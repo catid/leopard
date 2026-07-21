@@ -47,9 +47,29 @@ typedef enum leo2_test_encode_mode {
     LEO2_TEST_ENCODE_FORCE_TRANSFORM = 2
 } leo2_test_encode_mode;
 
+/*
+    Diagnostic decoder selection used to validate the P=T, N=2P translation
+    identity.  A plan captures the codec mode at construction and remains
+    immutable if the codec mode is later changed.
+*/
+typedef enum leo2_test_decode_mode {
+    LEO2_TEST_DECODE_AUTO = 0,
+    LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW = 1
+} leo2_test_decode_mode;
+
 LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
     leo2_codec* codec,
     leo2_test_encode_mode mode);
+
+LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
+    leo2_codec* codec,
+    leo2_test_decode_mode mode);
+
+LEO2_EXPORT int leo2_test_codec_translated_low_capable(
+    const leo2_codec* codec);
+
+LEO2_EXPORT int leo2_test_decode_plan_uses_translated_low(
+    const leo2_decode_plan* plan);
 
 LEO2_EXPORT int leo2_test_codec_direct_encode_capable(
     const leo2_codec* codec);

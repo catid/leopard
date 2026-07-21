@@ -56,6 +56,7 @@ enum DecodePathRule
     kDecodeRuleMeasuredMaterialized,
     kDecodeRuleWorkspaceTiled,
     kDecodeRuleWorkspaceMaterialized,
+    kDecodeRuleTranslatedLowDiagnostic,
     kDecodeRuleUnsupportedProfile
 };
 
@@ -375,6 +376,8 @@ static inline const char* DecodePathRuleName(DecodePathRule rule)
     case kDecodeRuleMeasuredMaterialized: return "measured_materialized";
     case kDecodeRuleWorkspaceTiled: return "workspace_tiled";
     case kDecodeRuleWorkspaceMaterialized: return "workspace_materialized";
+    case kDecodeRuleTranslatedLowDiagnostic:
+        return "translated_low_diagnostic";
     case kDecodeRuleUnsupportedProfile: return "unsupported_profile";
     }
     return "unknown";

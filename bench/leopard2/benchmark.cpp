@@ -29,6 +29,9 @@
 #include "leopard.h"
 #include "leopard2.h"
 #include "Leopard2Dispatch.h"
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+#include "Leopard2Direct.h"
+#endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
 #if !defined(LEO2_BENCHMARK_SOURCE_COMMIT) || \
     !defined(LEO2_BENCHMARK_SOURCE_TREE) || \
@@ -109,6 +112,9 @@ struct Options
     bool retain_samples;
     bool report_decode_path;
     bool attest_source;
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    bool force_translated_low;
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     enum HighEvaluatorMode
     {
@@ -141,6 +147,9 @@ struct Options
         , retain_samples(false)
         , report_decode_path(false)
         , attest_source(false)
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+        , force_translated_low(false)
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         , high_evaluator_mode(HighEvaluatorUnset)
 #endif
@@ -405,6 +414,10 @@ static void Usage(std::ostream& output, const char* program)
         << "  --high-evaluator-mode NAME\n"
         << "                         Attribution-only: no-copy or copy-fallback\n"
 #endif
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+        << "  --force-translated-low\n"
+        << "                         Attribution-only: run high wire through Algorithm 4\n"
+#endif
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
 }
@@ -455,6 +468,10 @@ static Options ParseOptions(int argc, char** argv)
                 Fail("invalid --high-evaluator-mode: " + mode);
         }
 #endif
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+        else if (argument == "--force-translated-low")
+            options.force_translated_low = true;
+#endif
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
     }
@@ -494,6 +511,23 @@ static Options ParseOptions(int argc, char** argv)
         Fail("the attribution benchmark requires explicit high profile/field, "
              "one forced specialized workspace, --skip-legacy, "
              "--retain-samples, --report-decode-path, and one thread");
+#endif
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.attest_source)
+        Fail("the high/low duality benchmark does not support --attest-source");
+    if (options.force_translated_low &&
+        (options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         (options.field != LEO2_FIELD_GF8 &&
+          options.field != LEO2_FIELD_GF16) ||
+         options.force_generic_decode || options.force_tiled_decode ||
+         !options.force_materialized_decode || !options.skip_legacy ||
+         !options.retain_samples || !options.report_decode_path ||
+         options.threads != 1))
+    {
+        Fail("translated-low attribution requires explicit high profile/field, "
+             "--force-materialized, --skip-legacy, --retain-samples, "
+             "--report-decode-path, and one thread");
+    }
 #endif
     return options;
 }
@@ -1036,6 +1070,14 @@ static int Run(const Options& options)
         context, options.k, options.r, options.profile, options.field,
         &codec_options, &codec),
         "codec create");
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.force_translated_low)
+    {
+        RequireLeo2(leo2_test_codec_set_decode_mode(
+            codec, LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
+            "force translated-low decoder");
+    }
+#endif
 
     size_t encode_scratch_bytes = 0;
     size_t decode_scratch_bytes = 0;
@@ -1051,6 +1093,11 @@ static int Run(const Options& options)
     leo2_decode_plan* plan = NULL;
     RequireLeo2(leo2_decode_plan_create(
         codec, &original_present[0], &recovery_present[0], &plan), "decode plan create");
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (leo2_test_decode_plan_uses_translated_low(plan) !=
+        (options.force_translated_low ? 1 : 0))
+        Fail("decode plan did not capture translated-low attribution mode");
+#endif
     RequireLeo2(leo2_decode_plan_scratch_size(plan, options.bytes, &decode_scratch_bytes),
         "decode scratch query");
 
@@ -1146,6 +1193,14 @@ static int Run(const Options& options)
             context, options.k, options.r, options.profile, options.field,
             &codec_options, &temporary),
             "timed codec create");
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+        if (options.force_translated_low)
+        {
+            RequireLeo2(leo2_test_codec_set_decode_mode(
+                temporary, LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
+                "timed force translated-low decoder");
+        }
+#endif
         leo2_codec_destroy(temporary);
     });
 
@@ -1310,6 +1365,10 @@ static int Run(const Options& options)
          << (options.force_tiled_decode ? "true" : "false") << ",\n"
          << "    \"force_materialized_decode\": "
          << (options.force_materialized_decode ? "true" : "false") << ",\n";
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    json << "    \"force_translated_low\": "
+         << (options.force_translated_low ? "true" : "false") << ",\n";
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     json << "    \"high_evaluator_mode\": \""
          << HighEvaluatorModeName(options.high_evaluator_mode) << "\",\n";

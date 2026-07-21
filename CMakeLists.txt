@@ -972,6 +972,17 @@ if(LEO2_BUILD_TESTS)
         target_link_libraries(
             bench_leopard2_high_decode_copy_attribution leopard_test_hooks)
 
+        # Same-source P=T,N=2P comparison between ordinary Algorithm 5 and a
+        # translated Algorithm 4 plan over the unchanged legacy-high wire.
+        add_executable(bench_leopard2_high_low_duality
+            bench/leopard2/benchmark.cpp)
+        target_compile_definitions(
+            bench_leopard2_high_low_duality PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HIGH_LOW_DUALITY_ATTRIBUTION=1)
+        target_link_libraries(
+            bench_leopard2_high_low_duality leopard_test_hooks)
+
     endif()
 
     add_executable(leopard2_direct_oracle_test
@@ -1229,6 +1240,19 @@ if(LEO2_BUILD_TESTS)
         COMMAND leopard2_decode_low_acceptance_test)
     set_tests_properties(leopard2_decode_low_acceptance PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
+
+    # Diagnostic proof of the IT2026 Algorithm 4/5 coset-translation duality.
+    # The production archive has no forced translation control and remains
+    # unchanged until correctness and same-source timing justify promotion.
+    add_executable(leopard2_high_low_duality_test
+        tests/leopard2/test_high_low_duality.cpp)
+    target_compile_definitions(leopard2_high_low_duality_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_link_libraries(leopard2_high_low_duality_test leopard_test_hooks)
+    add_test(NAME leopard2_high_low_duality
+        COMMAND leopard2_high_low_duality_test)
+    set_tests_properties(leopard2_high_low_duality PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     add_executable(leopard2_arbitrary_counts_acceptance_test
         tests/leopard2/direct_oracle.cpp
