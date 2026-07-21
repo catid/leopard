@@ -1945,11 +1945,16 @@ static leo2_result EncodeLayout(
 
     /*
         The complete legacy-high GF16 transform repeatedly sweeps 2T shard
-        rows.  Once that working set reaches the large-shard regime, execute
-        independent byte ranges end-to-end so the accumulator and temporary
-        half remain cache-resident.  Promotion is restricted to the calibrated
-        AUTO AVX-512VL encode host path; explicit AVX2, SSSE3, scalar, and
-        uncalibrated hosts retain their single-pass layouts until measured.
+        rows.  The measured K=1000, R=200, 64-KiB cell benefits from executing
+        two independent 32-KiB ranges end-to-end so the accumulator and
+        temporary half remain cache-resident.  Keep promotion exact to that
+        AUTO host cell until neighboring sizes and code shapes have equivalent
+        same-source evidence.  The public scratch query is independent of the
+        requested parity subset, so partial-output calls reuse this compact
+        layout even though their conservative transform selector remains
+        AVX2; those calls have their own non-regression measurements.  Explicit
+        backends, uncalibrated hosts, ragged tails, and every other shape retain
+        their single-pass layouts.
         The balanced split avoids a tiny final pass: every tile in this
         qualified range remains larger than 16 KiB, preserving the established
         aligned-pass source-staging policy.
@@ -1959,13 +1964,16 @@ static leo2_result EncodeLayout(
         from the complete public shard length below.
     */
     static const size_t kHighGF16EncodeTileBytes = 32U * 1024U;
-    static const size_t kHighGF16EncodeMinimumBytes = 64U * 1024U;
+    static const size_t kHighGF16EncodeCellBytes = 64U * 1024U;
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-        codec->field == LEO2_FIELD_GF16 && codec->padded_side >= 256 &&
+        codec->field == LEO2_FIELD_GF16 &&
+        codec->original_count == 1000 && codec->recovery_count == 200 &&
+        codec->padded_side == 256 &&
         CodecMayUseAutoAVX512Encode(codec) &&
         codec->auto_avx512_encode_ops != NULL &&
         codec->context->ops == codec->context->baseline_ops &&
-        geometry.aligned_prefix_bytes >= kHighGF16EncodeMinimumBytes)
+        geometry.tail_bytes == 0 &&
+        geometry.aligned_prefix_bytes == kHighGF16EncodeCellBytes)
     {
         geometry.execution_tile_count = 1U +
             (geometry.aligned_prefix_bytes - 1U) /
