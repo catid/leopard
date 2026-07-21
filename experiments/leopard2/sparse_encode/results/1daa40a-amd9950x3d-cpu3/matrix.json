@@ -1,0 +1,3785 @@
+{
+  "attestation": {
+    "competing_work_idle": true,
+    "cpu": 3,
+    "operator": "codex sparse_encode_gate after explicit root/T8/Algorithm5 quiet acknowledgments",
+    "reserved_cpus": [
+      3,
+      19
+    ],
+    "schema": "leopard2-benchmark-isolation-attestation/v1",
+    "smt_sibling_idle": true,
+    "timestamp_utc": "2026-07-21T23:40:57Z"
+  },
+  "authoritative": true,
+  "build_inputs_changed_during_run": false,
+  "executable_changed_during_run": false,
+  "isolation": {
+    "accepted": true,
+    "after_monotonic_ns": 503111496435589,
+    "after_sibling_stat": {
+      "cpu": 19,
+      "fields": [
+        3197643,
+        73263,
+        65056,
+        46958821,
+        1084,
+        0,
+        32,
+        0
+      ]
+    },
+    "before_monotonic_ns": 503100256691883,
+    "before_sibling_stat": {
+      "cpu": 19,
+      "fields": [
+        3197643,
+        73263,
+        65056,
+        46957697,
+        1084,
+        0,
+        32,
+        0
+      ]
+    },
+    "benchmark_cpu": 3,
+    "maximum_sibling_nonidle_jiffies": 0,
+    "protected_identity": {
+      "pair_lease": {
+        "cpus": [
+          3,
+          19
+        ],
+        "device": 51,
+        "inode": 121,
+        "kernel_name_sha256": "debfd8f884ff625b70023fcd0d2d081aeb76834c566b1e7ef792d1355430aa63",
+        "mechanism": "abstract-af-unix-bind-plus-fcntl-flock",
+        "path": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-3-19.lock",
+        "payload": {
+          "cpus": [
+            3,
+            19
+          ],
+          "schema": "leopard2-cpu-pair-lease/v1",
+          "uid": 1000
+        }
+      },
+      "topology": {
+        "cpus": [
+          3,
+          19
+        ],
+        "records": [
+          {
+            "core_id": "3",
+            "cpu": 3,
+            "physical_package_id": "0",
+            "thread_siblings_list": "3,19"
+          },
+          {
+            "core_id": "3",
+            "cpu": 19,
+            "physical_package_id": "0",
+            "thread_siblings_list": "3,19"
+          }
+        ]
+      }
+    },
+    "reserved_sibling": 19,
+    "runner_housekeeping_cpus": [
+      0,
+      1,
+      2,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+    ],
+    "sibling_delta": {
+      "cpu": 19,
+      "fields": [
+        0,
+        0,
+        0,
+        1124,
+        0,
+        0,
+        0,
+        0
+      ],
+      "nonidle_jiffies": 0,
+      "total_jiffies": 1124
+    }
+  },
+  "jobs": [
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0xf0546e65505aaeb8",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "7b3c9174a96f2a5fdc34311d1fd543615978eb62fff8f5f9cf1223f45db0cd9f",
+          "direct_generator_symbols_checked": 40,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "4d9ef8a651c358c5765564a1801d407480f415d00eb5baf442d740479f8dfd89",
+          "parity_sha256": "3c084575f4ba7673f95e8afdad5427f5b828dee12af32c2ed2065b44afd84872",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "recovery_source_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 1778284.765625,
+              "prefix_over_modeled_exact": 1.614012,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 1774813.572266,
+              "prefix_over_modeled_exact": 1.617168,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 1774379.673096,
+              "prefix_over_modeled_exact": 1.617564,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 476.25,
+            "maximum": 1781272.617188,
+            "median": 1780148.148438,
+            "minimum": 1779671.898438,
+            "samples": [
+              1779671.898438,
+              1780148.148438,
+              1781272.617188
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 496.875,
+            "maximum": 1775802.859375,
+            "median": 1774317.6875,
+            "minimum": 1773820.8125,
+            "samples": [
+              1775802.859375,
+              1774317.6875,
+              1773820.8125
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 589.148438,
+            "maximum": 2870761.640625,
+            "median": 2870172.492188,
+            "minimum": 2868797.945312,
+            "samples": [
+              2870172.492188,
+              2868797.945312,
+              2870761.640625
+            ]
+          },
+          "prefix_over_exact_call_local": 1.612322,
+          "prefix_over_exact_prepared": 1.61762,
+          "schedule_setup_ns": {
+            "mad": 7.34375,
+            "maximum": 3983.34375,
+            "median": 3967.078125,
+            "minimum": 3959.734375,
+            "samples": [
+              3967.078125,
+              3983.34375,
+              3959.734375
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            127,
+            128,
+            383,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 65536,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 507,
+          "prefix_butterflies": 1513,
+          "retained_butterflies": 571,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.008459,
+            "maximum": 61.275389,
+            "median": 61.163471,
+            "minimum": 61.155012,
+            "samples": [
+              61.275389,
+              61.155012,
+              61.163471
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 1779671.898438,
+              "candidate_gain_percent": 61.275389,
+              "log_contrast": 0.477943,
+              "observations_ns": [
+                2869708.109375,
+                1780526.046875,
+                1778817.75,
+                2870636.875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 2870172.492188,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 1780148.148438,
+              "candidate_gain_percent": 61.155012,
+              "log_contrast": 0.477197,
+              "observations_ns": [
+                1780499.640625,
+                2868324.8125,
+                2869271.078125,
+                1779796.65625
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 2868797.945312,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 1781272.617188,
+              "candidate_gain_percent": 61.163471,
+              "log_contrast": 0.477249,
+              "observations_ns": [
+                2868538.109375,
+                1781166.984375,
+                1781378.25,
+                2872985.171875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 2870761.640625,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "edge_sparse",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          127,
+          128,
+          383,
+          895
+        ],
+        "shard_bytes": 65536
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "65536",
+        "--requested-parity",
+        "0,127,128,383,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "143636c3953a281efa9f",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/143636c3953a281efa9f.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/143636c3953a281efa9f.stdout",
+      "stdout_sha256": "f0e6ffedea9cf3df62ca9a0608a38e4640e38b647b702c6bf192140b3e16f7a1"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0xf8b1c2dc7942d87a",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "006d45de073b22a0b19e40e69e4b06c47dd4dbc52df286bd06fe61fa4926aa80",
+          "direct_generator_symbols_checked": 48,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "f6c92c70b7ac6b7a69cc8a8e8e45e578908f5f8733488a752c3d402e717292e8",
+          "parity_sha256": "4564103f4de0abe1b9e55decccbf9fcddbcda58768e60af06b74a22c3c853836",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "recovery_source_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 11808.265625,
+              "prefix_over_modeled_exact": 0.668766,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 8413.634766,
+              "prefix_over_modeled_exact": 0.938592,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 7989.305908,
+              "prefix_over_modeled_exact": 0.988442,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 0.851562,
+            "maximum": 11978.890625,
+            "median": 11978.039062,
+            "minimum": 11962.953125,
+            "samples": [
+              11978.890625,
+              11962.953125,
+              11978.039062
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 20.46875,
+            "maximum": 7949.15625,
+            "median": 7928.6875,
+            "minimum": 7907.28125,
+            "samples": [
+              7949.15625,
+              7907.28125,
+              7928.6875
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 26.875,
+            "maximum": 7925.953125,
+            "median": 7896.96875,
+            "minimum": 7870.09375,
+            "samples": [
+              7925.953125,
+              7896.96875,
+              7870.09375
+            ]
+          },
+          "prefix_over_exact_call_local": 0.659287,
+          "prefix_over_exact_prepared": 0.995999,
+          "schedule_setup_ns": {
+            "mad": 9.6875,
+            "maximum": 3889.265625,
+            "median": 3879.578125,
+            "minimum": 3869.578125,
+            "samples": [
+              3879.578125,
+              3869.578125,
+              3889.265625
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            7,
+            63,
+            135,
+            255,
+            519,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 64,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 506,
+          "prefix_butterflies": 1356,
+          "retained_butterflies": 602,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.154283,
+            "maximum": -33.833974,
+            "median": -33.988257,
+            "minimum": -34.295641,
+            "samples": [
+              -33.833974,
+              -33.988257,
+              -34.295641
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 11978.890625,
+              "candidate_gain_percent": -33.833974,
+              "log_contrast": -0.413003,
+              "observations_ns": [
+                7920.25,
+                11992.171875,
+                11965.609375,
+                7931.65625
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 7925.953125,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 11962.953125,
+              "candidate_gain_percent": -33.988257,
+              "log_contrast": -0.415338,
+              "observations_ns": [
+                11980.140625,
+                7916.03125,
+                7877.90625,
+                11945.765625
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 7896.96875,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 11978.039062,
+              "candidate_gain_percent": -34.295641,
+              "log_contrast": -0.420005,
+              "observations_ns": [
+                7870.71875,
+                11976.09375,
+                11979.984375,
+                7869.46875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 7870.09375,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "scattered_sparse",
+        "profile": "low",
+        "requested_parity": [
+          7,
+          63,
+          135,
+          255,
+          519,
+          895
+        ],
+        "shard_bytes": 64
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "64",
+        "--requested-parity",
+        "7,63,135,255,519,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "28679d12a0e08161ca26",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/28679d12a0e08161ca26.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/28679d12a0e08161ca26.stdout",
+      "stdout_sha256": "44aa5b16adf3f2f6421d4af059feacc2e748fd8a6317c6cc76599aebdb4552e1"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0x2b2328026a3965b8",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "fa5955b3b3f152f171fed6c6c5cd6d718edb39d1a91f36d41d6a4cb856926509",
+          "direct_generator_symbols_checked": 1024,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "5ec11ec4637e1d3a6a0576256111c69b0f53c323ab053f12cb104a62d91d5702",
+          "parity_sha256": "d3f77aeec426ff6ce037a6d6905657c077295511107fb289a25fd38c34c65448",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "recovery_source_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 25520.140625,
+              "prefix_over_modeled_exact": 0.853996,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 23984.365234,
+              "prefix_over_modeled_exact": 0.908679,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 23792.393311,
+              "prefix_over_modeled_exact": 0.916011,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 41.257812,
+            "maximum": 25680.46875,
+            "median": 25599.609375,
+            "minimum": 25558.351562,
+            "samples": [
+              25680.46875,
+              25599.609375,
+              25558.351562
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 14.375,
+            "maximum": 23779.34375,
+            "median": 23764.96875,
+            "minimum": 23697.015625,
+            "samples": [
+              23764.96875,
+              23697.015625,
+              23779.34375
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 5.078125,
+            "maximum": 22223.15625,
+            "median": 21794.09375,
+            "minimum": 21789.015625,
+            "samples": [
+              22223.15625,
+              21794.09375,
+              21789.015625
+            ]
+          },
+          "prefix_over_exact_call_local": 0.851345,
+          "prefix_over_exact_prepared": 0.917068,
+          "schedule_setup_ns": {
+            "mad": 1.71875,
+            "maximum": 1757.21875,
+            "median": 1755.171875,
+            "minimum": 1753.453125,
+            "samples": [
+              1757.21875,
+              1753.453125,
+              1755.171875
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 1024,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 448,
+          "fused_four_groups": 96,
+          "one_output_butterflies": 0,
+          "prefix_butterflies": 448,
+          "retained_butterflies": 448,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.117549,
+            "maximum": -13.471102,
+            "median": -14.747991,
+            "minimum": -14.86554,
+            "samples": [
+              -13.471102,
+              -14.86554,
+              -14.747991
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 25680.46875,
+              "candidate_gain_percent": -13.471102,
+              "log_contrast": -0.144692,
+              "observations_ns": [
+                22531.21875,
+                25698.90625,
+                25662.03125,
+                21915.09375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 22223.15625,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 25599.609375,
+              "candidate_gain_percent": -14.86554,
+              "log_contrast": -0.160938,
+              "observations_ns": [
+                25614.53125,
+                21775.109375,
+                21813.078125,
+                25584.6875
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 21794.09375,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 25558.351562,
+              "candidate_gain_percent": -14.747991,
+              "log_contrast": -0.159558,
+              "observations_ns": [
+                21807.296875,
+                25562.65625,
+                25554.046875,
+                21770.734375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 21789.015625,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "prefix_neighbor",
+        "field": "gf16",
+        "mask_name": "dense_prefix_neighbor",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127
+        ],
+        "shard_bytes": 1024
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "1024",
+        "--requested-parity",
+        "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "3a0c731c230848c60529",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/3a0c731c230848c60529.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/3a0c731c230848c60529.stdout",
+      "stdout_sha256": "dbf679552617e29d5fa8cd208b5f6d511d17e49b6982bbe5574104dffcbfdd1e"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0x99e1dd74d8e92b09",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "fb42d3bfab0f8c58c68f2fba228a44f6ec8484f8bb2b89e33f721b5d8d55a112",
+          "direct_generator_symbols_checked": 40,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "5ec11ec4637e1d3a6a0576256111c69b0f53c323ab053f12cb104a62d91d5702",
+          "parity_sha256": "96ea8a15d71a52335d14161b6df205df77093995c38c71acf85dbca2b1ccda07",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "recovery_source_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 32955.875,
+              "prefix_over_modeled_exact": 1.458599,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 29451.048828,
+              "prefix_over_modeled_exact": 1.63218,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 29012.945557,
+              "prefix_over_modeled_exact": 1.656826,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 40.945312,
+            "maximum": 33102.34375,
+            "median": 33057.125,
+            "minimum": 33016.179688,
+            "samples": [
+              33016.179688,
+              33102.34375,
+              33057.125
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 21.390625,
+            "maximum": 28971.75,
+            "median": 28950.359375,
+            "minimum": 28924.25,
+            "samples": [
+              28971.75,
+              28950.359375,
+              28924.25
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 35.625,
+            "maximum": 48113.390625,
+            "median": 48069.414062,
+            "minimum": 48033.789062,
+            "samples": [
+              48033.789062,
+              48069.414062,
+              48113.390625
+            ]
+          },
+          "prefix_over_exact_call_local": 1.454132,
+          "prefix_over_exact_prepared": 1.660408,
+          "schedule_setup_ns": {
+            "mad": 10.0,
+            "maximum": 4028.484375,
+            "median": 4005.515625,
+            "minimum": 3995.515625,
+            "samples": [
+              4005.515625,
+              4028.484375,
+              3995.515625
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            127,
+            128,
+            383,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 1024,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 507,
+          "prefix_butterflies": 1513,
+          "retained_butterflies": 571,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.060503,
+            "maximum": 45.546241,
+            "median": 45.485738,
+            "minimum": 45.21452,
+            "samples": [
+              45.485738,
+              45.21452,
+              45.546241
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 33016.179688,
+              "candidate_gain_percent": 45.485738,
+              "log_contrast": 0.374908,
+              "observations_ns": [
+                48043.234375,
+                33061.1875,
+                32971.171875,
+                48024.34375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 48033.789062,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 33102.34375,
+              "candidate_gain_percent": 45.21452,
+              "log_contrast": 0.373042,
+              "observations_ns": [
+                33089.140625,
+                48040.890625,
+                48097.9375,
+                33115.546875
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 48069.414062,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 33057.125,
+              "candidate_gain_percent": 45.546241,
+              "log_contrast": 0.375324,
+              "observations_ns": [
+                48126.984375,
+                33082.59375,
+                33031.65625,
+                48099.796875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 48113.390625,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "edge_sparse",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          127,
+          128,
+          383,
+          895
+        ],
+        "shard_bytes": 1024
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "1024",
+        "--requested-parity",
+        "0,127,128,383,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "411b5cac9cfdcd087cf8",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/411b5cac9cfdcd087cf8.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/411b5cac9cfdcd087cf8.stdout",
+      "stdout_sha256": "b738bc6321a1e42509a94d51f44b8d42a9a8b2bca0d10e2b7c43c43ca6895d25"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0xf0b2e4ab418edcb6",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "0f77c3d553a217c5849853a0f53d1ec1d839c1e6ee776470b08d4ab4012388dc",
+          "direct_generator_symbols_checked": 1024,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "f6c92c70b7ac6b7a69cc8a8e8e45e578908f5f8733488a752c3d402e717292e8",
+          "parity_sha256": "abcf0752979ea9f06bc4f112ffc6ee3f76a5958750bf7e7d3419a76924cab72a",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "recovery_source_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 6191.953125,
+              "prefix_over_modeled_exact": 0.640229,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 4735.748047,
+              "prefix_over_modeled_exact": 0.837094,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 4553.722412,
+              "prefix_over_modeled_exact": 0.870555,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 9.0625,
+            "maximum": 6340.3125,
+            "median": 6331.25,
+            "minimum": 6317.96875,
+            "samples": [
+              6317.96875,
+              6331.25,
+              6340.3125
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 2.671875,
+            "maximum": 4532.703125,
+            "median": 4527.71875,
+            "minimum": 4525.046875,
+            "samples": [
+              4532.703125,
+              4527.71875,
+              4525.046875
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 1.796875,
+            "maximum": 3966.0625,
+            "median": 3964.265625,
+            "minimum": 3923.796875,
+            "samples": [
+              3966.0625,
+              3923.796875,
+              3964.265625
+            ]
+          },
+          "prefix_over_exact_call_local": 0.626143,
+          "prefix_over_exact_prepared": 0.875555,
+          "schedule_setup_ns": {
+            "mad": 1.109375,
+            "maximum": 1665.34375,
+            "median": 1664.234375,
+            "minimum": 1659.859375,
+            "samples": [
+              1665.34375,
+              1664.234375,
+              1659.859375
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 64,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 448,
+          "fused_four_groups": 96,
+          "one_output_butterflies": 0,
+          "prefix_butterflies": 448,
+          "retained_butterflies": 448,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.250875,
+            "maximum": -37.225677,
+            "median": -37.476551,
+            "minimum": -38.02476,
+            "samples": [
+              -37.225677,
+              -38.02476,
+              -37.476551
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 6317.96875,
+              "candidate_gain_percent": -37.225677,
+              "log_contrast": -0.465624,
+              "observations_ns": [
+                3970.203125,
+                6323.984375,
+                6311.953125,
+                3961.921875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 3966.0625,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 6331.25,
+              "candidate_gain_percent": -38.02476,
+              "log_contrast": -0.478435,
+              "observations_ns": [
+                6346.015625,
+                3924.890625,
+                3922.703125,
+                6316.484375
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 3923.796875,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 6340.3125,
+              "candidate_gain_percent": -37.476551,
+              "log_contrast": -0.469629,
+              "observations_ns": [
+                3990.046875,
+                6338.046875,
+                6342.578125,
+                3938.484375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 3964.265625,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "prefix_neighbor",
+        "field": "gf16",
+        "mask_name": "dense_prefix_neighbor",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127
+        ],
+        "shard_bytes": 64
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "64",
+        "--requested-parity",
+        "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "45052c25170213677eb6",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/45052c25170213677eb6.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/45052c25170213677eb6.stdout",
+      "stdout_sha256": "8a081923443d19069cf8ea40d73630516d95a328b2c31aa66405f02565a0411a"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0xe32c6b3267b8ec0c",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "35b7854fa005c110a1bd7533cae8e1d60b29da1aa1954dad2dd73ee0250990b1",
+          "direct_generator_symbols_checked": 48,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "4d9ef8a651c358c5765564a1801d407480f415d00eb5baf442d740479f8dfd89",
+          "parity_sha256": "55b8dd76880f3ac9afe0ae9b08a9dbfbb93d10a2ce2f3371d604b89354954c05",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "recovery_source_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 1754754.328125,
+              "prefix_over_modeled_exact": 1.510034,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 1751197.822266,
+              "prefix_over_modeled_exact": 1.513101,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 1750753.259033,
+              "prefix_over_modeled_exact": 1.513485,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 310.9375,
+            "maximum": 1755440.273438,
+            "median": 1755129.335938,
+            "minimum": 1754266.429688,
+            "samples": [
+              1754266.429688,
+              1755129.335938,
+              1755440.273438
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 21.109375,
+            "maximum": 1751214.28125,
+            "median": 1750689.75,
+            "minimum": 1750668.640625,
+            "samples": [
+              1751214.28125,
+              1750668.640625,
+              1750689.75
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 67.03125,
+            "maximum": 2649822.476562,
+            "median": 2649738.960938,
+            "minimum": 2649671.929688,
+            "samples": [
+              2649671.929688,
+              2649738.960938,
+              2649822.476562
+            ]
+          },
+          "prefix_over_exact_call_local": 1.509712,
+          "prefix_over_exact_prepared": 1.51354,
+          "schedule_setup_ns": {
+            "mad": 5.46875,
+            "maximum": 4089.109375,
+            "median": 4064.578125,
+            "minimum": 4059.109375,
+            "samples": [
+              4064.578125,
+              4059.109375,
+              4089.109375
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            7,
+            63,
+            135,
+            255,
+            519,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 65536,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 506,
+          "prefix_butterflies": 1356,
+          "retained_butterflies": 602,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.021985,
+            "maximum": 51.041577,
+            "median": 50.971153,
+            "minimum": 50.949167,
+            "samples": [
+              51.041577,
+              50.971153,
+              50.949167
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 1754266.429688,
+              "candidate_gain_percent": 51.041577,
+              "log_contrast": 0.412385,
+              "observations_ns": [
+                2650843.578125,
+                1754424.015625,
+                1754108.84375,
+                2648500.28125
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 2649671.929688,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 1755129.335938,
+              "candidate_gain_percent": 50.971153,
+              "log_contrast": 0.411919,
+              "observations_ns": [
+                1754626.828125,
+                2649093.5625,
+                2650384.359375,
+                1755631.84375
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 2649738.960938,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 1755440.273438,
+              "candidate_gain_percent": 50.949167,
+              "log_contrast": 0.411773,
+              "observations_ns": [
+                2649580.125,
+                1755601.375,
+                1755279.171875,
+                2650064.828125
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 2649822.476562,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "scattered_sparse",
+        "profile": "low",
+        "requested_parity": [
+          7,
+          63,
+          135,
+          255,
+          519,
+          895
+        ],
+        "shard_bytes": 65536
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "65536",
+        "--requested-parity",
+        "7,63,135,255,519,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "71a66aba632b2ef4d275",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/71a66aba632b2ef4d275.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/71a66aba632b2ef4d275.stdout",
+      "stdout_sha256": "f23c386059eeb4e962477c7fedde7a6627fca66a9c1c7e04486992814a003524"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0x10cc8be297629dcd",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "a1e06485d35f99752ab87f72a569869c0bc0fe89e7f684c44c787b95428b5bba",
+          "direct_generator_symbols_checked": 1024,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "4d9ef8a651c358c5765564a1801d407480f415d00eb5baf442d740479f8dfd89",
+          "parity_sha256": "8829ac119f809ae07fb990c5a085d53e721fdefd3dd3dd27cc889fee41a99c3d",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "recovery_source_sha256": "9dacb92af677fa0d7b7bc712166362e85f1c6d912dd79192204650a1a1087131",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 1407038.734375,
+              "prefix_over_modeled_exact": 0.935914,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 1405469.996094,
+              "prefix_over_modeled_exact": 0.936959,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 1405273.903809,
+              "prefix_over_modeled_exact": 0.93709,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 13.601562,
+            "maximum": 1407818.03125,
+            "median": 1407583.578125,
+            "minimum": 1407569.976562,
+            "samples": [
+              1407569.976562,
+              1407818.03125,
+              1407583.578125
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 115.78125,
+            "maximum": 1405822.453125,
+            "median": 1405245.890625,
+            "minimum": 1405130.109375,
+            "samples": [
+              1405822.453125,
+              1405130.109375,
+              1405245.890625
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 38.757812,
+            "maximum": 1317025.210938,
+            "median": 1316867.484375,
+            "minimum": 1316828.726562,
+            "samples": [
+              1316867.484375,
+              1316828.726562,
+              1317025.210938
+            ]
+          },
+          "prefix_over_exact_call_local": 0.935552,
+          "prefix_over_exact_prepared": 0.937108,
+          "schedule_setup_ns": {
+            "mad": 3.609375,
+            "maximum": 1803.609375,
+            "median": 1792.84375,
+            "minimum": 1789.234375,
+            "samples": [
+              1803.609375,
+              1789.234375,
+              1792.84375
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63,
+            64,
+            65,
+            66,
+            67,
+            68,
+            69,
+            70,
+            71,
+            72,
+            73,
+            74,
+            75,
+            76,
+            77,
+            78,
+            79,
+            80,
+            81,
+            82,
+            83,
+            84,
+            85,
+            86,
+            87,
+            88,
+            89,
+            90,
+            91,
+            92,
+            93,
+            94,
+            95,
+            96,
+            97,
+            98,
+            99,
+            100,
+            101,
+            102,
+            103,
+            104,
+            105,
+            106,
+            107,
+            108,
+            109,
+            110,
+            111,
+            112,
+            113,
+            114,
+            115,
+            116,
+            117,
+            118,
+            119,
+            120,
+            121,
+            122,
+            123,
+            124,
+            125,
+            126,
+            127
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 65536,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 448,
+          "fused_four_groups": 96,
+          "one_output_butterflies": 0,
+          "prefix_butterflies": 448,
+          "retained_butterflies": 448,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.010299,
+            "maximum": -6.433599,
+            "median": -6.443898,
+            "minimum": -6.463153,
+            "samples": [
+              -6.443898,
+              -6.463153,
+              -6.433599
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 1407569.976562,
+              "candidate_gain_percent": -6.443898,
+              "log_contrast": -0.066609,
+              "observations_ns": [
+                1317088.890625,
+                1408206.546875,
+                1406933.40625,
+                1316646.078125
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 1316867.484375,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 1407818.03125,
+              "candidate_gain_percent": -6.463153,
+              "log_contrast": -0.066815,
+              "observations_ns": [
+                1407871.703125,
+                1317409.359375,
+                1316248.09375,
+                1407764.359375
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 1316828.726562,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 1407583.578125,
+              "candidate_gain_percent": -6.433599,
+              "log_contrast": -0.066499,
+              "observations_ns": [
+                1317083.5625,
+                1408094.53125,
+                1407072.625,
+                1316966.859375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 1317025.210938,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "prefix_neighbor",
+        "field": "gf16",
+        "mask_name": "dense_prefix_neighbor",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          112,
+          113,
+          114,
+          115,
+          116,
+          117,
+          118,
+          119,
+          120,
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127
+        ],
+        "shard_bytes": 65536
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "65536",
+        "--requested-parity",
+        "0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90,91,92,93,94,95,96,97,98,99,100,101,102,103,104,105,106,107,108,109,110,111,112,113,114,115,116,117,118,119,120,121,122,123,124,125,126,127",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "950a59e3f619b8327160",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/950a59e3f619b8327160.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/950a59e3f619b8327160.stdout",
+      "stdout_sha256": "b7a6119fe3b6fbb84869686fdcf16432d08be4c13958b3cfd7042619638a753d"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0x0342362dcc011f3d",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "eacfba6596ab2b37222fad7c9a81762195675bfecdcd638dd71280a5dd95147e",
+          "direct_generator_symbols_checked": 48,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "5ec11ec4637e1d3a6a0576256111c69b0f53c323ab053f12cb104a62d91d5702",
+          "parity_sha256": "d5e025250ef883aeb75de260ff8a676e829e987d9a0fcbfcf26e57d3d079f720",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "recovery_source_sha256": "3650b973d93bcdcfd05c8d9aab219f747da720a4705de6ee51634d3503e37bfd",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 33233.0625,
+              "prefix_over_modeled_exact": 1.343374,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 29719.896484,
+              "prefix_over_modeled_exact": 1.502174,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 29280.750732,
+              "prefix_over_modeled_exact": 1.524703,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 13.515625,
+            "maximum": 33377.039062,
+            "median": 33363.523438,
+            "minimum": 33320.71875,
+            "samples": [
+              33320.71875,
+              33377.039062,
+              33363.523438
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 0.78125,
+            "maximum": 29272.84375,
+            "median": 29218.015625,
+            "minimum": 29217.234375,
+            "samples": [
+              29272.84375,
+              29217.234375,
+              29218.015625
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 10.476562,
+            "maximum": 44654.921875,
+            "median": 44644.445312,
+            "minimum": 44588.65625,
+            "samples": [
+              44588.65625,
+              44644.445312,
+              44654.921875
+            ]
+          },
+          "prefix_over_exact_call_local": 1.338121,
+          "prefix_over_exact_prepared": 1.527977,
+          "schedule_setup_ns": {
+            "mad": 2.8125,
+            "maximum": 4019.421875,
+            "median": 4015.046875,
+            "minimum": 4012.234375,
+            "samples": [
+              4015.046875,
+              4019.421875,
+              4012.234375
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            7,
+            63,
+            135,
+            255,
+            519,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 1024,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 506,
+          "prefix_butterflies": 1356,
+          "retained_butterflies": 602,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.026934,
+            "maximum": 33.84357,
+            "median": 33.816637,
+            "minimum": 33.75795,
+            "samples": [
+              33.816637,
+              33.75795,
+              33.84357
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 33320.71875,
+              "candidate_gain_percent": 33.816637,
+              "log_contrast": 0.2913,
+              "observations_ns": [
+                44572.25,
+                33345.09375,
+                33296.34375,
+                44605.0625
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 44588.65625,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 33377.039062,
+              "candidate_gain_percent": 33.75795,
+              "log_contrast": 0.290862,
+              "observations_ns": [
+                33384.296875,
+                44627.578125,
+                44661.3125,
+                33369.78125
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 44644.445312,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 33363.523438,
+              "candidate_gain_percent": 33.84357,
+              "log_contrast": 0.291502,
+              "observations_ns": [
+                44676.484375,
+                33390.25,
+                33336.796875,
+                44633.359375
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 44654.921875,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "scattered_sparse",
+        "profile": "low",
+        "requested_parity": [
+          7,
+          63,
+          135,
+          255,
+          519,
+          895
+        ],
+        "shard_bytes": 1024
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "1024",
+        "--requested-parity",
+        "7,63,135,255,519,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "a36375f59fcf99fde7a2",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/a36375f59fcf99fde7a2.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/a36375f59fcf99fde7a2.stdout",
+      "stdout_sha256": "fa69a7aef50e64cbb0b0be49640f8c7252497fb7180b9cf60f5f2022b85978d0"
+    },
+    {
+      "benchmark": {
+        "authoritative": false,
+        "authority_note": "requires the fail-closed pinned runner and host isolation attestation",
+        "build": {
+          "compiler": "gcc",
+          "compiler_version": "13.3.0",
+          "cplusplus": 201103,
+          "library_test_hooks": false,
+          "source_dirty": 0,
+          "source_git_sha": "1daa40a343bc14b648fba6b9c3225b62b358c56c"
+        },
+        "correctness": {
+          "allocation_guards_match": true,
+          "digest_fnv1a64": "0x9030a94c3fc5759a",
+          "direct_generator_parity_match": true,
+          "direct_generator_sample_sha256": "01526a146ac53e73a9f4517f375d42a46904838ce39bdaa1ef42d66eeb54b987",
+          "direct_generator_symbols_checked": 40,
+          "encode_decode_recovery_match": true,
+          "exact_prefix_parity_match": true,
+          "input_immutable": true,
+          "input_sha256": "f6c92c70b7ac6b7a69cc8a8e8e45e578908f5f8733488a752c3d402e717292e8",
+          "parity_sha256": "042ebf4bfc684986421e96e96d71f4d1bb813a24b0a1bbb36e7f229193c4ff95",
+          "post_timing_recheck_match": true,
+          "recovered_original_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "recovery_source_sha256": "32ebe2e16ec73a24173cabeef2de02221d77db87927d6663df869b33b8748a7e",
+          "unrequested_output_canary": {
+            "applicable": true,
+            "match": true
+          }
+        },
+        "metrics": {
+          "amortized_exact": [
+            {
+              "modeled_ns": 11769.046875,
+              "prefix_over_modeled_exact": 0.711516,
+              "reuse": 1
+            },
+            {
+              "modeled_ns": 8373.048828,
+              "prefix_over_modeled_exact": 1.000097,
+              "reuse": 8
+            },
+            {
+              "modeled_ns": 7948.549072,
+              "prefix_over_modeled_exact": 1.053508,
+              "reuse": 64
+            }
+          ],
+          "exact_call_local_total_ns": {
+            "mad": 4.296875,
+            "maximum": 11825.921875,
+            "median": 11808.421875,
+            "minimum": 11804.125,
+            "samples": [
+              11804.125,
+              11808.421875,
+              11825.921875
+            ]
+          },
+          "exact_prepared_execution_ns": {
+            "mad": 3.28125,
+            "maximum": 7891.1875,
+            "median": 7887.90625,
+            "minimum": 7863.0625,
+            "samples": [
+              7891.1875,
+              7863.0625,
+              7887.90625
+            ]
+          },
+          "prefix_execution_ns": {
+            "mad": 75.382812,
+            "maximum": 8449.242188,
+            "median": 8373.859375,
+            "minimum": 8282.210938,
+            "samples": [
+              8449.242188,
+              8373.859375,
+              8282.210938
+            ]
+          },
+          "prefix_over_exact_call_local": 0.709143,
+          "prefix_over_exact_prepared": 1.061607,
+          "schedule_setup_ns": {
+            "mad": 1.5625,
+            "maximum": 3885.984375,
+            "median": 3881.140625,
+            "minimum": 3879.578125,
+            "samples": [
+              3885.984375,
+              3881.140625,
+              3879.578125
+            ]
+          }
+        },
+        "parameters": {
+          "K": 128,
+          "R": 896,
+          "field": "gf16",
+          "iterations": 64,
+          "memory_mib": 768,
+          "profile": "low",
+          "requested_backend": "avx2",
+          "requested_parity": [
+            0,
+            127,
+            128,
+            383,
+            895
+          ],
+          "reuse": [
+            1,
+            8,
+            64
+          ],
+          "rounds": 3,
+          "seed": 6003370125125043534,
+          "setup_iterations": 64,
+          "shard_bytes": 64,
+          "warmups": 4
+        },
+        "plan": {
+          "dependency_workspace_bytes": 16,
+          "full_butterflies": 1792,
+          "fused_four_groups": 0,
+          "one_output_butterflies": 507,
+          "prefix_butterflies": 1513,
+          "retained_butterflies": 571,
+          "schedule_bytes": 784
+        },
+        "primary_abba": {
+          "design": "pairwise_prefix_call_local_ABBA",
+          "order_policy": "alternating_ABBA_BAAB",
+          "round_gain_percent": {
+            "mad": 0.664383,
+            "maximum": -28.421144,
+            "median": -29.085527,
+            "minimum": -29.965588,
+            "samples": [
+              -28.421144,
+              -29.085527,
+              -29.965588
+            ]
+          },
+          "rounds": [
+            {
+              "call_local_median_ns": 11804.125,
+              "candidate_gain_percent": -28.421144,
+              "log_contrast": -0.33437,
+              "observations_ns": [
+                8466.515625,
+                11837.171875,
+                11771.078125,
+                8431.96875
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 8449.242188,
+              "round": 0
+            },
+            {
+              "call_local_median_ns": 11808.421875,
+              "candidate_gain_percent": -29.085527,
+              "log_contrast": -0.343696,
+              "observations_ns": [
+                11834.984375,
+                8371.359375,
+                8376.359375,
+                11781.859375
+              ],
+              "order": [
+                "call_local",
+                "prefix",
+                "prefix",
+                "call_local"
+              ],
+              "prefix_median_ns": 8373.859375,
+              "round": 1
+            },
+            {
+              "call_local_median_ns": 11825.921875,
+              "candidate_gain_percent": -29.965588,
+              "log_contrast": -0.356183,
+              "observations_ns": [
+                8289.15625,
+                11810.765625,
+                11841.078125,
+                8275.265625
+              ],
+              "order": [
+                "prefix",
+                "call_local",
+                "call_local",
+                "prefix"
+              ],
+              "prefix_median_ns": 8282.210938,
+              "round": 2
+            }
+          ]
+        },
+        "resolved": {
+          "backend": "avx2",
+          "block_count": 7,
+          "padded_side": 128
+        },
+        "runtime": {
+          "allowed_cpus": [
+            3
+          ],
+          "executable_path": "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+          "linux_procfs_affinity_attested": true
+        },
+        "schema": "leopard2-sparse-encode-benchmark-v4"
+      },
+      "cell": {
+        "K": 128,
+        "R": 896,
+        "backend": "avx2",
+        "cell_kind": "sparse_candidate",
+        "field": "gf16",
+        "mask_name": "edge_sparse",
+        "profile": "low",
+        "requested_parity": [
+          0,
+          127,
+          128,
+          383,
+          895
+        ],
+        "shard_bytes": 64
+      },
+      "command": [
+        "/usr/bin/taskset",
+        "-c",
+        "3",
+        "/home/catid/leopard-worktrees/sparse-pinned-1daa40a/build/sparse-pinned-release/bench_leopard2_sparse_encode",
+        "--profile",
+        "low",
+        "--field",
+        "gf16",
+        "--k",
+        "128",
+        "--r",
+        "896",
+        "--bytes",
+        "64",
+        "--requested-parity",
+        "0,127,128,383,895",
+        "--backend",
+        "avx2",
+        "--iterations",
+        "64",
+        "--rounds",
+        "3",
+        "--warmups",
+        "4",
+        "--setup-iterations",
+        "64",
+        "--reuse",
+        "1,8,64",
+        "--memory-mib",
+        "768",
+        "--seed",
+        "6003370125125043534"
+      ],
+      "configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+      "error": null,
+      "job_id": "e7a5fbf3d2451dfdaadd",
+      "returncode": 0,
+      "schema": "leopard2-sparse-encode-crossover-job/v2",
+      "status": "passed",
+      "stderr_path": "jobs/e7a5fbf3d2451dfdaadd.stderr",
+      "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "stdout_path": "jobs/e7a5fbf3d2451dfdaadd.stdout",
+      "stdout_sha256": "e18a06179e5d6fa13789e8e3524ffec45be4297ed40c7e706acd312f1af60126"
+    }
+  ],
+  "manifest_configuration_id": "e9dd8ec60e5637ce986ff2ff7def739187dd5b252ba2d405190ec8713ea175f9",
+  "schema": "leopard2-sparse-encode-crossover/v2",
+  "source_changed_during_run": false,
+  "status": "passed",
+  "summary": {
+    "call_local_total": {
+      "cells": 9,
+      "cells_at_descriptive_5_percent": 4,
+      "descriptive_gain_max_percent": 61.163471,
+      "descriptive_gain_median_percent": -6.443898,
+      "descriptive_gain_min_percent": -37.476551,
+      "regressions": 5,
+      "severe_regressions_below_minus_2_percent": 5
+    },
+    "exact_prepared_execution": {
+      "cells": 9,
+      "cells_at_descriptive_5_percent": 5,
+      "descriptive_gain_max_percent": 66.040819871515,
+      "descriptive_gain_median_percent": 6.160736570620373,
+      "descriptive_gain_min_percent": -12.444525733847755,
+      "regressions": 4,
+      "severe_regressions_below_minus_2_percent": 3
+    },
+    "jobs_failed": 0,
+    "jobs_passed": 9,
+    "jobs_total": 9,
+    "modeled_amortized": {
+      "1": {
+        "cells": 9,
+        "cells_at_descriptive_5_percent": 4,
+        "descriptive_gain_max_percent": 61.40117419153859,
+        "descriptive_gain_median_percent": -6.408583345792085,
+        "descriptive_gain_min_percent": -35.97713766607365,
+        "regressions": 5,
+        "severe_regressions_below_minus_2_percent": 5
+      },
+      "64": {
+        "cells": 9,
+        "cells_at_descriptive_5_percent": 5,
+        "descriptive_gain_max_percent": 65.68263973113768,
+        "descriptive_gain_median_percent": 5.35079168370971,
+        "descriptive_gain_min_percent": -12.944504160856985,
+        "regressions": 4,
+        "severe_regressions_below_minus_2_percent": 3
+      },
+      "8": {
+        "cells": 9,
+        "cells_at_descriptive_5_percent": 4,
+        "descriptive_gain_max_percent": 63.218004026039786,
+        "descriptive_gain_median_percent": 0.009680426946490073,
+        "descriptive_gain_min_percent": -16.290613737022642,
+        "regressions": 4,
+        "severe_regressions_below_minus_2_percent": 4
+      }
+    },
+    "promotion_gate": {
+      "credible_regression_job_ids": [
+        "28679d12a0e08161ca26",
+        "e7a5fbf3d2451dfdaadd",
+        "3a0c731c230848c60529",
+        "45052c25170213677eb6",
+        "950a59e3f619b8327160"
+      ],
+      "eligible_sparse_job_ids": [
+        "143636c3953a281efa9f",
+        "411b5cac9cfdcd087cf8",
+        "71a66aba632b2ef4d275",
+        "a36375f59fcf99fde7a2"
+      ],
+      "passed": false,
+      "primary_only": "call-local exact versus prefix paired log contrast; prepared and modeled metrics excluded",
+      "production_promotion_sufficient": false,
+      "rule": "at least one sparse lower 95% Student-t bound >=5%; no prefix-neighbor lower bound >=5%; no upper bound below -2%",
+      "scope": "preliminary kernel evidence only; neighboring K/R and end-to-end public encoder gates remain external",
+      "suspicious_prefix_neighbor_job_ids": []
+    },
+    "round_level_inference": {
+      "prefix_neighbors": [
+        {
+          "all_rounds_positive": false,
+          "job_id": "3a0c731c230848c60529",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": false,
+            "credible_regression_below_minus_2_percent": true,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": -14.363864442034027,
+            "gain_student_t_interval_percent": [
+              -16.25889233337671,
+              -12.425952824776672
+            ],
+            "log_contrast_mean": -0.15506284754949937,
+            "log_contrast_standard_error": 0.005200826534288374,
+            "log_contrast_student_t_interval": [
+              -0.17744019803505023,
+              -0.1326854970639485
+            ],
+            "speedup_geometric_mean": 0.8563613555796598,
+            "speedup_student_t_interval": [
+              0.8374110766662329,
+              0.8757404717522332
+            ]
+          },
+          "round_gain_median_percent": -14.747991,
+          "round_gain_percent": [
+            -13.471102,
+            -14.86554,
+            -14.747991
+          ]
+        },
+        {
+          "all_rounds_positive": false,
+          "job_id": "45052c25170213677eb6",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": false,
+            "credible_regression_below_minus_2_percent": true,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": -37.57655560960574,
+            "gain_student_t_interval_percent": [
+              -38.584627233034446,
+              -36.55193750355911
+            ],
+            "log_contrast_mean": -0.4712292697900349,
+            "log_contrast_standard_error": 0.0037838846421027355,
+            "log_contrast_student_t_interval": [
+              -0.48751001137504757,
+              -0.4549485282050222
+            ],
+            "speedup_geometric_mean": 0.6242344439039426,
+            "speedup_student_t_interval": [
+              0.6141537276696555,
+              0.6344806249644089
+            ]
+          },
+          "round_gain_median_percent": -37.476551,
+          "round_gain_percent": [
+            -37.225677,
+            -38.02476,
+            -37.476551
+          ]
+        },
+        {
+          "all_rounds_positive": false,
+          "job_id": "950a59e3f619b8327160",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": false,
+            "credible_regression_below_minus_2_percent": true,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": -6.446884127740832,
+            "gain_student_t_interval_percent": [
+              -6.48414316776811,
+              -6.4096102427865995
+            ],
+            "log_contrast_mean": -0.06664082679690668,
+            "log_contrast_standard_error": 9.258137061805153e-05,
+            "log_contrast_student_t_interval": [
+              -0.06703917228393537,
+              -0.06624248130987799
+            ],
+            "speedup_geometric_mean": 0.9355311587225916,
+            "speedup_student_t_interval": [
+              0.9351585683223189,
+              0.935903897572134
+            ]
+          },
+          "round_gain_median_percent": -6.443898,
+          "round_gain_percent": [
+            -6.443898,
+            -6.463153,
+            -6.433599
+          ]
+        }
+      ],
+      "prefix_neighbors_with_blanket_5_percent_gain": 0,
+      "sparse_candidates": [
+        {
+          "all_rounds_positive": true,
+          "job_id": "143636c3953a281efa9f",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": true,
+            "credible_regression_below_minus_2_percent": false,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": 61.1979482758666,
+            "gain_student_t_interval_percent": [
+              61.03114216083421,
+              61.36492717909161
+            ],
+            "log_contrast_mean": 0.47746291618623243,
+            "log_contrast_standard_error": 0.0002406251188602565,
+            "log_contrast_student_t_interval": [
+              0.4764275898616831,
+              0.47849824251078177
+            ],
+            "speedup_geometric_mean": 1.611979482758666,
+            "speedup_student_t_interval": [
+              1.610311421608342,
+              1.613649271790916
+            ]
+          },
+          "round_gain_median_percent": 61.163471,
+          "round_gain_percent": [
+            61.275389,
+            61.155012,
+            61.163471
+          ]
+        },
+        {
+          "all_rounds_positive": false,
+          "job_id": "28679d12a0e08161ca26",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": false,
+            "credible_regression_below_minus_2_percent": true,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": -34.039569676666495,
+            "gain_student_t_interval_percent": [
+              -34.621151760057465,
+              -33.45281408947687
+            ],
+            "log_contrast_mean": -0.41611516431352474,
+            "log_contrast_standard_error": 0.0020583201775584035,
+            "log_contrast_student_t_interval": [
+              -0.42497140124452787,
+              -0.4072589273825216
+            ],
+            "speedup_geometric_mean": 0.659604303233335,
+            "speedup_student_t_interval": [
+              0.6537884823994253,
+              0.6654718591052313
+            ]
+          },
+          "round_gain_median_percent": -33.988257,
+          "round_gain_percent": [
+            -33.833974,
+            -33.988257,
+            -34.295641
+          ]
+        },
+        {
+          "all_rounds_positive": true,
+          "job_id": "411b5cac9cfdcd087cf8",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": true,
+            "credible_regression_below_minus_2_percent": false,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": 45.41542818641355,
+            "gain_student_t_interval_percent": [
+              44.977100089011905,
+              45.855081538085365
+            ],
+            "log_contrast_mean": 0.374424482054519,
+            "log_contrast_standard_error": 0.0007016296002647254,
+            "log_contrast_student_t_interval": [
+              0.3714056135395534,
+              0.3774433505694846
+            ],
+            "speedup_geometric_mean": 1.4541542818641355,
+            "speedup_student_t_interval": [
+              1.449771000890119,
+              1.4585508153808537
+            ]
+          },
+          "round_gain_median_percent": 45.485738,
+          "round_gain_percent": [
+            45.485738,
+            45.21452,
+            45.546241
+          ]
+        },
+        {
+          "all_rounds_positive": true,
+          "job_id": "71a66aba632b2ef4d275",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": true,
+            "credible_regression_below_minus_2_percent": false,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": 50.98729392570809,
+            "gain_student_t_interval_percent": [
+              50.867429886446814,
+              51.10725319684225
+            ],
+            "log_contrast_mean": 0.41202550109898023,
+            "log_contrast_standard_error": 0.00018458000581064092,
+            "log_contrast_student_t_interval": [
+              0.41123131743309205,
+              0.4128196847648684
+            ],
+            "speedup_geometric_mean": 1.5098729392570809,
+            "speedup_student_t_interval": [
+              1.5086742988644681,
+              1.5110725319684226
+            ]
+          },
+          "round_gain_median_percent": 50.971153,
+          "round_gain_percent": [
+            51.041577,
+            50.971153,
+            50.949167
+          ]
+        },
+        {
+          "all_rounds_positive": true,
+          "job_id": "a36375f59fcf99fde7a2",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": true,
+            "credible_regression_below_minus_2_percent": false,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": 33.80604757592512,
+            "gain_student_t_interval_percent": [
+              33.69732862115865,
+              33.9148549379264
+            ],
+            "log_contrast_mean": 0.29122115930886316,
+            "log_contrast_standard_error": 0.00018891642782145035,
+            "log_contrast_student_t_interval": [
+              0.2904083175249721,
+              0.29203400109275424
+            ],
+            "speedup_geometric_mean": 1.3380604757592511,
+            "speedup_student_t_interval": [
+              1.3369732862115864,
+              1.339148549379264
+            ]
+          },
+          "round_gain_median_percent": 33.816637,
+          "round_gain_percent": [
+            33.816637,
+            33.75795,
+            33.84357
+          ]
+        },
+        {
+          "all_rounds_positive": false,
+          "job_id": "e7a5fbf3d2451dfdaadd",
+          "paired_log_student_t": {
+            "confidence": 0.95,
+            "credible_gain_at_least_5_percent": false,
+            "credible_regression_below_minus_2_percent": true,
+            "degrees_of_freedom": 2,
+            "gain_geometric_mean_percent": -29.16024665142744,
+            "gain_student_t_interval_percent": [
+              -31.06029260722757,
+              -27.207833565410404
+            ],
+            "log_contrast_mean": -0.34474985488961946,
+            "log_contrast_standard_error": 0.006318895830233377,
+            "log_contrast_student_t_interval": [
+              -0.37193786928359807,
+              -0.31756184049564085
+            ],
+            "speedup_geometric_mean": 0.7083975334857257,
+            "speedup_student_t_interval": [
+              0.6893970739277243,
+              0.727921664345896
+            ]
+          },
+          "round_gain_median_percent": -29.085527,
+          "round_gain_percent": [
+            -28.421144,
+            -29.085527,
+            -29.965588
+          ]
+        }
+      ],
+      "sparse_candidates_with_lower_ci_at_least_5_percent": 4
+    }
+  }
+}

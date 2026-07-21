@@ -1,0 +1,369 @@
+{
+  "call_local_total": {
+    "cells": 9,
+    "cells_at_descriptive_5_percent": 4,
+    "descriptive_gain_max_percent": 61.163471,
+    "descriptive_gain_median_percent": -6.443898,
+    "descriptive_gain_min_percent": -37.476551,
+    "regressions": 5,
+    "severe_regressions_below_minus_2_percent": 5
+  },
+  "exact_prepared_execution": {
+    "cells": 9,
+    "cells_at_descriptive_5_percent": 5,
+    "descriptive_gain_max_percent": 66.040819871515,
+    "descriptive_gain_median_percent": 6.160736570620373,
+    "descriptive_gain_min_percent": -12.444525733847755,
+    "regressions": 4,
+    "severe_regressions_below_minus_2_percent": 3
+  },
+  "jobs_failed": 0,
+  "jobs_passed": 9,
+  "jobs_total": 9,
+  "modeled_amortized": {
+    "1": {
+      "cells": 9,
+      "cells_at_descriptive_5_percent": 4,
+      "descriptive_gain_max_percent": 61.40117419153859,
+      "descriptive_gain_median_percent": -6.408583345792085,
+      "descriptive_gain_min_percent": -35.97713766607365,
+      "regressions": 5,
+      "severe_regressions_below_minus_2_percent": 5
+    },
+    "64": {
+      "cells": 9,
+      "cells_at_descriptive_5_percent": 5,
+      "descriptive_gain_max_percent": 65.68263973113768,
+      "descriptive_gain_median_percent": 5.35079168370971,
+      "descriptive_gain_min_percent": -12.944504160856985,
+      "regressions": 4,
+      "severe_regressions_below_minus_2_percent": 3
+    },
+    "8": {
+      "cells": 9,
+      "cells_at_descriptive_5_percent": 4,
+      "descriptive_gain_max_percent": 63.218004026039786,
+      "descriptive_gain_median_percent": 0.009680426946490073,
+      "descriptive_gain_min_percent": -16.290613737022642,
+      "regressions": 4,
+      "severe_regressions_below_minus_2_percent": 4
+    }
+  },
+  "promotion_gate": {
+    "credible_regression_job_ids": [
+      "28679d12a0e08161ca26",
+      "e7a5fbf3d2451dfdaadd",
+      "3a0c731c230848c60529",
+      "45052c25170213677eb6",
+      "950a59e3f619b8327160"
+    ],
+    "eligible_sparse_job_ids": [
+      "143636c3953a281efa9f",
+      "411b5cac9cfdcd087cf8",
+      "71a66aba632b2ef4d275",
+      "a36375f59fcf99fde7a2"
+    ],
+    "passed": false,
+    "primary_only": "call-local exact versus prefix paired log contrast; prepared and modeled metrics excluded",
+    "production_promotion_sufficient": false,
+    "rule": "at least one sparse lower 95% Student-t bound >=5%; no prefix-neighbor lower bound >=5%; no upper bound below -2%",
+    "scope": "preliminary kernel evidence only; neighboring K/R and end-to-end public encoder gates remain external",
+    "suspicious_prefix_neighbor_job_ids": []
+  },
+  "round_level_inference": {
+    "prefix_neighbors": [
+      {
+        "all_rounds_positive": false,
+        "job_id": "3a0c731c230848c60529",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": false,
+          "credible_regression_below_minus_2_percent": true,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": -14.363864442034027,
+          "gain_student_t_interval_percent": [
+            -16.25889233337671,
+            -12.425952824776672
+          ],
+          "log_contrast_mean": -0.15506284754949937,
+          "log_contrast_standard_error": 0.005200826534288374,
+          "log_contrast_student_t_interval": [
+            -0.17744019803505023,
+            -0.1326854970639485
+          ],
+          "speedup_geometric_mean": 0.8563613555796598,
+          "speedup_student_t_interval": [
+            0.8374110766662329,
+            0.8757404717522332
+          ]
+        },
+        "round_gain_median_percent": -14.747991,
+        "round_gain_percent": [
+          -13.471102,
+          -14.86554,
+          -14.747991
+        ]
+      },
+      {
+        "all_rounds_positive": false,
+        "job_id": "45052c25170213677eb6",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": false,
+          "credible_regression_below_minus_2_percent": true,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": -37.57655560960574,
+          "gain_student_t_interval_percent": [
+            -38.584627233034446,
+            -36.55193750355911
+          ],
+          "log_contrast_mean": -0.4712292697900349,
+          "log_contrast_standard_error": 0.0037838846421027355,
+          "log_contrast_student_t_interval": [
+            -0.48751001137504757,
+            -0.4549485282050222
+          ],
+          "speedup_geometric_mean": 0.6242344439039426,
+          "speedup_student_t_interval": [
+            0.6141537276696555,
+            0.6344806249644089
+          ]
+        },
+        "round_gain_median_percent": -37.476551,
+        "round_gain_percent": [
+          -37.225677,
+          -38.02476,
+          -37.476551
+        ]
+      },
+      {
+        "all_rounds_positive": false,
+        "job_id": "950a59e3f619b8327160",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": false,
+          "credible_regression_below_minus_2_percent": true,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": -6.446884127740832,
+          "gain_student_t_interval_percent": [
+            -6.48414316776811,
+            -6.4096102427865995
+          ],
+          "log_contrast_mean": -0.06664082679690668,
+          "log_contrast_standard_error": 9.258137061805153e-05,
+          "log_contrast_student_t_interval": [
+            -0.06703917228393537,
+            -0.06624248130987799
+          ],
+          "speedup_geometric_mean": 0.9355311587225916,
+          "speedup_student_t_interval": [
+            0.9351585683223189,
+            0.935903897572134
+          ]
+        },
+        "round_gain_median_percent": -6.443898,
+        "round_gain_percent": [
+          -6.443898,
+          -6.463153,
+          -6.433599
+        ]
+      }
+    ],
+    "prefix_neighbors_with_blanket_5_percent_gain": 0,
+    "sparse_candidates": [
+      {
+        "all_rounds_positive": true,
+        "job_id": "143636c3953a281efa9f",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": true,
+          "credible_regression_below_minus_2_percent": false,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": 61.1979482758666,
+          "gain_student_t_interval_percent": [
+            61.03114216083421,
+            61.36492717909161
+          ],
+          "log_contrast_mean": 0.47746291618623243,
+          "log_contrast_standard_error": 0.0002406251188602565,
+          "log_contrast_student_t_interval": [
+            0.4764275898616831,
+            0.47849824251078177
+          ],
+          "speedup_geometric_mean": 1.611979482758666,
+          "speedup_student_t_interval": [
+            1.610311421608342,
+            1.613649271790916
+          ]
+        },
+        "round_gain_median_percent": 61.163471,
+        "round_gain_percent": [
+          61.275389,
+          61.155012,
+          61.163471
+        ]
+      },
+      {
+        "all_rounds_positive": false,
+        "job_id": "28679d12a0e08161ca26",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": false,
+          "credible_regression_below_minus_2_percent": true,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": -34.039569676666495,
+          "gain_student_t_interval_percent": [
+            -34.621151760057465,
+            -33.45281408947687
+          ],
+          "log_contrast_mean": -0.41611516431352474,
+          "log_contrast_standard_error": 0.0020583201775584035,
+          "log_contrast_student_t_interval": [
+            -0.42497140124452787,
+            -0.4072589273825216
+          ],
+          "speedup_geometric_mean": 0.659604303233335,
+          "speedup_student_t_interval": [
+            0.6537884823994253,
+            0.6654718591052313
+          ]
+        },
+        "round_gain_median_percent": -33.988257,
+        "round_gain_percent": [
+          -33.833974,
+          -33.988257,
+          -34.295641
+        ]
+      },
+      {
+        "all_rounds_positive": true,
+        "job_id": "411b5cac9cfdcd087cf8",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": true,
+          "credible_regression_below_minus_2_percent": false,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": 45.41542818641355,
+          "gain_student_t_interval_percent": [
+            44.977100089011905,
+            45.855081538085365
+          ],
+          "log_contrast_mean": 0.374424482054519,
+          "log_contrast_standard_error": 0.0007016296002647254,
+          "log_contrast_student_t_interval": [
+            0.3714056135395534,
+            0.3774433505694846
+          ],
+          "speedup_geometric_mean": 1.4541542818641355,
+          "speedup_student_t_interval": [
+            1.449771000890119,
+            1.4585508153808537
+          ]
+        },
+        "round_gain_median_percent": 45.485738,
+        "round_gain_percent": [
+          45.485738,
+          45.21452,
+          45.546241
+        ]
+      },
+      {
+        "all_rounds_positive": true,
+        "job_id": "71a66aba632b2ef4d275",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": true,
+          "credible_regression_below_minus_2_percent": false,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": 50.98729392570809,
+          "gain_student_t_interval_percent": [
+            50.867429886446814,
+            51.10725319684225
+          ],
+          "log_contrast_mean": 0.41202550109898023,
+          "log_contrast_standard_error": 0.00018458000581064092,
+          "log_contrast_student_t_interval": [
+            0.41123131743309205,
+            0.4128196847648684
+          ],
+          "speedup_geometric_mean": 1.5098729392570809,
+          "speedup_student_t_interval": [
+            1.5086742988644681,
+            1.5110725319684226
+          ]
+        },
+        "round_gain_median_percent": 50.971153,
+        "round_gain_percent": [
+          51.041577,
+          50.971153,
+          50.949167
+        ]
+      },
+      {
+        "all_rounds_positive": true,
+        "job_id": "a36375f59fcf99fde7a2",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": true,
+          "credible_regression_below_minus_2_percent": false,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": 33.80604757592512,
+          "gain_student_t_interval_percent": [
+            33.69732862115865,
+            33.9148549379264
+          ],
+          "log_contrast_mean": 0.29122115930886316,
+          "log_contrast_standard_error": 0.00018891642782145035,
+          "log_contrast_student_t_interval": [
+            0.2904083175249721,
+            0.29203400109275424
+          ],
+          "speedup_geometric_mean": 1.3380604757592511,
+          "speedup_student_t_interval": [
+            1.3369732862115864,
+            1.339148549379264
+          ]
+        },
+        "round_gain_median_percent": 33.816637,
+        "round_gain_percent": [
+          33.816637,
+          33.75795,
+          33.84357
+        ]
+      },
+      {
+        "all_rounds_positive": false,
+        "job_id": "e7a5fbf3d2451dfdaadd",
+        "paired_log_student_t": {
+          "confidence": 0.95,
+          "credible_gain_at_least_5_percent": false,
+          "credible_regression_below_minus_2_percent": true,
+          "degrees_of_freedom": 2,
+          "gain_geometric_mean_percent": -29.16024665142744,
+          "gain_student_t_interval_percent": [
+            -31.06029260722757,
+            -27.207833565410404
+          ],
+          "log_contrast_mean": -0.34474985488961946,
+          "log_contrast_standard_error": 0.006318895830233377,
+          "log_contrast_student_t_interval": [
+            -0.37193786928359807,
+            -0.31756184049564085
+          ],
+          "speedup_geometric_mean": 0.7083975334857257,
+          "speedup_student_t_interval": [
+            0.6893970739277243,
+            0.727921664345896
+          ]
+        },
+        "round_gain_median_percent": -29.085527,
+        "round_gain_percent": [
+          -28.421144,
+          -29.085527,
+          -29.965588
+        ]
+      }
+    ],
+    "sparse_candidates_with_lower_ci_at_least_5_percent": 4
+  }
+}
