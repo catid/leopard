@@ -1,0 +1,151 @@
+{
+  "schema": "leopard2-gf8-small-high-encode-evidence/v1",
+  "implementation_commit": "8c54abd6a74eadae4267b94f1f1c63c519bada59",
+  "selector_commit": "db725de35eb021357b88fc8cdf254722bac0ee71",
+  "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+  "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+  "benchmark_cpu": 5,
+  "reserved_sibling": 21,
+  "allowed_cpu_set_at_launch": [0, 5, 21],
+  "ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+  "statistics": {
+    "independent_rounds": 3,
+    "order_per_round": ["baseline", "candidate", "candidate", "baseline"],
+    "samples_per_child": 9,
+    "confidence": 0.95,
+    "method": "one mean log contrast per round; Student-t interval with 2 degrees of freedom"
+  },
+  "binary_identity": {
+    "candidate_executable_sha256": "d7c3da0b8902121006538d5749a2607347557816e5a4a50f0b3dc76ff3cbac43",
+    "baseline_executable_sha256": "3559d1bd0a2812a22511d8f54ecd5d157b5f043bbc648ad67fbdf5de71690835"
+  },
+  "validation": {
+    "focused_release_tests_passed": 9,
+    "focused_release_tests_failed": 0,
+    "clang_version": "18.1.3",
+    "asan_ubsan_tests_passed": 8,
+    "asan_ubsan_tests_failed": 0,
+    "asan_detect_leaks": true,
+    "ubsan_halt_on_error": true,
+    "accepted_manifest_replays_passed": 7,
+    "accepted_manifest_replays_failed": 0,
+    "broad_fuzzing": "not_run_by_optimization-focused_scope"
+  },
+  "accepted": [
+    {
+      "id": "k16-r2-64k-v2",
+      "k": 16,
+      "r": 2,
+      "shard_bytes": 65536,
+      "encode_speedup": 1.465766299564515,
+      "ci95_lower": 1.4431684930179434,
+      "ci95_upper": 1.4887179531242296,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "3279149290cf1f32a31395fd4db83d953028609ab4f316338b96dc9dd1084e88",
+      "manifest_file_sha256": "d91ec0f6cbff949d3ada7a572a97020df11ab6de169e33e638a30ee28ca6d765"
+    },
+    {
+      "id": "k16-r4-64k",
+      "k": 16,
+      "r": 4,
+      "shard_bytes": 65536,
+      "encode_speedup": 1.1997978470818784,
+      "ci95_lower": 1.1956327040231625,
+      "ci95_upper": 1.203977499961747,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "9c262f746eb4246ee75b26eb9dde2ddfa0eea06fc555b3bec14f608cddc83c0c",
+      "manifest_file_sha256": "198e2c838673e5f49f0715251c75cd7a99254fccc3243f525b43100303c37b28"
+    },
+    {
+      "id": "k64-r2-4k",
+      "k": 64,
+      "r": 2,
+      "shard_bytes": 4096,
+      "encode_speedup": 1.1890012708697202,
+      "ci95_lower": 1.165147731749559,
+      "ci95_upper": 1.2133431526378153,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "b106d2f0b5c259a56037466019d8bd00987a2402733af62984fdf700341013f9",
+      "manifest_file_sha256": "f9142e30d51891dcdf8653e733a9dee4c956a53d2522a75db86754ad2a4ae5e2"
+    },
+    {
+      "id": "k64-r2-64k",
+      "k": 64,
+      "r": 2,
+      "shard_bytes": 65536,
+      "encode_speedup": 1.4713320274276367,
+      "ci95_lower": 1.4402089070219273,
+      "ci95_upper": 1.5031277229153812,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "824161f3d213efc591020d87718b8fe19d5a69bf4e18a8a3a5ce8cd59ea743c2",
+      "manifest_file_sha256": "eb43585c2adbed260a0002dea8ccd1b4bb088550a95bd499123f6bc2ecf72207"
+    },
+    {
+      "id": "k64-r4-4k",
+      "k": 64,
+      "r": 4,
+      "shard_bytes": 4096,
+      "encode_speedup": 1.1545015550865887,
+      "ci95_lower": 1.1180473041071652,
+      "ci95_upper": 1.1921444073081857,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "c1707c82e0e72ec06627bb251e6be15ed75312f24cc6a18e9fc4e2d481d8f8b9",
+      "manifest_file_sha256": "dbef87423980f2748c5436bcc26cfdf447a43e62d4731f1f1331287cb701e0db"
+    },
+    {
+      "id": "k64-r4-64k",
+      "k": 64,
+      "r": 4,
+      "shard_bytes": 65536,
+      "encode_speedup": 1.2972017131460265,
+      "ci95_lower": 1.2761775713297459,
+      "ci95_upper": 1.3185722131408564,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "b82c95da1162195d861091e9d203e2811feb6265d6e745f33b628df79ddd7a06",
+      "manifest_file_sha256": "a5c4c3f4a6af664d68b929cdf896542889d5c2716605554b8dfd3302efc3eb52"
+    },
+    {
+      "id": "k240-r4-64k",
+      "k": 240,
+      "r": 4,
+      "shard_bytes": 65536,
+      "encode_speedup": 1.2915060164166974,
+      "ci95_lower": 1.2732412517159997,
+      "ci95_upper": 1.3100327908733016,
+      "sibling_nonidle_jiffies": 0,
+      "workload_digests_match": true,
+      "manifest_digest": "93c01ce613d18a090273b53e272a12ed2d5ef9f60e48a9230992833f57d0ba27",
+      "manifest_file_sha256": "808ae9d084581510e4b7930065134d5b9bf270904b2bb4ae6301b6041f1d3b0b"
+    }
+  ],
+  "excluded": [
+    {
+      "id": "k8-r4-4k",
+      "disposition": "not_promoted",
+      "reason": "The child comparison did not clear the 5 percent lower-confidence-bound gate, and its enclosing affinity supervisor explicitly rejected authoritative completion. The run is retained only as a rejected diagnostic and is not accepted evidence.",
+      "diagnostic_manifest_file_sha256": "d4b261ea78d8c2a3c50351f44ba265a9d59eb9d082b3235a3f207f2d7ac6b207",
+      "rejected_supervisor_report_sha256": "d972bed0fd57aa238f7cdef939795c7e543e5a56f687817a54ddc0cdb047c1f3"
+    },
+    {
+      "id": "k240-r2-64k",
+      "disposition": "timing_inconclusive_not_promoted",
+      "reason": "Both atomic campaigns failed closed because the reserved SMT sibling accumulated five non-idle jiffies. No timing from either launch is used.",
+      "failed_launches": [
+        {
+          "sibling_nonidle_jiffies": 5,
+          "failure_file_sha256": "92bf7eacd1f2bbdd153c2422e785a1d22fae0a882645f2c71c4b883db342ae8a"
+        },
+        {
+          "sibling_nonidle_jiffies": 5,
+          "failure_file_sha256": "45c3b4dcb50f4d308e38c751c73d71c9b90e7c5b500c167d56efda22a34261bd"
+        }
+      ]
+    }
+  ]
+}

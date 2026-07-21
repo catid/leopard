@@ -120,6 +120,13 @@ legacy-high block, including the first, to copy-first in the qualified region.
 Scalar, SSSE3, GF8, low-profile interpolation, smaller sides, and passes no
 larger than 16 KiB retain the measured source-staging path.
 
+A later GF8 follow-up replaces the legacy copy-first accumulator specifically
+for qualified `T=2` and `T=4` AVX2 cells.  It preserves the same wire profile
+while feeding complete message blocks directly into inverse-transform XOR
+accumulation.  Its conservative selector, exact-main results, and explicit
+negative cells are recorded under
+`experiments/leopard2/gf8_high_encode/results/8c54abd-small-t-amd9950x3d/`.
+
 The rebuilt final policy then passed 56 of 56 isolated ABBA launches with no
 rejections and exact original, parity, and recovery digests. Control-time over
 candidate-time geometric means were 1.023x for K=1000/R=200 at 16 KiB, 0.997x

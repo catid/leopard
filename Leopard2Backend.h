@@ -233,11 +233,13 @@ typedef void (*FF8HighEncodeOneBlock)(
 // compatibility path's per-message-block copy through work[side..2*side).
 //
 // side must be 2 or 4.  data[0..original_count) are read-only and disjoint
-// from the pairwise-disjoint work[0..side) outputs.  inverse_skew points at
-// the first message coset (the field table's +side entry), while forward_skew
-// points at the parity coset.  The callback is optional and may be used for a
-// contiguous requested parity prefix: it materializes all side parent-code
-// parity coordinates, placing unrequested or punctured suffix coordinates in
+// from all pairwise-disjoint work[0..2*side) slots.  work[0..side) receive the
+// parent-code parity coordinates; work[side..2*side) are temporary scratch and
+// have unspecified contents on return.  inverse_skew points at the first
+// message coset (the field table's +side entry), while forward_skew points at
+// the parity coset.  The callback is optional and may be used for a contiguous
+// requested parity prefix: it materializes all side parent-code parity
+// coordinates, placing unrequested or punctured suffix coordinates in
 // caller-provided scratch slots.
 typedef void (*FF8HighEncodeSmall)(
     const void* const* data,
