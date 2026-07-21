@@ -5494,28 +5494,14 @@ static leo2_result EncodeInternal(
 
     if (geometry.aligned_prefix_bytes != 0)
     {
-        const size_t total_tiles =
-            geometry.aligned_prefix_bytes / kScratchAlignment;
-        size_t first_tile = 0;
-        for (size_t pass_index = 0;
-            pass_index < geometry.execution_tile_count; ++pass_index)
+        if (geometry.execution_tile_count == 1)
         {
-            const size_t passes_left =
-                geometry.execution_tile_count - pass_index;
-            const size_t tiles_left = total_tiles - first_tile;
-            const size_t pass_tiles =
-                (tiles_left + passes_left - 1U) / passes_left;
-            const size_t pass_bytes = pass_tiles * kScratchAlignment;
-            const size_t source_offset = first_tile * kScratchAlignment;
-            PopulateEncodeInputs(
-                codec, original, source_offset, pass_bytes, NULL, pointers);
-
             if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
             {
                 for (size_t i = 0; i < geometry.work_count; ++i)
                 {
                     work[i] = i < requested_recovery_prefix && recovery[i]
-                        ? static_cast<uint8_t*>(recovery[i]) + source_offset
+                        ? recovery[i]
                         : work_storage + i * geometry.work_slot_bytes;
                 }
             }
@@ -5524,20 +5510,61 @@ static leo2_result EncodeInternal(
                 for (size_t i = 0; i < geometry.work_count; ++i)
                     work[i] = work_storage + i * geometry.work_slot_bytes;
                 for (uint32_t i = 0; i < codec->recovery_count; ++i)
-                    parity[i] = recovery[i]
-                        ? static_cast<uint8_t*>(recovery[i]) + source_offset
-                        : NULL;
+                    parity[i] = recovery[i];
             }
-            const void* const* const pass_original =
-                const_cast<const void* const*>(pointers);
             ExecuteTransformEncodePass(
-                codec, transform_ops, pass_bytes,
+                codec, transform_ops, geometry.aligned_prefix_bytes,
                 geometry.aligned_prefix_bytes,
                 requested_recovery_count, requested_recovery_prefix,
-                pass_original, parity, work, &sparse_plans);
-            first_tile += pass_tiles;
+                original, parity, work, &sparse_plans);
         }
-        LEO_DEBUG_ASSERT(first_tile == total_tiles);
+        else
+        {
+            const size_t total_tiles =
+                geometry.aligned_prefix_bytes / kScratchAlignment;
+            size_t first_tile = 0;
+            for (size_t pass_index = 0;
+                pass_index < geometry.execution_tile_count; ++pass_index)
+            {
+                const size_t passes_left =
+                    geometry.execution_tile_count - pass_index;
+                const size_t tiles_left = total_tiles - first_tile;
+                const size_t pass_tiles =
+                    (tiles_left + passes_left - 1U) / passes_left;
+                const size_t pass_bytes = pass_tiles * kScratchAlignment;
+                const size_t source_offset = first_tile * kScratchAlignment;
+                PopulateEncodeInputs(
+                    codec, original, source_offset, pass_bytes, NULL, pointers);
+
+                if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+                {
+                    for (size_t i = 0; i < geometry.work_count; ++i)
+                    {
+                        work[i] = i < requested_recovery_prefix && recovery[i]
+                            ? static_cast<uint8_t*>(recovery[i]) + source_offset
+                            : work_storage + i * geometry.work_slot_bytes;
+                    }
+                }
+                else
+                {
+                    for (size_t i = 0; i < geometry.work_count; ++i)
+                        work[i] = work_storage + i * geometry.work_slot_bytes;
+                    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                        parity[i] = recovery[i]
+                            ? static_cast<uint8_t*>(recovery[i]) + source_offset
+                            : NULL;
+                }
+                const void* const* const pass_original =
+                    const_cast<const void* const*>(pointers);
+                ExecuteTransformEncodePass(
+                    codec, transform_ops, pass_bytes,
+                    geometry.aligned_prefix_bytes,
+                    requested_recovery_count, requested_recovery_prefix,
+                    pass_original, parity, work, &sparse_plans);
+                first_tile += pass_tiles;
+            }
+            LEO_DEBUG_ASSERT(first_tile == total_tiles);
+        }
     }
 
     if (geometry.tail_bytes != 0)
