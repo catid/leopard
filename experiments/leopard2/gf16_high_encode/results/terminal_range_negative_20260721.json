@@ -1,0 +1,111 @@
+{
+  "schema": "leopard2-gf16-terminal-range-negative/v1",
+  "date_utc": "2026-07-21",
+  "status": "rejected_below_promotion_threshold",
+  "bead": "leopard-79h.38.5.4",
+  "hypothesis": "The terminal legacy-high GF16 inverse stages still dispatched one backend call and prepared eight fixed-multiplier nibble rows per shard pair. Optional AVX2-family range callbacks could amortize that setup without changing arithmetic order or parity bytes.",
+  "candidate": {
+    "base_commit": "91d87be277185441380b89f3eb6c678534ef531f",
+    "implementation_state": "uncommitted diagnostic diff, fully reverted after the kill decision",
+    "diff_sha256": "f10a0e0dc15bd878a6b4884d40184149afb621c47c6bc2070ee923217470fed8",
+    "diff_sha256_definition": "SHA-256 of git diff restricted to the six changed production/test files in repository order.",
+    "summary": "Added optional AVX2 and AVX-512VL terminal inverse radix-two, accumulating radix-two, and accumulating split-radix-four range callbacks; scalar, SSSE3, low-profile, wire-format, and public-API behavior remained unchanged.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "production_change_retained": false,
+    "candidate_archive": {
+      "path": "/home/catid/leopard-worktrees/gf16-high-gap-91d87be/build/gf16-range/libleopard.a",
+      "sha256": "a9647ec15d45828013b6447c29d2303a469fe7a0f9c2129a487b9aa34957d75e",
+      "bytes": 724174
+    }
+  },
+  "control": {
+    "source_commit": "9d6d975b3533732016595b257d96a0978beed7f1",
+    "archive": {
+      "path": "/tmp/leopard2-root-release/libleopard.a",
+      "sha256": "71a63a2a333f76c47b2e57ca830d389799dda7569e335c89c8b401beb91ef811",
+      "bytes": 717182
+    },
+    "source_identity_limitation": "The control was rebuilt from root commit 9d6d975 while the candidate was based on 91d87be. The intervening commits 8c38d72 and 9d6d975 change direct-repair tests and C API integer selector validation, not LeopardFF16.cpp or an ISA backend. This makes the screen strong directional kill evidence, but not strict identical-source promotion evidence."
+  },
+  "benchmark": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "method": {
+      "order_per_round": ["control", "candidate", "candidate", "control"],
+      "rounds": 3,
+      "iterations_per_process": 9,
+      "warmups_per_process": 2,
+      "reuse_per_sample": 8,
+      "batch": 1,
+      "threads": 1,
+      "profile": "legacy_high_v1",
+      "field": "gf16",
+      "requested_backend": "auto",
+      "resolved_context_backend": "avx2",
+      "loss_count": 8
+    },
+    "isolation": [
+      {
+        "cell": "k1000-r200-64k",
+        "sibling_before": [2632124, 73201, 48801, 46139516, 3997, 0, 34, 0, 0, 0],
+        "sibling_after": [2632124, 73201, 48801, 46141822, 3997, 0, 34, 0, 0, 0],
+        "sibling_nonidle_delta_jiffies": 0
+      },
+      {
+        "cell": "k4096-r512-4k",
+        "sibling_before": [2632124, 73201, 48802, 46142852, 3997, 0, 34, 0, 0, 0],
+        "sibling_after": [2632124, 73201, 48802, 46143369, 3997, 0, 34, 0, 0, 0],
+        "sibling_nonidle_delta_jiffies": 0
+      }
+    ],
+    "raw_bundle": {
+      "path": "/tmp/leo2-gf16-terminal-range-91d87be-20260721",
+      "json_file_count": 24,
+      "sha256": "bc290a16cf38980e1a7e7f9c6943bc68a103b9224f36a902df7433210aee98de",
+      "sha256_definition": "SHA-256 of the sorted relative-path sha256sum lines for every JSON file in the bundle."
+    },
+    "cells": [
+      {
+        "id": "k1000-r200-64k",
+        "K": 1000,
+        "R": 200,
+        "shard_bytes": 65536,
+        "seed": 1000200,
+        "round_control_over_candidate": [1.010875907, 1.022409342, 1.013446970],
+        "aggregate_geometric_speedup": 1.01557,
+        "workload_digests": {
+          "original_data": "139c485152b304f3",
+          "transmitted_parity": "4d5e93d271a555ef",
+          "recovered_originals": "53696d779eead970"
+        },
+        "unique_digest_sets_across_12_processes": 1,
+        "round_trip_passes": 12,
+        "decision": "rejected_1_56_percent_is_below_five_percent_gate"
+      },
+      {
+        "id": "k4096-r512-4k",
+        "K": 4096,
+        "R": 512,
+        "shard_bytes": 4096,
+        "seed": 4096512,
+        "round_control_over_candidate": [0.997651592, 1.002710252, 1.000575767],
+        "aggregate_geometric_speedup": 1.00031,
+        "workload_digests": {
+          "original_data": "044ebafc32cf738e",
+          "transmitted_parity": "72c25a962d1c7bbe",
+          "recovered_originals": "a0989c0e56309c21"
+        },
+        "unique_digest_sets_across_12_processes": 1,
+        "round_trip_passes": 12,
+        "decision": "rejected_statistical_tie"
+      }
+    ]
+  },
+  "pre_timing_validation": {
+    "release_focused": "9/9 passed: backend ops, context backends, AUTO encode backend, API, GF16 tails, GF16 padded odd, GF16 legacy encoder matrix, encode concurrency, and legacy golden vectors.",
+    "candidate_and_control_parity": "All timed processes produced one exact digest triplet per cell and completed the Leopard2 round trip."
+  },
+  "kill_rationale": "The candidate saved only 1.56% in one target and was neutral in the other, far below the required credible 5% improvement. Its four additional operation-table members and approximately 7 KiB archive growth are not justified. All production and test changes were reverted; only this negative checkpoint is retained."
+}
