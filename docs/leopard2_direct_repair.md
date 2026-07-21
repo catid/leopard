@@ -3,21 +3,22 @@
 ## Scope and dispatch
 
 Leopard2 retains the specialized low/high LCH decoders and the generic
-`O(N log N)` decoder.  An immutable direct-repair plan is selected only when
-all of the following deterministic conditions hold:
+`O(N log N)` decoder.  An immutable direct-repair plan is selected in three
+measured regions:
 
-- generic decoding was not explicitly forced;
-- `2 <= K <= 16`;
-- one through four original shards are missing;
-- the parent systematic dimension is at most 256; and
-- neither the existing `R=1` XOR path nor the existing `K=1` copy path applies.
+- the original bounded region, `2 <= K <= 16`, for one through four missing
+  originals and a parent systematic dimension no larger than 256;
+- a GF8/AVX2 legacy-high region for exactly one missing original when
+  `17 <= K <= 128`, `P=T`, and the parent is `N=2P`; and
+- the separately measured GF8/AVX2 `K=65`, `P=T=128` region for one through
+  eight missing originals.
 
-Every other case falls back to the existing locator and transform decoder.
-The deliberately small production region was chosen after measuring the cells
-below and keeps the initial derivation, codec setup, and review surface bounded.
-It is not a claim that `K=17` is a mathematical or performance crossover.
-Expanding the region requires additional pinned measurements and randomized
-coverage, not a wire-format change.
+Forced generic, specialized, tiled, or materialized decoding disables direct
+repair.  The existing `R=1` XOR and `K=1` copy paths remain earlier dispatch
+choices.  Other cases use the locator and transform decoder.  The added
+one-loss region is deliberately tied to the exact profile, field, backend,
+and parent shapes measured below; it is not a general claim that direct repair
+wins for multiple losses or for unequal rounded sides.
 
 ## Generator-row derivation
 
@@ -87,11 +88,13 @@ original directly to its caller-provided disjoint output and uses scratch only
 for the existing overlap/range validation array.
 
 GF8 fixed multiply and multiply-add accept any positive byte count.  Complete
-64-byte tiles use the current SSSE3/AVX2/AVX512 backend and a trailing partial tile uses
-scalar field elements.  GF16 uses the same optimized complete-tile kernels and
-handles an even compact tail as `q` low bytes followed by `q` high bytes.  Odd
-GF16 byte counts remain unsupported.  No-loss, `R=1`, `K=1`, specialized LCH,
-and generic fallback semantics are unchanged.
+64-byte tiles use the current SSSE3/AVX2/AVX512 backend.  The measured extended
+GF8/AVX2 regions zero-pad a trailing partial tile on the stack and run the same
+backend kernel; the original small region retains its scalar field-element
+tail.  GF16 uses optimized complete-tile kernels and handles an even compact
+tail as `q` low bytes followed by `q` high bytes.  Odd GF16 byte counts remain
+unsupported.  No-loss, `R=1`, `K=1`, specialized LCH, and generic fallback
+semantics are unchanged.
 
 ## Correctness evidence
 
@@ -109,7 +112,11 @@ The production API test now checks:
 - an independent direct-algebra check that enumerates aligned cosets through
   dimension 256 in GF8 and GF16 and verifies every barycentric denominator
   against `product(V_d \\ {0})`; and
-- the accepted `K=16` and fallback `K=17` scratch/dispatch boundary.
+- exact dispatch boundaries for the bounded region, the equal-rounded one-loss
+  region, and the `K=65` eight-loss exception; and
+- targeted one-loss execution at `K=17,32,33,64,66,128`, both lower and upper
+  equal-rounded `R` boundaries, scalar tails, aligned buffers, and a 1 MiB
+  shard, with every result compared to the independent/generic oracle.
 
 Validation commands completed on 2026-07-16:
 
@@ -126,6 +133,11 @@ compiled `leopard2.cpp` with `-Wall -Wextra -Wpedantic -Wconversion
 -Wsign-conversion -Wshadow -Werror`; both FF translation units passed
 `-Wall -Wextra -Wpedantic -Werror` after suppressing the repository's existing
 `FFTSkew - 1` array-bounds diagnostic.
+
+A 2026-07-21 follow-up rebuilt and passed `leopard2_api`,
+`leopard2_direct_oracle`, and `leopard2_direct_repair` in both Release and
+Clang 18 ASan+UBSan configurations after extending the selector.  This focused
+optimization pass intentionally did not run a new broad fuzz campaign.
 
 ## Pinned crossover evidence
 
@@ -149,3 +161,34 @@ Machine-readable results are in the ignored directory
 `.research/leopard2/direct_repair_bench/`.  Direct plan setup medians ranged
 from 0.28 to 1.45 microseconds in these cells.  The forced-generic setup ranged
 from 0.19 to 36.05 microseconds; setup and execution are reported separately.
+
+## Equal-rounded one-loss promotion
+
+A 30-worker directional matrix compared direct repair with the same-binary
+forced translated-low transform over 1,950 cells: the requested 13 `K` values
+from 17 through 128, three equal-rounded `R` boundaries per `K`, loss counts
+1, 4, 8, 12, and 16, ten shard sizes from 1 byte through 1 MiB, and reuse
+counts 1, 8, 64, and 1024.  Every data, parity, and repaired-output digest
+matched.  One loss won all 390 cells, with minimum execution and reuse-one
+speedups of 1.369x and 1.577x respectively.  Multi-loss results were
+fragmented, so they were not generalized beyond the existing `K=65`
+exception.
+
+The promotion gate then compared against the exact Leopard1 `main` codec at
+commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`, not merely against another
+Leopard2 path.  Thirty representative cells covered ten `(K,R)` pairs and
+64-byte, 4-KiB, and 1-MiB shards.  Each cell used three pinned A/B/B/A rounds,
+15 measured iterations per process, four warmups, identical workload digests,
+and candidate time equal to execution plus plan setup divided by reuse.  A
+cell was discarded and rerun if the reserved SMT sibling accumulated even one
+non-idle jiffy.  All 30 accepted cells had zero such activity, selected the
+direct path, and matched all digests.  Mean paired Leopard1-over-Leopard2
+speedups ranged from 6.128x to 58.769x; even the weakest cell's 95-percent
+interval was `[5.858x, 6.399x]`.
+
+The measured executable and static archive were then rebuilt from clean commit
+`b665ed0fb3c8d2479eec6129fb43672a1a328630` and matched byte for byte.  The
+full per-cell medians, confidence intervals, source and binary hashes,
+raw-bundle manifests, exclusions, directional summary, and selector definition
+are in
+`experiments/leopard2/direct_repair/results/one_loss_equal_rounded_exact_main.json`.
