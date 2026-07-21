@@ -39,6 +39,17 @@ rejected and remains on AVX2.  A later GF16 terminal-range callback experiment
 was also rejected at only 1.016x and 1.000x in its two targets, so none of that
 candidate code is present.
 
+The later GF16 K=1000/R=200/64-KiB byte-tiling checkpoint halves Leopard2
+scratch from 33,585,728 to 16,808,512 bytes and improves the prior Leopard2
+implementation by 1.135x for full parity (1.108x--1.147x for measured parity
+subsets).  A clean exact-main ABBA gate nevertheless measures only 0.97678x,
+95% CI [0.97349, 0.98008], so Leopard2 remains 2.32% slower than exact Leopard
+main in that full-output cell.  The optimization is retained as a composable
+scratch and same-source improvement, but the GF16 exact-main encoder gap is not
+closed.  A distinct K=1000/R=199 neighbor measures 1.01049x, 95% CI
+[1.00875, 1.01224]; it is not evidence for the R=200 prefix-output branch,
+because Leopard1 has no parity-subset API.
+
 Machine-readable evidence, including binary/source identities, raw-bundle
 hashes, isolation limits, selector bounds, and validation, is retained in:
 
@@ -46,6 +57,7 @@ hashes, isolation limits, selector bounds, and validation, is retained in:
 - `experiments/leopard2/high_decode_copy/results/high_low_translation_checkpoint.json`
 - `experiments/leopard2/direct_repair/results/k65_exact_main_checkpoint.json`
 - `experiments/leopard2/gf8_balanced_encode/results/checkpoint.json`
+- `experiments/leopard2/gf16_high_encode/results/byte_tiling_positive_20260721.json`
 - `experiments/leopard2/gf16_high_encode/results/terminal_range_negative_20260721.json`
 
 ## Earlier full-matrix checkpoint: 2026-07-18

@@ -144,6 +144,47 @@
       }
     ]
   },
+  "exact_leopard_main_gate": {
+    "status": "target_gap_remains_open",
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+    "source_identity": {
+      "leopard2_commit": "8b69b39cf6a249b40c8c4e1b17277ce18c497b22",
+      "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "candidate_executable_sha256": "623669a00b471d68a45fdaaf83b6ac2b1e8a9719b8aeb719c81792344a3b41e6",
+      "candidate_archive_sha256": "60d906d20d1834668a5296bbbb971d34947d76a6df5c0b8a7913d617d7e1f0c2",
+      "baseline_executable_sha256": "35dad5646033625d350ed5b614747a672dfc32dbf4561f2064d902bb6db8e310",
+      "baseline_archive_sha256": "6be670c3b93309f0f21fd237e99f993817aabb8d837ef13ed82a25a873cbe3cf"
+    },
+    "method": "Three independent ABBA rounds, six constituent pairs, nine retained samples per invocation, two warmups, one thread, CPU 4 with SMT sibling 20 reserved, and a fail-closed zero-nonidle-jiffy sibling gate. The committed v6 verifier passed source, object, archive, link, runtime, workload-digest, and isolation closure. Contaminated attempts on other CPU pairs and two rejected prefix attempts were retained only as failure bundles and were not analyzed.",
+    "full_output_target": {
+      "K": 1000,
+      "R": 200,
+      "T": 256,
+      "N": 2048,
+      "shard_bytes": 65536,
+      "geometric_speedup": 0.976778479,
+      "ci95_lower": 0.973490995,
+      "ci95_upper": 0.980077065,
+      "interpretation": "Leopard2 remains credibly 2.32 percent slower than exact Leopard main in the target full-output encode cell. The bead's at-least-five-percent exact-main promotion gate is not met.",
+      "manifest_sha256": "bda79027d522ec61e7177c4b646eeda19c4e2c37851b46a3ab56ae8c035dd413",
+      "raw_json_sha256": "0f5c8044ffa0ef5166570d7ec9fff55e0ae7499e5fbd12c17d442810a825066d",
+      "reserved_sibling_nonidle_delta_jiffies": 0
+    },
+    "neighbor_codec": {
+      "K": 1000,
+      "R": 199,
+      "shard_bytes": 65536,
+      "geometric_speedup": 1.010492766,
+      "ci95_lower": 1.008751788,
+      "ci95_upper": 1.012236748,
+      "interpretation": "This is a distinct R=199 codec and not the R=200 prefix-199 parity-mask branch; its Leopard2 scratch remains untiled. It is a neighboring nonregression observation only.",
+      "manifest_sha256": "14452d172adecf1d210be4b83e7df52c4d12946cc62081b81c6e84efaeddc09e",
+      "raw_json_sha256": "3221fcca8bcaf1a13c8c1f5c0c4a31738bde6ef429cd2a36203f8f30f337a528",
+      "reserved_sibling_nonidle_delta_jiffies": 0
+    },
+    "parity_subset_comparability": "Exact Leopard1 always computes all R public parity shards and has no parity-subset API. The R=200 prefix-199, sparse-three, and output-zero tiling results therefore remain same-source Leopard2 comparisons and are not mislabeled as Leopard1 results.",
+    "disposition": "Retain the bounded tiling as an intermediate same-source and scratch reduction while the parent GF16 exact-main optimization remains active; do not close the exact-main gap or claim that this candidate alone met its final promotion threshold."
+  },
   "targeted_correctness": {
     "release_after_final_narrowing": "15/15 focused tests passed.",
     "release_before_final_narrowing": "15/15 focused tests passed.",
@@ -195,7 +236,7 @@
   "compatibility": {
     "legacy_high_parity": "Byte-identical in targeted old-API comparisons and all existing legacy golden/matrix tests run before narrowing; the final narrowing changes only whether a call enters the optimization.",
     "old_api_routed_to_new_engine": false,
-    "exact_leopard_main_benchmark": "Not performed here; the coordinating worker owns the final exact-main Leopard1 comparison."
+    "exact_leopard_main_benchmark": "Performed against exact main 6e5725eb at integrated candidate 8b69b39. Every original, parity, and recovered-output digest matched, but the full-output encode ratio was 0.97678x, so the exact-main performance gap remains open."
   },
-  "conclusion": "The exact promoted cell clears the 5% improvement rule for full output and every measured legal subset shape, with no wire/API change and approximately half the scratch. Broader K/R/length dispatch remains deliberately unpromoted pending independent same-source measurements."
+  "conclusion": "The bounded tile clears the same-source 5% rule for full and measured subset outputs, changes no wire/API bytes, and approximately halves scratch. It does not clear the exact-Leopard-main gate: the target full-output cell remains 2.32% slower. Keep this as an intermediate composable optimization while the parent GF16 encoder gap remains open; broader K/R/length dispatch remains deliberately unpromoted."
 }
