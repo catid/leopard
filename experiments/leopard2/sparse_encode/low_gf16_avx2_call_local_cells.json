@@ -1,0 +1,104 @@
+{
+  "schema": "leopard2-sparse-encode-cells/v2",
+  "cells": [
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "edge_sparse",
+      "requested_parity": [0, 127, 128, 383, 895],
+      "backend": "avx2",
+      "shard_bytes": 64
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "scattered_sparse",
+      "requested_parity": [7, 63, 135, 255, 519, 895],
+      "backend": "avx2",
+      "shard_bytes": 64
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "prefix_neighbor",
+      "mask_name": "dense_prefix_neighbor",
+      "requested_parity": {"prefix": 128},
+      "backend": "avx2",
+      "shard_bytes": 64
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "edge_sparse",
+      "requested_parity": [0, 127, 128, 383, 895],
+      "backend": "avx2",
+      "shard_bytes": 1024
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "scattered_sparse",
+      "requested_parity": [7, 63, 135, 255, 519, 895],
+      "backend": "avx2",
+      "shard_bytes": 1024
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "prefix_neighbor",
+      "mask_name": "dense_prefix_neighbor",
+      "requested_parity": {"prefix": 128},
+      "backend": "avx2",
+      "shard_bytes": 1024
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "edge_sparse",
+      "requested_parity": [0, 127, 128, 383, 895],
+      "backend": "avx2",
+      "shard_bytes": 65536
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "sparse_candidate",
+      "mask_name": "scattered_sparse",
+      "requested_parity": [7, 63, 135, 255, 519, 895],
+      "backend": "avx2",
+      "shard_bytes": 65536
+    },
+    {
+      "profile": "low",
+      "field": "gf16",
+      "K": 128,
+      "R": 896,
+      "cell_kind": "prefix_neighbor",
+      "mask_name": "dense_prefix_neighbor",
+      "requested_parity": {"prefix": 128},
+      "backend": "avx2",
+      "shard_bytes": 65536
+    }
+  ]
+}

@@ -42,6 +42,7 @@ JOB_SCHEMA = "leopard2-sparse-encode-crossover-job/v2"
 BENCHMARK_SCHEMA = "leopard2-sparse-encode-benchmark-v4"
 ATTESTATION_SCHEMA = "leopard2-benchmark-isolation-attestation/v1"
 LINK_SIDECAR_SCHEMA = "leopard2-sparse-encode-link-sidecar/v1"
+CELL_SCHEMA = "leopard2-sparse-encode-cells/v2"
 SOURCE_FILES = (
     "CMakeLists.txt",
     "cmake/WriteSparseEncodeEvidenceSidecar.cmake",
@@ -839,6 +840,171 @@ def make_cells(backends: list[str], shard_bytes: list[int]) -> list[dict[str, An
     )
 
 
+def validate_cells(value: Any) -> list[dict[str, Any]]:
+    """Validate a complete, explicitly targeted benchmark cell manifest."""
+    if not isinstance(value, dict) or set(value) != {"schema", "cells"} or (
+        value.get("schema") != CELL_SCHEMA
+    ):
+        raise CrossoverError("cell manifest has an unknown schema or fields")
+    raw_cells = value.get("cells")
+    if not isinstance(raw_cells, list) or not raw_cells:
+        raise CrossoverError("cell manifest contains no cells")
+
+    cells: list[dict[str, Any]] = []
+    expected_keys = {
+        "profile", "field", "K", "R", "cell_kind", "mask_name",
+        "requested_parity", "backend", "shard_bytes",
+    }
+    for index, raw in enumerate(raw_cells):
+        if not isinstance(raw, dict) or set(raw) != expected_keys:
+            raise CrossoverError(
+                f"cell {index} has unknown or missing fields"
+            )
+        profile = raw["profile"]
+        field = raw["field"]
+        backend = raw["backend"]
+        cell_kind = raw["cell_kind"]
+        k = raw["K"]
+        r = raw["R"]
+        byte_count = raw["shard_bytes"]
+        if profile not in ("high", "low") or field not in ("gf8", "gf16"):
+            raise CrossoverError(f"cell {index} has an invalid profile or field")
+        if backend not in KNOWN_BACKENDS:
+            raise CrossoverError(f"cell {index} has an invalid backend")
+        if cell_kind not in ("sparse_candidate", "prefix_neighbor"):
+            raise CrossoverError(f"cell {index} has an invalid inference role")
+        if not isinstance(k, int) or isinstance(k, bool) or k <= 0 or (
+            not isinstance(r, int) or isinstance(r, bool) or r <= 0
+        ):
+            raise CrossoverError(f"cell {index} has invalid K or R")
+        if not isinstance(byte_count, int) or isinstance(byte_count, bool) or (
+            byte_count <= 0 or byte_count > 1 << 30
+        ):
+            raise CrossoverError(f"cell {index} has invalid shard bytes")
+        if field == "gf16" and byte_count % 2 != 0:
+            raise CrossoverError(f"cell {index} has an odd GF16 byte count")
+        if not isinstance(raw["mask_name"], str) or not raw["mask_name"].strip():
+            raise CrossoverError(f"cell {index} has no mask name")
+
+        requested_raw = raw["requested_parity"]
+        if requested_raw == "all":
+            requested = list(range(r))
+        elif isinstance(requested_raw, dict) and set(requested_raw) == {"prefix"}:
+            prefix_count = requested_raw["prefix"]
+            if not isinstance(prefix_count, int) or isinstance(prefix_count, bool) or (
+                prefix_count <= 0 or prefix_count > r
+            ):
+                raise CrossoverError(
+                    f"cell {index} has an invalid requested parity prefix"
+                )
+            requested = list(range(prefix_count))
+        else:
+            requested = requested_raw
+        if not isinstance(requested, list) or not requested or any(
+            not isinstance(item, int) or isinstance(item, bool)
+            or item < 0 or item >= r for item in requested
+        ) or requested != sorted(set(requested)):
+            raise CrossoverError(f"cell {index} has invalid requested parity")
+        if cell_kind == "prefix_neighbor" and requested != list(
+            range(requested[-1] + 1)
+        ):
+            raise CrossoverError(
+                f"cell {index} labels a non-prefix mask as a prefix neighbor"
+            )
+        if cell_kind == "sparse_candidate" and requested == list(
+            range(requested[-1] + 1)
+        ):
+            raise CrossoverError(
+                f"cell {index} labels a prefix mask as a sparse candidate"
+            )
+
+        padded_side_value = r if profile == "high" else k
+        padded_side = 1
+        while padded_side < padded_side_value:
+            padded_side <<= 1
+        field_order = 256 if field == "gf8" else 65536
+        parent_span = k + padded_side if profile == "high" else padded_side + r
+        if parent_span > field_order:
+            raise CrossoverError(f"cell {index} does not fit its field")
+
+        cell = dict(raw)
+        cell["requested_parity"] = requested
+        cells.append(cell)
+
+    cells.sort(key=lambda cell: (
+        cell["field"], cell["profile"], cell["K"], cell["R"],
+        cell["mask_name"], cell["backend"], cell["shard_bytes"],
+    ))
+    identities = [canonical_bytes(cell) for cell in cells]
+    if len(identities) != len(set(identities)):
+        raise CrossoverError("cell manifest contains duplicate cells")
+
+    groups: dict[tuple[Any, ...], set[str]] = {}
+    seen_masks: set[tuple[Any, ...]] = set()
+    seen_requested: set[tuple[Any, ...]] = set()
+    for cell in cells:
+        group = (
+            cell["profile"], cell["field"], cell["K"], cell["R"],
+            cell["backend"], cell["shard_bytes"],
+        )
+        groups.setdefault(group, set()).add(cell["cell_kind"])
+        mask_identity = group + (cell["mask_name"],)
+        if mask_identity in seen_masks:
+            raise CrossoverError(
+                "cell manifest reuses a mask name within one inference group"
+            )
+        seen_masks.add(mask_identity)
+        requested_identity = group + (tuple(cell["requested_parity"]),)
+        if requested_identity in seen_requested:
+            raise CrossoverError(
+                "cell manifest duplicates a requested mask within one inference group"
+            )
+        seen_requested.add(requested_identity)
+    required_roles = {"sparse_candidate", "prefix_neighbor"}
+    if any(roles != required_roles for roles in groups.values()):
+        raise CrossoverError(
+            "every cell-manifest inference group requires sparse and prefix roles"
+        )
+    return cells
+
+
+def load_cell_manifest(path: Path) -> tuple[list[dict[str, Any]], dict[str, str]]:
+    try:
+        payload = path.read_bytes()
+        value = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CrossoverError(f"cannot read {path}: {error}") from error
+    cells = validate_cells(value)
+    return cells, {"path": str(path), "sha256": digest_bytes(payload)}
+
+
+def load_cells(path: Path) -> list[dict[str, Any]]:
+    return load_cell_manifest(path)[0]
+
+
+def validate_cell_manifest_identity(manifest: dict[str, Any]) -> None:
+    identity = manifest.get("settings", {}).get("cell_manifest")
+    if identity is None:
+        return
+    if not isinstance(identity, dict) or set(identity) != {"path", "sha256"}:
+        raise CrossoverError("cell manifest identity is malformed")
+    path_text = identity.get("path")
+    expected_sha = identity.get("sha256")
+    if not isinstance(path_text, str) or not Path(path_text).is_absolute() or (
+        not isinstance(expected_sha, str) or len(expected_sha) != 64
+    ):
+        raise CrossoverError("cell manifest identity is malformed")
+    path = Path(path_text)
+    cells, current = load_cell_manifest(path)
+    if current != identity:
+        raise CrossoverError("cell manifest changed before an invocation")
+    # Hashing alone must not let a later parser/schema change reinterpret cells.
+    if canonical_bytes(cells) != canonical_bytes(
+        [job.get("cell") for job in manifest.get("jobs", [])]
+    ):
+        raise CrossoverError("cell manifest cells differ from the run manifest")
+
+
 def mask_text(indices: list[int]) -> str:
     return ",".join(str(value) for value in indices)
 
@@ -1214,6 +1380,7 @@ def validate_static_identity(manifest: dict[str, Any]) -> None:
         raise CrossoverError("executable identity changed before an invocation")
     if build_metadata(executable, source) != manifest.get("build_metadata"):
         raise CrossoverError("object/archive identity changed before an invocation")
+    validate_cell_manifest_identity(manifest)
 
 
 def validate_job_artifacts(
@@ -1602,10 +1769,24 @@ def _run_matrix_impl(
             Path(arguments.isolation_attestation).resolve(), pin_cpu,
             topology["cpus"],
         )
-    shard_bytes = parse_csv_unsigned(arguments.bytes, "bytes", 1 << 30)
     reuse = parse_csv_unsigned(arguments.reuse, "reuse", 1000000)
-    backends = parse_backends(arguments.backends)
-    cells = make_cells(backends, shard_bytes)
+    if arguments.cell_manifest:
+        if arguments.backends is not None or arguments.bytes is not None:
+            raise CrossoverError(
+                "--cell-manifest cannot be combined with --backends or --bytes"
+            )
+        cell_manifest = Path(arguments.cell_manifest).resolve()
+        cells, cell_manifest_identity = load_cell_manifest(cell_manifest)
+    else:
+        shard_bytes = parse_csv_unsigned(
+            arguments.default_bytes if arguments.bytes is None else arguments.bytes,
+            "bytes", 1 << 30,
+        )
+        backends = parse_backends(
+            "auto" if arguments.backends is None else arguments.backends
+        )
+        cells = make_cells(backends, shard_bytes)
+        cell_manifest_identity = None
     if arguments.workers is None:
         arguments.workers = min(128, len(cpus), len(cells))
     settings = {
@@ -1625,6 +1806,8 @@ def _run_matrix_impl(
         "warmups": arguments.warmups,
         "workers": arguments.workers,
     }
+    if cell_manifest_identity is not None:
+        settings["cell_manifest"] = cell_manifest_identity
     manifest = make_manifest(
         source, executable, arguments.command, cells, settings,
         pin_cpu, attestation, protected_isolation, cpus,
@@ -1682,6 +1865,7 @@ def _run_matrix_impl(
             jobs.append(result)
             print(f"{job['job_id']} {result['status']}", flush=True)
     jobs.sort(key=lambda value: value["job_id"])
+    validate_cell_manifest_identity(manifest)
     fingerprint_after = source_fingerprint(source)
     git_after = git_state(source)
     executable_after = digest_bytes(executable.read_bytes())
@@ -1805,6 +1989,7 @@ def analyze(arguments: argparse.Namespace) -> int:
         raise CrossoverError("current executable identity differs from the manifest")
     if build_metadata(executable, source) != manifest.get("build_metadata"):
         raise CrossoverError("current object/archive identity differs from the manifest")
+    validate_cell_manifest_identity(manifest)
     jobs = load_jobs(result_dir, manifest)
     matrix = read_json(result_dir / "matrix.json")
     if not isinstance(matrix, dict) or matrix.get("schema") != SCHEMA:
@@ -1876,12 +2061,63 @@ def self_test() -> int:
     defaults = build_parser().parse_args([
         "screen", "--executable", "benchmark", "--result-dir", "results",
     ])
-    if defaults.backends != "auto":
+    if defaults.backends is not None or defaults.bytes is not None or (
+        defaults.default_bytes != "64,1024"
+    ):
         raise CrossoverError("sparse runner default backend changed")
     cells_a = make_cells(["avx2", "scalar"], [1024, 64])
     cells_b = make_cells(["scalar", "avx2"], [64, 1024])
     if canonical_bytes(cells_a) != canonical_bytes(cells_b) or len(cells_a) != 48:
         raise CrossoverError("cell generation is not deterministic")
+    custom_value = {
+        "schema": CELL_SCHEMA,
+        "cells": [
+            {
+                "profile": "low", "field": "gf16", "K": 128, "R": 896,
+                "cell_kind": "sparse_candidate", "mask_name": "edge_sparse",
+                "requested_parity": [0, 127, 128, 383, 895],
+                "backend": "avx2", "shard_bytes": 1024,
+            },
+            {
+                "profile": "low", "field": "gf16", "K": 128, "R": 896,
+                "cell_kind": "prefix_neighbor", "mask_name": "dense_prefix",
+                "requested_parity": {"prefix": 128},
+                "backend": "avx2", "shard_bytes": 1024,
+            },
+        ],
+    }
+    custom_cells = validate_cells(custom_value)
+    if len(custom_cells) != 2 or custom_cells[0]["requested_parity"] != list(
+        range(128)
+    ):
+        raise CrossoverError("custom cell manifest normalization failed")
+
+    def reject_cell_mutation(mutator: Any) -> None:
+        changed = json.loads(json.dumps(custom_value))
+        mutator(changed)
+        try:
+            validate_cells(changed)
+        except CrossoverError:
+            return
+        raise CrossoverError("malformed custom cell manifest was accepted")
+
+    reject_cell_mutation(lambda value: value.update({"schema": "unknown"}))
+    reject_cell_mutation(lambda value: value["cells"][0].update({"extra": True}))
+    reject_cell_mutation(lambda value: value["cells"][0].update(
+        {"requested_parity": [896]}))
+    reject_cell_mutation(lambda value: value["cells"][0].update(
+        {"shard_bytes": 1023}))
+    reject_cell_mutation(lambda value: value["cells"][0].update(
+        {"requested_parity": [0, 1]}))
+    reject_cell_mutation(lambda value: value["cells"][0].update(
+        {"field": "gf8"}))
+    reject_cell_mutation(lambda value: value["cells"].append(value["cells"][0]))
+    reject_cell_mutation(lambda value: value["cells"].pop())
+    reject_cell_mutation(lambda value: value["cells"][1].update(
+        {"mask_name": "edge_sparse"}))
+    reject_cell_mutation(lambda value: value["cells"].append({
+        **value["cells"][0], "mask_name": "edge_sparse_alias",
+    }))
     if parse_csv_unsigned("64,1,8", "reuse", 100) != [1, 8, 64]:
         raise CrossoverError("numeric list normalization failed")
     validate_resume_policy("screen", False)
@@ -1922,6 +2158,23 @@ def self_test() -> int:
         after = source_fingerprint(root)
         if before["digest"] == after["digest"]:
             raise CrossoverError("source fingerprint ignored a mutation")
+        cell_path = (root / "cells.json").resolve()
+        atomic_write_json(cell_path, custom_value)
+        loaded_cells, cell_identity = load_cell_manifest(cell_path)
+        cell_bound_manifest = {
+            "settings": {"cell_manifest": cell_identity},
+            "jobs": [{"cell": cell} for cell in loaded_cells],
+        }
+        validate_cell_manifest_identity(cell_bound_manifest)
+        changed_cells = json.loads(json.dumps(custom_value))
+        changed_cells["cells"][0]["mask_name"] = "changed"
+        atomic_write_json(cell_path, changed_cells)
+        try:
+            validate_cell_manifest_identity(cell_bound_manifest)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError("changed cell manifest retained stale authority")
         attestation = {
             "schema": ATTESTATION_SCHEMA, "cpu": 7,
             "reserved_cpus": [7, 8],
@@ -2312,7 +2565,10 @@ def self_test() -> int:
         else:
             raise CrossoverError("rehashing a runtime-affinity mutation was accepted")
 
-    print("PASS sparse encode crossover self-test cells=48 identity_mutations=23")
+    print(
+        "PASS sparse encode crossover self-test cells=48 "
+        "cell_mutations=10 identity_mutations=24"
+    )
     return 0
 
 
@@ -2331,9 +2587,14 @@ def build_parser() -> argparse.ArgumentParser:
         sub.add_argument("--source", default=".")
         sub.add_argument("--executable", required=True)
         sub.add_argument("--result-dir", required=True)
-        sub.add_argument("--backends", default="auto")
         sub.add_argument(
-            "--bytes", default="64,1024" if command == "screen"
+            "--cell-manifest",
+            help="complete v2 cell matrix; replaces built-in --backends/--bytes",
+        )
+        sub.add_argument("--backends")
+        sub.add_argument("--bytes")
+        sub.set_defaults(
+            default_bytes="64,1024" if command == "screen"
             else "64,1024,65536,262144"
         )
         sub.add_argument("--reuse", default="1,8,64")

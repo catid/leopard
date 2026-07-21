@@ -75,6 +75,33 @@ Structural accounting includes full, mature-prefix, retained, one-output, and
 fused-four butterfly counts plus schedule and dependency-workspace bytes. A
 matrix cell fails if its sparse mask does not reduce the mature prefix graph.
 
+For a bounded follow-up, `--cell-manifest` replaces the built-in backend/byte
+cross product with complete cells under
+`leopard2-sparse-encode-cells/v2`.  Each cell declares its inference role;
+`sparse_candidate` must be a non-prefix mask and `prefix_neighbor` must be a
+true contiguous prefix.  The runner validates field capacity, GF16 byte
+alignment, mask bounds and uniqueness, role consistency, deterministic cell
+ordering, and duplicate cells.  It hashes the raw manifest and rechecks both
+the hash and normalized cells before and after every retained invocation, so a
+changed target list cannot inherit timing authority.  Every
+`(profile,field,K,R,backend,shard_bytes)` group must contain both a sparse
+candidate and a prefix control; duplicate names or normalized masks within a
+group are rejected so aliases cannot overweight the inference.  Supplying
+`--backends` or `--bytes` together with `--cell-manifest` is an error rather
+than a silently ignored setting.
+
+The committed nine-cell decision matrix at
+`experiments/leopard2/sparse_encode/low_gf16_avx2_call_local_cells.json`
+is intentionally narrower than a production-dispatch qualification.  It
+compares the two sparse LOW-GF16 masks and a dense-prefix control at 64 B,
+1 KiB, and 64 KiB for AVX2.  The three sizes establish a lower rejection
+boundary, the discovery-screen target, and an upper neighbor.  Because every
+cell reports prepared execution and setup-inclusive call-local execution, this
+is the smallest regular matrix used to decide whether the target gain survives
+ordinary calls or instead requires a reusable immutable encode plan.  A
+subsequent production gate must still cover neighboring K/R values and the
+public encoder end to end.
+
 ## Evidence identity and authority
 
 The runner fails closed:
@@ -165,7 +192,8 @@ matrix with an attestation covering the complete sibling set:
       --source . \
       --executable build/release/bench_leopard2_sparse_encode \
       --result-dir results/leopard2/sparse-encode-pinned \
-      --backends avx2 \
+      --cell-manifest \
+        experiments/leopard2/sparse_encode/low_gf16_avx2_call_local_cells.json \
       --cpu 16 \
       --workers 1 \
       --no-resume \
