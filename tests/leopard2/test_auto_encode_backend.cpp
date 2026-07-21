@@ -28,6 +28,7 @@
 
 #include "Leopard2Backend.h"
 #include "Leopard2Direct.h"
+#include "LeopardFF8.h"
 #include "leopard.h"
 #include "leopard2.h"
 
@@ -204,6 +205,61 @@ Shards encode(
     return recovery;
 }
 
+Shards encode_unaligned(
+    const leo2_codec* codec,
+    const Shards& original,
+    uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    Shards original_storage(original.size(), Bytes(bytes + 3));
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+    {
+        std::memcpy(original_storage[i].data() + 1,
+            original[i].data(), bytes);
+        original_ptrs[i] = original_storage[i].data() + 1;
+    }
+
+    Shards recovery_storage(r, Bytes(bytes + 5));
+    std::vector<void*> recovery_ptrs(r);
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_ptrs[i] = recovery_storage[i].data() + 3;
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        LEO2_SUCCESS, "unaligned scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_encode(codec, bytes, original_ptrs.data(),
+        recovery_ptrs.data(), scratch.get(), scratch_bytes),
+        LEO2_SUCCESS, "unaligned encode");
+
+    Shards recovery(r, Bytes(bytes));
+    for (uint32_t i = 0; i < r; ++i)
+        std::memcpy(recovery[i].data(),
+            recovery_storage[i].data() + 3, bytes);
+    return recovery;
+}
+
+Shards encode_legacy(const Shards& original, uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    const uint32_t k = static_cast<uint32_t>(original.size());
+    std::vector<const void*> original_ptrs(k);
+    for (uint32_t i = 0; i < k; ++i)
+        original_ptrs[i] = original[i].data();
+    const unsigned work_count = leo_encode_work_count(k, r);
+    require(work_count >= r, "legacy encode work count");
+    Shards work(work_count, Bytes(bytes));
+    std::vector<void*> work_ptrs(work_count);
+    for (unsigned i = 0; i < work_count; ++i)
+        work_ptrs[i] = work[i].data();
+    require(leo_encode(bytes, k, r, work_count,
+                original_ptrs.data(), work_ptrs.data()) == Leopard_Success,
+        "legacy encode");
+    work.resize(r);
+    return work;
+}
+
 void require_sparse_matches_full(
     const Shards& sparse, const Shards& full)
 {
@@ -225,7 +281,11 @@ void require_explicit_backend(Context& context, leo2_backend expected)
 }
 
 void test_selection_and_bytes(
-    Context& automatic, Context& avx2, Context& avx512)
+    Context& automatic,
+    Context& scalar,
+    Context& ssse3,
+    Context& avx2,
+    Context& avx512)
 {
     Codec auto_codec(automatic.get(), 1000, 200);
     Codec avx2_codec(avx2.get(), 1000, 200);
@@ -317,11 +377,172 @@ void test_selection_and_bytes(
     require(selected_backend(low_profile.get(), 64, 8, 8) ==
             LEO2_BACKEND_AVX2,
         "AUTO widened a non-legacy-high profile");
-    Codec gf8(automatic.get(), 8, 2,
+    Codec gf8_unbalanced(automatic.get(), 8, 2,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    require(selected_backend(gf8.get(), 64, 2, 2) ==
+    require(selected_backend(gf8_unbalanced.get(), 4096, 2, 2) ==
             LEO2_BACKEND_AVX2,
-        "AUTO widened a non-GF16 codec");
+        "AUTO widened an unqualified GF8 codec");
+
+    static const uint32_t gf8_sides[] = { 16, 32, 64 };
+    for (size_t side_i = 0;
+         side_i < sizeof(gf8_sides) / sizeof(gf8_sides[0]); ++side_i)
+    {
+        const uint32_t side = gf8_sides[side_i];
+        Codec balanced(automatic.get(), side, side,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        require(selected_backend(balanced.get(), 1984, side, side) ==
+                LEO2_BACKEND_AVX2,
+            "balanced GF8 AUTO widened below the calibrated byte range");
+        require(selected_backend(balanced.get(), 2048, side, side) ==
+                LEO2_BACKEND_AVX512,
+            "balanced GF8 AUTO did not widen at the lower byte boundary");
+        require(selected_backend(balanced.get(), 4096, side, side) ==
+                LEO2_BACKEND_AVX512,
+            "balanced GF8 AUTO did not widen in the calibrated region");
+        require(selected_backend(balanced.get(), 65536, side, side) ==
+                LEO2_BACKEND_AVX512,
+            "balanced GF8 AUTO did not widen at the upper byte boundary");
+        require(selected_backend(balanced.get(), 65600, side, side) ==
+                LEO2_BACKEND_AVX2,
+            "balanced GF8 AUTO widened above the calibrated byte range");
+        require(selected_backend(balanced.get(), 4097, side, side) ==
+                LEO2_BACKEND_AVX2,
+            "balanced GF8 AUTO widened a ragged tail");
+        require(selected_backend(balanced.get(), 4096, side - 1, side) ==
+                LEO2_BACKEND_AVX2,
+            "balanced GF8 AUTO widened a partial-output encode");
+
+        Codec explicit_avx2(avx2.get(), side, side,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec explicit_avx512(avx512.get(), side, side,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec explicit_scalar(scalar.get(), side, side,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec explicit_ssse3(ssse3.get(), side, side,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        require(selected_backend(explicit_avx2.get(), 4096, side, side) ==
+                LEO2_BACKEND_AVX2,
+            "balanced GF8 explicit AVX2 widened");
+        require(selected_backend(explicit_avx512.get(), 4097, side, side) ==
+                LEO2_BACKEND_AVX512,
+            "balanced GF8 explicit AVX512 was constrained by AUTO bounds");
+
+        const Shards balanced_original = make_original(side, 4096);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const Shards balanced_auto = encode(
+            balanced.get(), balanced_original, side, false);
+        const leopard::ff8::TestOnlyHighEncodeCounts whole_counts =
+            leopard::ff8::TestOnlyGetHighEncodeCounts();
+        require(whole_counts.whole_transform_calls == 1,
+            "balanced GF8 AUTO did not execute the coarse transform");
+        const Shards balanced_avx2 = encode(
+            explicit_avx2.get(), balanced_original, side, false);
+        const Shards balanced_avx512 = encode(
+            explicit_avx512.get(), balanced_original, side, false);
+        require(balanced_auto == balanced_avx2 &&
+                balanced_auto == balanced_avx512 &&
+                balanced_auto == encode(
+                    explicit_scalar.get(), balanced_original, side, false) &&
+                balanced_auto == encode(
+                    explicit_ssse3.get(), balanced_original, side, false) &&
+                balanced_auto == encode_legacy(balanced_original, side),
+            "balanced GF8 coarse transform changed legacy parity bytes");
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        require_sparse_matches_full(
+            encode(balanced.get(), balanced_original, side, true),
+            balanced_auto);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    whole_transform_calls == 0,
+            "balanced GF8 sparse encode used the dense coarse transform");
+
+        static const size_t tail_bytes[] = { 1025, 2049, 4097 };
+        for (size_t tail_i = 0;
+             tail_i < sizeof(tail_bytes) / sizeof(tail_bytes[0]); ++tail_i)
+        {
+            const Shards tail_original =
+                make_original(side, tail_bytes[tail_i]);
+            const Shards tail_reference = encode(
+                explicit_scalar.get(), tail_original, side, false);
+            require(tail_reference == encode(
+                        explicit_ssse3.get(), tail_original, side, false) &&
+                    tail_reference == encode(
+                        explicit_avx2.get(), tail_original, side, false) &&
+                    tail_reference == encode(
+                        explicit_avx512.get(), tail_original, side, false),
+                "balanced GF8 coarse transform changed a byte tail");
+            require(tail_reference == encode_unaligned(
+                        explicit_avx2.get(), tail_original, side) &&
+                    tail_reference == encode_unaligned(
+                        explicit_avx512.get(), tail_original, side),
+                "balanced GF8 coarse transform mishandled unaligned buffers");
+        }
+    }
+
+    Codec gf8_below_side(automatic.get(), 8, 8,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec gf8_above_side(automatic.get(), 128, 128,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec gf8_shortened(automatic.get(), 15, 16,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec gf8_punctured(automatic.get(), 16, 15,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    require(selected_backend(gf8_below_side.get(), 4096, 8, 8) ==
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO widened T=8");
+    require(selected_backend(gf8_above_side.get(), 4096, 128, 128) ==
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO widened T=128");
+    require(selected_backend(gf8_shortened.get(), 4096, 16, 16) ==
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO widened a shortened input block");
+    require(selected_backend(gf8_punctured.get(), 4096, 15, 15) ==
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO widened a punctured parity block");
+
+    const Shards shortened_original = make_original(15, 4096);
+    Codec shortened_scalar(scalar.get(), 15, 16,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec shortened_avx2(avx2.get(), 15, 16,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec shortened_avx512(avx512.get(), 15, 16,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards shortened_reference = encode(
+        shortened_scalar.get(), shortened_original, 16, false);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    const Shards shortened_auto = encode(
+        gf8_shortened.get(), shortened_original, 16, false);
+    require(shortened_reference == shortened_auto &&
+            shortened_reference == encode(
+                shortened_avx2.get(), shortened_original, 16, false) &&
+            shortened_reference == encode(
+                shortened_avx512.get(), shortened_original, 16, false),
+        "shortened GF8 neighbor changed legacy parity bytes");
+    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                whole_transform_calls == 0,
+        "shortened GF8 neighbor used the exact balanced transform");
+
+    const Shards punctured_original = make_original(16, 4096);
+    const Shards punctured_reference = encode_legacy(punctured_original, 15);
+    Codec punctured_scalar(scalar.get(), 16, 15,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec punctured_avx2(avx2.get(), 16, 15,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Codec punctured_avx512(avx512.get(), 16, 15,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    const Shards punctured_auto = encode(
+        gf8_punctured.get(), punctured_original, 15, false);
+    require(punctured_reference == punctured_auto &&
+            punctured_reference == encode(
+                punctured_scalar.get(), punctured_original, 15, false) &&
+            punctured_reference == encode(
+                punctured_avx2.get(), punctured_original, 15, false) &&
+            punctured_reference == encode(
+                punctured_avx512.get(), punctured_original, 15, false),
+        "punctured GF8 neighbor changed legacy parity bytes");
+    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                whole_transform_calls == 0,
+        "punctured GF8 neighbor used the exact balanced transform");
 
     Codec maximum_parent(automatic.get(), 60000, 1024);
     require(selected_backend(maximum_parent.get(), 1024, 1024, 1024) ==
@@ -385,10 +606,13 @@ int main()
 
         if (leopard::backend::IsCalibratedAutoAVX512EncodeHost() &&
             leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2 &&
+            scalar.result() == LEO2_SUCCESS &&
+            ssse3.result() == LEO2_SUCCESS &&
             avx2.result() == LEO2_SUCCESS &&
             avx512.result() == LEO2_SUCCESS)
         {
-            test_selection_and_bytes(automatic, avx2, avx512);
+            test_selection_and_bytes(
+                automatic, scalar, ssse3, avx2, avx512);
         }
         else
         {

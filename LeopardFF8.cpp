@@ -59,6 +59,7 @@ static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
+static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -2269,6 +2270,27 @@ void ReedSolomonEncode(
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
 #endif
+    const bool whole_transform_size =
+        m == 16 || m == 32 || m == 64;
+    const bool dense_schedule = !sparse_plans ||
+        sparse_plans->block_count == 0;
+    if (ops.kind == LEO2_BACKEND_AVX512 &&
+        ops.ff8_high_encode_one_block &&
+        whole_transform_size && buffer_bytes > 1024 &&
+        original_count == m && recovery_count == m &&
+        requested_output_count == m && dense_schedule)
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighIFFTButterfly4OutCalls.fetch_add(
+            m / 4, std::memory_order_relaxed);
+        TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+        TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+        ops.ff8_high_encode_one_block(
+            data, work, m, FFTSkewStorage + m,
+            FFTSkewStorage, buffer_bytes);
+        return;
+    }
     // work <- IFFT(data, m, m)
 
     const ffe_t* skewLUT = FFTSkewStorage + m;
@@ -3220,6 +3242,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighIFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestHighInputCopyShards.store(0, std::memory_order_relaxed);
     TestHighForwardFusedCalls.store(0, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3232,6 +3255,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighInputCopyShards.load(std::memory_order_relaxed);
     result.forward_fused_calls =
         TestHighForwardFusedCalls.load(std::memory_order_relaxed);
+    result.whole_transform_calls =
+        TestHighWholeTransformCalls.load(std::memory_order_relaxed);
     return result;
 }
 

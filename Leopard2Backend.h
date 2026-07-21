@@ -203,6 +203,21 @@ typedef void (*FFTButterfly4Out)(
 // pass first.
 typedef FFTButterfly4Out IFFTButterfly4Out;
 
+// Complete one-block legacy-high GF8 transform.  The caller has already
+// established that data[0..side) and work[0..side) are disjoint complete
+// blocks and that every parity coordinate is requested.  inverse_skew names
+// the message-coset skew table, while forward_skew names the parity-coset
+// table.  Keeping the regular transform traversal in an ISA translation unit
+// removes one indirect Ops dispatch per butterfly range without changing the
+// wire profile or arithmetic order.  This callback is optional.
+typedef void (*FF8HighEncodeOneBlock)(
+    const void* const* data,
+    void* const* work,
+    uint32_t side,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count);
+
 // GF8 AVX2 boundary operation.  Applies four independent nonzero fixed
 // multipliers to the selected input rows and immediately executes the first
 // two inverse LCH layers.  weight_log values are ordinary GF8 logarithms: both
@@ -281,6 +296,7 @@ struct Ops
     FFTButterfly4Out ff16_fft_butterfly4_out;
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;
+    FF8HighEncodeOneBlock ff8_high_encode_one_block;
 };
 
 struct X86Features

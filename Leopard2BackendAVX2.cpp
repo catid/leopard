@@ -1679,6 +1679,291 @@ static void AVX2FF8IFFTButterfly4XorRange(
             log01, log23, log02, byte_count);
 }
 
+#if defined(LEO2_AVX512_VARIANT)
+
+template<bool Inverse, bool AllNonzero>
+static void AVX2FF8Butterfly4RangePreparedImpl(
+    void* const* work,
+    uint32_t distance,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    __m256i low01 = _mm256_setzero_si256();
+    __m256i high01 = _mm256_setzero_si256();
+    __m256i low23 = _mm256_setzero_si256();
+    __m256i high23 = _mm256_setzero_si256();
+    __m256i low02 = _mm256_setzero_si256();
+    __m256i high02 = _mm256_setzero_si256();
+    if (AllNonzero || log01 != kZeroSkew)
+    {
+        low01 = BroadcastTable(FF8Tables[log01].low);
+        high01 = BroadcastTable(FF8Tables[log01].high);
+    }
+    if (AllNonzero || log23 != kZeroSkew)
+    {
+        low23 = BroadcastTable(FF8Tables[log23].low);
+        high23 = BroadcastTable(FF8Tables[log23].high);
+    }
+    if (AllNonzero || log02 != kZeroSkew)
+    {
+        low02 = BroadcastTable(FF8Tables[log02].low);
+        high02 = BroadcastTable(FF8Tables[log02].high);
+    }
+
+    for (uint32_t lane = 0; lane < distance; ++lane)
+    {
+        uint8_t* value0 = static_cast<uint8_t*>(work[lane]);
+        uint8_t* value1 = static_cast<uint8_t*>(work[lane + distance]);
+        uint8_t* value2 = static_cast<uint8_t*>(work[lane + distance * 2U]);
+        uint8_t* value3 = static_cast<uint8_t*>(work[lane + distance * 3U]);
+        uint64_t remaining = byte_count;
+        while (remaining >= 32)
+        {
+            __m256i x0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(value0));
+            __m256i x1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(value1));
+            __m256i x2 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(value2));
+            __m256i x3 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(value3));
+            if (Inverse)
+            {
+                x1 = _mm256_xor_si256(x1, x0);
+                if (AllNonzero || log01 != kZeroSkew)
+                    x0 = _mm256_xor_si256(x0,
+                        AVX2FF8ProductVector(x1, low01, high01));
+                x3 = _mm256_xor_si256(x3, x2);
+                if (AllNonzero || log23 != kZeroSkew)
+                    x2 = _mm256_xor_si256(x2,
+                        AVX2FF8ProductVector(x3, low23, high23));
+                x2 = _mm256_xor_si256(x2, x0);
+                x3 = _mm256_xor_si256(x3, x1);
+                if (AllNonzero || log02 != kZeroSkew)
+                {
+                    x0 = _mm256_xor_si256(x0,
+                        AVX2FF8ProductVector(x2, low02, high02));
+                    x1 = _mm256_xor_si256(x1,
+                        AVX2FF8ProductVector(x3, low02, high02));
+                }
+            }
+            else
+            {
+                if (AllNonzero || log02 != kZeroSkew)
+                {
+                    x0 = _mm256_xor_si256(x0,
+                        AVX2FF8ProductVector(x2, low02, high02));
+                    x1 = _mm256_xor_si256(x1,
+                        AVX2FF8ProductVector(x3, low02, high02));
+                }
+                x2 = _mm256_xor_si256(x2, x0);
+                x3 = _mm256_xor_si256(x3, x1);
+                if (AllNonzero || log01 != kZeroSkew)
+                    x0 = _mm256_xor_si256(x0,
+                        AVX2FF8ProductVector(x1, low01, high01));
+                x1 = _mm256_xor_si256(x1, x0);
+                if (AllNonzero || log23 != kZeroSkew)
+                    x2 = _mm256_xor_si256(x2,
+                        AVX2FF8ProductVector(x3, low23, high23));
+                x3 = _mm256_xor_si256(x3, x2);
+            }
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(value0), x0);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(value1), x1);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(value2), x2);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(value3), x3);
+            value0 += 32;
+            value1 += 32;
+            value2 += 32;
+            value3 += 32;
+            remaining -= 32;
+        }
+        while (remaining-- != 0)
+        {
+            uint8_t x0 = *value0;
+            uint8_t x1 = *value1;
+            uint8_t x2 = *value2;
+            uint8_t x3 = *value3;
+            if (Inverse)
+            {
+                x1 ^= x0;
+                if (AllNonzero || log01 != kZeroSkew)
+                    x0 ^= FF8Product(log01, x1);
+                x3 ^= x2;
+                if (AllNonzero || log23 != kZeroSkew)
+                    x2 ^= FF8Product(log23, x3);
+                x2 ^= x0;
+                x3 ^= x1;
+                if (AllNonzero || log02 != kZeroSkew)
+                {
+                    x0 ^= FF8Product(log02, x2);
+                    x1 ^= FF8Product(log02, x3);
+                }
+            }
+            else
+            {
+                if (AllNonzero || log02 != kZeroSkew)
+                {
+                    x0 ^= FF8Product(log02, x2);
+                    x1 ^= FF8Product(log02, x3);
+                }
+                x2 ^= x0;
+                x3 ^= x1;
+                if (AllNonzero || log01 != kZeroSkew)
+                    x0 ^= FF8Product(log01, x1);
+                x1 ^= x0;
+                if (AllNonzero || log23 != kZeroSkew)
+                    x2 ^= FF8Product(log23, x3);
+                x3 ^= x2;
+            }
+            *value0++ = x0;
+            *value1++ = x1;
+            *value2++ = x2;
+            *value3++ = x3;
+        }
+    }
+}
+
+template<bool Inverse>
+static void AVX2FF8Butterfly4RangePrepared(
+    void* const* work,
+    uint32_t distance,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (log01 != kZeroSkew && log23 != kZeroSkew && log02 != kZeroSkew)
+        AVX2FF8Butterfly4RangePreparedImpl<Inverse, true>(
+            work, distance, log01, log23, log02, byte_count);
+    else
+        AVX2FF8Butterfly4RangePreparedImpl<Inverse, false>(
+            work, distance, log01, log23, log02, byte_count);
+}
+
+static void AVX2FF8IFFTButterfly2RangePrepared(
+    void* const* work,
+    uint32_t distance,
+    uint16_t log,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (log == kZeroSkew)
+    {
+        for (uint32_t lane = 0; lane < distance; ++lane)
+            AVX2XorMemory(
+                work[lane + distance], work[lane], byte_count);
+        return;
+    }
+    const __m256i low = BroadcastTable(FF8Tables[log].low);
+    const __m256i high = BroadcastTable(FF8Tables[log].high);
+    for (uint32_t lane = 0; lane < distance; ++lane)
+    {
+        uint8_t* x = static_cast<uint8_t*>(work[lane]);
+        uint8_t* y = static_cast<uint8_t*>(work[lane + distance]);
+        uint64_t remaining = byte_count;
+        while (remaining >= 32)
+        {
+            __m256i x_value = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x));
+            __m256i y_value = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(y));
+            y_value = _mm256_xor_si256(y_value, x_value);
+            x_value = _mm256_xor_si256(x_value,
+                AVX2FF8ProductVector(y_value, low, high));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(x), x_value);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(y), y_value);
+            x += 32;
+            y += 32;
+            remaining -= 32;
+        }
+        while (remaining-- != 0)
+        {
+            *y ^= *x;
+            *x ^= FF8Product(log, *y);
+            ++x;
+            ++y;
+        }
+    }
+}
+
+static void AVX2FF8HighEncodeOneBlock(
+    const void* const* data,
+    void* const* work,
+    uint32_t side,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+
+    // Consume the systematic shards directly through the first two inverse
+    // layers, exactly as IFFT_DIT_Encoder does for a complete input block.
+    for (uint32_t r = 0; r < side; r += 4)
+    {
+        AVX2FF8IFFTButterfly4Out(
+            data[r], data[r + 1], data[r + 2], data[r + 3],
+            work[r], work[r + 1], work[r + 2], work[r + 3],
+            inverse_skew[r + 1], inverse_skew[r + 3],
+            inverse_skew[r + 2], byte_count);
+    }
+
+    uint32_t distance = 4;
+    uint32_t distance4 = 16;
+    for (; distance4 <= side;
+         distance = distance4, distance4 <<= 2)
+    {
+        for (uint32_t r = 0; r < side; r += distance4)
+        {
+            const uint32_t end = r + distance;
+            AVX2FF8Butterfly4RangePrepared<true>(
+                work + r, distance,
+                inverse_skew[end], inverse_skew[end + distance * 2U],
+                inverse_skew[end + distance], byte_count);
+        }
+    }
+    if (distance < side)
+    {
+        AVX2FF8IFFTButterfly2RangePrepared(
+            work, distance, inverse_skew[distance], byte_count);
+    }
+
+    // Evaluate the coefficient block on the legacy parity coset.  The
+    // promoted production schedule uses the same fused radix-four operation
+    // at every complete stage for these sizes.
+    distance4 = side;
+    distance = side >> 2;
+    for (; distance != 0;
+         distance4 = distance, distance >>= 2)
+    {
+        for (uint32_t r = 0; r < side; r += distance4)
+        {
+            const uint32_t end = r + distance;
+            AVX2FF8Butterfly4RangePrepared<false>(
+                work + r, distance,
+                forward_skew[end], forward_skew[end + distance * 2U],
+                forward_skew[end + distance], byte_count);
+        }
+    }
+    if (distance4 == 2)
+    {
+        for (uint32_t r = 0; r < side; r += 2)
+        {
+            const uint16_t log = forward_skew[r + 1];
+            if (log == kZeroSkew)
+                AVX2XorMemory(work[r + 1], work[r], byte_count);
+            else
+                AVX2FF8Butterfly2<false>(
+                    work[r], work[r + 1], log, byte_count);
+        }
+    }
+}
+
+#endif // LEO2_AVX512_VARIANT
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -2245,6 +2530,11 @@ static const Ops AVX2Ops = {
     NULL,
     NULL,
     NULL
+#endif
+#if defined(LEO_HAS_FF8) && defined(LEO2_AVX512_VARIANT)
+    , AVX2FF8HighEncodeOneBlock
+#else
+    , NULL
 #endif
 };
 

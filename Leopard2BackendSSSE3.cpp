@@ -2036,6 +2036,7 @@ static const Ops SSSE3Ops = {
     NULL,
     NULL
 #endif
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

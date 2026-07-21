@@ -2822,17 +2822,34 @@ static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
         !codec->context->auto_requested ||
         !codec->context->auto_avx512_encode_host ||
         codec->context->backend != LEO2_BACKEND_AVX2 ||
-        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
-        codec->field != LEO2_FIELD_GF16 ||
-        codec->original_count < 8 ||
-        codec->recovery_count > 4096 ||
-        codec->parent_count < 16)
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1)
         return false;
 
-    // T=1 uses the direct copy/XOR path and never reaches this transform
-    // selector.  The remaining bounds exactly match the retained Zen 5
-    // calibration screen: K >= 8, R <= 4096, and N >= 16.
-    return codec->padded_side >= 2;
+    if (codec->field == LEO2_FIELD_GF16)
+    {
+        if (codec->original_count < 8 ||
+            codec->recovery_count > 4096 ||
+            codec->parent_count < 16)
+            return false;
+
+        // T=1 uses the direct copy/XOR path and never reaches this transform
+        // selector.  The remaining bounds exactly match the retained Zen 5
+        // calibration screen: K >= 8, R <= 4096, and N >= 16.
+        return codec->padded_side >= 2;
+    }
+
+    if (codec->field != LEO2_FIELD_GF8 ||
+        codec->original_count != codec->padded_side ||
+        codec->recovery_count != codec->padded_side)
+        return false;
+
+    // The balanced GF8 coarse AVX-512VL transform is wire-identical to the
+    // portable AVX2 schedule.  Keep AUTO on the exact measured shapes: a
+    // single complete message block, a complete parity block, and the three
+    // transform sizes qualified on this processor class.  Shortened,
+    // punctured, sparse-output, and neighboring sizes retain portable AVX2.
+    return codec->padded_side == 16 || codec->padded_side == 32 ||
+        codec->padded_side == 64;
 }
 
 static bool UseAutoAVX512Encode(
@@ -2846,8 +2863,20 @@ static bool UseAutoAVX512Encode(
         codec->context->ops != codec->context->baseline_ops ||
         requested_recovery_count != codec->recovery_count ||
         requested_recovery_prefix != codec->recovery_count ||
-        (buffer_bytes & (kScratchAlignment - 1U)) != 0 ||
-        buffer_bytes > 4U * 1024U * 1024U)
+        (buffer_bytes & (kScratchAlignment - 1U)) != 0)
+        return false;
+
+    if (codec->field == LEO2_FIELD_GF8)
+    {
+        // The whole-transform AVX-512VL calibration screen is positive in
+        // this cache-resident interval.  Above it the backends converge as
+        // shard traffic becomes the bottleneck; below it setup and validation
+        // dominate.
+        return buffer_bytes >= 2U * 1024U &&
+            buffer_bytes <= 64U * 1024U;
+    }
+
+    if (buffer_bytes > 4U * 1024U * 1024U)
         return false;
 
     // The AVX-512VL translation unit deliberately retains 256-bit data
