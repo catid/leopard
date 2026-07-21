@@ -1,0 +1,162 @@
+{
+  "schema": "leopard2-gf16-high-final-fusion-tile-negative/v1",
+  "date_utc": "2026-07-21",
+  "status": "directional_negative_candidates_reverted",
+  "task_context": "leopard-79h.38.5.4",
+  "source_identity": {
+    "candidate_base_and_same_source_control_commit": "edbd888f5471018a69150a31d52c052cd0a796f6",
+    "candidate_branch": "agent/gf16-gap-next-edbd888",
+    "same_source_control_worktree": "/home/catid/leopard-worktrees/gf16-gap-next-control-edbd888",
+    "candidate_worktree": "/home/catid/leopard-worktrees/gf16-gap-next-edbd888",
+    "candidate_source_policy": "Each candidate was an uncommitted, precisely scoped temporary patch atop edbd888; all candidate source was reverted after it failed the directional gate, as required for this negative-only commit.",
+    "exact_leopard_main_context_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "prior_exact_main_ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+    "prior_exact_main_ratio": 0.976778479,
+    "prior_exact_main_ci95": [0.973490995, 0.980077065],
+    "prior_exact_main_evidence": "experiments/leopard2/gf16_high_encode/results/byte_tiling_positive_20260721.json",
+    "prior_exact_main_interpretation": "The integrated Leopard2 source was 2.32 percent slower than exact Leopard main in this target cell. The candidates below were screened against exact same-source Leopard2 first and were killed before another exact-main campaign."
+  },
+  "workload": {
+    "K": 1000,
+    "R": 200,
+    "T": 256,
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "shard_bytes": 65536,
+    "requested_backend": "auto",
+    "reported_context_backend": "avx2",
+    "full_output_execution_backend": "avx512",
+    "threads": 1,
+    "cpu": 4,
+    "reuse": 4,
+    "retained_samples_per_process": 7,
+    "warmups_per_process": 2,
+    "compiler": "gcc 13.3.0",
+    "transmitted_parity_fnv1a64": "661175412a7efeaf"
+  },
+  "validation": {
+    "focused_release_tests": {
+      "passed": 8,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_backend_failure_avx512_kat",
+        "leopard2_context_backends",
+        "leopard2_auto_encode_backend",
+        "leopard2_api",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden",
+        "leopard2_transform_differential"
+      ],
+      "candidate_startup_kat_scope": "Ordinary and 65535-sentinel GF16 butterfly logs, one-byte-unaligned guarded ranges, and 2, 62, 64, 128, and 130-byte ALTMAP layouts were compared with the mature split IFFT plus XOR oracle.",
+      "result": "8/8 passed before directional timing"
+    },
+    "packed_variant_followup": {
+      "passed": 5,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_backend_failure_avx512_kat",
+        "leopard2_auto_encode_backend",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden"
+      ]
+    },
+    "fuzzing": "Not run; this bounded optimization pass used deterministic differential, startup-KAT, compatibility, and benchmark checks."
+  },
+  "directional_method": {
+    "purpose": "Fast fail screen only; not promotion or authoritative evidence.",
+    "usual_order": ["control", "candidate", "candidate", "control"],
+    "ratio_orientation": "candidate_time_over_same_source_control_time",
+    "interpretation": "A ratio above 1.0 is slower.",
+    "limitations": [
+      "No confidence interval or fail-closed SMT-sibling isolation gate was run.",
+      "The host had unrelated sanitizer activity on another physical core during part of the pass.",
+      "Every candidate lost directionally, so spending an isolated authoritative campaign on it would not be scientifically useful."
+    ],
+    "authoritative_claim": false
+  },
+  "candidates": [
+    {
+      "id": "avx512_final_ifft_xor_direct",
+      "hypothesis": "Keep all four GF16 rows live through the final inverse radix-four layers and XOR directly into the accumulator, removing one full temporary write/read pass.",
+      "implementation": "Optional AVX-512VL-only ff16 inverse-butterfly4-XOR range callback, exact-gated to AUTO legacy-high K=1000, R=200, 64-KiB shards and its 32-KiB execution tiles.",
+      "same_source_control_medians_us": [7579.285250, 7587.787750],
+      "candidate_medians_us": [7708.981750, 7710.334250],
+      "mean_control_us": 7583.536500,
+      "mean_candidate_us": 7709.658000,
+      "candidate_time_over_control": 1.016630961,
+      "control_time_over_candidate": 0.983641103,
+      "scratch_bytes": 16808512,
+      "scratch_change": "none",
+      "static_result": "Generated assembly rebroadcast the 24 GF16 nibble tables inside each 64-byte loop iteration, overwhelming the saved temporary traffic.",
+      "decision": "kill_and_revert"
+    },
+    {
+      "id": "avx512_packed_zmm_tables",
+      "hypothesis": "Pack each multiplier's four nibble tables into ZMM lanes so six invariant 64-byte table vectors replace repeated YMM broadcasts while retaining direct final accumulation.",
+      "implementation": "AVX-512BW VPSHUFB across packed 128-bit lanes followed by cross-lane XOR reduction, with invariant tables loaded once per four-row group.",
+      "same_source_control_medians_us": [7582.919500, 7597.049750],
+      "candidate_medians_us": [9298.044750, 9318.745250],
+      "mean_control_us": 7589.984625,
+      "mean_candidate_us": 9308.395000,
+      "candidate_time_over_control": 1.226404988,
+      "control_time_over_candidate": 0.815391335,
+      "scratch_bytes": 16808512,
+      "scratch_change": "none",
+      "static_result": "Packed lookup construction, lane reduction, and wide-vector execution cost substantially more than the mature split schedule.",
+      "decision": "kill_and_revert"
+    },
+    {
+      "id": "four_16k_byte_tiles",
+      "hypothesis": "Four smaller end-to-end byte tiles may improve cache residency enough to close the residual exact-main gap while halving scratch again.",
+      "implementation": "Change only the exact qualified cell's maximum execution tile from 32 KiB to 16 KiB.",
+      "same_source_control_medians_us": [7583.968750, 7589.801500],
+      "candidate_medians_us": [7905.417750, 7926.000500],
+      "mean_control_us": 7586.885125,
+      "mean_candidate_us": 7915.709125,
+      "candidate_time_over_control": 1.043341107,
+      "control_time_over_candidate": 0.958459312,
+      "control_scratch_bytes": 16808512,
+      "candidate_scratch_bytes": 8419904,
+      "scratch_reduction_fraction": 0.499069043,
+      "decision": "kill_and_revert"
+    },
+    {
+      "id": "three_balanced_byte_tiles",
+      "hypothesis": "Three approximately 21.8-KiB balanced passes may provide a crossover between two 32-KiB and four 16-KiB passes.",
+      "implementation": "Set the exact cell's maximum tile to 24 KiB; the layout selected three balanced aligned passes.",
+      "candidate_median_us": 9098.174000,
+      "reference_control_mean_us_from_preceding_bracket": 7586.885125,
+      "candidate_time_over_reference_control": 1.199197543,
+      "control_time_over_candidate": 0.833890968,
+      "control_scratch_bytes": 16808512,
+      "candidate_scratch_bytes": 11237952,
+      "scratch_reduction_fraction": 0.331413036,
+      "method_note": "Single candidate run against the immediately preceding control bracket; sufficiently negative for a kill decision but not an ABBA result.",
+      "decision": "kill_and_revert"
+    }
+  ],
+  "ignored_ephemeral_artifacts": [
+    {"path": "/tmp/gf16-gap-control-a.json", "sha256": "cb8185def701fc926963934544a1e84cbd52477bb6970f423019245261549184"},
+    {"path": "/tmp/gf16-gap-control-b.json", "sha256": "57c9f6ebee99e01a66774ce0968c06502cb622fdd6f0b203c02a112f6b5d017e"},
+    {"path": "/tmp/gf16-gap-candidate-a.json", "sha256": "aec391c9d776c4eaab96a8c59f66c715f4863ccd7a252574aa108dcd294bd92e"},
+    {"path": "/tmp/gf16-gap-candidate-b.json", "sha256": "d68cb55ba838c8900d05953f6a3a235f3646807ecb0e2cb4539a53a416b2d1d8"},
+    {"path": "/tmp/gf16-gap-packed-control-a.json", "sha256": "03e7f5385b1545f921d69fcb51f8471a4717de92e211d61f29145fccbcb6c78d"},
+    {"path": "/tmp/gf16-gap-packed-control-b.json", "sha256": "4ea8d963e217fdde55371718c7657f8153c478b80fb7c0fa7fca04e377610daf"},
+    {"path": "/tmp/gf16-gap-packed-candidate-a.json", "sha256": "56e754a93439e0b2bd5bf9eb607cab13c8704c7e908ca47353f964945dd5577f"},
+    {"path": "/tmp/gf16-gap-packed-candidate-b.json", "sha256": "a2a9df566822192ef1c2d79696e17d492fdcb9d59f43980f4091f48f3c5c8ee9"},
+    {"path": "/tmp/gf16-gap-t16-control-a.json", "sha256": "dc0c758e1e99f8e6dc0c9e386117022950a96421ac65592408b40fc5d20a515d"},
+    {"path": "/tmp/gf16-gap-t16-control-b.json", "sha256": "59a93ea687fed7860c26c14ec77e48813b82471e3f2bf0295f1ead2d53cd872c"},
+    {"path": "/tmp/gf16-gap-t16-candidate-a.json", "sha256": "320cf184e8dee3fe6333996cf56f82c1e01fd18730ba37795513c0f442c972f0"},
+    {"path": "/tmp/gf16-gap-t16-candidate-b.json", "sha256": "c73bfd145cbf4a739106088f503d910c66b5a9e20689f0e5ac6f9d33bb257313"},
+    {"path": "/tmp/gf16-gap-t24.json", "sha256": "4f4909e11d64629183e841cdce63f630858d5f96ffa9f86bd15fcf2cb02aef6e"}
+  ],
+  "artifact_retention_note": "The /tmp paths are ignored, machine-local artifacts and are not expected to survive a machine move. Their hashes and all decision-bearing measurements are retained in this committed record.",
+  "conclusion": {
+    "promotion": "none",
+    "candidate_source_retained": false,
+    "kill_decision": "All four bounded candidates are slower than the current Leopard2 source in the target cell; do not spend an authoritative exact-main campaign or production complexity on them.",
+    "remaining_hypothesis": "The residual exact-main gap is more likely in coarse whole-transform call shape or portable-translation-unit instruction shape than in final-stage temporary traffic or smaller byte tiles. That is a larger, separately reviewable experiment."
+  }
+}
