@@ -1,0 +1,230 @@
+{
+  "schema": "leopard2-gf8-k65-direct-repair-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "promoted_narrow_reuse_aware_region",
+  "scope": "Bounded direct recovery of at most eight missing originals for the GF8 K=65 legacy-high parent",
+  "source_identity": {
+    "exact_leopard_main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "measured_candidate_root_commit": "9d6d975b3533732016595b257d96a0978beed7f1",
+    "measured_candidate_tree": "6b3975eca3f0f9fe460363c0f86776e9a4e63672",
+    "worker_implementation_commit": "c4823f699709d75257f9aa808e6f71139c5f66fc",
+    "integrated_implementation_commit": "c863cc0db9adb009aca138ec8a821ccd2f0c8424",
+    "integrated_dispatch_test_commit": "91d87be277185441380b89f3eb6c678534ef531f",
+    "integrated_boundary_test_commit": "8c38d7220897375e8c064c76f46c2105d79e652f",
+    "integrated_enum_boundary_fix": "9d6d975b3533732016595b257d96a0978beed7f1"
+  },
+  "change": {
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "LEO2_FIELD_GF8",
+    "summary": "Precompute an eight-by-eight-or-smaller missing-original solve in the immutable decode plan and execute its fixed coefficients directly with AVX2 GF8 multiply-add kernels. Ragged tails are zero-padded into one aligned 64-byte stack tile before using the same mature kernel.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "hot_path_allocation_added": false,
+    "maximum_stack_tail_bytes": 128,
+    "decode_required_full_shard_work_slots": 0
+  },
+  "selector": {
+    "requirements": [
+      "legacy-high v1 profile",
+      "GF8",
+      "runtime-selected AVX2 context backend",
+      "K=65",
+      "65<=R<=128, implying P=T=128, N=256, and parent dimension 128",
+      "one through eight missing originals",
+      "no forced generic, specialized, tiled, or materialized decoder flag"
+    ],
+    "excluded": [
+      "K other than 65",
+      "R below 65 or above 128",
+      "nine or more missing originals",
+      "GF16",
+      "the low profile",
+      "scalar, SSSE3, AVX-512, and other non-AVX2 context backends",
+      "all forced decoder modes"
+    ],
+    "unchanged_neighbor": "The pre-existing K<=16 direct-repair path retains its four-loss limit and its existing field/backend behavior.",
+    "coverage_note": "Production tests execute R=66, 96, and 128 at loss counts 1, 4, and 8; R=65 carries representative ragged-tail coverage from 1 through 1025 bytes; R=127 is also exercised. R>K cases are compared with the independent generic decoder because Leopard1's public API rejects R>K."
+  },
+  "benchmark": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "backend": "avx2",
+    "threads": 1,
+    "method": {
+      "kind": "manually supervised pinned ABBA",
+      "order_per_round": [
+        "exact_main",
+        "leopard2",
+        "leopard2",
+        "exact_main"
+      ],
+      "rounds": 3,
+      "process_medians_per_implementation": 6,
+      "iterations_per_process": 15,
+      "warmups_per_process": 4,
+      "batch": 1,
+      "losses": 8,
+      "workload_seed_equal_within_cell": true,
+      "workload_digests_equal": true,
+      "leopard1_metric": "decode including its per-call erasure setup",
+      "leopard2_metric": "execution plus decode-plan setup divided by the cell's reuse count",
+      "paired_ratio_summary": "Arithmetic mean of the three independent per-round ratios; each round first averages its two process medians per implementation.",
+      "confidence_interval": "Two-sided 95% Student-t interval over the three independent per-round ratios, df=2.",
+      "extended_fuzzing_run": false,
+      "hardened_run_abba_bundle": false,
+      "note": "This is a manually supervised checkpoint rather than run_abba v6 evidence. Both programs were pinned to CPU 14; CPU 30 was reserved and accumulated zero non-idle jiffies. The observation is not a cgroup-exclusive host claim."
+    },
+    "isolation": {
+      "reserved_sibling_nonidle_jiffies": 0,
+      "reserved_sibling_idle_jiffies": 7917,
+      "cgroup_exclusive": false
+    },
+    "binary_sha256": {
+      "leopard2_benchmark": "1edc53368d21b19682ce70c8c34ed8954c7c88ddf52aab08a9afebd14bc5adf0",
+      "leopard2_archive": "71a63a2a333f76c47b2e57ca830d389799dda7569e335c89c8b401beb91ef811",
+      "exact_main_benchmark": "2cb8ac3d8e4b24491c60ce5e8e38e64748b63f414bf6553641cce22d2b1a9265",
+      "exact_main_archive": "36b026da1774ec4cd21ec4b1c1da6cc292d0c4dadc155a7d7d8aaaeb4206f263"
+    },
+    "raw_bundle": {
+      "original_path": "/tmp/leopard2-tiny-direct-exact-main-9d6d975.UZx1F6",
+      "json_file_count": 48,
+      "total_file_count": 51,
+      "normalized_sha256_manifest_digest": "b794bf95820e8e08fd8b64b4e0aeb1e4a4d4589501d457192b57c0fb75cd796a",
+      "manifest_digest_definition": "SHA-256 of sorted lines '<file_sha256>  <basename>\\n' for all 51 top-level bundle files.",
+      "sorted_raw_json_concatenation_sha256": "6e17b8084dd2539c2c20aafc63bd18b78eeb095e884f503197adea60ca67961b"
+    },
+    "cells": [
+      {
+        "id": "gf8-k65-r65-64b-loss8",
+        "K": 65,
+        "R": 65,
+        "shard_bytes": 64,
+        "losses": 8,
+        "seed": 650864,
+        "missing_original_indices": [1, 2, 21, 22, 28, 29, 40, 51],
+        "reuse": 512,
+        "selected_leopard2_path": "direct",
+        "exact_main_mean_median_us": 3.725168,
+        "leopard2_execution_mean_median_us": 2.347898,
+        "leopard2_plan_setup_mean_median_us": 11.215,
+        "leopard2_amortized_mean_median_us": 2.369803,
+        "round_main_over_leopard2_amortized": [1.579626848, 1.566615783, 1.569581970],
+        "mean_paired_speedup": 1.571942,
+        "mean_paired_speedup_95_percent_interval": [1.555002, 1.588881],
+        "aggregate_cold_leopard2_us": 13.562898,
+        "aggregate_cold_main_over_leopard2": 0.274659,
+        "first_aggregate_reuse_count_beating_main": 9,
+        "leopard2_decode_scratch_bytes": 3136,
+        "exact_main_decode_work_bytes": 16384,
+        "workload_digests": {
+          "original_data": "d5aad8786857b5f7",
+          "transmitted_parity": "4d8a881bd28ed291",
+          "recovered_originals": "b2267f9990a32bfd"
+        }
+      },
+      {
+        "id": "gf8-k65-r65-1k-loss8",
+        "K": 65,
+        "R": 65,
+        "shard_bytes": 1024,
+        "losses": 8,
+        "seed": 6501024,
+        "missing_original_indices": [0, 2, 8, 9, 30, 42, 44, 48],
+        "reuse": 256,
+        "selected_leopard2_path": "direct",
+        "exact_main_mean_median_us": 25.288805,
+        "leopard2_execution_mean_median_us": 8.198755,
+        "leopard2_plan_setup_mean_median_us": 11.4435,
+        "leopard2_amortized_mean_median_us": 8.243456,
+        "round_main_over_leopard2_amortized": [3.082653215, 3.082001748, 3.038909322],
+        "mean_paired_speedup": 3.067855,
+        "mean_paired_speedup_95_percent_interval": [3.005578, 3.130131],
+        "aggregate_cold_leopard2_us": 19.642255,
+        "aggregate_cold_main_over_leopard2": 1.287470,
+        "first_aggregate_reuse_count_beating_main": 1,
+        "leopard2_decode_scratch_bytes": 3136,
+        "exact_main_decode_work_bytes": 262144,
+        "workload_digests": {
+          "original_data": "7ebb0a9896302585",
+          "transmitted_parity": "061c709231322aa1",
+          "recovered_originals": "3025bcaff9a75c7d"
+        }
+      },
+      {
+        "id": "gf8-k65-r65-64k-loss8",
+        "K": 65,
+        "R": 65,
+        "shard_bytes": 65536,
+        "losses": 8,
+        "seed": 6565536,
+        "missing_original_indices": [3, 21, 22, 23, 28, 33, 54, 57],
+        "reuse": 16,
+        "selected_leopard2_path": "direct",
+        "exact_main_mean_median_us": 1808.603281,
+        "leopard2_execution_mean_median_us": 466.585240,
+        "leopard2_plan_setup_mean_median_us": 11.316667,
+        "leopard2_amortized_mean_median_us": 467.292531,
+        "round_main_over_leopard2_amortized": [3.868174503, 3.867137849, 3.875864981],
+        "mean_paired_speedup": 3.870392,
+        "mean_paired_speedup_95_percent_interval": [3.858549, 3.882236],
+        "aggregate_cold_leopard2_us": 477.901907,
+        "aggregate_cold_main_over_leopard2": 3.784466,
+        "first_aggregate_reuse_count_beating_main": 1,
+        "leopard2_decode_scratch_bytes": 3136,
+        "exact_main_decode_work_bytes": 16777216,
+        "workload_digests": {
+          "original_data": "f1d54ed03f5918c2",
+          "transmitted_parity": "d79201a1490301d6",
+          "recovered_originals": "0e358af215c68f37"
+        }
+      },
+      {
+        "id": "gf8-k65-r65-1m-loss8",
+        "K": 65,
+        "R": 65,
+        "shard_bytes": 1048576,
+        "losses": 8,
+        "seed": 651048576,
+        "missing_original_indices": [20, 28, 37, 44, 48, 53, 55, 60],
+        "reuse": 4,
+        "selected_leopard2_path": "direct",
+        "exact_main_mean_median_us": 101056.005750,
+        "leopard2_execution_mean_median_us": 13362.541542,
+        "leopard2_plan_setup_mean_median_us": 11.015167,
+        "leopard2_amortized_mean_median_us": 13365.295333,
+        "round_main_over_leopard2_amortized": [7.546636221, 7.568717708, 7.567926253],
+        "mean_paired_speedup": 7.561093,
+        "mean_paired_speedup_95_percent_interval": [7.529976, 7.592211],
+        "aggregate_cold_leopard2_us": 13373.556709,
+        "aggregate_cold_main_over_leopard2": 7.556405,
+        "first_aggregate_reuse_count_beating_main": 1,
+        "leopard2_decode_scratch_bytes": 3136,
+        "exact_main_decode_work_bytes": 268435456,
+        "workload_digests": {
+          "original_data": "cd1a1b833f4c75ee",
+          "transmitted_parity": "3f6f825b226dada5",
+          "recovered_originals": "31e08736824540da"
+        }
+      }
+    ]
+  },
+  "validation": {
+    "legacy_profile_parity_unchanged": true,
+    "exact_main_round_trip_passes": 24,
+    "leopard2_round_trip_passes": 24,
+    "all_workload_digests_matched": true,
+    "all_candidate_runs_selected_direct": true,
+    "worker_release_full_suite": "96/96 passed",
+    "exact_root_clang18_asan_ubsan_focused": "2/2 passed: leopard2_api and leopard2_direct_repair",
+    "focused_boundary_matrix": "R=66/96/128 x losses=1/4/8, plus R=65/127, loss 9 exclusion, K=66 exclusion, R=64 exclusion, GF16 exclusion, low-profile exclusion, and forced-mode exclusions",
+    "ragged_tail_bytes": [1, 7, 31, 63, 65, 127, 1025]
+  },
+  "interpretation": {
+    "promotion": "The narrow direct path exceeds the five-percent target in every retained amortized exact-main cell and is the measured best Leopard2 path in this region.",
+    "cold_64_byte_caveat": "At reuse one, aggregate Leopard2 execution plus plan setup is 13.562898 us versus Leopard1's 3.725168 us. The aggregate crossover is reuse nine, so the 1.571942x 64-byte result must not be described as one-shot superiority.",
+    "larger_cell_caveat": "At 1 KiB and above, aggregate execution plus the full plan setup already beats Leopard1 at reuse one.",
+    "scope_caveat": "These measurements support only K=65, R=65, GF8, AVX2, and eight missing originals. Correctness tests—not exact-main timing—cover R>K and the other selector boundaries."
+  }
+}
