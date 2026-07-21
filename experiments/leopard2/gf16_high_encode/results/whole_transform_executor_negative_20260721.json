@@ -1,0 +1,146 @@
+{
+  "schema": "leopard2-gf16-high-whole-transform-executor/v1",
+  "date_utc": "2026-07-21",
+  "status": "directional_negative_candidate_reverted",
+  "task_context": "leopard-79h.38.5.4.7",
+  "source_identity": {
+    "same_source_control_commit": "91e046d80732eb0b84158e5f9e63c90ede2fb005",
+    "same_source_control_tree": "a95c9bed3452c0a6a5a2eaef31980587d68244d9",
+    "candidate_branch": "agent/gf16-specialized-executor-91e046d",
+    "candidate_source_policy": "One uncommitted bounded prototype was built atop the exact control tree and fully reverted after its directional gate failed.",
+    "control_executable_sha256": "a4e3ae4c401e2b28a3d8af2820988edc9cd7bdc54e23992731cd366bffe9be0c",
+    "candidate_executable_sha256": "5984e4d6fa6bccf43401f6bf372b6e68b4ce7c127f1989a2e9ef751fc2415d15",
+    "control_archive_sha256": "a76b051b3029aad0e43706a36cc9c790b9647de79517fa57c9eae6f44cb9e56e",
+    "candidate_archive_sha256": "a5ad223d199a90b7cfca19eec053a161c2cf77958a5c1ef65f987594caa45c64",
+    "control_avx512_object_sha256": "fecdb794fefeac2356ab31836579abb366cbea9ebc630a8971ae12333615f11b",
+    "candidate_avx512_object_sha256": "5eba0d1a829fc2e0fd7f1ea400949e1670180ec72d1ed41f4a632e59bb86b7f3"
+  },
+  "hypothesis": "An exact-shape AVX-512VL whole-transform executor could close the residual K=1000,R=200,64-KiB legacy-high encode gap by keeping serial transform control and fixed-coefficient expansion inside one ISA translation unit.",
+  "prototype": {
+    "scope": "GF16 legacy_high_v1 only; exact K=1000,R=200,T=256; dense full parity; AUTO-selected AVX-512VL; two 32768-byte execution tiles from one 65536-byte public shard.",
+    "implementation": [
+      "One optional Ops callback executed four shifted 256-point inverse transforms and the requested 200-output forward prefix.",
+      "All transform-stage control was serial and used direct intra-translation-unit calls.",
+      "Each fixed GF16 nibble-table coefficient was expanded once per pair range and retained in YMM registers across that range.",
+      "The established two-tile layout and final inverse split-XOR accumulation were preserved."
+    ],
+    "static_audit": {
+      "outer_executor_direct_calls": 11,
+      "gomp_calls": 0,
+      "prepared_table_vector_spills": 0,
+      "coefficient_expansion": "Eight 16-byte nibble rows were broadcast once before each prepared pair-range byte loop.",
+      "wire_format_change": false
+    }
+  },
+  "correctness": {
+    "legacy_parity": "Every byte of all 200 transmitted 65536-byte parity shards matched the old leo_encode API.",
+    "independent_oracle": "The first GF16 parity symbol matched direct Lagrange interpolation over the legacy coordinate map.",
+    "production_route": "The exact AUTO encode executed two whole-transform callbacks, one for each 32768-byte tile.",
+    "fallback_routes": "Sparse and partial-output encodes executed zero whole-transform callbacks and retained their established path.",
+    "caller_sources_unchanged": true,
+    "timed_workload_digests": {
+      "algorithm": "fnv1a64",
+      "original_data": "139c485152b304f3",
+      "transmitted_parity": "4d5e93d271a555ef",
+      "recovered_originals": "d5e95280f560875a"
+    }
+  },
+  "validation": {
+    "focused_release": {
+      "passed": 6,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden",
+        "leopard2_transform_differential"
+      ],
+      "compiler": "gcc 13.3.0"
+    },
+    "focused_asan_ubsan": {
+      "passed": 6,
+      "failed": 0,
+      "compiler": "clang 18.1.3",
+      "flags": "-O1 -g -fno-omit-frame-pointer -fno-sanitize-recover=all -fsanitize=address,undefined",
+      "openmp": false,
+      "runtime_policy": "ASan leak detection, halt-on-error, and abort-on-error; UBSan halt-on-error, abort-on-error, and stack traces"
+    },
+    "portable_isa": "2/2 passed",
+    "reduced_field_build_install_consumer_matrix": "1/1 passed for GF8-only and GF16-only variants",
+    "fuzzing": "Not run by request; this optimization pass used deterministic compatibility, direct algebra, boundary, and focused sanitizer tests."
+  },
+  "directional_method": {
+    "authoritative_claim": false,
+    "purpose": "Fast fail screen before spending a quiet exact-main campaign.",
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "compiler": "gcc 13.3.0",
+    "cpu": 5,
+    "reserved_smt_sibling": 21,
+    "threads": 1,
+    "orders": [
+      ["control", "candidate", "candidate", "control"],
+      ["candidate", "control", "control", "candidate"]
+    ],
+    "retained_samples_per_process": 7,
+    "warmups_per_process": 2,
+    "reuse": 4,
+    "quiet_presample_seconds": 5,
+    "quiet_presample_nonidle_jiffies": {"cpu": 0, "sibling": 0},
+    "round_sibling_nonidle_jiffies": [0, 0],
+    "raw_hash_definition": "SHA-256 of each canonical JSON normalized invocation object: sorted keys, compact separators, no NaN; fields are label, encode_us, samples, digests, resolved, and stderr.",
+    "normalized_invocation_set_sha256": "b0d1a4ab92ff2f1ae5ba1f4b9fe44a14cc2be9be73b58a788f759fccdcedf535"
+  },
+  "workload": {
+    "K": 1000,
+    "R": 200,
+    "T": 256,
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "shard_bytes": 65536,
+    "requested_backend": "auto",
+    "reported_context_backend": "avx2",
+    "full_output_execution_backend": "avx512",
+    "loss_count": 1,
+    "batch": 1,
+    "seed": 1000200
+  },
+  "directional_results": {
+    "rounds": [
+      {
+        "order": ["control", "candidate", "candidate", "control"],
+        "encode_medians_us": [7589.48075, 7740.7275, 7749.58775, 7593.518],
+        "normalized_raw_sha256": [
+          "3532a04743949280800aa7cc13a9296fbc3b884b8d441de5c25a74eb58fddbd8",
+          "189effec07f0bb93aa629a630976efc27bc3d96ef883761f89a62371c6292044",
+          "dee66186df867c1434430b333704da6b642a4de3ecc70ef6b7d1bafb43aaacb0",
+          "b799de5fb3b0ac646b63004115ce8ebd24b726dfe2ed7b68cbe81645c902c029"
+        ],
+        "control_over_candidate": 0.9801608586975203
+      },
+      {
+        "order": ["candidate", "control", "control", "candidate"],
+        "encode_medians_us": [7731.09225, 7597.548, 7597.3255, 7738.9725],
+        "normalized_raw_sha256": [
+          "9d85fb245f3318a79f319a13fa48c8a280842a9ee75415808e9168f8d8d812a0",
+          "59a43a0a1bebeec5c380f1d7d98ed792e55641f6cf53b968f6a0732a9fc97d50",
+          "228a1a6269c5a8a6fb62539618f0813c0db357e3b06da851cad289e97187026e",
+          "88c8d3f744d2dc1e3ca8e0ed603df273465817b199abb53c38bdb04006cb18b4"
+        ],
+        "control_over_candidate": 0.982211497835985
+      }
+    ],
+    "aggregate_control_over_candidate": 0.9811856425475746,
+    "candidate_slowdown_fraction": 0.019175125110448388,
+    "candidate_slowdown_percent": 1.9175125110448388,
+    "all_timed_digests_matched": true
+  },
+  "decision": {
+    "promotion": "none",
+    "kill_reason": "The candidate was 1.92 percent slower directionally and therefore failed both the no-regression condition and the required 5 percent improvement threshold.",
+    "candidate_source_retained": false,
+    "candidate_tests_retained": false,
+    "next_step": "Do not repeat another isolated whole-executor/table-preparation rewrite for this cell without a materially different memory-traffic hypothesis. Resume broader paper-algorithm and dispatcher work instead."
+  }
+}
