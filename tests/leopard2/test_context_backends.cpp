@@ -2047,15 +2047,25 @@ void test_gf8_high_forward_fusion_policy(
     const std::vector<ContextEntry>& contexts)
 {
     const CodecCase cases[] = {
-        // T=128 uses the mature per-butterfly policy at the exact 1-KiB
-        // boundary.  The ragged case executes one 4096-byte aligned pass and
-        // one padded tail, so exactly one pass selects whole-stage fusion.
+        // Every promoted size retains the mature per-butterfly policy at the
+        // exact 1-KiB boundary.  A 1,025-byte shard executes a 1-KiB aligned
+        // prefix plus a padded tail, neither of which crosses the boundary.
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024 },
+        { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1025 },
+        // T=16, 32, and 64 each execute one 1,088-byte aligned pass plus a
+        // padded one-byte tail.  Only the aligned pass selects stage fusion.
+        { 16, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
+        { 32, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
+        { 65, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
+        // T=128 retains its established ragged behavior.
         { 127, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4097 },
-        // Neighboring high-rate T=64 and low-rate P=64 transforms retain the
-        // established policy even above 1 KiB.
+        // The policy is based on T, not the public rate within a promoted
+        // transform size.
         { 190, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
-        { 64, 192, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 4096 }
+        // Neighboring T=8, the low profile, and GF16 remain inactive.
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
+        { 64, 192, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 4096 },
+        { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 4096 }
     };
     std::vector<Shards> references(
         sizeof(cases) / sizeof(cases[0]));
@@ -2086,9 +2096,12 @@ void test_gf8_high_forward_fusion_policy(
             const size_t alignment = leo2_scratch_alignment();
             const size_t aligned_prefix =
                 test_case.bytes - test_case.bytes % alignment;
+            const uint32_t side = transform_side(test_case);
+            const bool promoted_side =
+                side == 16 || side == 32 || side == 64 || side == 128;
             const bool expect_fused_forward =
                 test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-                transform_side(test_case) == 128 &&
+                test_case.field == LEO2_FIELD_GF8 && promoted_side &&
                 leo2_context_backend(contexts[context_i].context) ==
                     LEO2_BACKEND_AVX2 &&
                 aligned_prefix > 1024;
@@ -2100,6 +2113,26 @@ void test_gf8_high_forward_fusion_policy(
                 " K=" + std::to_string(test_case.k) +
                 " R=" + std::to_string(test_case.r) +
                 " bytes=" + std::to_string(test_case.bytes));
+
+            // Partial-output encoding uses the independent sparse schedule;
+            // it must neither select nor depend on the dense-stage policy.
+            if (test_case.k == 65 && test_case.r == 63)
+            {
+                require_result(leo2_test_codec_set_encode_mode(codec,
+                    LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
+                    "force sparse forward-fusion neighbor");
+                trace.reset();
+                const Shards sparse = execute_encode(
+                    codec, test_case, originals, true);
+                const leopard::ff8::TestOnlyHighEncodeCounts sparse_counts =
+                    leopard::ff8::TestOnlyGetHighEncodeCounts();
+                require(sparse_counts.forward_fused_calls == 0,
+                    "sparse GF8 encode selected dense forward fusion");
+                for (uint32_t i = 0; i < test_case.r; ++i)
+                    if (i == 0 || i + 1 == test_case.r || i % 7U == 3U)
+                        require(sparse[i] == recovery[i],
+                            "sparse GF8 encode changed requested parity");
+            }
             leo2_codec_destroy(codec);
         }
     }

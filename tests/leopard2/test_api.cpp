@@ -333,6 +333,50 @@ void compare_high_with_legacy(
     leo2_codec_destroy(codec);
 }
 
+void compare_avx2_fused_high_with_legacy(TestCounts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    require(result == LEO2_SUCCESS || result == LEO2_UNSUPPORTED,
+        "explicit AVX2 compatibility context returned an unexpected result");
+    if (result == LEO2_UNSUPPORTED)
+    {
+        require(context == NULL,
+            "unsupported AVX2 compatibility context was not cleared");
+        return;
+    }
+    require(context != NULL &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "explicit AVX2 compatibility context selected the wrong backend");
+
+    // Exercise the lower and upper recovery-count edges of the promoted T
+    // bins.  Ragged lengths cover the aligned fused pass followed by an
+    // independently padded tail.  The T=64 high-rate case also covers a
+    // partial final message block.
+    compare_high_with_legacy(
+        context, 16, 9, std::vector<size_t>{1089, 4097}, counts);
+    compare_high_with_legacy(
+        context, 16, 16, std::vector<size_t>{1089}, counts);
+    compare_high_with_legacy(
+        context, 32, 17, std::vector<size_t>{1089, 4097}, counts);
+    compare_high_with_legacy(
+        context, 32, 32, std::vector<size_t>{1089}, counts);
+    compare_high_with_legacy(
+        context, 64, 33, std::vector<size_t>{1089, 4097}, counts);
+    compare_high_with_legacy(
+        context, 190, 64, std::vector<size_t>{4096}, counts);
+    compare_high_with_legacy(
+        context, 127, 65, std::vector<size_t>{1089, 4097}, counts);
+    compare_high_with_legacy(
+        context, 128, 128, std::vector<size_t>{1089}, counts);
+    leo2_context_destroy(context);
+}
+
 void compare_high_gf16_compact_with_legacy(
     leo2_context* context,
     unsigned k,
@@ -2042,6 +2086,7 @@ int main()
             std::vector<size_t>{64}, &counts);
         compare_high_with_legacy(context, 1000, 200,
             std::vector<size_t>{64}, &counts);
+        compare_avx2_fused_high_with_legacy(&counts);
 
         const BinaryField gf8 = leopard2_test::make_legacy_gf8();
         compare_low_gf8_with_oracle(context, 2, 5, 65, gf8, &counts);
