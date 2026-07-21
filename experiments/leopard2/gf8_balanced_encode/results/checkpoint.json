@@ -1,0 +1,221 @@
+{
+  "schema": "leopard2-gf8-balanced-avx512-encode-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "promoted_with_conservative_t16_lower_bound",
+  "source_identity": {
+    "exact_leopard_main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "measured_candidate_root_commit": "723632d350a3b8b148fa7b38e9c1e34670da7e33",
+    "implementation_commit": "3134f97a9e112fb7d3190bc613b89c2a5f521e87",
+    "selector_fix_commit": "068205bdecb6efd5609c0dda8c9d20deff68dbab",
+    "selector_fix_root_integration": "3be161dde0f7f8541cf21aadf7f93dad3f99dea1"
+  },
+  "change": {
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "LEO2_FIELD_GF8",
+    "summary": "Execute the exact balanced one-block inverse and forward LCH transform through one AVX-512VL callback, hoisting fixed-multiplier tables across each transform range.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "portable_avx2_object_changed": false,
+    "production_archive_growth_bytes": 11352,
+    "production_archive_growth_percent": 1.615,
+    "avx512_object_text_growth_bytes": 7232
+  },
+  "selector": {
+    "host": "AMD family 0x1a model 0x44 with runtime-qualified AVX-512F/BW/VL",
+    "context_requirement": "AUTO context whose portable baseline is AVX2",
+    "shape_requirement": "legacy-high GF8, K=R=T, T in {16,32,64}, one complete input block, all parity outputs requested",
+    "byte_requirement": "a multiple of 64 bytes",
+    "bounds_bytes": {
+      "T16": [4096, 65536],
+      "T32": [2048, 65536],
+      "T64": [2048, 65536]
+    },
+    "excluded": [
+      "T16 at 2048 bytes",
+      "shortened inputs",
+      "punctured or sparse parity outputs",
+      "T outside 16, 32, and 64",
+      "ragged public byte counts",
+      "non-legacy profiles",
+      "non-GF8 fields",
+      "uncalibrated processors"
+    ]
+  },
+  "benchmark": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu_pair": {
+      "benchmark_cpu": 14,
+      "reserved_smt_sibling": 30
+    },
+    "method": {
+      "order_per_round": ["exact_main", "leopard2", "leopard2", "exact_main"],
+      "rounds": 3,
+      "process_medians_per_implementation": 6,
+      "iterations_per_process": 15,
+      "warmups_per_process": 4,
+      "reuse_per_sample": 256,
+      "batch": 1,
+      "threads": 1
+    },
+    "isolation": {
+      "four_kib_sweep_reserved_sibling_nonidle_jiffies": 0,
+      "two_and_sixty_four_kib_sweep_reserved_sibling_user_jiffies": 4,
+      "two_and_sixty_four_kib_sweep_reserved_sibling_other_nonidle_jiffies": 0,
+      "cgroup_exclusive": false,
+      "interpretation": "The 4 KiB sweep met the zero-sibling criterion. The combined 2 KiB and 64 KiB sweep was quiet and pinned but is directional rather than strict authoritative evidence because the reserved sibling accumulated four user jiffies and no cgroup exclusivity was available."
+    },
+    "raw_bundle": {
+      "original_path": "/tmp/leopard2-balanced-avx512-manual-723632d.EPIRoL",
+      "json_file_count": 108,
+      "normalized_sha256_manifest_digest": "ff0c885434e859c590b8873310d2b97b05f8118ec0c2baa927b8eff5668b6fa1",
+      "digest_definition": "SHA-256 of sorted lines '<file_sha256>  <basename>\\n'."
+    },
+    "cells": [
+      {
+        "id": "gf8-bal16-2k",
+        "K": 16,
+        "R": 16,
+        "shard_bytes": 2048,
+        "seed": 1620,
+        "exact_main_median_us": 1.550883,
+        "candidate_median_us": 1.495328,
+        "round_geomean_speedups": [0.947390, 1.059996, 1.057889],
+        "aggregate_geomean_speedup": 1.020370,
+        "transmitted_parity_digest": "05763e396a64dc88",
+        "digests_matched": true,
+        "decision": "rejected_inconclusive_noisy_below_five_percent"
+      },
+      {
+        "id": "gf8-bal16-4k",
+        "K": 16,
+        "R": 16,
+        "shard_bytes": 4096,
+        "seed": 1616,
+        "exact_main_median_us": 3.163926,
+        "candidate_median_us": 2.918160,
+        "round_geomean_speedups": [1.109978, 1.078232, 1.083869],
+        "aggregate_geomean_speedup": 1.090606,
+        "transmitted_parity_digest": "d6404a7752165e3f",
+        "digests_matched": true,
+        "decision": "promoted_lower_bound"
+      },
+      {
+        "id": "gf8-bal16-64k",
+        "K": 16,
+        "R": 16,
+        "shard_bytes": 65536,
+        "seed": 1664,
+        "exact_main_median_us": 55.913719,
+        "candidate_median_us": 46.948688,
+        "round_geomean_speedups": [1.185416, 1.191855, 1.196368],
+        "aggregate_geomean_speedup": 1.191204,
+        "transmitted_parity_digest": "07121c0cf46bd812",
+        "digests_matched": true,
+        "decision": "promoted_upper_bound_directional"
+      },
+      {
+        "id": "gf8-bal32-2k",
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 2048,
+        "seed": 3220,
+        "exact_main_median_us": 4.358415,
+        "candidate_median_us": 3.991297,
+        "round_geomean_speedups": [1.093610, 1.100375, 1.090066],
+        "aggregate_geomean_speedup": 1.094675,
+        "transmitted_parity_digest": "26fdf03769a60d01",
+        "digests_matched": true,
+        "decision": "promoted_lower_bound_directional"
+      },
+      {
+        "id": "gf8-bal32-4k",
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 4096,
+        "seed": 3232,
+        "exact_main_median_us": 8.143983,
+        "candidate_median_us": 7.512041,
+        "round_geomean_speedups": [1.082037, 1.082969, 1.089600],
+        "aggregate_geomean_speedup": 1.084863,
+        "transmitted_parity_digest": "d0adc3d1475787e5",
+        "digests_matched": true,
+        "decision": "promoted"
+      },
+      {
+        "id": "gf8-bal32-64k",
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 65536,
+        "seed": 3264,
+        "exact_main_median_us": 152.102742,
+        "candidate_median_us": 131.494532,
+        "round_geomean_speedups": [1.158288, 1.149231, 1.165341],
+        "aggregate_geomean_speedup": 1.157601,
+        "transmitted_parity_digest": "236f7137882b31e3",
+        "digests_matched": true,
+        "decision": "promoted_upper_bound_directional"
+      },
+      {
+        "id": "gf8-bal64-2k",
+        "K": 64,
+        "R": 64,
+        "shard_bytes": 2048,
+        "seed": 6420,
+        "exact_main_median_us": 9.970195,
+        "candidate_median_us": 9.048313,
+        "round_geomean_speedups": [1.103589, 1.102316, 1.100318],
+        "aggregate_geomean_speedup": 1.102073,
+        "transmitted_parity_digest": "2f460ece3dbbb0c9",
+        "digests_matched": true,
+        "decision": "promoted_lower_bound_directional"
+      },
+      {
+        "id": "gf8-bal64-4k",
+        "K": 64,
+        "R": 64,
+        "shard_bytes": 4096,
+        "seed": 6464,
+        "exact_main_median_us": 18.850010,
+        "candidate_median_us": 17.427744,
+        "round_geomean_speedups": [1.080478, 1.079564, 1.083781],
+        "aggregate_geomean_speedup": 1.081273,
+        "transmitted_parity_digest": "2921e003e0cb30b2",
+        "digests_matched": true,
+        "decision": "promoted"
+      },
+      {
+        "id": "gf8-bal64-64k",
+        "K": 64,
+        "R": 64,
+        "shard_bytes": 65536,
+        "seed": 6464,
+        "exact_main_median_us": 345.284257,
+        "candidate_median_us": 309.737813,
+        "round_geomean_speedups": [1.114484, 1.119085, 1.118613],
+        "aggregate_geomean_speedup": 1.117392,
+        "transmitted_parity_digest": "289962542ff53264",
+        "digests_matched": true,
+        "decision": "promoted_upper_bound_directional"
+      }
+    ]
+  },
+  "validation": {
+    "release_full": "96/96 effective pass; the only initial failure was an uninitialized sse2neon worktree submodule and passed after initialization",
+    "release_focused": "auto encode backend, context backends, direct encode, portable ISA, portable ISA registration, and field-option matrix passed",
+    "strict_gcc": "GCC 13.3.0 with -Wall -Wextra -Wpedantic -Werror built successfully; focused tests passed",
+    "asan_ubsan": "GCC ASan+UBSan focused API/backend/encode tests passed; final committed callback/selector backend tests passed",
+    "parity": "T=16,32,64 parity matched scalar, SSSE3, portable AVX2, explicit AVX-512VL, and exact legacy Leopard for full outputs",
+    "tails_and_alignment": "1025, 2049, and 4097-byte public encodes and deliberately unaligned input/output buffers matched the scalar oracle; 1025 uses fallback split and 2049/4097 each execute one coarse aligned-prefix call",
+    "neighbor_gates": "sparse output, K=15/R=16 shortening, K=16/R=15 puncturing, T=8, and T=128 retained portable AVX2 and matched reference parity",
+    "startup_kat": "T=16,32,64 callback traversal passed guarded unaligned 65-byte differential checks after independent primitive KATs",
+    "production_archive": "No LEO2_ENABLE_TEST_HOOKS/TestOnly/leo2_test symbols; no global -march=native",
+    "assembly": "The callback contains 27 YMM vpternlogq instructions and zero ZMM references; portable AVX2 contains zero vpternlog and is byte-identical in text size to the parent build",
+    "independent_review": "No correctness, bounds, ABI, field-configuration, or AUTO-gating defect found"
+  },
+  "limitations": [
+    "The 2 KiB and 64 KiB sweep does not meet the strict zero-sibling-jiffy standard; its stable endpoint ratios are directional evidence.",
+    "T=16 at 2 KiB was noisy and below the five-percent promotion threshold, so AUTO deliberately retains AVX2 there.",
+    "The selector is calibrated only for the named AMD processor family/model and exact balanced shapes.",
+    "No claim is made for shard sizes above 64 KiB, where the backend advantage trends toward memory-bandwidth convergence."
+  ]
+}
