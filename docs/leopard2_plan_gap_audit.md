@@ -98,10 +98,12 @@ committed result bundle bound to `1962218`. The independent strict/static pass
 under `leopard-79h.40.2` separately reports GCC and Clang 65/65 plus focused
 sanitizer evidence on its audited candidate. Subsequent initialization, option,
 size-validation and other bug fixes changed production source, so the final
-current-HEAD Release/sanitizer/fuzz repeat remains pending under
-`leopard-79h.15`, `.40.3`, and `.40.4`. MSan, native ARM runtime, external
-128-CPU/NUMA, and the final 128-seed campaign must not be inferred from local
-x86 evidence.
+current-HEAD Release, focused sanitizer, and deterministic regression repeat
+remains pending under `leopard-79h.15`, `.40.3`, and `.40.4`. Per the
+2026-07-21 scope decision, a bounded public-API fuzz smoke remains useful but a
+large multi-seed coverage-guided campaign is deferred and is not a CPU-release
+gate. MSan, native ARM runtime, and external 128-CPU/NUMA evidence must not be
+inferred from local x86 results.
 
 ## Exact Leopard1 performance check
 
@@ -170,7 +172,7 @@ remain in `leopard-79h.16`, `.23`, and `.24`.
 | Optional PMULL/SVE/SVE2 research | `leopard-79h.18.25` |
 | Allocation-free executor setup, scalable batch alias metadata, static scheduling, affinity, 128-core and NUMA | `leopard-79h.14`, `.14.1`, `.14.2`, `.14.4`, `.14.5`, `.23`, `.24` |
 | Full Leopard1-centric benchmark matrix, counters and footprint | `leopard-79h.16`, `.16.2`, `.16.4`, `.23`, `.24` |
-| Full sanitizer/fuzz/compatibility and release gates | `leopard-79h.15`, `.17`, `.40` |
+| Focused sanitizer, deterministic compatibility, bounded fuzz smoke, and release gates | `leopard-79h.15`, `.17`, `.40`; extended fuzzing is deferred |
 | Product-tree/epsilon locator comparison | `leopard-79h.29`, as an unpromoted experiment rather than a CPU-release blocker |
 | Incremental locator correctness comparison | `leopard-79h.18.5` |
 | Exact-size/profile and deterministic crossover research | `leopard-79h.18.1.8`, `.18.1.10`, `.18.1.11` |
@@ -217,7 +219,7 @@ payloads as the explicit padded-GF16 wire layout and parity rebuild as an
 ordinary encode after original recovery; neither requires a duplicate hot path.
 
 Production evidence also remains incomplete: current-HEAD compatibility and
-sanitizer/fuzz repeats, authoritative exact-main and full benchmark matrices,
+focused sanitizer/regression repeats, authoritative exact-main and full benchmark matrices,
 128-core/multi-NUMA execution, final formula/literature traceability, and release
 documentation. Speculative exact-code, Jerasure, CUDA and other A-W experiments
 must not block the core codec except where the plan explicitly places them after
