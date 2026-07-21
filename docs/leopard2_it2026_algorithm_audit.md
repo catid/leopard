@@ -152,20 +152,30 @@ field, or wire bytes.  This applies to every pair whose K and R round to the
 same P, not only exact K=R; `(127,65)` is an example.  The candidate must remain
 forced until exhaustive equivalence and pinned crossover evidence exist.
 
-## Algorithm 5 cancellation opportunity
+## Algorithm 5 zero-shift cancellation
 
 Paper Algorithm 5 line 3 includes the shift-zero block and line 4 immediately
 evaluates accumulated h on the same `V_t`.  Linearity gives
 
     FFT_0(IFFT_0(F_0) + H_other) = F_0 + FFT_0(H_other).
 
-Current GF8 and GF16 execution always inverse-transforms block zero and then
-forward-transforms the sum.  Keeping raw block zero until after the transform
-of later contributions removes one T-point inverse transform.  If no later
-block is live, both transforms disappear.  Balanced full-original-loss
-recovery is exactly such a case under the current deterministic survivor
-selection.  This is an execution simplification of paper lines 3-4, not a new
-decoder identity.
+GF8 and GF16 now keep raw block zero out of the coefficient accumulator.  When
+a later block contributes, its first inverse transform seeds the accumulator,
+the remaining live blocks accumulate normally, and the transform at shift zero
+is followed by XOR of the raw live block-zero rows.  When no later block is
+live, block zero is staged directly and neither transform executes.  This
+removes one T-point inverse transform for every Algorithm 5 execution and also
+removes the T-point forward transform in the block-zero-only case.  Balanced
+full-original-loss recovery is exactly such a case under the current
+deterministic survivor selection.
+
+`FinishHighDecodeSyndrome` implements the shared boundary in both fields for
+prepared, materialized, tiled, and pruned execution.  Test-only counters prove
+which transforms were elided, and synthetic hook tests cover an empty block
+zero, a sparse block zero, a block-zero-only input, and a first later
+exact-pruned contribution followed by accumulation.  Forced-specialized
+GF8/GF16 end-to-end tests compare the result with the generic decoder.  This is
+an execution simplification of paper lines 3-4, not a new decoder identity.
 
 Other performance gaps are extra GF16 copy/diagonal passes, low tiled handling
 of an empty block zero, a selector that is mostly workspace-driven outside two

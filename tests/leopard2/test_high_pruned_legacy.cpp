@@ -19,6 +19,8 @@
 #error "high-pruned stage counter target requires Leopard2 test hooks"
 #endif
 #if defined(LEO2_ENABLE_TEST_HOOKS)
+#include "Leopard2Backend.h"
+#include "Leopard2Plan.h"
 #include "LeopardFF16.h"
 #include "LeopardFF8.h"
 #endif
@@ -30,6 +32,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -149,7 +152,12 @@ void verify_gf8_one_loss_receive_stage(
               << static_cast<unsigned>(leo2_context_backend(context))
               << " fused4=" << counts.receive_ifft_butterfly4_out_of_place
               << " copies=" << counts.receive_copy_shards
-              << " zeros=" << counts.receive_zero_shards << std::endl;
+              << " zeros=" << counts.receive_zero_shards
+              << " block0_ifft_elided="
+              << counts.syndrome_block_zero_ifft_elisions
+              << " syndrome_fft=" << counts.syndrome_forward_transforms
+              << " block0_xor_shards="
+              << counts.syndrome_block_zero_xor_shards << std::endl;
     require(memcmp(restored[0], original_input[0], test.bytes) == 0,
         "one-loss restored original mismatch");
 
@@ -160,22 +168,462 @@ void verify_gf8_one_loss_receive_stage(
     {
         require(counts.receive_ifft_butterfly4_out_of_place == 56,
             "qualified GF8 one-loss fused-group count drifted");
-        require(counts.receive_copy_shards == 16,
+        require(counts.receive_copy_shards == 15,
             "qualified GF8 one-loss staged-copy count drifted");
-        require(counts.receive_zero_shards == 16,
+        require(counts.receive_zero_shards == 1,
             "qualified GF8 one-loss staged-zero count drifted");
     }
     else
     {
         require(counts.receive_ifft_butterfly4_out_of_place == 0,
             "unqualified GF8 backend fused receive rows");
-        require(counts.receive_copy_shards == test.k,
+        require(counts.receive_copy_shards == test.k - 1,
             "copy-first GF8 one-loss staged-copy count drifted");
-        require(counts.receive_zero_shards ==
-                leo2_codec_parent_count(codec) - test.k,
+        require(counts.receive_zero_shards == 1,
             "copy-first GF8 one-loss staged-zero count drifted");
     }
+    require(counts.syndrome_block_zero_ifft_elisions == 1,
+        "GF8 block-zero inverse transform was not elided");
+    require(counts.syndrome_forward_transforms == 1 &&
+            counts.syndrome_forward_transform_elisions == 0,
+        "GF8 later-block syndrome did not retain exactly one forward transform");
+    require(counts.syndrome_block_zero_xor_shards == 1,
+        "GF8 block-zero raw-source XOR count drifted");
     leo2_decode_plan_destroy(plan);
+}
+
+template<class Counts, class ResetCounts, class GetCounts>
+void verify_block_zero_only_cancellation_case(
+    leo2_context* context,
+    leo2_field field,
+    uint32_t k,
+    size_t bytes,
+    uint32_t layout_flag,
+    ResetCounts reset_counts,
+    GetCounts get_counts,
+    const char* label)
+{
+    leo2_codec_options specialized_options = {};
+    specialized_options.struct_size = sizeof(specialized_options);
+    specialized_options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
+        layout_flag;
+    leo2_codec* specialized_codec = NULL;
+    require_result(leo2_codec_create(context, k, k,
+        LEO2_PROFILE_LEGACY_HIGH_V1, field, &specialized_options,
+        &specialized_codec), "block-zero-only specialized codec create");
+
+    leo2_codec_options generic_options = {};
+    generic_options.struct_size = sizeof(generic_options);
+    generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+    leo2_codec* generic_codec = NULL;
+    require_result(leo2_codec_create(context, k, k,
+        LEO2_PROFILE_LEGACY_HIGH_V1, field, &generic_options,
+        &generic_codec), "block-zero-only generic codec create");
+
+    const size_t stride = (bytes + 63u) & ~size_t(63u);
+    AlignedBytes original_storage(static_cast<size_t>(k) * stride);
+    AlignedBytes recovery_storage(static_cast<size_t>(k) * stride);
+    std::vector<const void*> originals(k);
+    std::vector<void*> recovery_output(k);
+    for (uint32_t shard = 0; shard < k; ++shard)
+    {
+        uint8_t* original = original_storage.data() +
+            static_cast<size_t>(shard) * stride;
+        for (size_t byte = 0; byte < bytes; ++byte)
+            original[byte] = static_cast<uint8_t>(
+                mix(shard * 65537u + static_cast<uint32_t>(byte) * 17u));
+        originals[shard] = original;
+        recovery_output[shard] = recovery_storage.data() +
+            static_cast<size_t>(shard) * stride;
+    }
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        specialized_codec, bytes, &encode_scratch_bytes),
+        "block-zero-only encode scratch query");
+    AlignedBytes encode_scratch(encode_scratch_bytes);
+    require_result(leo2_encode(specialized_codec, bytes, &originals[0],
+        &recovery_output[0], encode_scratch.data(), encode_scratch.size()),
+        "block-zero-only encode");
+
+    std::vector<uint8_t> original_present(k, 0);
+    std::vector<uint8_t> recovery_present(k, 1);
+    leo2_decode_plan* specialized_plan = NULL;
+    leo2_decode_plan* generic_plan = NULL;
+    require_result(leo2_decode_plan_create(specialized_codec,
+        &original_present[0], &recovery_present[0], &specialized_plan),
+        "block-zero-only specialized plan create");
+    require_result(leo2_decode_plan_create(generic_codec,
+        &original_present[0], &recovery_present[0], &generic_plan),
+        "block-zero-only generic plan create");
+
+    std::vector<const void*> missing_originals(k, NULL);
+    std::vector<const void*> recovery(k);
+    for (uint32_t i = 0; i < k; ++i)
+        recovery[i] = recovery_output[i];
+    AlignedBytes specialized_storage(static_cast<size_t>(k) * stride);
+    AlignedBytes generic_storage(static_cast<size_t>(k) * stride);
+    std::vector<void*> specialized_output(k), generic_output(k);
+    for (uint32_t i = 0; i < k; ++i)
+    {
+        specialized_output[i] = specialized_storage.data() +
+            static_cast<size_t>(i) * stride;
+        generic_output[i] = generic_storage.data() +
+            static_cast<size_t>(i) * stride;
+    }
+
+    size_t specialized_scratch_bytes = 0;
+    size_t generic_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        specialized_plan, bytes, &specialized_scratch_bytes),
+        "block-zero-only specialized scratch query");
+    require_result(leo2_decode_plan_scratch_size(
+        generic_plan, bytes, &generic_scratch_bytes),
+        "block-zero-only generic scratch query");
+    AlignedBytes specialized_scratch(specialized_scratch_bytes);
+    AlignedBytes generic_scratch(generic_scratch_bytes);
+
+    reset_counts();
+    require_result(leo2_decode_plan_execute(specialized_plan, bytes,
+        &missing_originals[0], &recovery[0], &specialized_output[0],
+        specialized_scratch.data(), specialized_scratch.size()),
+        "block-zero-only specialized decode");
+    const Counts counts = get_counts();
+    require_result(leo2_decode_plan_execute(generic_plan, bytes,
+        &missing_originals[0], &recovery[0], &generic_output[0],
+        generic_scratch.data(), generic_scratch.size()),
+        "block-zero-only generic decode");
+    for (uint32_t i = 0; i < k; ++i)
+    {
+        require(memcmp(specialized_output[i], originals[i], bytes) == 0,
+            "block-zero-only specialized recovery mismatch");
+        require(memcmp(generic_output[i], specialized_output[i], bytes) == 0,
+            "block-zero-only specialized/generic mismatch");
+    }
+
+    const uint64_t kernel_passes = bytes > 64 && (bytes & 63u) != 0 ? 2 : 1;
+    require(counts.syndrome_block_zero_ifft_elisions == kernel_passes,
+        "block-zero-only inverse-elision count mismatch");
+    require(counts.syndrome_forward_transforms == 0,
+        "block-zero-only path retained a forward syndrome transform");
+    require(counts.syndrome_forward_transform_elisions == kernel_passes,
+        "block-zero-only forward-elision count mismatch");
+    require(counts.syndrome_block_zero_xor_shards == 0,
+        "block-zero-only path unexpectedly XORed staged raw sources");
+    std::cout << "COUNTERS " << label
+              << " block0_ifft_elided="
+              << counts.syndrome_block_zero_ifft_elisions
+              << " syndrome_fft=" << counts.syndrome_forward_transforms
+              << " syndrome_fft_elided="
+              << counts.syndrome_forward_transform_elisions << std::endl;
+
+    leo2_decode_plan_destroy(generic_plan);
+    leo2_decode_plan_destroy(specialized_plan);
+    leo2_codec_destroy(generic_codec);
+    leo2_codec_destroy(specialized_codec);
+}
+
+void verify_block_zero_only_cancellation(leo2_context* context)
+{
+    verify_block_zero_only_cancellation_case<
+        leopard::ff8::TestOnlyHighDecodeCounts>(
+        context, LEO2_FIELD_GF8, 128, 65,
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE,
+        leopard::ff8::TestOnlyResetHighDecodeCounts,
+        leopard::ff8::TestOnlyGetHighDecodeCounts,
+        "alg5_block0_only_gf8_materialized");
+    verify_block_zero_only_cancellation_case<
+        leopard::ff8::TestOnlyHighDecodeCounts>(
+        context, LEO2_FIELD_GF8, 128, 64,
+        LEO2_CODEC_FORCE_TILED_DECODE,
+        leopard::ff8::TestOnlyResetHighDecodeCounts,
+        leopard::ff8::TestOnlyGetHighDecodeCounts,
+        "alg5_block0_only_gf8_tiled");
+    verify_block_zero_only_cancellation_case<
+        leopard::ff16::TestOnlyHighDecodeCounts>(
+        context, LEO2_FIELD_GF16, 256, 66,
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE,
+        leopard::ff16::TestOnlyResetHighDecodeCounts,
+        leopard::ff16::TestOnlyGetHighDecodeCounts,
+        "alg5_block0_only_gf16_materialized");
+    verify_block_zero_only_cancellation_case<
+        leopard::ff16::TestOnlyHighDecodeCounts>(
+        context, LEO2_FIELD_GF16, 256, 64,
+        LEO2_CODEC_FORCE_TILED_DECODE,
+        leopard::ff16::TestOnlyResetHighDecodeCounts,
+        leopard::ff16::TestOnlyGetHighDecodeCounts,
+        "alg5_block0_only_gf16_tiled");
+}
+
+struct GF8CancellationField
+{
+    typedef leopard::ff8::ffe_t Ffe;
+    typedef leopard::ff8::TestOnlyHighDecodeCounts Counts;
+    static const unsigned kModulus = leopard::ff8::kModulus;
+
+    static void prepare(unsigned n, unsigned side, Ffe* factors)
+    {
+        leopard::ff8::PrepareHighDecode(n, side, factors);
+    }
+    static bool prepare_pruned(unsigned size, unsigned shift, bool inverse,
+        const uint8_t* input_mask, const uint8_t* output_mask,
+        leopard2_internal::PrunedTransformPlan& plan)
+    {
+        return leopard::ff8::PreparePrunedTransformPlan(
+            size, shift, inverse, input_mask, output_mask, plan);
+    }
+    static void prepared(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint8_t* requested,
+        const Ffe* locator, const Ffe* factors, void** work)
+    {
+        leopard::ff8::ReedSolomonDecodeHighPrepared(
+            bytes, n, side, inputs, requested, locator, factors, work);
+    }
+    static void pruned(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint16_t* prefixes,
+        const uint32_t* requested,
+        const leopard2_internal::DecodeOutputBlock* output_blocks,
+        unsigned output_block_count, const Ffe* locator, const Ffe* factors,
+        const leopard2_internal::PrunedTransformBlock* input_plans,
+        unsigned input_plan_count, void** work)
+    {
+        leopard::ff8::ReedSolomonDecodeHighPrunedPlanned(
+            leopard::backend::GetDefaultOps(), bytes, n, side, inputs,
+            prefixes, requested, output_blocks, output_block_count, locator,
+            factors, input_plans, input_plan_count, NULL, 0, NULL, work);
+    }
+    static void tiled_pruned(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint16_t* prefixes,
+        const uint32_t* requested,
+        const leopard2_internal::DecodeOutputBlock* output_blocks,
+        unsigned output_block_count, const Ffe* locator, const Ffe* factors,
+        void* const* outputs,
+        const leopard2_internal::PrunedTransformBlock* input_plans,
+        unsigned input_plan_count, void** work)
+    {
+        leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
+            leopard::backend::GetDefaultOps(), bytes, n, side, inputs,
+            prefixes, requested, output_blocks, output_block_count, locator,
+            factors, outputs, input_plans, input_plan_count, NULL, 0, work);
+    }
+    static void reset() { leopard::ff8::TestOnlyResetHighDecodeCounts(); }
+    static Counts counts() { return leopard::ff8::TestOnlyGetHighDecodeCounts(); }
+};
+
+struct GF16CancellationField
+{
+    typedef leopard::ff16::ffe_t Ffe;
+    typedef leopard::ff16::TestOnlyHighDecodeCounts Counts;
+    static const unsigned kModulus = leopard::ff16::kModulus;
+
+    static void prepare(unsigned n, unsigned side, Ffe* factors)
+    {
+        leopard::ff16::PrepareHighDecode(n, side, factors);
+    }
+    static bool prepare_pruned(unsigned size, unsigned shift, bool inverse,
+        const uint8_t* input_mask, const uint8_t* output_mask,
+        leopard2_internal::PrunedTransformPlan& plan)
+    {
+        return leopard::ff16::PreparePrunedTransformPlan(
+            size, shift, inverse, input_mask, output_mask, plan);
+    }
+    static void prepared(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint8_t* requested,
+        const Ffe* locator, const Ffe* factors, void** work)
+    {
+        leopard::ff16::ReedSolomonDecodeHighPrepared(
+            bytes, n, side, inputs, requested, locator, factors, work);
+    }
+    static void pruned(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint16_t* prefixes,
+        const uint32_t* requested,
+        const leopard2_internal::DecodeOutputBlock* output_blocks,
+        unsigned output_block_count, const Ffe* locator, const Ffe* factors,
+        const leopard2_internal::PrunedTransformBlock* input_plans,
+        unsigned input_plan_count, void** work)
+    {
+        leopard::ff16::ReedSolomonDecodeHighPrunedPlanned(
+            leopard::backend::GetDefaultOps(), bytes, n, side, inputs,
+            prefixes, requested, output_blocks, output_block_count, locator,
+            factors, input_plans, input_plan_count, NULL, 0, NULL, work);
+    }
+    static void tiled_pruned(uint64_t bytes, unsigned n, unsigned side,
+        const void* const* inputs, const uint16_t* prefixes,
+        const uint32_t* requested,
+        const leopard2_internal::DecodeOutputBlock* output_blocks,
+        unsigned output_block_count, const Ffe* locator, const Ffe* factors,
+        void* const* outputs,
+        const leopard2_internal::PrunedTransformBlock* input_plans,
+        unsigned input_plan_count, void** work)
+    {
+        leopard::ff16::ReedSolomonDecodeHighTiledPrunedPlanned(
+            leopard::backend::GetDefaultOps(), bytes, n, side, inputs,
+            prefixes, requested, output_blocks, output_block_count, locator,
+            factors, outputs, input_plans, input_plan_count, NULL, 0, work);
+    }
+    static void reset() { leopard::ff16::TestOnlyResetHighDecodeCounts(); }
+    static Counts counts() { return leopard::ff16::TestOnlyGetHighDecodeCounts(); }
+};
+
+template<class Field>
+void verify_internal_cancellation_pattern(
+    unsigned side, bool block_zero_live, const char* label)
+{
+    typedef typename Field::Ffe Ffe;
+    typedef typename Field::Counts Counts;
+    const unsigned n = side * 8;
+    const size_t bytes = 64;
+    AlignedBytes sources(static_cast<size_t>(n) * bytes);
+    std::vector<const void*> inputs(n, NULL);
+    for (unsigned coordinate = 0; coordinate < n; ++coordinate)
+    {
+        uint8_t* shard = sources.data() +
+            static_cast<size_t>(coordinate) * bytes;
+        for (size_t byte = 0; byte < bytes; ++byte)
+            shard[byte] = static_cast<uint8_t>(
+                mix(coordinate * 257u + static_cast<unsigned>(byte) * 13u));
+    }
+    unsigned block_zero_live_rows = 0;
+    if (block_zero_live)
+    {
+        inputs[0] = sources.data();
+        inputs[side - 1] = sources.data() +
+            static_cast<size_t>(side - 1) * bytes;
+        block_zero_live_rows = 2;
+    }
+    // Block one is empty.  The first later contribution is sparse and owns
+    // an exact input plan; the next block is dense and must accumulate into
+    // the first.  Both are subsequently reused as output destinations.
+    const unsigned sparse_offset = side * 2;
+    inputs[sparse_offset] = sources.data() +
+        static_cast<size_t>(sparse_offset) * bytes;
+    inputs[sparse_offset + side / 2] = sources.data() +
+        static_cast<size_t>(sparse_offset + side / 2) * bytes;
+    inputs[sparse_offset + side - 1] = sources.data() +
+        static_cast<size_t>(sparse_offset + side - 1) * bytes;
+    const unsigned dense_offset = side * 3;
+    for (unsigned i = 0; i < side; ++i)
+        inputs[dense_offset + i] = sources.data() +
+            static_cast<size_t>(dense_offset + i) * bytes;
+
+    std::vector<uint16_t> prefixes(n / side, 0);
+    for (unsigned coordinate = 0; coordinate < n; ++coordinate)
+        if (inputs[coordinate])
+            prefixes[coordinate / side] = static_cast<uint16_t>(
+                coordinate % side + 1);
+    const uint32_t requested_coordinates[] = {
+        sparse_offset + 1, dense_offset + side / 2
+    };
+    const leopard2_internal::DecodeOutputBlock output_blocks[] = {
+        { 2, 2, 0, 1 },
+        { 3, side / 2 + 1, 1, 2 }
+    };
+    std::vector<uint8_t> requested_mask(n, 0);
+    requested_mask[requested_coordinates[0]] = 1;
+    requested_mask[requested_coordinates[1]] = 1;
+    std::vector<Ffe> locator(n);
+    std::vector<Ffe> factors(n);
+    for (unsigned i = 0; i < n; ++i)
+        locator[i] = static_cast<Ffe>(mix(i + n) % Field::kModulus);
+    Field::prepare(n, side, &factors[0]);
+
+    std::vector<leopard2_internal::PrunedTransformBlock> plans;
+    std::vector<uint8_t> input_mask(side), output_mask(side, 1);
+    for (unsigned block = 0; block < n / side; ++block)
+    {
+        unsigned live_count = 0;
+        for (unsigned i = 0; i < side; ++i)
+        {
+            input_mask[i] = inputs[block * side + i] != NULL;
+            live_count += input_mask[i];
+        }
+        if (live_count == 0 || live_count == side)
+            continue;
+        leopard2_internal::PrunedTransformBlock entry;
+        entry.block = block;
+        require(Field::prepare_pruned(side, block * side, true,
+            &input_mask[0], &output_mask[0], entry.plan),
+            "cancellation input plan build");
+        plans.push_back(std::move(entry));
+    }
+    require(!plans.empty() &&
+            plans[block_zero_live ? 1u : 0u].block == 2,
+        "first later cancellation input plan is not exact-pruned");
+
+    AlignedBytes expected_storage(static_cast<size_t>(n) * bytes);
+    AlignedBytes materialized_storage(static_cast<size_t>(n) * bytes);
+    std::vector<void*> expected_work(n), materialized_work(n);
+    for (unsigned i = 0; i < n; ++i)
+    {
+        expected_work[i] = expected_storage.data() +
+            static_cast<size_t>(i) * bytes;
+        materialized_work[i] = materialized_storage.data() +
+            static_cast<size_t>(i) * bytes;
+    }
+    Field::prepared(bytes, n, side, &inputs[0], &requested_mask[0],
+        &locator[0], &factors[0], &expected_work[0]);
+
+    const auto verify_counts = [block_zero_live, block_zero_live_rows, label](
+        const Counts& counts) {
+        require(counts.syndrome_block_zero_ifft_elisions ==
+                (block_zero_live ? 1u : 0u),
+            "synthetic block-zero inverse-elision count mismatch");
+        require(counts.syndrome_forward_transforms == 1 &&
+                counts.syndrome_forward_transform_elisions == 0,
+            "synthetic later contribution forward-transform count mismatch");
+        require(counts.syndrome_block_zero_xor_shards ==
+                block_zero_live_rows,
+            "synthetic block-zero source XOR count mismatch");
+        require(counts.syndrome_materialized_blocks != 0,
+            "synthetic first exact-pruned contribution was not materialized");
+        require(counts.syndrome_accumulated_blocks != 0,
+            "synthetic second dense contribution was not accumulated");
+        std::cout << "COUNTERS " << label
+                  << " block0_ifft_elided="
+                  << counts.syndrome_block_zero_ifft_elisions
+                  << " syndrome_materialized="
+                  << counts.syndrome_materialized_blocks
+                  << " syndrome_accumulated="
+                  << counts.syndrome_accumulated_blocks << std::endl;
+    };
+
+    Field::reset();
+    Field::pruned(bytes, n, side, &inputs[0], &prefixes[0],
+        requested_coordinates, output_blocks, 2, &locator[0], &factors[0],
+        &plans[0], plans.size(), &materialized_work[0]);
+    Counts counts = Field::counts();
+    verify_counts(counts);
+    for (unsigned i = 0; i < 2; ++i)
+        require(memcmp(expected_work[requested_coordinates[i]],
+                materialized_work[requested_coordinates[i]], bytes) == 0,
+            "materialized cancellation overwrote a former input temp incorrectly");
+
+    AlignedBytes tiled_storage(static_cast<size_t>(side * 2 + 2) * bytes);
+    std::vector<void*> tiled_work(side * 2 + 2);
+    for (unsigned i = 0; i < side * 2 + 2; ++i)
+        tiled_work[i] = tiled_storage.data() +
+            static_cast<size_t>(i) * bytes;
+    Field::reset();
+    Field::tiled_pruned(bytes, n, side, &inputs[0], &prefixes[0],
+        requested_coordinates, output_blocks, 2, &locator[0], &factors[0],
+        &tiled_work[side * 2], &plans[0], plans.size(), &tiled_work[0]);
+    counts = Field::counts();
+    verify_counts(counts);
+    for (unsigned i = 0; i < 2; ++i)
+        require(memcmp(expected_work[requested_coordinates[i]],
+                tiled_work[side * 2 + i], bytes) == 0,
+            "tiled cancellation overwrote its former input tile incorrectly");
+}
+
+void verify_internal_cancellation_patterns()
+{
+    verify_internal_cancellation_pattern<GF8CancellationField>(
+        16, false, "alg5_gf8_block0_empty");
+    verify_internal_cancellation_pattern<GF8CancellationField>(
+        16, true, "alg5_gf8_block0_sparse");
+    verify_internal_cancellation_pattern<GF16CancellationField>(
+        32, false, "alg5_gf16_block0_empty");
+    verify_internal_cancellation_pattern<GF16CancellationField>(
+        32, true, "alg5_gf16_block0_sparse");
 }
 #endif
 
@@ -283,26 +731,30 @@ void run_case(leo2_context* context, const Case& test, size_t case_index,
     for (uint32_t i = 0; i < test.r; ++i)
         new_recovery[i] = new_recovery_output[i];
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-    const bool verify_parent_wide_stage =
+    const bool verify_materialized_cancellation =
         test.field == LEO2_FIELD_GF16 && (case_index & 1u) == 0;
-    if (verify_parent_wide_stage)
+    if (verify_materialized_cancellation)
         leopard::ff16::TestOnlyResetHighDecodeCounts();
 #endif
     require_result(leo2_decode_plan_execute(plan, test.bytes,
         &old_original[0], &new_recovery[0], &restored[0],
         decode_scratch.data(), decode_scratch.size()), "new decode");
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-    if (verify_parent_wide_stage)
+    if (verify_materialized_cancellation)
     {
         const leopard::ff16::TestOnlyHighDecodeCounts stage_counts =
             leopard::ff16::TestOnlyGetHighDecodeCounts();
         require(stage_counts.receive_ifft_butterfly4_out_of_place == 0,
             "materialized GF16 unexpectedly fused receive rows");
-        require(stage_counts.receive_copy_shards == test.k,
-            "materialized GF16 did not copy each selected row exactly once");
-        require(stage_counts.receive_zero_shards ==
-                leo2_codec_parent_count(codec) - test.k,
-            "materialized GF16 did not zero the complete parent complement");
+        require(stage_counts.receive_copy_shards == test.k - loss_count,
+            "materialized GF16 did not stage each later selected row once");
+        require(stage_counts.syndrome_block_zero_ifft_elisions == 1,
+            "materialized GF16 did not elide the block-zero inverse transform");
+        require(stage_counts.syndrome_forward_transforms == 1 &&
+                stage_counts.syndrome_forward_transform_elisions == 0,
+            "materialized GF16 later syndrome forward count drifted");
+        require(stage_counts.syndrome_block_zero_xor_shards == loss_count,
+            "materialized GF16 block-zero raw-source XOR count drifted");
     }
 #endif
     for (uint32_t i = 0; i < loss_count; ++i)
@@ -356,6 +808,10 @@ int main()
         uint64_t restored_bytes = 0;
         for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
             run_case(context, cases[i], i, parity_bytes, restored_bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        verify_block_zero_only_cancellation(context);
+        verify_internal_cancellation_patterns();
+#endif
         leo2_context_destroy(context);
         std::cout << "PASS high_pruned_legacy cases="
                   << sizeof(cases) / sizeof(cases[0])

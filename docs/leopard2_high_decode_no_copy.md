@@ -95,11 +95,12 @@ execution by only 1.0--1.8% through 16 KiB and were neutral at 32 KiB.  Those
 results did not meet the 5% production promotion rule, so every GF16 backend
 uses the deterministic copy-first path.  Test hooks and the operation model
 make that negative disposition explicit rather than leaving a dormant
-size-dependent branch.  The materialized GF16 kernel performs that staging in
-one parent-wide OpenMP pass, matching the control schedule and covering empty
-and pruned blocks with zero rows before block transforms begin.  The tiled
-kernel retains its established per-tile staging because it has no N-row
-workspace.
+size-dependent branch.  The later Algorithm 5 zero-shift cancellation retains
+copy-first arithmetic for GF16 but no longer stages block zero or empty later
+blocks before syndrome construction.  Materialized and tiled execution stage
+each contributing later T-row block; when there is no later contribution, they
+stage raw block zero directly and skip its inverse/forward pair.  This newer
+schedule is derived in `docs/leopard2_math_and_sources.md`.
 
 Algorithm 4 is not changed by this receive fusion.  Its receive values are
 multiplied by plan-owned locator factors before the first inverse transform.
@@ -330,8 +331,10 @@ accidentally split materialized staging into one OpenMP region per nonempty T
 block.  An eight-core forced-materialized screen found regressions of 3.3% at
 64-byte shards, 1.4% at 1 KiB for K=1000, R=200, and 1.9% at 64 bytes for
 K=4096, R=512.  Restoring the single parent-wide staging region removed that
-schedule regression; the structural test requires exactly K selected-row
-copies and N-K zero rows even when later input blocks are empty or pruned.
+schedule regression at that experiment's control commit.  The subsequent
+zero-shift cancellation intentionally replaces that boundary: structural
+tests now require only contributing later blocks to be staged, with block zero
+retained as immutable raw input until the shift-zero forward boundary.
 
 The GF8 K=240, R=16 candidate was also compared against an exact detached
 Leopard main build at `6e5725e` under the same fail-closed isolation protocol.

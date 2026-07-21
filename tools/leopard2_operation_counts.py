@@ -340,7 +340,7 @@ def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
 
 
 def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
-    """Reject promotion of the measured-below-threshold GF16 candidate."""
+    """Keep GF16 receive transforms on the measured copy-first boundary."""
     compact = re.sub(r"\s+", "", source)
     begin = compact.find("staticvoidStageHighDecodeSources(")
     end = compact.find("/*DecimationintimeFFT:", begin)
@@ -361,16 +361,19 @@ def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
     if materialized < 0 or materialized_end < 0:
         raise ModelError("{} is missing materialized Algorithm 5".format(label))
     materialized_segment = compact[materialized:materialized_end]
-    stage = "StageHighDecodeSources(buffer_bytes,coordinate_data,work,n);"
-    loop = materialized_segment.find("for(unsignedblock=0;")
-    stage_at = materialized_segment.find(stage)
-    if stage_at < 0 or loop < 0 or stage_at > loop or \
-            materialized_segment.count("StageHighDecodeSources(") != 1:
+    if "for(unsignedblock=1;block<block_count;++block)" not in \
+            materialized_segment or \
+            "StageHighDecodeSources(buffer_bytes,coordinate_data+offset," \
+            "block_work,t);" not in materialized_segment or \
+            "FinishHighDecodeSyndrome(ops,buffer_bytes,coordinate_data," \
+            "block_input_counts[0],have_later_contribution,t,work);" not in \
+            materialized_segment:
         raise ModelError(
-            "{} no longer stages materialized GF16 in one parent-wide pass".format(
-                label
-            )
+            "{} no longer stages only contributing later GF16 blocks".format(label)
         )
+    if "StageHighDecodeSources(buffer_bytes,coordinate_data,work,n);" in \
+            materialized_segment:
+        raise ModelError("{} restored parent-wide GF16 staging".format(label))
     if "IFFT_DIT_DecoderFromSources(" in materialized_segment:
         raise ModelError(
             "{} reopened per-block staging in materialized GF16".format(label)
@@ -383,9 +386,10 @@ def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
     if tiled < 0 or tiled_end < 0:
         raise ModelError("{} is missing tiled Algorithm 5".format(label))
     tiled_segment = compact[tiled:tiled_end]
-    if "StageHighDecodeSources(buffer_bytes,coordinate_data,accumulator,t);" \
-            not in tiled_segment or \
-            "StageHighDecodeSources(buffer_bytes,coordinate_data+offset,tile,t);" \
+    if "StageHighDecodeSources(buffer_bytes,coordinate_data+offset," \
+            "block_work,t);" not in tiled_segment or \
+            "FinishHighDecodeSyndrome(ops,buffer_bytes,coordinate_data," \
+            "block_input_counts[0],have_later_contribution,t,accumulator);" \
             not in tiled_segment:
         raise ModelError(
             "{} no longer retains per-tile GF16 copy-first staging".format(label)
@@ -396,8 +400,62 @@ def verify_high_decode_gf16_copy_first_source(source: str, label: str) -> None:
         )
 
 
+def verify_high_decode_zero_shift_cancellation_source(
+    source: str, label: str
+) -> None:
+    """Require the Algorithm 5 block-zero affine cancellation in every layout."""
+    compact = re.sub(r"\s+", "", source)
+    helper = compact.find("staticvoidFinishHighDecodeSyndrome(")
+    prepared = compact.find("voidReedSolomonDecodeHighPrepared(", helper)
+    if helper < 0 or prepared < 0:
+        raise ModelError("{} is missing the block-zero cancellation helper".format(label))
+    segment = compact[helper:prepared]
+    required = (
+        "if(block_zero_input_count!=0)"
+        "TestHighSyndromeBlockZeroIFFTElisions.fetch_add(",
+        "if(!have_later_contribution){StageHighDecodeSources("
+        "buffer_bytes,block_zero_sources,work,t);",
+        "TestHighSyndromeForwardTransformElisions.fetch_add(",
+        "FFT_DIT(ops,buffer_bytes,work,t,t,FFTSkewStorage);",
+        "xor_mem(ops,work[i],block_zero_sources[i],buffer_bytes);",
+    )
+    if any(token not in segment for token in required):
+        raise ModelError(
+            "{} block-zero cancellation identity or counters drifted".format(label)
+        )
+    if compact.count("FinishHighDecodeSyndrome(") != 4:
+        raise ModelError(
+            "{} does not route prepared/materialized/tiled Algorithm 5 through "
+            "the cancellation helper".format(label)
+        )
+    materialized = compact.find(
+        "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&"
+    )
+    materialized_end = compact.find(
+        "voidReedSolomonDecodeHighPlanned(", materialized
+    )
+    tiled = compact.find(
+        "voidReedSolomonDecodeHighTiledPrunedPlanned(constbackend::Ops&"
+    )
+    tiled_end = compact.find("voidReedSolomonDecodeHighTiledPlanned(", tiled)
+    if min(materialized, materialized_end, tiled, tiled_end) < 0:
+        raise ModelError("{} is missing a planned Algorithm 5 layout".format(label))
+    for name, body in (
+        ("materialized", compact[materialized:materialized_end]),
+        ("tiled", compact[tiled:tiled_end]),
+    ):
+        if "for(unsignedblock=1;block<block_count;++block)" not in body or \
+                "input_plans[input_plan_index].block==0" not in body or \
+                "boolhave_later_contribution=false;" not in body:
+            raise ModelError(
+                "{} {} Algorithm 5 reintroduced a block-zero inverse plan".format(
+                    label, name
+                )
+            )
+
+
 def verify_high_pruned_hook_registration(source: str, label: str) -> None:
-    """Require the GF16 parent-wide counter gate to execute with hooks."""
+    """Require the high-pruned counter target to execute with test hooks."""
     compact = re.sub(r"\s+", "", source)
     begin = compact.find(
         "add_executable(leopard2_high_pruned_stage_test"
@@ -1808,29 +1866,44 @@ def model_high_decode(
     schedule, data, selected_parities = _decode_base(
         k, r, parent, padded, "high", shard_bytes, losses
     )
-    # The mature Algorithm 5 input schedule consumes complete live blocks in
-    # four-row groups through the first two inverse layers.  A partial block
-    # owns an exact pruned input plan and is staged as a whole before that plan
-    # executes; source fusion must not be credited inside it.  An empty later
-    # block is skipped.  This is an execution-boundary change: butterfly
-    # counts are identical to the former stage-then-transform schedule.
+    # Algorithm 5's zero-shift contribution is kept in evaluation form:
+    # FFT_0(IFFT_0(F_0) + H_later) = F_0 + FFT_0(H_later).  Only later
+    # nonempty blocks execute an inverse transform.  The first later block
+    # becomes the coefficient accumulator without a reduction; subsequent
+    # blocks reduce into it.  If no later block exists, F_0 is staged directly
+    # and the forward transform is also absent.
     receive_copy_vectors = 0
     receive_zero_vectors = 0
     receive_fused_groups = 0
     receive_exact_pruned_blocks = 0
     receive_skipped_blocks = 0
-    active_later_blocks = 0
     prefixes: List[int] = []
+    blocks: List[Tuple[int, int, Set[int]]] = []
     for offset in range(0, parent, padded):
         prefix = _block_prefix(data, offset, padded)
         prefixes.append(prefix)
         live = {coordinate - offset for coordinate in data
                 if offset <= coordinate < offset + padded}
-        if not live and offset != 0:
+        blocks.append((offset, prefix, live))
+    block_zero_live = blocks[0][2]
+    active_later_blocks = sum(
+        1 for offset, _, live in blocks if offset != 0 and live
+    )
+    copy_first_copies = 0
+    copy_first_zeros = 0
+    for offset, prefix, live in blocks:
+        if offset == 0:
+            if active_later_blocks == 0:
+                receive_copy_vectors += len(live)
+                receive_zero_vectors += padded - len(live)
+                copy_first_copies += len(live)
+                copy_first_zeros += padded - len(live)
+            continue
+        if not live:
             receive_skipped_blocks += 1
             continue
-        if offset != 0:
-            active_later_blocks += 1
+        copy_first_copies += len(live)
+        copy_first_zeros += padded - len(live)
         if padded <= 4 or field_name != "gf8":
             receive_copy_vectors += len(live)
             receive_zero_vectors += padded - len(live)
@@ -1844,18 +1917,15 @@ def model_high_decode(
         schedule.add_transform(
             ifft_prefix_butterflies(padded, prefix), _transform_layers(padded)
         )
-    # Keep the ISA-independent schedule totals on the original copy-first
-    # contract.  The source-boundary values below are a qualified
-    # SSSE3/AVX2/AVX512 delta, not a backend-neutral replacement for those
-    # totals.
-    # A future backend-aware model can apply the delta to absolute traffic.
-    schedule.copies += k
-    schedule.zero_fills += parent - k
-    reduction = active_later_blocks * padded
-    schedule.nontransform_xor_vectors += reduction
-    schedule.add_transform(
-        fft_prefix_butterflies(padded, padded), _transform_layers(padded)
-    )
+    schedule.copies += copy_first_copies
+    schedule.zero_fills += copy_first_zeros
+    reduction = max(0, active_later_blocks - 1) * padded
+    block_zero_raw_xor = len(block_zero_live) if active_later_blocks else 0
+    schedule.nontransform_xor_vectors += reduction + block_zero_raw_xor
+    if active_later_blocks:
+        schedule.add_transform(
+            fft_prefix_butterflies(padded, padded), _transform_layers(padded)
+        )
     schedule.fixed_multiply_vectors += len(selected_parities)
     schedule.add_transform(
         ifft_prefix_butterflies(padded, padded), _transform_layers(padded)
@@ -1889,6 +1959,12 @@ def model_high_decode(
         "receive_exact_pruned_staged_blocks": receive_exact_pruned_blocks,
         "receive_skipped_empty_blocks": receive_skipped_blocks,
         "active_later_syndrome_blocks": active_later_blocks,
+        "block_zero_live_rows": len(block_zero_live),
+        "block_zero_ifft_elided": bool(block_zero_live),
+        "syndrome_forward_transform_elided": active_later_blocks == 0,
+        "block_zero_raw_xor_vectors": block_zero_raw_xor,
+        "copy_first_copies_after_cancellation": copy_first_copies,
+        "copy_first_zero_fills_after_cancellation": copy_first_zeros,
         "receive_source_fusion_scope": (
             "GF8 qualified SSSE3/AVX2/AVX512 mature unpruned schedule delta"
             if field_name == "gf8" else
@@ -2601,12 +2677,22 @@ def run_self_test(verbose: bool = True) -> None:
 
     high_decode = model_high_decode(240, 16, 256, 16, 1024, {0})
     assert high_decode.decode_coordinate_pointer_mappings == 240
-    assert high_decode.copies == 240
+    assert high_decode.copies == 239
+    assert high_decode.details["block_zero_ifft_elided"]
+    assert not high_decode.details["syndrome_forward_transform_elided"]
+    assert high_decode.details["block_zero_raw_xor_vectors"] == 1
     assert high_decode.decode_output_gather_payload_bytes == 1024
     assert high_decode.details["locator_weighted_live_scan_scope"] == (
         "statically qualified GF8 AVX2/AVX512 passes scan receive pointers "
         "until ceil(T/2) live rows are found; sparse fallback scans all T"
     )
+    balanced_high_decode = model_high_decode(
+        128, 128, 256, 128, 1024, set(range(128))
+    )
+    assert balanced_high_decode.details["active_later_syndrome_blocks"] == 0
+    assert balanced_high_decode.details["block_zero_ifft_elided"]
+    assert balanced_high_decode.details["syndrome_forward_transform_elided"]
+    assert balanced_high_decode.details["block_zero_raw_xor_vectors"] == 0
     low_decode_ragged = model_low_decode(8, 248, 256, 8, 65, {0, 1})
     assert low_decode_ragged.decode_coordinate_pointer_mappings == 8
     assert low_decode_ragged.copies == 0
@@ -2617,7 +2703,7 @@ def run_self_test(verbose: bool = True) -> None:
     )
     assert scratch.plan_total_bytes == 28800
     assert scratch.codec_total_bytes == 29824
-    checks += 9
+    checks += 16
 
     for pointer_bytes in (4, 8):
         maximum = size_t_max(pointer_bytes)
@@ -2887,6 +2973,7 @@ def run_self_test(verbose: bool = True) -> None:
         source = ff8_source if filename == "LeopardFF8.cpp" else ff16_source
         verify_low_encode_no_copy_source(source, filename)
         verify_high_decode_no_copy_source(source, filename)
+        verify_high_decode_zero_shift_cancellation_source(source, filename)
         if filename == "LeopardFF8.cpp":
             verify_high_decode_receive_fusion_source(source, filename)
             verify_high_decode_weighted_locator_source(source, filename)
@@ -2914,7 +3001,7 @@ def run_self_test(verbose: bool = True) -> None:
             pass
         else:
             raise AssertionError("whole-T copy mutation escaped source guard")
-        checks += 6 if filename == "LeopardFF8.cpp" else 5
+        checks += 7 if filename == "LeopardFF8.cpp" else 6
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
     assert direct.nontransform_xor_vectors == 60

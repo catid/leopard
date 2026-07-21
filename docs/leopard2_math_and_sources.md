@@ -333,6 +333,24 @@ evaluates it on `V_t`, multiplies by locator values, and inverse-transforms thos
 values to `z`.  Only message blocks containing requested missing originals need
 the final shifted evaluation.
 
+The shift-zero block admits one exact execution cancellation.  Write its raw
+evaluation vector as `F_0`, and let `H_later` be the coefficient-vector sum of
+all nonzero-shift blocks.  Since the forward and inverse transforms on the same
+active coset are mutual inverses and the transform is linear,
+
+    FFT_0(IFFT_0(F_0) + H_later)
+        = F_0 + FFT_0(H_later).
+
+Production therefore does not inverse-transform block zero.  If
+`H_later != 0`, the first later inverse transform seeds the coefficient
+accumulator; after the shift-zero forward transform, the live rows of `F_0`
+are XORed into the result.  If `H_later = 0`, `F_0` is already the required
+evaluation vector and both transforms are omitted.  The equality uses the
+same active length, normalized LCH basis, and shift on the inverse/forward
+pair, so it introduces no new subspace, normalization, locator, shortening,
+puncturing, or coordinate-map factor.  It is a direct linear simplification of
+R10 Algorithm 5 lines 3-4.
+
 The promoted GF8 AVX2 execution composes, but does not reorder, the locator
 diagonal with the first two inverse layers.  For four rows, let
 `u_i = h_i Lambda_i` when row `i` is live and zero otherwise.  With the three

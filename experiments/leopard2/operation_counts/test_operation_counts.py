@@ -95,13 +95,13 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             high_decode.details["receive_source_fused_radix4_groups"], 56
         )
-        self.assertEqual(high_decode.details["receive_copy_vectors"], 16)
-        self.assertEqual(high_decode.details["receive_zero_vectors"], 16)
+        self.assertEqual(high_decode.details["receive_copy_vectors"], 15)
+        self.assertEqual(high_decode.details["receive_zero_vectors"], 1)
         self.assertEqual(
             high_decode.details["receive_copy_vectors_removed"], 224
         )
         self.assertEqual(
-            high_decode.details["receive_exact_pruned_staged_blocks"], 2
+            high_decode.details["receive_exact_pruned_staged_blocks"], 1
         )
         # These are exact deltas at the new receive boundary.  The broader
         # model's pre-existing absolute copy total is tracked separately and
@@ -112,7 +112,7 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             high_decode_gf16.details["receive_source_fused_radix4_groups"], 0
         )
-        self.assertEqual(high_decode_gf16.details["receive_copy_vectors"], 240)
+        self.assertEqual(high_decode_gf16.details["receive_copy_vectors"], 239)
         self.assertEqual(
             high_decode_gf16.details["receive_copy_vectors_removed"], 0
         )
@@ -121,7 +121,7 @@ class OperationCountTests(unittest.TestCase):
         # stages K rows into its transform workspace.
         self.assertEqual(high_decode.details["coordinate_pointer_mappings"], 240)
         self.assertEqual(high_decode.details["aligned_input_staging_copies"], 0)
-        self.assertEqual(high_decode.copies, 240)
+        self.assertEqual(high_decode.copies, 239)
         self.assertEqual(high_decode.decode_output_gather_payload_bytes, 1024)
 
         low_decode = COUNTS.model_low_decode(8, 248, 256, 8, 65, {0, 1})
@@ -198,8 +198,8 @@ class OperationCountTests(unittest.TestCase):
         source = (ROOT / filename).read_text(encoding="utf-8")
         COUNTS.verify_high_decode_gf16_copy_first_source(source, filename)
         mutated = source.replace(
-            "StageHighDecodeSources(buffer_bytes, coordinate_data, work, n);",
-            "StageHighDecodeSources(buffer_bytes, coordinate_data, work, t);",
+            "buffer_bytes, coordinate_data + offset, block_work, t);",
+            "buffer_bytes, coordinate_data + offset, block_work, n);",
         )
         self.assertNotEqual(mutated, source)
         with self.assertRaises(COUNTS.ModelError):
@@ -211,6 +211,10 @@ class OperationCountTests(unittest.TestCase):
         tokens = (
             "syndrome_pruned_accumulated_blocks",
             "syndrome_pruned_fallback_blocks",
+            "syndrome_block_zero_ifft_elisions",
+            "syndrome_forward_transforms",
+            "syndrome_forward_transform_elisions",
+            "syndrome_block_zero_xor_shards",
             "receive_ifft_butterfly4_out_of_place",
             "receive_copy_shards",
             "receive_zero_shards",
@@ -661,7 +665,6 @@ class OperationCountTests(unittest.TestCase):
             self.assertEqual(
                 metrics["decode_reveal_scatter_payload_bytes"]["value"], 2
             )
-        )
 
     def test_backend_qualified_high_syndrome_traffic(self) -> None:
         def metrics(shard_bytes: int, backend: str = "avx2") -> dict:

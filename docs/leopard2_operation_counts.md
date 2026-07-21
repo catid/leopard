@@ -113,6 +113,15 @@ Reports separate:
 - `decode_syndrome_materialized_xor_payload_bytes`, rows retaining a separate
   materialize-then-XOR boundary.
 
+The Algorithm 5 schedule also models the exact shift-zero cancellation from
+R10 lines 3-4.  Block zero is never inverse-transformed.  A live later block
+seeds the coefficient accumulator, later contributions reduce into it, the
+shift-zero forward transform runs once, and raw live block-zero rows are XORed
+afterward.  If no later block contributes, both the block-zero inverse and the
+forward transform are elided.  Structural source guards and the model's
+self-test prevent the production kernels and this accounting rule from
+drifting silently.
+
 The `estimated_backend_bytes_*` metrics apply those exact boundary deltas to the
 broader logical traffic bounds.  They remain estimates because they do not
 model caches, write allocation, tables, or backend instruction sequences.

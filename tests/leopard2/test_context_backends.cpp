@@ -1899,20 +1899,58 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                 true,
                 true);
             uint64_t exact_pruned_syndrome_blocks = 0;
+            uint64_t accumulated_syndrome_blocks = 0;
+            uint64_t materialized_syndrome_blocks = 0;
+            uint64_t syndrome_forward_transforms = 0;
             if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
             {
                 if (test_case.field == LEO2_FIELD_GF8)
-                    exact_pruned_syndrome_blocks = leopard::ff8::
-                        TestOnlyGetHighDecodeCounts().
-                            syndrome_pruned_accumulated_blocks;
+                {
+                    const leopard::ff8::TestOnlyHighDecodeCounts counts =
+                        leopard::ff8::TestOnlyGetHighDecodeCounts();
+                    exact_pruned_syndrome_blocks =
+                        counts.syndrome_pruned_accumulated_blocks;
+                    accumulated_syndrome_blocks =
+                        counts.syndrome_accumulated_blocks;
+                    materialized_syndrome_blocks =
+                        counts.syndrome_materialized_blocks;
+                    syndrome_forward_transforms =
+                        counts.syndrome_forward_transforms;
+                }
                 else
-                    exact_pruned_syndrome_blocks = leopard::ff16::
-                        TestOnlyGetHighDecodeCounts().
-                            syndrome_pruned_accumulated_blocks;
+                {
+                    const leopard::ff16::TestOnlyHighDecodeCounts counts =
+                        leopard::ff16::TestOnlyGetHighDecodeCounts();
+                    exact_pruned_syndrome_blocks =
+                        counts.syndrome_pruned_accumulated_blocks;
+                    accumulated_syndrome_blocks =
+                        counts.syndrome_accumulated_blocks;
+                    materialized_syndrome_blocks =
+                        counts.syndrome_materialized_blocks;
+                    syndrome_forward_transforms =
+                        counts.syndrome_forward_transforms;
+                }
             }
-            if (side >= 4 && exact_pruned_syndrome_blocks == 0)
+            // One materialized block seeds the accumulator for each compact
+            // execution pass.  Only materialized blocks beyond that per-pass
+            // seed imply a grouped-XOR reduction.  Comparing the aggregate
+            // count with the number of forward transforms keeps ragged tails
+            // (two passes, one seed apiece) from creating a false expectation.
+            if (side >= 4 &&
+                materialized_syndrome_blocks > syndrome_forward_transforms &&
+                exact_pruned_syndrome_blocks == 0 &&
+                accumulated_syndrome_blocks == 0)
                 require(trace.xor_four_calls() != 0,
-                    "decode bypassed the context grouped-XOR table");
+                    "decode bypassed the context grouped-XOR table: backend=" +
+                    std::to_string(static_cast<unsigned>(
+                        leo2_context_backend(contexts[context_i].context))) +
+                    " K=" + std::to_string(test_case.k) +
+                    " R=" + std::to_string(test_case.r) +
+                    " bytes=" + std::to_string(test_case.bytes) +
+                    " materialized=" +
+                    std::to_string(materialized_syndrome_blocks) +
+                    " forward=" +
+                    std::to_string(syndrome_forward_transforms));
             if (test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1)
             {
                 const bool expect_gf16_accumulation =
@@ -1923,13 +1961,11 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                      (test_case.k == 33 && test_case.r == 16));
                 const leo2_backend execution_backend =
                     leo2_context_backend(contexts[context_i].context);
-                const bool expect_pruned_accumulation =
-                    ((execution_backend == LEO2_BACKEND_AVX2 ||
-                      execution_backend == LEO2_BACKEND_AVX512) &&
-                     test_case.bytes >= 1024) ||
-                    (execution_backend == LEO2_BACKEND_SSSE3 &&
-                     test_case.field == LEO2_FIELD_GF8 &&
-                     test_case.bytes >= 65536);
+                // This fixed two-loss pattern makes its first later block the
+                // exact-pruned coefficient accumulator.  It therefore must be
+                // materialized even where a *subsequent* exact block would
+                // qualify for the accumulation sink.
+                const bool expect_pruned_accumulation = false;
                 const bool expect_gf16_materialization =
                     test_case.field == LEO2_FIELD_GF16 &&
                     ((test_case.k == 17 && test_case.r == 4) ||
