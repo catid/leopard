@@ -277,6 +277,9 @@ int main()
         run_profile(context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 257,
             compared_bytes, executions);
+        run_profile(context, 64, 4, LEO2_PROFILE_LEGACY_HIGH_V1,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 4096,
+            compared_bytes, executions);
         run_profile(context, 5, 11, LEO2_PROFILE_LOW_V1,
             LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 257,
             compared_bytes, executions);
@@ -288,7 +291,7 @@ int main()
             compared_bytes, executions);
 
         leo2_context_destroy(context);
-        std::cout << "leopard2 concurrent encode passed: profiles=4"
+        std::cout << "leopard2 concurrent encode passed: profiles=5"
                   << " executions=" << executions
                   << " compared_bytes=" << compared_bytes << std::endl;
         return 0;

@@ -975,12 +975,12 @@ void test_high_small_coarse_kernel(
         size_t bytes;
     };
     const Case cases[] = {
-        { 8, 2, 1 },
-        { 9, 2, 65 },
-        { 10, 3, 129 },
-        { 11, 4, 257 },
-        { 251, 3, 4097 },
-        { 252, 4, 4096 }
+        { 16, 2, 65536 },
+        { 16, 4, 65536 },
+        { 64, 2, 4096 },
+        { 64, 3, 4097 },
+        { 240, 4, 65536 },
+        { 252, 4, 65536 }
     };
     for (unsigned case_i = 0;
          case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)

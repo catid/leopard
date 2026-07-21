@@ -2275,9 +2275,23 @@ void ReedSolomonEncode(
         m == 8 || m == 16 || m == 32 || m == 64;
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
+    // The direct-input accumulator removes one complete source copy for each
+    // full T=2/T=4 message block.  Keep its production region tied to the
+    // isolated exact-main cells that cleared the project's 5% promotion gate:
+    // T=2 through K=64, T=4 for larger GF8 high-rate codes, and enough bytes
+    // to amortize fixed API/backend overhead.  In particular, the rejected
+    // K=8/R=4 cell and timing-inconclusive K=240/R=2 cell stay on the mature
+    // path.  A ragged sub-64-byte pass also stays on that path.
+    const bool small_transform_shape =
+        m == 4 ? original_count >= 16 :
+        m == 2 && original_count >= 16 && original_count <= 64;
+    const bool small_transform_bytes =
+        buffer_bytes >= 64U * 1024U ||
+        (original_count >= 64 && buffer_bytes >= 4U * 1024U);
     if (ops.kind == LEO2_BACKEND_AVX2 &&
-        ops.ff8_high_encode_small && (m == 2 || m == 4) &&
-        original_count >= 8 && requested_output_count == recovery_count &&
+        ops.ff8_high_encode_small && small_transform_shape &&
+        small_transform_bytes &&
+        requested_output_count == recovery_count &&
         dense_schedule)
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)

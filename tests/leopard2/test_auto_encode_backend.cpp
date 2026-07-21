@@ -240,6 +240,30 @@ Shards encode_unaligned(
     return recovery;
 }
 
+Shards encode_prefix(
+    const leo2_codec* codec,
+    const Shards& original,
+    uint32_t r,
+    uint32_t prefix)
+{
+    const size_t bytes = original[0].size();
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    Shards recovery(r, Bytes(bytes));
+    std::vector<void*> recovery_ptrs(r, NULL);
+    for (uint32_t i = 0; i < prefix; ++i)
+        recovery_ptrs[i] = recovery[i].data();
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        LEO2_SUCCESS, "prefix scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_encode(codec, bytes, original_ptrs.data(),
+        recovery_ptrs.data(), scratch.get(), scratch_bytes),
+        LEO2_SUCCESS, "prefix encode");
+    return recovery;
+}
+
 Shards encode_legacy(const Shards& original, uint32_t r)
 {
     const size_t bytes = original[0].size();
@@ -296,12 +320,12 @@ void test_small_high_encode(
         size_t bytes;
     };
     static const TestCase cases[] = {
-        { 8, 2, 1 },
-        { 9, 2, 33 },
-        { 10, 3, 65 },
-        { 11, 4, 257 },
-        { 251, 3, 4096 },
-        { 251, 4, 4097 },
+        { 16, 2, 65536 },
+        { 16, 4, 65536 },
+        { 64, 2, 4096 },
+        { 64, 3, 4097 },
+        { 240, 4, 65536 },
+        { 251, 3, 65536 },
         { 252, 4, 65536 }
     };
 
@@ -319,14 +343,17 @@ void test_small_high_encode(
             avx2_codec.get(), original, test_case.r, false);
         const leopard::ff8::TestOnlyHighEncodeCounts route =
             leopard::ff8::TestOnlyGetHighEncodeCounts();
-        const uint64_t expected_passes =
-            (test_case.bytes >= 64 ? 1U : 0U) +
-            ((test_case.bytes & 63U) != 0 ? 1U : 0U);
+        // The aligned prefix is one execution pass.  A ragged 64-byte staging
+        // pass deliberately remains below the production byte threshold.
+        const uint64_t expected_passes = 1;
         const uint32_t side = test_case.r == 2 ? 2U : 4U;
+        const uint64_t expected_input_copies =
+            (test_case.k % side) * expected_passes +
+            ((test_case.bytes & 63U) != 0 ? test_case.k : 0U);
         require(route.small_transform_calls == expected_passes,
             "dense T=2/T=4 AVX2 encode missed the coarse kernel");
         require(route.input_copy_shards ==
-                (test_case.k % side) * expected_passes,
+                expected_input_copies,
             "dense T=2/T=4 AVX2 encode retained avoidable input copies");
         require(original == original_before,
             "dense T=2/T=4 AVX2 encode modified caller input");
@@ -347,6 +374,18 @@ void test_small_high_encode(
             TestOnlyGetHighEncodeCounts().small_transform_calls;
         require((sparse_calls != 0) == (test_case.r == 2),
             "T=2/T=4 coarse kernel mishandled a prefix/holey output mask");
+
+        if (test_case.k == 64 && test_case.r == 3)
+        {
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            const Shards prefix = encode_prefix(
+                avx2_codec.get(), original, test_case.r, 2);
+            require(prefix[0] == actual[0] && prefix[1] == actual[1],
+                "T=4 coarse kernel changed a requested parity prefix");
+            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                        small_transform_calls == 1,
+                "T=4 parity prefix missed the coarse kernel");
+        }
 
         if (scalar.result() == LEO2_SUCCESS)
         {
@@ -374,12 +413,16 @@ void test_small_high_encode(
         }
     }
 
-    // The measured production gate is deliberately limited to T=2/T=4 and
-    // at least eight originals.  Lock both immediate shape boundaries so a
-    // later callback addition cannot silently broaden the policy.
+    // Lock the evidence-derived shape and byte boundaries.  These cases also
+    // preserve the explicit negative results from the exact-main gate.
     const TestCase controls[] = {
-        { 7, 2, 4096 },
-        { 8, 5, 4096 }
+        { 8, 4, 65536 },
+        { 15, 4, 65536 },
+        { 16, 2, 4096 },
+        { 64, 4, 4095 },
+        { 65, 2, 65536 },
+        { 240, 2, 65536 },
+        { 64, 5, 65536 }
     };
     for (size_t case_i = 0;
          case_i < sizeof(controls) / sizeof(controls[0]); ++case_i)
