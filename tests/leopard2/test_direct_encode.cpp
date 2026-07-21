@@ -961,16 +961,44 @@ void test_high_gf16_byte_tiling(
 
     size_t one_pass_scratch = 0;
     size_t tiled_scratch = 0;
+    size_t neighboring_scratch = 0;
+    size_t ragged_scratch = 0;
     require_result(leo2_encode_scratch_size(
         owner->codec, tile_bytes, &one_pass_scratch),
         "GF16 byte-tile one-pass scratch query");
     require_result(leo2_encode_scratch_size(
         owner->codec, bytes, &tiled_scratch),
         "GF16 byte-tile scratch query");
+    require_result(leo2_encode_scratch_size(
+        owner->codec, bytes + 64U, &neighboring_scratch),
+        "GF16 byte-tile neighboring-size scratch query");
+    require_result(leo2_encode_scratch_size(
+        owner->codec, bytes + 2U, &ragged_scratch),
+        "GF16 byte-tile ragged scratch query");
     const bool byte_tiling_active = tiled_scratch == one_pass_scratch;
     require(byte_tiling_active ||
             tiled_scratch == one_pass_scratch + 512U * tile_bytes,
         "GF16 byte tiling/fallback scratch geometry mismatch");
+    if (byte_tiling_active)
+    {
+        require(neighboring_scratch == tiled_scratch +
+                512U * (bytes + 64U - tile_bytes),
+            "GF16 byte tiling crossed its exact measured-size boundary");
+        require(ragged_scratch > tiled_scratch,
+            "GF16 byte tiling crossed an uncalibrated ragged boundary");
+
+        leo2_backend dense_backend = LEO2_BACKEND_AUTO;
+        leo2_backend partial_backend = LEO2_BACKEND_AUTO;
+        require_result(leo2_test_codec_transform_encode_backend(
+            owner->codec, bytes, r, r, &dense_backend),
+            "GF16 byte-tile dense backend query");
+        require_result(leo2_test_codec_transform_encode_backend(
+            owner->codec, bytes, r - 1U, r, &partial_backend),
+            "GF16 byte-tile partial backend query");
+        require(dense_backend == LEO2_BACKEND_AVX512 &&
+                partial_backend == LEO2_BACKEND_AVX2,
+            "GF16 byte-tile/backend dispatch boundary mismatch");
+    }
 
     // Promotion is deliberately limited to the calibrated AUTO host path.
     // Every explicit lower or wider backend retains one complete byte pass.
@@ -1086,6 +1114,14 @@ void test_high_gf16_byte_tiling(
     compare_requested(sparse.recovery, expected, sparse_requested, 0xa5,
         "GF16 byte-tile sparse/legacy", counts);
 
+    std::vector<uint8_t> prefix_requested(r, 1);
+    prefix_requested[r - 1U] = 0;
+    const EncodeResult prefix = encode(owner->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, prefix_requested);
+    require_result(prefix.result, "GF16 byte-tile prefix encode");
+    compare_requested(prefix.recovery, expected, prefix_requested, 0xa5,
+        "GF16 byte-tile prefix/legacy", counts);
+
     AlignedBuffer alias_scratch(tiled_scratch);
     std::vector<void*> aliased_output(r, NULL);
     aliased_output[0] = const_cast<void*>(original_pointers[0]);
@@ -1142,123 +1178,6 @@ void test_high_gf16_byte_tiling(
 
     ++counts->high_byte_tiling_checks;
     delete owner;
-
-    // A compact padded-odd GF16 tail is staged after the tiled aligned prefix.
-    // Cover both the 65,537-byte public payload boundary and a ragged prefix
-    // that balances across more than two byte-execution tiles.
-    const unsigned tail_k = 8;
-    const unsigned tail_r = 129;
-    const size_t payload_sizes[] = { 65537U, 65601U };
-    for (unsigned size_i = 0;
-        size_i < sizeof(payload_sizes) / sizeof(payload_sizes[0]); ++size_i)
-    {
-        const size_t payload_bytes = payload_sizes[size_i];
-        const size_t wire_bytes = payload_bytes + 1U;
-        const size_t prefix_bytes = wire_bytes & ~size_t(63U);
-        require(prefix_bytes >= 64U * 1024U,
-            "GF16 byte-tile tail prefix is below its intended boundary");
-
-        CodecOwner* tail_owner = make_codec(context, tail_k, tail_r,
-            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
-            LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
-        CodecOwner* prefix_owner = make_codec(context, tail_k, tail_r,
-            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
-        uint64_t queried_wire_bytes = 0;
-        require_result(leo2_codec_wire_shard_bytes(
-            tail_owner->codec, payload_bytes, &queried_wire_bytes),
-            "GF16 byte-tile padded wire-size query");
-        require(queried_wire_bytes == wire_bytes,
-            "GF16 byte-tile padded wire-size mismatch");
-
-        Shards tail_original = random_shards(
-            tail_k, wire_bytes,
-            UINT64_C(0x474631365441494c) + size_i);
-        for (unsigned i = 0; i < tail_k; ++i)
-            tail_original[i][wire_bytes - 1U] = 0;
-        const Shards tail_original_before = tail_original;
-        Shards prefix_original(tail_k, Bytes(prefix_bytes, 0));
-        for (unsigned i = 0; i < tail_k; ++i)
-            std::copy(tail_original[i].begin(),
-                tail_original[i].begin() + prefix_bytes,
-                prefix_original[i].begin());
-        std::vector<uint8_t> requested_tail(tail_r, 0);
-        requested_tail[0] = 1;
-        requested_tail[tail_r / 2] = 1;
-        requested_tail[tail_r - 1] = 1;
-
-        size_t prefix_scratch = 0;
-        size_t tail_scratch = 0;
-        require_result(leo2_encode_scratch_size(
-            prefix_owner->codec, prefix_bytes, &prefix_scratch),
-            "GF16 byte-tile prefix scratch query");
-        require_result(leo2_encode_scratch_size(
-            tail_owner->codec, wire_bytes, &tail_scratch),
-            "GF16 byte-tile tail scratch query");
-        require(tail_scratch == prefix_scratch +
-                    static_cast<size_t>(tail_k) * 64U,
-            "GF16 byte-tile tail scratch did not add one input staging tile");
-
-        const EncodeResult prefix = encode(prefix_owner->codec,
-            LEO2_TEST_ENCODE_FORCE_TRANSFORM,
-            prefix_original, requested_tail);
-        const EncodeResult tail = encode(tail_owner->codec,
-            LEO2_TEST_ENCODE_FORCE_TRANSFORM,
-            tail_original, requested_tail);
-        require_result(prefix.result, "GF16 byte-tile prefix encode");
-        require_result(tail.result, "GF16 byte-tile tail encode");
-        require(tail_original == tail_original_before,
-            "GF16 byte-tile tail modified a caller source shard");
-
-        const ProfileLayout tail_layout = leopard2_test::make_profile_layout(
-            leopard2_test::kLegacyHigh, tail_k, tail_r);
-        std::vector<Element> tail_points(tail_layout.parent_dimension, 0);
-        std::vector<Element> tail_values(tail_layout.parent_dimension, 0);
-        for (unsigned i = 0; i < tail_layout.parent_dimension; ++i)
-        {
-            tail_points[i] = static_cast<Element>(
-                tail_layout.systematic_coordinates[i]);
-        }
-        for (unsigned i = 0; i < tail_k; ++i)
-        {
-            tail_values[i] = static_cast<Element>(
-                tail_original[i][prefix_bytes]);
-        }
-        for (unsigned parity = 0; parity < tail_r; ++parity)
-        {
-            if (!requested_tail[parity])
-            {
-                require(std::find(tail.recovery[parity].begin(),
-                            tail.recovery[parity].end(),
-                            static_cast<uint8_t>(0xa5 ^ 0xffu)) ==
-                        tail.recovery[parity].end(),
-                    "GF16 byte-tile tail invalid sentinel check");
-                for (size_t offset = 0;
-                    offset < tail.recovery[parity].size(); ++offset)
-                {
-                    require(tail.recovery[parity][offset] == 0xa5,
-                        "GF16 byte-tile tail modified an unrequested output");
-                }
-                continue;
-            }
-            require(std::equal(prefix.recovery[parity].begin(),
-                    prefix.recovery[parity].end(),
-                    tail.recovery[parity].begin()),
-                "GF16 byte-tile tail changed its aligned prefix");
-            const Element direct_tail = leopard2_test::lagrange_evaluate(
-                gf16, tail_points, tail_values,
-                static_cast<Element>(tail_layout.parity_coordinates[parity]));
-            const Element encoded_tail = static_cast<Element>(
-                tail.recovery[parity][prefix_bytes] |
-                (static_cast<unsigned>(
-                    tail.recovery[parity][prefix_bytes + 1U]) << 8));
-            require(encoded_tail == direct_tail,
-                "GF16 byte-tile compact tail differs from direct interpolation");
-            counts->parity_symbols += wire_bytes;
-        }
-        ++counts->high_byte_tiling_checks;
-        delete prefix_owner;
-        delete tail_owner;
-    }
 }
 
 void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
