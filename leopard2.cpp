@@ -2869,10 +2869,13 @@ static bool UseAutoAVX512Encode(
     if (codec->field == LEO2_FIELD_GF8)
     {
         // The whole-transform AVX-512VL calibration screen is positive in
-        // this cache-resident interval.  Above it the backends converge as
-        // shard traffic becomes the bottleneck; below it setup and validation
-        // dominate.
-        return buffer_bytes >= 2U * 1024U &&
+        // this cache-resident interval.  T=16 needs 4 KiB to clear the
+        // promotion threshold; T=32 and T=64 clear it at 2 KiB.  Above the
+        // upper bound the backends converge as shard traffic becomes the
+        // bottleneck.
+        const size_t minimum_bytes = codec->padded_side == 16
+            ? 4U * 1024U : 2U * 1024U;
+        return buffer_bytes >= minimum_bytes &&
             buffer_bytes <= 64U * 1024U;
     }
 

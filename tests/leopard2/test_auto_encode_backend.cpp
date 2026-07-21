@@ -390,12 +390,19 @@ void test_selection_and_bytes(
         const uint32_t side = gf8_sides[side_i];
         Codec balanced(automatic.get(), side, side,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-        require(selected_backend(balanced.get(), 1984, side, side) ==
+        const uint64_t minimum_bytes = side == 16 ? 4096 : 2048;
+        require(selected_backend(
+                    balanced.get(), minimum_bytes - 64, side, side) ==
                 LEO2_BACKEND_AVX2,
             "balanced GF8 AUTO widened below the calibrated byte range");
-        require(selected_backend(balanced.get(), 2048, side, side) ==
+        require(selected_backend(
+                    balanced.get(), minimum_bytes, side, side) ==
                 LEO2_BACKEND_AVX512,
             "balanced GF8 AUTO did not widen at the lower byte boundary");
+        if (side == 16)
+            require(selected_backend(balanced.get(), 2048, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 T=16 widened at the inconclusive 2 KiB cell");
         require(selected_backend(balanced.get(), 4096, side, side) ==
                 LEO2_BACKEND_AVX512,
             "balanced GF8 AUTO did not widen in the calibrated region");
