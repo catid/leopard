@@ -1,0 +1,239 @@
+{
+  "schema": "leopard2-high-low-translation-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "promoted",
+  "scope": "Execute IT2026 Algorithm 4 for legacy-high codes whose public sides round to the same power of two",
+  "implementation": {
+    "prototype_commit": "de1bc5d",
+    "integrated_commits": [
+      "e5798d70d715b1462c11bdfedbb88c9d156bcf06",
+      "ec1c3b3a6f84fb2af5b4c7a4ada5121184094717",
+      "c993ba1e28c13835a4a62022f8c7a30abacdd2ad",
+      "3759b628b9d1eba936b1bacf4637c7f6647f52e1"
+    ],
+    "same_source_control": "native legacy-high Algorithm 5 selected by a test-only immutable-codec control",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "identity": {
+    "eligibility": "LEGACY_HIGH_V1 with P=ceil_pow2(K)=T=ceil_pow2(R) and N=2P",
+    "coordinate_translation": "tau(i)=i xor P",
+    "wire_profile_changed": false,
+    "parity_bytes_changed": false,
+    "persistent_code_identity_changed": false
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "backend": "avx2",
+    "threads": 1
+  },
+  "method": {
+    "order": [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    "timing_samples_per_process": 15,
+    "warmup_calls": 3,
+    "same_seed_within_cell": true,
+    "workload_digests_equal": true,
+    "plan_setup_reported_separately": true,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "extended_fuzzing_run": false,
+    "note": "Pinned manual ABBA evidence. Results are arithmetic means of the two process medians for each side. This is not a cgroup-exclusive host claim."
+  },
+  "same_source_algorithm4_vs_algorithm5": [
+    {
+      "id": "gf16-k129-r129-64b-l64",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 64,
+      "loss": 64,
+      "algorithm5_median_us": 17.439460,
+      "algorithm4_median_us": 15.309043,
+      "algorithm4_speedup": 1.139161
+    },
+    {
+      "id": "gf16-k129-r255-64k-l129",
+      "K": 129,
+      "R": 255,
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "loss": 129,
+      "algorithm5_median_us": 7091.551750,
+      "algorithm4_median_us": 4441.575500,
+      "algorithm4_speedup": 1.596630
+    },
+    {
+      "id": "gf16-k255-r129-4k-l129",
+      "K": 255,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 129,
+      "algorithm5_median_us": 498.520266,
+      "algorithm4_median_us": 330.430156,
+      "algorithm4_speedup": 1.508701
+    },
+    {
+      "id": "gf8-k100-r100-64k-l50",
+      "K": 100,
+      "R": 100,
+      "field": "gf8",
+      "shard_bytes": 65536,
+      "loss": 50,
+      "algorithm5_median_us": 2314.865813,
+      "algorithm4_median_us": 1622.191250,
+      "algorithm4_speedup": 1.426999
+    },
+    {
+      "id": "gf8-k128-r128-4k-l128",
+      "K": 128,
+      "R": 128,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 128,
+      "algorithm5_median_us": 148.259633,
+      "algorithm4_median_us": 94.536047,
+      "algorithm4_speedup": 1.568287
+    },
+    {
+      "id": "gf8-k65-r127-4k-l64",
+      "K": 65,
+      "R": 127,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 64,
+      "algorithm5_median_us": 126.743493,
+      "algorithm4_median_us": 75.300578,
+      "algorithm4_speedup": 1.683168
+    },
+    {
+      "id": "gf8-k65-r65-64b-l8",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 64,
+      "loss": 8,
+      "algorithm5_median_us": 5.206423,
+      "algorithm4_median_us": 4.416239,
+      "algorithm4_speedup": 1.178927
+    }
+  ],
+  "exact_main": {
+    "comparison": "Leopard1 decode including per-call setup versus Leopard2 Algorithm 4 execution plus plan setup amortized at reuse",
+    "cells": [
+      {
+        "id": "gf16-k129-r129-64b-l64",
+        "K": 129,
+        "R": 129,
+        "field": "gf16",
+        "shard_bytes": 64,
+        "loss": 64,
+        "reuse": 256,
+        "main_median_us": 164.232373,
+        "leopard2_amortized_median_us": 15.463301,
+        "plan_setup_median_us": 31.065500,
+        "amortized_speedup": 10.620784
+      },
+      {
+        "id": "gf16-k255-r129-4k-l129",
+        "K": 255,
+        "R": 129,
+        "field": "gf16",
+        "shard_bytes": 4096,
+        "loss": 129,
+        "reuse": 32,
+        "main_median_us": 550.627687,
+        "leopard2_amortized_median_us": 333.117000,
+        "plan_setup_median_us": 34.951000,
+        "amortized_speedup": 1.652956
+      },
+      {
+        "id": "gf16-k255-r255-64k-l200",
+        "K": 255,
+        "R": 255,
+        "field": "gf16",
+        "shard_bytes": 65536,
+        "loss": 200,
+        "reuse": 4,
+        "main_median_us": 8797.871500,
+        "leopard2_amortized_median_us": 6762.048625,
+        "plan_setup_median_us": 35.000500,
+        "amortized_speedup": 1.301066
+      },
+      {
+        "id": "gf8-k100-r100-4k-l50",
+        "K": 100,
+        "R": 100,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 50,
+        "reuse": 64,
+        "main_median_us": 122.020984,
+        "leopard2_amortized_median_us": 93.958281,
+        "plan_setup_median_us": 14.750000,
+        "amortized_speedup": 1.298672
+      },
+      {
+        "id": "gf8-k127-r65-4k-l65",
+        "K": 127,
+        "R": 65,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 65,
+        "reuse": 64,
+        "main_median_us": 127.256602,
+        "leopard2_amortized_median_us": 106.496015,
+        "plan_setup_median_us": 15.185000,
+        "amortized_speedup": 1.194942
+      },
+      {
+        "id": "gf8-k128-r128-64k-l128",
+        "K": 128,
+        "R": 128,
+        "field": "gf8",
+        "shard_bytes": 65536,
+        "loss": 128,
+        "reuse": 8,
+        "main_median_us": 2174.016062,
+        "leopard2_amortized_median_us": 1724.486000,
+        "plan_setup_median_us": 2.025000,
+        "amortized_speedup": 1.260675
+      },
+      {
+        "id": "gf8-k65-r65-64b-l8",
+        "K": 65,
+        "R": 65,
+        "field": "gf8",
+        "shard_bytes": 64,
+        "loss": 8,
+        "reuse": 512,
+        "main_median_us": 3.719236,
+        "leopard2_amortized_median_us": 4.343843,
+        "plan_setup_median_us": 12.915000,
+        "amortized_speedup": 0.856209,
+        "disposition": "not closed by transform translation; direct-repair crossover work is tracked separately"
+      }
+    ]
+  },
+  "validation": {
+    "release_full": "96/96",
+    "integrated_focused": "11/11",
+    "duality_cases": 1028,
+    "recovered_shards_compared": 23240,
+    "backends": [
+      "scalar",
+      "ssse3",
+      "avx2",
+      "avx512"
+    ],
+    "asan_ubsan_smoke": "3/3",
+    "production_test_symbols_absent": true
+  }
+}

@@ -162,6 +162,9 @@ when `P=T` and `N=2P`.  The direct few-loss path still wins before this choice,
 forced generic remains generic, and test hooks retain forced Algorithm 4 and
 Algorithm 5 controls for differential evidence.
 
+The compact correctness and pinned-timing checkpoint is
+`experiments/leopard2/high_decode_copy/results/high_low_translation_checkpoint.json`.
+
 ## Algorithm 5 zero-shift cancellation
 
 Paper Algorithm 5 line 3 includes the shift-zero block and line 4 immediately
