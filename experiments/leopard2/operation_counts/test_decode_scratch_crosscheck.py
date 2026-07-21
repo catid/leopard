@@ -341,12 +341,12 @@ def mutation_checks() -> int:
                 "ExecuteTransformDecodePass(\n"
                 "            plan, kScratchAlignment, coordinate_input, "
                 "work,\n"
-                "            use_generic, use_tiled, true);",
+                "            use_generic, use_tiled, true, NULL);",
                 "ExecuteTransformDecodePass(\n"
                 "            plan, kScratchAlignment, coordinate_input, "
                 "work,\n"
                 "            use_generic, use_tiled, "
-                "reveal_aligned_outputs_in_place);",
+                "reveal_aligned_outputs_in_place, NULL);",
                 1,
             ),
             ff8,

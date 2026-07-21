@@ -1098,7 +1098,8 @@ void run_high_reveal_fusion_case(
     leo2_context* context,
     leo2_field field,
     size_t bytes,
-    const std::vector<unsigned>& missing)
+    const std::vector<unsigned>& missing,
+    uint32_t execution_flag)
 {
     const unsigned k = 64;
     const unsigned r = 16;
@@ -1107,7 +1108,7 @@ void run_high_reveal_fusion_case(
     leo2_codec* codec = make_flagged_codec(context, k, r,
         LEO2_PROFILE_LEGACY_HIGH_V1, field,
         LEO2_CODEC_FORCE_SPECIALIZED_DECODE |
-            LEO2_CODEC_FORCE_TILED_DECODE);
+            execution_flag);
     const Shards source = make_originals(k, bytes,
         UINT64_C(0x62af134900000000) + bytes + field + missing.size());
     const Shards parity = encode_new(codec, source, bytes);
@@ -1127,6 +1128,12 @@ void run_high_reveal_fusion_case(
     leo2_decode_plan* plan = NULL;
     require_result(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &plan), "high reveal plan create");
+    leopard2_internal::DecodePathInfo path_info;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, bytes, false, &path_info), "high reveal path introspection");
+    require(path_info.path == leopard2_internal::kDecodePathTiled ||
+            path_info.path == leopard2_internal::kDecodePathMaterialized,
+        "high reveal test did not select a specialized workspace");
     size_t scratch_bytes = 0;
     require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
         "high reveal scratch query");
@@ -1167,6 +1174,13 @@ void run_high_reveal_fusion_case(
         (bytes & 63u) != 0 ? missing.size() : 0;
     require(leo2_test_high_direct_reveal_shards() == expected_direct,
         "high direct reveal counter disagrees with complete-tile policy");
+    const uint64_t expected_materialized_direct =
+        path_info.path == leopard2_internal::kDecodePathMaterialized &&
+            aligned_prefix != 0
+        ? missing.size() : 0;
+    require(leo2_test_high_materialized_direct_reveal_shards() ==
+            expected_materialized_direct,
+        "materialized high reveal counter disagrees with selected path");
     require(leo2_test_high_scratch_reveal_shards() == expected_scratch,
         "high scratch reveal counter disagrees with tail policy");
 
@@ -1176,26 +1190,42 @@ void run_high_reveal_fusion_case(
 
 void test_high_reveal_fusion(leo2_context* context)
 {
+    const uint32_t execution_flags[] = {
+        0,
+        LEO2_CODEC_FORCE_TILED_DECODE,
+        LEO2_CODEC_FORCE_MATERIALIZED_DECODE
+    };
     const unsigned losses[] = { 1, 16 };
-    for (size_t loss = 0; loss < sizeof(losses) / sizeof(losses[0]); ++loss)
+    for (size_t mode = 0;
+         mode < sizeof(execution_flags) / sizeof(execution_flags[0]); ++mode)
     {
-        std::vector<unsigned> missing(losses[loss]);
-        for (unsigned i = 0; i < losses[loss]; ++i)
-            missing[i] = i;
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF8, 17, missing);
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF8, 64, missing);
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF8, 65, missing);
+        for (size_t loss = 0;
+             loss < sizeof(losses) / sizeof(losses[0]); ++loss)
+        {
+            std::vector<unsigned> missing(losses[loss]);
+            for (unsigned i = 0; i < losses[loss]; ++i)
+                missing[i] = i;
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF8, 17, missing,
+                execution_flags[mode]);
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF8, 64, missing,
+                execution_flags[mode]);
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF8, 65, missing,
+                execution_flags[mode]);
 #ifdef LEO_HAS_FF16
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF16, 34, missing);
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF16, 64, missing);
-        run_high_reveal_fusion_case(
-            context, LEO2_FIELD_GF16, 66, missing);
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF16, 34, missing,
+                execution_flags[mode]);
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF16, 64, missing,
+                execution_flags[mode]);
+            run_high_reveal_fusion_case(
+                context, LEO2_FIELD_GF16, 66, missing,
+                execution_flags[mode]);
 #endif
+        }
     }
 
     /* Exercise requested-output indexing across every T-sized message block,
@@ -1204,12 +1234,18 @@ void test_high_reveal_fusion(leo2_context* context)
     const std::vector<unsigned> scattered(scattered_indices,
         scattered_indices + sizeof(scattered_indices) /
             sizeof(scattered_indices[0]));
-    run_high_reveal_fusion_case(
-        context, LEO2_FIELD_GF8, 65, scattered);
+    for (size_t mode = 0;
+         mode < sizeof(execution_flags) / sizeof(execution_flags[0]); ++mode)
+    {
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF8, 65, scattered,
+            execution_flags[mode]);
 #ifdef LEO_HAS_FF16
-    run_high_reveal_fusion_case(
-        context, LEO2_FIELD_GF16, 66, scattered);
+        run_high_reveal_fusion_case(
+            context, LEO2_FIELD_GF16, 66, scattered,
+            execution_flags[mode]);
 #endif
+    }
 }
 
 void test_tiled_materialized_execution(leo2_context* context)
@@ -1312,12 +1348,15 @@ void test_tiled_materialized_execution(leo2_context* context)
         require_result(leo2_decode_plan_execute(plans[path], bytes,
             &original_inputs[0], &recovery_inputs[0], &output[0],
             scratch.data, scratch.bytes), "workspace decode execute");
-        const uint64_t expected_direct =
-            path_info[path].path == leopard2_internal::kDecodePathTiled
+        const uint64_t expected_direct = missing_count;
+        const uint64_t expected_materialized_direct =
+            path_info[path].path == leopard2_internal::kDecodePathMaterialized
                 ? missing_count : 0;
         require(leo2_test_high_direct_reveal_shards() == expected_direct &&
+                leo2_test_high_materialized_direct_reveal_shards() ==
+                    expected_materialized_direct &&
                 leo2_test_high_scratch_reveal_shards() == 0,
-            "high reveal fusion escaped the selected tiled path");
+            "high reveal fusion escaped the selected specialized path");
         for (unsigned i = 0; i < missing_count; ++i)
             require(restored[path][i] == source[i],
                 "workspace decode restored the wrong original");
@@ -1356,12 +1395,15 @@ void test_tiled_materialized_execution(leo2_context* context)
     leo2_test_reset_high_reveal_counts();
     require_result(leo2_decode_plan_execute_batch(plans[0], items, 2),
         "AUTO tiled batch execute");
-    const uint64_t expected_batch_direct =
-        batch_path.path == leopard2_internal::kDecodePathTiled
-            ? 2u * missing_count : 0;
+    const uint64_t expected_batch_direct = 2u * missing_count;
+    const uint64_t expected_batch_materialized_direct =
+        batch_path.path == leopard2_internal::kDecodePathMaterialized
+            ? expected_batch_direct : 0;
     require(leo2_test_high_direct_reveal_shards() == expected_batch_direct &&
+            leo2_test_high_materialized_direct_reveal_shards() ==
+                expected_batch_materialized_direct &&
             leo2_test_high_scratch_reveal_shards() == 0,
-        "high reveal fusion escaped the selected batch path");
+        "high reveal fusion escaped the selected AUTO batch path");
     for (unsigned item = 0; item < 2; ++item)
         for (unsigned i = 0; i < missing_count; ++i)
             require(batch_restored[item][i] == source[i],

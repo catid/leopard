@@ -268,6 +268,11 @@ The self-test fixes two useful schedule checks:
   receive-row copy and report zero removed copy vectors.  Materialized decode
   stages the full parent in one regular pass; tiled decode stages only live
   tiles and skips completely empty later blocks.
+- Specialized high decode reveals every complete 64-byte-aligned prefix
+  directly into the caller output in both tiled and materialized layouts.
+  Materialized tails retain one alias-safe 64-byte in-place temporary per
+  requested shard; tiled tails retain their out-of-place scratch destination.
+  Both layouts charge only the residual public tail to output gather traffic.
 
 It also checks every full transform size from 1 through 65,536 against the
 closed form N log2(N) / 2, compares prefix schedules with independently built

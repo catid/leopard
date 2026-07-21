@@ -569,6 +569,9 @@ void ReedSolomonDecodeHighPlanned(
     const ffe_t* locator_logs,
     const ffe_t* output_factors,
     void** work);
+// A non-null systematic_output is indexed by requested coordinate - t and
+// receives the out-of-place reveal for complete public-layout passes.  Null
+// retains the materialized in-place reveal required by compact tails.
 void ReedSolomonDecodeHighPrunedPlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -585,6 +588,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plans,
     unsigned output_plan_count,
+    void* const* systematic_output,
     void** work);
 void ReedSolomonDecodeHighPlanned(
     uint64_t buffer_bytes,

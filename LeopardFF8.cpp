@@ -4103,6 +4103,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plans,
     unsigned output_plan_count,
+    void* const* systematic_output,
     void** work)
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
@@ -4272,7 +4273,17 @@ void ReedSolomonDecodeHighPrunedPlanned(
             LEO_DEBUG_ASSERT(coordinate >= offset && coordinate < offset + t);
             const ffe_t reveal_log = SubMod(
                 output_factors[coordinate], locator_logs[coordinate]);
-            mul_mem_inplace(ops, work[coordinate], reveal_log, buffer_bytes);
+            if (systematic_output)
+            {
+                LEO_DEBUG_ASSERT(coordinate >= t);
+                void* const destination = systematic_output[coordinate - t];
+                LEO_DEBUG_ASSERT(destination != NULL);
+                mul_mem(ops, destination, work[coordinate], reveal_log,
+                    buffer_bytes);
+            }
+            else
+                mul_mem_inplace(
+                    ops, work[coordinate], reveal_log, buffer_bytes);
         }
     }
 }
@@ -4295,7 +4306,7 @@ void ReedSolomonDecodeHighPlanned(
     ReedSolomonDecodeHighPrunedPlanned(
         ops, buffer_bytes, n, t, coordinate_data, block_input_counts,
         requested_coordinates, output_blocks, output_block_count,
-        locator_logs, output_factors, NULL, 0, NULL, 0, work);
+        locator_logs, output_factors, NULL, 0, NULL, 0, NULL, work);
 }
 
 

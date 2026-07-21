@@ -193,6 +193,27 @@ def verify_high_decode_no_copy_source(source: str, label: str) -> None:
             "{} no longer routes mature Algorithm 5 evaluation through the "
             "out-of-place first layer".format(label)
         )
+    materialized = compact.find(
+        "voidReedSolomonDecodeHighPrunedPlanned(constbackend::Ops&"
+    )
+    materialized_end = compact.find(
+        "voidReedSolomonDecodeHighPlanned(", materialized
+    )
+    if materialized < 0 or materialized_end < 0:
+        raise ModelError("{} is missing materialized Algorithm 5".format(label))
+    materialized_segment = compact[materialized:materialized_end]
+    direct_reveal_tokens = (
+        "void*const*systematic_output,void**work)",
+        "if(systematic_output){",
+        "systematic_output[coordinate-t]",
+        "mul_mem(ops,destination,work[coordinate],reveal_log,buffer_bytes);",
+        "elsemul_mem_inplace(ops,work[coordinate],reveal_log,buffer_bytes);",
+    )
+    if any(token not in materialized_segment for token in direct_reveal_tokens):
+        raise ModelError(
+            "{} no longer supports direct materialized Algorithm 5 reveal".
+            format(label)
+        )
 
 
 def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
@@ -608,14 +629,18 @@ def verify_decode_fusion_sources(
         "UseFusedLowRevealScatter(codec,geometry.aligned_prefix_bytes);",
         "constboolreveal_aligned_outputs_in_place="
         "!(fuse_generic_reveal_scatter||fuse_low_reveal_scatter);",
+        "constboolfuse_high_reveal_scatter=!use_generic&&"
+        "codec->profile==LEO2_PROFILE_LEGACY_HIGH_V1&&"
+        "geometry.aligned_prefix_bytes!=0;",
         "ExecuteTransformDecodePass(plan,geometry.aligned_prefix_bytes,"
         "coordinate_input,work,use_generic,use_tiled,"
-        "reveal_aligned_outputs_in_place);",
+        "reveal_aligned_outputs_in_place,"
+        "fuse_high_reveal_scatter&&!use_tiled?restored_original:NULL);",
         "GatherTransformDecodePass(plan,restored_original,0,"
         "geometry.aligned_prefix_bytes,work,use_generic,use_tiled,"
         "reveal_aligned_outputs_in_place);",
         "ExecuteTransformDecodePass(plan,kScratchAlignment,coordinate_input,"
-        "work,use_generic,use_tiled,true);",
+        "work,use_generic,use_tiled,true,NULL);",
         "GatherTransformDecodePass(plan,restored_original,"
         "geometry.aligned_prefix_bytes,geometry.tail_bytes,work,use_generic,"
         "use_tiled,true);",
@@ -1443,12 +1468,12 @@ def apply_decode_backend_accounting(
     loss_count = len(losses)
     tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
     aligned = shard_bytes - tail
-    kernel_bytes = rounded_kernel_bytes(shard_bytes)
     use_generic = selection.path == "generic"
     use_low_specialized = not use_generic and profile == "low"
+    use_high_specialized = not use_generic and profile == "high"
     fuse_aligned_reveal = (
         aligned != 0 and
-        (use_low_specialized or
+        (use_low_specialized or use_high_specialized or
          (use_generic and field_name == "gf8" and aligned >= 4096 and
           backend in ("ssse3", "avx2", "avx512")))
     )
@@ -1459,16 +1484,19 @@ def apply_decode_backend_accounting(
         direct = aligned if fuse_aligned_reveal else 0
         temporary = unfused_kernel
     elif selection.path == "materialized":
-        # Algorithm 5 reveals in-place in the materialized output block.
-        temporary = kernel_bytes
-        scatter = shard_bytes
-        direct = 0
+        # Complete Algorithm 5 passes reveal directly to public output.  A
+        # compact tail keeps the materialized coordinate slot and its
+        # alias-safe in-place multiply before gathering the residual payload.
+        temporary = 64 if tail else 0
+        scatter = tail
+        direct = aligned
     else:
-        # Tiled Algorithm 5 multiplies out of place into a compact requested-
-        # output workspace, then scatters the public payload.
+        # Tiled Algorithm 5 also reveals complete passes directly.  Its compact
+        # tail uses an out-of-place multiply into retained kernel-layout
+        # scratch, so it does not pay the materialized in-place temporary.
         temporary = 0
-        scatter = shard_bytes
-        direct = 0
+        scatter = tail
+        direct = aligned
     schedule.decode_reveal_temporary_payload_bytes = temporary * loss_count
     schedule.decode_reveal_scatter_payload_bytes = scatter * loss_count
     schedule.decode_reveal_direct_payload_bytes = direct * loss_count
@@ -2748,12 +2776,24 @@ def run_self_test(verbose: bool = True) -> None:
                 "ExecuteTransformDecodePass(\n"
                 "            plan, kScratchAlignment, coordinate_input, "
                 "work,\n"
-                "            use_generic, use_tiled, true);",
+                "            use_generic, use_tiled, true, NULL);",
                 "ExecuteTransformDecodePass(\n"
                 "            plan, kScratchAlignment, coordinate_input, "
                 "work,\n"
                 "            use_generic, use_tiled, "
-                "reveal_aligned_outputs_in_place);",
+                "reveal_aligned_outputs_in_place, NULL);",
+                1,
+            ),
+            ff8_source,
+            ff16_source,
+        ),
+        (
+            core_source.replace(
+                "const bool fuse_high_reveal_scatter = !use_generic &&\n"
+                "        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1",
+                "const bool fuse_high_reveal_scatter = !use_generic && "
+                "use_tiled &&\n"
+                "        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1",
                 1,
             ),
             ff8_source,

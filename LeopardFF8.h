@@ -577,7 +577,10 @@ void ReedSolomonDecodeHighPlanned(
     const ffe_t* output_factors,
     void** work);
 // Algorithm 5 with immutable C1 schedules prepared by leo2_decode_plan_create.
-// Missing or empty schedules select the mature full-transform fallback.
+// Missing or empty schedules select the mature full-transform fallback.  A
+// non-null systematic_output is indexed by requested coordinate - t and lets
+// complete public-layout passes reveal directly into disjoint caller outputs;
+// null retains the materialized in-place reveal used for compact tails.
 void ReedSolomonDecodeHighPrunedPlanned(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -594,6 +597,7 @@ void ReedSolomonDecodeHighPrunedPlanned(
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plans,
     unsigned output_plan_count,
+    void* const* systematic_output,
     void** work);
 void ReedSolomonDecodeHighPlanned(
     uint64_t buffer_bytes,

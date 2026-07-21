@@ -326,12 +326,12 @@ class OperationCountTests(unittest.TestCase):
                     "ExecuteTransformDecodePass(\n"
                     "            plan, kScratchAlignment, coordinate_input, "
                     "work,\n"
-                    "            use_generic, use_tiled, true);",
+                    "            use_generic, use_tiled, true, NULL);",
                     "ExecuteTransformDecodePass(\n"
                     "            plan, kScratchAlignment, coordinate_input, "
                     "work,\n"
                     "            use_generic, use_tiled, "
-                    "reveal_aligned_outputs_in_place);",
+                    "reveal_aligned_outputs_in_place, NULL);",
                     1,
                 ),
                 ff8,
@@ -613,10 +613,14 @@ class OperationCountTests(unittest.TestCase):
             high_materialized[
                 "decode_reveal_inplace_temporary_payload_bytes"
             ]["value"],
-            256,
+            0,
         )
         self.assertEqual(
             high_materialized["decode_reveal_scatter_payload_bytes"]["value"],
+            0,
+        )
+        self.assertEqual(
+            high_materialized["decode_reveal_direct_payload_bytes"]["value"],
             256,
         )
         self.assertEqual(
@@ -624,7 +628,39 @@ class OperationCountTests(unittest.TestCase):
             0,
         )
         self.assertEqual(
-            high_tiled["decode_reveal_scatter_payload_bytes"]["value"], 256
+            high_tiled["decode_reveal_scatter_payload_bytes"]["value"], 0
+        )
+        self.assertEqual(
+            high_tiled["decode_reveal_direct_payload_bytes"]["value"], 256
+        )
+
+        high_materialized_tail = build_decode_report(
+            loss_count=2, shard_bytes=129, decode_workspace="materialized",
+            decode_selection="path",
+        )["metrics"]
+        high_tiled_tail = build_decode_report(
+            loss_count=2, shard_bytes=129, decode_workspace="tiled",
+            decode_selection="path",
+        )["metrics"]
+        self.assertEqual(
+            high_materialized_tail[
+                "decode_reveal_inplace_temporary_payload_bytes"
+            ]["value"],
+            128,
+        )
+        self.assertEqual(
+            high_tiled_tail[
+                "decode_reveal_inplace_temporary_payload_bytes"
+            ]["value"],
+            0,
+        )
+        for metrics in (high_materialized_tail, high_tiled_tail):
+            self.assertEqual(
+                metrics["decode_reveal_direct_payload_bytes"]["value"], 256
+            )
+            self.assertEqual(
+                metrics["decode_reveal_scatter_payload_bytes"]["value"], 2
+            )
         )
 
     def test_backend_qualified_high_syndrome_traffic(self) -> None:

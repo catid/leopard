@@ -38,26 +38,31 @@ This is an execution-only change.  Field representation, active-parent basis,
 coordinate order, locator values, reveal factors, parity bytes, requested
 originals, and the legacy-high-v1 wire profile do not change.
 
-## Tiled output reveal/scatter
+## Output reveal/scatter
 
-The tiled Algorithm 5 evaluator accepts one destination pointer for every
-requested original.  For a complete 64-byte kernel pass, public validation has
-already proved that those destinations are disjoint from every received shard,
-scratch, metadata range, and other output.  The evaluator now points directly
-at the caller destinations for that pass, so its fixed inverse-locator multiply
-also performs the final scatter.  The former route wrote each revealed shard to
-a retained scratch slot and immediately copied it to the same caller output;
-the direct route removes one full-shard scratch write and one full-shard scratch
-read per requested original.
+For a complete 64-byte kernel pass, public validation has already proved that
+every requested destination is disjoint from every received shard, scratch,
+metadata range, and other output.  Both Algorithm 5 layouts now use those final
+destinations for the fixed inverse-locator multiply.  The tiled evaluator takes
+one compact pointer per requested coordinate.  The materialized evaluator
+indexes the caller's systematic-output array by `coordinate - T` and multiplies
+out of place from its evaluated parent-coordinate slot.  The former
+materialized route also copied each 64-byte chunk to an alias-safe temporary
+inside `mul_mem_inplace`; the new route removes that temporary traffic as well
+as the following public gather.
 
 A ragged final pass retains the scratch destination and established gather.  In
 particular, a compact GF16 tail is not laid out like its padded 64-byte kernel
 tile and cannot be written directly.  When a shard has both an aligned prefix
-and a tail, the output pointers are restored to the retained scratch slots
-before the tail transform begins.  Materialized Algorithm 5 is unchanged.
+and a tail, tiled output pointers are restored to the retained scratch slots
+before the tail transform begins, while materialized execution passes a null
+systematic-output array and retains its in-place reveal.  Thus every tail keeps
+the previous kernel layout and gather semantics.
 
-Test-only direct/scratch counters cover GF8 and GF16, one and maximum loss,
-unaligned caller destinations, a tail-only shard, an aligned shard, and a split
+Test-only direct/scratch counters, including a separate materialized-direct
+counter, cover GF8 and GF16, forced tiled and materialized execution, AUTO's
+calibrated materialized route, one and maximum loss, unaligned caller
+destinations, a tail-only shard, an aligned shard, and a split
 aligned-plus-tail shard.  The candidate has no wire or arithmetic change; its
 performance promotion still requires the project's isolated end-to-end gate.
 
@@ -191,17 +196,14 @@ promotion of the rejected GF16 variant.
 
 ## Reveal and scatter
 
-The tiled Algorithm 5 path already fuses the final reveal-factor multiply with
-its scatter into the per-request kernel-layout retention slot by calling the
-out-of-place fixed multiplier once.  The materialized path keeps an in-place
-multiply because its parent-coordinate work slot is the source consumed by the
-common public gather.
-
-The public gather remains separate.  It converts compact GF16 tails and
-implements the documented public alias behavior; bypassing it only for some
-aligned destinations would add an alias/layout branch without removing the
-retention requirement for other calls.  No additional scatter fusion was
-promoted without isolated end-to-end evidence.
+Complete tiled and materialized Algorithm 5 passes now call the out-of-place
+fixed multiplier once with the final public destination.  The public gather is
+therefore omitted for their aligned prefixes.  It remains mandatory for every
+ragged tail, where it converts compact GF16 layout when needed and preserves the
+documented public alias behavior.  The materialized extension is a correctness-
+qualified candidate until same-source directional timing and the isolated
+promotion gate establish that the removed traffic improves the calibrated AUTO
+region.
 
 ## Correctness and structural evidence
 

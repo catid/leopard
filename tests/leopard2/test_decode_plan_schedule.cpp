@@ -754,7 +754,8 @@ static uint64_t CheckFieldKernels(
         unsigned, const void* const*, const uint16_t*, const uint32_t*,
         const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
         const Ffe*, const leopard2_internal::PrunedTransformBlock*, unsigned,
-        const leopard2_internal::PrunedTransformPlan*, unsigned, void**),
+        const leopard2_internal::PrunedTransformPlan*, unsigned,
+        void* const*, void**),
     void (*high_tiled_pruned)(const leopard::backend::Ops&, uint64_t, unsigned,
         unsigned, const void* const*, const uint16_t*, const uint32_t*,
         const leopard2_internal::DecodeOutputBlock*, unsigned, const Ffe*,
@@ -980,7 +981,7 @@ static uint64_t CheckFieldKernels(
         &high_blocks[0], high_blocks.size(), &locator[0], &high_factors[0],
         high_input_plans.empty() ? NULL : &high_input_plans[0],
         high_input_plans.size(), &high_output_plans[0],
-        high_output_plans.size(), &actual_work[0]);
+        high_output_plans.size(), NULL, &actual_work[0]);
     for (size_t i = 0; i < high_coordinates.size(); ++i)
         Require(memcmp(expected_work[high_coordinates[i]],
                 actual_work[high_coordinates[i]], kBytes) == 0,
