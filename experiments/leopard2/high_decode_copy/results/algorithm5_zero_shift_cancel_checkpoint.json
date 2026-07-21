@@ -1,0 +1,169 @@
+{
+  "schema": "leopard2-algorithm5-zero-shift-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "promoted",
+  "scope": "Algorithm 5 zero-shift block IFFT/FFT cancellation",
+  "implementation": {
+    "worker_commit": "a88ed24ca87489a0f287f25a46eaaffb9669701a",
+    "worker_tree": "96f659f7ef3a60f6106f8c730b25236c924a04c6",
+    "integrated_commit": "bd13ef72eac6cc23c06322169a9bc0ad67a348c6",
+    "control_commit": "2870b149af8884d8ea42be15f8496a71bb839b66",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "backend": "avx2",
+    "threads": 1
+  },
+  "method": {
+    "order": ["control", "candidate", "candidate", "control"],
+    "timing_samples_per_process": 15,
+    "warmup_calls": 3,
+    "workload_seed_equal_within_cell": true,
+    "workload_digests_equal": true,
+    "plan_setup_reported_separately": true,
+    "extended_fuzzing_run": false,
+    "note": "Pinned manual ABBA checkpoint. The reserved sibling accumulated zero non-idle jiffies in both retained intervals. This is not a cgroup-exclusive host claim."
+  },
+  "binary_sha256": {
+    "same_source_control": "d29da6f5dad61665f98b3ddbd24586d4139b836beb0e32657a9fb01c455ce740",
+    "same_source_candidate": "978b9707c9e50740c275523236ecf9cedefc2bd00bea8f92a6768aca066d1213",
+    "exact_main": "d09a95521f02063b52ff5689c3e8eda5fb4912f8eefddcb44005d857c37caaa5"
+  },
+  "same_source": {
+    "sibling_nonidle_jiffies": 0,
+    "cells": [
+      {
+        "id": "gf8-k65-r65-64b-full",
+        "K": 65,
+        "R": 65,
+        "field": "gf8",
+        "shard_bytes": 64,
+        "loss": 65,
+        "control_median_us": 4.995,
+        "candidate_median_us": 3.105,
+        "speedup": 1.609
+      },
+      {
+        "id": "gf8-k128-r128-4k-full",
+        "K": 128,
+        "R": 128,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 128,
+        "control_median_us": 146.745,
+        "candidate_median_us": 109.000,
+        "speedup": 1.346
+      },
+      {
+        "id": "gf8-k127-r65-4k-max",
+        "K": 127,
+        "R": 65,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 65,
+        "control_median_us": 156.937,
+        "candidate_median_us": 136.172,
+        "speedup": 1.152
+      },
+      {
+        "id": "gf16-k256-r256-4k-full",
+        "K": 256,
+        "R": 256,
+        "field": "gf16",
+        "shard_bytes": 4096,
+        "loss": 256,
+        "control_median_us": 481.449,
+        "candidate_median_us": 313.482,
+        "speedup": 1.536
+      },
+      {
+        "id": "gf16-k255-r129-64k-max",
+        "K": 255,
+        "R": 129,
+        "field": "gf16",
+        "shard_bytes": 65536,
+        "loss": 129,
+        "control_median_us": 9717.772,
+        "candidate_median_us": 8007.151,
+        "speedup": 1.214
+      }
+    ]
+  },
+  "exact_main": {
+    "sibling_nonidle_jiffies": 0,
+    "comparison": "Leopard1 decode including its per-call setup versus Leopard2 execution and plan-setup amortized at the recorded reuse count",
+    "cells": [
+      {
+        "id": "gf8-k240-r16-4k-max",
+        "K": 240,
+        "R": 16,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 16,
+        "reuse": 64,
+        "main_median_us": 131.319,
+        "leopard2_execution_median_us": 66.325,
+        "leopard2_amortized_median_us": 66.510,
+        "plan_setup_median_us": 11.805,
+        "amortized_speedup": 1.974
+      },
+      {
+        "id": "gf8-k224-r32-64k-max",
+        "K": 224,
+        "R": 32,
+        "field": "gf8",
+        "shard_bytes": 65536,
+        "loss": 32,
+        "reuse": 8,
+        "main_median_us": 2342.848,
+        "leopard2_execution_median_us": 1680.171,
+        "leopard2_amortized_median_us": 1681.981,
+        "plan_setup_median_us": 14.480,
+        "amortized_speedup": 1.393
+      },
+      {
+        "id": "gf8-k190-r64-4k-max",
+        "K": 190,
+        "R": 64,
+        "field": "gf8",
+        "shard_bytes": 4096,
+        "loss": 64,
+        "reuse": 64,
+        "main_median_us": 137.675,
+        "leopard2_execution_median_us": 128.125,
+        "leopard2_amortized_median_us": 128.359,
+        "plan_setup_median_us": 14.980,
+        "amortized_speedup": 1.073
+      },
+      {
+        "id": "gf16-k1000-r200-4k-max",
+        "K": 1000,
+        "R": 200,
+        "field": "gf16",
+        "shard_bytes": 4096,
+        "loss": 200,
+        "reuse": 8,
+        "main_median_us": 1844.602,
+        "leopard2_execution_median_us": 1051.438,
+        "leopard2_amortized_median_us": 1064.775,
+        "plan_setup_median_us": 106.696,
+        "amortized_speedup": 1.732
+      }
+    ]
+  },
+  "validation": {
+    "integrated_release": "95/95",
+    "operation_model": "390/390",
+    "independent_model_tests": "20/20",
+    "strict_gcc_build": "pass",
+    "strict_clang_asan_ubsan_build": "pass",
+    "focused_release_differential": "14/14",
+    "focused_asan_ubsan_differential": "14/14",
+    "review_result": "clean"
+  }
+}
