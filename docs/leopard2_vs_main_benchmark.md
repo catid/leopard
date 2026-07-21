@@ -39,6 +39,16 @@ rejected and remains on AVX2.  A later GF16 terminal-range callback experiment
 was also rejected at only 1.016x and 1.000x in its two targets, so none of that
 candidate code is present.
 
+The dedicated R=1 coarse XOR path closes the earlier GF8 XOR regression.  Five
+separate exact-main campaigns around the K=128 power boundary all passed the
+zero-sibling-work and byte-identity gates.  At K=129, Leopard2 encode is
+1.104x at 4 KiB, 1.329x at 64 KiB, and 1.098x at 1 MiB; first-use decode is
+1.013x, 1.183x, and 1.103x respectively.  The K=128 and K=130 4-KiB neighbors
+show no credible regression over two percent, and K=130 encode is credibly
+1.081x.  The apparent K=130 decode loss in an earlier contaminated campaign
+did not reproduce under the accepted isolation gate, so no narrower selector
+is needed.
+
 The later GF16 K=1000/R=200/64-KiB byte-tiling checkpoint halves Leopard2
 scratch from 33,585,728 to 16,808,512 bytes and improves the prior Leopard2
 implementation by 1.135x for full parity (1.108x--1.147x for measured parity
@@ -59,6 +69,7 @@ hashes, isolation limits, selector bounds, and validation, is retained in:
 - `experiments/leopard2/gf8_balanced_encode/results/checkpoint.json`
 - `experiments/leopard2/gf16_high_encode/results/byte_tiling_positive_20260721.json`
 - `experiments/leopard2/gf16_high_encode/results/terminal_range_negative_20260721.json`
+- `experiments/leopard2/r1_xor/results/e621109-exact-main-amd9950x3d/summary.json`
 
 ## Earlier full-matrix checkpoint: 2026-07-18
 

@@ -1,0 +1,243 @@
+{
+  "schema": "leopard2-r1-exact-main-gate/v1",
+  "created_utc": "2026-07-21T23:18:35Z",
+  "comparison": {
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+    "baseline_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_source_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "candidate_source_commit": "e6211091784df3e0c746790c7650450d8528119f",
+    "candidate_source_tree": "0e02a26d97255b559e9471b564bce72e305ee79b",
+    "candidate_executable_sha256": "a4e3ae4c401e2b28a3d8af2820988edc9cd7bdc54e23992731cd366bffe9be0c",
+    "candidate_archive_sha256": "10e0e5e8a10358394a556588aa6f002cfcaf51f9136b61f8dec4fb5cae77818a",
+    "baseline_executable_sha256": "b592265357cc898806cacbb79529a4bd84b5f6625da56fba806594d16948da96",
+    "baseline_archive_sha256": "92fef9c62f16283559e5449d3a9393072b78290f8cb8e8fc82b96fac00e0fdf3",
+    "runner_sha256": "25c2b576d97281a12a70445cea713461c7a56b9ca26fdb953574b6c3e909897d"
+  },
+  "method": {
+    "rounds": 3,
+    "order_per_round": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "iterations_per_invocation": 9,
+    "warmups_per_invocation": 2,
+    "reuse": 8,
+    "batch": 1,
+    "threads": 1,
+    "statistics": "one mean paired log contrast per independent ABBA round; two-sided Student-t 95 percent confidence interval with df=2",
+    "isolation": "one cell per campaign; process pinned to one logical CPU; SMT sibling reserved and required to accumulate exactly zero non-idle /proc/stat jiffies",
+    "validity": "every accepted manifest independently passed source, build, object, archive, link, runtime, workload-digest, retained-stream, isolation, and statistics verification"
+  },
+  "machine": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      16,
+      17,
+      18,
+      19,
+      20,
+      21,
+      22,
+      23,
+      24,
+      25,
+      26,
+      27,
+      28,
+      29,
+      30
+    ],
+    "accepted_cpu_pairs": [
+      [4, 20],
+      [5, 21]
+    ],
+    "scaling_driver": "amd-pstate-epp",
+    "scaling_governor": "powersave",
+    "energy_performance_preference": "performance"
+  },
+  "cells": [
+    {
+      "id": "k128-r1-4k",
+      "k": 128,
+      "r": 1,
+      "shard_bytes": 4096,
+      "benchmark_cpu": 4,
+      "reserved_sibling": 20,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "manifest": "k128-r1-4k.manifest.json",
+      "manifest_file_sha256": "77621c215dd94c9be35b880bc70cf55e8d2404d75dba193e784717f0e6169ab1",
+      "raw_sha256": "be6631ce1e8da34f339cdb51198a25ee2024730f31d560dd8df552af955e824f",
+      "encode": {
+        "geometric_speedup": 1.051222110847,
+        "ci95_lower": 1.004734314295,
+        "ci95_upper": 1.099860839439
+      },
+      "decode_first_use": {
+        "geometric_speedup": 1.008919688823,
+        "ci95_lower": 0.981626658736,
+        "ci95_upper": 1.036971571051
+      },
+      "decode_reuse_amortized": {
+        "geometric_speedup": 1.047311943571,
+        "ci95_lower": 1.019630059402,
+        "ci95_upper": 1.075745361793
+      }
+    },
+    {
+      "id": "k129-r1-4k",
+      "k": 129,
+      "r": 1,
+      "shard_bytes": 4096,
+      "benchmark_cpu": 4,
+      "reserved_sibling": 20,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "manifest": "k129-r1-4k.manifest.json",
+      "manifest_file_sha256": "216e1c393cbfd7ea36fcb2e8dbfa8a58b26b647523ee2b6e0f1df465f1314438",
+      "raw_sha256": "3011ef02451529043c0fc8dc7d7c6a09c6ba2b22154da1e5f8a2613439cc558b",
+      "encode": {
+        "geometric_speedup": 1.103520626899,
+        "ci95_lower": 1.024112147857,
+        "ci95_upper": 1.189086348149
+      },
+      "decode_first_use": {
+        "geometric_speedup": 1.013418507121,
+        "ci95_lower": 1.007705125609,
+        "ci95_upper": 1.019164281768
+      },
+      "decode_reuse_amortized": {
+        "geometric_speedup": 1.052369192102,
+        "ci95_lower": 1.046123759517,
+        "ci95_upper": 1.058651910361
+      }
+    },
+    {
+      "id": "k130-r1-4k",
+      "k": 130,
+      "r": 1,
+      "shard_bytes": 4096,
+      "benchmark_cpu": 4,
+      "reserved_sibling": 20,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "manifest": "k130-r1-4k.manifest.json",
+      "manifest_file_sha256": "c6355f54e88672eec10421d10fc5ba628c42b6e28277afdbfad366399218357b",
+      "raw_sha256": "4d6600431da31c970792f804c08b2434742f91867ba88dfe6fff2b001e573084",
+      "encode": {
+        "geometric_speedup": 1.081464518309,
+        "ci95_lower": 1.053521619276,
+        "ci95_upper": 1.110148556008
+      },
+      "decode_first_use": {
+        "geometric_speedup": 1.017280893810,
+        "ci95_lower": 0.995344252135,
+        "ci95_upper": 1.039701002634
+      },
+      "decode_reuse_amortized": {
+        "geometric_speedup": 1.054573069336,
+        "ci95_lower": 1.032294305522,
+        "ci95_upper": 1.077332648858
+      }
+    },
+    {
+      "id": "k129-r1-64k",
+      "k": 129,
+      "r": 1,
+      "shard_bytes": 65536,
+      "benchmark_cpu": 4,
+      "reserved_sibling": 20,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "manifest": "k129-r1-64k.manifest.json",
+      "manifest_file_sha256": "3054566207876caa09eb00f395ff53ae296ae62f56417ef3f53ac7eb1c17c806",
+      "raw_sha256": "519d1f90fae39a330606b63f27a3c0cfa805c62b2784b7e3ff39744db82ba708",
+      "encode": {
+        "geometric_speedup": 1.329358704007,
+        "ci95_lower": 1.175807716925,
+        "ci95_upper": 1.502962209280
+      },
+      "decode_first_use": {
+        "geometric_speedup": 1.182612470002,
+        "ci95_lower": 1.076403588166,
+        "ci95_upper": 1.299300996002
+      },
+      "decode_reuse_amortized": {
+        "geometric_speedup": 1.184886914944,
+        "ci95_lower": 1.078219952717,
+        "ci95_upper": 1.302106307408
+      }
+    },
+    {
+      "id": "k129-r1-1m",
+      "k": 129,
+      "r": 1,
+      "shard_bytes": 1048576,
+      "benchmark_cpu": 5,
+      "reserved_sibling": 21,
+      "reserved_sibling_nonidle_jiffies": 0,
+      "manifest": "k129-r1-1m.manifest.json",
+      "manifest_file_sha256": "5d67772a084b73f4497441ca937a95989257e0192b86f149353bc9db9047d7b2",
+      "raw_sha256": "09b3b0a97e50d8045cfe5db4817878e7eefb2a0b05b114982568bf12cef3f2b9",
+      "encode": {
+        "geometric_speedup": 1.098389514521,
+        "ci95_lower": 1.084790516417,
+        "ci95_upper": 1.112158990471
+      },
+      "decode_first_use": {
+        "geometric_speedup": 1.103140254251,
+        "ci95_lower": 1.095264810262,
+        "ci95_upper": 1.111072326207
+      },
+      "decode_reuse_amortized": {
+        "geometric_speedup": 1.103240711541,
+        "ci95_lower": 1.095359657909,
+        "ci95_upper": 1.111178468928
+      }
+    }
+  ],
+  "correctness": {
+    "accepted_invocations": 60,
+    "all_original_data_digests_match": true,
+    "all_transmitted_parity_digests_match": true,
+    "all_recovered_original_digests_match": true,
+    "all_manifests_verify": true
+  },
+  "decision": {
+    "coarse_r1_xor_path": "retained",
+    "power_boundary_neighbor_regression": "not observed",
+    "credible_five_percent_wins": [
+      "K=130, 4 KiB encode",
+      "K=129, 64 KiB encode and both decode metrics",
+      "K=129, 1 MiB encode and both decode metrics"
+    ],
+    "selector_change_required": false
+  },
+  "rejected_attempts": [
+    {
+      "cell": "K=129,R=1,4KiB",
+      "reason": "stale noncanonical runtime pair-lease payload; zero benchmark invocations",
+      "ignored_failure": "/tmp/leopard-r1-authoritative-e621109/k129-4k/failure.json",
+      "failure_sha256": "fdd0bc0afb9ed722823a1f8ebd48e9d562390342b57906f3ad5b7a6dbbe8663a"
+    },
+    {
+      "cell": "K=129,R=1,1MiB",
+      "reason": "reserved sibling CPU 20 accumulated two user jiffies; timings rejected",
+      "ignored_failure": "/tmp/leopard-r1-authoritative-e621109/k129-1m/failure.json",
+      "failure_sha256": "5b1d87eeaeffcc4becf5f8b3de4d1b9830b13459185bb4d09bab0c0c539982f7"
+    }
+  ]
+}
