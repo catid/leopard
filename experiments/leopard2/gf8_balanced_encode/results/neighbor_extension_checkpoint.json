@@ -1,0 +1,135 @@
+{
+  "schema": "leopard2-gf8-high-neighbor-encode-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "narrow_promotion_with_negative_cells_retained",
+  "source_identity": {
+    "implementation_commit": "1235048fc74b5b1b64ca700062ee375b677da29f",
+    "final_selector_commit": "4fc1a2cbbbadb737a0eb2ad11d875498c80dad64",
+    "exact_leopard_main": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "change": {
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "LEO2_FIELD_GF8",
+    "summary": "Extend the one-block AVX-512VL high encoder to T=8 and to one-coordinate message shortening and parity puncturing at T in {8,16,32,64}. The final shortened source is supplied as mathematical zero without a staging copy; punctured final parity is evaluated into scratch so arithmetic and wire order remain unchanged.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "portable_avx2_object_changed": false,
+    "portable_avx2_object_sha256_before": "3ca3d07977bcae905064215e5aa196563a2f5052bba14c213ec83f0eddbd9b46",
+    "portable_avx2_object_sha256_after": "3ca3d07977bcae905064215e5aa196563a2f5052bba14c213ec83f0eddbd9b46",
+    "avx512_object_text_growth_bytes": 2160,
+    "portable_isa_note": "An initial seven-argument callback caused GCC to emit forbidden kmovw in the AVX-512VL member. Packing the internal shortened-input bit into the existing side argument restored the six-register call shape; the portable-ISA gate then passed and the packed contract is covered by startup KATs."
+  },
+  "execution_eligibility": {
+    "explicit_avx512": "legacy-high GF8, T in {8,16,32,64}, K in {T-1,T}, R in {T-1,T}, dense full output, bytes > 1024",
+    "auto_new_shortened": "K=63,R=64, aligned bytes in [2048,65536]; Leopard1 has no legal R>K comparison, so this interval is supported only by the same-source AVX2 gate",
+    "auto_new_punctured": "T=64, R=63, K in {63,64}, exactly 65536 aligned bytes",
+    "auto_rejected": [
+      "all T=8 cells",
+      "T=64 R=63 below 65536 bytes",
+      "ragged byte tails",
+      "T=16 and T=32 shortened or punctured neighbors",
+      "partial parity output"
+    ],
+    "unchanged_existing_auto": "exact balanced K=R=T gates for T in {16,32,64}"
+  },
+  "same_source_avx2_gate": {
+    "ratio_orientation": "explicit_avx2_time_over_explicit_avx512_time",
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu_pair": [14, 30],
+    "method": "three independent ABBA rounds per cell; child estimator is the median of 9 samples; warmup 3; reuse 256 below 64KiB and 32 at 64KiB; CPU14 pinned; sibling CPU30 required zero non-idle jiffies for every ABBA unit",
+    "sibling_contamination_events": 0,
+    "summary_sha256": "e5525ee94035c24282b5ef632d5e080afea86c6f377a50d68dd6abd2f9487b27",
+    "manifest_sha256": "aed8e59142d6cd0baab29382db01c026e72954dab05cbe96989b8e4dade33470",
+    "columns": ["K", "R", "bytes", "geometric_speedup", "ci95_lower", "ci95_upper"],
+    "cells": [
+      [63,64,2048,1.149987,1.105654,1.196098],
+      [63,64,2049,1.141457,1.119914,1.163414],
+      [63,64,4096,1.153603,1.141262,1.166077],
+      [63,64,4097,1.144501,1.132906,1.156215],
+      [63,64,65536,1.121274,1.112962,1.129648],
+      [63,64,65537,1.108232,1.053447,1.165865],
+      [64,63,2048,1.130638,1.128037,1.133244],
+      [64,63,2049,1.141137,1.113623,1.169331],
+      [64,63,4096,1.156473,1.137624,1.175635],
+      [64,63,4097,1.135159,1.109154,1.161773],
+      [64,63,65536,1.108396,1.095949,1.120984],
+      [64,63,65537,1.118149,1.116856,1.119444],
+      [63,63,2048,1.130721,1.129457,1.131987],
+      [63,63,2049,1.150703,1.118313,1.184031],
+      [63,63,4096,1.154184,1.149750,1.158635],
+      [63,63,4097,1.134960,1.134548,1.135372],
+      [63,63,65536,1.118667,1.114647,1.122702],
+      [63,63,65537,1.092806,1.028456,1.161182],
+      [8,8,2048,1.126149,1.084860,1.169009],
+      [8,8,2049,1.143697,1.070759,1.221605],
+      [8,8,4096,1.147921,1.107420,1.189904],
+      [8,8,4097,1.105237,1.039084,1.175602],
+      [8,8,65536,1.218764,1.068000,1.390811],
+      [8,8,65537,1.143258,1.121299,1.165646],
+      [8,7,2048,1.133659,1.117473,1.150079],
+      [8,7,2049,1.145225,1.086144,1.207521],
+      [8,7,4096,1.146722,1.058442,1.242365],
+      [8,7,4097,1.085103,1.067240,1.103266],
+      [8,7,65536,1.219927,1.084276,1.372549],
+      [8,7,65537,1.157939,1.142250,1.173843]
+    ],
+    "interpretation": "The coarse kernel is consistently faster than Leopard2's portable AVX2 kernel in these prioritized shapes. This is necessary but not sufficient for AUTO promotion because Leopard1 remains the primary end-to-end comparison."
+  },
+  "exact_main_gate": {
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_auto_time",
+    "method": "independently linked exact-main and clean production Leopard2 artifacts; three ABBA rounds; six constituent pairs; median of 9 samples; warmup 3; reuse 128 at 2/4KiB and 32 at 64KiB; every accepted campaign recorded zero non-idle sibling jiffies and passed source/build/digest replay verification",
+    "columns": ["id", "K", "R", "bytes", "geometric_speedup", "ci95_lower", "ci95_upper", "decision"],
+    "cells": [
+      ["t64p2k",64,63,2048,1.003631,0.990618,1.016816,"reject_below_5_percent"],
+      ["t64p4k",64,63,4096,1.033018,1.017198,1.049084,"reject_below_5_percent"],
+      ["t64b2k",63,63,2048,0.976821,0.959884,0.994057,"reject_regression_over_2_percent"],
+      ["t64b4k",63,63,4096,1.035192,1.018223,1.052443,"reject_below_5_percent"],
+      ["t64e2k",64,64,2048,1.008725,0.991625,1.026121,"existing_gate_control"],
+      ["t64e4k",64,64,4096,1.033782,1.026587,1.041027,"existing_gate_control"],
+      ["t8p2k",8,7,2048,0.849819,0.833026,0.866950,"reject_regression"],
+      ["t8p4k",8,7,4096,0.906821,0.896061,0.917709,"reject_regression"],
+      ["t8e2k",8,8,2048,0.848070,0.840337,0.855873,"reject_regression"],
+      ["t8e4k",8,8,4096,0.895512,0.880450,0.910831,"reject_regression"],
+      ["t64p64k",64,63,65536,1.111030,1.096573,1.125678,"promote"],
+      ["t64b64k",63,63,65536,1.115691,1.110033,1.121377,"promote"],
+      ["t64e64k",64,64,65536,1.109796,1.101299,1.118359,"existing_gate_control"],
+      ["t8p64k",8,7,65536,1.100009,0.920512,1.314508,"reject_inconclusive"],
+      ["t8e64k",8,8,65536,1.143219,0.843113,1.550149,"reject_inconclusive"]
+    ],
+    "accepted_manifest_sha256": {
+      "t64p_small": "bcdaa9601a462ddea1bb5ac072f78f8e82329a01dc81e497a08edbd1a25bea18",
+      "t64b_small": "b96c54eb03c62269d87e8513a7a95e3abd3eeeefeb937d2729a440d57c560df9",
+      "t64e_small": "df021ab40b65a21bbe9690f6b28c67ac296217849574e0ce8946885faf3b2b2c",
+      "t8p_small": "756f946824bdb4eba37b9dcec12e8b86ef56ae03ec9c105abde942f055ed6395",
+      "t8e_small": "7afaa56afc8874816a3975d6a12b8bf5cabb9a1a82f23d778f2a371fb103840a",
+      "t64p_64k": "c581475b41c03c000cfb9a2303131788ac23d7d5c84b291e8f626cb59eb24c8e",
+      "t64b_64k": "01a3f7c352361c7cdcb941cfe807115cdfaf58a5b445b9a6ff111b5fd3472b6c",
+      "t64e_64k": "b48fea3d44a7958f9eb4c2248e7b206b869c10d1085f1b0e6d59d1d43bca6310",
+      "t8p_64k": "1d357ec44c47077998ebd21f2cc89c774cdb52fe4497f2c1f89d6463af3da9db",
+      "t8e_64k": "a577b7d99be05587e8e530f27476acf2305f234fcbdeaeedd40b78b4b37ea681"
+    },
+    "discarded_campaign": {
+      "failure_sha256": "85901f00f3af33da157264a224d1fef43d9c8aea11b52a480483ebed4a4f50d4",
+      "reason": "The original combined 10-cell campaign accumulated seven non-idle sibling jiffies. Its failure bundle verifies as diagnostics but is explicitly excluded from every result above."
+    }
+  },
+  "unpromoted_screened_neighbors": {
+    "shapes": [[7,8],[7,7],[15,16],[16,15],[15,15],[31,32],[32,31],[31,31]],
+    "reason": "Correctness and directional saturated screens completed, but no zero-sibling exact-main gate was run after the prioritized T=64/T=8 matrix. They remain explicit-AVX512-only candidates.",
+    "broad_screen_summary_sha256": "4fc743f03cdd37820a4534df4c54930e11d092e5e308f4ce62695b21e267f20b",
+    "specialized_screen_summary_sha256": "1c6b793581ef8c5e36ced5e1de8fad3a200bcd8f92acf0eb179239a2ee0066b6"
+  },
+  "correctness": {
+    "cases": "All 13 K/R boundary cases at 2048,2049,4096,4097,65536,65537 bytes across scalar, SSSE3, AVX2, AVX512, and AUTO; aligned R<=K outputs also matched exact Leopard1.",
+    "direct_oracle": "All 13 cases executed 2049 bytes through explicit AVX512 and matched an independently constructed direct systematic generator matrix over the first and last 65 bytes of every parity shard.",
+    "partial_output": "Every case retained the sparse schedule and did not enter the dense callback.",
+    "concurrency": "Four simultaneous K=63,R=63,4097-byte executions shared one immutable codec and matched the reference.",
+    "startup_kat": "T in {8,16,32,64}, exact and final-source-shortened, unaligned 65-byte guarded buffers; the shortened source pointer is null to prove it is not read.",
+    "tails": "All candidate byte tails and deliberately unaligned buffers matched mature backends; AUTO remains aligned-only.",
+    "release_deterministic_suite": "95/95 effective pass with fuzz/lab campaigns excluded; 94 passed on the first run and the Visual Studio contract test passed after initializing the worktree's pinned sse2neon submodule.",
+    "release_focused": "auto encode backend, direct encode, and portable ISA passed",
+    "strict_gcc": "GCC -Wall -Wextra -Wpedantic -Werror focused tests passed",
+    "asan_ubsan": "Clang 18 ASan+UBSan focused tests passed",
+    "fuzzing": "No broad fuzz campaign was run; deterministic differential and sanitizer gates were prioritized for this arithmetic optimization."
+  }
+}
