@@ -1,6 +1,54 @@
 # Leopard2 versus exact Leopard main
 
-## Current checkpoint: 2026-07-18
+## Optimization update: 2026-07-21
+
+The production stack after the paper-faithfulness audit has materially moved
+the remaining balanced and small-loss cells.  The compact checkpoints below
+compare against exact Leopard default-branch commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`.  Ratios remain exact-main time
+divided by Leopard2 time.  Each result used counterbalanced pinned processes,
+matching original/parity/recovery digests, and separately reported Leopard2
+plan setup.  These are scoped optimization checkpoints rather than a rerun of
+the entire uniform matrix in the next section.
+
+| Decode cell | Leopard2 path | Plan reuse | Amortized speedup |
+| --- | --- | ---: | ---: |
+| GF8 K=240 R=16, 4 KiB, 16 losses | Algorithm 5 with zero-shift cancellation | 64 | 1.974x |
+| GF8 K=127 R=65, 4 KiB, 65 losses | translated Algorithm 4 | 64 | 1.195x |
+| GF8 K=100 R=100, 4 KiB, 50 losses | translated Algorithm 4 | 64 | 1.299x |
+| GF8 K=128 R=128, 64 KiB, 128 losses | translated Algorithm 4 | 8 | 1.261x |
+| GF16 K=255 R=129, 4 KiB, 129 losses | translated Algorithm 4 | 32 | 1.653x |
+| GF8 K=65 R=65, 64 B, 8 losses | direct eight-loss repair | 512 | 1.572x |
+| GF8 K=65 R=65, 1 KiB, 8 losses | direct eight-loss repair | 256 | 3.068x |
+| GF8 K=65 R=65, 64 KiB, 8 losses | direct eight-loss repair | 16 | 3.870x |
+| GF8 K=65 R=65, 1 MiB, 8 losses | direct eight-loss repair | 4 | 7.561x |
+
+The 64-byte direct cell is reuse-sensitive: charging its 11.215-us plan setup
+once gives 13.563 us versus Leopard1's 3.725 us, and the aggregate crossover
+is reuse nine.  At 1 KiB and above it already wins with setup charged once.
+The direct selector is deliberately limited to AVX2 GF8 legacy-high K=65,
+R=65..128, and at most eight missing originals; neighboring shapes retain the
+paper transform paths.
+
+Balanced GF8 encoding also now uses a runtime-qualified, wire-identical
+AVX-512VL whole-transform callback on the measured AMD processor family.
+Exact-main speedups are 1.091x/1.191x for T=16 at 4/64 KiB;
+1.095x/1.085x/1.158x for T=32 at 2/4/64 KiB; and
+1.102x/1.081x/1.117x for T=64 at 2/4/64 KiB.  A noisy T=16, 2-KiB cell was
+rejected and remains on AVX2.  A later GF16 terminal-range callback experiment
+was also rejected at only 1.016x and 1.000x in its two targets, so none of that
+candidate code is present.
+
+Machine-readable evidence, including binary/source identities, raw-bundle
+hashes, isolation limits, selector bounds, and validation, is retained in:
+
+- `experiments/leopard2/high_decode_copy/results/algorithm5_zero_shift_cancel_checkpoint.json`
+- `experiments/leopard2/high_decode_copy/results/high_low_translation_checkpoint.json`
+- `experiments/leopard2/direct_repair/results/k65_exact_main_checkpoint.json`
+- `experiments/leopard2/gf8_balanced_encode/results/checkpoint.json`
+- `experiments/leopard2/gf16_high_encode/results/terminal_range_negative_20260721.json`
+
+## Earlier full-matrix checkpoint: 2026-07-18
 
 The current authoritative comparison measures detached, test-hooks-off
 Leopard2 commit `a1fa5bf02641f0af8c344b21c879b9da0bbd133a` against the
