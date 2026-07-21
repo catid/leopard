@@ -21,7 +21,7 @@
   },
   "execution_eligibility": {
     "explicit_avx512": "legacy-high GF8, T in {8,16,32,64}, K in {T-1,T}, R in {T-1,T}, dense full output, bytes > 1024",
-    "auto_new_shortened": "K=63,R=64, aligned bytes in [2048,65536]; Leopard1 has no legal R>K comparison, so this interval is supported only by the same-source AVX2 gate",
+    "auto_new_shortened": "K=63,R=64, aligned bytes in [2048,65536]; Leopard1 has no legal R>K comparison, so this interval is supported by the independent clean-final-commit AVX2 gate below",
     "auto_new_punctured": "T=64, R=63, K in {63,64}, exactly 65536 aligned bytes",
     "auto_rejected": [
       "all T=8 cells",
@@ -33,6 +33,8 @@
     "unchanged_existing_auto": "exact balanced K=R=T gates for T in {16,32,64}"
   },
   "same_source_avx2_gate": {
+    "authority": "superseded_non_authoritative_history",
+    "provenance_note": "This first screen ran from HEAD 9565521 plus a dirty worktree and recorded the then-current binary and diff hashes. The binary was later overwritten and the dirty state is not reconstructible from the recorded diff hash, so these measurements are retained only as historical diagnostics and are not used to justify AUTO selection. The clean-final-commit gate below supersedes them.",
     "ratio_orientation": "explicit_avx2_time_over_explicit_avx512_time",
     "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
     "cpu_pair": [14, 30],
@@ -73,7 +75,30 @@
       [8,7,65536,1.219927,1.084276,1.372549],
       [8,7,65537,1.157939,1.142250,1.173843]
     ],
-    "interpretation": "The coarse kernel is consistently faster than Leopard2's portable AVX2 kernel in these prioritized shapes. This is necessary but not sufficient for AUTO promotion because Leopard1 remains the primary end-to-end comparison."
+    "interpretation": "Historical directional screen only. It is consistent with the authoritative clean-final-commit and exact-main gates, but it contributes no promotion authority."
+  },
+  "independent_clean_commit_same_source_gate": {
+    "authority": "authoritative_for_the_R_greater_than_K_exception",
+    "source_commit": "2e592eb6a38cfe3d0d8373e93c41ba14e7f43888",
+    "source_tree": "d719ce18150223a444ec1b36dc6cf6d98ee4b523",
+    "source_status_before_and_after": "clean",
+    "benchmark_sha256": "623a51c856a68b625575d0dc2401becaaa3236e44de8b4fe2996a432a67fff8f",
+    "production_archive_sha256": "cefd3d0081bbe5ff801c2e6d4ea683e507ce29446eb6bc203fd4c36c70ad610a",
+    "manifest_sha256": "5793d6f218b6cd58b4b14dcf2def9ac73290e55e25f2c51b3b908e4d3e7e8cf7",
+    "raw_bundle_sha256": "b4c69084c3a4b1dbc6e30be7b6abaf6c77cd0f968a5b1b3f9b4b831b96784518",
+    "raw_invocation_count": 36,
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu_pair": [4, 20],
+    "method": "Independent review rerun from the clean final stack. CPU4 was pinned and CPU20 was held under the pair lease and required exactly zero non-idle jiffies during the two-second preflight, every ABBA round, and the complete campaign. Each cell used three independent AVX2-AVX512-AVX512-AVX2 rounds, median of 9 samples per child, warmup 3, reuse 256 below 64KiB and 32 at 64KiB. All 36 child invocations matched original, parity, and recovered-output digests and passed round-trip recovery.",
+    "ratio_orientation": "explicit_avx2_time_over_explicit_avx512_time",
+    "promotion_threshold": "95 percent confidence lower bound at least 1.05",
+    "columns": ["K", "R", "bytes", "geometric_speedup", "ci95_lower", "ci95_upper"],
+    "cells": [
+      [63,64,2048,1.142955,1.088152,1.200518],
+      [63,64,4096,1.152584,1.142591,1.162664],
+      [63,64,65536,1.116763,1.115676,1.117850]
+    ],
+    "decision": "All three clean cells clear the promotion threshold. Keep the aligned 2KiB-through-64KiB AUTO interval for the explicit legacy-high R>K profile; ordinary profile AUTO still selects the low profile when R>K."
   },
   "exact_main_gate": {
     "ratio_orientation": "exact_leopard_main_time_over_leopard2_auto_time",
@@ -130,6 +155,7 @@
     "release_focused": "auto encode backend, direct encode, and portable ISA passed",
     "strict_gcc": "GCC -Wall -Wextra -Wpedantic -Werror focused tests passed",
     "asan_ubsan": "Clang 18 ASan+UBSan focused tests passed",
-    "fuzzing": "No broad fuzz campaign was run; deterministic differential and sanitizer gates were prioritized for this arithmetic optimization."
+    "fuzzing": "No broad fuzz campaign was run; deterministic differential and sanitizer gates were prioritized for this arithmetic optimization.",
+    "independent_review": "Clean. An independent detached-worktree review passed Release portable-ISA/backend/direct-oracle/legacy/concurrency gates (7/7), Clang 18 ASan+UBSan focused gates (6/6), reproduced the unchanged portable AVX2 object SHA-256 and 2160-byte AVX-512 text growth, replay-verified all 10 accepted exact-main manifests plus the excluded contaminated failure bundle, and reran the R>K same-source gate from the clean final commit."
   }
 }
