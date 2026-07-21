@@ -254,6 +254,21 @@ std::vector<const void*> const_pointers(const Shards& shards)
     return result;
 }
 
+uint64_t hash_shards(const Shards& shards)
+{
+    uint64_t hash = UINT64_C(1469598103934665603);
+    for (size_t shard_i = 0; shard_i < shards.size(); ++shard_i)
+    {
+        const Bytes& shard = shards[shard_i];
+        for (size_t byte_i = 0; byte_i < shard.size(); ++byte_i)
+        {
+            hash ^= shard[byte_i];
+            hash *= UINT64_C(1099511628211);
+        }
+    }
+    return hash;
+}
+
 leopard2_test::ProfileKind oracle_profile(leo2_profile profile)
 {
     return profile == LEO2_PROFILE_LEGACY_HIGH_V1
@@ -999,6 +1014,13 @@ void test_high_gf16_byte_tiling(
                 partial_backend == LEO2_BACKEND_AVX2,
             "GF16 byte-tile/backend dispatch boundary mismatch");
     }
+    else
+    {
+        require(neighboring_scratch == tiled_scratch + 512U * 64U,
+            "GF16 one-pass neighboring-size scratch geometry mismatch");
+        require(ragged_scratch > tiled_scratch,
+            "GF16 one-pass ragged scratch geometry mismatch");
+    }
 
     // Promotion is deliberately limited to the calibrated AUTO host path.
     // Every explicit lower or wider backend retains one complete byte pass.
@@ -1041,39 +1063,86 @@ void test_high_gf16_byte_tiling(
         leo2_context_destroy(fixed_context);
     }
 
+    // The large differential below exists only to validate the promoted
+    // schedule.  Generic GF16 encoding and the one-pass fallback are covered
+    // by the ordinary profile matrix and boundary tests.  Avoid imposing this
+    // roughly 300-MiB vector on uncalibrated and non-x86 CI hosts that cannot
+    // execute the candidate.
+    if (!byte_tiling_active)
+    {
+        ++counts->high_byte_tiling_checks;
+        delete owner;
+        return;
+    }
+
     const Shards original = random_shards(
         k, bytes, UINT64_C(0x4746313642595445));
-    const Shards original_before = original;
+    const uint64_t original_hash = hash_shards(original);
     const std::vector<const void*> original_pointers =
         const_pointers(original);
 
     const unsigned legacy_work_count = leo_encode_work_count(k, r);
     require(legacy_work_count == 512,
         "GF16 byte-tile legacy work-count geometry mismatch");
-    Shards legacy_work(legacy_work_count, Bytes(bytes, 0));
-    std::vector<void*> legacy_pointers(legacy_work_count, NULL);
-    for (unsigned i = 0; i < legacy_work_count; ++i)
-        legacy_pointers[i] = &legacy_work[i][0];
-    require(leo_encode(bytes, k, r, legacy_work_count,
-                &original_pointers[0], &legacy_pointers[0]) ==
-            Leopard_Success,
-        "GF16 byte-tile legacy compatibility encode failed");
-    Shards expected(r, Bytes(bytes, 0));
-    for (unsigned i = 0; i < r; ++i)
-        expected[i] = legacy_work[i];
+    Shards expected;
+    {
+        Shards legacy_work(legacy_work_count, Bytes(bytes, 0));
+        std::vector<void*> legacy_pointers(legacy_work_count, NULL);
+        for (unsigned i = 0; i < legacy_work_count; ++i)
+            legacy_pointers[i] = &legacy_work[i][0];
+        require(leo_encode(bytes, k, r, legacy_work_count,
+                    &original_pointers[0], &legacy_pointers[0]) ==
+                Leopard_Success,
+            "GF16 byte-tile legacy compatibility encode failed");
+
+        // Retain only the transmitted parity buffers.  Moving the vector
+        // storage avoids copying another R complete 64-KiB shards and frees
+        // the unused transform half before the Leopard2 executions begin.
+        legacy_work.resize(r);
+        expected.swap(legacy_work);
+    }
 
     const std::vector<uint8_t> dense_requested(r, 1);
     leopard::ff16::TestOnlyResetHighEncodeCounts();
-    const EncodeResult dense = encode(owner->codec,
-        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, dense_requested);
-    require_result(dense.result, "GF16 byte-tile dense encode");
-    require(original == original_before,
-        "GF16 byte tiling modified a caller source shard");
-    compare_requested(dense.recovery, expected, dense_requested, 0xa5,
-        "GF16 byte-tile/legacy", counts);
+    leopard::ff16::TestOnlyHighEncodeCounts route = {};
+    {
+        const EncodeResult dense = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, dense_requested);
+        require_result(dense.result, "GF16 byte-tile dense encode");
+        require(hash_shards(original) == original_hash,
+            "GF16 byte tiling modified a caller source shard");
+        compare_requested(dense.recovery, expected, dense_requested, 0xa5,
+            "GF16 byte-tile/legacy", counts);
 
-    const leopard::ff16::TestOnlyHighEncodeCounts route =
-        leopard::ff16::TestOnlyGetHighEncodeCounts();
+        route = leopard::ff16::TestOnlyGetHighEncodeCounts();
+
+        // The large compatibility vector is complemented by a mathematically
+        // independent direct interpolation of its first GF16 symbol.
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, k, r);
+        std::vector<Element> points(layout.parent_dimension, 0);
+        std::vector<Element> values(layout.parent_dimension, 0);
+        for (unsigned i = 0; i < layout.parent_dimension; ++i)
+        {
+            points[i] = static_cast<Element>(
+                layout.systematic_coordinates[i]);
+        }
+        for (unsigned i = 0; i < k; ++i)
+        {
+            values[i] = static_cast<Element>(original[i][0] |
+                (static_cast<unsigned>(original[i][32]) << 8));
+        }
+        const Element direct_symbol = leopard2_test::lagrange_evaluate(
+            gf16, points, values,
+            static_cast<Element>(layout.parity_coordinates[0]));
+        const Element encoded_symbol = static_cast<Element>(
+            dense.recovery[0][0] |
+            (static_cast<unsigned>(dense.recovery[0][32]) << 8));
+        require(encoded_symbol == direct_symbol,
+            "GF16 byte-tile direct-symbol mismatch");
+        ++counts->parity_symbols;
+    }
+
     const leo2_backend backend = leo2_context_backend(context);
     const bool copy_first = backend == LEO2_BACKEND_AVX2 ||
         backend == LEO2_BACKEND_AVX512;
@@ -1084,52 +1153,38 @@ void test_high_gf16_byte_tiling(
                 (copy_first ? 1000U * execution_passes : 0U),
         "GF16 byte tiling changed the full-call source-staging policy");
 
-    // The large compatibility vector is complemented by a mathematically
-    // independent direct interpolation of its first GF16 symbol.
-    const ProfileLayout layout = leopard2_test::make_profile_layout(
-        leopard2_test::kLegacyHigh, k, r);
-    std::vector<Element> points(layout.parent_dimension, 0);
-    std::vector<Element> values(layout.parent_dimension, 0);
-    for (unsigned i = 0; i < layout.parent_dimension; ++i)
-        points[i] = static_cast<Element>(layout.systematic_coordinates[i]);
-    for (unsigned i = 0; i < k; ++i)
-        values[i] = static_cast<Element>(original[i][0] |
-            (static_cast<unsigned>(original[i][32]) << 8));
-    const Element direct_symbol = leopard2_test::lagrange_evaluate(
-        gf16, points, values,
-        static_cast<Element>(layout.parity_coordinates[0]));
-    const Element encoded_symbol = static_cast<Element>(dense.recovery[0][0] |
-        (static_cast<unsigned>(dense.recovery[0][32]) << 8));
-    require(encoded_symbol == direct_symbol,
-        "GF16 byte-tile direct-symbol mismatch");
-    ++counts->parity_symbols;
+    {
+        std::vector<uint8_t> sparse_requested(r, 0);
+        sparse_requested[0] = 1;
+        sparse_requested[r / 2] = 1;
+        sparse_requested[r - 1] = 1;
+        const EncodeResult sparse = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse_requested);
+        require_result(sparse.result, "GF16 byte-tile sparse encode");
+        compare_requested(sparse.recovery, expected, sparse_requested, 0xa5,
+            "GF16 byte-tile sparse/legacy", counts);
+    }
 
-    std::vector<uint8_t> sparse_requested(r, 0);
-    sparse_requested[0] = 1;
-    sparse_requested[r / 2] = 1;
-    sparse_requested[r - 1] = 1;
-    const EncodeResult sparse = encode(owner->codec,
-        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse_requested);
-    require_result(sparse.result, "GF16 byte-tile sparse encode");
-    compare_requested(sparse.recovery, expected, sparse_requested, 0xa5,
-        "GF16 byte-tile sparse/legacy", counts);
+    {
+        std::vector<uint8_t> prefix_requested(r, 1);
+        prefix_requested[r - 1U] = 0;
+        const EncodeResult prefix = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, prefix_requested);
+        require_result(prefix.result, "GF16 byte-tile prefix encode");
+        compare_requested(prefix.recovery, expected, prefix_requested, 0xa5,
+            "GF16 byte-tile prefix/legacy", counts);
+    }
 
-    std::vector<uint8_t> prefix_requested(r, 1);
-    prefix_requested[r - 1U] = 0;
-    const EncodeResult prefix = encode(owner->codec,
-        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, prefix_requested);
-    require_result(prefix.result, "GF16 byte-tile prefix encode");
-    compare_requested(prefix.recovery, expected, prefix_requested, 0xa5,
-        "GF16 byte-tile prefix/legacy", counts);
-
-    AlignedBuffer alias_scratch(tiled_scratch);
-    std::vector<void*> aliased_output(r, NULL);
-    aliased_output[0] = const_cast<void*>(original_pointers[0]);
-    require(leo2_encode(owner->codec, bytes, &original_pointers[0],
-                &aliased_output[0], alias_scratch.data(),
-                alias_scratch.size()) == LEO2_OVERLAP,
-        "GF16 byte tiling accepted output/input overlap");
-    ++counts->contract_checks;
+    {
+        AlignedBuffer alias_scratch(tiled_scratch);
+        std::vector<void*> aliased_output(r, NULL);
+        aliased_output[0] = const_cast<void*>(original_pointers[0]);
+        require(leo2_encode(owner->codec, bytes, &original_pointers[0],
+                    &aliased_output[0], alias_scratch.data(),
+                    alias_scratch.size()) == LEO2_OVERLAP,
+            "GF16 byte tiling accepted output/input overlap");
+        ++counts->contract_checks;
+    }
 
     // One immutable codec may execute the tiled schedule concurrently when
     // each caller supplies disjoint outputs and scratch.
@@ -1175,6 +1230,8 @@ void test_high_gf16_byte_tiling(
     for (unsigned i = 0; i < worker_count; ++i)
         delete invocation[i];
     counts->concurrent_executions += worker_count * repeats;
+    require(hash_shards(original) == original_hash,
+        "concurrent GF16 byte tiling modified a caller source shard");
 
     ++counts->high_byte_tiling_checks;
     delete owner;
