@@ -519,13 +519,14 @@ static Options ParseOptions(int argc, char** argv)
         (options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
          (options.field != LEO2_FIELD_GF8 &&
           options.field != LEO2_FIELD_GF16) ||
-         options.force_generic_decode || options.force_tiled_decode ||
-         !options.force_materialized_decode || !options.skip_legacy ||
+         options.force_generic_decode ||
+         options.force_tiled_decode == options.force_materialized_decode ||
+         !options.skip_legacy ||
          !options.retain_samples || !options.report_decode_path ||
          options.threads != 1))
     {
         Fail("translated-low attribution requires explicit high profile/field, "
-             "--force-materialized, --skip-legacy, --retain-samples, "
+             "one forced workspace, --skip-legacy, --retain-samples, "
              "--report-decode-path, and one thread");
     }
 #endif

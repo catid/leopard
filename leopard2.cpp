@@ -164,6 +164,11 @@ struct leo2_codec
 #ifdef LEO2_ENABLE_TEST_HOOKS
     leo2_test_encode_mode test_encode_mode;
     leo2_test_decode_mode test_decode_mode;
+    std::vector<uint8_t> translated_low_permanent_erased;
+    std::vector<uint8_t> translated_low_permanent_locator8;
+    std::vector<uint16_t> translated_low_permanent_locator16;
+    std::vector<uint8_t> translated_low_factors8;
+    std::vector<uint16_t> translated_low_factors16;
 #endif
 };
 
@@ -217,16 +222,11 @@ struct leo2_decode_plan
     bool direct_repair;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     /*
-        A forced legacy-high P=T plan owns an Algorithm 4 view translated by
-        xor P.  Keep the public high coordinates and locator intact; these
-        vectors are immutable execution metadata in low-profile order.
+        A forced legacy-high P=T plan executes an Algorithm 4 view translated
+        by xor P.  The plan captures this decision immutably; codec-owned
+        low-profile constants and execution-order plan metadata remain private.
     */
     bool translated_low;
-    std::vector<uint32_t> translated_low_requested_coordinates;
-    std::vector<uint8_t> translated_low_locator8;
-    std::vector<uint16_t> translated_low_locator16;
-    std::vector<uint8_t> translated_low_factors8;
-    std::vector<uint16_t> translated_low_factors16;
 #endif
 };
 
@@ -822,7 +822,12 @@ static const std::vector<uint32_t>& DecodeExecutionRequestedCoordinates(
 {
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (plan->translated_low)
-        return plan->translated_low_requested_coordinates;
+    {
+        // A high-profile systematic coordinate is P+i.  Translation by xor P
+        // maps it directly to low-profile systematic coordinate i, which is
+        // already stored in missing_originals in increasing order.
+        return plan->missing_originals;
+    }
 #endif
     return plan->requested_coordinates;
 }
@@ -849,6 +854,26 @@ static uint32_t DecodeExecutionCoordinateForOriginal(
     return PlanUsesTranslatedLowDecode(plan)
         ? TranslateHalfParentCoordinate(plan->codec, coordinate)
         : coordinate;
+}
+
+static uint32_t DecodeExecutionCoordinateForRecovery(
+    const leo2_decode_plan* plan,
+    uint32_t index)
+{
+    const uint32_t coordinate = CoordinateForRecovery(plan->codec, index);
+    return PlanUsesTranslatedLowDecode(plan)
+        ? TranslateHalfParentCoordinate(plan->codec, coordinate)
+        : coordinate;
+}
+
+static void TranslatePlanErasureMaskForExecution(leo2_decode_plan* plan)
+{
+    if (!PlanUsesTranslatedLowDecode(plan))
+        return;
+    const uint32_t side = plan->codec->padded_side;
+    LEO_DEBUG_ASSERT(plan->coordinate_erased.size() == side * 2U);
+    for (uint32_t i = 0; i < side; ++i)
+        std::swap(plan->coordinate_erased[i], plan->coordinate_erased[i + side]);
 }
 
 static bool PrepareCodecPrunedTransform(
@@ -1972,10 +1997,16 @@ static bool SelectTransformDecodePath(
 {
     if (PlanUsesTranslatedLowDecode(plan))
     {
-        selection.path = leopard2_internal::kDecodePathMaterialized;
+        selection.path =
+            (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0
+                ? leopard2_internal::kDecodePathTiled
+                : leopard2_internal::kDecodePathMaterialized;
         selection.rule =
             leopard2_internal::kDecodeRuleTranslatedLowDiagnostic;
         selection.matching_auto_rules = 0;
+        // In this exact duality region N=2P, so both low-profile execution
+        // forms own N shard slots.  Forced tiled/materialized controls compare
+        // traversal cost, not scratch capacity.
         selection.required_work_slots = codec->parent_count;
         selection.aligned_prefix_bytes = geometry.aligned_prefix_bytes;
         selection.tail_bytes = geometry.tail_bytes;
@@ -2234,10 +2265,7 @@ static void ExecuteTransformDecodePass(
         const uint8_t* low_factors = codec->fixed_factors8.data();
 #ifdef LEO2_ENABLE_TEST_HOOKS
         if (plan->translated_low)
-        {
-            low_locator = plan->translated_low_locator8.data();
-            low_factors = plan->translated_low_factors8.data();
-        }
+            low_factors = codec->translated_low_factors8.data();
 #endif
         if (use_generic)
         {
@@ -2330,10 +2358,7 @@ static void ExecuteTransformDecodePass(
         const uint16_t* low_factors = codec->fixed_factors16.data();
 #ifdef LEO2_ENABLE_TEST_HOOKS
         if (plan->translated_low)
-        {
-            low_locator = plan->translated_low_locator16.data();
-            low_factors = plan->translated_low_factors16.data();
-        }
+            low_factors = codec->translated_low_factors16.data();
 #endif
         if (use_generic)
         {
@@ -2438,7 +2463,8 @@ static void PopulateDecodeCoordinates(
 
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
-        const uint32_t coordinate = CoordinateForOriginal(codec, i);
+        const uint32_t coordinate =
+            DecodeExecutionCoordinateForOriginal(plan, i);
         if (!original[i] || plan->coordinate_erased[coordinate])
             continue;
         const uint8_t* const source =
@@ -2456,7 +2482,8 @@ static void PopulateDecodeCoordinates(
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
-        const uint32_t coordinate = CoordinateForRecovery(codec, i);
+        const uint32_t coordinate =
+            DecodeExecutionCoordinateForRecovery(plan, i);
         if (!recovery[i] || plan->coordinate_erased[coordinate])
             continue;
         const uint8_t* const source =
@@ -2473,18 +2500,6 @@ static void PopulateDecodeCoordinates(
         else
             coordinate_data[coordinate] = const_cast<uint8_t*>(source);
     }
-}
-
-static void TranslateDecodeCoordinatesForExecution(
-    const leo2_decode_plan* plan,
-    void** coordinate_data)
-{
-    if (!PlanUsesTranslatedLowDecode(plan))
-        return;
-    const leo2_codec* codec = plan->codec;
-    LEO_DEBUG_ASSERT(CanUseTranslatedLowDecode(codec));
-    for (uint32_t i = 0; i < codec->padded_side; ++i)
-        std::swap(coordinate_data[i], coordinate_data[i + codec->padded_side]);
 }
 
 static LEO_FORCE_INLINE void GatherTransformDecodeOne(
@@ -2528,14 +2543,8 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
 #ifdef LEO_HAS_FF8
         if (codec->field == LEO2_FIELD_GF8)
         {
-            uint8_t locator_log = plan->locator8[execution_coordinate];
-#ifdef LEO2_ENABLE_TEST_HOOKS
-            if (plan->translated_low)
-            {
-                locator_log =
-                    plan->translated_low_locator8[execution_coordinate];
-            }
-#endif
+            const uint8_t locator_log =
+                plan->locator8[execution_coordinate];
             LEO_DEBUG_ASSERT(ops.ff8_multiply != NULL);
             ops.ff8_multiply(destination, source,
                 static_cast<uint16_t>(255U - locator_log),
@@ -2554,14 +2563,7 @@ static LEO_FORCE_INLINE void GatherTransformDecodeOne(
 #ifdef LEO_HAS_FF16
         LEO_DEBUG_ASSERT(codec->field == LEO2_FIELD_GF16 &&
             ops.ff16_multiply != NULL);
-        uint16_t locator_log = plan->locator16[execution_coordinate];
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        if (plan->translated_low)
-        {
-            locator_log =
-                plan->translated_low_locator16[execution_coordinate];
-        }
-#endif
+        const uint16_t locator_log = plan->locator16[execution_coordinate];
         ops.ff16_multiply(destination, source,
             static_cast<uint16_t>(65535U - locator_log),
             pass_bytes);
@@ -4746,6 +4748,18 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             for (uint32_t i = padded + recovery_count; i < parent; ++i)
                 codec->permanent_erased[i] = 1;
         }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (CanUseTranslatedLowDecode(codec))
+        {
+            codec->translated_low_permanent_erased.resize(parent);
+            for (uint32_t i = 0; i < parent; ++i)
+            {
+                codec->translated_low_permanent_erased[i] =
+                    codec->permanent_erased[
+                        TranslateHalfParentCoordinate(codec, i)];
+            }
+        }
+#endif
 
         const bool specialized =
             (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
@@ -4786,6 +4800,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 codec->permanent_locator8.resize(parent);
                 leopard::ff8::PrepareDecode(parent,
                     &codec->permanent_erased[0], &codec->permanent_locator8[0]);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                if (!codec->translated_low_permanent_erased.empty())
+                {
+                    codec->translated_low_permanent_locator8.resize(parent);
+                    leopard::ff8::PrepareDecode(parent,
+                        codec->translated_low_permanent_erased.data(),
+                        codec->translated_low_permanent_locator8.data());
+                }
+#endif
             }
             if (specialized && padded >= 2)
             {
@@ -4800,6 +4823,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                     codec->fixed_factors8.resize(parent);
                     leopard::ff8::PrepareHighDecode(
                         parent, padded, &codec->fixed_factors8[0]);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                    if (CanUseTranslatedLowDecode(codec))
+                    {
+                        codec->translated_low_factors8.resize(
+                            parent / padded - 1);
+                        leopard::ff8::PrepareLowDecode(parent, padded,
+                            codec->translated_low_factors8.data());
+                    }
+#endif
                 }
             }
         }
@@ -4827,6 +4859,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 codec->permanent_locator16.resize(parent);
                 leopard::ff16::PrepareDecode(parent,
                     &codec->permanent_erased[0], &codec->permanent_locator16[0]);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                if (!codec->translated_low_permanent_erased.empty())
+                {
+                    codec->translated_low_permanent_locator16.resize(parent);
+                    leopard::ff16::PrepareDecode(parent,
+                        codec->translated_low_permanent_erased.data(),
+                        codec->translated_low_permanent_locator16.data());
+                }
+#endif
             }
             if (specialized && padded >= 2)
             {
@@ -4841,6 +4882,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                     codec->fixed_factors16.resize(parent);
                     leopard::ff16::PrepareHighDecode(
                         parent, padded, &codec->fixed_factors16[0]);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                    if (CanUseTranslatedLowDecode(codec))
+                    {
+                        codec->translated_low_factors16.resize(
+                            parent / padded - 1);
+                        leopard::ff16::PrepareLowDecode(parent, padded,
+                            codec->translated_low_factors16.data());
+                    }
+#endif
                 }
             }
         }
@@ -4930,8 +4980,7 @@ LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
     {
         if (!CanUseTranslatedLowDecode(codec))
             return LEO2_UNSUPPORTED;
-        if ((codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
-                             LEO2_CODEC_FORCE_TILED_DECODE)) != 0)
+        if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
             return LEO2_INVALID_ARGUMENT;
     }
     codec->test_decode_mode = mode;
@@ -5488,20 +5537,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (!recovery_present[i])
                 plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
 
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        if (plan->translated_low)
-        {
-            plan->translated_low_requested_coordinates.reserve(
-                plan->requested_coordinates.size());
-            for (size_t i = 0; i < plan->requested_coordinates.size(); ++i)
-            {
-                plan->translated_low_requested_coordinates.push_back(
-                    TranslateHalfParentCoordinate(
-                        codec, plan->requested_coordinates[i]));
-            }
-        }
-#endif
-
         /*
             Specialized decoders use exactly parent redundancy erasures.  Keep
             every surviving systematic shard, then the lowest-index parity
@@ -5595,64 +5630,65 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 delete plan;
                 return LEO2_INTERNAL_ERROR;
             }
+            // From this point onward coordinate_erased follows the execution
+            // view.  A translated plan has no generic fallback metadata, so
+            // constructing its locator directly in low-profile order avoids
+            // retaining and touching a second N-entry locator vector.
+            TranslatePlanErasureMaskForExecution(plan);
 #ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8)
             {
                 plan->locator8.resize(codec->parent_count);
-                if (codec->permanent_locator8.empty())
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                const bool translated = PlanUsesTranslatedLowDecode(plan);
+                const std::vector<uint8_t>& permanent_locator = translated
+                    ? codec->translated_low_permanent_locator8
+                    : codec->permanent_locator8;
+                const std::vector<uint8_t>& permanent_erased = translated
+                    ? codec->translated_low_permanent_erased
+                    : codec->permanent_erased;
+#else
+                const std::vector<uint8_t>& permanent_locator =
+                    codec->permanent_locator8;
+                const std::vector<uint8_t>& permanent_erased =
+                    codec->permanent_erased;
+#endif
+                if (permanent_locator.empty())
                     leopard::ff8::PrepareDecode(codec->parent_count,
                         &plan->coordinate_erased[0], &plan->locator8[0]);
                 else
                     leopard::ff8::PrepareDecodeWithPermanent(
                         codec->parent_count, &plan->coordinate_erased[0],
-                        &codec->permanent_erased[0], &codec->permanent_locator8[0],
+                        permanent_erased.data(), permanent_locator.data(),
                         &plan->locator8[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
-                if (plan->translated_low)
-                {
-                    plan->translated_low_locator8.resize(codec->parent_count);
-                    for (uint32_t i = 0; i < codec->parent_count; ++i)
-                    {
-                        plan->translated_low_locator8[i] = plan->locator8[
-                            TranslateHalfParentCoordinate(codec, i)];
-                    }
-                    plan->translated_low_factors8.resize(
-                        codec->parent_count / codec->padded_side - 1);
-                    leopard::ff8::PrepareLowDecode(
-                        codec->parent_count, codec->padded_side,
-                        plan->translated_low_factors8.data());
-                }
-#endif
             }
 #endif
 #ifdef LEO_HAS_FF16
             if (codec->field == LEO2_FIELD_GF16)
             {
                 plan->locator16.resize(codec->parent_count);
-                if (codec->permanent_locator16.empty())
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                const bool translated = PlanUsesTranslatedLowDecode(plan);
+                const std::vector<uint16_t>& permanent_locator = translated
+                    ? codec->translated_low_permanent_locator16
+                    : codec->permanent_locator16;
+                const std::vector<uint8_t>& permanent_erased = translated
+                    ? codec->translated_low_permanent_erased
+                    : codec->permanent_erased;
+#else
+                const std::vector<uint16_t>& permanent_locator =
+                    codec->permanent_locator16;
+                const std::vector<uint8_t>& permanent_erased =
+                    codec->permanent_erased;
+#endif
+                if (permanent_locator.empty())
                     leopard::ff16::PrepareDecode(codec->parent_count,
                         &plan->coordinate_erased[0], &plan->locator16[0]);
                 else
                     leopard::ff16::PrepareDecodeWithPermanent(
                         codec->parent_count, &plan->coordinate_erased[0],
-                        &codec->permanent_erased[0], &codec->permanent_locator16[0],
+                        permanent_erased.data(), permanent_locator.data(),
                         &plan->locator16[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
-                if (plan->translated_low)
-                {
-                    plan->translated_low_locator16.resize(codec->parent_count);
-                    for (uint32_t i = 0; i < codec->parent_count; ++i)
-                    {
-                        plan->translated_low_locator16[i] = plan->locator16[
-                            TranslateHalfParentCoordinate(codec, i)];
-                    }
-                    plan->translated_low_factors16.resize(
-                        codec->parent_count / codec->padded_side - 1);
-                    leopard::ff16::PrepareLowDecode(
-                        codec->parent_count, codec->padded_side,
-                        plan->translated_low_factors16.data());
-                }
-#endif
             }
 #endif
         }
@@ -5840,6 +5876,7 @@ static leo2_result DecodePlanExecuteInternal(
         leopard2_internal::kDecodePathTiled;
     const bool fuse_high_reveal_scatter = !use_generic &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        !PlanUsesTranslatedLowDecode(plan) &&
         geometry.aligned_prefix_bytes != 0;
     void** const high_requested_output =
         work + static_cast<size_t>(codec->padded_side) * 2;
@@ -5880,7 +5917,6 @@ static leo2_result DecodePlanExecuteInternal(
         PopulateDecodeCoordinates(
             plan, original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
-        TranslateDecodeCoordinatesForExecution(plan, coordinate_data);
         const void* const* const coordinate_input =
             const_cast<const void* const*>(coordinate_data);
         ExecuteTransformDecodePass(
@@ -5910,7 +5946,8 @@ static leo2_result DecodePlanExecuteInternal(
         }
 #ifdef LEO2_ENABLE_TEST_HOOKS
         if (!use_generic &&
-            codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+            codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            !PlanUsesTranslatedLowDecode(plan))
         {
             g_test_high_scratch_reveal_shards.fetch_add(
                 plan->missing_originals.size(), std::memory_order_relaxed);
@@ -5919,7 +5956,6 @@ static leo2_result DecodePlanExecuteInternal(
         PopulateDecodeCoordinates(
             plan, original, recovery, geometry.aligned_prefix_bytes,
             geometry.tail_bytes, staging_slots, coordinate_data);
-        TranslateDecodeCoordinatesForExecution(plan, coordinate_data);
         const void* const* const coordinate_input =
             const_cast<const void* const*>(coordinate_data);
         ExecuteTransformDecodePass(
