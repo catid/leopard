@@ -1,0 +1,175 @@
+{
+  "schema": "leopard2-gf16-high-byte-tiling-evidence/v1",
+  "date_utc": "2026-07-21",
+  "status": "same_source_promoted_and_validated",
+  "bead": "leopard-79h.38.5.4.4",
+  "source_identity": {
+    "same_source_control": "d9f10817f6ccd41fc4a6436cf18199b7aca94109",
+    "production_implementation": "299783b9f230c54be1b10becac9cff7528f0c0df",
+    "initial_test_hardening": "89b3bf81b0f2f2cb2b04055b07ea5eb2765bfbbb",
+    "dispatch_narrowing": "7ecf5cbe3dd84cf39578edd35aa1c167c1b8ae56",
+    "final_test_hardening": "57e6c00796e8b434211530d0e60696ba6a74ddca",
+    "one_pass_preservation": "6c247bfa543936593c07971578c405c86e40580d",
+    "aggregate_diff_sha256_from_control": "d409bdbd365cb2704529c171ab1ba8f5abe9345f633e0a736d59dc0485157848",
+    "aggregate_diff_definition": "SHA-256 of git diff --binary d9f1081..6c247bf before this evidence file was added."
+  },
+  "change": {
+    "summary": "Split the exact legacy-high GF16 K=1000, R=200, 65536-byte qualified AUTO encode into two balanced 32768-byte end-to-end transform passes and reuse the same 2T work slots.",
+    "promotion_scope": {
+      "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+      "field": "LEO2_FIELD_GF16",
+      "K": 1000,
+      "R": 200,
+      "T": 256,
+      "shard_bytes": 65536,
+      "required_context": "AUTO on a startup-qualified AVX-512VL encode host whose reported baseline is AVX2",
+      "full_output_execution_backend": "AVX512",
+      "partial_output_execution_backend": "AVX2",
+      "excluded": "Every other K, R, T, shard length, ragged tail, explicit backend, and uncalibrated host retains the prior single-pass layout."
+    },
+    "source_policy": "Each 32768-byte execution pass supplies the full aligned public length of 65536 bytes as source_policy_bytes. This preserves the pre-candidate greater-than-16-KiB copy-first crossover. The legacy overload passes buffer_bytes for both arguments.",
+    "scratch_contract": "The public scratch query has no output-mask parameter, so every parity subset uses the same compact two-pass geometry in the promoted cell. Partial-mask AVX2 execution was therefore measured separately.",
+    "wire_format_changed": false,
+    "public_api_changed": false,
+    "arithmetic_order_within_each_byte_range_changed": false,
+    "hot_path_allocation_added": false
+  },
+  "same_source_mask_screen": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "method": {
+      "order_per_round": ["control", "candidate", "candidate", "control"],
+      "rounds": 3,
+      "calls_per_process": 8,
+      "warmups_per_process": 2,
+      "threads": 1,
+      "K": 1000,
+      "R": 200,
+      "shard_bytes": 65536,
+      "profile": "legacy_high_v1",
+      "field": "gf16",
+      "requested_backend": "auto",
+      "reported_context_backend": "avx2",
+      "seed": 1000200
+    },
+    "artifacts": {
+      "ignored_raw_json": ".research/leopard2/gf16-high-gap/byte_tile_mask_abba.json",
+      "raw_json_sha256": "e692af6c95a033056030a10e1316c10d2d2d07b92d961c0f7b3265b98feb8fe1",
+      "candidate_harness_sha256": "3ae7290bb94bc2c86586f46aaf74bba8f29b3b64dcd12a5e849f8968596cf923",
+      "control_harness_sha256": "b1f124ef28ba8f364fc3461c0d345e7950df8a97ce1be1bedbf26c564e05ad81",
+      "candidate_archive_sha256": "d8dd085e9515d591e35727e50c679bc1028396529ae88200dbfe975e5c182447",
+      "candidate_archive_bytes": 719594,
+      "control_archive_sha256": "305cfa425975226fe9036e8d4283dd4cfe5ec0139bd4b05c6e99f73cb5416326",
+      "control_archive_bytes": 717182
+    },
+    "cells": [
+      {
+        "mask": "all",
+        "round_control_over_candidate": [1.113050074, 1.111930698, 1.180215908],
+        "aggregate_geometric_speedup": 1.134622250,
+        "control_geometric_mean_us": 9442.299699,
+        "candidate_geometric_mean_us": 8321.976499,
+        "input_hash": "3266b1e40976e4ef",
+        "output_hash": "76921b6245fcb7e2",
+        "reserved_sibling_nonidle_delta_jiffies": 0
+      },
+      {
+        "mask": "prefix_0_through_198",
+        "round_control_over_candidate": [1.107248154, 1.102585763, 1.115492515],
+        "aggregate_geometric_speedup": 1.108429312,
+        "control_geometric_mean_us": 10125.364931,
+        "candidate_geometric_mean_us": 9134.876553,
+        "input_hash": "3266b1e40976e4ef",
+        "output_hash": "adbcb8825f55e14f",
+        "reserved_sibling_nonidle_delta_jiffies": 0
+      },
+      {
+        "mask": "indices_0_100_199",
+        "round_control_over_candidate": [1.123634056, 1.144884875, 1.173261044],
+        "aggregate_geometric_speedup": 1.147080211,
+        "control_geometric_mean_us": 10138.318147,
+        "candidate_geometric_mean_us": 8838.368972,
+        "input_hash": "3266b1e40976e4ef",
+        "output_hash": "cc15b8446ae344af",
+        "reserved_sibling_nonidle_delta_jiffies": 0
+      },
+      {
+        "mask": "index_0_only",
+        "round_control_over_candidate": [1.128642231, 1.122180034, 1.121406342],
+        "aggregate_geometric_speedup": 1.124071527,
+        "control_geometric_mean_us": 9092.423621,
+        "candidate_geometric_mean_us": 8088.830115,
+        "input_hash": "3266b1e40976e4ef",
+        "output_hash": "e9f6e3691e355520",
+        "reserved_sibling_nonidle_delta_jiffies": 0
+      }
+    ],
+    "scratch_bytes": {
+      "control": 33585728,
+      "candidate": 16808512,
+      "reduction_bytes": 16777216,
+      "reduction_percent": 49.957752
+    },
+    "correctness": "All 48 timed processes produced one identical input/output digest pair per mask; every reserved-sibling non-idle delta was zero. The later one-pass-preservation commit changes only the execution_tile_count==1 branch; the measured two-pass branch is byte-for-byte source-identical."
+  },
+  "pre_narrowing_neighbor_screen": {
+    "qualification": "Directional only: this screen preceded the final exact dispatch narrowing, although the promoted 64-KiB cell executes the same implementation and backend semantics.",
+    "raw_bundle": "/tmp/leo2-gf16-byte-tiling-d9f1081-20260721",
+    "raw_bundle_json_files": 36,
+    "raw_bundle_sha256": "000899c0cb951670298bed853794094baf747c8d92a47998739d1f5667c66b29",
+    "cells": [
+      {
+        "K": 1000,
+        "R": 200,
+        "shard_bytes": 65536,
+        "aggregate_geometric_speedup": 1.106349150,
+        "scratch_control": 33585728,
+        "scratch_candidate": 16808512
+      },
+      {
+        "K": 1000,
+        "R": 200,
+        "shard_bytes": 32768,
+        "aggregate_geometric_speedup": 0.999004974,
+        "dispatch_in_final_candidate": "single_pass"
+      },
+      {
+        "K": 4096,
+        "R": 512,
+        "shard_bytes": 4096,
+        "aggregate_geometric_speedup": 1.006061334,
+        "dispatch_in_final_candidate": "single_pass"
+      }
+    ]
+  },
+  "targeted_correctness": {
+    "release_after_final_narrowing": "15/15 focused tests passed.",
+    "release_before_final_narrowing": "15/15 focused tests passed.",
+    "clang_strict_before_final_narrowing": "15/15 focused tests passed with Clang 18, -Wall -Wextra -Wpedantic -Werror.",
+    "clang_asan_ubsan_before_final_narrowing": "15/15 focused tests passed with ASan+UBSan, leak detection, halt-on-error, and OMP_NUM_THREADS=1.",
+    "final_strict_and_sanitizer_state": "Post-narrowing Clang 18 strict Release and Clang 18 ASan+UBSan builds each passed all 15 focused tests. Strict flags were -Wall -Wextra -Wpedantic -Werror. Sanitizers used -O1 -g -fno-omit-frame-pointer -fno-sanitize-recover=all -fsanitize=address,undefined, ASAN leak detection and halt-on-error, UBSAN halt-on-error and stack traces, and OMP_NUM_THREADS=1.",
+    "campaign_scope": "Optimization-oriented validation by user direction: targeted parity differential tests, direct-algebra checks, dispatch/backend boundaries, alias/sentinel/concurrency tests, strict warnings, and ASan+UBSan. No broad fuzz campaign was run for this isolated optimization.",
+    "coverage": [
+      "all 200 parity shards byte-for-byte against the old leo_encode API",
+      "independent direct Lagrange evaluation of a GF16 symbol",
+      "dense, 199-output prefix, and holey three-output parity masks",
+      "unrequested-output sentinels and immutable source buffers",
+      "input/output overlap rejection",
+      "two concurrent callers reusing one immutable codec",
+      "explicit scalar, SSSE3, AVX2, AVX512, and NEON contexts retain one pass when supported",
+      "65536+64-byte and ragged 65536+2-byte calls retain one pass"
+    ]
+  },
+  "static_and_assembly_audit": {
+    "source_audit": "Public spans are validated before writes; every byte-tile offset remains within those spans; null outputs use disjoint compact work slots; codec/backend tables are immutable; each call owns its pointer array and scratch.",
+    "pre_narrowing_clang_object": "The separate ReedSolomonEncodeWithSourcePolicy symbol was present. The source-policy comparison compiled as cmp $0x4001 on the policy-byte argument, and legacy wrappers passed the ordinary buffer length for both byte arguments. Layout division remained in setup/outer-pass control rather than field byte loops.",
+    "final_object_state": "The final Clang strict object retains a distinct ReedSolomonEncodeWithSourcePolicy symbol at 0x290 and legacy ReedSolomonEncode wrappers at 0x24d0/0x2500. IFFT compares the third SysV argument against 0x4001, so the 16-KiB crossover uses full source_policy_bytes rather than the 32-KiB execution tile. Both legacy wrappers move buffer_bytes into that policy argument before calling the new symbol. EncodeLayout assembly gates tiling on K=0x3e8, R=0xc8, T=0x100, shard_bytes=0x10000, and qualified AUTO/context/backend checks before setting tile_count=2 and tile_bytes=0x8000. Division and tiling setup remain outside field byte loops."
+  },
+  "compatibility": {
+    "legacy_high_parity": "Byte-identical in targeted old-API comparisons and all existing legacy golden/matrix tests run before narrowing; the final narrowing changes only whether a call enters the optimization.",
+    "old_api_routed_to_new_engine": false,
+    "exact_leopard_main_benchmark": "Not performed here; the coordinating worker owns the final exact-main Leopard1 comparison."
+  },
+  "conclusion": "The exact promoted cell clears the 5% improvement rule for full output and every measured legal subset shape, with no wire/API change and approximately half the scratch. Broader K/R/length dispatch remains deliberately unpromoted pending independent same-source measurements."
+}
