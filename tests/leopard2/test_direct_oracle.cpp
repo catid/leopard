@@ -28,6 +28,7 @@
 
 #include "direct_oracle.h"
 
+#include <algorithm>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
@@ -40,6 +41,7 @@ struct Counts
 {
     uint64_t field_checks;
     uint64_t subspace_checks;
+    uint64_t barycentric_checks;
     uint64_t normalization_checks;
     uint64_t high_basis_cases;
     uint64_t high_recovered_symbols;
@@ -50,6 +52,7 @@ struct Counts
     Counts()
         : field_checks(0)
         , subspace_checks(0)
+        , barycentric_checks(0)
         , normalization_checks(0)
         , high_basis_cases(0)
         , high_recovered_symbols(0)
@@ -63,6 +66,64 @@ void require(bool condition, const std::string& message)
 {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+void test_aligned_coset_barycentric_denominators(
+    const BinaryField& field,
+    Counts* counts)
+{
+    /*
+        This is deliberately independent of Leopard2's generator/repair
+        implementation.  In Cantor coordinate order an aligned interval
+        a+V_d is an additive coset, so xor-by-x maps its other points onto
+        V_d without zero.  Verify the resulting constant derivative directly
+        with polynomial-basis field multiplication in both production fields.
+    */
+    const unsigned maximum_dimension = std::min(256u, field.order());
+    for (unsigned dimension = 1;
+         dimension <= maximum_dimension;
+         dimension <<= 1)
+    {
+        Element expected = 1;
+        for (unsigned difference = 1;
+             difference < dimension;
+             ++difference)
+        {
+            expected = field.multiply(
+                expected, static_cast<Element>(difference));
+        }
+        require(expected != 0,
+            "aligned-coset barycentric denominator is zero");
+
+        std::vector<unsigned> begins;
+        begins.push_back(0);
+        if (dimension * 2 <= field.order())
+            begins.push_back(dimension);
+        const unsigned last = field.order() - dimension;
+        if (std::find(begins.begin(), begins.end(), last) == begins.end())
+            begins.push_back(last);
+
+        for (size_t begin_i = 0; begin_i < begins.size(); ++begin_i)
+        {
+            const unsigned begin = begins[begin_i];
+            require((begin & (dimension - 1)) == 0,
+                "test coset is not aligned");
+            for (unsigned x = begin; x < begin + dimension; ++x)
+            {
+                Element denominator = 1;
+                for (unsigned s = begin; s < begin + dimension; ++s)
+                {
+                    if (s == x)
+                        continue;
+                    denominator = field.multiply(denominator,
+                        static_cast<Element>(x ^ s));
+                }
+                require(denominator == expected,
+                    "aligned-coset barycentric denominator is not constant");
+                ++counts->barycentric_checks;
+            }
+        }
+    }
 }
 
 std::string context(unsigned n, unsigned t, uint32_t mask, unsigned basis_index)
@@ -519,6 +580,8 @@ int main()
         test_field(gf4, true, &counts);
         test_field(gf8, true, &counts);
         test_field(gf16, false, &counts);
+        test_aligned_coset_barycentric_denominators(gf8, &counts);
+        test_aligned_coset_barycentric_denominators(gf16, &counts);
         test_gf4_field_laws(gf4, &counts);
         test_subspaces(gf4, &counts);
         test_active_normalization_identity(gf4, &counts);
@@ -530,6 +593,7 @@ int main()
             << "PASS direct_oracle"
             << " field_checks=" << counts.field_checks
             << " subspace_checks=" << counts.subspace_checks
+            << " barycentric_checks=" << counts.barycentric_checks
             << " normalization_checks=" << counts.normalization_checks
             << " high_basis_cases=" << counts.high_basis_cases
             << " high_recovered_symbols=" << counts.high_recovered_symbols

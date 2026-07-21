@@ -60,6 +60,20 @@ are removed.  Nonzero coefficients are stored in Leopard logarithmic form so
 execution does no field setup, matrix work, locator work, or allocation.
 Coefficient one is ordered first when present and is specialized to copy/XOR.
 
+When the complete parent systematic set is an aligned additive coset
+`a + V_d`, XOR by any `x` in the coset permutes the other coordinates onto
+`V_d` without zero.  Therefore every public systematic coordinate has the
+same denominator
+
+    c_d = product over nonzero u in V_d of u.
+
+Codec setup computes this product and its inverse once, then fills the public
+weight vector.  The general per-coordinate calculation remains the fallback
+for a systematic interval that is not an aligned power-of-two coset.  This
+reduces setup from `O(K D)` to `O(D + K)` for every low-profile bounded direct
+encoder/repair codec and for equal-rounded `P=T` legacy-high direct repair;
+it does not change generator coefficients or wire bytes.
+
 The MDS property makes any valid selected `L x L` parity submatrix invertible.
 The implementation nevertheless treats a zero pivot as a plan-preparation
 failure and safely falls back to the transform decoder.
@@ -91,7 +105,10 @@ The production API test now checks:
   `2,34,64,66,1026`;
 - high and low direct repair in GF8 and GF16, including skipped low-index parity
   rows, repeated immutable plan execution, and comparison with the forced
-  generic decoder; and
+  generic decoder;
+- an independent direct-algebra check that enumerates aligned cosets through
+  dimension 256 in GF8 and GF16 and verifies every barycentric denominator
+  against `product(V_d \\ {0})`; and
 - the accepted `K=16` and fallback `K=17` scratch/dispatch boundary.
 
 Validation commands completed on 2026-07-16:

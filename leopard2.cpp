@@ -1353,6 +1353,35 @@ static bool PrepareDirectBarycentricWeights(
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
     const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
     weights.resize(codec->original_count);
+
+    /*
+        A complete aligned power-of-two coordinate interval is an additive
+        coset in Leopard's Cantor index order.  For every x in that coset,
+        xor-by-x maps the other coordinates onto the same nonzero subspace
+        elements.  Its vanishing-polynomial derivative, and therefore every
+        systematic barycentric denominator, is constant.  Equal-rounded high
+        profiles and every low profile have this shape, so compute the product
+        once instead of repeating the same O(D) loop for each public original.
+    */
+    const uint32_t dimension = codec->parent_dimension;
+    if (dimension != 0 && (dimension & (dimension - 1)) == 0 &&
+        (systematic_begin & (dimension - 1)) == 0)
+    {
+        Element denominator = 1;
+        for (uint32_t difference = 1; difference < dimension; ++difference)
+        {
+            denominator = Field::Multiply(
+                denominator, static_cast<Element>(difference));
+        }
+        if (denominator == 0)
+        {
+            weights.clear();
+            return false;
+        }
+        std::fill(weights.begin(), weights.end(), Field::Inverse(denominator));
+        return true;
+    }
+
     for (uint32_t original = 0; original < codec->original_count; ++original)
     {
         const uint32_t coordinate = systematic_begin + original;
