@@ -679,16 +679,18 @@ def verify_decode_fusion_sources(
         "(codec->context->backend==LEO2_BACKEND_SSSE3||"
         "codec->context->backend==LEO2_BACKEND_AVX2||"
         "codec->context->backend==LEO2_BACKEND_AVX512);",
-        "returncodec->profile==LEO2_PROFILE_LOW_V1&&"
+        "return(plan->codec->profile==LEO2_PROFILE_LOW_V1||"
+        "PlanUsesTranslatedLowDecode(plan))&&"
         "aligned_prefix_bytes!=0;",
         "constboolfuse_generic_reveal_scatter=use_generic&&"
         "UseFusedGenericRevealScatter(codec,geometry.aligned_prefix_bytes);",
         "constboolfuse_low_reveal_scatter=!use_generic&&"
-        "UseFusedLowRevealScatter(codec,geometry.aligned_prefix_bytes);",
+        "UseFusedLowRevealScatter(plan,geometry.aligned_prefix_bytes);",
         "constboolreveal_aligned_outputs_in_place="
         "!(fuse_generic_reveal_scatter||fuse_low_reveal_scatter);",
         "constboolfuse_high_reveal_scatter=!use_generic&&"
         "codec->profile==LEO2_PROFILE_LEGACY_HIGH_V1&&"
+        "!PlanUsesTranslatedLowDecode(plan)&&"
         "geometry.aligned_prefix_bytes!=0;",
         "ExecuteTransformDecodePass(plan,geometry.aligned_prefix_bytes,"
         "coordinate_input,work,use_generic,use_tiled,"
@@ -1379,6 +1381,22 @@ def select_decode_execution(
             geometry["parent_dimension"] <= 256 and loss_count <= 4):
         return DecodeSelection("direct", "direct", 0, 0)
 
+    # With P=ceil_pow2(K)=ceil_pow2(R)=T and N=2P, xor P translates the
+    # immutable legacy-high codeword into the Algorithm 4 low-profile view.
+    # Production makes this choice after direct repair and before the ordinary
+    # Algorithm 5 workspace selector.  Forced generic is the sole transform
+    # override that deliberately retains the original coordinate view.
+    translated_low = (
+        force != "generic" and profile == "high" and padded >= 2 and
+        parent == 2 * padded and geometry["parent_dimension"] == padded and
+        ceil_power_of_two(k) == padded
+    )
+    if translated_low:
+        return DecodeSelection(
+            "tiled" if force == "tiled" else "materialized",
+            "translated_low", 0, parent,
+        )
+
     tiled_slots = 2 * padded + (loss_count if profile == "high" else 0)
     materialized_slots = parent
     balanced = (
@@ -1527,8 +1545,13 @@ def apply_decode_backend_accounting(
     tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
     aligned = shard_bytes - tail
     use_generic = selection.path == "generic"
-    use_low_specialized = not use_generic and profile == "low"
-    use_high_specialized = not use_generic and profile == "high"
+    translated_low = selection.rule == "translated_low"
+    use_low_specialized = not use_generic and (
+        profile == "low" or translated_low
+    )
+    use_high_specialized = (
+        not use_generic and profile == "high" and not translated_low
+    )
     fuse_aligned_reveal = (
         aligned != 0 and
         (use_low_specialized or use_high_specialized or
@@ -2477,7 +2500,7 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
                 args.k, args.r, parent, padded, profile,
                 args.shard_bytes, losses,
             )
-        elif profile == "high":
+        elif profile == "high" and selection.rule != "translated_low":
             schedule = model_high_decode(
                 args.k, args.r, parent, padded, args.shard_bytes,
                 losses, args.field,

@@ -149,8 +149,18 @@ The locator translates too:
 Consequently, a legacy-high codec can execute Algorithm 4 through translated
 coordinate, locator, and output views without changing its encoder, profile,
 field, or wire bytes.  This applies to every pair whose K and R round to the
-same P, not only exact K=R; `(127,65)` is an example.  The candidate must remain
-forced until exhaustive equivalence and pinned crossover evidence exist.
+same P, not only exact K=R; `(127,65)` is an example.
+
+Exhaustive small cases, randomized GF8/GF16 patterns, every available backend,
+unaligned tails, batches, concurrent immutable-plan execution, old-data
+recovery, and parity rebuilds established byte equivalence.  A quiet pinned
+counterbalanced comparison then measured translated Algorithm 4 at
+1.139x-1.683x the native Algorithm 5 execution speed across seven representative
+64-byte through 64-KiB GF8/GF16 cells, with identical workload digests.
+Production AUTO therefore selects this view for legacy-high transform plans
+when `P=T` and `N=2P`.  The direct few-loss path still wins before this choice,
+forced generic remains generic, and test hooks retain forced Algorithm 4 and
+Algorithm 5 controls for differential evidence.
 
 ## Algorithm 5 zero-shift cancellation
 
@@ -191,7 +201,9 @@ per-cell Leopard2-versus-Leopard1 guarantee:
   can be shortened and punctured;
 - the paper's K is parent dimension, not necessarily public K;
 - the XDRS harness selects the low implementation at K<=128 and high above it,
-  whereas Leopard2 AUTO currently selects legacy high whenever public R<=K;
+  whereas Leopard2's persistent profile still selects legacy high whenever
+  public R<=K (its internal decoder may use the proven translated Algorithm 4
+  view without changing that code identity);
 - the reported groups contain 1,024 codewords with locator setup amortized once
   and random erasure patterns; and
 - the executable comparison baseline is not necessarily the exact current

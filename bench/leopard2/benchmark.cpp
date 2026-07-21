@@ -29,7 +29,8 @@
 #include "leopard.h"
 #include "leopard2.h"
 #include "Leopard2Dispatch.h"
-#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION) || \
+    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
 #include "Leopard2Direct.h"
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
@@ -114,6 +115,7 @@ struct Options
     bool attest_source;
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     bool force_translated_low;
+    bool force_native_high;
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     enum HighEvaluatorMode
@@ -149,6 +151,7 @@ struct Options
         , attest_source(false)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         , force_translated_low(false)
+        , force_native_high(false)
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         , high_evaluator_mode(HighEvaluatorUnset)
@@ -417,6 +420,8 @@ static void Usage(std::ostream& output, const char* program)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         << "  --force-translated-low\n"
         << "                         Attribution-only: run high wire through Algorithm 4\n"
+        << "  --force-native-high\n"
+        << "                         Attribution-only: run high wire through Algorithm 5\n"
 #endif
         << "  --json PATH           JSON output path, or - for stdout\n"
         << "  --help                 Show this message\n";
@@ -471,6 +476,8 @@ static Options ParseOptions(int argc, char** argv)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         else if (argument == "--force-translated-low")
             options.force_translated_low = true;
+        else if (argument == "--force-native-high")
+            options.force_native_high = true;
 #endif
         else if (argument == "--json" || argument == "--output") options.output = NeedValue(argc, argv, i);
         else Fail("unknown argument: " + argument);
@@ -515,7 +522,9 @@ static Options ParseOptions(int argc, char** argv)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if (options.attest_source)
         Fail("the high/low duality benchmark does not support --attest-source");
-    if (options.force_translated_low &&
+    if (options.force_translated_low && options.force_native_high)
+        Fail("translated-low and native-high controls are mutually exclusive");
+    if ((options.force_translated_low || options.force_native_high) &&
         (options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
          (options.field != LEO2_FIELD_GF8 &&
           options.field != LEO2_FIELD_GF16) ||
@@ -1071,11 +1080,21 @@ static int Run(const Options& options)
         &codec_options, &codec),
         "codec create");
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
-    if (options.force_translated_low)
+    if (options.force_translated_low || options.force_native_high)
     {
         RequireLeo2(leo2_test_codec_set_decode_mode(
-            codec, LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
-            "force translated-low decoder");
+            codec, options.force_translated_low
+                ? LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW
+                : LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+            "force attributed decoder");
+    }
+#endif
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    if (leo2_test_codec_translated_low_capable(codec))
+    {
+        RequireLeo2(leo2_test_codec_set_decode_mode(
+            codec, LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+            "force native high evaluator attribution");
     }
 #endif
 
@@ -1094,8 +1113,9 @@ static int Run(const Options& options)
     RequireLeo2(leo2_decode_plan_create(
         codec, &original_present[0], &recovery_present[0], &plan), "decode plan create");
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
-    if (leo2_test_decode_plan_uses_translated_low(plan) !=
-        (options.force_translated_low ? 1 : 0))
+    if ((options.force_translated_low || options.force_native_high) &&
+        leo2_test_decode_plan_uses_translated_low(plan) !=
+            (options.force_translated_low ? 1 : 0))
         Fail("decode plan did not capture translated-low attribution mode");
 #endif
     RequireLeo2(leo2_decode_plan_scratch_size(plan, options.bytes, &decode_scratch_bytes),
@@ -1194,11 +1214,21 @@ static int Run(const Options& options)
             &codec_options, &temporary),
             "timed codec create");
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
-        if (options.force_translated_low)
+        if (options.force_translated_low || options.force_native_high)
         {
             RequireLeo2(leo2_test_codec_set_decode_mode(
-                temporary, LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
-                "timed force translated-low decoder");
+                temporary, options.force_translated_low
+                    ? LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW
+                    : LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+                "timed force attributed decoder");
+        }
+#endif
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+        if (leo2_test_codec_translated_low_capable(temporary))
+        {
+            RequireLeo2(leo2_test_codec_set_decode_mode(
+                temporary, LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+                "timed force native high evaluator attribution");
         }
 #endif
         leo2_codec_destroy(temporary);
@@ -1367,7 +1397,9 @@ static int Run(const Options& options)
          << (options.force_materialized_decode ? "true" : "false") << ",\n";
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     json << "    \"force_translated_low\": "
-         << (options.force_translated_low ? "true" : "false") << ",\n";
+         << (options.force_translated_low ? "true" : "false") << ",\n"
+         << "    \"force_native_high\": "
+         << (options.force_native_high ? "true" : "false") << ",\n";
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     json << "    \"high_evaluator_mode\": \""

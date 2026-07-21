@@ -20,6 +20,7 @@
 #endif
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 #include "Leopard2Backend.h"
+#include "Leopard2Direct.h"
 #include "Leopard2Plan.h"
 #include "LeopardFF16.h"
 #include "LeopardFF8.h"
@@ -211,6 +212,11 @@ void verify_block_zero_only_cancellation_case(
     require_result(leo2_codec_create(context, k, k,
         LEO2_PROFILE_LEGACY_HIGH_V1, field, &specialized_options,
         &specialized_codec), "block-zero-only specialized codec create");
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    require_result(leo2_test_codec_set_decode_mode(specialized_codec,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+        "block-zero-only force native Algorithm 5");
+#endif
 
     leo2_codec_options generic_options = {};
     generic_options.struct_size = sizeof(generic_options);
@@ -664,6 +670,14 @@ void run_case(leo2_context* context, const Case& test, size_t case_index,
     require_result(leo2_codec_create(context, test.k, test.r,
         LEO2_PROFILE_LEGACY_HIGH_V1, test.field, &codec_options, &codec),
         "codec create");
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    if (leo2_test_codec_translated_low_capable(codec))
+    {
+        require_result(leo2_test_codec_set_decode_mode(codec,
+            LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+            "force native Algorithm 5");
+    }
+#endif
 
     AlignedBytes new_recovery_storage(static_cast<size_t>(test.r) * stride);
     std::vector<void*> new_recovery_output(test.r);

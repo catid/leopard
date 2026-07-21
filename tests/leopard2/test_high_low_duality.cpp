@@ -236,26 +236,34 @@ Shards decode(
     const std::vector<uint8_t>& original_present,
     const std::vector<uint8_t>& recovery_present,
     size_t bytes,
-    bool translated,
+    leo2_test_decode_mode decode_mode,
     bool test_plan_immutability,
     bool expect_tiled)
 {
+    const bool translated =
+        decode_mode == LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW;
     require_success(leo2_test_codec_set_decode_mode(codec,
-        translated ? LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW
-                   : LEO2_TEST_DECODE_AUTO),
+        decode_mode),
         "set decode mode");
     leo2_decode_plan* plan = NULL;
     require_success(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &plan), "decode plan create");
     require(plan != NULL, "decode plan create returned null");
-    require(leo2_test_decode_plan_uses_translated_low(plan) ==
-            (translated ? 1 : 0),
-        "decode plan did not capture the requested translation mode");
+    const bool has_missing_original = std::find(
+        original_present.begin(), original_present.end(), 0) !=
+            original_present.end();
+    if (decode_mode != LEO2_TEST_DECODE_AUTO)
+    {
+        require(leo2_test_decode_plan_uses_translated_low(plan) ==
+                (translated && has_missing_original ? 1 : 0),
+            "decode plan did not capture the requested translation mode");
+    }
     if (test_plan_immutability)
     {
         require_success(leo2_test_codec_set_decode_mode(
             codec, LEO2_TEST_DECODE_AUTO), "reset codec decode mode");
-        require(leo2_test_decode_plan_uses_translated_low(plan) == 1,
+        require(leo2_test_decode_plan_uses_translated_low(plan) ==
+                (translated && has_missing_original ? 1 : 0),
             "codec mutation changed immutable plan translation metadata");
     }
 
@@ -291,8 +299,8 @@ Shards decode(
                 : leopard2_internal::kDecodePathMaterialized),
             "translated plan selected the wrong forced workspace traversal");
         require(path.rule ==
-                leopard2_internal::kDecodeRuleTranslatedLowDiagnostic,
-            "translated plan did not report its diagnostic dispatch rule");
+                leopard2_internal::kDecodeRuleTranslatedLow,
+            "translated plan did not report its production dispatch rule");
         require(path.required_work_slots == leo2_codec_parent_count(codec),
             "translated P=T plan did not report its exact N-slot workspace");
     }
@@ -396,15 +404,18 @@ void run_pattern(
     Counts* counts)
 {
     const Shards translated = decode(translated_high, originals, recovery,
-        original_present, recovery_present, bytes, true,
+        original_present, recovery_present, bytes,
+        LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW,
         test_plan_immutability, false);
     const Shards translated_tiled = decode(translated_high_tiled, originals,
-        recovery, original_present, recovery_present, bytes, true, false,
-        true);
+        recovery, original_present, recovery_present, bytes,
+        LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW, false, true);
     const Shards high = decode(ordinary_high, originals, recovery,
-        original_present, recovery_present, bytes, false, false, false);
+        original_present, recovery_present, bytes,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH, false, false);
     const Shards low = decode(ordinary_low, originals, recovery,
-        original_present, recovery_present, bytes, false, false, false);
+        original_present, recovery_present, bytes,
+        LEO2_TEST_DECODE_AUTO, false, false);
     require_recovery(originals, translated, translated_tiled, high, low,
         original_present, counts);
     Shards complete = originals;
@@ -478,8 +489,7 @@ void run_case(
     std::vector<uint8_t> all_recovery_present(r, 1);
     run_pattern(translated_high, translated_high_tiled, ordinary_high,
         ordinary_low, originals, high_recovery, all_original_present,
-        all_recovery_present, bytes, true, counts);
-    tested_immutability = true;
+        all_recovery_present, bytes, false, counts);
 
     // Keep surplus parity present so deterministic virtual erasures, fixed
     // shortening, and puncturing all participate in the translated plan.
@@ -489,7 +499,8 @@ void run_case(
         surplus_original_present[(i * 7u + 1u) % k] = 0;
     run_pattern(translated_high, translated_high_tiled, ordinary_high,
         ordinary_low, originals, high_recovery, surplus_original_present,
-        all_recovery_present, bytes, false, counts);
+        all_recovery_present, bytes, true, counts);
+    tested_immutability = true;
 
     // This is the paper's balanced full-loss corner and the production
     // selector's existing generic-special-case boundary.
@@ -503,14 +514,15 @@ void run_case(
         leo2_codec* automatic_high = create_codec(context, k, r,
             LEO2_PROFILE_LEGACY_HIGH_V1, field, 0);
         require_selected_path(automatic_high, none_original_present,
-            all_recovery_present, bytes, leopard2_internal::kDecodePathGeneric,
-            leopard2_internal::kDecodeRuleBalancedGeneric);
-        const Shards generic = decode(automatic_high, originals, high_recovery,
-            none_original_present, all_recovery_present, bytes, false, false,
-            false);
+            all_recovery_present, bytes,
+            leopard2_internal::kDecodePathMaterialized,
+            leopard2_internal::kDecodeRuleTranslatedLow);
+        const Shards automatic = decode(automatic_high, originals, high_recovery,
+            none_original_present, all_recovery_present, bytes,
+            LEO2_TEST_DECODE_AUTO, false, false);
         for (unsigned i = 0; i < k; ++i)
-            require(generic[i] == originals[i],
-                "balanced generic special case disagrees with translated Algorithm 4");
+            require(automatic[i] == originals[i],
+                "production translated Algorithm 4 disagrees with source");
         leo2_codec_destroy(automatic_high);
     }
 
@@ -584,6 +596,9 @@ void test_rejection(leo2_context* context)
         LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW), LEO2_UNSUPPORTED,
         "reject unequal rounded sides");
     require_result(leo2_test_codec_set_decode_mode(unequal,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH), LEO2_UNSUPPORTED,
+        "reject native-high control outside the duality region");
+    require_result(leo2_test_codec_set_decode_mode(unequal,
         static_cast<leo2_test_decode_mode>(99)), LEO2_INVALID_ARGUMENT,
         "reject unknown decode mode");
     leo2_codec_destroy(unequal);
@@ -594,6 +609,9 @@ void test_rejection(leo2_context* context)
     require_result(leo2_test_codec_set_decode_mode(forced_generic,
         LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW), LEO2_INVALID_ARGUMENT,
         "reject translation with forced generic decoder");
+    require_result(leo2_test_codec_set_decode_mode(forced_generic,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH), LEO2_INVALID_ARGUMENT,
+        "reject native-high control with forced generic decoder");
     leo2_codec_destroy(forced_generic);
 }
 
@@ -610,6 +628,41 @@ void test_direct_dispatch_bypass(leo2_context* context)
     require_selected_path(automatic, original_present, recovery_present, 64,
         leopard2_internal::kDecodePathDirect,
         leopard2_internal::kDecodeRuleDirect);
+
+    // The native Algorithm 5 control exists only in hook builds and must
+    // bypass production direct repair so attribution cannot silently time the
+    // small-loss solver instead of the requested transform.
+    require_success(leo2_test_codec_set_decode_mode(automatic,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+        "force native Algorithm 5 direct bypass");
+    require_selected_path(automatic, original_present, recovery_present, 64,
+        leopard2_internal::kDecodePathMaterialized,
+        leopard2_internal::kDecodeRuleWorkspaceMaterialized);
+    require_success(leo2_test_codec_set_decode_mode(automatic,
+        LEO2_TEST_DECODE_AUTO), "restore automatic direct repair");
+    require_selected_path(automatic, original_present, recovery_present, 64,
+        leopard2_internal::kDecodePathDirect,
+        leopard2_internal::kDecodeRuleDirect);
+
+    // Once the measured direct-repair region is exceeded, production AUTO
+    // deterministically selects the translated Algorithm 4 plan.
+    for (unsigned i = 0; i < 5; ++i)
+        original_present[i] = 0;
+    leo2_decode_plan* automatic_transform_plan = NULL;
+    require_success(leo2_decode_plan_create(automatic, &original_present[0],
+        &recovery_present[0], &automatic_transform_plan),
+        "automatic translated plan create");
+    require(leo2_test_decode_plan_uses_translated_low(
+                automatic_transform_plan) == 1,
+        "production AUTO did not select translated Algorithm 4");
+    leopard2_internal::DecodePathInfo automatic_path;
+    require_success(leopard2_internal::GetDecodePlanPathInfo(
+        automatic_transform_plan, 64, false, &automatic_path),
+        "automatic translated path introspection");
+    require(automatic_path.path == leopard2_internal::kDecodePathMaterialized &&
+            automatic_path.rule == leopard2_internal::kDecodeRuleTranslatedLow,
+        "production AUTO reported the wrong translated dispatch rule");
+    leo2_decode_plan_destroy(automatic_transform_plan);
     leo2_codec_destroy(automatic);
 
     leo2_codec* translated = create_codec(context, k, r,
@@ -620,7 +673,14 @@ void test_direct_dispatch_bypass(leo2_context* context)
         "force translated direct-bypass plan");
     require_selected_path(translated, original_present, recovery_present, 64,
         leopard2_internal::kDecodePathMaterialized,
-        leopard2_internal::kDecodeRuleTranslatedLowDiagnostic);
+        leopard2_internal::kDecodeRuleTranslatedLow);
+
+    require_success(leo2_test_codec_set_decode_mode(translated,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+        "force native Algorithm 5 control");
+    require_selected_path(translated, original_present, recovery_present, 64,
+        leopard2_internal::kDecodePathMaterialized,
+        leopard2_internal::kDecodeRuleForcedMaterialized);
     leo2_codec_destroy(translated);
 }
 
@@ -659,7 +719,8 @@ void test_legacy_wire_and_recovery(leo2_context* context)
         LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
         "enable translated old-data decode");
     const Shards translated = decode(codec, originals, parity,
-        original_present, recovery_present, bytes, true, false, false);
+        original_present, recovery_present, bytes,
+        LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW, false, false);
 
     const unsigned decode_work_count = leo_decode_work_count(k, r);
     require(decode_work_count >= k, "old Leopard decode work count failed");

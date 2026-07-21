@@ -161,14 +161,17 @@ struct leo2_codec
     // logarithms, for the bounded allocation-free direct encoder.
     std::vector<uint8_t> direct_generator_logs8;
     std::vector<uint16_t> direct_generator_logs16;
-#ifdef LEO2_ENABLE_TEST_HOOKS
-    leo2_test_encode_mode test_encode_mode;
-    leo2_test_decode_mode test_decode_mode;
+    // In the P=T,N=2P legacy-high region, coordinate xor P turns the parent
+    // into the Algorithm 4 low-profile view without changing public bytes.
+    // Keep that translated view immutable and code-dependent in the codec.
     std::vector<uint8_t> translated_low_permanent_erased;
     std::vector<uint8_t> translated_low_permanent_locator8;
     std::vector<uint16_t> translated_low_permanent_locator16;
     std::vector<uint8_t> translated_low_factors8;
     std::vector<uint16_t> translated_low_factors16;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leo2_test_encode_mode test_encode_mode;
+    leo2_test_decode_mode test_decode_mode;
 #endif
 };
 
@@ -220,14 +223,13 @@ struct leo2_decode_plan
     bool direct_xor;
     bool direct_copy;
     bool direct_repair;
-#ifdef LEO2_ENABLE_TEST_HOOKS
     /*
-        A forced legacy-high P=T plan executes an Algorithm 4 view translated
-        by xor P.  The plan captures this decision immutably; codec-owned
-        low-profile constants and execution-order plan metadata remain private.
+        A legacy-high P=T transform plan executes an Algorithm 4 view
+        translated by xor P.  The plan captures this decision immutably;
+        codec-owned low-profile constants and execution-order plan metadata
+        remain private.  Direct repair and forced generic plans leave it false.
     */
     bool translated_low;
-#endif
 };
 
 namespace leopard {
@@ -786,7 +788,6 @@ static uint32_t CeilPow2(uint64_t value)
     return result;
 }
 
-#if defined(LEO2_ENABLE_TEST_HOOKS) || defined(LEO_DEBUG)
 static bool CanUseTranslatedLowDecode(const leo2_codec* codec)
 {
     if (!codec || codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -796,16 +797,10 @@ static bool CanUseTranslatedLowDecode(const leo2_codec* codec)
         return false;
     return CeilPow2(codec->original_count) == codec->padded_side;
 }
-#endif
 
 static bool PlanUsesTranslatedLowDecode(const leo2_decode_plan* plan)
 {
-#ifdef LEO2_ENABLE_TEST_HOOKS
     return plan && plan->translated_low;
-#else
-    (void)plan;
-    return false;
-#endif
 }
 
 static uint32_t TranslateHalfParentCoordinate(
@@ -820,7 +815,6 @@ static uint32_t TranslateHalfParentCoordinate(
 static const std::vector<uint32_t>& DecodeExecutionRequestedCoordinates(
     const leo2_decode_plan* plan)
 {
-#ifdef LEO2_ENABLE_TEST_HOOKS
     if (plan->translated_low)
     {
         // A high-profile systematic coordinate is P+i.  Translation by xor P
@@ -828,7 +822,6 @@ static const std::vector<uint32_t>& DecodeExecutionRequestedCoordinates(
         // already stored in missing_originals in increasing order.
         return plan->missing_originals;
     }
-#endif
     return plan->requested_coordinates;
 }
 
@@ -2001,8 +1994,7 @@ static bool SelectTransformDecodePath(
             (codec->flags & LEO2_CODEC_FORCE_TILED_DECODE) != 0
                 ? leopard2_internal::kDecodePathTiled
                 : leopard2_internal::kDecodePathMaterialized;
-        selection.rule =
-            leopard2_internal::kDecodeRuleTranslatedLowDiagnostic;
+        selection.rule = leopard2_internal::kDecodeRuleTranslatedLow;
         selection.matching_auto_rules = 0;
         // In this exact duality region N=2P, so both low-profile execution
         // forms own N shard slots.  Forced tiled/materialized controls compare
@@ -2263,10 +2255,8 @@ static void ExecuteTransformDecodePass(
     {
         const uint8_t* low_locator = plan->locator8.data();
         const uint8_t* low_factors = codec->fixed_factors8.data();
-#ifdef LEO2_ENABLE_TEST_HOOKS
         if (plan->translated_low)
             low_factors = codec->translated_low_factors8.data();
-#endif
         if (use_generic)
         {
             const leopard2_internal::OutputDependencyView dependencies =
@@ -2356,10 +2346,8 @@ static void ExecuteTransformDecodePass(
     {
         const uint16_t* low_locator = plan->locator16.data();
         const uint16_t* low_factors = codec->fixed_factors16.data();
-#ifdef LEO2_ENABLE_TEST_HOOKS
         if (plan->translated_low)
             low_factors = codec->translated_low_factors16.data();
-#endif
         if (use_generic)
         {
             const leopard2_internal::OutputDependencyView dependencies =
@@ -4748,8 +4736,11 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             for (uint32_t i = padded + recovery_count; i < parent; ++i)
                 codec->permanent_erased[i] = 1;
         }
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        if (CanUseTranslatedLowDecode(codec))
+        const bool specialized =
+            (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
+        const bool prepare_translated_low =
+            specialized && CanUseTranslatedLowDecode(codec);
+        if (prepare_translated_low)
         {
             codec->translated_low_permanent_erased.resize(parent);
             for (uint32_t i = 0; i < parent; ++i)
@@ -4759,10 +4750,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                         TranslateHalfParentCoordinate(codec, i)];
             }
         }
-#endif
-
-        const bool specialized =
-            (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
         const uint32_t permanent_erasure_count =
             profile == LEO2_PROFILE_LEGACY_HIGH_V1
                 ? padded - recovery_count
@@ -4800,7 +4787,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 codec->permanent_locator8.resize(parent);
                 leopard::ff8::PrepareDecode(parent,
                     &codec->permanent_erased[0], &codec->permanent_locator8[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
                 if (!codec->translated_low_permanent_erased.empty())
                 {
                     codec->translated_low_permanent_locator8.resize(parent);
@@ -4808,7 +4794,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                         codec->translated_low_permanent_erased.data(),
                         codec->translated_low_permanent_locator8.data());
                 }
-#endif
             }
             if (specialized && padded >= 2)
             {
@@ -4823,15 +4808,13 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                     codec->fixed_factors8.resize(parent);
                     leopard::ff8::PrepareHighDecode(
                         parent, padded, &codec->fixed_factors8[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
-                    if (CanUseTranslatedLowDecode(codec))
+                    if (prepare_translated_low)
                     {
                         codec->translated_low_factors8.resize(
                             parent / padded - 1);
                         leopard::ff8::PrepareLowDecode(parent, padded,
                             codec->translated_low_factors8.data());
                     }
-#endif
                 }
             }
         }
@@ -4859,7 +4842,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 codec->permanent_locator16.resize(parent);
                 leopard::ff16::PrepareDecode(parent,
                     &codec->permanent_erased[0], &codec->permanent_locator16[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
                 if (!codec->translated_low_permanent_erased.empty())
                 {
                     codec->translated_low_permanent_locator16.resize(parent);
@@ -4867,7 +4849,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                         codec->translated_low_permanent_erased.data(),
                         codec->translated_low_permanent_locator16.data());
                 }
-#endif
             }
             if (specialized && padded >= 2)
             {
@@ -4882,15 +4863,13 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                     codec->fixed_factors16.resize(parent);
                     leopard::ff16::PrepareHighDecode(
                         parent, padded, &codec->fixed_factors16[0]);
-#ifdef LEO2_ENABLE_TEST_HOOKS
-                    if (CanUseTranslatedLowDecode(codec))
+                    if (prepare_translated_low)
                     {
                         codec->translated_low_factors16.resize(
                             parent / padded - 1);
                         leopard::ff16::PrepareLowDecode(parent, padded,
                             codec->translated_low_factors16.data());
                     }
-#endif
                 }
             }
         }
@@ -4974,9 +4953,10 @@ LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
     leo2_test_decode_mode mode)
 {
     if (!codec || (mode != LEO2_TEST_DECODE_AUTO &&
-                   mode != LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW))
+                   mode != LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW &&
+                   mode != LEO2_TEST_DECODE_FORCE_NATIVE_HIGH))
         return LEO2_INVALID_ARGUMENT;
-    if (mode == LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW)
+    if (mode != LEO2_TEST_DECODE_AUTO)
     {
         if (!CanUseTranslatedLowDecode(codec))
             return LEO2_UNSUPPORTED;
@@ -5501,10 +5481,10 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     try
     {
         plan->codec = codec;
+        plan->translated_low = false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
-        plan->translated_low =
-            codec->test_decode_mode == LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW;
-        if (plan->translated_low && !CanUseTranslatedLowDecode(codec))
+        if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO &&
+            !CanUseTranslatedLowDecode(codec))
         {
             delete plan;
             return LEO2_INTERNAL_ERROR;
@@ -5600,8 +5580,13 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             }
         }
 
+        bool force_test_transform = false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        force_test_transform =
+            codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
+#endif
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
-            !PlanUsesTranslatedLowDecode(plan) &&
+            !force_test_transform &&
             missing_original_count <= kDirectMaxLosses)
         {
 #ifdef LEO_HAS_FF8
@@ -5625,6 +5610,16 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             !plan->direct_repair)
         {
+            plan->translated_low =
+                (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0 &&
+                CanUseTranslatedLowDecode(codec);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+            if (codec->test_decode_mode == LEO2_TEST_DECODE_FORCE_NATIVE_HIGH)
+                plan->translated_low = false;
+            else if (codec->test_decode_mode ==
+                     LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW)
+                plan->translated_low = true;
+#endif
             if (!PreparePlanExecutionMetadata(plan))
             {
                 delete plan;
@@ -5639,7 +5634,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (codec->field == LEO2_FIELD_GF8)
             {
                 plan->locator8.resize(codec->parent_count);
-#ifdef LEO2_ENABLE_TEST_HOOKS
                 const bool translated = PlanUsesTranslatedLowDecode(plan);
                 const std::vector<uint8_t>& permanent_locator = translated
                     ? codec->translated_low_permanent_locator8
@@ -5647,12 +5641,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 const std::vector<uint8_t>& permanent_erased = translated
                     ? codec->translated_low_permanent_erased
                     : codec->permanent_erased;
-#else
-                const std::vector<uint8_t>& permanent_locator =
-                    codec->permanent_locator8;
-                const std::vector<uint8_t>& permanent_erased =
-                    codec->permanent_erased;
-#endif
                 if (permanent_locator.empty())
                     leopard::ff8::PrepareDecode(codec->parent_count,
                         &plan->coordinate_erased[0], &plan->locator8[0]);
@@ -5667,7 +5655,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (codec->field == LEO2_FIELD_GF16)
             {
                 plan->locator16.resize(codec->parent_count);
-#ifdef LEO2_ENABLE_TEST_HOOKS
                 const bool translated = PlanUsesTranslatedLowDecode(plan);
                 const std::vector<uint16_t>& permanent_locator = translated
                     ? codec->translated_low_permanent_locator16
@@ -5675,12 +5662,6 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 const std::vector<uint8_t>& permanent_erased = translated
                     ? codec->translated_low_permanent_erased
                     : codec->permanent_erased;
-#else
-                const std::vector<uint16_t>& permanent_locator =
-                    codec->permanent_locator16;
-                const std::vector<uint8_t>& permanent_erased =
-                    codec->permanent_erased;
-#endif
                 if (permanent_locator.empty())
                     leopard::ff16::PrepareDecode(codec->parent_count,
                         &plan->coordinate_erased[0], &plan->locator16[0]);

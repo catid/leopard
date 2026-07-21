@@ -1241,9 +1241,8 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_decode_low_acceptance PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
-    # Diagnostic proof of the IT2026 Algorithm 4/5 coset-translation duality.
-    # The production archive has no forced translation control and remains
-    # unchanged until correctness and same-source timing justify promotion.
+    # Correctness and control-path proof for the production IT2026 Algorithm 4
+    # coset translation and its retained test-only Algorithm 5 comparison.
     add_executable(leopard2_high_low_duality_test
         tests/leopard2/test_high_low_duality.cpp)
     target_compile_definitions(leopard2_high_low_duality_test PRIVATE

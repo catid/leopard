@@ -54,7 +54,8 @@ typedef enum leo2_test_encode_mode {
 */
 typedef enum leo2_test_decode_mode {
     LEO2_TEST_DECODE_AUTO = 0,
-    LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW = 1
+    LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW = 1,
+    LEO2_TEST_DECODE_FORCE_NATIVE_HIGH = 2
 } leo2_test_decode_mode;
 
 LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(

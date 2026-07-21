@@ -1512,8 +1512,8 @@ void test_batch_materialized_capacity(leo2_context* context)
     require_result(leo2_decode_plan_scratch_size(
         tiled_plan, bytes, &tiled_scratch_bytes),
         "forced-tiled-capacity scratch query");
-    require(tiled_scratch_bytes > scratch_bytes,
-        "forced tiled query did not reserve its extra output slot");
+    require(tiled_scratch_bytes == scratch_bytes,
+        "translated tiled/materialized N-slot queries differ");
 
     std::vector<const void*> original_inputs = const_pointers(source);
     std::vector<const void*> recovery_inputs = const_pointers(parity);
@@ -2008,8 +2008,8 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                 k, bytes,
                 "AUTO, generic, and materialized scratch differ");
             require_balanced_family(
-                scratch[3] > scratch[2], k, bytes,
-                "forced tiled scratch did not retain its K output slots");
+                scratch[3] == scratch[2], k, bytes,
+                "translated tiled and materialized scratch differ at N=2P");
 
             size_t one_shot_scratch = 0;
             require_result(leo2_decode_scratch_size(
@@ -2143,13 +2143,17 @@ int main()
         for (size_t i = 0; i < balanced_full_recovery.size(); ++i)
             balanced_full_recovery[i] = static_cast<unsigned>(i);
         leo2_test_reset_generic_reveal_counts();
+        leo2_test_reset_low_reveal_counts();
         run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 257, balanced_full_recovery,
             std::vector<unsigned>(), &counts);
         require(leo2_test_generic_direct_reveal_shards() == 0,
             "small balanced decode unexpectedly fused reveal/scatter");
+        require(leo2_test_low_direct_reveal_shards() == 128 * 3,
+            "small balanced AUTO did not use translated Algorithm 4 reveal");
 
         leo2_test_reset_generic_reveal_counts();
+        leo2_test_reset_low_reveal_counts();
         run_decode_case(context, 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1,
             LEO2_FIELD_GF8, 4097, balanced_full_recovery,
             std::vector<unsigned>(), &counts);
@@ -2158,11 +2162,13 @@ int main()
             balanced_backend == LEO2_BACKEND_SSSE3 ||
             balanced_backend == LEO2_BACKEND_AVX2 ||
             balanced_backend == LEO2_BACKEND_AVX512
-                ? 128 * 3
+                ? 128
                 : 0;
         require(leo2_test_generic_direct_reveal_shards() ==
                 expected_direct_reveals,
-            "balanced generic reveal/scatter did not match backend policy");
+            "forced generic reveal/scatter did not match backend policy");
+        require(leo2_test_low_direct_reveal_shards() == 128 * 3,
+            "balanced AUTO did not use translated Algorithm 4 reveal");
 
         const size_t direct_gf16_boundaries[] = { 2, 34, 64, 66, 1026 };
         for (size_t count_i = 0;
