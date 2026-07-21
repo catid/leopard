@@ -670,20 +670,40 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         leo2_profile profile;
         leo2_field field;
         size_t bytes;
+        unsigned losses;
         bool expect_direct;
+        bool avx2_only;
     };
     const Case cases[] = {
-        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 33, true },
-        { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 33, false },
-        { 16, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66, true },
-        { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, 66, false }
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          33, 4, true, false },
+        { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          33, 4, false, false },
+        { 16, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          66, 4, true, false },
+        { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          66, 4, false, false },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 8, true, true },
+        { 65, 127, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 8, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 9, false, false },
+        { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 8, false, false },
+        { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 8, false, false },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          64, 8, false, false },
+        { 65, 65, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          64, 8, false, false }
     };
     for (size_t case_i = 0; case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
     {
         const Case& test = cases[case_i];
         std::vector<uint8_t> original_present(test.k, 1);
         std::vector<uint8_t> recovery_present(test.r, 1);
-        for (unsigned i = 0; i < 4; ++i)
+        for (unsigned i = 0; i < test.losses; ++i)
             original_present[i] = 0;
         // Force deterministic selection to skip parity zero.
         recovery_present[0] = 0;
@@ -713,7 +733,10 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         require_result(leo2_decode_plan_scratch_size(
             reference_plan, test.bytes, &reference_scratch_bytes),
             "direct-dispatch reference scratch query");
-        require(test.expect_direct
+        const bool expect_direct = test.expect_direct &&
+            (!test.avx2_only ||
+             leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+        require(expect_direct
                 ? scratch_bytes < reference_scratch_bytes
                 : scratch_bytes == reference_scratch_bytes,
             "direct-repair dispatch boundary selected the wrong scratch shape");
@@ -722,6 +745,48 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         leo2_decode_plan_destroy(plan);
         leo2_codec_destroy(codec);
     }
+}
+
+void test_expanded_direct_repair_execution(TestCounts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    require(result == LEO2_SUCCESS || result == LEO2_UNSUPPORTED,
+        "explicit AVX2 direct-repair context returned an unexpected result");
+    if (result == LEO2_UNSUPPORTED)
+    {
+        require(context == NULL,
+            "unsupported AVX2 direct-repair context was not cleared");
+        return;
+    }
+    require(context != NULL &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "explicit AVX2 direct-repair context selected the wrong backend");
+
+    test_direct_repair_dispatch_bounds(context);
+    const std::vector<unsigned> missing_originals = {
+        0, 1, 7, 16, 32, 48, 63, 64
+    };
+    const std::vector<unsigned> missing_recovery = { 0, 3, 64 };
+    const size_t byte_counts[] = {
+        1, 7, 31, 63, 64, 65, 127, 128, 1024, 1025
+    };
+    for (size_t i = 0;
+         i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++i)
+    {
+        run_decode_case(context, 65, 65,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            byte_counts[i], missing_originals, missing_recovery, counts);
+    }
+    run_decode_case(context, 65, 127,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
+    leo2_context_destroy(context);
 }
 
 void test_direct_repair_field_helpers()
@@ -2187,6 +2252,7 @@ int main()
 
         test_no_loss_no_op(context);
         test_direct_repair_dispatch_bounds(context);
+        test_expanded_direct_repair_execution(&counts);
         test_direct_repair_field_helpers();
         test_overlap_rejection(context);
         test_gf16_byte_granularity(context);
