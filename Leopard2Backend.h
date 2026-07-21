@@ -226,6 +226,28 @@ typedef void (*FF8HighEncodeOneBlock)(
     const uint8_t* forward_skew,
     uint64_t byte_count);
 
+// Complete dense legacy-high GF8 encode for the two- and four-coordinate
+// redundancy transforms.  The implementation consumes all original shards
+// directly, accumulates each shifted inverse transform into work[0..side),
+// and performs the final parity-coset transform in place.  This avoids the
+// compatibility path's per-message-block copy through work[side..2*side).
+//
+// side must be 2 or 4.  data[0..original_count) are read-only and disjoint
+// from the pairwise-disjoint work[0..side) outputs.  inverse_skew points at
+// the first message coset (the field table's +side entry), while forward_skew
+// points at the parity coset.  The callback is optional and may be used for a
+// contiguous requested parity prefix: it materializes all side parent-code
+// parity coordinates, placing unrequested or punctured suffix coordinates in
+// caller-provided scratch slots.
+typedef void (*FF8HighEncodeSmall)(
+    const void* const* data,
+    uint32_t original_count,
+    void* const* work,
+    uint32_t side,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count);
+
 // GF8 AVX2 boundary operation.  Applies four independent nonzero fixed
 // multipliers to the selected input rows and immediately executes the first
 // two inverse LCH layers.  weight_log values are ordinary GF8 logarithms: both
@@ -305,6 +327,7 @@ struct Ops
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;
     FF8HighEncodeOneBlock ff8_high_encode_one_block;
+    FF8HighEncodeSmall ff8_high_encode_small;
 };
 
 struct X86Features

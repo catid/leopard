@@ -6,6 +6,7 @@
 #include "Leopard2Backend.h"
 #include "LeopardCommon.h"
 
+#include <algorithm>
 #include <cstring>
 #include <immintrin.h>
 #include <memory>
@@ -250,6 +251,59 @@ static void AVX2FF8FFTButterfly2Out(
         *y_output++ = y_value;
     }
 }
+
+#if !defined(LEO2_AVX512_VARIANT)
+static void AVX2FF8IFFTButterfly2Out(
+    const void* x_input_pointer,
+    const void* y_input_pointer,
+    void* x_output_pointer,
+    void* y_output_pointer,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    const uint8_t* x_input = static_cast<const uint8_t*>(x_input_pointer);
+    const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
+    uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
+    uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
+    __m256i low_table = _mm256_setzero_si256();
+    __m256i high_table = _mm256_setzero_si256();
+    if (multiplier_log != kZeroSkew)
+    {
+        low_table = BroadcastTable(FF8Tables[multiplier_log].low);
+        high_table = BroadcastTable(FF8Tables[multiplier_log].high);
+    }
+    while (byte_count >= 32)
+    {
+        const __m256i x_original = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x_input));
+        const __m256i y_value = _mm256_xor_si256(x_original,
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y_input)));
+        __m256i x_value = x_original;
+        if (multiplier_log != kZeroSkew)
+            x_value = _mm256_xor_si256(x_value,
+                AVX2FF8ProductVector(y_value, low_table, high_table));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(x_output), x_value);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(y_output), y_value);
+        x_input += 32;
+        y_input += 32;
+        x_output += 32;
+        y_output += 32;
+        byte_count -= 32;
+    }
+    while (byte_count-- != 0)
+    {
+        const uint8_t y_value = static_cast<uint8_t>(*y_input ^ *x_input);
+        uint8_t x_value = *x_input;
+        if (multiplier_log != kZeroSkew)
+            x_value ^= FF8Product(multiplier_log, y_value);
+        *x_output++ = x_value;
+        *y_output++ = y_value;
+        ++x_input;
+        ++y_input;
+    }
+}
+#endif
 
 static void AVX2FF8IFFTButterfly2Xor(
     const void* x_input_pointer,
@@ -1708,6 +1762,120 @@ static void AVX2FF8IFFTButterfly4XorRange(
             log01, log23, log02, byte_count);
 }
 
+#if !defined(LEO2_AVX512_VARIANT)
+static void AVX2FF8HighEncodeSmall(
+    const void* const* data,
+    uint32_t original_count,
+    void* const* work,
+    uint32_t side,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+
+    // Materialize the first complete message block directly into the
+    // accumulator.  This avoids both a separate output clear and the
+    // redundant zero-valued accumulator load in the first XOR transform.
+    if (side == 2)
+    {
+        AVX2FF8IFFTButterfly2Out(
+            data[0], data[1], work[0], work[1],
+            inverse_skew[1], byte_count);
+    }
+    else
+    {
+        AVX2FF8IFFTButterfly4Out(
+            data[0], data[1], data[2], data[3],
+            work[0], work[1], work[2], work[3],
+            inverse_skew[1], inverse_skew[3], inverse_skew[2],
+            byte_count);
+    }
+
+    for (uint32_t base = side; base < original_count; base += side)
+    {
+        const uint32_t remaining = std::min(
+            side, original_count - base);
+        const void* source[4] = { NULL, NULL, NULL, NULL };
+        if (remaining == side)
+        {
+            for (uint32_t lane = 0; lane < side; ++lane)
+                source[lane] = data[base + lane];
+        }
+        else
+        {
+            // work[side..2*side) is the established encoder temporary half.
+            // A high-rate block can have at most one shortened suffix, so the
+            // only retained copy/zero pass is bounded independently of K.
+            for (uint32_t lane = 0; lane < side; ++lane)
+            {
+                if (lane < remaining)
+                    std::memcpy(work[side + lane], data[base + lane],
+                        static_cast<size_t>(byte_count));
+                else
+                    std::memset(work[side + lane], 0,
+                        static_cast<size_t>(byte_count));
+                source[lane] = work[side + lane];
+            }
+        }
+
+        if (side == 2)
+        {
+            const uint16_t log = inverse_skew[base + 1U];
+            if (log == kZeroSkew)
+            {
+                AVX2XorMemory(work[0], source[0], byte_count);
+                AVX2XorMemory2To1(
+                    work[1], source[0], source[1], byte_count);
+            }
+            else
+            {
+                AVX2FF8IFFTButterfly2Xor(
+                    source[0], source[1], work[0], work[1],
+                    log, byte_count);
+            }
+        }
+        else
+        {
+            const uint16_t log01 = inverse_skew[base + 1U];
+            const uint16_t log23 = inverse_skew[base + 3U];
+            const uint16_t log02 = inverse_skew[base + 2U];
+            if (log01 != kZeroSkew && log23 != kZeroSkew &&
+                log02 != kZeroSkew)
+            {
+                AVX2FF8IFFTButterfly4XorKernel<true>(
+                    source[0], source[1], source[2], source[3],
+                    work[0], work[1], work[2], work[3],
+                    log01, log23, log02, byte_count);
+            }
+            else
+            {
+                AVX2FF8IFFTButterfly4XorKernel<false>(
+                    source[0], source[1], source[2], source[3],
+                    work[0], work[1], work[2], work[3],
+                    log01, log23, log02, byte_count);
+            }
+        }
+    }
+
+    if (side == 2)
+    {
+        const uint16_t log = forward_skew[1];
+        if (log == kZeroSkew)
+            AVX2XorMemory(work[1], work[0], byte_count);
+        else
+            AVX2FF8FFTButterfly2(work[0], work[1], log, byte_count);
+    }
+    else
+    {
+        AVX2FF8FFTButterfly4(
+            work[0], work[1], work[2], work[3],
+            forward_skew[1], forward_skew[3], forward_skew[2],
+            byte_count);
+    }
+}
+#endif
+
 #if defined(LEO2_AVX512_VARIANT)
 
 template<bool Inverse, bool AllNonzero>
@@ -2583,6 +2751,11 @@ static const Ops AVX2Ops = {
 #endif
 #if defined(LEO_HAS_FF8) && defined(LEO2_AVX512_VARIANT)
     , AVX2FF8HighEncodeOneBlock
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+    , AVX2FF8HighEncodeSmall
 #else
     , NULL
 #endif

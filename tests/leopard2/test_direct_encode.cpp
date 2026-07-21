@@ -151,6 +151,7 @@ struct Counts
     uint64_t high_source_staging_checks;
     uint64_t high_byte_tiling_checks;
     uint64_t gf8_coarse_oracle_checks;
+    uint64_t high_small_transform_checks;
 
     Counts()
         : profiles(0), basis_messages(0), random_messages(0), parity_symbols(0)
@@ -159,6 +160,7 @@ struct Counts
         , unaligned_checks(0), batch_executions(0), no_copy_checks(0)
         , high_source_staging_checks(0), high_byte_tiling_checks(0)
         , gf8_coarse_oracle_checks(0)
+        , high_small_transform_checks(0)
     {}
 };
 
@@ -957,6 +959,85 @@ void test_high_transform_source_staging(
             "GF16 low-profile large source-staging/oracle prefix mismatch");
         ++counts->parity_symbols;
         ++counts->high_source_staging_checks;
+        delete owner;
+    }
+}
+
+void test_high_small_coarse_kernel(
+    leo2_context* context,
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+        size_t bytes;
+    };
+    const Case cases[] = {
+        { 8, 2, 1 },
+        { 9, 2, 65 },
+        { 10, 3, 129 },
+        { 11, 4, 257 },
+        { 251, 3, 4097 },
+        { 252, 4, 4096 }
+    };
+    for (unsigned case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& c = cases[case_i];
+        CodecOwner* owner = make_codec(context, c.k, c.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        const Shards original = random_shards(c.k, c.bytes,
+            UINT64_C(0x534d414c4c540000) + case_i);
+        const Shards original_before = original;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, c.k, c.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        const Shards expected = oracle_parity(
+            gf8, generator, original, c.r, LEO2_FIELD_GF8);
+        const std::vector<uint8_t> all(c.r, 1);
+
+        int direct = -1;
+        require_result(leo2_test_codec_encode_path(
+            owner->codec, c.bytes, c.r, &direct),
+            "small-T AUTO path query");
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult dense = encode(owner->codec,
+            LEO2_TEST_ENCODE_AUTO, original, all);
+        require_result(dense.result, "small-T dense AUTO encode");
+        compare_requested(dense.recovery, expected, all, 0xa5,
+            "small-T dense AUTO/oracle", counts);
+        require(original == original_before,
+            "small-T dense AUTO modified caller input");
+        const bool avx2 = leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+        require((leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    small_transform_calls != 0) == (avx2 && direct == 0),
+            "small-T coarse-kernel route disagrees with the backend: K=" +
+                std::to_string(c.k) + " R=" + std::to_string(c.r) +
+                " bytes=" + std::to_string(c.bytes) + " backend=" +
+                std::to_string(static_cast<unsigned>(
+                    leo2_context_backend(context))) + " direct=" +
+                std::to_string(direct) + " calls=" +
+                std::to_string(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    small_transform_calls));
+
+        std::vector<uint8_t> sparse(c.r, 0);
+        sparse[0] = 1;
+        if (c.r > 2)
+            sparse[c.r - 1] = 1;
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult partial = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse);
+        require_result(partial.result, "small-T sparse transform encode");
+        compare_requested(partial.recovery, expected, sparse, 0xa5,
+            "small-T sparse transform/oracle", counts);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    small_transform_calls == 0,
+            "small-T sparse transform used the dense coarse kernel");
+
+        ++counts->high_small_transform_checks;
         delete owner;
     }
 }
@@ -1891,6 +1972,7 @@ int main()
             context, gf8, gf16, &counts);
         test_high_transform_source_staging(
             context, gf8, gf16, &counts);
+        test_high_small_coarse_kernel(context, gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);
@@ -1919,6 +2001,8 @@ int main()
                   << counts.high_byte_tiling_checks
                   << " gf8_coarse_oracle_checks="
                   << counts.gf8_coarse_oracle_checks
+                  << " high_small_transform_checks="
+                  << counts.high_small_transform_checks
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
                   << " allocation_audit=enabled"
 #else

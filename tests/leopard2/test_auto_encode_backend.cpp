@@ -280,6 +280,122 @@ void require_explicit_backend(Context& context, leo2_backend expected)
         "explicit backend was changed by the AUTO calibration bounds");
 }
 
+void test_small_high_encode(
+    Context& scalar,
+    Context& ssse3,
+    Context& avx2,
+    Context& avx512)
+{
+    if (avx2.result() != LEO2_SUCCESS)
+        return;
+
+    struct TestCase
+    {
+        uint32_t k;
+        uint32_t r;
+        size_t bytes;
+    };
+    static const TestCase cases[] = {
+        { 8, 2, 1 },
+        { 9, 2, 33 },
+        { 10, 3, 65 },
+        { 11, 4, 257 },
+        { 251, 3, 4096 },
+        { 251, 4, 4097 },
+        { 252, 4, 65536 }
+    };
+
+    for (size_t case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const TestCase& test_case = cases[case_i];
+        const Shards original = make_original(test_case.k, test_case.bytes);
+        const Shards original_before = original;
+        Codec avx2_codec(avx2.get(), test_case.k, test_case.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const Shards actual = encode(
+            avx2_codec.get(), original, test_case.r, false);
+        const leopard::ff8::TestOnlyHighEncodeCounts route =
+            leopard::ff8::TestOnlyGetHighEncodeCounts();
+        const uint64_t expected_passes =
+            (test_case.bytes >= 64 ? 1U : 0U) +
+            ((test_case.bytes & 63U) != 0 ? 1U : 0U);
+        const uint32_t side = test_case.r == 2 ? 2U : 4U;
+        require(route.small_transform_calls == expected_passes,
+            "dense T=2/T=4 AVX2 encode missed the coarse kernel");
+        require(route.input_copy_shards ==
+                (test_case.k % side) * expected_passes,
+            "dense T=2/T=4 AVX2 encode retained avoidable input copies");
+        require(original == original_before,
+            "dense T=2/T=4 AVX2 encode modified caller input");
+        if ((test_case.bytes & 63U) == 0 &&
+            leo_encode_work_count(test_case.k, test_case.r) != 0)
+        {
+            require(actual == encode_legacy(original, test_case.r),
+                "dense T=2/T=4 AVX2 encode changed legacy parity bytes");
+        }
+        require(actual == encode_unaligned(
+                    avx2_codec.get(), original, test_case.r),
+            "dense T=2/T=4 AVX2 encode mishandled unaligned buffers");
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        require_sparse_matches_full(
+            encode(avx2_codec.get(), original, test_case.r, true), actual);
+        const uint64_t sparse_calls = leopard::ff8::
+            TestOnlyGetHighEncodeCounts().small_transform_calls;
+        require((sparse_calls != 0) == (test_case.r == 2),
+            "T=2/T=4 coarse kernel mishandled a prefix/holey output mask");
+
+        if (scalar.result() == LEO2_SUCCESS)
+        {
+            Codec scalar_codec(scalar.get(), test_case.k, test_case.r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+            require(actual == encode(
+                        scalar_codec.get(), original, test_case.r, false),
+                "dense T=2/T=4 AVX2 encode differs from scalar");
+        }
+        if (ssse3.result() == LEO2_SUCCESS)
+        {
+            Codec ssse3_codec(ssse3.get(), test_case.k, test_case.r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+            require(actual == encode(
+                        ssse3_codec.get(), original, test_case.r, false),
+                "dense T=2/T=4 AVX2 encode differs from SSSE3");
+        }
+        if (avx512.result() == LEO2_SUCCESS)
+        {
+            Codec avx512_codec(avx512.get(), test_case.k, test_case.r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+            require(actual == encode(
+                        avx512_codec.get(), original, test_case.r, false),
+                "dense T=2/T=4 AVX2 encode differs from AVX-512");
+        }
+    }
+
+    // The measured production gate is deliberately limited to T=2/T=4 and
+    // at least eight originals.  Lock both immediate shape boundaries so a
+    // later callback addition cannot silently broaden the policy.
+    const TestCase controls[] = {
+        { 7, 2, 4096 },
+        { 8, 5, 4096 }
+    };
+    for (size_t case_i = 0;
+         case_i < sizeof(controls) / sizeof(controls[0]); ++case_i)
+    {
+        const TestCase& test_case = controls[case_i];
+        const Shards original = make_original(test_case.k, test_case.bytes);
+        Codec codec(avx2.get(), test_case.k, test_case.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        (void)encode(codec.get(), original, test_case.r, false);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    small_transform_calls == 0,
+            "T=2/T=4 coarse-kernel policy escaped its shape bounds");
+    }
+}
+
 void test_selection_and_bytes(
     Context& automatic,
     Context& scalar,
@@ -702,6 +818,8 @@ int main()
         require_explicit_backend(ssse3, LEO2_BACKEND_SSSE3);
         require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
         require_explicit_backend(avx512, LEO2_BACKEND_AVX512);
+
+        test_small_high_encode(scalar, ssse3, avx2, avx512);
 
         if (leopard::backend::IsCalibratedAutoAVX512EncodeHost() &&
             leo2_context_backend(automatic.get()) == LEO2_BACKEND_AVX2 &&

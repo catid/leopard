@@ -60,6 +60,7 @@ static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
 static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
+static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -2274,6 +2275,21 @@ void ReedSolomonEncode(
         m == 8 || m == 16 || m == 32 || m == 64;
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
+    if (ops.kind == LEO2_BACKEND_AVX2 &&
+        ops.ff8_high_encode_small && (m == 2 || m == 4) &&
+        original_count >= 8 && requested_output_count == recovery_count &&
+        dense_schedule)
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighSmallTransformCalls.fetch_add(1, std::memory_order_relaxed);
+        TestHighInputCopyShards.fetch_add(
+            original_count % m, std::memory_order_relaxed);
+#endif
+        ops.ff8_high_encode_small(
+            data, original_count, work, m, FFTSkewStorage + m,
+            FFTSkewStorage, buffer_bytes);
+        return;
+    }
     if (ops.kind == LEO2_BACKEND_AVX512 &&
         ops.ff8_high_encode_one_block &&
         whole_transform_size && buffer_bytes > 1024 &&
@@ -3247,6 +3263,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighInputCopyShards.store(0, std::memory_order_relaxed);
     TestHighForwardFusedCalls.store(0, std::memory_order_relaxed);
     TestHighWholeTransformCalls.store(0, std::memory_order_relaxed);
+    TestHighSmallTransformCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3261,6 +3278,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighForwardFusedCalls.load(std::memory_order_relaxed);
     result.whole_transform_calls =
         TestHighWholeTransformCalls.load(std::memory_order_relaxed);
+    result.small_transform_calls =
+        TestHighSmallTransformCalls.load(std::memory_order_relaxed);
     return result;
 }
 
