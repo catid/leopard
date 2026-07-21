@@ -1,0 +1,177 @@
+{
+  "schema": "leopard2-gf16-high-whole-transform-attribution/v1",
+  "date_utc": "2026-07-21",
+  "status": "directional_negative_candidate_reverted",
+  "task_context": "leopard-79h.38.5.4.6",
+  "source_identity": {
+    "same_source_control_commit": "064b49031048ab487b8eeb910926787aa8d85d78",
+    "candidate_branch": "agent/gf16-whole-transform-064b490",
+    "candidate_policy": "One uncommitted, bounded, wire-identical prototype was applied atop the control commit and reverted after its directional gate failed.",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "prior_exact_main_ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+    "prior_exact_main_ratio": 0.976778479,
+    "prior_exact_main_ci95": [
+      0.973490995,
+      0.980077065
+    ],
+    "prior_exact_main_evidence": "experiments/leopard2/gf16_high_encode/results/byte_tiling_positive_20260721.json"
+  },
+  "workload": {
+    "K": 1000,
+    "R": 200,
+    "T": 256,
+    "profile": "legacy_high_v1",
+    "field": "gf16",
+    "shard_bytes": 65536,
+    "requested_backend": "auto",
+    "reported_context_backend": "avx2",
+    "full_output_execution_backend": "avx512",
+    "execution_tile_bytes": 32768,
+    "execution_tile_count": 2,
+    "threads": 1,
+    "cpu": 4,
+    "reuse": 4,
+    "retained_samples_per_process": 7,
+    "warmups_per_process": 2,
+    "compiler": "gcc 13.3.0",
+    "host": "AMD Ryzen 9 9950X3D",
+    "transmitted_parity_fnv1a64": "661175412a7efeaf"
+  },
+  "static_attribution": {
+    "exact_main": {
+      "byte_passes": 1,
+      "logical_inverse_radix4_calls": 1014,
+      "logical_forward_radix4_calls": 230,
+      "logical_radix4_calls_total": 1244,
+      "approximate_openmp_regions": 31,
+      "payload_shape": "Direct fused IFFT_DIT4/FFT_DIT4 calls in the -march=native field translation unit.",
+      "approximate_table_vector_loads": 29856
+    },
+    "leopard2": {
+      "byte_passes": 2,
+      "logical_inverse_radix4_calls_per_tile": 1014,
+      "logical_forward_radix4_calls_per_tile": 230,
+      "logical_radix4_calls_total": 2488,
+      "approximate_openmp_regions": 56,
+      "pointer_stores": 3024,
+      "upper_bound_indirect_ops_calls": 4132,
+      "upper_bound_table_broadcasts": 79616,
+      "payload_shape": "The AVX-512VL range entry calls the split radix-four implementation for large tiles; each ordinary split operation invokes four two-way kernels, while accumulated terminal stages invoke four pair callbacks per lane."
+    },
+    "isa_result": "The gap is not explained by an ISA mismatch. Exact main's -march=native code and Leopard2's isolated AVX-512VL backend both use 256-bit EVEX instructions and the expanded YMM register file.",
+    "assembly_inputs": [
+      "/tmp/main-ff16.asm",
+      "/tmp/current-ff16.asm",
+      "/tmp/current-avx512.asm",
+      "/tmp/current-api.asm"
+    ],
+    "assembly_input_retention": "The assembly files are ignored machine-local diagnostics. Decision-bearing counts and conclusions are retained here."
+  },
+  "openmp_diagnostic": {
+    "purpose": "Determine whether single-thread OpenMP runtime overhead alone can explain the 2.32 percent exact-main gap.",
+    "openmp_on_medians_us": [
+      7586.573000,
+      7600.098250
+    ],
+    "openmp_off_medians_us": [
+      7580.593000,
+      7588.008000
+    ],
+    "parity_digest_equal": true,
+    "result": "OpenMP-off is only about 0.1 percent faster directionally, far below the gap; reject an OpenMP-only production change."
+  },
+  "candidate": {
+    "id": "legacy_high_avx512_large_radix4_fusion",
+    "hypothesis": "The AVX-512VL expanded register file may make exact-main-style fused two-layer radix-four payloads profitable for large legacy-high tiles, reducing split passes and repeated table preparation.",
+    "scope": "Legacy-high GF16 encode under the selected AVX-512 operation table. Large ordinary inverse and final forward radix-four stages were fused; the established final inverse split-XOR accumulator remained unchanged.",
+    "wire_identity": "All four timed parity digests matched the control value 661175412a7efeaf.",
+    "directional_order": [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    "control_process_medians_us": [
+      7592.465000,
+      7587.575500
+    ],
+    "candidate_process_medians_us": [
+      8195.515250,
+      8287.155750
+    ],
+    "pooled_control_median_us": 7590.420250,
+    "pooled_candidate_median_us": 8224.675500,
+    "candidate_time_over_control": 1.083559965,
+    "candidate_slowdown_fraction": 0.083559965,
+    "decision": "kill_and_revert",
+    "interpretation": "Large fusion is 8.36 percent slower directionally. The extra fused-kernel table pressure outweighs its reduced shard passes even with the expanded register file."
+  },
+  "directional_method": {
+    "authoritative_claim": false,
+    "purpose": "Fast fail screen only; a clearly losing candidate does not justify consuming a quiet exact-main campaign.",
+    "limitations": [
+      "No confidence interval or fail-closed SMT-sibling isolation gate was run.",
+      "The measurements ran while unrelated project work could use other cores.",
+      "The negative magnitude is much larger than the prior exact-main gap and every parity digest matched."
+    ]
+  },
+  "ignored_ephemeral_artifacts": [
+    {
+      "path": "/tmp/gf16-fused-control-a.json",
+      "sha256": "65f4fb765c63849806bfaa329a75e4e4d65d29a25c65403c053b7fec95ae6e1e"
+    },
+    {
+      "path": "/tmp/gf16-fused-candidate-a.json",
+      "sha256": "082a4e27d48f7dd45ed0c9c012ee959809255cc7c9e2b74ba81a60ea96e249dd"
+    },
+    {
+      "path": "/tmp/gf16-fused-candidate-b.json",
+      "sha256": "7a24994ff767b0aa914794cd0e43348ccd14d640aa815016064190e5d3a55342"
+    },
+    {
+      "path": "/tmp/gf16-fused-control-b.json",
+      "sha256": "40f6471f6cd4b1dc1efb0579031b6e758a1181db6bff89cc733818bfd013a81a"
+    }
+  ],
+  "validation": {
+    "focused_release_tests": {
+      "passed": 6,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden",
+        "leopard2_transform_differential"
+      ],
+      "compiler": "gcc 13.3.0",
+      "result": "6/6 passed"
+    },
+    "focused_asan_ubsan_tests": {
+      "passed": 6,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden",
+        "leopard2_transform_differential"
+      ],
+      "compiler": "clang 18.1.3",
+      "flags": "-O1 -g -fno-omit-frame-pointer -fno-sanitize-recover=all -fsanitize=address,undefined",
+      "openmp": false,
+      "runtime_policy": "ASan leak detection, halt-on-error, and abort-on-error; UBSan halt-on-error, abort-on-error, and stack traces",
+      "result": "6/6 passed"
+    },
+    "fuzzing": "Not run by request; this pass uses deterministic compatibility, direct-oracle, backend-KAT, and focused sanitizer tests."
+  },
+  "conclusion": {
+    "promotion": "none",
+    "candidate_source_retained": false,
+    "kill_decision": "Do not promote large AVX-512 radix-four fusion or an OpenMP-only special case.",
+    "remaining_actionable_hypothesis": "If the residual 2.32 percent cell remains worth pursuing, use a separately reviewed codec-specialized whole-transform executor that combines direct intra-translation-unit calls, compact pre-expanded coefficient schedules, and serial control. Isolated callback, table-layout, tile-size, terminal-fusion, large-fusion, and OpenMP-only changes have each failed to provide enough headroom.",
+    "scope_warning": "That combined executor is materially larger than this bead's one-prototype limit and requires its own exact-main and neighboring-cell gate."
+  }
+}
