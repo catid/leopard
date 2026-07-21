@@ -632,6 +632,8 @@ struct EncodeScratchGeometry
     size_t rounded_bytes;
     size_t aligned_prefix_bytes;
     size_t tail_bytes;
+    size_t execution_tile_count;
+    size_t execution_tile_bytes;
     size_t work_count;
     size_t work_slot_bytes;
     size_t work_data_offset;
@@ -1919,6 +1921,8 @@ static leo2_result ValidateEncodeBuffers(
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
 }
 
+static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec);
+
 static leo2_result EncodeLayout(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -1936,9 +1940,47 @@ static leo2_result EncodeLayout(
         (kScratchAlignment - 1);
     geometry.aligned_prefix_bytes =
         static_cast<size_t>(shard_bytes) - geometry.tail_bytes;
-    geometry.work_slot_bytes = geometry.tail_bytes == 0
-        ? static_cast<size_t>(shard_bytes)
-        : std::max(geometry.aligned_prefix_bytes, kScratchAlignment);
+    geometry.execution_tile_count = geometry.aligned_prefix_bytes == 0 ? 0 : 1;
+    geometry.execution_tile_bytes = geometry.aligned_prefix_bytes;
+
+    /*
+        The complete legacy-high GF16 transform repeatedly sweeps 2T shard
+        rows.  Once that working set reaches the large-shard regime, execute
+        independent byte ranges end-to-end so the accumulator and temporary
+        half remain cache-resident.  Promotion is restricted to the calibrated
+        AUTO AVX-512VL encode host path; explicit AVX2, SSSE3, scalar, and
+        uncalibrated hosts retain their single-pass layouts until measured.
+        The balanced split avoids a tiny final pass: every tile in this
+        qualified range remains larger than 16 KiB, preserving the established
+        aligned-pass source-staging policy.
+
+        This is only an execution/scratch layout choice.  Tiles end on the
+        64-byte GF16 ALTMAP boundary, and backend selection still occurs once
+        from the complete public shard length below.
+    */
+    static const size_t kHighGF16EncodeTileBytes = 32U * 1024U;
+    static const size_t kHighGF16EncodeMinimumBytes = 64U * 1024U;
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF16 && codec->padded_side >= 256 &&
+        CodecMayUseAutoAVX512Encode(codec) &&
+        codec->auto_avx512_encode_ops != NULL &&
+        codec->context->ops == codec->context->baseline_ops &&
+        geometry.aligned_prefix_bytes >= kHighGF16EncodeMinimumBytes)
+    {
+        geometry.execution_tile_count = 1U +
+            (geometry.aligned_prefix_bytes - 1U) /
+                kHighGF16EncodeTileBytes;
+        size_t rounded_tile_bytes = 0;
+        if (!AlignUp(
+                geometry.aligned_prefix_bytes /
+                    geometry.execution_tile_count,
+                kScratchAlignment, rounded_tile_bytes))
+            return LEO2_INVALID_COUNTS;
+        geometry.execution_tile_bytes = rounded_tile_bytes;
+    }
+    geometry.work_slot_bytes = std::max(
+        geometry.execution_tile_bytes,
+        geometry.tail_bytes == 0 ? size_t(0) : kScratchAlignment);
     /*
         Transform kernels operate on complete 64-byte tiles.  Aligned shards
         can therefore be read from and written to the caller's disjoint
@@ -2809,6 +2851,7 @@ static void ExecuteTransformEncodePass(
     const leo2_codec* codec,
     const leopard::backend::Ops& ops,
     size_t buffer_bytes,
+    size_t policy_buffer_bytes,
     uint32_t requested_recovery_count,
     uint32_t requested_recovery_prefix,
     const void* const* padded_original,
@@ -2843,8 +2886,9 @@ static void ExecuteTransformEncodePass(
 #endif
         else
 #ifdef LEO_HAS_FF16
-            leopard::ff16::ReedSolomonEncode(
-                ops, buffer_bytes, codec->original_count,
+            leopard::ff16::ReedSolomonEncodeWithSourcePolicy(
+                ops, buffer_bytes, policy_buffer_bytes,
+                codec->original_count,
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
                 padded_original, work, sparse_plans);
@@ -5442,27 +5486,50 @@ static leo2_result EncodeInternal(
 
     if (geometry.aligned_prefix_bytes != 0)
     {
-        if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+        const size_t total_tiles =
+            geometry.aligned_prefix_bytes / kScratchAlignment;
+        size_t first_tile = 0;
+        for (size_t pass_index = 0;
+            pass_index < geometry.execution_tile_count; ++pass_index)
         {
-            for (size_t i = 0; i < geometry.work_count; ++i)
+            const size_t passes_left =
+                geometry.execution_tile_count - pass_index;
+            const size_t tiles_left = total_tiles - first_tile;
+            const size_t pass_tiles =
+                (tiles_left + passes_left - 1U) / passes_left;
+            const size_t pass_bytes = pass_tiles * kScratchAlignment;
+            const size_t source_offset = first_tile * kScratchAlignment;
+            PopulateEncodeInputs(
+                codec, original, source_offset, pass_bytes, NULL, pointers);
+
+            if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
             {
-                work[i] = i < requested_recovery_prefix && recovery[i]
-                    ? static_cast<uint8_t*>(recovery[i])
-                    : work_storage + i * geometry.work_slot_bytes;
+                for (size_t i = 0; i < geometry.work_count; ++i)
+                {
+                    work[i] = i < requested_recovery_prefix && recovery[i]
+                        ? static_cast<uint8_t*>(recovery[i]) + source_offset
+                        : work_storage + i * geometry.work_slot_bytes;
+                }
             }
+            else
+            {
+                for (size_t i = 0; i < geometry.work_count; ++i)
+                    work[i] = work_storage + i * geometry.work_slot_bytes;
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                    parity[i] = recovery[i]
+                        ? static_cast<uint8_t*>(recovery[i]) + source_offset
+                        : NULL;
+            }
+            const void* const* const pass_original =
+                const_cast<const void* const*>(pointers);
+            ExecuteTransformEncodePass(
+                codec, transform_ops, pass_bytes,
+                geometry.aligned_prefix_bytes,
+                requested_recovery_count, requested_recovery_prefix,
+                pass_original, parity, work, &sparse_plans);
+            first_tile += pass_tiles;
         }
-        else
-        {
-            for (size_t i = 0; i < geometry.work_count; ++i)
-                work[i] = work_storage + i * geometry.work_slot_bytes;
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
-                parity[i] = recovery[i];
-        }
-        ExecuteTransformEncodePass(
-            codec, transform_ops, geometry.aligned_prefix_bytes,
-            requested_recovery_count, requested_recovery_prefix,
-            original, parity, work,
-            &sparse_plans);
+        LEO_DEBUG_ASSERT(first_tile == total_tiles);
     }
 
     if (geometry.tail_bytes != 0)
@@ -5483,7 +5550,8 @@ static leo2_result EncodeInternal(
         const void* const* const padded_original =
             const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
-            codec, transform_ops, kScratchAlignment, requested_recovery_count,
+            codec, transform_ops, kScratchAlignment, kScratchAlignment,
+            requested_recovery_count,
             requested_recovery_prefix,
             padded_original, parity, work, &sparse_plans);
 

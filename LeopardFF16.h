@@ -142,6 +142,17 @@ bool ExecuteSparseForwardPlanFromSources(
     void* const* source,
     void** work);
 
+void ReedSolomonEncodeWithSourcePolicy(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    uint64_t source_policy_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned requested_output_count,
+    unsigned m,
+    const void* const * const data,
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
 void ReedSolomonEncode(
     const backend::Ops& ops,
     uint64_t buffer_bytes,

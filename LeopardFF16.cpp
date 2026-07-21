@@ -1225,6 +1225,7 @@ template<bool FuseAccumulation>
 static void IFFT_DIT_Encoder_Impl(
     const backend::Ops& ops,
     const uint64_t bytes,
+    const uint64_t source_policy_bytes,
     const void* const* data,
     const unsigned m_truncated,
     void** work,
@@ -1245,7 +1246,7 @@ static void IFFT_DIT_Encoder_Impl(
         high_profile_transform &&
         (ops.kind == LEO2_BACKEND_AVX2 ||
          ops.kind == LEO2_BACKEND_AVX512) &&
-        m >= 256 && bytes > 16U * 1024U);
+        m >= 256 && source_policy_bytes > 16U * 1024U);
     if (stage_sources)
     {
         // Consume complete encoder-source groups directly through the first
@@ -1381,6 +1382,7 @@ LEO_OPENMP_PARALLEL_FOR
 static void IFFT_DIT_Encoder(
     const backend::Ops& ops,
     const uint64_t bytes,
+    const uint64_t source_policy_bytes,
     const void* const* data,
     const unsigned m_truncated,
     void** work,
@@ -1398,12 +1400,14 @@ static void IFFT_DIT_Encoder(
         ops.kind == LEO2_BACKEND_AVX2 ||
         ops.kind == LEO2_BACKEND_AVX512)
     {
-        IFFT_DIT_Encoder_Impl<true>(ops, bytes, data, m_truncated,
+        IFFT_DIT_Encoder_Impl<true>(ops, bytes, source_policy_bytes,
+            data, m_truncated,
             work, xor_result, high_profile_transform, m, skewLUT);
     }
     else
     {
-        IFFT_DIT_Encoder_Impl<false>(ops, bytes, data, m_truncated,
+        IFFT_DIT_Encoder_Impl<false>(ops, bytes, source_policy_bytes,
+            data, m_truncated,
             work, xor_result, high_profile_transform, m, skewLUT);
     }
 }
@@ -2252,9 +2256,10 @@ LEO_OPENMP_PARALLEL_FOR
 //------------------------------------------------------------------------------
 // Reed-Solomon Encode
 
-void ReedSolomonEncode(
+void ReedSolomonEncodeWithSourcePolicy(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
+    uint64_t source_policy_bytes,
     unsigned original_count,
     unsigned recovery_count,
     unsigned requested_output_count,
@@ -2273,6 +2278,7 @@ void ReedSolomonEncode(
     IFFT_DIT_Encoder(
         ops,
         buffer_bytes,
+        source_policy_bytes,
         data,
         original_count < m ? original_count : m,
         work,
@@ -2296,6 +2302,7 @@ void ReedSolomonEncode(
         IFFT_DIT_Encoder(
             ops,
             buffer_bytes,
+            source_policy_bytes,
             data, // data source
             m,
             work + m, // temporary workspace
@@ -2316,6 +2323,7 @@ void ReedSolomonEncode(
         IFFT_DIT_Encoder(
             ops,
             buffer_bytes,
+            source_policy_bytes,
             data, // data source
             last_count,
             work + m, // temporary workspace
@@ -2353,6 +2361,23 @@ skip_body:
             m,
             FFTSkewStorage);
     }
+}
+
+
+void ReedSolomonEncode(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned original_count,
+    unsigned recovery_count,
+    unsigned requested_output_count,
+    unsigned m,
+    const void* const * data,
+    void** work,
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
+{
+    ReedSolomonEncodeWithSourcePolicy(
+        ops, buffer_bytes, buffer_bytes, original_count,
+        recovery_count, requested_output_count, m, data, work, sparse_plans);
 }
 
 
@@ -2402,6 +2427,7 @@ void ReedSolomonEncodeLow(
     // are shortened and therefore supplied to the transform as known zeroes.
     IFFT_DIT_Encoder(
         ops,
+        buffer_bytes,
         buffer_bytes,
         data,
         original_count,
