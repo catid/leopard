@@ -150,6 +150,8 @@
     "gf8_only_structural": "2/2",
     "gf16_only_structural": "2/2",
     "gcc_werror_structural": "2/2",
+    "production_hook_isolation": "1/1",
+    "visual_studio_project_self_test": "1/1 after initializing the pinned sse2neon submodule",
     "broad_fuzzing_run": false,
     "review_result": "dispatch reachability and retained hook/native controls reviewed"
   }
