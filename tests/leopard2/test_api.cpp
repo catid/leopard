@@ -685,8 +685,26 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           66, 4, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           63, 8, true, true },
+        { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 4, true, true },
+        { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 8, true, true },
+        { 65, 96, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 65, 96, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 4, true, true },
+        { 65, 96, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 8, true, true },
         { 65, 127, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           65, 8, true, true },
+        { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 4, true, true },
+        { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 8, true, true },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 9, false, false },
         { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -745,6 +763,57 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         leo2_decode_plan_destroy(plan);
         leo2_codec_destroy(codec);
     }
+
+    if (leo2_context_backend(context) == LEO2_BACKEND_AVX2)
+    {
+        std::vector<uint8_t> original_present(65, 1);
+        std::vector<uint8_t> recovery_present(65, 1);
+        for (unsigned i = 0; i < 8; ++i)
+            original_present[i] = 0;
+        recovery_present[0] = 0;
+
+        leo2_codec* automatic = make_codec(context, 65, 65,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        leo2_decode_plan* automatic_plan = NULL;
+        require_result(leo2_decode_plan_create(automatic,
+            &original_present[0], &recovery_present[0], &automatic_plan),
+            "forced-exclusion automatic plan create");
+        size_t automatic_scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            automatic_plan, 64, &automatic_scratch_bytes),
+            "forced-exclusion automatic scratch query");
+
+        const uint32_t forced_flags[] = {
+            LEO2_CODEC_FORCE_GENERIC_DECODE,
+            LEO2_CODEC_FORCE_SPECIALIZED_DECODE
+        };
+        for (size_t i = 0;
+             i < sizeof(forced_flags) / sizeof(forced_flags[0]); ++i)
+        {
+            leo2_codec_options options;
+            memset(&options, 0, sizeof(options));
+            options.struct_size = sizeof(options);
+            options.flags = forced_flags[i];
+            leo2_codec* forced = NULL;
+            require_result(leo2_codec_create(context, 65, 65,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                &options, &forced), "forced-exclusion codec create");
+            leo2_decode_plan* forced_plan = NULL;
+            require_result(leo2_decode_plan_create(forced,
+                &original_present[0], &recovery_present[0], &forced_plan),
+                "forced-exclusion plan create");
+            size_t forced_scratch_bytes = 0;
+            require_result(leo2_decode_plan_scratch_size(
+                forced_plan, 64, &forced_scratch_bytes),
+                "forced-exclusion scratch query");
+            require(forced_scratch_bytes > automatic_scratch_bytes,
+                "forced decoder mode unexpectedly selected direct repair");
+            leo2_decode_plan_destroy(forced_plan);
+            leo2_codec_destroy(forced);
+        }
+        leo2_decode_plan_destroy(automatic_plan);
+        leo2_codec_destroy(automatic);
+    }
 }
 
 void test_expanded_direct_repair_execution(TestCounts* counts)
@@ -786,6 +855,29 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
+    const unsigned recovery_counts[] = { 66, 96, 128 };
+    const unsigned loss_counts[] = { 1, 4, 8 };
+    for (size_t recovery_i = 0;
+         recovery_i < sizeof(recovery_counts) / sizeof(recovery_counts[0]);
+         ++recovery_i)
+    {
+        const unsigned recovery_count = recovery_counts[recovery_i];
+        for (size_t loss_i = 0;
+             loss_i < sizeof(loss_counts) / sizeof(loss_counts[0]); ++loss_i)
+        {
+            const unsigned loss_count = loss_counts[loss_i];
+            run_decode_case(context, 65, recovery_count,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                64,
+                std::vector<unsigned>(
+                    missing_originals.begin(),
+                    missing_originals.begin() + loss_count),
+                std::vector<unsigned>{
+                    0, recovery_count / 2, recovery_count - 1
+                },
+                counts);
+        }
+    }
     leo2_context_destroy(context);
 }
 
