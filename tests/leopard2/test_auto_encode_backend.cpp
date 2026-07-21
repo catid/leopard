@@ -470,12 +470,21 @@ void test_selection_and_bytes(
                 make_original(side, tail_bytes[tail_i]);
             const Shards tail_reference = encode(
                 explicit_scalar.get(), tail_original, side, false);
-            require(tail_reference == encode(
-                        explicit_ssse3.get(), tail_original, side, false) &&
-                    tail_reference == encode(
-                        explicit_avx2.get(), tail_original, side, false) &&
-                    tail_reference == encode(
-                        explicit_avx512.get(), tail_original, side, false),
+            const Shards tail_ssse3 = encode(
+                explicit_ssse3.get(), tail_original, side, false);
+            const Shards tail_avx2 = encode(
+                explicit_avx2.get(), tail_original, side, false);
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            const Shards tail_avx512 = encode(
+                explicit_avx512.get(), tail_original, side, false);
+            const uint64_t expected_whole_calls = tail_bytes[tail_i] >= 2049
+                ? 1 : 0;
+            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    whole_transform_calls == expected_whole_calls,
+                "balanced GF8 tail used the wrong coarse-transform split");
+            require(tail_reference == tail_ssse3 &&
+                    tail_reference == tail_avx2 &&
+                    tail_reference == tail_avx512,
                 "balanced GF8 coarse transform changed a byte tail");
             require(tail_reference == encode_unaligned(
                         explicit_avx2.get(), tail_original, side) &&
