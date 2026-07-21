@@ -273,9 +273,10 @@ static const size_t kScratchAlignment = 64;
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
-static const uint32_t kDirectMaxOriginals = 16;
-static const uint32_t kDirectMaxRecoveries = 16;
-static const uint32_t kDirectMaxLosses = 4;
+static const uint32_t kDirectEncodeMaxOriginals = 16;
+static const uint32_t kDirectEncodeMaxRecoveries = 16;
+static const uint32_t kDirectLegacyMaxRepairOriginals = 16;
+static const uint32_t kDirectMaxRepairLosses = 8;
 static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
@@ -1233,8 +1234,8 @@ struct DirectField16
 static bool IsDirectEncodeShape(const leo2_codec* codec)
 {
     if (!codec || codec->original_count == 0 || codec->recovery_count == 0 ||
-        codec->original_count > kDirectMaxOriginals ||
-        codec->recovery_count > kDirectMaxRecoveries)
+        codec->original_count > kDirectEncodeMaxOriginals ||
+        codec->recovery_count > kDirectEncodeMaxRecoveries)
         return false;
     size_t coefficient_count = 0;
     return CheckedMultiply(
@@ -1266,6 +1267,28 @@ static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
 #endif
 }
 
+static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
+{
+    /*
+        K=65 is the largest GF8 message-side inflation boundary: its
+        equal-rounded legacy-high parent has P=T=128 and N=256.  A direct
+        eight-loss solve performs at most 8*65 fixed-source terms per byte,
+        versus Algorithm 4's 256*log2(128) butterfly equivalents.  Pinned
+        tail/aligned sweeps from 1 byte through 16 MiB retained the direct
+        path across representative R values whose rounded side is 128.  Keep
+        this deliberately narrow until neighboring K values have equally
+        stable evidence.
+    */
+    return codec && codec->context &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->original_count == 65 &&
+        codec->padded_side == 128 &&
+        codec->parent_count == 256 &&
+        codec->parent_dimension == 128;
+}
+
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
     return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
@@ -1273,9 +1296,16 @@ static bool CanPrepareDirectRepair(const leo2_codec* codec)
                            LEO2_CODEC_FORCE_TILED_DECODE |
                            LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
-        codec->original_count <= kDirectMaxOriginals &&
+        (codec->original_count <= kDirectLegacyMaxRepairOriginals ||
+         IsExpandedDirectRepairCodec(codec)) &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
         codec->padded_side >= 2;
+}
+
+static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
+{
+    return IsExpandedDirectRepairCodec(codec)
+        ? kDirectMaxRepairLosses : 4;
 }
 
 template<class Field>
@@ -1372,7 +1402,7 @@ static bool PrepareDirectGeneratorLogs(
         return false;
 
     generator_logs.resize(coefficient_count);
-    Element row[kDirectMaxOriginals];
+    Element row[kDirectEncodeMaxOriginals];
     for (uint32_t recovery = 0; recovery < codec->recovery_count; ++recovery)
     {
         if (!PrepareDirectGeneratorRow<Field>(
@@ -1448,7 +1478,8 @@ static bool ShouldUseDirectEncode(
 
 template<class Field>
 static bool InvertDirectRepairMatrix(
-    typename Field::Element matrix[kDirectMaxLosses][kDirectMaxLosses * 2],
+    typename Field::Element matrix
+        [kDirectMaxRepairLosses][kDirectMaxRepairLosses * 2],
     uint32_t size)
 {
     typedef typename Field::Element Element;
@@ -1490,11 +1521,11 @@ static bool PrepareDirectRepairTerms(
     typedef typename Field::Element Element;
     const leo2_codec* codec = plan->codec;
     const uint32_t losses = plan->missing_original_count;
-    if (losses == 0 || losses > kDirectMaxLosses ||
+    if (losses == 0 || losses > DirectRepairLossLimit(codec) ||
         barycentric_weights.size() != codec->original_count)
         return false;
 
-    uint32_t selected_parities[kDirectMaxLosses] = {};
+    uint32_t selected_parities[kDirectMaxRepairLosses] = {};
     uint32_t selected_count = 0;
     for (uint32_t parity = 0;
          parity < codec->recovery_count && selected_count < losses;
@@ -1517,7 +1548,8 @@ static bool PrepareDirectRepairTerms(
             return false;
     }
 
-    Element augmented[kDirectMaxLosses][kDirectMaxLosses * 2] = {};
+    Element augmented
+        [kDirectMaxRepairLosses][kDirectMaxRepairLosses * 2] = {};
     for (uint32_t equation = 0; equation < losses; ++equation)
     {
         for (uint32_t missing = 0; missing < losses; ++missing)
@@ -3209,6 +3241,15 @@ static leo2_result ExecuteDirectRepair(
 {
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
+#ifdef LEO_HAS_FF8
+    const bool tiled_gf8_tail = IsExpandedDirectRepairCodec(codec) &&
+        (shard_bytes & (kScratchAlignment - 1U)) != 0;
+    const size_t aligned_bytes = tiled_gf8_tail
+        ? shard_bytes & ~(kScratchAlignment - 1U)
+        : shard_bytes;
+#else
+    const size_t aligned_bytes = shard_bytes;
+#endif
     for (uint32_t output_index = 0;
          output_index < plan->missing_original_count;
          ++output_index)
@@ -3218,7 +3259,9 @@ static leo2_result ExecuteDirectRepair(
         if (begin == end)
             return LEO2_INTERNAL_ERROR;
         void* output = restored_original[plan->missing_originals[output_index]];
-        for (size_t term_index = begin; term_index < end; ++term_index)
+        for (size_t term_index = begin;
+             aligned_bytes != 0 && term_index < end;
+             ++term_index)
         {
             const leo2_direct_repair_term& term = plan->direct_terms[term_index];
             const bool parity = (term.tagged_source & kDirectRecoveryTag) != 0;
@@ -3230,39 +3273,89 @@ static leo2_result ExecuteDirectRepair(
             if (term_index == begin)
             {
                 if (term.multiplier_log == 0)
-                    memcpy(output, source, shard_bytes);
+                    memcpy(output, source, aligned_bytes);
                 else if (codec->field == LEO2_FIELD_GF8)
 #ifdef LEO_HAS_FF8
                     leopard::ff8::MultiplyBytes(ops, output, source,
-                        static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+                        static_cast<leopard::ff8::ffe_t>(term.multiplier_log), aligned_bytes);
 #else
                     return LEO2_INTERNAL_ERROR;
 #endif
                 else
 #ifdef LEO_HAS_FF16
                     leopard::ff16::MultiplyBytes(ops, output, source,
-                        static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+                        static_cast<leopard::ff16::ffe_t>(term.multiplier_log), aligned_bytes);
 #else
                     return LEO2_INTERNAL_ERROR;
 #endif
             }
             else if (term.multiplier_log == 0)
-                XorArbitraryBytes(ops, output, source, shard_bytes);
+                XorArbitraryBytes(ops, output, source, aligned_bytes);
             else if (codec->field == LEO2_FIELD_GF8)
 #ifdef LEO_HAS_FF8
                 leopard::ff8::MultiplyAddBytes(ops, output, source,
-                    static_cast<leopard::ff8::ffe_t>(term.multiplier_log), shard_bytes);
+                    static_cast<leopard::ff8::ffe_t>(term.multiplier_log), aligned_bytes);
 #else
                 return LEO2_INTERNAL_ERROR;
 #endif
             else
 #ifdef LEO_HAS_FF16
                 leopard::ff16::MultiplyAddBytes(ops, output, source,
-                    static_cast<leopard::ff16::ffe_t>(term.multiplier_log), shard_bytes);
+                    static_cast<leopard::ff16::ffe_t>(term.multiplier_log), aligned_bytes);
 #else
                 return LEO2_INTERNAL_ERROR;
 #endif
         }
+#ifdef LEO_HAS_FF8
+        if (tiled_gf8_tail)
+        {
+            const size_t tail_bytes = shard_bytes - aligned_bytes;
+            alignas(kScratchAlignment) uint8_t source_tile[kScratchAlignment];
+            alignas(kScratchAlignment) uint8_t output_tile[kScratchAlignment];
+            for (size_t term_index = begin; term_index < end; ++term_index)
+            {
+                const leo2_direct_repair_term& term =
+                    plan->direct_terms[term_index];
+                const bool parity =
+                    (term.tagged_source & kDirectRecoveryTag) != 0;
+                const uint32_t source_index =
+                    term.tagged_source & ~kDirectRecoveryTag;
+                const uint8_t* source = static_cast<const uint8_t*>(
+                    parity ? recovery[source_index] : original[source_index]);
+                if (!source)
+                    return LEO2_INTERNAL_ERROR;
+                memcpy(source_tile, source + aligned_bytes, tail_bytes);
+                memset(source_tile + tail_bytes, 0,
+                    sizeof(source_tile) - tail_bytes);
+                if (term_index == begin)
+                {
+                    if (term.multiplier_log == 0)
+                        memcpy(output_tile, source_tile, sizeof(output_tile));
+                    else
+                        leopard::ff8::MultiplyBytes(ops,
+                            output_tile, source_tile,
+                            static_cast<leopard::ff8::ffe_t>(
+                                term.multiplier_log),
+                            sizeof(output_tile));
+                }
+                else if (term.multiplier_log == 0)
+                {
+                    XorArbitraryBytes(
+                        ops, output_tile, source_tile, sizeof(output_tile));
+                }
+                else
+                {
+                    leopard::ff8::MultiplyAddBytes(ops,
+                        output_tile, source_tile,
+                        static_cast<leopard::ff8::ffe_t>(
+                            term.multiplier_log),
+                        sizeof(output_tile));
+                }
+            }
+            memcpy(static_cast<uint8_t*>(output) + aligned_bytes,
+                output_tile, tail_bytes);
+        }
+#endif
     }
     return LEO2_SUCCESS;
 }
@@ -5619,7 +5712,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
 #endif
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             !force_test_transform &&
-            missing_original_count <= kDirectMaxLosses)
+            missing_original_count <= DirectRepairLossLimit(codec))
         {
 #ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8 &&
