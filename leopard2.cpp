@@ -799,6 +799,39 @@ static bool CanUseTranslatedLowDecode(const leo2_codec* codec)
     return CeilPow2(codec->original_count) == codec->padded_side;
 }
 
+static bool CodecMayCreateNativeHighPlan(const leo2_codec* codec)
+{
+    if (!codec || codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
+        return false;
+    if (!CanUseTranslatedLowDecode(codec))
+        return true;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    // A hook codec may switch to FORCE_NATIVE_HIGH after construction.
+    return true;
+#else
+    // Every non-direct transform plan captures translated_low=true.  The
+    // translated selector then returns before generic/native-high dispatch.
+    return false;
+#endif
+}
+
+static bool CodecMayUseNativeLocator(const leo2_codec* codec)
+{
+    if (!codec)
+        return false;
+    if ((codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) != 0)
+        return true;
+    if (!CanUseTranslatedLowDecode(codec))
+        return true;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    // The mutable native-high hook still consumes the unshifted locator.
+    return true;
+#else
+    return false;
+#endif
+}
+
 static bool PlanUsesTranslatedLowDecode(const leo2_decode_plan* plan)
 {
     return plan && plan->translated_low;
@@ -4868,6 +4901,10 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0;
         const bool prepare_translated_low =
             specialized && CanUseTranslatedLowDecode(codec);
+        const bool prepare_native_locator =
+            CodecMayUseNativeLocator(codec);
+        const bool prepare_native_high =
+            CodecMayCreateNativeHighPlan(codec);
         if (prepare_translated_low)
         {
             codec->translated_low_permanent_erased.resize(parent);
@@ -4912,9 +4949,13 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             if (permanent_erasure_count != 0 &&
                 leopard::ff8::IsDirectLocatorPreferred(parent, recovery_count))
             {
-                codec->permanent_locator8.resize(parent);
-                leopard::ff8::PrepareDecode(parent,
-                    &codec->permanent_erased[0], &codec->permanent_locator8[0]);
+                if (prepare_native_locator)
+                {
+                    codec->permanent_locator8.resize(parent);
+                    leopard::ff8::PrepareDecode(parent,
+                        &codec->permanent_erased[0],
+                        &codec->permanent_locator8[0]);
+                }
                 if (!codec->translated_low_permanent_erased.empty())
                 {
                     codec->translated_low_permanent_locator8.resize(parent);
@@ -4933,9 +4974,12 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 }
                 else
                 {
-                    codec->fixed_factors8.resize(parent);
-                    leopard::ff8::PrepareHighDecode(
-                        parent, padded, &codec->fixed_factors8[0]);
+                    if (prepare_native_high)
+                    {
+                        codec->fixed_factors8.resize(parent);
+                        leopard::ff8::PrepareHighDecode(
+                            parent, padded, &codec->fixed_factors8[0]);
+                    }
                     if (prepare_translated_low)
                     {
                         codec->translated_low_factors8.resize(
@@ -4967,9 +5011,13 @@ LEO2_EXPORT leo2_result leo2_codec_create(
             if (permanent_erasure_count != 0 &&
                 leopard::ff16::IsDirectLocatorPreferred(parent, recovery_count))
             {
-                codec->permanent_locator16.resize(parent);
-                leopard::ff16::PrepareDecode(parent,
-                    &codec->permanent_erased[0], &codec->permanent_locator16[0]);
+                if (prepare_native_locator)
+                {
+                    codec->permanent_locator16.resize(parent);
+                    leopard::ff16::PrepareDecode(parent,
+                        &codec->permanent_erased[0],
+                        &codec->permanent_locator16[0]);
+                }
                 if (!codec->translated_low_permanent_erased.empty())
                 {
                     codec->translated_low_permanent_locator16.resize(parent);
@@ -4988,9 +5036,12 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 }
                 else
                 {
-                    codec->fixed_factors16.resize(parent);
-                    leopard::ff16::PrepareHighDecode(
-                        parent, padded, &codec->fixed_factors16[0]);
+                    if (prepare_native_high)
+                    {
+                        codec->fixed_factors16.resize(parent);
+                        leopard::ff16::PrepareHighDecode(
+                            parent, padded, &codec->fixed_factors16[0]);
+                    }
                     if (prepare_translated_low)
                     {
                         codec->translated_low_factors16.resize(
@@ -5258,6 +5309,33 @@ LEO2_EXPORT leo2_result leo2_encode_scratch_size(
 }
 
 } // extern "C"
+
+namespace leopard2_internal {
+
+bool GetCodecDecodeMetadataInfo(
+    const leo2_codec* codec,
+    CodecDecodeMetadataInfo* info_out)
+{
+    if (!codec || !info_out)
+        return false;
+    CodecDecodeMetadataInfo info;
+    info.permanent_erased_bytes = codec->permanent_erased.size();
+    info.native_locator_bytes = codec->permanent_locator8.size() +
+        codec->permanent_locator16.size() * sizeof(uint16_t);
+    info.native_factor_bytes = codec->fixed_factors8.size() +
+        codec->fixed_factors16.size() * sizeof(uint16_t);
+    info.translated_permanent_erased_bytes =
+        codec->translated_low_permanent_erased.size();
+    info.translated_locator_bytes =
+        codec->translated_low_permanent_locator8.size() +
+        codec->translated_low_permanent_locator16.size() * sizeof(uint16_t);
+    info.translated_factor_bytes = codec->translated_low_factors8.size() +
+        codec->translated_low_factors16.size() * sizeof(uint16_t);
+    *info_out = info;
+    return true;
+}
+
+} // namespace leopard2_internal
 
 static leo2_result EncodeInternal(
     const leo2_codec* codec,

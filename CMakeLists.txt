@@ -740,6 +740,55 @@ if(LEO2_BUILD_TESTS)
             LEO2_BACKEND_FORCE_AVX512=1)
     endif()
 
+    # Structural reachability checks link the exact production archive and
+    # the deliberately richer hook archive separately.  The former must elide
+    # native Algorithm-5 metadata in translated P=T,N=2P codecs; the latter
+    # must retain it because its codec mode can switch after construction.
+    add_executable(leopard2_translated_metadata_test
+        tests/leopard2/test_translated_metadata.cpp)
+    target_link_libraries(leopard2_translated_metadata_test leopard)
+    add_executable(leopard2_translated_metadata_hooks_test
+        tests/leopard2/test_translated_metadata.cpp)
+    target_compile_definitions(leopard2_translated_metadata_hooks_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1
+        LEO2_EXPECT_HOOK_NATIVE_METADATA=1)
+    target_link_libraries(leopard2_translated_metadata_hooks_test
+        leopard_test_hooks)
+    if(LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_translated_metadata_test PRIVATE
+            LEO2_EXPECT_GF8=1)
+        target_compile_definitions(
+            leopard2_translated_metadata_hooks_test PRIVATE
+            LEO2_EXPECT_GF8=1)
+    else()
+        target_compile_definitions(leopard2_translated_metadata_test PRIVATE
+            LEO2_EXPECT_GF8=0)
+        target_compile_definitions(
+            leopard2_translated_metadata_hooks_test PRIVATE
+            LEO2_EXPECT_GF8=0)
+    endif()
+    if(LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_translated_metadata_test PRIVATE
+            LEO2_EXPECT_GF16=1)
+        target_compile_definitions(
+            leopard2_translated_metadata_hooks_test PRIVATE
+            LEO2_EXPECT_GF16=1)
+    else()
+        target_compile_definitions(leopard2_translated_metadata_test PRIVATE
+            LEO2_EXPECT_GF16=0)
+        target_compile_definitions(
+            leopard2_translated_metadata_hooks_test PRIVATE
+            LEO2_EXPECT_GF16=0)
+    endif()
+    add_test(NAME leopard2_translated_metadata
+        COMMAND leopard2_translated_metadata_test)
+    add_test(NAME leopard2_translated_metadata_hooks
+        COMMAND leopard2_translated_metadata_hooks_test)
+    set_tests_properties(
+        leopard2_translated_metadata leopard2_translated_metadata_hooks
+        PROPERTIES ENVIRONMENT
+            "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
     add_executable(leopard2_field_options_test
         tests/leopard2/test_field_options.cpp)
     if(LEOPARD_ENABLE_GF8)

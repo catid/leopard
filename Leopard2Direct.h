@@ -117,4 +117,32 @@ LEO2_EXPORT uint64_t leo2_test_high_scratch_reveal_shards(void);
 
 #endif /* LEO2_ENABLE_TEST_HOOKS */
 
+#ifdef __cplusplus
+
+namespace leopard2_internal {
+
+/*
+    Internal structural accounting for immutable decode tables.  This is not
+    part of the installed C API: production and hook-library tests use it to
+    prove that codec setup retains exactly the metadata reachable through each
+    build's dispatch controls.
+*/
+struct CodecDecodeMetadataInfo
+{
+    size_t permanent_erased_bytes;
+    size_t native_locator_bytes;
+    size_t native_factor_bytes;
+    size_t translated_permanent_erased_bytes;
+    size_t translated_locator_bytes;
+    size_t translated_factor_bytes;
+};
+
+bool GetCodecDecodeMetadataInfo(
+    const leo2_codec* codec,
+    CodecDecodeMetadataInfo* info_out);
+
+} // namespace leopard2_internal
+
+#endif /* __cplusplus */
+
 #endif /* CAT_LEOPARD2_DIRECT_TEST_H */
