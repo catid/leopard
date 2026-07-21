@@ -10,6 +10,7 @@
     "dispatch_narrowing": "7ecf5cbe3dd84cf39578edd35aa1c167c1b8ae56",
     "final_test_hardening": "57e6c00796e8b434211530d0e60696ba6a74ddca",
     "one_pass_preservation": "6c247bfa543936593c07971578c405c86e40580d",
+    "independent_review_test_memory_fix": "e3e3365d93bc1c0527079a71da268e914b4b546f",
     "aggregate_diff_sha256_from_control": "d409bdbd365cb2704529c171ab1ba8f5abe9345f633e0a736d59dc0485157848",
     "aggregate_diff_definition": "SHA-256 of git diff --binary d9f1081..6c247bf before this evidence file was added."
   },
@@ -149,6 +150,8 @@
     "clang_strict_before_final_narrowing": "15/15 focused tests passed with Clang 18, -Wall -Wextra -Wpedantic -Werror.",
     "clang_asan_ubsan_before_final_narrowing": "15/15 focused tests passed with ASan+UBSan, leak detection, halt-on-error, and OMP_NUM_THREADS=1.",
     "final_strict_and_sanitizer_state": "Post-narrowing Clang 18 strict Release and Clang 18 ASan+UBSan builds each passed all 15 focused tests. Strict flags were -Wall -Wextra -Wpedantic -Werror. Sanitizers used -O1 -g -fno-omit-frame-pointer -fno-sanitize-recover=all -fsanitize=address,undefined, ASAN leak detection and halt-on-error, UBSAN halt-on-error and stack traces, and OMP_NUM_THREADS=1.",
+    "post_independent_review_release": "8/8 focused encode, backend, API, aliasing, concurrency, and legacy-golden tests passed after the test-memory fix.",
+    "post_independent_review_asan_ubsan": "4/4 direct-encode, API, public-contract, and batch-aliasing tests passed under Clang 18 ASan+UBSan with leak detection and halt-on-error after the test-memory fix.",
     "campaign_scope": "Optimization-oriented validation by user direction: targeted parity differential tests, direct-algebra checks, dispatch/backend boundaries, alias/sentinel/concurrency tests, strict warnings, and ASan+UBSan. No broad fuzz campaign was run for this isolated optimization.",
     "coverage": [
       "all 200 parity shards byte-for-byte against the old leo_encode API",
@@ -160,6 +163,29 @@
       "explicit scalar, SSSE3, AVX2, AVX512, and NEON contexts retain one pass when supported",
       "65536+64-byte and ragged 65536+2-byte calls retain one pass"
     ]
+  },
+  "independent_review": {
+    "status": "production_clean_after_bounds_and_dispatch_audit",
+    "production_findings": 0,
+    "audited": [
+      "scratch query and runtime geometry identity",
+      "exact calibrated-host and codec-cell dispatch gate",
+      "AUTO AVX-512 dense and AVX2 partial-output semantics",
+      "explicit-backend and neighboring-size one-pass fallback",
+      "full-call source-staging policy",
+      "64-byte GF16 ALTMAP tile boundaries",
+      "source and destination offsets, work-slot bounds, and output holes",
+      "alias rejection, failure atomicity, immutable-codec concurrency",
+      "same-source benchmark artifacts and committed evidence claims"
+    ],
+    "production_differential": "Current production dense, prefix-199, sparse-three, and single-output hashes matched the frozen control. The 32768-byte, ragged 65538-byte, and neighboring 65600-byte dense and sparse checks also matched the control.",
+    "test_memory_fix": {
+      "before_peak_rss_kib": 317136,
+      "after_peak_rss_kib": 165148,
+      "reduction_kib": 151988,
+      "reduction_percent": 47.925180,
+      "method": "Hash immutable sources instead of retaining a full duplicate, move the transmitted legacy parity buffers without copying, release sequential encode results and alias scratch before concurrency, and skip the large differential when the calibrated tiling path is inactive while retaining dispatch assertions."
+    }
   },
   "static_and_assembly_audit": {
     "source_audit": "Public spans are validated before writes; every byte-tile offset remains within those spans; null outputs use disjoint compact work slots; codec/backend tables are immutable; each call owns its pointer array and scratch.",
