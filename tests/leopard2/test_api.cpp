@@ -1068,6 +1068,32 @@ void test_forced_backend(leo2_context* context)
 
 void test_codec_flag_validation(leo2_context* context)
 {
+    const int invalid_profiles[] = { -1, 99 };
+    for (size_t i = 0;
+         i < sizeof(invalid_profiles) / sizeof(invalid_profiles[0]); ++i)
+    {
+        leo2_codec* invalid =
+            reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+        require(leo2_codec_create(context, 9, 7, invalid_profiles[i],
+                LEO2_FIELD_GF8, NULL, &invalid) == LEO2_INVALID_ARGUMENT,
+            "invalid integer profile was accepted");
+        require(invalid == NULL,
+            "invalid integer profile did not clear codec output");
+    }
+    const int invalid_fields[] = { -1, 99 };
+    for (size_t i = 0;
+         i < sizeof(invalid_fields) / sizeof(invalid_fields[0]); ++i)
+    {
+        leo2_codec* invalid =
+            reinterpret_cast<leo2_codec*>(static_cast<uintptr_t>(1));
+        require(leo2_codec_create(context, 9, 7,
+                LEO2_PROFILE_LEGACY_HIGH_V1, invalid_fields[i], NULL,
+                &invalid) == LEO2_INVALID_ARGUMENT,
+            "invalid integer field was accepted");
+        require(invalid == NULL,
+            "invalid integer field did not clear codec output");
+    }
+
     leo2_codec_options options;
     memset(&options, 0, sizeof(options));
     options.struct_size = sizeof(options);

@@ -23,6 +23,14 @@ first proving that the complete scalar output object span is representable.
 The wire-size query follows the same rule.  Null introspection arguments return
 their documented zero, AUTO, or native-layout sentinel.
 
+`leo2_codec_create` accepts profile and field selectors through integer ABI
+parameters and validates them before converting to the internal enum types.
+Applications still pass the `leo2_profile` and `leo2_field` constants normally.
+This representation keeps negative and unknown values well-defined under C
+short-enum modes and C++ enum sanitizers instead of invoking undefined behavior
+while trying to reject them.  Profile, field, layout, and backend introspection
+remain enum-typed because the library returns only values it has validated.
+
 Option structures must be zero-initialized, `struct_size` set, and every
 `reserved` field left zero.  A nonzero reserved field is rejected.  A
 `struct_size` larger than the current definition is accepted and only the known

@@ -599,7 +599,10 @@ void test_rejection(leo2_context* context)
         LEO2_TEST_DECODE_FORCE_NATIVE_HIGH), LEO2_UNSUPPORTED,
         "reject native-high control outside the duality region");
     require_result(leo2_test_codec_set_decode_mode(unequal,
-        static_cast<leo2_test_decode_mode>(99)), LEO2_INVALID_ARGUMENT,
+        -1), LEO2_INVALID_ARGUMENT,
+        "reject negative decode mode");
+    require_result(leo2_test_codec_set_decode_mode(unequal,
+        99), LEO2_INVALID_ARGUMENT,
         "reject unknown decode mode");
     leo2_codec_destroy(unequal);
 

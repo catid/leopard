@@ -58,13 +58,15 @@ typedef enum leo2_test_decode_mode {
     LEO2_TEST_DECODE_FORCE_NATIVE_HIGH = 2
 } leo2_test_decode_mode;
 
+/* Integer inputs keep deliberately invalid diagnostic probes defined under
+   C++ enum sanitizers; valid leo2_test_* enum constants convert implicitly. */
 LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
     leo2_codec* codec,
-    leo2_test_encode_mode mode);
+    int mode);
 
 LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
     leo2_codec* codec,
-    leo2_test_decode_mode mode);
+    int mode);
 
 LEO2_EXPORT int leo2_test_codec_translated_low_capable(
     const leo2_codec* codec);

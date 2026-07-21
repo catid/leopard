@@ -239,12 +239,20 @@ LEO2_EXPORT void leo2_context_destroy(leo2_context* context);
 LEO2_EXPORT leo2_backend leo2_context_backend(const leo2_context* context);
 LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context);
 
+/*
+    profile and field intentionally use integer ABI inputs.  Pass one of the
+    corresponding leo2_* enum constants.  Keeping untrusted selector values as
+    integers until after validation makes negative and unknown future values a
+    defined LEO2_INVALID_ARGUMENT result, including under C short-enum modes
+    and C++ enum sanitizers.  Introspection returns remain enum-typed because
+    the library produces only validated values.
+*/
 LEO2_EXPORT leo2_result leo2_codec_create(
     leo2_context* context,
     uint32_t original_count,
     uint32_t recovery_count,
-    leo2_profile profile,
-    leo2_field field,
+    int profile,
+    int field,
     const leo2_codec_options* options,
     leo2_codec** codec_out);
 LEO2_EXPORT void leo2_codec_destroy(leo2_codec* codec);

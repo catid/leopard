@@ -500,6 +500,22 @@ void test_profile_matrix(
 
 void test_capability_boundaries(leo2_context* context, Counts* counts)
 {
+    CodecOwner* mode_validation = make_codec(context, 3, 3,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+    require_result(leo2_test_codec_set_encode_mode(mode_validation->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM), "set validation transform mode");
+    require(leo2_test_codec_set_encode_mode(mode_validation->codec, -1) ==
+            LEO2_INVALID_ARGUMENT &&
+            leo2_test_codec_set_encode_mode(mode_validation->codec, 99) ==
+            LEO2_INVALID_ARGUMENT,
+        "invalid integer encode mode was accepted");
+    int validation_direct = -1;
+    require_result(leo2_test_codec_encode_path(mode_validation->codec,
+        1024, 1, &validation_direct), "post-rejection encode path query");
+    require(validation_direct == 0,
+        "invalid encode mode changed the prior codec mode");
+    delete mode_validation;
+
     const unsigned pairs[][2] = {
         { 17, 1 }, { 17, 16 }, { 1, 17 }, { 16, 17 }, { 17, 17 }
     };

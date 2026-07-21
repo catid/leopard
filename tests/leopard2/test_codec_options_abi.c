@@ -43,6 +43,12 @@ typedef char leo2_layout_storage_must_be_u32[
 typedef char leo2_backend_storage_must_be_u32[
     sizeof(((leo2_context_options *)0)->backend) == sizeof(uint32_t) ? 1 : -1];
 
+typedef leo2_result (*leo2_codec_create_integer_selector_fn)(
+    leo2_context *, uint32_t, uint32_t, int, int,
+    const leo2_codec_options *, leo2_codec **);
+static leo2_codec_create_integer_selector_fn const
+    leo2_codec_create_integer_selector_signature = leo2_codec_create;
+
 static int require_result(leo2_result actual, leo2_result expected,
     const char *operation)
 {
@@ -82,9 +88,40 @@ int main(void)
     context_options.struct_size = sizeof(context_options);
     context_options.thread_count = 1;
     if (LEO2_API_VERSION < 4u ||
+        leo2_codec_create_integer_selector_signature == NULL ||
         !require_result(leo2_context_create(&context_options, &context), LEO2_SUCCESS,
             "C ABI context create")) {
         return 1;
+    }
+
+    {
+        const int invalid_profiles[] = { -1, 99 };
+        const int invalid_fields[] = { -1, 99 };
+        size_t i;
+        for (i = 0; i < sizeof(invalid_profiles) / sizeof(invalid_profiles[0]);
+             ++i) {
+            codec = (leo2_codec *)(uintptr_t)1;
+            if (!require_result(leo2_codec_create(context, 5, 3,
+                    invalid_profiles[i], LEO2_FIELD_GF8, NULL, &codec),
+                    LEO2_INVALID_ARGUMENT,
+                    "C ABI invalid integer profile rejection") ||
+                codec != NULL) {
+                leo2_context_destroy(context);
+                return 1;
+            }
+        }
+        for (i = 0; i < sizeof(invalid_fields) / sizeof(invalid_fields[0]);
+             ++i) {
+            codec = (leo2_codec *)(uintptr_t)1;
+            if (!require_result(leo2_codec_create(context, 5, 3,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, invalid_fields[i], NULL,
+                    &codec), LEO2_INVALID_ARGUMENT,
+                    "C ABI invalid integer field rejection") ||
+                codec != NULL) {
+                leo2_context_destroy(context);
+                return 1;
+            }
+        }
     }
 
     {

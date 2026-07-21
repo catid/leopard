@@ -4719,8 +4719,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     leo2_context* context,
     uint32_t original_count,
     uint32_t recovery_count,
-    leo2_profile profile,
-    leo2_field field,
+    int profile_value,
+    int field_value,
     const leo2_codec_options* options,
     leo2_codec** codec_out)
 {
@@ -4794,14 +4794,16 @@ LEO2_EXPORT leo2_result leo2_codec_create(
         }
     }
     if (shard_layout == LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1 &&
-        field != LEO2_FIELD_GF16)
+        field_value != LEO2_FIELD_GF16)
         return LEO2_INVALID_ARGUMENT;
-    if (profile == LEO2_PROFILE_AUTO)
-        profile = recovery_count <= original_count
+    if (profile_value == LEO2_PROFILE_AUTO)
+        profile_value = recovery_count <= original_count
             ? LEO2_PROFILE_LEGACY_HIGH_V1 : LEO2_PROFILE_LOW_V1;
-    if (profile != LEO2_PROFILE_LEGACY_HIGH_V1 && profile != LEO2_PROFILE_LOW_V1)
-        return profile == LEO2_PROFILE_EXACT_EXPERIMENTAL_V1
+    if (profile_value != LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        profile_value != LEO2_PROFILE_LOW_V1)
+        return profile_value == LEO2_PROFILE_EXACT_EXPERIMENTAL_V1
             ? LEO2_UNSUPPORTED : LEO2_INVALID_ARGUMENT;
+    const leo2_profile profile = static_cast<leo2_profile>(profile_value);
 
     const uint32_t padded = CeilPow2(
         profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? recovery_count : original_count);
@@ -4812,14 +4814,15 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     if (parent == 0)
         return LEO2_INVALID_COUNTS;
 
-    if (field == LEO2_FIELD_AUTO)
-        field = parent <= kGF8Order ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
-    if (field == LEO2_FIELD_GF8 && parent > kGF8Order)
+    if (field_value == LEO2_FIELD_AUTO)
+        field_value = parent <= kGF8Order ? LEO2_FIELD_GF8 : LEO2_FIELD_GF16;
+    if (field_value == LEO2_FIELD_GF8 && parent > kGF8Order)
         return LEO2_INVALID_COUNTS;
-    if (field == LEO2_FIELD_GF16 && parent > kGF16Order)
+    if (field_value == LEO2_FIELD_GF16 && parent > kGF16Order)
         return LEO2_INVALID_COUNTS;
-    if (field != LEO2_FIELD_GF8 && field != LEO2_FIELD_GF16)
+    if (field_value != LEO2_FIELD_GF8 && field_value != LEO2_FIELD_GF16)
         return LEO2_INVALID_ARGUMENT;
+    const leo2_field field = static_cast<leo2_field>(field_value);
 #ifndef LEO_HAS_FF8
     if (field == LEO2_FIELD_GF8)
         return LEO2_UNSUPPORTED;
@@ -5060,12 +5063,14 @@ LEO2_EXPORT leo2_shard_layout leo2_codec_shard_layout(const leo2_codec* codec)
 #ifdef LEO2_ENABLE_TEST_HOOKS
 LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
     leo2_codec* codec,
-    leo2_test_encode_mode mode)
+    int mode_value)
 {
-    if (!codec || (mode != LEO2_TEST_ENCODE_AUTO &&
-                   mode != LEO2_TEST_ENCODE_FORCE_DIRECT &&
-                   mode != LEO2_TEST_ENCODE_FORCE_TRANSFORM))
+    if (!codec || (mode_value != LEO2_TEST_ENCODE_AUTO &&
+                   mode_value != LEO2_TEST_ENCODE_FORCE_DIRECT &&
+                   mode_value != LEO2_TEST_ENCODE_FORCE_TRANSFORM))
         return LEO2_INVALID_ARGUMENT;
+    const leo2_test_encode_mode mode =
+        static_cast<leo2_test_encode_mode>(mode_value);
     if (mode == LEO2_TEST_ENCODE_FORCE_DIRECT &&
         !HasDirectGeneratorRows(codec))
         return LEO2_UNSUPPORTED;
@@ -5075,12 +5080,14 @@ LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
 
 LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
     leo2_codec* codec,
-    leo2_test_decode_mode mode)
+    int mode_value)
 {
-    if (!codec || (mode != LEO2_TEST_DECODE_AUTO &&
-                   mode != LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW &&
-                   mode != LEO2_TEST_DECODE_FORCE_NATIVE_HIGH))
+    if (!codec || (mode_value != LEO2_TEST_DECODE_AUTO &&
+                   mode_value != LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW &&
+                   mode_value != LEO2_TEST_DECODE_FORCE_NATIVE_HIGH))
         return LEO2_INVALID_ARGUMENT;
+    const leo2_test_decode_mode mode =
+        static_cast<leo2_test_decode_mode>(mode_value);
     if (mode != LEO2_TEST_DECODE_AUTO)
     {
         if (!CanUseTranslatedLowDecode(codec))
