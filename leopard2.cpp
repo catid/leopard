@@ -1302,26 +1302,30 @@ static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
 #endif
 }
 
-static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
+static bool IsMeasuredEqualRoundedDirectRepairCodec(const leo2_codec* codec)
 {
     /*
-        K=65 is the largest GF8 message-side inflation boundary: its
-        equal-rounded legacy-high parent has P=T=128 and N=256.  A direct
-        eight-loss solve performs at most 8*65 fixed-source terms per byte,
-        versus Algorithm 4's 256*log2(128) butterfly equivalents.  Pinned
-        tail/aligned sweeps from 1 byte through 16 MiB retained the direct
-        path across representative R values whose rounded side is 128.  Keep
-        this deliberately narrow until neighboring K values have equally
-        stable evidence.
+        A deterministic 1,950-cell direct-versus-Algorithm-4 screen covered
+        every requested K from 17 through 128, all three equal-rounded R
+        boundaries, one through sixteen losses, and shard sizes from one byte
+        through one MiB.  One-loss repair was the only broad new region that
+        won every cell: its weakest execution result was 1.369x and its
+        weakest reuse-one result including plan setup was 1.577x.  Keep the
+        selector tied to the measured GF8/AVX2 P=T,N=2P construction.
     */
     return codec && codec->context &&
-        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        CanUseTranslatedLowDecode(codec) &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->context->backend == LEO2_BACKEND_AVX2 &&
-        codec->original_count == 65 &&
-        codec->padded_side == 128 &&
-        codec->parent_count == 256 &&
-        codec->parent_dimension == 128;
+        codec->original_count > kDirectLegacyMaxRepairOriginals &&
+        codec->parent_count <= kGF8Order;
+}
+
+static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
+{
+    /* K=65 retains its separately measured eight-loss promotion. */
+    return IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+        codec->original_count == 65 && codec->padded_side == 128;
 }
 
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
@@ -1332,15 +1336,18 @@ static bool CanPrepareDirectRepair(const leo2_codec* codec)
                            LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
         (codec->original_count <= kDirectLegacyMaxRepairOriginals ||
-         IsExpandedDirectRepairCodec(codec)) &&
+         IsMeasuredEqualRoundedDirectRepairCodec(codec)) &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
         codec->padded_side >= 2;
 }
 
 static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
 {
-    return IsExpandedDirectRepairCodec(codec)
-        ? kDirectMaxRepairLosses : 4;
+    if (IsExpandedDirectRepairCodec(codec))
+        return kDirectMaxRepairLosses;
+    if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
+        return 1;
+    return 4;
 }
 
 template<class Field>
@@ -3356,7 +3363,8 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
-    const bool tiled_gf8_tail = IsExpandedDirectRepairCodec(codec) &&
+    const bool tiled_gf8_tail =
+        IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
         (shard_bytes & (kScratchAlignment - 1U)) != 0;
     const size_t aligned_bytes = tiled_gf8_tail
         ? shard_bytes & ~(kScratchAlignment - 1U)

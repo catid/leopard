@@ -679,6 +679,24 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           33, 4, true, false },
         { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, false, false },
+        { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1, 1, true, true },
+        { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1, 4, false, false },
+        { 17, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, false, false },
+        { 17, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, false, false },
+        { 32, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 1, true, true },
+        { 32, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, false, false },
+        { 33, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 1, true, true },
+        { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1025, 1, true, true },
         { 16, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
           66, 4, true, false },
         { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
@@ -709,6 +727,16 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           64, 9, false, false },
         { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, false, false },
+        { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 128, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 1, true, true },
+        { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1024, 1, true, true },
+        { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1024, 4, false, false },
+        { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, false, false },
         { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
@@ -816,6 +844,41 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
     }
 }
 
+void test_generalized_one_loss_direct_repair_execution(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+        unsigned missing_original;
+        size_t bytes;
+    };
+    const Case cases[] = {
+        { 17, 17, 0, 1 },
+        { 17, 32, 16, 65 },
+        { 32, 17, 31, 1025 },
+        { 32, 32, 15, 64 },
+        { 33, 33, 32, 63 },
+        { 33, 64, 0, 65 },
+        { 64, 33, 63, 1025 },
+        { 64, 64, 31, 64 },
+        { 66, 65, 65, 1 },
+        { 66, 128, 0, 65 },
+        { 128, 65, 127, 1025 },
+        { 128, 128, 64, 1024 * 1024 }
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        const Case& test = cases[i];
+        run_decode_case(context, test.k, test.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            test.bytes, std::vector<unsigned>{test.missing_original},
+            std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
+    }
+}
+
 void test_expanded_direct_repair_execution(TestCounts* counts)
 {
     leo2_context_options options;
@@ -838,6 +901,7 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         "explicit AVX2 direct-repair context selected the wrong backend");
 
     test_direct_repair_dispatch_bounds(context);
+    test_generalized_one_loss_direct_repair_execution(context, counts);
     const std::vector<unsigned> missing_originals = {
         0, 1, 7, 16, 32, 48, 63, 64
     };
