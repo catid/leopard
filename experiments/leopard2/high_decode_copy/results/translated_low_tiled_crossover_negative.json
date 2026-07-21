@@ -1,0 +1,922 @@
+{
+  "schema": "leopard2-translated-low-tiled-crossover/v1",
+  "date_utc": "2026-07-21",
+  "status": "rejected_no_dispatch_change",
+  "bead": "leopard-79h.38.4.4",
+  "source_commit": "102e0b5c5d29307be08722a6c04d753ed586a34c",
+  "scope": "Existing materialized versus side-tiled IT2026 Algorithm 4 execution for legacy-high P=T,N=2P plans",
+  "identity": {
+    "wire_profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "wire_profile_changed": false,
+    "field_or_coordinate_map_changed": false
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "backend": "avx2",
+    "threads": 1,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30
+  },
+  "method": {
+    "order": [
+      "materialized",
+      "tiled",
+      "tiled",
+      "materialized"
+    ],
+    "cells": 18,
+    "processes": 72,
+    "process_concurrency": 1,
+    "timing_samples_per_process": 15,
+    "warmup_calls": 2,
+    "same_seed_within_cell": true,
+    "plan_setup_reported_separately": true,
+    "amortized_reuse_counts": [
+      1,
+      8,
+      64
+    ],
+    "batch_counts": [
+      1,
+      8,
+      64
+    ],
+    "fields": [
+      "gf8",
+      "gf16"
+    ],
+    "exact_digest_requirement": true,
+    "selected_path_and_scratch_introspection_requirement": true
+  },
+  "isolation": {
+    "counter_source": "/proc/stat",
+    "elapsed_seconds": 51.062,
+    "benchmark_cpu": {
+      "cpu": 14,
+      "nonidle_jiffies": 5107,
+      "idle_jiffies": 0,
+      "total_jiffies": 5107
+    },
+    "reserved_sibling": {
+      "cpu": 30,
+      "nonidle_jiffies": 0,
+      "idle_jiffies": 5106,
+      "total_jiffies": 5106
+    },
+    "accepted": true
+  },
+  "raw_bundle": {
+    "location_at_measurement": "/tmp/leo2-translated-tiled-quiet-102e0b5.QJoM5H",
+    "file_count": 149,
+    "manifest_algorithm": "sha256 of lexicographically sorted sha256sum records over relative paths",
+    "manifest_sha256": "0c2e8e416d56fde5fd3596e30e991cbe5db7d162b24d8478cb5c075d1d97bcbf"
+  },
+  "rejected_directional_screen": {
+    "cells": 48,
+    "process_concurrency": 15,
+    "reason": "Concurrent jobs contended for shared cache and memory bandwidth and produced contradictory cache-state reversals; excluded from promotion evidence.",
+    "raw_json_files": 96,
+    "manifest_sha256": "5e8bc727b0ed638c118dd8fb0d83cf50ecd91868695b1ce9c5dfda12c61e1e75"
+  },
+  "validation": {
+    "all_workload_digests_equal_within_cell": true,
+    "all_round_trips_passed": true,
+    "all_paths_exactly_materialized_or_tiled_as_forced": true,
+    "all_rules": "translated_low",
+    "all_work_slot_counts_equal_within_cell": true,
+    "all_scratch_sizes_equal_within_cell": true
+  },
+  "results": [
+    {
+      "id": "k1000-r1000-gf16-l500-b4096-batch1",
+      "K": 1000,
+      "R": 1000,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 500,
+      "batch": 1,
+      "measured_reuse": 4,
+      "materialized_process_medians_us": [
+        1552.71,
+        1557.77
+      ],
+      "tiled_process_medians_us": [
+        1554.77,
+        1553.3575
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        0.998675,
+        1.002841
+      ],
+      "mean_process_median_us": {
+        "materialized": 1555.24,
+        "tiled": 1554.06375
+      },
+      "execution_speedup_materialized_over_tiled": 1.000757,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 156.227,
+        "tiled": 156.7215
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.000399,
+        "8": 1.000708,
+        "64": 1.000751
+      },
+      "decode_required_work_slots": 2048,
+      "decode_scratch_bytes_per_stripe": 8469376,
+      "decode_scratch_bytes_batch": 8469376,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "dec39f3bd4744aeb",
+        "transmitted_parity": "b12670ad4a88864c",
+        "recovered_originals": "db4b495ff4d0e34e"
+      }
+    },
+    {
+      "id": "k1000-r1000-gf16-l500-b4096-batch64",
+      "K": 1000,
+      "R": 1000,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 500,
+      "batch": 64,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        136924.501,
+        136949.632
+      ],
+      "tiled_process_medians_us": [
+        133483.463,
+        133217.359
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.025779,
+        1.028016
+      ],
+      "mean_process_median_us": {
+        "materialized": 136937.0665,
+        "tiled": 133350.411
+      },
+      "execution_speedup_materialized_over_tiled": 1.026896,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 152.4315,
+        "tiled": 152.8865
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.026862,
+        "8": 1.026892,
+        "64": 1.026896
+      },
+      "decode_required_work_slots": 2048,
+      "decode_scratch_bytes_per_stripe": 8469376,
+      "decode_scratch_bytes_batch": 542040064,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "c55332a5e137f69c",
+        "transmitted_parity": "1f353f1261378848",
+        "recovered_originals": "01b97690900c46be"
+      }
+    },
+    {
+      "id": "k1000-r1000-gf16-l500-b4096-batch8",
+      "K": 1000,
+      "R": 1000,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 500,
+      "batch": 8,
+      "measured_reuse": 2,
+      "materialized_process_medians_us": [
+        16295.943,
+        16306.2185
+      ],
+      "tiled_process_medians_us": [
+        15813.558,
+        15709.462
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.030505,
+        1.037987
+      ],
+      "mean_process_median_us": {
+        "materialized": 16301.08075,
+        "tiled": 15761.51
+      },
+      "execution_speedup_materialized_over_tiled": 1.034233,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 155.692,
+        "tiled": 154.6665
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.033965,
+        "8": 1.0342,
+        "64": 1.034229
+      },
+      "decode_required_work_slots": 2048,
+      "decode_scratch_bytes_per_stripe": 8469376,
+      "decode_scratch_bytes_batch": 67755008,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "b7b06199d43817ad",
+        "transmitted_parity": "0f02270bda62ebaf",
+        "recovered_originals": "14e35610352aeb4f"
+      }
+    },
+    {
+      "id": "k1000-r1000-gf16-l500-b65536-batch1",
+      "K": 1000,
+      "R": 1000,
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "loss": 500,
+      "batch": 1,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        44037.765,
+        43993.186
+      ],
+      "tiled_process_medians_us": [
+        44202.698,
+        44480.901
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        0.996269,
+        0.989035
+      ],
+      "mean_process_median_us": {
+        "materialized": 44015.4755,
+        "tiled": 44341.7995
+      },
+      "execution_speedup_materialized_over_tiled": 0.992641,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 154.302,
+        "tiled": 153.976
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 0.992674,
+        "8": 0.992645,
+        "64": 0.992641
+      },
+      "decode_required_work_slots": 2048,
+      "decode_scratch_bytes_per_stripe": 134298496,
+      "decode_scratch_bytes_batch": 134298496,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "b848978d808eda6a",
+        "transmitted_parity": "1a870804b2b3762c",
+        "recovered_originals": "0be2be34aed12738"
+      }
+    },
+    {
+      "id": "k128-r128-gf8-l128-b4096-batch1",
+      "K": 128,
+      "R": 128,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 128,
+      "batch": 1,
+      "measured_reuse": 8,
+      "materialized_process_medians_us": [
+        92.716125,
+        92.401
+      ],
+      "tiled_process_medians_us": [
+        93.184875,
+        93.537375
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        0.99497,
+        0.987851
+      ],
+      "mean_process_median_us": {
+        "materialized": 92.558562,
+        "tiled": 93.361125
+      },
+      "execution_speedup_materialized_over_tiled": 0.991404,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 2.06,
+        "tiled": 2.035
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 0.991849,
+        "8": 0.99146,
+        "64": 0.991411
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 1058816,
+      "decode_scratch_bytes_batch": 1058816,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "cac88843699abab6",
+        "transmitted_parity": "56a195e33d0db906",
+        "recovered_originals": "cac88843699abab6"
+      }
+    },
+    {
+      "id": "k128-r128-gf8-l128-b65536-batch8",
+      "K": 128,
+      "R": 128,
+      "field": "gf8",
+      "shard_bytes": 65536,
+      "loss": 128,
+      "batch": 8,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        20318.248,
+        20333.419
+      ],
+      "tiled_process_medians_us": [
+        19723.092,
+        19650.211
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.030176,
+        1.034768
+      ],
+      "mean_process_median_us": {
+        "materialized": 20325.8335,
+        "tiled": 19686.6515
+      },
+      "execution_speedup_materialized_over_tiled": 1.032468,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 1.975,
+        "tiled": 1.96
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.032465,
+        "8": 1.032467,
+        "64": 1.032468
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 16787456,
+      "decode_scratch_bytes_batch": 134299648,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "e04da0ad6845e809",
+        "transmitted_parity": "72c8c763446ce179",
+        "recovered_originals": "e04da0ad6845e809"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b4096-batch1",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 64,
+      "batch": 1,
+      "measured_reuse": 8,
+      "materialized_process_medians_us": [
+        218.09625,
+        217.224875
+      ],
+      "tiled_process_medians_us": [
+        211.747375,
+        210.916125
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.029983,
+        1.029911
+      ],
+      "mean_process_median_us": {
+        "materialized": 217.660562,
+        "tiled": 211.33175
+      },
+      "execution_speedup_materialized_over_tiled": 1.029947,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 31.325,
+        "tiled": 31.87
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.023782,
+        "8": 1.029077,
+        "64": 1.029837
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 2111552,
+      "decode_scratch_bytes_batch": 2111552,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "93d1a11350f809e7",
+        "transmitted_parity": "46936f9d439ef21e",
+        "recovered_originals": "d768b668ae669cf4"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b4096-batch64",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 64,
+      "batch": 64,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        19369.788,
+        19488.488
+      ],
+      "tiled_process_medians_us": [
+        18737.911,
+        18759.001
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.033722,
+        1.038887
+      ],
+      "mean_process_median_us": {
+        "materialized": 19429.138,
+        "tiled": 18748.456
+      },
+      "execution_speedup_materialized_over_tiled": 1.036306,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 31.961,
+        "tiled": 31.871
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.036249,
+        "8": 1.036299,
+        "64": 1.036305
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 2111552,
+      "decode_scratch_bytes_batch": 135139328,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "748b049cb5e4fcc4",
+        "transmitted_parity": "bd012086afe8eabd",
+        "recovered_originals": "0431c6f784a3bad5"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b4096-batch8",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 4096,
+      "loss": 64,
+      "batch": 8,
+      "measured_reuse": 4,
+      "materialized_process_medians_us": [
+        1795.73025,
+        1786.28275
+      ],
+      "tiled_process_medians_us": [
+        1771.88725,
+        1780.1275
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.013456,
+        1.003458
+      ],
+      "mean_process_median_us": {
+        "materialized": 1791.0065,
+        "tiled": 1776.007375
+      },
+      "execution_speedup_materialized_over_tiled": 1.008445,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 32.6305,
+        "tiled": 32.2055
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.00853,
+        "8": 1.008456,
+        "64": 1.008447
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 2111552,
+      "decode_scratch_bytes_batch": 16892416,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "a41251b6dad7e47b",
+        "transmitted_parity": "b9c367b747016686",
+        "recovered_originals": "12ac5b673ef5bbdc"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b64-batch1",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 64,
+      "loss": 64,
+      "batch": 1,
+      "measured_reuse": 64,
+      "materialized_process_medians_us": [
+        15.322516,
+        15.152203
+      ],
+      "tiled_process_medians_us": [
+        15.395328,
+        15.623766
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        0.995271,
+        0.969818
+      ],
+      "mean_process_median_us": {
+        "materialized": 15.23736,
+        "tiled": 15.509547
+      },
+      "execution_speedup_materialized_over_tiled": 0.98245,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 32.37,
+        "tiled": 32.2155
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 0.997534,
+        "8": 0.987056,
+        "64": 0.983153
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 47168,
+      "decode_scratch_bytes_batch": 47168,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "b67ecf8566c316db",
+        "transmitted_parity": "c18f8da6a274d7f9",
+        "recovered_originals": "be79213d8f46e0db"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b65536-batch1",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "loss": 64,
+      "batch": 1,
+      "measured_reuse": 2,
+      "materialized_process_medians_us": [
+        4321.5585,
+        4297.5735
+      ],
+      "tiled_process_medians_us": [
+        4309.2435,
+        4401.0595
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.002858,
+        0.976486
+      ],
+      "mean_process_median_us": {
+        "materialized": 4309.566,
+        "tiled": 4355.1515
+      },
+      "execution_speedup_materialized_over_tiled": 0.989533,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 31.3905,
+        "tiled": 31.4105
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 0.989603,
+        "8": 0.989542,
+        "64": 0.989534
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 33568832,
+      "decode_scratch_bytes_batch": 33568832,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "740587af77a612e9",
+        "transmitted_parity": "0405abe7f9cf99c1",
+        "recovered_originals": "43744d3df3a6761a"
+      }
+    },
+    {
+      "id": "k129-r129-gf16-l64-b65536-batch8",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "loss": 64,
+      "batch": 8,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        41853.27,
+        41840.551
+      ],
+      "tiled_process_medians_us": [
+        40378.134,
+        40365.604
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.036533,
+        1.03654
+      ],
+      "mean_process_median_us": {
+        "materialized": 41846.9105,
+        "tiled": 40371.869
+      },
+      "execution_speedup_materialized_over_tiled": 1.036536,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 32.2755,
+        "tiled": 32.0455
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.036513,
+        "8": 1.036533,
+        "64": 1.036536
+      },
+      "decode_required_work_slots": 512,
+      "decode_scratch_bytes_per_stripe": 33568832,
+      "decode_scratch_bytes_batch": 268550656,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "051782f62e357a32",
+        "transmitted_parity": "2ce9c5f4afbdbf3a",
+        "recovered_originals": "e29ca930a9877153"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b4096-batch1",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 9,
+      "batch": 1,
+      "measured_reuse": 8,
+      "materialized_process_medians_us": [
+        76.348375,
+        68.50075
+      ],
+      "tiled_process_medians_us": [
+        68.720875,
+        67.88575
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.110992,
+        1.009059
+      ],
+      "mean_process_median_us": {
+        "materialized": 72.424563,
+        "tiled": 68.303313
+      },
+      "execution_speedup_materialized_over_tiled": 1.060337,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 13.17,
+        "tiled": 13.12
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.051229,
+        "8": 1.059012,
+        "64": 1.060168
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 1055808,
+      "decode_scratch_bytes_batch": 1055808,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "5b84d5e063b9f823",
+        "transmitted_parity": "b061cae83a0b1658",
+        "recovered_originals": "144121b94c7b3b89"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b4096-batch64",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 9,
+      "batch": 64,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        6811.217,
+        6799.286
+      ],
+      "tiled_process_medians_us": [
+        6612.284,
+        6503.243
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.030085,
+        1.045522
+      ],
+      "mean_process_median_us": {
+        "materialized": 6805.2515,
+        "tiled": 6557.7635
+      },
+      "execution_speedup_materialized_over_tiled": 1.03774,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 12.87,
+        "tiled": 13.06
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.037636,
+        "8": 1.037727,
+        "64": 1.037738
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 1055808,
+      "decode_scratch_bytes_batch": 67571712,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "4eb1e90b95874a65",
+        "transmitted_parity": "cb9de7635877aeb6",
+        "recovered_originals": "ee38117091386118"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b4096-batch8",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 9,
+      "batch": 8,
+      "measured_reuse": 4,
+      "materialized_process_medians_us": [
+        564.49625,
+        564.5365
+      ],
+      "tiled_process_medians_us": [
+        553.03625,
+        555.06125
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.020722,
+        1.017071
+      ],
+      "mean_process_median_us": {
+        "materialized": 564.516375,
+        "tiled": 554.04875
+      },
+      "execution_speedup_materialized_over_tiled": 1.018893,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 13.22,
+        "tiled": 13.35
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.018219,
+        "8": 1.018807,
+        "64": 1.018882
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 1055808,
+      "decode_scratch_bytes_batch": 8446464,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "9a45dc87a89fbff7",
+        "transmitted_parity": "5c1b800570b540d5",
+        "recovered_originals": "340930b3de22b102"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b64-batch1",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 64,
+      "loss": 9,
+      "batch": 1,
+      "measured_reuse": 64,
+      "materialized_process_medians_us": [
+        4.302547,
+        4.276609
+      ],
+      "tiled_process_medians_us": [
+        4.300047,
+        6.129125
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.000581,
+        0.697752
+      ],
+      "mean_process_median_us": {
+        "materialized": 4.289578,
+        "tiled": 5.214586
+      },
+      "execution_speedup_materialized_over_tiled": 0.822611,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 12.92,
+        "tiled": 13.0
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 0.944824,
+        "8": 0.863295,
+        "64": 0.829031
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 23616,
+      "decode_scratch_bytes_batch": 23616,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "77c0197bbe71a775",
+        "transmitted_parity": "0113c67d36b88be9",
+        "recovered_originals": "d068fda5d39c1958"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b65536-batch1",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 65536,
+      "loss": 9,
+      "batch": 1,
+      "measured_reuse": 2,
+      "materialized_process_medians_us": [
+        1197.6085,
+        1194.4085
+      ],
+      "tiled_process_medians_us": [
+        1194.1935,
+        1194.828
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.00286,
+        0.999649
+      ],
+      "mean_process_median_us": {
+        "materialized": 1196.0085,
+        "tiled": 1194.51075
+      },
+      "execution_speedup_materialized_over_tiled": 1.001254,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 13.275,
+        "tiled": 13.355
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.001174,
+        "8": 1.001244,
+        "64": 1.001253
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 16784448,
+      "decode_scratch_bytes_batch": 16784448,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "c62853650fb7093c",
+        "transmitted_parity": "c132a12f22437e67",
+        "recovered_originals": "a2c4bb31467b3b78"
+      }
+    },
+    {
+      "id": "k65-r65-gf8-l9-b65536-batch8",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 65536,
+      "loss": 9,
+      "batch": 8,
+      "measured_reuse": 1,
+      "materialized_process_medians_us": [
+        14914.958,
+        14916.527
+      ],
+      "tiled_process_medians_us": [
+        14375.412,
+        14384.601
+      ],
+      "pair_speedups_materialized_over_tiled": [
+        1.037533,
+        1.036979
+      ],
+      "mean_process_median_us": {
+        "materialized": 14915.7425,
+        "tiled": 14380.0065
+      },
+      "execution_speedup_materialized_over_tiled": 1.037256,
+      "plan_setup_mean_process_median_us": {
+        "materialized": 12.895,
+        "tiled": 12.9305
+      },
+      "amortized_speedup_materialized_over_tiled": {
+        "1": 1.03722,
+        "8": 1.037251,
+        "64": 1.037255
+      },
+      "decode_required_work_slots": 256,
+      "decode_scratch_bytes_per_stripe": 16784448,
+      "decode_scratch_bytes_batch": 134275584,
+      "workload_digests": {
+        "algorithm": "fnv1a64",
+        "original_data": "521978c5ee4aa9d5",
+        "transmitted_parity": "6230365560b0711f",
+        "recovered_originals": "3e4fb3d6db677720"
+      }
+    }
+  ],
+  "decision": {
+    "promotion_threshold": "At least 5% credible improvement in target region and no unexplained neighboring regression over 2%.",
+    "cells_with_both_pair_speedups_at_least_1_05": 0,
+    "largest_minimum_pair_speedup": 1.036979,
+    "largest_minimum_pair_cell": "k65-r65-gf8-l9-b65536-batch8",
+    "largest_mean_speedup": 1.060337,
+    "largest_mean_speedup_cell": "k65-r65-gf8-l9-b4096-batch1",
+    "largest_mean_pair_speedups": [
+      1.110992,
+      1.009059
+    ],
+    "kill_rationale": "No stable region cleared 5%. The lone mean above 5% was order-sensitive (one pair only 0.9%); its batch and size neighbors were at most 3.8%. Setup amortization at reuse 1, 8, and 64 did not create a qualifying region. Keep production AUTO materialized and retain forced tiled only as an oracle/experimental control.",
+    "production_change": null
+  },
+  "exact_main_context": {
+    "artifact": "experiments/leopard2/high_decode_copy/results/high_low_translation_checkpoint.json",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "note": "That pinned checkpoint already compares the unchanged production translated-Algorithm-4 materialized path with exact Leopard main. This rejected traversal study changes neither production code nor those results."
+  }
+}
