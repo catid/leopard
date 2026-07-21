@@ -1,0 +1,156 @@
+{
+  "schema": "leopard2-translated-metadata-elision-checkpoint/v1",
+  "date_utc": "2026-07-21",
+  "status": "promoted",
+  "scope": "elide native Algorithm-5 factors and locator cache from production P=T,N=2P translated codecs",
+  "implementation": {
+    "candidate_commit": "3f261732685ca5e9fcfae60e91de955ec32ab116",
+    "control_commit": "102e0b5c5d29307be08722a6c04d753ed586a34c"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "backend": "avx2",
+    "threads": 1
+  },
+  "method": {
+    "order": ["control", "candidate", "candidate", "control"],
+    "timing_samples_per_process": 15,
+    "warmup_calls": 4,
+    "reuse": 32,
+    "rounds_per_cell": [3, 5],
+    "round_summary": "median of the per-round A/B ratios; each side of a round is the arithmetic mean of its two process medians",
+    "workload_seed_equal_within_cell": true,
+    "workload_digests_equal": true,
+    "selected_path_equal": true,
+    "retained_sibling_nonidle_jiffies": 0,
+    "discarded_intervals": 1,
+    "discard_reason": "one GF16 candidate process accumulated one non-idle sibling jiffy; its complete ABBA round was replaced",
+    "raw_bundle": "/tmp/leo2-metadata-abba.DcDpGy",
+    "note": "Pinned same-source checkpoint. The raw /tmp bundle is intentionally not a durable repository artifact. This is not a cgroup-exclusive host claim."
+  },
+  "binary_sha256": {
+    "control": "1edc53368d21b19682ce70c8c34ed8954c7c88ddf52aab08a9afebd14bc5adf0",
+    "candidate": "56787fc8263c8b11ad08f7e4d0c0ad2d25907ea017f762c6a52e10b49cbf57f3"
+  },
+  "reachability": {
+    "production": "AUTO, FORCE_SPECIALIZED, FORCE_TILED, and FORCE_MATERIALIZED legacy-high codecs with P=T,N=2P capture translated Algorithm 4 for every non-direct transform plan; no-op and direct plans consume neither transform table",
+    "forced_generic": "FORCE_GENERIC disables translation and retains the native coordinate locator; it does not prepare specialized Algorithm-5 factors",
+    "test_hooks": "the private hook archive retains native locator/factors because a codec can switch to FORCE_NATIVE_HIGH after construction",
+    "nontranslated": "legacy-high codecs outside P=T,N=2P retain native Algorithm-5 factors; low-profile codecs retain native Algorithm-4 factors",
+    "field_only": "the same structural assertions pass with GF8-only and GF16-only archives"
+  },
+  "table_bytes": {
+    "gf8_n32_punctured": {
+      "production_native_locator": 0,
+      "production_native_factors": 0,
+      "hook_native_locator": 32,
+      "hook_native_factors": 32,
+      "production_bytes_removed": 64
+    },
+    "gf16_n32_punctured": {
+      "production_native_locator": 0,
+      "production_native_factors": 0,
+      "hook_native_locator": 64,
+      "hook_native_factors": 64,
+      "production_bytes_removed": 128
+    },
+    "general_no_locator_cache": {
+      "formula": "N * field_element_bytes",
+      "gf8_k65_r65_bytes_removed": 256,
+      "gf16_k129_r129_bytes_removed": 1024
+    }
+  },
+  "cells": [
+    {
+      "id": "gf8-k9-r9-4k-l5",
+      "K": 9,
+      "R": 9,
+      "field": "gf8",
+      "shard_bytes": 4096,
+      "loss": 5,
+      "retained_rounds": 5,
+      "codec_setup_control_us": 0.590000,
+      "codec_setup_candidate_us": 0.430000,
+      "codec_setup_speedup": 1.372093,
+      "encode_control_us": 2.921282,
+      "encode_candidate_us": 2.914094,
+      "encode_speedup": 1.002467,
+      "plan_setup_control_us": 1.665000,
+      "plan_setup_candidate_us": 1.635000,
+      "plan_setup_speedup": 1.018349,
+      "decode_control_us": 6.901328,
+      "decode_candidate_us": 6.884781,
+      "decode_speedup": 1.002403,
+      "digests": {
+        "original": "0402af49d482da8e",
+        "parity": "9136db8847656460",
+        "recovered": "49d4aa929ff13ced"
+      }
+    },
+    {
+      "id": "gf8-k65-r65-64k-l16",
+      "K": 65,
+      "R": 65,
+      "field": "gf8",
+      "shard_bytes": 65536,
+      "loss": 16,
+      "retained_rounds": 3,
+      "codec_setup_control_us": 19.350500,
+      "codec_setup_candidate_us": 19.070000,
+      "codec_setup_speedup": 1.014709,
+      "encode_control_us": 637.991547,
+      "encode_candidate_us": 638.527985,
+      "encode_speedup": 0.999160,
+      "plan_setup_control_us": 13.455500,
+      "plan_setup_candidate_us": 13.460500,
+      "plan_setup_speedup": 0.999629,
+      "decode_control_us": 1254.963203,
+      "decode_candidate_us": 1253.557547,
+      "decode_speedup": 1.001121,
+      "digests": {
+        "original": "8c6cf2147ac341d0",
+        "parity": "6668b4e6bd25a107",
+        "recovered": "5ca2b0f5a2ceecfc"
+      }
+    },
+    {
+      "id": "gf16-k129-r129-64k-l64",
+      "K": 129,
+      "R": 129,
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "loss": 64,
+      "retained_rounds": 3,
+      "codec_setup_control_us": 1.220000,
+      "codec_setup_candidate_us": 0.595000,
+      "codec_setup_speedup": 2.050420,
+      "encode_control_us": 2052.639547,
+      "encode_candidate_us": 2058.390094,
+      "encode_speedup": 0.997206,
+      "plan_setup_control_us": 31.190000,
+      "plan_setup_candidate_us": 31.095500,
+      "plan_setup_speedup": 1.003039,
+      "decode_control_us": 4376.228641,
+      "decode_candidate_us": 4378.848985,
+      "decode_speedup": 0.999402,
+      "digests": {
+        "original": "8b9fa494378f59c9",
+        "parity": "de707fa7a1838b40",
+        "recovered": "4384a5254f0e7c66"
+      }
+    }
+  ],
+  "validation": {
+    "focused_release": "20/20",
+    "clang_asan_ubsan": "5/5",
+    "gf8_only_structural": "2/2",
+    "gf16_only_structural": "2/2",
+    "gcc_werror_structural": "2/2",
+    "broad_fuzzing_run": false,
+    "review_result": "dispatch reachability and retained hook/native controls reviewed"
+  }
+}
