@@ -503,62 +503,146 @@ void test_selection_and_bytes(
     Codec gf8_punctured(automatic.get(), 16, 15,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require(selected_backend(gf8_below_side.get(), 4096, 8, 8) ==
-            LEO2_BACKEND_AVX2,
-        "balanced GF8 AUTO widened T=8");
+            LEO2_BACKEND_AVX512,
+        "balanced GF8 AUTO did not widen qualified T=8");
     require(selected_backend(gf8_above_side.get(), 4096, 128, 128) ==
             LEO2_BACKEND_AVX2,
         "balanced GF8 AUTO widened T=128");
     require(selected_backend(gf8_shortened.get(), 4096, 16, 16) ==
             LEO2_BACKEND_AVX2,
-        "balanced GF8 AUTO widened a shortened input block");
+        "balanced GF8 T=16 widened an unqualified shortened input block");
     require(selected_backend(gf8_punctured.get(), 4096, 15, 15) ==
             LEO2_BACKEND_AVX2,
-        "balanced GF8 AUTO widened a punctured parity block");
+        "balanced GF8 T=16 widened an unqualified punctured parity block");
 
-    const Shards shortened_original = make_original(15, 4096);
-    Codec shortened_scalar(scalar.get(), 15, 16,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    Codec shortened_avx2(avx2.get(), 15, 16,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    Codec shortened_avx512(avx512.get(), 15, 16,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    const Shards shortened_reference = encode(
-        shortened_scalar.get(), shortened_original, 16, false);
-    leopard::ff8::TestOnlyResetHighEncodeCounts();
-    const Shards shortened_auto = encode(
-        gf8_shortened.get(), shortened_original, 16, false);
-    require(shortened_reference == shortened_auto &&
-            shortened_reference == encode(
-                shortened_avx2.get(), shortened_original, 16, false) &&
-            shortened_reference == encode(
-                shortened_avx512.get(), shortened_original, 16, false),
-        "shortened GF8 neighbor changed legacy parity bytes");
-    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                whole_transform_calls == 0,
-        "shortened GF8 neighbor used the exact balanced transform");
+    struct GF8CoarseCase
+    {
+        uint32_t k;
+        uint32_t r;
+    };
+    static const GF8CoarseCase coarse_cases[] = {
+        { 8, 8 }, { 7, 8 }, { 8, 7 }, { 7, 7 },
+        { 15, 16 }, { 16, 15 }, { 15, 15 },
+        { 31, 32 }, { 32, 31 }, { 31, 31 },
+        { 63, 64 }, { 64, 63 }, { 63, 63 }
+    };
+    static const size_t coarse_bytes[] = {
+        2048, 2049, 4096, 4097, 65536, 65537
+    };
+    for (size_t case_i = 0;
+         case_i < sizeof(coarse_cases) / sizeof(coarse_cases[0]); ++case_i)
+    {
+        const GF8CoarseCase& current = coarse_cases[case_i];
+        Codec automatic_codec(automatic.get(), current.k, current.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec scalar_codec(scalar.get(), current.k, current.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec ssse3_codec(ssse3.get(), current.k, current.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec avx2_codec(avx2.get(), current.k, current.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Codec avx512_codec(avx512.get(), current.k, current.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
 
-    const Shards punctured_original = make_original(16, 4096);
-    const Shards punctured_reference = encode_legacy(punctured_original, 15);
-    Codec punctured_scalar(scalar.get(), 16, 15,
+        const uint32_t side = current.r <= 8 ? 8U :
+            (current.r <= 16 ? 16U : (current.r <= 32 ? 32U : 64U));
+        const bool promoted_shape =
+            (side == 8 && current.k == 8 &&
+                (current.r == 8 || current.r == 7)) ||
+            (side == 64 &&
+                (current.k == 64 || current.k == 63) &&
+                (current.r == 64 || current.r == 63));
+
+        // AUTO widens only the exact aligned cells that passed the isolated
+        // crossover gate.  Explicit AVX-512 exercises every neighboring
+        // candidate independently of the production promotion decision.
+        for (size_t byte_i = 0;
+             byte_i < sizeof(coarse_bytes) / sizeof(coarse_bytes[0]); ++byte_i)
+        {
+            const size_t bytes = coarse_bytes[byte_i];
+            const leo2_backend expected_auto = promoted_shape &&
+                    (bytes & 63U) == 0
+                ? LEO2_BACKEND_AVX512 : LEO2_BACKEND_AVX2;
+            require(selected_backend(automatic_codec.get(), bytes,
+                        current.r, current.r) == expected_auto,
+                "GF8 coarse neighbor selected the wrong AUTO backend");
+            require(selected_backend(avx512_codec.get(), bytes,
+                        current.r, current.r) == LEO2_BACKEND_AVX512,
+                "explicit GF8 coarse neighbor lost AVX-512");
+
+            const Shards original = make_original(current.k, bytes);
+            const Shards reference = encode(
+                scalar_codec.get(), original, current.r, false);
+            require(reference == encode(
+                        ssse3_codec.get(), original, current.r, false) &&
+                    reference == encode(
+                        avx2_codec.get(), original, current.r, false),
+                "GF8 coarse neighbor changed a mature backend result");
+
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            const Shards widened = encode(
+                avx512_codec.get(), original, current.r, false);
+            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                        whole_transform_calls == 1,
+                "GF8 coarse neighbor did not execute one aligned-prefix callback");
+            require(reference == widened &&
+                    reference == encode(
+                        automatic_codec.get(), original, current.r, false),
+                "GF8 coarse neighbor changed parity bytes");
+            if ((bytes & 63U) == 0 && current.r <= current.k)
+                require(reference == encode_legacy(original, current.r),
+                    "GF8 coarse neighbor differs from legacy Leopard");
+
+            if ((bytes & 63U) != 0)
+            {
+                require(reference == encode_unaligned(
+                            avx2_codec.get(), original, current.r) &&
+                        reference == encode_unaligned(
+                            avx512_codec.get(), original, current.r),
+                    "GF8 coarse neighbor mishandled an unaligned byte tail");
+            }
+        }
+
+        const Shards partial_original = make_original(current.k, 4097);
+        const Shards partial_reference = encode(
+            scalar_codec.get(), partial_original, current.r, false);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        require_sparse_matches_full(encode(
+                avx512_codec.get(), partial_original, current.r, true),
+            partial_reference);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    whole_transform_calls == 0,
+            "partial-output GF8 neighbor used the dense coarse callback");
+    }
+
+    // One ragged, shortened-and-punctured codec is also executed concurrently;
+    // each call owns its output and scratch while sharing the immutable codec.
+    Codec concurrent_codec(avx512.get(), 63, 63,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    Codec punctured_avx2(avx2.get(), 16, 15,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    Codec punctured_avx512(avx512.get(), 16, 15,
-        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    leopard::ff8::TestOnlyResetHighEncodeCounts();
-    const Shards punctured_auto = encode(
-        gf8_punctured.get(), punctured_original, 15, false);
-    require(punctured_reference == punctured_auto &&
-            punctured_reference == encode(
-                punctured_scalar.get(), punctured_original, 15, false) &&
-            punctured_reference == encode(
-                punctured_avx2.get(), punctured_original, 15, false) &&
-            punctured_reference == encode(
-                punctured_avx512.get(), punctured_original, 15, false),
-        "punctured GF8 neighbor changed legacy parity bytes");
-    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                whole_transform_calls == 0,
-        "punctured GF8 neighbor used the exact balanced transform");
+    const Shards concurrent_original = make_original(63, 4097);
+    const Shards concurrent_reference = encode(
+        concurrent_codec.get(), concurrent_original, 63, false);
+    std::atomic<unsigned> coarse_failures(0);
+    std::vector<std::thread> coarse_threads;
+    for (unsigned lane = 0; lane < 4; ++lane)
+    {
+        coarse_threads.push_back(std::thread([&]() {
+            try
+            {
+                if (encode(concurrent_codec.get(), concurrent_original,
+                        63, false) != concurrent_reference)
+                    coarse_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+            catch (...)
+            {
+                coarse_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    for (size_t i = 0; i < coarse_threads.size(); ++i)
+        coarse_threads[i].join();
+    require(coarse_failures.load(std::memory_order_relaxed) == 0,
+        "concurrent GF8 coarse neighbor encode failed");
 
     Codec maximum_parent(automatic.get(), 60000, 1024);
     require(selected_backend(maximum_parent.get(), 1024, 1024, 1024) ==

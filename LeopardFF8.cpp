@@ -2271,14 +2271,15 @@ void ReedSolomonEncode(
     (void)requested_output_count;
 #endif
     const bool whole_transform_size =
-        m == 16 || m == 32 || m == 64;
+        m == 8 || m == 16 || m == 32 || m == 64;
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     if (ops.kind == LEO2_BACKEND_AVX512 &&
         ops.ff8_high_encode_one_block &&
         whole_transform_size && buffer_bytes > 1024 &&
-        original_count == m && recovery_count == m &&
-        requested_output_count == m && dense_schedule)
+        (original_count == m || original_count + 1U == m) &&
+        (recovery_count == m || recovery_count + 1U == m) &&
+        requested_output_count == recovery_count && dense_schedule)
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighIFFTButterfly4OutCalls.fetch_add(
@@ -2287,7 +2288,10 @@ void ReedSolomonEncode(
         TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
 #endif
         ops.ff8_high_encode_one_block(
-            data, work, m, FFTSkewStorage + m,
+            data, work, m |
+                (original_count == m
+                    ? 0U : backend::kFF8HighEncodeShortenedInput),
+            FFTSkewStorage + m,
             FFTSkewStorage, buffer_bytes);
         return;
     }

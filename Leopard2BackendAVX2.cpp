@@ -1310,7 +1310,7 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
-template<bool Inverse>
+template<bool Inverse, bool Input3Zero = false>
 static void AVX2FF8Butterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1357,8 +1357,10 @@ static void AVX2FF8Butterfly4Out(
             reinterpret_cast<const __m256i*>(input1));
         __m256i x2 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(input2));
-        __m256i x3 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input3));
+        __m256i x3 = Input3Zero
+            ? _mm256_setzero_si256()
+            : _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input3));
         if (Inverse)
         {
             x1 = _mm256_xor_si256(x1, x0);
@@ -1406,7 +1408,8 @@ static void AVX2FF8Butterfly4Out(
         input0 += 32;
         input1 += 32;
         input2 += 32;
-        input3 += 32;
+        if (!Input3Zero)
+            input3 += 32;
         output0 += 32;
         output1 += 32;
         output2 += 32;
@@ -1418,7 +1421,7 @@ static void AVX2FF8Butterfly4Out(
         uint8_t x0 = *input0++;
         uint8_t x1 = *input1++;
         uint8_t x2 = *input2++;
-        uint8_t x3 = *input3++;
+        uint8_t x3 = Input3Zero ? 0 : *input3++;
         if (Inverse)
         {
             x1 ^= x0;
@@ -1470,6 +1473,32 @@ static void AVX2FF8IFFTButterfly4Out(
         output0, output1, output2, output3,
         log01, log23, log02, byte_count);
 }
+
+#if defined(LEO2_AVX512_VARIANT)
+
+#if defined(_MSC_VER)
+# define LEO2_AVX2_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+# define LEO2_AVX2_NOINLINE __attribute__((noinline))
+#else
+# define LEO2_AVX2_NOINLINE
+#endif
+
+static LEO2_AVX2_NOINLINE void AVX2FF8IFFTButterfly4OutLastZero(
+    const void* input0, const void* input1, const void* input2,
+    void* output0, void* output1, void* output2, void* output3,
+    uint16_t log01, uint16_t log23, uint16_t log02,
+    uint64_t byte_count)
+{
+    AVX2FF8Butterfly4Out<true, true>(
+        input0, input1, input2, NULL,
+        output0, output1, output2, output3,
+        log01, log23, log02, byte_count);
+}
+
+#undef LEO2_AVX2_NOINLINE
+
+#endif // LEO2_AVX512_VARIANT
 
 static void AVX2FF8WeightedIFFTButterfly4(
     const void* input0_pointer, const void* input1_pointer,
@@ -1893,22 +1922,43 @@ static void AVX2FF8IFFTButterfly2RangePrepared(
 static void AVX2FF8HighEncodeOneBlock(
     const void* const* data,
     void* const* work,
-    uint32_t side,
+    uint32_t side_and_flags,
     const uint8_t* inverse_skew,
     const uint8_t* forward_skew,
     uint64_t byte_count)
 {
     static const uint16_t kZeroSkew = 255;
+    const bool shortened =
+        (side_and_flags & kFF8HighEncodeShortenedInput) != 0;
+    const uint32_t side =
+        side_and_flags & ~kFF8HighEncodeShortenedInput;
+    const uint32_t data_count = side - static_cast<uint32_t>(shortened);
+    LEO_DEBUG_ASSERT(side == 8 || side == 16 || side == 32 || side == 64);
 
     // Consume the systematic shards directly through the first two inverse
-    // layers, exactly as IFFT_DIT_Encoder does for a complete input block.
+    // layers, exactly as IFFT_DIT_Encoder does for a complete input block.  A
+    // one-coordinate shortened tail changes only the final four-row boundary;
+    // the weighted primitive supplies mathematical zero without reading a
+    // nonexistent public pointer and leaves the remaining traversal regular.
     for (uint32_t r = 0; r < side; r += 4)
     {
-        AVX2FF8IFFTButterfly4Out(
-            data[r], data[r + 1], data[r + 2], data[r + 3],
-            work[r], work[r + 1], work[r + 2], work[r + 3],
-            inverse_skew[r + 1], inverse_skew[r + 3],
-            inverse_skew[r + 2], byte_count);
+        if (!shortened || r + 4U <= data_count)
+        {
+            AVX2FF8IFFTButterfly4Out(
+                data[r], data[r + 1], data[r + 2], data[r + 3],
+                work[r], work[r + 1], work[r + 2], work[r + 3],
+                inverse_skew[r + 1], inverse_skew[r + 3],
+                inverse_skew[r + 2], byte_count);
+        }
+        else
+        {
+            LEO_DEBUG_ASSERT(r + 3U == data_count);
+            AVX2FF8IFFTButterfly4OutLastZero(
+                data[r], data[r + 1], data[r + 2],
+                work[r], work[r + 1], work[r + 2], work[r + 3],
+                inverse_skew[r + 1], inverse_skew[r + 3],
+                inverse_skew[r + 2], byte_count);
+        }
     }
 
     uint32_t distance = 4;

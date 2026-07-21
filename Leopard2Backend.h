@@ -204,16 +204,24 @@ typedef void (*FFTButterfly4Out)(
 typedef FFTButterfly4Out IFFTButterfly4Out;
 
 // Complete one-block legacy-high GF8 transform.  The caller has already
-// established that data[0..side) and work[0..side) are disjoint complete
-// blocks and that every parity coordinate is requested.  inverse_skew names
-// the message-coset skew table, while forward_skew names the parity-coset
-// table.  Keeping the regular transform traversal in an ISA translation unit
-// removes one indirect Ops dispatch per butterfly range without changing the
-// wire profile or arithmetic order.  This callback is optional.
+// established that data[0..data_count) and work[0..side) are disjoint and that
+// every transmitted parity coordinate is requested.  side_and_flags stores
+// side in the low bits and sets kFF8HighEncodeShortenedInput when data_count is
+// side - 1; otherwise data_count is side.  Keeping this one-bit fact in the
+// existing size argument preserves the six-register hot-call shape on x86-64.
+// A missing final data coordinate is the shortened known zero;
+// a punctured final parity coordinate is still evaluated into the caller's
+// scratch-backed work row.  inverse_skew names the message-coset skew table,
+// while forward_skew names the parity-coset table.  Keeping the regular
+// transform traversal in an ISA translation unit removes one indirect Ops
+// dispatch per butterfly range without changing the wire profile or arithmetic
+// order.  This callback is optional.
+static const uint32_t kFF8HighEncodeShortenedInput = 0x80000000U;
+
 typedef void (*FF8HighEncodeOneBlock)(
     const void* const* data,
     void* const* work,
-    uint32_t side,
+    uint32_t side_and_flags,
     const uint8_t* inverse_skew,
     const uint8_t* forward_skew,
     uint64_t byte_count);

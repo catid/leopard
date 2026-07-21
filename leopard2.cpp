@@ -2991,18 +2991,35 @@ static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
         return codec->padded_side >= 2;
     }
 
-    if (codec->field != LEO2_FIELD_GF8 ||
-        codec->original_count != codec->padded_side ||
-        codec->recovery_count != codec->padded_side)
+    if (codec->field != LEO2_FIELD_GF8)
         return false;
 
-    // The balanced GF8 coarse AVX-512VL transform is wire-identical to the
-    // portable AVX2 schedule.  Keep AUTO on the exact measured shapes: a
-    // single complete message block, a complete parity block, and the three
-    // transform sizes qualified on this processor class.  Shortened,
-    // punctured, sparse-output, and neighboring sizes retain portable AVX2.
-    return codec->padded_side == 16 || codec->padded_side == 32 ||
-        codec->padded_side == 64;
+    const uint32_t side = codec->padded_side;
+    if (side == 8)
+    {
+        // The quiet T=8 screen qualified the exact message block with either
+        // all eight parity rows or the first seven transmitted rows.  Its
+        // shortened-message neighbors remain on AVX2.
+        return codec->original_count == side &&
+            (codec->recovery_count == side ||
+             codec->recovery_count + 1U == side);
+    }
+    if (side == 64)
+    {
+        // The quiet T=64 screen qualified all four combinations of an exact
+        // or one-coordinate-shortened message block and an exact or
+        // one-coordinate-punctured parity block.
+        return (codec->original_count == side ||
+                codec->original_count + 1U == side) &&
+            (codec->recovery_count == side ||
+             codec->recovery_count + 1U == side);
+    }
+
+    // Retain the earlier exact balanced T=16 and T=32 gates.  Their ragged
+    // neighbors were not part of the isolated promotion screen.
+    return (side == 16 || side == 32) &&
+        codec->original_count == side &&
+        codec->recovery_count == side;
 }
 
 static bool UseAutoAVX512Encode(
@@ -3023,8 +3040,8 @@ static bool UseAutoAVX512Encode(
     {
         // The whole-transform AVX-512VL calibration screen is positive in
         // this cache-resident interval.  T=16 needs 4 KiB to clear the
-        // promotion threshold; T=32 and T=64 clear it at 2 KiB.  Above the
-        // upper bound the backends converge as shard traffic becomes the
+        // promotion threshold; T=8, T=32, and T=64 clear it at 2 KiB.  Above
+        // the upper bound the backends converge as shard traffic becomes the
         // bottleneck.
         const size_t minimum_bytes = codec->padded_side == 16
             ? 4U * 1024U : 2U * 1024U;

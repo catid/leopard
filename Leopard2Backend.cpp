@@ -717,6 +717,75 @@ static bool TestFF8ButterflyRanges(const Ops& ops)
     return true;
 }
 
+static void ReferenceFF8HighEncodeOneBlock(
+    const Ops& ops,
+    const void* const* data,
+    void* const* work,
+    unsigned side,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t bytes)
+{
+    for (unsigned r = 0; r < side; r += 4)
+        ops.ff8_ifft_butterfly4_out(
+            data[r], data[r + 1], data[r + 2], data[r + 3],
+            work[r], work[r + 1], work[r + 2], work[r + 3],
+            inverse_skew[r + 1], inverse_skew[r + 3],
+            inverse_skew[r + 2], bytes);
+    unsigned distance = 4;
+    unsigned distance4 = 16;
+    for (; distance4 <= side;
+         distance = distance4, distance4 <<= 2)
+    {
+        for (unsigned r = 0; r < side; r += distance4)
+        {
+            const unsigned end = r + distance;
+            ops.ff8_ifft_butterfly4_range(
+                work + r, distance,
+                inverse_skew[end], inverse_skew[end + distance * 2U],
+                inverse_skew[end + distance], bytes, false);
+        }
+    }
+    if (distance < side)
+    {
+        const uint8_t log = inverse_skew[distance];
+        for (unsigned i = 0; i < distance; ++i)
+        {
+            if (log == 255)
+                ops.xor_memory(work[i + distance], work[i], bytes);
+            else
+                ops.ff8_ifft_butterfly2(
+                    work[i], work[i + distance], log, bytes);
+        }
+    }
+    distance4 = side;
+    distance = side >> 2;
+    for (; distance != 0;
+         distance4 = distance, distance >>= 2)
+    {
+        for (unsigned r = 0; r < side; r += distance4)
+        {
+            const unsigned end = r + distance;
+            ops.ff8_fft_butterfly4_range(
+                work + r, distance,
+                forward_skew[end], forward_skew[end + distance * 2U],
+                forward_skew[end + distance], bytes, true);
+        }
+    }
+    if (distance4 == 2)
+    {
+        for (unsigned r = 0; r < side; r += 2)
+        {
+            const uint8_t log = forward_skew[r + 1];
+            if (log == 255)
+                ops.xor_memory(work[r + 1], work[r], bytes);
+            else
+                ops.ff8_fft_butterfly2(
+                    work[r], work[r + 1], log, bytes);
+        }
+    }
+}
+
 static bool TestFF8HighEncodeOneBlock(const Ops& ops)
 {
     if (!ops.ff8_high_encode_one_block)
@@ -724,7 +793,7 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
 
     static const unsigned kMaximumSide = 64;
     static const uint64_t kBytes = 65;
-    static const unsigned kSides[] = { 16, 32, 64 };
+    static const unsigned kSides[] = { 8, 16, 32, 64 };
     uint8_t input[kMaximumSide][68];
     uint8_t input_before[kMaximumSide][68];
     uint8_t actual[kMaximumSide][68];
@@ -762,72 +831,9 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                     (lane * 53U + side_i * 19U + 9U) % 255U);
         }
 
-        for (unsigned r = 0; r < side; r += 4)
-        {
-            ops.ff8_ifft_butterfly4_out(
-                input_pointers[r], input_pointers[r + 1],
-                input_pointers[r + 2], input_pointers[r + 3],
-                expected_pointers[r], expected_pointers[r + 1],
-                expected_pointers[r + 2], expected_pointers[r + 3],
-                inverse_skew[r + 1], inverse_skew[r + 3],
-                inverse_skew[r + 2], kBytes);
-        }
-        unsigned distance = 4;
-        unsigned distance4 = 16;
-        for (; distance4 <= side;
-             distance = distance4, distance4 <<= 2)
-        {
-            for (unsigned r = 0; r < side; r += distance4)
-            {
-                const unsigned end = r + distance;
-                ops.ff8_ifft_butterfly4_range(
-                    expected_pointers + r, distance,
-                    inverse_skew[end], inverse_skew[end + distance * 2U],
-                    inverse_skew[end + distance], kBytes, false);
-            }
-        }
-        if (distance < side)
-        {
-            const uint8_t log = inverse_skew[distance];
-            for (unsigned i = 0; i < distance; ++i)
-            {
-                if (log == 255)
-                    ops.xor_memory(expected_pointers[i + distance],
-                        expected_pointers[i], kBytes);
-                else
-                    ops.ff8_ifft_butterfly2(
-                        expected_pointers[i], expected_pointers[i + distance],
-                        log, kBytes);
-            }
-        }
-        distance4 = side;
-        distance = side >> 2;
-        for (; distance != 0;
-             distance4 = distance, distance >>= 2)
-        {
-            for (unsigned r = 0; r < side; r += distance4)
-            {
-                const unsigned end = r + distance;
-                ops.ff8_fft_butterfly4_range(
-                    expected_pointers + r, distance,
-                    forward_skew[end], forward_skew[end + distance * 2U],
-                    forward_skew[end + distance], kBytes, true);
-            }
-        }
-        if (distance4 == 2)
-        {
-            for (unsigned r = 0; r < side; r += 2)
-            {
-                const uint8_t log = forward_skew[r + 1];
-                if (log == 255)
-                    ops.xor_memory(expected_pointers[r + 1],
-                        expected_pointers[r], kBytes);
-                else
-                    ops.ff8_fft_butterfly2(
-                        expected_pointers[r], expected_pointers[r + 1],
-                        log, kBytes);
-            }
-        }
+        ReferenceFF8HighEncodeOneBlock(
+            ops, input_pointers, expected_pointers, side,
+            inverse_skew, forward_skew, kBytes);
 
         ops.ff8_high_encode_one_block(
             input_pointers, actual_pointers, side,
@@ -835,6 +841,34 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
         if (std::memcmp(input, input_before, sizeof(input)) != 0 ||
             std::memcmp(actual, expected, sizeof(actual)) != 0)
             return false;
+
+        // Repeat with the final public source shortened to known zero.  The
+        // callback must not inspect data[side - 1], so pass null explicitly.
+        static const uint8_t zero[68] = {};
+        input_pointers[side - 1] = NULL;
+        for (unsigned lane = 0; lane < side; ++lane)
+        {
+            std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+            std::memset(expected[lane], 0xc3, sizeof(expected[lane]));
+            expected_pointers[lane] = expected[lane] + 1;
+            actual_pointers[lane] = actual[lane] + 1;
+        }
+        const void* shortened_expected[kMaximumSide];
+        for (unsigned lane = 0; lane < side; ++lane)
+            shortened_expected[lane] = lane + 1U == side
+                ? static_cast<const void*>(zero + 1)
+                : static_cast<const void*>(input[lane] + 1);
+        ReferenceFF8HighEncodeOneBlock(
+            ops, shortened_expected, expected_pointers, side,
+            inverse_skew, forward_skew, kBytes);
+        ops.ff8_high_encode_one_block(
+            input_pointers, actual_pointers,
+            side | kFF8HighEncodeShortenedInput,
+            inverse_skew, forward_skew, kBytes);
+        if (std::memcmp(input, input_before, sizeof(input)) != 0 ||
+            std::memcmp(actual, expected, sizeof(actual)) != 0)
+            return false;
+        input_pointers[side - 1] = input[side - 1] + 1;
     }
     return true;
 }

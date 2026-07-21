@@ -150,6 +150,7 @@ struct Counts
     uint64_t no_copy_checks;
     uint64_t high_source_staging_checks;
     uint64_t high_byte_tiling_checks;
+    uint64_t gf8_coarse_oracle_checks;
 
     Counts()
         : profiles(0), basis_messages(0), random_messages(0), parity_symbols(0)
@@ -157,6 +158,7 @@ struct Counts
         , concurrent_executions(0), contract_checks(0), dispatch_checks(0)
         , unaligned_checks(0), batch_executions(0), no_copy_checks(0)
         , high_source_staging_checks(0), high_byte_tiling_checks(0)
+        , gf8_coarse_oracle_checks(0)
     {}
 };
 
@@ -1237,6 +1239,94 @@ void test_high_gf16_byte_tiling(
     delete owner;
 }
 
+void test_gf8_high_coarse_direct_oracle(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options context_options = {};
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AVX512;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(
+        &context_options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(context_result, "explicit AVX-512 oracle context");
+
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+    };
+    const Case cases[] = {
+        { 8, 8 }, { 7, 8 }, { 8, 7 }, { 7, 7 },
+        { 15, 16 }, { 16, 15 }, { 15, 15 },
+        { 31, 32 }, { 32, 31 }, { 31, 31 },
+        { 63, 64 }, { 64, 63 }, { 63, 63 }
+    };
+    const size_t bytes = 2049;
+    const size_t oracle_bytes = 65;
+    for (unsigned case_i = 0;
+         case_i < sizeof(cases) / sizeof(cases[0]); ++case_i)
+    {
+        const Case& c = cases[case_i];
+        CodecOwner* owner = make_codec(context, c.k, c.r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        const Shards original = random_shards(
+            c.k, bytes, UINT64_C(0x434f415253450000) + case_i);
+        const Shards original_before = original;
+        const std::vector<uint8_t> requested(c.r, 1);
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult candidate = encode(owner->codec,
+            LEO2_TEST_ENCODE_AUTO, original, requested);
+        require_result(candidate.result, "GF8 coarse direct-oracle encode");
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    whole_transform_calls == 1,
+            "GF8 coarse direct-oracle encode missed the aligned callback");
+        require(original == original_before,
+            "GF8 coarse direct-oracle encode modified a source shard");
+
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, c.k, c.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        Shards head_original(c.k, Bytes(oracle_bytes));
+        Shards tail_original(c.k, Bytes(oracle_bytes));
+        for (unsigned original_i = 0; original_i < c.k; ++original_i)
+        {
+            std::copy(original[original_i].begin(),
+                original[original_i].begin() + oracle_bytes,
+                head_original[original_i].begin());
+            std::copy(original[original_i].end() - oracle_bytes,
+                original[original_i].end(), tail_original[original_i].begin());
+        }
+        const Shards head_expected = oracle_parity(
+            gf8, generator, head_original, c.r, LEO2_FIELD_GF8);
+        const Shards tail_expected = oracle_parity(
+            gf8, generator, tail_original, c.r, LEO2_FIELD_GF8);
+        Shards head_actual(c.r, Bytes(oracle_bytes));
+        Shards tail_actual(c.r, Bytes(oracle_bytes));
+        for (unsigned recovery = 0; recovery < c.r; ++recovery)
+        {
+            std::copy(candidate.recovery[recovery].begin(),
+                candidate.recovery[recovery].begin() + oracle_bytes,
+                head_actual[recovery].begin());
+            std::copy(candidate.recovery[recovery].end() - oracle_bytes,
+                candidate.recovery[recovery].end(),
+                tail_actual[recovery].begin());
+        }
+        compare_requested(head_actual, head_expected, requested, 0xa5,
+            "GF8 coarse head/direct oracle", counts);
+        compare_requested(tail_actual, tail_expected, requested, 0xa5,
+            "GF8 coarse tail/direct oracle", counts);
+        ++counts->gf8_coarse_oracle_checks;
+        delete owner;
+    }
+    leo2_context_destroy(context);
+}
+
 void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
 {
     const leo2_backend backend = leo2_context_backend(context);
@@ -1802,6 +1892,7 @@ int main()
         test_high_transform_source_staging(
             context, gf8, gf16, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
+        test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
         test_unaligned_guarded_buffers(context, gf8, gf16, &counts);
@@ -1826,6 +1917,8 @@ int main()
                   << counts.high_source_staging_checks
                   << " high_byte_tiling_checks="
                   << counts.high_byte_tiling_checks
+                  << " gf8_coarse_oracle_checks="
+                  << counts.gf8_coarse_oracle_checks
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
                   << " allocation_audit=enabled"
 #else
