@@ -3576,7 +3576,8 @@ static leo2_result ValidateDecodeBuffers(
     void* scratch,
     size_t scratch_bytes,
     const ProtectedMetadataSpan* protected_metadata,
-    size_t protected_metadata_count)
+    size_t protected_metadata_count,
+    void** coordinate_data)
 {
     const leo2_codec* codec = plan->codec;
     if (!original || !recovery || !restored)
@@ -3696,14 +3697,42 @@ static leo2_result ValidateDecodeBuffers(
         return output_count == 1 ? LEO2_SUCCESS : LEO2_INTERNAL_ERROR;
 
     AddressRange* ranges = reinterpret_cast<AddressRange*>(scratch);
+    if (coordinate_data)
+        std::fill(coordinate_data,
+            coordinate_data + codec->parent_count,
+            static_cast<void*>(NULL));
     input_count = 0;
     output_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
         if (original[i])
+        {
             MakeRange(original[i], shard_bytes, ranges[input_count++]);
+            if (coordinate_data)
+            {
+                const uint32_t coordinate =
+                    DecodeExecutionCoordinateForOriginal(plan, i);
+                if (!plan->coordinate_erased[coordinate])
+                    coordinate_data[coordinate] =
+                        const_cast<void*>(original[i]);
+            }
+        }
+    }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
         if (recovery[i])
+        {
             MakeRange(recovery[i], shard_bytes, ranges[input_count++]);
+            if (coordinate_data)
+            {
+                const uint32_t coordinate =
+                    DecodeExecutionCoordinateForRecovery(plan, i);
+                if (!plan->coordinate_erased[coordinate])
+                    coordinate_data[coordinate] =
+                        const_cast<void*>(recovery[i]);
+            }
+        }
+    }
     AddressRange* outputs = ranges + input_count;
     for (uint32_t i = 0; i < codec->original_count; ++i)
         if (!original[i])
@@ -4592,7 +4621,7 @@ static leo2_result ValidateDecodeBatchAliases(
         result = ValidateDecodeBuffers(plan,
             item.shard_bytes, item.original, item.recovery,
             item.restored_original, item.scratch, item.scratch_bytes,
-            &item_metadata, 1);
+            &item_metadata, 1, NULL);
         if (result != LEO2_SUCCESS)
             return result;
     }
@@ -6627,18 +6656,27 @@ static leo2_result DecodePlanExecuteInternal(
     const ScratchLayout& layout = direct_execution
         ? direct_layout
         : geometry.layout;
+    bool coordinates_prepopulated = false;
     if (!prevalidated)
     {
         AddressRange scratch_range;
         result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
         if (result != LEO2_SUCCESS)
             return result;
+        void** validation_coordinate_data = NULL;
+        if (!direct_execution && geometry.aligned_prefix_bytes != 0 &&
+            plan->missing_original_count > 1)
+        {
+            validation_coordinate_data = reinterpret_cast<void**>(
+                static_cast<uint8_t*>(scratch) + layout.pointer_offset);
+        }
         result = ValidateDecodeBuffers(
             plan, shard_bytes, original, recovery, restored_original,
             scratch, scratch_bytes, protected_metadata,
-            protected_metadata_count);
+            protected_metadata_count, validation_coordinate_data);
         if (result != LEO2_SUCCESS)
             return result;
+        coordinates_prepopulated = validation_coordinate_data != NULL;
     }
 
     const leo2_codec* codec = plan->codec;
@@ -6738,9 +6776,12 @@ static leo2_result DecodePlanExecuteInternal(
                     std::memory_order_relaxed);
 #endif
         }
-        PopulateDecodeCoordinates(
-            plan, original, recovery, 0, geometry.aligned_prefix_bytes,
-            NULL, coordinate_data);
+        if (!coordinates_prepopulated)
+        {
+            PopulateDecodeCoordinates(
+                plan, original, recovery, 0, geometry.aligned_prefix_bytes,
+                NULL, coordinate_data);
+        }
         const void* const* const coordinate_input =
             const_cast<const void* const*>(coordinate_data);
         ExecuteTransformDecodePass(
