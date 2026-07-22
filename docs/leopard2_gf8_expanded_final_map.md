@@ -9,7 +9,8 @@ The baseline is fixed in the tool to commit
 `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198` and executable SHA-256
 `a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910`.
 The runner rejects another baseline.  It also rejects a dirty or mismatched
-candidate source tree, a build directory configured from another tree, an
+candidate source tree (including untracked files and non-default index flags),
+a build directory configured from another tree, an
 unexpected runtime backend/profile/field, digest disagreement, and any EVEX
 instruction in either whole executable.  Both executables must contain AVX2
 YMM instructions.  Before timing, the runner invokes the same candidate binary

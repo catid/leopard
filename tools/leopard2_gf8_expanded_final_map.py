@@ -526,21 +526,37 @@ def inspect_isa(path, pass_fds=()):
 
 def source_provenance(source, expected_commit):
     source = os.path.realpath(source)
+    if not os.path.isdir(source):
+        raise RuntimeError("candidate source is not a directory: " + source)
     if not COMMIT_PATTERN.match(expected_commit):
         raise RuntimeError("candidate commit must be a full lowercase SHA")
+    top = checked_output(
+        ["git", "rev-parse", "--show-toplevel"], cwd=source)
+    if os.path.realpath(top) != source:
+        raise RuntimeError("candidate source is not the Git top level")
     head = checked_output(["git", "rev-parse", "HEAD"], cwd=source)
     tree = checked_output(["git", "rev-parse", "HEAD^{tree}"], cwd=source)
     expected_tree = checked_output(
         ["git", "rev-parse", expected_commit + "^{tree}"], cwd=source)
+    for flag in ("-v", "-f"):
+        records = [record for record in checked_output(
+            ["git", "ls-files", flag, "-z"], cwd=source).split("\0")
+                   if record]
+        if not records or any(not record.startswith("H ")
+                              for record in records):
+            raise RuntimeError(
+                "candidate index uses assume-unchanged, skip-worktree, "
+                "fsmonitor-valid, or another non-default flag")
     status = checked_output(
-        ["git", "status", "--porcelain", "--untracked-files=no"], cwd=source)
+        ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
+        cwd=source)
     if head != expected_commit or tree != expected_tree:
         raise RuntimeError(
             "candidate source does not exactly match expected commit")
     if status:
         raise RuntimeError("candidate source has tracked changes:\n" + status)
     return {"path": source, "head": head, "tree": tree,
-            "tracked_clean": True}
+            "status": "clean"}
 
 
 def cmake_provenance(build, source):
@@ -1641,6 +1657,35 @@ def self_test():
                 descriptor, "self-test fixture") == snapshot_identity
         finally:
             os.close(descriptor)
+    with tempfile.TemporaryDirectory(prefix="leopard2-expanded-source-") \
+            as directory:
+        root = Path(directory)
+        checked_output(["git", "init", "-q"], cwd=root)
+        tracked = root / "tracked.txt"
+        tracked.write_text("tracked\n", encoding="utf-8")
+        checked_output(["git", "add", "tracked.txt"], cwd=root)
+        checked_output([
+            "git", "-c", "user.name=Leopard2 Self Test", "-c",
+            "user.email=leopard2-self-test.invalid", "commit", "-qm",
+            "fixture"], cwd=root)
+        commit = checked_output(["git", "rev-parse", "HEAD"], cwd=root)
+        assert source_provenance(root, commit)["status"] == "clean"
+        rogue = root / "untracked.txt"
+        rogue.write_text("untracked\n", encoding="utf-8")
+        try:
+            source_provenance(root, commit)
+            raise AssertionError("untracked source file was accepted")
+        except RuntimeError as error:
+            assert "tracked changes" in str(error)
+        rogue.unlink()
+        checked_output(
+            ["git", "update-index", "--assume-unchanged", "tracked.txt"],
+            cwd=root)
+        try:
+            source_provenance(root, commit)
+            raise AssertionError("non-default index flag was accepted")
+        except RuntimeError as error:
+            assert "non-default flag" in str(error)
     print(json.dumps({
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
         "matrix_sha256": matrix_digest(matrix),
@@ -1648,6 +1693,7 @@ def self_test():
         "r1_selector_boundary_cells": len(r1_boundaries),
         "direct_odd_arity_cells": len(direct_odd),
         "sealed_snapshot_execution": "passed",
+        "clean_source_identity": "passed",
     }, sort_keys=True))
 
 
