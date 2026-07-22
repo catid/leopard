@@ -44,6 +44,88 @@ def runner_record(affinity: list[int]) -> dict:
 
 
 class IsolationTests(unittest.TestCase):
+    def test_small_direct_matrices_are_complete_and_stable(self) -> None:
+        core = RUNNER.make_matrix()
+        self.assertEqual(core["schema"], RUNNER.MATRIX_SCHEMA)
+        self.assertEqual(core["cell_count"], 160)
+        self.assertEqual(
+            core["matrix_sha256"], RUNNER.make_matrix()["matrix_sha256"])
+        self.assertEqual(
+            {cell["K"] for cell in core["cells"]}, {5, 8, 9, 12, 16})
+        self.assertEqual(
+            {cell["bytes"] for cell in core["cells"]},
+            {64, 2048, 4096, 65536})
+        self.assertEqual(
+            [cell["index"] for cell in core["cells"]],
+            list(range(core["cell_count"])))
+        self.assertEqual(
+            len({cell["id"] for cell in core["cells"]}),
+            core["cell_count"])
+        self.assertTrue(all(
+            cell["loss"] <= min(cell["K"], cell["R"])
+            for cell in core["cells"]))
+
+        full = RUNNER.make_large_matrix()
+        self.assertEqual(full["schema"], RUNNER.LARGE_MATRIX_SCHEMA)
+        self.assertEqual(full["cell_count"], 1264)
+        self.assertEqual(
+            full["matrix_sha256"],
+            RUNNER.make_large_matrix()["matrix_sha256"])
+        self.assertEqual(
+            [cell["index"] for cell in full["cells"]],
+            list(range(full["cell_count"])))
+        self.assertEqual(
+            len({cell["id"] for cell in full["cells"]}),
+            full["cell_count"])
+        expected = {
+            (k, r, loss, byte_count)
+            for k in range(5, 17)
+            for r in range(5, 9)
+            for loss in range(4, min(k, r) + 1)
+            for byte_count in
+                (64, 65, 256, 1024, 2048, 2049, 4096, 65536)
+        }
+        self.assertEqual({
+            (cell["K"], cell["R"], cell["loss"], cell["bytes"])
+            for cell in full["cells"]
+        }, expected)
+
+    def test_small_direct_modes_are_explicit_and_directional(self) -> None:
+        self.assertEqual(
+            RUNNER.comparison_modes("transform", "output"),
+            {"baseline": "transform", "candidate": "output"})
+        self.assertEqual(
+            RUNNER.comparison_modes("transform", "source"),
+            {"baseline": "transform", "candidate": "source"})
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "distinct and known"):
+            RUNNER.comparison_modes("source", "source")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "distinct and known"):
+            RUNNER.comparison_modes("unknown", "source")
+
+        loss4 = {"loss": 4}
+        loss5 = {"loss": 5}
+        self.assertEqual(
+            RUNNER.expected_direct_executor("transform", loss4),
+            "output_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("output", loss5),
+            "output_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("source", loss5),
+            "source_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("transform", loss5), "none")
+
+        arguments = ["c++", "-O3", RUNNER.MODE_COMPILE_DEFINITIONS["source"]]
+        self.assertEqual(
+            RUNNER.strip_mode_definition(arguments, "source", "test"),
+            ["c++", "-O3"])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "exact mode definition once"):
+            RUNNER.strip_mode_definition(["c++", "-O3"], "source", "test")
+
     @staticmethod
     def physical_pairs() -> list[tuple[int, int]]:
         allowed = RUNNER.cgroup_effective_cpus() & set(os.sched_getaffinity(0))
@@ -336,7 +418,8 @@ class IsolationTests(unittest.TestCase):
             with self.assertRaisesRegex(
                     RUNNER.EvidenceError, "pending control signal"):
                 RUNNER.run_invocation(
-                    Path("/bin/true"), "baseline", cell, 1, 17, 1.0,
+                    Path("/bin/true"), "baseline", cell, "transform",
+                    1, 17, 1.0,
                     Path(directory), 0, 0, 0, Path("/unused"), reservation,
                     "0" * 64, set())
         gated.assert_called_once()

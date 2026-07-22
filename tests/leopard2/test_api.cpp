@@ -48,6 +48,10 @@
 #include <malloc.h>
 #endif
 
+#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -676,6 +680,8 @@ void test_no_loss_no_op(leo2_context* context)
 
 void test_direct_repair_dispatch_bounds(leo2_context* context)
 {
+    static const bool experimental_small_direct =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0;
     struct Case
     {
         unsigned k;
@@ -690,6 +696,14 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
     const Case cases[] = {
         { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, true, false },
+        { 5, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 5, experimental_small_direct, true },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 8, experimental_small_direct, true },
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 8, experimental_small_direct, true },
+        { 16, 9, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 8, false, false },
         { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, false, false },
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -765,7 +779,8 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         for (unsigned i = 0; i < test.losses; ++i)
             original_present[i] = 0;
         // Force deterministic selection to skip parity zero.
-        recovery_present[0] = 0;
+        if (test.losses < test.r)
+            recovery_present[0] = 0;
 
         leo2_codec* codec = make_codec(
             context, test.k, test.r, test.profile, test.field);
@@ -795,6 +810,30 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         const bool expect_direct = test.expect_direct &&
             (!test.avx2_only ||
              leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+        leopard2_internal::DecodePathInfo path_info;
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            plan, test.bytes, false, &path_info),
+            "direct-dispatch path introspection");
+        require((path_info.path == leopard2_internal::kDecodePathDirect) ==
+                expect_direct,
+            "direct-repair path introspection disagrees with scratch shape");
+        if (expect_direct)
+        {
+            const leopard2_internal::DirectRepairExecutor expected_executor =
+                test.k >= 5 && test.k <= 16 &&
+                test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
+                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+                    ? leopard2_internal::kDirectRepairExecutorSourceMajor
+                    : leopard2_internal::kDirectRepairExecutorOutputMajor;
+            require(path_info.direct_executor == expected_executor,
+                "direct-repair executor introspection selected the wrong loop order");
+        }
+        else
+        {
+            require(path_info.direct_executor ==
+                    leopard2_internal::kDirectRepairExecutorNone,
+                "transform plan reported a direct-repair executor");
+        }
         require(expect_direct
                 ? scratch_bytes < reference_scratch_bytes
                 : scratch_bytes == reference_scratch_bytes,
@@ -891,6 +930,58 @@ void test_generalized_one_loss_direct_repair_execution(
             std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
     }
 }
+
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+void test_experimental_small_direct_repair_execution(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+        unsigned losses;
+    };
+    static const Shape shapes[] = {
+        { 5, 5, 5 }, { 8, 8, 5 }, { 8, 8, 8 },
+        { 9, 6, 6 }, { 12, 7, 7 }, { 16, 8, 5 }, { 16, 8, 8 }
+    };
+    static const size_t boundary_bytes[] = {
+        2047, 2048, 2049, 4095, 4096, 4097,
+        65535, 65536, 65537
+    };
+    for (size_t shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]); ++shape_i)
+    {
+        const Shape& shape = shapes[shape_i];
+        std::vector<unsigned> missing(shape.losses, 0);
+        for (unsigned i = 0; i < shape.losses; ++i)
+            missing[i] = i;
+        for (size_t byte_i = 0;
+             byte_i < sizeof(boundary_bytes) / sizeof(boundary_bytes[0]);
+             ++byte_i)
+        {
+            run_decode_case(context, shape.k, shape.r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                boundary_bytes[byte_i], missing, std::vector<unsigned>(),
+                counts);
+        }
+    }
+
+    /* Every byte tail through four complete AVX2 vectors catches a different
+       aligned-prefix/tail split without turning this targeted experiment into
+       an open-ended fuzzer. */
+    std::vector<unsigned> all_missing(8, 0);
+    for (unsigned i = 0; i < all_missing.size(); ++i)
+        all_missing[i] = i;
+    for (size_t bytes = 1; bytes <= 257; ++bytes)
+    {
+        run_decode_case(context, 8, 8,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            bytes, all_missing, std::vector<unsigned>(), counts);
+    }
+}
+#endif
 
 void test_concurrent_expanded_direct_repair_cache(
     leo2_context* context,
@@ -1030,6 +1121,9 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     test_concurrent_expanded_direct_repair_cache(context, counts);
     test_direct_repair_dispatch_bounds(context);
     test_generalized_one_loss_direct_repair_execution(context, counts);
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+    test_experimental_small_direct_repair_execution(context, counts);
+#endif
     const std::vector<unsigned> missing_originals = {
         0, 1, 7, 16, 32, 48, 63, 64
     };
@@ -2172,6 +2266,10 @@ leopard2_internal::DecodePathInfo require_decode_path(
     require(selection.rule == expected_rule,
         std::string(operation) + " selected rule " +
         leopard2_internal::DecodePathRuleName(selection.rule));
+    require(selection.direct_executor ==
+            leopard2_internal::kDirectRepairExecutorNone,
+        std::string(operation) +
+        " transform selector reported a direct-repair executor");
     require(selection.aligned_prefix_bytes == input.aligned_prefix_bytes &&
             selection.tail_bytes == input.tail_bytes &&
             selection.rounded_shard_bytes == input.rounded_shard_bytes &&

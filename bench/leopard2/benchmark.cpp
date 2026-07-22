@@ -1449,6 +1449,10 @@ static int Run(const Options& options)
              << "    \"selected_decode_rule\": \""
              << leopard2_internal::DecodePathRuleName(decode_path_info.rule)
              << "\",\n"
+             << "    \"direct_repair_executor\": \""
+             << leopard2_internal::DirectRepairExecutorName(
+                    decode_path_info.direct_executor)
+             << "\",\n"
              << "    \"decode_required_work_slots\": "
              << decode_path_info.required_work_slots << ",\n"
              << "    \"decode_aligned_prefix_bytes\": "
