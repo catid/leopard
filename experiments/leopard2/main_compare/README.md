@@ -97,7 +97,10 @@ holds the canonical benchmark lock for the complete campaign.  It intentionally
 saturates the allowed CPUs and identifies regions for follow-up; its output is
 not authoritative single-core performance evidence.  Every near or losing
 region still requires the isolated ABBA runner before a promotion or final
-disposition.
+disposition.  One untimed schema-v5 preflight binds the sealed Leopard2
+executable to the exact clean source commit/tree.  Timed calls then use the
+distinct schema-v3 decode-path report, so summaries record the implementation
+actually selected instead of inferring a potentially stale route from K/R.
 
 ## Counterbalanced comparison
 

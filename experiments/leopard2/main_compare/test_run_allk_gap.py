@@ -53,8 +53,8 @@ class AllKIdentityTests(unittest.TestCase):
             result = {"build": build}
             if role == "leopard2":
                 result.update({
-                    "schema": "leopard2-benchmark-v5",
-                    "parameters": {"attest_source": True},
+                    "schema": "leopard2-benchmark-v3",
+                    "parameters": {"report_decode_path": True},
                 })
             snapshot = (self.main_snapshot if role == "main" else
                         self.current_snapshot)
@@ -63,6 +63,26 @@ class AllKIdentityTests(unittest.TestCase):
                             "returncode": 0,
                             "result": result})
         return records
+
+    def attestation_record(self):
+        return {
+            "role": "leopard2", "returncode": 0,
+            "executable_snapshot_sha256": self.current_snapshot["sha256"],
+            "result": {
+                "schema": "leopard2-benchmark-v5",
+                "parameters": {"attest_source": True},
+                "resolved": {
+                    "profile": "legacy_high_v1", "field": "gf8",
+                    "backend": "avx2",
+                },
+                "build": {
+                    "source_commit": self.current_source["head"],
+                    "source_tree": self.current_source["tree"],
+                    "source_tracked_dirty": False,
+                },
+                "correctness": {"leopard2_round_trip": True},
+            },
+        }
 
     def correctness_records(self, cell):
         digest = {
@@ -91,6 +111,9 @@ class AllKIdentityTests(unittest.TestCase):
         runner.validate_invocation_identities(
             self.records(), self.main_commit, self.current_source,
             self.main_snapshot, self.current_snapshot)
+        runner.validate_source_attestation(
+            self.attestation_record(), self.current_source,
+            self.current_snapshot)
 
     def test_pure_avx2_disassembly_gate(self) -> None:
         avx2 = """
@@ -121,23 +144,34 @@ class AllKIdentityTests(unittest.TestCase):
         self.assertEqual(command[command.index("--profile") + 1], "high")
         self.assertEqual(command[command.index("--field") + 1], "gf8")
         self.assertEqual(command[command.index("--backend") + 1], "avx2")
-        self.assertIn("--attest-source", command)
+        self.assertIn("--report-decode-path", command)
+        self.assertNotIn("--attest-source", command)
         self.assertIn("--skip-legacy", command)
+
+    def test_path_classification_consumes_reported_route(self) -> None:
+        cell = runner.Cell("one", "gf8-all-k", 65, 64, 4096, 4,
+                           "max-GF8-R", "max-loss", 7, 5, 16, 1)
+        result = {"resolved": {
+            "profile": "legacy_high_v1", "field": "gf8",
+            "backend": "avx2", "parent_count": 256,
+            "padded_side": 64, "selected_decode_path": "tiled",
+            "selected_decode_rule": "workspace_tiled",
+            "decode_required_work_slots": 132,
+        }}
+        selected = runner.classify_paths(cell, result)
+        self.assertEqual(selected["decode_path"], "tiled")
+        self.assertEqual(selected["decode_rule"], "workspace_tiled")
+        self.assertEqual(selected["decode_required_work_slots"], 132)
+        del result["resolved"]["selected_decode_path"]
+        expect_rejected(
+            self, lambda: runner.classify_paths(cell, result),
+            "selected decode path")
 
     def test_embedded_identities_reject_every_mismatch(self) -> None:
         mutations = []
         wrong_main = self.records()
         wrong_main[0]["result"]["build"]["main_source_commit"] = "d" * 40
         mutations.append((wrong_main, "exact-main"))
-        wrong_commit = self.records()
-        wrong_commit[1]["result"]["build"]["source_commit"] = "d" * 40
-        mutations.append((wrong_commit, "embedded commit"))
-        wrong_tree = self.records()
-        wrong_tree[1]["result"]["build"]["source_tree"] = "d" * 40
-        mutations.append((wrong_tree, "embedded tree"))
-        dirty = self.records()
-        dirty[1]["result"]["build"]["source_tracked_dirty"] = True
-        mutations.append((dirty, "tracked-dirty"))
         wrong_snapshot = self.records()
         wrong_snapshot[2]["executable_snapshot_sha256"] = "f" * 64
         mutations.append((wrong_snapshot, "snapshot mismatch"))
@@ -154,6 +188,27 @@ class AllKIdentityTests(unittest.TestCase):
                     lambda records=records: runner.validate_invocation_identities(
                         records, self.main_commit, self.current_source,
                         self.main_snapshot, self.current_snapshot),
+                    message)
+
+        attestation_mutations = []
+        wrong_commit = self.attestation_record()
+        wrong_commit["result"]["build"]["source_commit"] = "d" * 40
+        attestation_mutations.append((wrong_commit, "embedded commit"))
+        wrong_tree = self.attestation_record()
+        wrong_tree["result"]["build"]["source_tree"] = "d" * 40
+        attestation_mutations.append((wrong_tree, "embedded tree"))
+        dirty = self.attestation_record()
+        dirty["result"]["build"]["source_tracked_dirty"] = True
+        attestation_mutations.append((dirty, "tracked-dirty"))
+        wrong_backend = self.attestation_record()
+        wrong_backend["result"]["resolved"]["backend"] = "auto"
+        attestation_mutations.append((wrong_backend, "codec identity"))
+        for record, message in attestation_mutations:
+            with self.subTest(message=message):
+                expect_rejected(
+                    self,
+                    lambda record=record: runner.validate_source_attestation(
+                        record, self.current_source, self.current_snapshot),
                     message)
 
     def test_git_identity_requires_requested_clean_top_level(self) -> None:

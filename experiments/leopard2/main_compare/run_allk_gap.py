@@ -452,37 +452,27 @@ def classify_paths(cell: Cell, result: Mapping[str, Any]) -> dict[str, Any]:
             "all-K current benchmark selected the wrong finite field")
     require(backend == "avx2",
             "all-K current benchmark did not select explicit AVX2")
+    decode = resolved.get("selected_decode_path")
+    decode_rule = resolved.get("selected_decode_rule")
+    require(decode in ("direct", "generic", "materialized", "tiled"),
+            "all-K current benchmark did not report its selected decode path")
+    require(isinstance(decode_rule, str) and decode_rule != "unknown",
+            "all-K current benchmark did not report its decode rule")
     if padded == 1:
         encode = "direct-xor-single-parity"
     else:
         encode = "specialized-high-transform"
-    if padded == 1 and cell.losses == 1:
-        decode = "direct-xor-one-loss"
+    if decode == "direct":
         workspace = "direct-bounded"
         locator = "none"
-    elif 2 <= cell.k <= 16 and cell.losses <= 4:
-        decode = "direct-small-loss-matrix"
-        workspace = "direct-bounded"
-        locator = "none"
-    elif (field == "gf8" and cell.k == 128 and cell.r == 128 and
-          cell.losses == 128 and 256 <= cell.shard_bytes <= 1024 * 1024):
-        decode = "generic-full-parent-transform"
+    elif decode == "generic":
         workspace = "materialized-N"
         locator = "active-parent-" + (
             "sparse-direct" if padded <= direct_locator_cutoff(field, parent)
             else "walsh")
     else:
-        decode = "specialized-high-transform"
-        calibrated_materialized = (
-            field == "gf8" and cell.k == 224 and cell.r == 32 and
-            1 <= cell.losses <= 8 and cell.shard_bytes <= 65536 and
-            backend in ("avx2", "ssse3") and
-            cell.shard_bytes >= (24576 if backend == "avx2" else 32768))
-        tiled_slots = 2 * padded + cell.losses
-        if calibrated_materialized or tiled_slots >= parent:
-            workspace = "materialized-N"
-        else:
-            workspace = "tiled-2T-plus-losses"
+        workspace = ("materialized-N" if decode == "materialized" else
+                     "tiled-side-plus-losses")
         permanent_cached = padded > cell.r and \
             cell.r <= direct_locator_cutoff(field, parent)
         effective = cell.r if permanent_cached else padded
@@ -494,7 +484,10 @@ def classify_paths(cell: Cell, result: Mapping[str, Any]) -> dict[str, Any]:
         "parent_count": parent, "padded_side": padded,
         "parent_inflation": parent / float(cell.k + cell.r),
         "encode_path": encode, "decode_path": decode,
+        "decode_rule": decode_rule,
         "decode_workspace": workspace, "locator_setup": locator,
+        "decode_required_work_slots":
+            int(resolved.get("decode_required_work_slots", 0)),
     }
 
 
@@ -512,11 +505,23 @@ def command(role: str, executable: Path, cell: Cell, cpu: int,
         field = "gf8" if cell.family == "gf8-all-k" else "gf16"
         common.extend(("--profile", "high", "--field", field,
                        "--backend", "avx2", "--retain-samples",
-                       "--attest-source"))
+                       "--report-decode-path"))
         if not with_current_legacy:
             common.append("--skip-legacy")
     common.extend(("--json", "-"))
     return common
+
+
+def source_attestation_command(executable: Path, cpu: int) -> list[str]:
+    return [
+        "/usr/bin/taskset", "-c", str(cpu), str(executable),
+        "--k", "3", "--r", "2", "--bytes", "64", "--loss", "1",
+        "--batch", "1", "--reuse", "1", "--iterations", "1",
+        "--warmup", "0", "--threads", "1", "--seed", "7",
+        "--profile", "high", "--field", "gf8", "--backend", "avx2",
+        "--skip-legacy", "--retain-samples", "--attest-source",
+        "--json", "-",
+    ]
 
 
 def run_one(role: str, command_value: Sequence[str], timeout: float,
@@ -585,19 +590,47 @@ def validate_invocation_identities(
                     "exact-main benchmark embedded commit mismatch")
         else:
             expected_snapshot = current_snapshot
-            require(result.get("schema") == "leopard2-benchmark-v5",
-                    "Leopard2 benchmark source-attestation schema mismatch")
-            require(result.get("parameters", {}).get("attest_source") is True,
-                    "Leopard2 benchmark did not record source attestation")
-            require(build.get("source_commit") == current_source.get("head"),
-                    "Leopard2 benchmark embedded commit mismatch")
-            require(build.get("source_tree") == current_source.get("tree"),
-                    "Leopard2 benchmark embedded tree mismatch")
-            require(build.get("source_tracked_dirty") is False,
-                    "Leopard2 benchmark was built from a tracked-dirty tree")
+            require(result.get("schema") == "leopard2-benchmark-v3",
+                    "Leopard2 benchmark decode-path schema mismatch")
+            require(result.get("parameters", {}).get(
+                "report_decode_path") is True,
+                "Leopard2 benchmark did not record decode-path reporting")
         require(record.get("executable_snapshot_sha256") ==
                 expected_snapshot.get("sha256"),
                 f"all-K invocation {index} executable snapshot mismatch")
+
+
+def validate_source_attestation(
+        record: Mapping[str, Any], current_source: Mapping[str, Any],
+        current_snapshot: Mapping[str, Any]) -> None:
+    require(record.get("returncode") == 0,
+            "Leopard2 source-attestation preflight failed")
+    require(record.get("executable_snapshot_sha256") ==
+            current_snapshot.get("sha256"),
+            "Leopard2 source-attestation snapshot mismatch")
+    result = record.get("result")
+    require(isinstance(result, dict) and
+            result.get("schema") == "leopard2-benchmark-v5",
+            "Leopard2 benchmark source-attestation schema mismatch")
+    require(result.get("parameters", {}).get("attest_source") is True,
+            "Leopard2 benchmark did not record source attestation")
+    build = result.get("build")
+    require(isinstance(build, dict),
+            "Leopard2 source attestation has no build identity")
+    require(build.get("source_commit") == current_source.get("head"),
+            "Leopard2 benchmark embedded commit mismatch")
+    require(build.get("source_tree") == current_source.get("tree"),
+            "Leopard2 benchmark embedded tree mismatch")
+    require(build.get("source_tracked_dirty") is False,
+            "Leopard2 benchmark was built from a tracked-dirty tree")
+    resolved = result.get("resolved", {})
+    require((resolved.get("profile"), resolved.get("field"),
+             resolved.get("backend")) ==
+            ("legacy_high_v1", "gf8", "avx2"),
+            "Leopard2 source attestation resolved the wrong codec identity")
+    require(result.get("correctness", {}).get(
+        "leopard2_round_trip") is True,
+        "Leopard2 source-attestation round trip failed")
 
 
 def validate_correctness(cell: Cell,
@@ -661,9 +694,9 @@ def gap_tags(cell: Cell, paths: Mapping[str, Any], encode_speedup: float,
             tags.append("encode:partial-final-message-block")
     if decode_first_speedup < 1.05 or decode_reuse_speedup < 1.05:
         decode_path = paths["decode_path"]
-        if decode_path.startswith("direct-"):
+        if decode_path == "direct":
             tags.append("decode:direct-path-overhead-or-kernel")
-        elif decode_path.startswith("generic-"):
+        elif decode_path == "generic":
             tags.append("decode:generic-fallback-crossover")
         else:
             tags.append("decode:specialized-high-crossover")
@@ -977,6 +1010,14 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
     workers = min(options.workers, len(cpus), 128)
     require(workers > 0, "the process has no allowed CPUs")
     cpus = cpus[:workers]
+    current_source_attestation = run_one(
+        "leopard2",
+        source_attestation_command(current_exe, cpus[0]),
+        options.timeout, current_snapshot_descriptor,
+        current_snapshot_initial)
+    validate_source_attestation(
+        current_source_attestation, current_source_initial,
+        current_snapshot_initial)
     cells = make_cells(gf8_only=options.gf8_only)
     contract = {
         "schema": "leopard2-all-k-gap-contract/v2",
@@ -987,6 +1028,7 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
         "current_executable_initial": current_executable_initial,
         "main_executable_snapshot": main_snapshot_initial,
         "current_executable_snapshot": current_snapshot_initial,
+        "current_source_attestation": current_source_attestation,
         "main_isa": main_isa, "current_isa": current_isa,
         "benchmark_lock": lock_path,
         "allowed_cpus": sorted(os.sched_getaffinity(0)), "used_cpus": cpus,
