@@ -957,13 +957,15 @@ def validate_leopard2_document(
     parameters = document["parameters"]
     expected_profile = (
         "legacy_high_v1" if cell["profile"] == "high" else "low_v1")
+    expected_iterations = int(cell.get(
+        "benchmark_iterations", iterations_for(cell["bytes"])))
     require(parameters["K"] == cell["K"] and
             parameters["R"] == cell["R"] and
             parameters["shard_bytes"] == cell["bytes"] and
             parameters["loss_count"] == cell["loss"] and
             parameters["batch"] == 1 and
             parameters["reuse"] == cell["reuse"] and
-            parameters["iterations"] == iterations_for(cell["bytes"]) and
+            parameters["iterations"] == expected_iterations and
             parameters["warmup"] == 2 and
             parameters["thread_count"] == 1 and
             parameters["seed"] == cell["seed"],
@@ -1212,6 +1214,7 @@ def l2_fallback_cells() -> list[dict[str, Any]]:
                     profile, k, r),
                 "tier": "l2-fallback",
                 "loss": 2,
+                "benchmark_iterations": 1,
                 "candidate_expected_path": "transform",
             })
             result.append(cell)
@@ -1542,7 +1545,9 @@ def synthetic_document(
             "loss_count": cell["loss"],
             "missing_original_indices": list(range(cell["loss"])),
             "batch": 1, "reuse": cell["reuse"],
-            "iterations": iterations_for(cell["bytes"]), "warmup": 2,
+            "iterations": int(cell.get(
+                "benchmark_iterations", iterations_for(cell["bytes"]))),
+            "warmup": 2,
             "thread_count": 1, "seed": cell["seed"],
             "requested_profile": profile,
             "requested_field": "gf8", "requested_backend": "avx2",
