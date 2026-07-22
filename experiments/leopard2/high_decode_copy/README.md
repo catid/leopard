@@ -19,13 +19,17 @@ GF8/GF16 compact tails, and balanced fully erased message blocks that must use
 the nonpruned mature evaluator.  Adversarial mode, counter, path, and digest
 mutations must be rejected.
 
-The campaign and manifest use the fail-closed `v2` evidence schemas.  The
-runner independently reproduces the exact sorted loss set from K, loss count,
-and seed; requires the global cell/round/slot sequence to be precisely
-ABBA/BAAB/ABBA; binds batch, reuse, sample count, warmup, and thread count; and
-recomputes medians, MAD, extrema, rates, and amortized decode time from retained
-samples.  It also validates the host record, coordinator reservation,
-pair-wide lease, per-child monotonic intervals, and per-child CPU deltas.
+The campaign and manifest use the fail-closed `v3` evidence schemas.  V3 binds
+the split `Leopard2BackendAVX2Xor.cpp.o` member in its exact archive position,
+after the main AVX2 member and before AVX-512.  Historical signed v2 raw and
+manifest evidence remains replayable under its original twelve-member archive
+definition; new campaigns always emit v3.  The runner independently
+reproduces the exact sorted loss set from K, loss count, and seed; requires the
+global cell/round/slot sequence to be precisely ABBA/BAAB/ABBA; binds batch,
+reuse, sample count, warmup, and thread count; and recomputes medians, MAD,
+extrema, rates, and amortized decode time from retained samples.  It also
+validates the host record, coordinator reservation, pair-wide lease, per-child
+monotonic intervals, and per-child CPU deltas.
 
 ## Build
 

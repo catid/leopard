@@ -23,9 +23,19 @@ from types import ModuleType
 from typing import Any, Mapping, Sequence
 
 
-RAW_SCHEMA = "leopard2-high-decode-copy-raw/v2"
-MANIFEST_SCHEMA = "leopard2-high-decode-copy-manifest/v2"
-FAILURE_SCHEMA = "leopard2-high-decode-copy-failure/v2"
+LEGACY_RAW_SCHEMA = "leopard2-high-decode-copy-raw/v2"
+LEGACY_MANIFEST_SCHEMA = "leopard2-high-decode-copy-manifest/v2"
+RAW_SCHEMA = "leopard2-high-decode-copy-raw/v3"
+MANIFEST_SCHEMA = "leopard2-high-decode-copy-manifest/v3"
+# Failure bundles are diagnostics rather than replay inputs, so only the
+# current failure schema is emitted and no historical failure schema is
+# advertised as verifiable.
+FAILURE_SCHEMA = "leopard2-high-decode-copy-failure/v3"
+RAW_SCHEMAS = frozenset({LEGACY_RAW_SCHEMA, RAW_SCHEMA})
+MANIFEST_RAW_SCHEMAS = {
+    LEGACY_MANIFEST_SCHEMA: LEGACY_RAW_SCHEMA,
+    MANIFEST_SCHEMA: RAW_SCHEMA,
+}
 MATRIX_SCHEMA = "leopard2-high-decode-copy-matrix/v1"
 RUNNER_RELATIVE = "experiments/leopard2/high_decode_copy/run_abba.py"
 CONTRACT_RELATIVE = "experiments/leopard2/high_decode_copy/benchmark_contract.py"
@@ -255,17 +265,28 @@ def find_build_root(binary: Path) -> Path:
 
 
 def diagnostic_specifications(
-    source_root: Path, build: Path
+    source_root: Path, build: Path, evidence_schema: str = RAW_SCHEMA,
 ) -> list[tuple[Path, Path, set[str]]]:
+    require(type(evidence_schema) is str and evidence_schema in RAW_SCHEMAS,
+            "unknown high-decode copy evidence schema")
     ordinary = (
         "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
         "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
         "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
         "LeopardFF16.cpp",
     )
-    backends = (
+    backends = [
         ("Leopard2BackendSSSE3.cpp", "leopard2_backend_ssse3_test_hooks"),
         ("Leopard2BackendAVX2.cpp", "leopard2_backend_avx2_test_hooks"),
+    ]
+    if evidence_schema == RAW_SCHEMA:
+        # V3 binds the split AVX2 XOR translation unit in its exact CMake
+        # archive position.  V2 predates that split and remains replayable
+        # against its historical twelve-member hooks archive.
+        backends.append((
+            "Leopard2BackendAVX2Xor.cpp",
+            "leopard2_backend_avx2_test_hooks"))
+    backends.append(
         ("Leopard2BackendAVX512.cpp", "leopard2_backend_avx512_test_hooks"),
     )
     specifications: list[tuple[Path, Path, set[str]]] = [
@@ -901,6 +922,7 @@ def validate_source_identity(value: object) -> dict[str, Any]:
 def validate_compile_snapshot(
     build_value: Mapping[str, Any], source_root: Path, build: Path,
     compiler: Mapping[str, Any], compiler_invocation: str,
+    evidence_schema: str,
 ) -> tuple[list[dict[str, Any]], Path]:
     commands_path = build / "compile_commands.json"
     commands_artifact = validate_artifact_record(
@@ -920,7 +942,8 @@ def validate_compile_snapshot(
     require(type(entries) is list and all(isinstance(item, dict) for item in entries),
             "retained compile commands are not an object array")
 
-    specifications = diagnostic_specifications(source_root, build)
+    specifications = diagnostic_specifications(
+        source_root, build, evidence_schema)
     records = build_value.get("validated_compile_closure")
     require(type(records) is list and len(records) == len(specifications) and
             all(isinstance(record, dict) for record in records),
@@ -1261,7 +1284,11 @@ def validate_runtime_snapshot(value: object, binary: Path) -> None:
                 "retained runtime dependency is outside system roots")
 
 
-def validate_snapshot_identity(value: object) -> dict[str, Any]:
+def validate_snapshot_identity(
+    value: object, evidence_schema: str = RAW_SCHEMA,
+) -> dict[str, Any]:
+    require(type(evidence_schema) is str and evidence_schema in RAW_SCHEMAS,
+            "unknown retained high-decode copy evidence schema")
     require(isinstance(value, dict) and set(value) == {
                 "source", "build", "runner", "contract", "matrix",
                 "support", "runtime"},
@@ -1311,7 +1338,8 @@ def validate_snapshot_identity(value: object) -> dict[str, Any]:
             re.fullmatch(r"(?:[^/]+-)?nm(?:-\d+)?", nm_name) is not None,
             "retained compiler/nm are outside system roots")
     compile_records, benchmark_object = validate_compile_snapshot(
-        build_value, source_root, build, compiler, compiler_invocation)
+        build_value, source_root, build, compiler, compiler_invocation,
+        evidence_schema)
     archive = validate_archive_snapshot(
         build_value.get("validated_archive_closure"), build, compile_records)
     require(build_value.get("hook_archive") == archive["archive"],
@@ -1605,8 +1633,11 @@ def validate_campaign_isolation(
 
 
 def validate_campaign_environment(
-    raw: Mapping[str, Any], campaign: Mapping[str, Any]
+    raw: Mapping[str, Any], campaign: Mapping[str, Any],
+    evidence_schema: str = RAW_SCHEMA,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    require(type(evidence_schema) is str and evidence_schema in RAW_SCHEMAS,
+            "unknown campaign high-decode copy evidence schema")
     cpu = campaign["cpu"]
     sibling = campaign["reserved_sibling"]
     host_initial = raw.get("host_initial")
@@ -1620,7 +1651,7 @@ def validate_campaign_environment(
             cpu in allowed and sibling in allowed,
             "host launch affinity record is invalid")
     SUPPORT.validate_host_record(
-        host_initial, cpu, sibling, allowed, RAW_SCHEMA)
+        host_initial, cpu, sibling, allowed, evidence_schema)
     isolation = validate_campaign_isolation(raw.get("isolation"), campaign)
     pair_lease = raw.get("pair_lease")
     SUPPORT.validate_pair_lease_identity(pair_lease, cpu, sibling)
@@ -1666,7 +1697,9 @@ def validate_record_execution_attestation(
 
 def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
     SUPPORT.verify_signature(raw, "high-decode copy raw evidence")
-    require(isinstance(raw, dict) and raw.get("schema") == RAW_SCHEMA and
+    raw_schema = raw.get("schema") if isinstance(raw, dict) else None
+    require(isinstance(raw, dict) and type(raw_schema) is str and
+            raw_schema in RAW_SCHEMAS and
             set(raw) == {
                 "schema", "created_utc", "validity_is_independent_of_speed",
                 "matrix", "campaign", "host_initial", "host_final",
@@ -1711,11 +1744,12 @@ def validate_raw(raw: object, output: Path, *, current: bool) -> dict[str, Any]:
     records = validate_record_sequence(records, matrix)
     cpu = campaign["cpu"]
     sibling = campaign["reserved_sibling"]
-    isolation, reservation = validate_campaign_environment(raw, campaign)
+    isolation, reservation = validate_campaign_environment(
+        raw, campaign, raw_schema)
     initial = raw.get("identities_initial")
     require(isinstance(initial, dict) and initial == raw.get("identities_final"),
             "source/build identity changed during the campaign")
-    validate_snapshot_identity(initial)
+    validate_snapshot_identity(initial, raw_schema)
     binary_value = initial.get("build", {}).get("binary", {}).get("path")
     require(type(binary_value) is str and binary_value,
             "diagnostic binary identity path is absent")
@@ -1884,7 +1918,10 @@ def verify_campaign(options: argparse.Namespace) -> int:
     path = options.manifest.resolve(strict=True)
     manifest = json.loads(path.read_text(encoding="utf-8"))
     SUPPORT.verify_signature(manifest, "high-decode copy manifest")
-    require(manifest.get("schema") == MANIFEST_SCHEMA and
+    manifest_schema = manifest.get("schema") if isinstance(manifest, dict) \
+        else None
+    require(type(manifest_schema) is str and
+            manifest_schema in MANIFEST_RAW_SCHEMAS and
             set(manifest) == {
                 "schema", "created_utc", "valid",
                 "validity_is_independent_of_speed", "raw", "matrix", "campaign",
@@ -1901,6 +1938,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
             SUPPORT.sha256_file(raw_path) == raw_info.get("sha256"),
             "raw high-decode copy bundle identity differs")
     raw = json.loads(raw_path.read_text(encoding="utf-8"))
+    validate_manifest_raw_schema_pair(
+        manifest_schema, raw.get("schema") if isinstance(raw, dict) else None)
     analysis = validate_raw(raw, path.parent, current=not options.no_current_input_check)
     validate_manifest_raw_timestamps(
         manifest.get("created_utc"), raw.get("created_utc"))
@@ -1917,6 +1956,18 @@ def verify_campaign(options: argparse.Namespace) -> int:
             "manifest differs from its raw high-decode copy bundle")
     print("high-decode copy/no-copy ABBA evidence verified")
     return 0
+
+
+def validate_manifest_raw_schema_pair(
+    manifest_schema: object, raw_schema: object,
+) -> tuple[str, str]:
+    require(type(manifest_schema) is str and
+            manifest_schema in MANIFEST_RAW_SCHEMAS,
+            "unknown high-decode copy manifest schema")
+    require(type(raw_schema) is str and
+            raw_schema == MANIFEST_RAW_SCHEMAS[manifest_schema],
+            "manifest/raw high-decode copy schema versions differ")
+    return manifest_schema, raw_schema
 
 
 def build_smoke(options: argparse.Namespace) -> int:
@@ -2002,7 +2053,9 @@ def synthetic_result(
     return document
 
 
-def synthetic_snapshot_identity() -> dict[str, Any]:
+def synthetic_snapshot_identity(
+    evidence_schema: str = RAW_SCHEMA,
+) -> dict[str, Any]:
     source_root = Path("/fixture/source")
     build = Path("/fixture/build")
     compiler_invocation = "/usr/bin/c++"
@@ -2024,7 +2077,8 @@ def synthetic_snapshot_identity() -> dict[str, Any]:
 
     compiler = artifact(Path(compiler_invocation), "compiler", executable=True)
     cmake = artifact(Path(cmake_invocation), "build_tool", executable=True)
-    specifications = diagnostic_specifications(source_root, build)
+    specifications = diagnostic_specifications(
+        source_root, build, evidence_schema)
     compile_records: list[dict[str, Any]] = []
     compile_entries: list[dict[str, Any]] = []
     for source, output, definitions in specifications:
@@ -2452,8 +2506,51 @@ def self_test() -> None:
         "child_environment": dict(SUPPORT.CHILD_ENVIRONMENT),
         "invocation_count": len(expected_record_sequence(matrix)),
     }
+    require(validate_manifest_raw_schema_pair(
+                LEGACY_MANIFEST_SCHEMA, LEGACY_RAW_SCHEMA) ==
+                (LEGACY_MANIFEST_SCHEMA, LEGACY_RAW_SCHEMA) and
+            validate_manifest_raw_schema_pair(
+                MANIFEST_SCHEMA, RAW_SCHEMA) ==
+                (MANIFEST_SCHEMA, RAW_SCHEMA),
+            "matching historical/current evidence schemas were rejected")
+    for manifest_value, raw_value in (
+        (LEGACY_MANIFEST_SCHEMA, RAW_SCHEMA),
+        (MANIFEST_SCHEMA, LEGACY_RAW_SCHEMA),
+        ("leopard2-high-decode-copy-manifest/unknown", RAW_SCHEMA),
+        (MANIFEST_SCHEMA, "leopard2-high-decode-copy-raw/unknown"),
+    ):
+        try:
+            validate_manifest_raw_schema_pair(manifest_value, raw_value)
+        except EvidenceError:
+            continue
+        raise AssertionError(
+            "mismatched/unknown manifest and raw schemas were accepted")
     fixture_identity = synthetic_snapshot_identity()
-    validate_snapshot_identity(fixture_identity)
+    validate_snapshot_identity(fixture_identity, RAW_SCHEMA)
+    legacy_fixture_identity = synthetic_snapshot_identity(LEGACY_RAW_SCHEMA)
+    validate_snapshot_identity(legacy_fixture_identity, LEGACY_RAW_SCHEMA)
+    current_sources = [
+        Path(record["source"]["path"]).name
+        for record in fixture_identity["build"]["validated_compile_closure"]
+    ]
+    legacy_sources = [
+        Path(record["source"]["path"]).name
+        for record in legacy_fixture_identity["build"]
+            ["validated_compile_closure"]
+    ]
+    expected_current_sources = [
+        "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
+        "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
+        "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
+        "LeopardFF16.cpp", "Leopard2BackendSSSE3.cpp",
+        "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp",
+        "Leopard2BackendAVX512.cpp", "benchmark.cpp",
+    ]
+    require(current_sources == expected_current_sources and
+            legacy_sources == [
+                name for name in expected_current_sources
+                if name != "Leopard2BackendAVX2Xor.cpp"],
+            "current/legacy diagnostic source order changed")
     fixture_binary = Path(fixture_identity["build"]["binary"]["path"])
     raw_records = []
     for index, (identifier, round_index, slot, mode) in enumerate(
@@ -2493,6 +2590,13 @@ def self_test() -> None:
     }
     raw_fixture = SUPPORT.signed(raw_fixture_payload)
     validate_raw(raw_fixture, Path("."), current=False)
+    legacy_raw_fixture_payload = copy.deepcopy(raw_fixture_payload)
+    legacy_raw_fixture_payload["schema"] = LEGACY_RAW_SCHEMA
+    legacy_raw_fixture_payload["identities_initial"] = legacy_fixture_identity
+    legacy_raw_fixture_payload["identities_final"] = copy.deepcopy(
+        legacy_fixture_identity)
+    validate_raw(SUPPORT.signed(legacy_raw_fixture_payload), Path("."),
+                 current=False)
     raw_mutations = []
     missing_host = copy.deepcopy(raw_fixture_payload)
     del missing_host["host_final"]
@@ -2540,6 +2644,93 @@ def self_test() -> None:
         encoded = text.encode("utf-8")
         artifact_value["size"] = len(encoded)
         artifact_value["sha256"] = SUPPORT.sha256_bytes(encoded)
+
+    def bind_compile_entries(
+        build_value: dict[str, Any], entries: Sequence[Mapping[str, Any]],
+    ) -> None:
+        text = json.dumps(entries, sort_keys=True, separators=(",", ":"))
+        build_value["compile_commands_text"] = text
+        encoded = text.encode("utf-8")
+        build_value["compile_commands"]["size"] = len(encoded)
+        build_value["compile_commands"]["sha256"] = \
+            SUPPORT.sha256_bytes(encoded)
+
+    def bind_archive_recipe(closure: dict[str, Any]) -> None:
+        text = "\n".join(
+            " ".join(command) for command in closure["recipe_tokens"]) + "\n"
+        closure["recipe_text"] = text
+        encoded = text.encode("utf-8")
+        closure["recipe"]["size"] = len(encoded)
+        closure["recipe"]["sha256"] = SUPPORT.sha256_bytes(encoded)
+
+    def xor_record_index(identity: Mapping[str, Any]) -> int:
+        records = identity["build"]["validated_compile_closure"]
+        matches = [
+            index for index, record in enumerate(records)
+            if Path(record["source"]["path"]).name ==
+                "Leopard2BackendAVX2Xor.cpp"
+        ]
+        require(len(matches) == 1,
+                "synthetic current identity lost its AVX2 XOR action")
+        return matches[0]
+
+    def omit_xor_action_coherently(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        index = xor_record_index(identity)
+        build_value["validated_compile_closure"].pop(index)
+        entries = json.loads(build_value["compile_commands_text"])
+        entries.pop(index)
+        bind_compile_entries(build_value, entries)
+        closure = build_value["validated_archive_closure"]
+        closure["recipe_tokens"][0].pop(3 + index)
+        closure["members"].pop(index)
+        bind_archive_recipe(closure)
+
+    def replace_xor_action_coherently(identity: dict[str, Any]) -> None:
+        build_value = identity["build"]
+        index = xor_record_index(identity)
+        record = build_value["validated_compile_closure"][index]
+        replacement_source = "/fixture/source/Leopard2BackendAVX2Replacement.cpp"
+        replacement_object = (
+            "/fixture/build/CMakeFiles/"
+            "leopard2_backend_avx2_test_hooks.dir/"
+            "Leopard2BackendAVX2Replacement.cpp.o")
+        record["source"] = substitute_artifact(
+            record["source"], replacement_source)
+        record["object"] = substitute_artifact(
+            record["object"], replacement_object)
+        source_index = record["command_tokens"].index("-c") + 1
+        output_index = record["command_tokens"].index("-o") + 1
+        record["command_tokens"][source_index] = replacement_source
+        record["command_tokens"][output_index] = replacement_object
+        entries = json.loads(build_value["compile_commands_text"])
+        entries[index]["file"] = replacement_source
+        entries[index]["output"] = replacement_object
+        entries[index]["arguments"] = list(record["command_tokens"])
+        bind_compile_entries(build_value, entries)
+        closure = build_value["validated_archive_closure"]
+        closure["recipe_tokens"][0][3 + index] = replacement_object
+        closure["members"][index] = {
+            "member": Path(replacement_object).name,
+            "sha256": record["object"]["sha256"],
+        }
+        bind_archive_recipe(closure)
+
+    def reorder_xor_archive_recipe(identity: dict[str, Any]) -> None:
+        index = xor_record_index(identity)
+        require(index > 0, "synthetic AVX2 XOR action cannot be first")
+        closure = identity["build"]["validated_archive_closure"]
+        archive_tokens = closure["recipe_tokens"][0]
+        archive_tokens[3 + index - 1], archive_tokens[3 + index] = \
+            archive_tokens[3 + index], archive_tokens[3 + index - 1]
+        closure["members"][index - 1], closure["members"][index] = \
+            closure["members"][index], closure["members"][index - 1]
+        bind_archive_recipe(closure)
+
+    def replace_xor_archive_member(identity: dict[str, Any]) -> None:
+        index = xor_record_index(identity)
+        identity["build"]["validated_archive_closure"]["members"][index] \
+            ["member"] = "Leopard2BackendAVX2Replacement.cpp.o"
 
     def substitute_compile_action(identity: dict[str, Any]) -> None:
         build_value = identity["build"]
@@ -2647,6 +2838,8 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_compile_closure"][0]["command_tokens"]
                           .append("-DUNRETAINED=1"))
+    add_identity_mutation(omit_xor_action_coherently)
+    add_identity_mutation(replace_xor_action_coherently)
     add_identity_mutation(substitute_compile_action)
     add_identity_mutation(substitute_complete_compiler)
     add_identity_mutation(lambda identity: identity["build"]
@@ -2655,6 +2848,8 @@ def self_test() -> None:
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_archive_closure"]["members"][0]
                           .__setitem__("sha256", "e" * 64))
+    add_identity_mutation(reorder_xor_archive_recipe)
+    add_identity_mutation(replace_xor_archive_member)
     add_identity_mutation(lambda identity: identity["build"]
                           ["validated_archive_closure"]["archive"]
                           .__setitem__("sha256", "f" * 64))
@@ -2712,7 +2907,8 @@ def self_test() -> None:
     CONTRACT.self_test()
     print("high-decode copy/no-copy runner self-test passed: "
           "16 cells, 192 invocations, deterministic losses/timings, exact ABBA "
-          "slots, canonical build inputs, field, and nested isolation")
+          "slots, current v3 AVX2-XOR closure, historical v2 replay, canonical "
+          "build inputs, field, and nested isolation")
 
 
 def parser() -> argparse.ArgumentParser:
