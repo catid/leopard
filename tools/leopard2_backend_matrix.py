@@ -900,6 +900,8 @@ def run_variant(context, variant, index):
         "-DLEO2_BUILD_BENCHMARKS=OFF",
         "-DLEO2_BUILD_FUZZERS=OFF",
         "-DLEO2_ENABLE_CUDA=OFF",
+        "-DLEOPARD_ENABLE_GF8=ON",
+        "-DLEOPARD_ENABLE_GF16=ON",
     ]
     base["fresh_build"] = {
         "configured_from_empty": True,
