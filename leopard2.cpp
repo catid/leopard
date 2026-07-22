@@ -2995,6 +2995,15 @@ static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec)
         return false;
 
     const uint32_t side = codec->padded_side;
+    if (side == 8)
+    {
+        // The register-resident T=8 kernel clears the exact Leopard1 gate for
+        // the balanced code.  Keep shortened and punctured neighbors out of
+        // AUTO: their explicit-callback correctness is covered, but their
+        // small-shard exact-main results did not clear the promotion margin.
+        return codec->original_count == side &&
+            codec->recovery_count == side;
+    }
     if (side == 64)
     {
         // The same-source AVX2 gate qualified all four combinations of an
@@ -3033,13 +3042,13 @@ static bool UseAutoAVX512Encode(
     if (codec->field == LEO2_FIELD_GF8)
     {
         // The whole-transform AVX-512VL calibration screen is positive in
-        // this cache-resident interval.  T=16 needs 4 KiB to clear the
-        // promotion threshold; T=32 and the previously qualified exact T=64
-        // shape clear it at 2 KiB.  A one-row-punctured T=64 code clears the
-        // exact-main threshold only at 64 KiB.  The shortened K=63,R=64 shape
-        // has no legal Leopard1 counterpart and retains the positive
-        // same-source AVX2 interval.  Above the upper bound the backends
-        // converge as shard traffic becomes the bottleneck.
+        // this cache-resident interval.  Exact T=8 and T=32, plus the
+        // previously qualified exact T=64 shape, clear it at 2 KiB.  T=16
+        // needs 4 KiB.  A one-row-punctured T=64 code clears the exact-main
+        // threshold only at 64 KiB.  The shortened K=63,R=64 shape has no
+        // legal Leopard1 counterpart and retains the positive same-source
+        // AVX2 interval.  Above the upper bound the backends converge as shard
+        // traffic becomes the bottleneck.
         if (codec->padded_side == 64 &&
             codec->recovery_count + 1U == codec->padded_side)
             return buffer_bytes == 64U * 1024U;

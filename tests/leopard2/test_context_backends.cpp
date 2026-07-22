@@ -2104,7 +2104,8 @@ void test_gf8_high_forward_fusion_policy(
         // The policy is based on T, not the public rate within a promoted
         // transform size.
         { 190, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
-        // Neighboring T=8, the low profile, and GF16 remain inactive.
+        // T=8 uses the independent whole-transform callback; the low profile
+        // and GF16 remain inactive for this per-stage fusion policy.
         { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
         { 64, 192, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 4096 },
         { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 4096 }

@@ -1878,6 +1878,311 @@ static void AVX2FF8HighEncodeSmall(
 
 #if defined(LEO2_AVX512_VARIANT)
 
+struct AVX2FF8T8Pair
+{
+    __m256i low;
+    __m256i high;
+};
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8Xor(
+    AVX2FF8T8Pair& destination,
+    const AVX2FF8T8Pair& source)
+{
+    destination.low = _mm256_xor_si256(destination.low, source.low);
+    destination.high = _mm256_xor_si256(destination.high, source.high);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8MulAdd(
+    AVX2FF8T8Pair& destination,
+    const AVX2FF8T8Pair& source,
+    uint16_t log)
+{
+    const FF8NibbleTable& table = FF8Tables[log];
+    const __m256i low_table = BroadcastTable(table.low);
+    const __m256i high_table = BroadcastTable(table.high);
+    destination.low = _mm256_xor_si256(destination.low,
+        AVX2FF8ProductVector(source.low, low_table, high_table));
+    destination.high = _mm256_xor_si256(destination.high,
+        AVX2FF8ProductVector(source.high, low_table, high_table));
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8MulAdd2(
+    AVX2FF8T8Pair& destination0,
+    const AVX2FF8T8Pair& source0,
+    AVX2FF8T8Pair& destination1,
+    const AVX2FF8T8Pair& source1,
+    uint16_t log)
+{
+    const FF8NibbleTable& table = FF8Tables[log];
+    const __m256i low_table = BroadcastTable(table.low);
+    const __m256i high_table = BroadcastTable(table.high);
+    destination0.low = _mm256_xor_si256(destination0.low,
+        AVX2FF8ProductVector(source0.low, low_table, high_table));
+    destination0.high = _mm256_xor_si256(destination0.high,
+        AVX2FF8ProductVector(source0.high, low_table, high_table));
+    destination1.low = _mm256_xor_si256(destination1.low,
+        AVX2FF8ProductVector(source1.low, low_table, high_table));
+    destination1.high = _mm256_xor_si256(destination1.high,
+        AVX2FF8ProductVector(source1.high, low_table, high_table));
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8MulAdd4(
+    AVX2FF8T8Pair& destination0,
+    const AVX2FF8T8Pair& source0,
+    AVX2FF8T8Pair& destination1,
+    const AVX2FF8T8Pair& source1,
+    AVX2FF8T8Pair& destination2,
+    const AVX2FF8T8Pair& source2,
+    AVX2FF8T8Pair& destination3,
+    const AVX2FF8T8Pair& source3,
+    uint16_t log)
+{
+    const FF8NibbleTable& table = FF8Tables[log];
+    const __m256i low_table = BroadcastTable(table.low);
+    const __m256i high_table = BroadcastTable(table.high);
+    destination0.low = _mm256_xor_si256(destination0.low,
+        AVX2FF8ProductVector(source0.low, low_table, high_table));
+    destination0.high = _mm256_xor_si256(destination0.high,
+        AVX2FF8ProductVector(source0.high, low_table, high_table));
+    destination1.low = _mm256_xor_si256(destination1.low,
+        AVX2FF8ProductVector(source1.low, low_table, high_table));
+    destination1.high = _mm256_xor_si256(destination1.high,
+        AVX2FF8ProductVector(source1.high, low_table, high_table));
+    destination2.low = _mm256_xor_si256(destination2.low,
+        AVX2FF8ProductVector(source2.low, low_table, high_table));
+    destination2.high = _mm256_xor_si256(destination2.high,
+        AVX2FF8ProductVector(source2.high, low_table, high_table));
+    destination3.low = _mm256_xor_si256(destination3.low,
+        AVX2FF8ProductVector(source3.low, low_table, high_table));
+    destination3.high = _mm256_xor_si256(destination3.high,
+        AVX2FF8ProductVector(source3.high, low_table, high_table));
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8IFFTRadix4(
+    AVX2FF8T8Pair& value0,
+    AVX2FF8T8Pair& value1,
+    AVX2FF8T8Pair& value2,
+    AVX2FF8T8Pair& value3,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02)
+{
+    static const uint16_t kZeroSkew = 255;
+    AVX2FF8T8Xor(value1, value0);
+    if (log01 != kZeroSkew)
+        AVX2FF8T8MulAdd(value0, value1, log01);
+    AVX2FF8T8Xor(value3, value2);
+    if (log23 != kZeroSkew)
+        AVX2FF8T8MulAdd(value2, value3, log23);
+    AVX2FF8T8Xor(value2, value0);
+    AVX2FF8T8Xor(value3, value1);
+    if (log02 != kZeroSkew)
+        AVX2FF8T8MulAdd2(value0, value2, value1, value3, log02);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8IFFTDistance4(
+    AVX2FF8T8Pair values[8],
+    uint16_t log)
+{
+    static const uint16_t kZeroSkew = 255;
+    AVX2FF8T8Xor(values[4], values[0]);
+    AVX2FF8T8Xor(values[5], values[1]);
+    AVX2FF8T8Xor(values[6], values[2]);
+    AVX2FF8T8Xor(values[7], values[3]);
+    if (log != kZeroSkew)
+        AVX2FF8T8MulAdd4(
+            values[0], values[4], values[1], values[5],
+            values[2], values[6], values[3], values[7], log);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8FFTRadix4Distance2(
+    AVX2FF8T8Pair values[8],
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (log02 != kZeroSkew)
+        AVX2FF8T8MulAdd4(
+            values[0], values[4], values[1], values[5],
+            values[2], values[6], values[3], values[7], log02);
+    AVX2FF8T8Xor(values[4], values[0]);
+    AVX2FF8T8Xor(values[5], values[1]);
+    AVX2FF8T8Xor(values[6], values[2]);
+    AVX2FF8T8Xor(values[7], values[3]);
+    if (log01 != kZeroSkew)
+        AVX2FF8T8MulAdd2(
+            values[0], values[2], values[1], values[3], log01);
+    AVX2FF8T8Xor(values[2], values[0]);
+    AVX2FF8T8Xor(values[3], values[1]);
+    if (log23 != kZeroSkew)
+        AVX2FF8T8MulAdd2(
+            values[4], values[6], values[5], values[7], log23);
+    AVX2FF8T8Xor(values[6], values[4]);
+    AVX2FF8T8Xor(values[7], values[5]);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8FFT2(
+    AVX2FF8T8Pair& value0,
+    AVX2FF8T8Pair& value1,
+    uint16_t log)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (log != kZeroSkew)
+        AVX2FF8T8MulAdd(value0, value1, log);
+    AVX2FF8T8Xor(value1, value0);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8ScalarIFFT2(
+    uint8_t& value0,
+    uint8_t& value1,
+    uint16_t log)
+{
+    value1 ^= value0;
+    if (log != 255)
+        value0 ^= FF8Product(log, value1);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T8ScalarFFT2(
+    uint8_t& value0,
+    uint8_t& value1,
+    uint16_t log)
+{
+    if (log != 255)
+        value0 ^= FF8Product(log, value1);
+    value1 ^= value0;
+}
+
+#if defined(_MSC_VER)
+# define LEO2_AVX2_T8_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+# define LEO2_AVX2_T8_NOINLINE __attribute__((noinline))
+#else
+# define LEO2_AVX2_T8_NOINLINE
+#endif
+
+static LEO2_AVX2_T8_NOINLINE void AVX2FF8HighEncodeT8ScalarTail(
+    const uint8_t* const input[8],
+    uint8_t* const output[8],
+    uint64_t lane7_offset_mask,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t offset,
+    uint64_t byte_count)
+{
+    while (offset < byte_count)
+    {
+        uint8_t values[8];
+        for (unsigned lane = 0; lane < 7; ++lane)
+            values[lane] = input[lane][offset];
+        values[7] = input[7][offset & lane7_offset_mask];
+
+        AVX2FF8T8ScalarIFFT2(values[0], values[1], inverse_skew[1]);
+        AVX2FF8T8ScalarIFFT2(values[2], values[3], inverse_skew[3]);
+        AVX2FF8T8ScalarIFFT2(values[0], values[2], inverse_skew[2]);
+        AVX2FF8T8ScalarIFFT2(values[1], values[3], inverse_skew[2]);
+        AVX2FF8T8ScalarIFFT2(values[4], values[5], inverse_skew[5]);
+        AVX2FF8T8ScalarIFFT2(values[6], values[7], inverse_skew[7]);
+        AVX2FF8T8ScalarIFFT2(values[4], values[6], inverse_skew[6]);
+        AVX2FF8T8ScalarIFFT2(values[5], values[7], inverse_skew[6]);
+        for (unsigned lane = 0; lane < 4; ++lane)
+            AVX2FF8T8ScalarIFFT2(
+                values[lane], values[lane + 4], inverse_skew[4]);
+
+        AVX2FF8T8ScalarFFT2(values[0], values[4], forward_skew[4]);
+        AVX2FF8T8ScalarFFT2(values[1], values[5], forward_skew[4]);
+        AVX2FF8T8ScalarFFT2(values[2], values[6], forward_skew[4]);
+        AVX2FF8T8ScalarFFT2(values[3], values[7], forward_skew[4]);
+        AVX2FF8T8ScalarFFT2(values[0], values[2], forward_skew[2]);
+        AVX2FF8T8ScalarFFT2(values[1], values[3], forward_skew[2]);
+        AVX2FF8T8ScalarFFT2(values[4], values[6], forward_skew[6]);
+        AVX2FF8T8ScalarFFT2(values[5], values[7], forward_skew[6]);
+        AVX2FF8T8ScalarFFT2(values[0], values[1], forward_skew[1]);
+        AVX2FF8T8ScalarFFT2(values[2], values[3], forward_skew[3]);
+        AVX2FF8T8ScalarFFT2(values[4], values[5], forward_skew[5]);
+        AVX2FF8T8ScalarFFT2(values[6], values[7], forward_skew[7]);
+
+        for (unsigned lane = 0; lane < 8; ++lane)
+            output[lane][offset] = values[lane];
+        ++offset;
+    }
+}
+
+#undef LEO2_AVX2_T8_NOINLINE
+
+static void AVX2FF8HighEncodeT8(
+    const void* const* data,
+    void* const* work,
+    bool shortened,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    alignas(32) static const uint8_t kZeroShard[64] = {};
+    const uint8_t* input[8];
+    uint8_t* output[8];
+    for (unsigned lane = 0; lane < 7; ++lane)
+    {
+        input[lane] = static_cast<const uint8_t*>(data[lane]);
+        output[lane] = static_cast<uint8_t*>(work[lane]);
+    }
+    input[7] = shortened
+        ? kZeroShard : static_cast<const uint8_t*>(data[7]);
+    output[7] = static_cast<uint8_t*>(work[7]);
+    const uint64_t lane7_offset_mask = shortened ? 0 : ~uint64_t(0);
+
+    uint64_t offset = 0;
+    while (byte_count - offset >= 64)
+    {
+        AVX2FF8T8Pair values[8];
+        for (unsigned lane = 0; lane < 7; ++lane)
+        {
+            values[lane].low = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[lane] + offset));
+            values[lane].high = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    input[lane] + offset + 32));
+        }
+        const uint64_t lane7_offset = offset & lane7_offset_mask;
+        values[7].low = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[7] + lane7_offset));
+        values[7].high = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                input[7] + lane7_offset + 32));
+
+        AVX2FF8T8IFFTRadix4(
+            values[0], values[1], values[2], values[3],
+            inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+        AVX2FF8T8IFFTRadix4(
+            values[4], values[5], values[6], values[7],
+            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+        AVX2FF8T8IFFTDistance4(values, inverse_skew[4]);
+
+        AVX2FF8T8FFTRadix4Distance2(values,
+            forward_skew[2], forward_skew[6], forward_skew[4]);
+        AVX2FF8T8FFT2(values[0], values[1], forward_skew[1]);
+        AVX2FF8T8FFT2(values[2], values[3], forward_skew[3]);
+        AVX2FF8T8FFT2(values[4], values[5], forward_skew[5]);
+        AVX2FF8T8FFT2(values[6], values[7], forward_skew[7]);
+
+        for (unsigned lane = 0; lane < 8; ++lane)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[lane] + offset),
+                values[lane].low);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[lane] + offset + 32),
+                values[lane].high);
+        }
+        offset += 64;
+    }
+
+    if (offset < byte_count)
+        AVX2FF8HighEncodeT8ScalarTail(
+            input, output, lane7_offset_mask,
+            inverse_skew, forward_skew, offset, byte_count);
+}
+
 template<bool Inverse, bool AllNonzero>
 static void AVX2FF8Butterfly4RangePreparedImpl(
     void* const* work,
@@ -2102,6 +2407,13 @@ static void AVX2FF8HighEncodeOneBlock(
         side_and_flags & ~kFF8HighEncodeShortenedInput;
     const uint32_t data_count = side - static_cast<uint32_t>(shortened);
     LEO_DEBUG_ASSERT(side == 8 || side == 16 || side == 32 || side == 64);
+
+    if (side == 8)
+    {
+        AVX2FF8HighEncodeT8(
+            data, work, shortened, inverse_skew, forward_skew, byte_count);
+        return;
+    }
 
     // Consume the systematic shards directly through the first two inverse
     // layers, exactly as IFFT_DIT_Encoder does for a complete input block.  A

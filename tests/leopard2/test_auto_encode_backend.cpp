@@ -240,6 +240,32 @@ Shards encode_unaligned(
     return recovery;
 }
 
+void require_encode_overlap_rejected(
+    const leo2_codec* codec,
+    Shards& original,
+    uint32_t r)
+{
+    const size_t bytes = original[0].size();
+    const Shards original_before = original;
+    std::vector<const void*> original_ptrs(original.size());
+    for (size_t i = 0; i < original.size(); ++i)
+        original_ptrs[i] = original[i].data();
+    Shards recovery(r, Bytes(bytes));
+    std::vector<void*> recovery_ptrs(r);
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_ptrs[i] = recovery[i].data();
+    recovery_ptrs[0] = original[0].data();
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
+        LEO2_SUCCESS, "overlap scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_encode(codec, bytes, original_ptrs.data(),
+        recovery_ptrs.data(), scratch.get(), scratch_bytes),
+        LEO2_OVERLAP, "encode input/output overlap");
+    require(original == original_before,
+        "rejected encode overlap modified a source shard");
+}
+
 Shards encode_prefix(
     const leo2_codec* codec,
     const Shards& original,
@@ -542,7 +568,7 @@ void test_selection_and_bytes(
             LEO2_BACKEND_AVX2,
         "AUTO widened an unqualified GF8 codec");
 
-    static const uint32_t gf8_sides[] = { 16, 32, 64 };
+    static const uint32_t gf8_sides[] = { 8, 16, 32, 64 };
     for (size_t side_i = 0;
          side_i < sizeof(gf8_sides) / sizeof(gf8_sides[0]); ++side_i)
     {
@@ -593,7 +619,7 @@ void test_selection_and_bytes(
                 LEO2_BACKEND_AVX512,
             "balanced GF8 explicit AVX512 was constrained by AUTO bounds");
 
-        const Shards balanced_original = make_original(side, 4096);
+        Shards balanced_original = make_original(side, 4096);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
         const Shards balanced_auto = encode(
             balanced.get(), balanced_original, side, false);
@@ -613,6 +639,9 @@ void test_selection_and_bytes(
                     explicit_ssse3.get(), balanced_original, side, false) &&
                 balanced_auto == encode_legacy(balanced_original, side),
             "balanced GF8 coarse transform changed legacy parity bytes");
+        if (side == 8)
+            require_encode_overlap_rejected(
+                balanced.get(), balanced_original, side);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
         require_sparse_matches_full(
             encode(balanced.get(), balanced_original, side, true),
@@ -653,7 +682,38 @@ void test_selection_and_bytes(
         }
     }
 
-    Codec gf8_below_side(automatic.get(), 8, 8,
+    // Exercise concurrent immutable-codec use through the exact T=8 AUTO
+    // route independently of the larger neighboring callback below.
+    Codec concurrent_t8(automatic.get(), 8, 8,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards concurrent_t8_original = make_original(8, 4096);
+    const Shards concurrent_t8_reference = encode(
+        concurrent_t8.get(), concurrent_t8_original, 8, false);
+    std::atomic<unsigned> concurrent_t8_failures(0);
+    std::vector<std::thread> concurrent_t8_threads;
+    for (unsigned lane = 0; lane < 4; ++lane)
+    {
+        concurrent_t8_threads.push_back(std::thread([&]() {
+            try
+            {
+                if (encode(concurrent_t8.get(), concurrent_t8_original,
+                        8, false) != concurrent_t8_reference)
+                    concurrent_t8_failures.fetch_add(
+                        1, std::memory_order_relaxed);
+            }
+            catch (...)
+            {
+                concurrent_t8_failures.fetch_add(
+                    1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    for (size_t i = 0; i < concurrent_t8_threads.size(); ++i)
+        concurrent_t8_threads[i].join();
+    require(concurrent_t8_failures.load(std::memory_order_relaxed) == 0,
+        "concurrent exact T=8 AUTO encode failed");
+
+    Codec gf8_t8(automatic.get(), 8, 8,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     Codec gf8_above_side(automatic.get(), 128, 128,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
@@ -661,9 +721,9 @@ void test_selection_and_bytes(
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     Codec gf8_punctured(automatic.get(), 16, 15,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    require(selected_backend(gf8_below_side.get(), 4096, 8, 8) ==
-            LEO2_BACKEND_AVX2,
-        "balanced GF8 AUTO widened rejected T=8");
+    require(selected_backend(gf8_t8.get(), 4096, 8, 8) ==
+            LEO2_BACKEND_AVX512,
+        "balanced GF8 AUTO did not widen qualified T=8");
     require(selected_backend(gf8_above_side.get(), 4096, 128, 128) ==
             LEO2_BACKEND_AVX2,
         "balanced GF8 AUTO widened T=128");
@@ -705,9 +765,11 @@ void test_selection_and_bytes(
 
         const uint32_t side = current.r <= 8 ? 8U :
             (current.r <= 16 ? 16U : (current.r <= 32 ? 32U : 64U));
-        const bool qualified_shape = side == 64 &&
+        const bool qualified_shape =
+            (side == 8 && current.k == 8 && current.r == 8) ||
+            (side == 64 &&
                 (current.k == 64 || current.k == 63) &&
-                (current.r == 64 || current.r == 63);
+                (current.r == 64 || current.r == 63));
 
         // AUTO widens only the exact aligned cells that passed the isolated
         // crossover gate.  Explicit AVX-512 exercises every neighboring
@@ -716,8 +778,9 @@ void test_selection_and_bytes(
              byte_i < sizeof(coarse_bytes) / sizeof(coarse_bytes[0]); ++byte_i)
         {
             const size_t bytes = coarse_bytes[byte_i];
-            const bool qualified_bytes = current.r == 64 ||
-                bytes == 64U * 1024U;
+            const bool qualified_bytes = side == 8
+                ? bytes >= 2U * 1024U && bytes <= 64U * 1024U
+                : current.r == 64 || bytes == 64U * 1024U;
             const leo2_backend expected_auto = qualified_shape &&
                     qualified_bytes && (bytes & 63U) == 0
                 ? LEO2_BACKEND_AVX512 : LEO2_BACKEND_AVX2;
