@@ -17,7 +17,10 @@ the missing output from one selected parity term, then streams the `K-1`
 surviving originals through fixed-coefficient AVX2 multiply-adds.  It uses no
 full-shard scratch.  The candidate therefore has approximately `K` source
 streams and one output stream, but its output is repeatedly read/modified in
-cache; this is not a claim of `(K+1) * bytes` DRAM traffic.
+cache; this is not a claim of `(K+1) * bytes` DRAM traffic.  Above 64 KiB the
+experimental executor keeps one 64-KiB output tile resident while streaming
+all source terms through it.  Focused correctness cases bracket that traversal
+change at 65,536 and 65,537 bytes.
 
 For these nontrivial shapes Leopard1 exposes `N` decode-work shard buffers.
 At a 1 MiB shard that is 64 MiB for `(17,31)` and 256 MiB for every `N=256`

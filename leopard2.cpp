@@ -4763,6 +4763,90 @@ ExecuteGF8SourceMajorDirectRepair(
 #undef LEO2_SOURCE_MAJOR_NOINLINE
 #endif
 
+#ifdef LEO_HAS_FF8
+static leo2_result ExecuteExperimentalGF8TiledDirectOneLoss(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    const leo2_codec* codec = plan->codec;
+    if (!IsExperimentalGeneralDirectOneLossCodec(codec) ||
+        plan->missing_original_count != 1 ||
+        plan->missing_originals.size() != 1 ||
+        plan->direct_term_offsets.size() != 2 ||
+        plan->direct_term_offsets[0] != 0 ||
+        plan->direct_term_offsets[1] != plan->direct_terms.size() ||
+        plan->direct_terms.empty())
+        return LEO2_INTERNAL_ERROR;
+
+    const uint32_t missing_original = plan->missing_originals[0];
+    if (missing_original >= codec->original_count ||
+        !restored_original[missing_original])
+        return LEO2_INTERNAL_ERROR;
+    uint8_t* const output = static_cast<uint8_t*>(
+        restored_original[missing_original]);
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const size_t kTileBytes = 64U * 1024U;
+
+    /*
+        The ordinary output-major executor visits the complete output once per
+        coefficient.  That is ideal for a small shard, but a large missing
+        shard falls out of cache between K source terms.  Keep one 64-KiB
+        output tile resident while streaming the selected parity and K-1
+        surviving originals through it.  This changes traversal only: term
+        order and arithmetic are identical, and no shard-data scratch is used.
+    */
+    size_t offset = 0;
+    while (offset < shard_bytes)
+    {
+        const size_t bytes = std::min(kTileBytes, shard_bytes - offset);
+        for (size_t term_index = 0;
+             term_index < plan->direct_terms.size(); ++term_index)
+        {
+            const leo2_direct_repair_term& term =
+                plan->direct_terms[term_index];
+            const bool parity =
+                (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                term.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
+                return LEO2_INTERNAL_ERROR;
+            const void* const source_base = parity
+                ? recovery[source_index] : original[source_index];
+            if (!source_base)
+                return LEO2_INTERNAL_ERROR;
+            const uint8_t* const source =
+                static_cast<const uint8_t*>(source_base) + offset;
+            uint8_t* const destination = output + offset;
+            if (term_index == 0)
+            {
+                if (term.multiplier_log == 0)
+                    memcpy(destination, source, bytes);
+                else
+                    leopard::ff8::MultiplyBytes(ops, destination, source,
+                        static_cast<leopard::ff8::ffe_t>(
+                            term.multiplier_log), bytes);
+            }
+            else if (term.multiplier_log == 0)
+            {
+                XorArbitraryBytes(ops, destination, source, bytes);
+            }
+            else
+            {
+                leopard::ff8::MultiplyAddBytes(ops, destination, source,
+                    static_cast<leopard::ff8::ffe_t>(term.multiplier_log),
+                    bytes);
+            }
+        }
+        offset += bytes;
+    }
+    return LEO2_SUCCESS;
+}
+#endif
+
 static leo2_result ExecuteDirectRepair(
     const leo2_decode_plan* plan,
     size_t shard_bytes,
@@ -4773,6 +4857,12 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
+    if (shard_bytes > 64U * 1024U &&
+        plan->missing_original_count == 1 &&
+        IsExperimentalGeneralDirectOneLossCodec(codec))
+        return ExecuteExperimentalGF8TiledDirectOneLoss(plan, shard_bytes,
+            original, recovery, restored_original);
+
     const uint32_t source_major_outputs = plan->missing_original_count;
     if (shard_bytes >= 2048 &&
         source_major_outputs >= 2 && source_major_outputs <= 8 &&

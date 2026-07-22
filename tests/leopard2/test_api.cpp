@@ -1173,6 +1173,8 @@ void test_experimental_general_direct_l1_execution(
         // Low parents cover shortened messages, punctured parity, and the
         // maximum redundancy-dominant GF8 boundary.
         { 17, 31, LEO2_PROFILE_LOW_V1, 16, 3, 63 },
+        { 17, 31, LEO2_PROFILE_LOW_V1, 8, 30, 65536 },
+        { 17, 31, LEO2_PROFILE_LOW_V1, 8, 30, 65537 },
         { 31, 200, LEO2_PROFILE_LOW_V1, 0, 199, 127 },
         { 32, 224, LEO2_PROFILE_LOW_V1, 31, 112, 65 },
         { 127, 128, LEO2_PROFILE_LOW_V1, 126, 127, 257 }
