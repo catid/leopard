@@ -81,6 +81,9 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "selected_decode_path", "selected_decode_rule",
             "decode_required_work_slots", "decode_aligned_prefix_bytes",
             "decode_tail_bytes", "decode_rounded_bytes",
+            "decode_direct_term_count", "decode_direct_unit_term_count",
+            "decode_direct_pair_count",
+            "decode_direct_pair_with_unit_count",
             "decode_multi_item_batch",
         })
     require(set(document["resolved"]) == expected_resolved,

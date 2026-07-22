@@ -1752,7 +1752,8 @@ if(LEO2_BUILD_TESTS)
             # establish the recipe provenance it promises.
             if(CMAKE_EXPORT_COMPILE_COMMANDS AND
                CMAKE_BUILD_TYPE STREQUAL "Release" AND
-               CMAKE_GENERATOR STREQUAL "Unix Makefiles")
+               CMAKE_GENERATOR STREQUAL "Unix Makefiles" AND
+               LEO2_BACKEND_VARIANT STREQUAL "auto")
                 add_test(
                     NAME leopard2_high_decode_copy_build_identity
                     COMMAND ${LEO2_PYTHON_EXECUTABLE}

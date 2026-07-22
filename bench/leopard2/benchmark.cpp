@@ -1457,6 +1457,14 @@ static int Run(const Options& options)
              << decode_path_info.tail_bytes << ",\n"
              << "    \"decode_rounded_bytes\": "
              << decode_path_info.rounded_shard_bytes << ",\n"
+             << "    \"decode_direct_term_count\": "
+             << decode_path_info.direct_term_count << ",\n"
+             << "    \"decode_direct_unit_term_count\": "
+             << decode_path_info.direct_unit_term_count << ",\n"
+             << "    \"decode_direct_pair_count\": "
+             << decode_path_info.direct_pair_count << ",\n"
+             << "    \"decode_direct_pair_with_unit_count\": "
+             << decode_path_info.direct_pair_with_unit_count << ",\n"
              << "    \"decode_multi_item_batch\": "
              << (decode_path_info.multi_item_batch ? "true" : "false");
     }

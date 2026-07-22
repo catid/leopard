@@ -2916,6 +2916,10 @@ static bool SelectTransformDecodePath(
         selection.aligned_prefix_bytes = geometry.aligned_prefix_bytes;
         selection.tail_bytes = geometry.tail_bytes;
         selection.rounded_shard_bytes = geometry.rounded_bytes;
+        selection.direct_term_count = 0;
+        selection.direct_unit_term_count = 0;
+        selection.direct_pair_count = 0;
+        selection.direct_pair_with_unit_count = 0;
         selection.multi_item_batch = multi_item_batch;
         return true;
     }
@@ -6242,6 +6246,10 @@ static void FillTerminalDecodePathInfo(
     info.aligned_prefix_bytes = 0;
     info.tail_bytes = 0;
     info.rounded_shard_bytes = 0;
+    info.direct_term_count = 0;
+    info.direct_unit_term_count = 0;
+    info.direct_pair_count = 0;
+    info.direct_pair_with_unit_count = 0;
     info.multi_item_batch = multi_item_batch;
     size_t rounded = 0;
     if (shard_bytes != 0 && RoundShardBytes(shard_bytes, rounded))
@@ -6283,6 +6291,34 @@ leo2_result GetDecodePlanPathInfo(
             return result;
         FillTerminalDecodePathInfo(kDecodePathDirect, kDecodeRuleDirect,
             shard_bytes, multi_item_batch, *info_out);
+        if (plan->direct_repair &&
+            (plan->direct_term_offsets.size() !=
+                    static_cast<size_t>(plan->missing_original_count) + 1U ||
+             plan->direct_term_offsets.empty() ||
+             plan->direct_term_offsets.front() != 0 ||
+             plan->direct_term_offsets.back() != plan->direct_terms.size()))
+            return LEO2_INTERNAL_ERROR;
+        info_out->direct_term_count = plan->direct_terms.size();
+        for (size_t output = 0;
+             output + 1 < plan->direct_term_offsets.size(); ++output)
+        {
+            const size_t begin = plan->direct_term_offsets[output];
+            const size_t end = plan->direct_term_offsets[output + 1];
+            if (begin > end || end > plan->direct_terms.size())
+                return LEO2_INTERNAL_ERROR;
+            for (size_t term = begin; term < end; ++term)
+            {
+                if (plan->direct_terms[term].multiplier_log == 0)
+                    ++info_out->direct_unit_term_count;
+            }
+            for (size_t term = begin; term + 1 < end; term += 2)
+            {
+                ++info_out->direct_pair_count;
+                if (plan->direct_terms[term].multiplier_log == 0 ||
+                    plan->direct_terms[term + 1].multiplier_log == 0)
+                    ++info_out->direct_pair_with_unit_count;
+            }
+        }
         return LEO2_SUCCESS;
     }
     DecodeScratchGeometry geometry;

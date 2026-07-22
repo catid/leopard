@@ -961,6 +961,14 @@ void run_experimental_general_direct_l1_case(
         "general direct-L1 path query");
     require(direct_path.path == leopard2_internal::kDecodePathDirect,
         "general direct-L1 AUTO plan did not select direct repair");
+    require(direct_path.direct_term_count == k &&
+            direct_path.direct_unit_term_count <= k &&
+            direct_path.direct_pair_count == k / 2 &&
+            direct_path.direct_pair_with_unit_count <=
+                direct_path.direct_unit_term_count &&
+            direct_path.direct_pair_with_unit_count <=
+                direct_path.direct_pair_count,
+        "general direct-L1 coefficient accounting differs");
 
     size_t one_byte_scratch = 0;
     size_t large_scratch = 0;
@@ -1006,6 +1014,11 @@ void run_experimental_general_direct_l1_case(
         "general direct-L1 forced-transform path query");
     require(transform_path.path != leopard2_internal::kDecodePathDirect,
         "forced specialized control selected general direct-L1 repair");
+    require(transform_path.direct_term_count == 0 &&
+            transform_path.direct_unit_term_count == 0 &&
+            transform_path.direct_pair_count == 0 &&
+            transform_path.direct_pair_with_unit_count == 0,
+        "forced specialized control retained direct-plan accounting");
 
     size_t transform_scratch_bytes = 0;
     require_result(leo2_decode_plan_scratch_size(
@@ -2482,6 +2495,10 @@ leopard2_internal::DecodePathInfo require_decode_path(
     require(selection.aligned_prefix_bytes == input.aligned_prefix_bytes &&
             selection.tail_bytes == input.tail_bytes &&
             selection.rounded_shard_bytes == input.rounded_shard_bytes &&
+            selection.direct_term_count == 0 &&
+            selection.direct_unit_term_count == 0 &&
+            selection.direct_pair_count == 0 &&
+            selection.direct_pair_with_unit_count == 0 &&
             selection.multi_item_batch == input.multi_item_batch,
         std::string(operation) + " lost byte or batch state");
     return selection;

@@ -109,6 +109,17 @@ struct DecodePathInfo
     size_t aligned_prefix_bytes;
     size_t tail_bytes;
     size_t rounded_shard_bytes;
+    /*
+        Structural direct-plan counts are exposed only through this private
+        build-tree introspection.  They let experiment runners attest the
+        coefficient mix selected by immutable plan setup without publishing
+        plan internals or scanning shard data.  Transform/no-op paths report
+        zero for every direct count.
+    */
+    size_t direct_term_count;
+    size_t direct_unit_term_count;
+    size_t direct_pair_count;
+    size_t direct_pair_with_unit_count;
     bool multi_item_batch;
 };
 
@@ -212,6 +223,10 @@ static inline bool SelectDecodePath(
     selection.aligned_prefix_bytes = input.aligned_prefix_bytes;
     selection.tail_bytes = input.tail_bytes;
     selection.rounded_shard_bytes = input.rounded_shard_bytes;
+    selection.direct_term_count = 0;
+    selection.direct_unit_term_count = 0;
+    selection.direct_pair_count = 0;
+    selection.direct_pair_with_unit_count = 0;
     selection.multi_item_batch = input.multi_item_batch;
 
     const uint32_t supported_flags =
