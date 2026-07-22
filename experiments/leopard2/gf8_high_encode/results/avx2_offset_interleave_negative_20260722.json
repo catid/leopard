@@ -1,0 +1,61 @@
+{
+  "schema": "leopard2-gf8-avx2-offset-interleave-negative/v1",
+  "decision": "rejected",
+  "bead": "leopard-79h.18.20.1.24",
+  "base_commit": "b8324e0dc4c20be7890375b1c7afd3870de5715d",
+  "hypothesis": "Interleaving two independent 32-byte payload offsets in the all-nonzero inverse prepared radix-4 range kernel can hide AVX2 GF8 nibble-table multiply latency for short shards.",
+  "candidate": {
+    "kernel": "AVX2FF8Butterfly4RangePreparedImpl<true,true>",
+    "scope": "64-byte unroll only when byte_count <= 4096; mature 32-byte loop retained for the residual and all larger shards",
+    "source_sha256": "93f422041cd25bc4ef4a49c24a494a6d92fb7c545efff37656ff8acb59f3984e",
+    "executable_sha256": "4e9aacdac42a1668d98006982160dc59938cb9775167bd33aa43bc5317d94ae0",
+    "avx2_object_sha256": "49dc9aed12c39807d46c6b7711c5b0f3509fdac9651bb0b8a9189e6e95a67d7e",
+    "avx2_object_text_bytes": 95989,
+    "exact_ifft_range_ymm_stack_operands": 0,
+    "evex_instruction_count": 0
+  },
+  "control": {
+    "executable_sha256": "9c262e64a98c64f395e756154c32a292befc898b579d03b6a89e78dad1a623bf",
+    "avx2_object_sha256": "96daa8b257b1c5892c4ec34b35bb808529e2f601c1321d40da8d32ac3d34ac29",
+    "avx2_object_text_bytes": 95541
+  },
+  "code_cost": {
+    "text_growth_bytes": 448,
+    "text_growth_percent": 0.47
+  },
+  "method": {
+    "backend": "pure AVX2 with zero EVEX instructions",
+    "cpu": 13,
+    "idle_smt_sibling": 29,
+    "rounds": 3,
+    "order": "control-candidate-candidate-control",
+    "iterations_per_invocation": 7,
+    "warmup_iterations": 3,
+    "cells": 27,
+    "invocations": 324,
+    "counts": "T in {2,4,64}, K in {T-1,T,T+1}",
+    "shard_bytes": [2048, 4096, 65536],
+    "ratio_orientation": "control_time_over_candidate_time",
+    "confidence_interval": "mean independent ABBA log contrast, Student-t 95 percent CI",
+    "all_workload_digests_matched": true,
+    "all_accepted_invocations_observed_idle_sibling": true
+  },
+  "selected_region_cells": [
+    {"T":64,"K":63,"bytes":2048,"encode":{"ratio":1.010867,"ci95":[1.005480,1.016283]},"decode":{"ratio":1.002096,"ci95":[0.982726,1.021846]}},
+    {"T":64,"K":63,"bytes":4096,"encode":{"ratio":1.012569,"ci95":[1.006667,1.018505]},"decode":{"ratio":0.995918,"ci95":[0.976583,1.015635]}},
+    {"T":64,"K":63,"bytes":65536,"encode":{"ratio":0.998921,"ci95":[0.991519,1.006377]},"decode":{"ratio":1.000640,"ci95":[1.000175,1.001105]}},
+    {"T":64,"K":64,"bytes":2048,"encode":{"ratio":1.006666,"ci95":[1.004431,1.008907]},"decode":{"ratio":0.999895,"ci95":[0.994764,1.005052]}},
+    {"T":64,"K":64,"bytes":4096,"encode":{"ratio":1.010214,"ci95":[0.996844,1.023763]},"decode":{"ratio":1.005456,"ci95":[0.997301,1.013678]}},
+    {"T":64,"K":64,"bytes":65536,"encode":{"ratio":0.999658,"ci95":[0.987154,1.012321]},"decode":{"ratio":1.000615,"ci95":[0.998515,1.002720]}},
+    {"T":64,"K":65,"bytes":2048,"encode":{"ratio":1.006695,"ci95":[1.004469,1.008925]},"decode":{"ratio":0.999390,"ci95":[0.995570,1.003225]}},
+    {"T":64,"K":65,"bytes":4096,"encode":{"ratio":1.012107,"ci95":[1.005542,1.018714]},"decode":{"ratio":0.998140,"ci95":[0.990996,1.005336]}},
+    {"T":64,"K":65,"bytes":65536,"encode":{"ratio":0.998213,"ci95":[0.989943,1.006551]},"decode":{"ratio":1.000982,"ci95":[0.999177,1.002789]}}
+  ],
+  "diagnostic": "The only credible >=5 percent encode ratios were T=2,K=1, where a radix-4 prepared kernel cannot execute; they are unrelated executable-layout noise and are not promotion evidence.",
+  "kill_reason": "In the selected T=64 region the bounded interleave improved encode by only 0.7 to 1.3 percent at 2/4 KiB, was neutral at 64 KiB, and did not improve decode. It therefore misses the required 5 percent end-to-end threshold despite eliminating spills and adding only 448 text bytes.",
+  "artifacts": {
+    "full_summary_sha256": "4166d57b0d3eb10ab159c1ecd31ec200b98632f7c9aefb6044871551ea259cb1",
+    "candidate_disassembly_sha256": "4de7137a8310ee7041bb0cd42cec0790e0c64fb962cfb0e7ec1fa18a43a901c0"
+  },
+  "repository_state": "Prototype and temporary harness fully reverted; this report is the only tracked change."
+}
