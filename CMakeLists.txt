@@ -43,6 +43,8 @@ option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
 option(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1
     "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate" OFF)
+option(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION
+    "Enable diagnostic two-source AVX2 direct-L1 fusion" OFF)
 
 if(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
     if(NOT LEOPARD_ENABLE_GF8)
@@ -56,6 +58,21 @@ if(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
     set_source_files_properties(leopard2.cpp tests/leopard2/test_api.cpp
         PROPERTIES COMPILE_DEFINITIONS
         LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=1)
+endif()
+
+if(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
+    if(NOT LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+        message(FATAL_ERROR
+            "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION requires "
+            "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=ON")
+    endif()
+    # Keep the optional kernel and its startup qualification out of ordinary
+    # builds.  leopard2.cpp discovers the qualified callback through Ops, so
+    # its general-direct compile recipe stays independently measurable.
+    set_source_files_properties(
+        Leopard2Backend.cpp Leopard2BackendAVX2.cpp
+        PROPERTIES COMPILE_DEFINITIONS
+        LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=1)
 endif()
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)

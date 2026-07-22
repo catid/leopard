@@ -42,6 +42,7 @@ foreach(field_variant gf8 gf16)
         -DLEO2_BUILD_TESTS=ON
         -DLEO2_BUILD_BENCHMARKS=OFF
         -DLEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=OFF
+        -DLEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=OFF
         -DLEOPARD_ENABLE_GF8=${enable_gf8}
         -DLEOPARD_ENABLE_GF16=${enable_gf16}
         -DCMAKE_BUILD_TYPE=Release
@@ -293,4 +294,44 @@ if(NOT experimental_without_gf8_diagnostic MATCHES
     message(FATAL_ERROR
         "GF8 direct-L1 rejection did not explain the requirement:\n"
         "${experimental_without_gf8_diagnostic}")
+endif()
+
+# Pair fusion is an implementation variant of the general direct-L1
+# experiment, never an independently selectable production behavior.
+set(pair_without_general_dir
+    "${LEO2_BINARY_DIR}/pair-without-general-build")
+file(MAKE_DIRECTORY "${pair_without_general_dir}")
+set(pair_without_general_configure
+    "${CMAKE_COMMAND}" -G "${LEO2_GENERATOR}")
+if(LEO2_GENERATOR_PLATFORM)
+    list(APPEND pair_without_general_configure
+        -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(LEO2_GENERATOR_TOOLSET)
+    list(APPEND pair_without_general_configure
+        -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+list(APPEND pair_without_general_configure
+    -DLEOPARD_ENABLE_GF8=ON -DLEOPARD_ENABLE_GF16=ON
+    -DLEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=OFF
+    -DLEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=ON
+    -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF
+    "${LEO2_SOURCE_DIR}")
+execute_process(
+    COMMAND ${pair_without_general_configure}
+    WORKING_DIRECTORY "${pair_without_general_dir}"
+    RESULT_VARIABLE pair_without_general_result
+    OUTPUT_VARIABLE pair_without_general_stdout
+    ERROR_VARIABLE pair_without_general_stderr)
+if(pair_without_general_result EQUAL 0)
+    message(FATAL_ERROR
+        "Direct-L1 pair fusion unexpectedly accepted general-L1=OFF")
+endif()
+set(pair_without_general_diagnostic
+    "${pair_without_general_stdout}\n${pair_without_general_stderr}")
+if(NOT pair_without_general_diagnostic MATCHES
+       "DIRECT_L1_PAIR_FUSION requires.*GENERAL_DIRECT_L1=ON")
+    message(FATAL_ERROR
+        "Direct-L1 pair-fusion rejection did not explain the requirement:\n"
+        "${pair_without_general_diagnostic}")
 endif()

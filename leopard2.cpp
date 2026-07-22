@@ -4764,7 +4764,7 @@ ExecuteGF8SourceMajorDirectRepair(
 #endif
 
 #ifdef LEO_HAS_FF8
-static leo2_result ExecuteExperimentalGF8TiledDirectOneLoss(
+static leo2_result ExecuteExperimentalGF8DirectOneLoss(
     const leo2_decode_plan* plan,
     size_t shard_bytes,
     const void* const* original,
@@ -4802,7 +4802,44 @@ static leo2_result ExecuteExperimentalGF8TiledDirectOneLoss(
     while (offset < shard_bytes)
     {
         const size_t bytes = std::min(kTileBytes, shard_bytes - offset);
-        for (size_t term_index = 0;
+        size_t term_index = 0;
+        if (ops.ff8_linear_combination2 &&
+            plan->direct_terms.size() >= 2)
+        {
+            while (term_index + 1 < plan->direct_terms.size())
+            {
+                const leo2_direct_repair_term& term0 =
+                    plan->direct_terms[term_index];
+                const leo2_direct_repair_term& term1 =
+                    plan->direct_terms[term_index + 1];
+                const bool parity0 =
+                    (term0.tagged_source & kDirectRecoveryTag) != 0;
+                const bool parity1 =
+                    (term1.tagged_source & kDirectRecoveryTag) != 0;
+                const uint32_t source_index0 =
+                    term0.tagged_source & ~kDirectRecoveryTag;
+                const uint32_t source_index1 =
+                    term1.tagged_source & ~kDirectRecoveryTag;
+                if ((parity0 && source_index0 >= codec->recovery_count) ||
+                    (!parity0 && source_index0 >= codec->original_count) ||
+                    (parity1 && source_index1 >= codec->recovery_count) ||
+                    (!parity1 && source_index1 >= codec->original_count))
+                    return LEO2_INTERNAL_ERROR;
+                const void* const source_base0 = parity0
+                    ? recovery[source_index0] : original[source_index0];
+                const void* const source_base1 = parity1
+                    ? recovery[source_index1] : original[source_index1];
+                if (!source_base0 || !source_base1)
+                    return LEO2_INTERNAL_ERROR;
+                ops.ff8_linear_combination2(output + offset,
+                    static_cast<const uint8_t*>(source_base0) + offset,
+                    static_cast<const uint8_t*>(source_base1) + offset,
+                    term0.multiplier_log, term1.multiplier_log,
+                    term_index != 0, bytes);
+                term_index += 2;
+            }
+        }
+        for (;
              term_index < plan->direct_terms.size(); ++term_index)
         {
             const leo2_direct_repair_term& term =
@@ -4857,11 +4894,11 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
-    if (shard_bytes > 64U * 1024U &&
-        plan->missing_original_count == 1 &&
-        IsExperimentalGeneralDirectOneLossCodec(codec))
-        return ExecuteExperimentalGF8TiledDirectOneLoss(plan, shard_bytes,
-            original, recovery, restored_original);
+    if (plan->missing_original_count == 1 &&
+        IsExperimentalGeneralDirectOneLossCodec(codec) &&
+        (shard_bytes > 64U * 1024U || ops.ff8_linear_combination2))
+        return ExecuteExperimentalGF8DirectOneLoss(plan, shard_bytes, original,
+            recovery, restored_original);
 
     const uint32_t source_major_outputs = plan->missing_original_count;
     if (shard_bytes >= 2048 &&

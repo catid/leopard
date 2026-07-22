@@ -710,6 +710,9 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1",
             "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate",
             "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION",
+            "Enable diagnostic two-source AVX2 direct-L1 fusion", "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -783,6 +786,9 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1",
             "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate",
             "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION",
+            "Enable diagnostic two-source AVX2 direct-L1 fusion", "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
@@ -2651,11 +2657,22 @@ class CMakeProductionGraph(object):
                    resolved_by_windows_key.get(reference.casefold(), [])):
                 approved_guard = bool_atom(
                     "option:LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1")
-                if (reference == "leopard2.cpp" and tuple(properties) == (
+                approved_general = (
+                    reference == "leopard2.cpp" and tuple(properties) == (
                         "COMPILE_DEFINITIONS",
                         "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=1") and
                         self._formula_equivalent(
-                            property_guard, approved_guard)):
+                            property_guard, approved_guard))
+                pair_guard = bool_atom(
+                    "option:LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION")
+                approved_pair = (
+                    reference in {
+                        "Leopard2Backend.cpp", "Leopard2BackendAVX2.cpp"} and
+                    tuple(properties) == (
+                        "COMPILE_DEFINITIONS",
+                        "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=1") and
+                    self._formula_equivalent(property_guard, pair_guard))
+                if approved_general or approved_pair:
                     continue
                 raise ContractError(
                     "CMake source properties affect production " + reference +
@@ -5172,6 +5189,8 @@ endif()'''
             'option(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1\n'
             '    "Enable the diagnostic GF8/AVX2 direct one-loss repair '
             'candidate" OFF)',
+            'option(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION\n'
+            '    "Enable diagnostic two-source AVX2 direct-L1 fusion" OFF)',
             'string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
             'LEO2_BACKEND_VARIANT_NORMALIZED)',
             'check_cxx_compiler_flag("/O2" CXX_FLAG_O2)',

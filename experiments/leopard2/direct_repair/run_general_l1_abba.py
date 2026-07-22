@@ -50,6 +50,7 @@ MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v1"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EXPERIMENT = "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1"
+PAIR_FUSION = "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION"
 ABBA = ("control", "candidate", "candidate", "control")
 BASE_BYTES = (64, 2048, 4096, 65536, 1048576)
 BASE_REUSE = (1, 8, 64)
@@ -376,6 +377,7 @@ def configure_and_build(
         "-DLEO2_FLAG_MAVX512F=FALSE",
         "-DLEO2_FLAG_MAVX512BW=FALSE",
         "-DLEO2_FLAG_MAVX512VL=FALSE",
+        "-D%s=OFF" % PAIR_FUSION,
         "-D%s=%s" % (EXPERIMENT, "ON" if enabled else "OFF"),
     )
     checked(configure, timeout=300)
@@ -427,6 +429,9 @@ def compare_build_closures(
             "control did not compile with the experiment OFF")
     require(cache_values(candidate_build).get(EXPERIMENT) == "ON",
             "candidate did not compile with the experiment ON")
+    require(cache_values(control_build).get(PAIR_FUSION) == "OFF" and
+            cache_values(candidate_build).get(PAIR_FUSION) == "OFF",
+            "general-L1 campaign must isolate pair fusion OFF")
     left = closure_by_source(control)
     right = closure_by_source(candidate)
     require(set(left) == set(right), "control/candidate source closure differs")
@@ -1313,9 +1318,11 @@ def synthetic_build_closure(
         }
 
     (control_build / "CMakeCache.txt").write_text(
-        "%s:BOOL=OFF\n" % EXPERIMENT, encoding="utf-8")
+        "%s:BOOL=OFF\n%s:BOOL=OFF\n" % (EXPERIMENT, PAIR_FUSION),
+        encoding="utf-8")
     (candidate_build / "CMakeCache.txt").write_text(
-        "%s:BOOL=ON\n" % EXPERIMENT, encoding="utf-8")
+        "%s:BOOL=ON\n%s:BOOL=OFF\n" % (EXPERIMENT, PAIR_FUSION),
+        encoding="utf-8")
     return provenance(control_build, False), provenance(candidate_build, True)
 
 

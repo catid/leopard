@@ -295,6 +295,122 @@ static bool TestFF8MultiplyAdd2Sources2Outputs(
     return true;
 }
 
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
+static bool TestFF8LinearCombination2(
+    const Ops& ops,
+    FF8MultiplyLog reference)
+{
+    if (!ops.ff8_linear_combination2)
+        return ops.kind != LEO2_BACKEND_AVX2;
+    static const uint64_t byte_counts[] = {
+        0, 1, 7, 31, 32, 33, 63, 64, 65, 257
+    };
+    static const uint16_t logs[] = {
+        UINT16_MAX, 0, 1, 17, 193, 254, 255
+    };
+    uint8_t source0[260];
+    uint8_t source1[260];
+    uint8_t original0[260];
+    uint8_t original1[260];
+    uint8_t output[260];
+    uint8_t expected[260];
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        for (size_t i = 0; i < sizeof(source0); ++i)
+        {
+            source0[i] = original0[i] = static_cast<uint8_t>(
+                i * 73U + count_i * 19U + 11U);
+            source1[i] = original1[i] = static_cast<uint8_t>(
+                i * 37U + count_i * 23U + 7U);
+        }
+        for (unsigned alias_sources = 0; alias_sources < 2; ++alias_sources)
+        {
+            const uint8_t* second_source =
+                alias_sources ? source0 : source1;
+            for (size_t log0_i = 0;
+                 log0_i < sizeof(logs) / sizeof(logs[0]); ++log0_i)
+            {
+                for (size_t log1_i = 0;
+                     log1_i < sizeof(logs) / sizeof(logs[0]); ++log1_i)
+                {
+                    const uint16_t log0 = logs[log0_i];
+                    const uint16_t log1 = logs[log1_i];
+                    const uint64_t bytes = byte_counts[count_i];
+                    for (unsigned add = 0; add < 2; ++add)
+                    {
+                        for (size_t i = 0; i < sizeof(output); ++i)
+                        {
+                            output[i] = expected[i] = static_cast<uint8_t>(
+                                i * 29U + count_i * 13U + log0_i * 7U +
+                                log1_i * 3U + alias_sources + add);
+                        }
+                        for (uint64_t i = 0; i < bytes; ++i)
+                        {
+                            uint8_t value = 0;
+                            if (log0 != UINT16_MAX)
+                            {
+                                value ^= reference(source0[i + 1],
+                                    static_cast<uint8_t>(log0));
+                            }
+                            if (log1 != UINT16_MAX)
+                            {
+                                value ^= reference(second_source[i + 1],
+                                    static_cast<uint8_t>(log1));
+                            }
+                            if (add)
+                                expected[i + 1] ^= value;
+                            else
+                                expected[i + 1] = value;
+                        }
+                        ops.ff8_linear_combination2(output + 1,
+                            log0 == UINT16_MAX ? NULL : source0 + 1,
+                            log1 == UINT16_MAX ? NULL : second_source + 1,
+                            log0, log1, add != 0, bytes);
+                        if (std::memcmp(output, expected, sizeof(output)) != 0 ||
+                            std::memcmp(source0, original0,
+                                sizeof(source0)) != 0 ||
+                            std::memcmp(source1, original1,
+                                sizeof(source1)) != 0)
+                            return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Exhaust every pair of live Leopard GF8 logarithms independently of the
+    // selected tail/identity cases above.  One unaligned byte is sufficient
+    // to prove the complete 255-by-255 coefficient product table.
+    for (unsigned log0 = 0; log0 < 255; ++log0)
+    {
+        for (unsigned log1 = 0; log1 < 255; ++log1)
+        {
+            source0[1] = static_cast<uint8_t>(log0 * 17U + log1 * 3U + 1U);
+            source1[1] = static_cast<uint8_t>(log0 * 5U + log1 * 29U + 7U);
+            const uint8_t combined = static_cast<uint8_t>(
+                reference(source0[1], static_cast<uint8_t>(log0)) ^
+                reference(source1[1], static_cast<uint8_t>(log1)));
+            output[1] = 0xa5;
+            ops.ff8_linear_combination2(output + 1, source0 + 1,
+                source1 + 1, static_cast<uint16_t>(log0),
+                static_cast<uint16_t>(log1), false, 1);
+            if (output[1] != combined)
+                return false;
+            output[1] = 0xa5;
+            ops.ff8_linear_combination2(output + 1, source0 + 1,
+                source1 + 1, static_cast<uint16_t>(log0),
+                static_cast<uint16_t>(log1), true, 1);
+            if (output[1] != static_cast<uint8_t>(0xa5 ^ combined))
+                return false;
+        }
+    }
+    ops.ff8_linear_combination2(
+        NULL, NULL, NULL, UINT16_MAX, UINT16_MAX, false, 0);
+    return true;
+}
+#endif
+
 template<bool Inverse>
 static void ReferenceFF8Butterfly2(
     uint8_t* x,
@@ -1997,6 +2113,14 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
         return false;
 #ifdef LEO_HAS_FF8
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.ff8_linear_combination2 != NULL))
+        return false;
+#else
+    if (ops.ff8_linear_combination2)
+        return false;
+#endif
     if ((ops.kind == LEO2_BACKEND_AVX2) !=
         (ops.xor_memory_sources_fused_final != NULL))
         return false;
@@ -2026,6 +2150,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8(ops, args.ff8_multiply_log) ||
         !TestFF8MultiplyAddOutputs(ops, args.ff8_multiply_log) ||
         !TestFF8MultiplyAdd2Sources2Outputs(ops, args.ff8_multiply_log) ||
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
+        !TestFF8LinearCombination2(ops, args.ff8_multiply_log) ||
+#endif
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
         !TestFF8ButterflyRanges(ops) ||
@@ -2056,7 +2183,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_high_encode_one_block ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
-        ops.ff8_multiply_add_2_sources_2_outputs)
+        ops.ff8_multiply_add_2_sources_2_outputs ||
+        ops.ff8_linear_combination2)
         return false;
 #endif
 #ifdef LEO_HAS_FF16

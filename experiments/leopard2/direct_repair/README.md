@@ -7,6 +7,16 @@ The CMake option `LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1` is OFF by
 default, and its definition is source-scoped to `leopard2.cpp` (plus the
 focused API test when tests are built).
 
+The nested option
+`LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION` is also OFF by default and
+requires the general experiment.  It qualifies an AVX2 operation that forms
+one output from two independently scaled sources in one pass.  The direct
+executor then initializes from its first source pair and accumulates later
+pairs, halving hot-output loads/stores for the paired terms.  The original
+runner pins this nested option OFF so its results continue to isolate the
+simple direct candidate; pair fusion has its own kernel, text-size, and codec
+promotion evidence.
+
 For one loss, plan construction generates one exact systematic generator row,
 selects one received parity equation, and stores at most `K` execution terms.
 The immutable codec retains `K` barycentric weights.  Row generation costs
