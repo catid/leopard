@@ -1692,12 +1692,22 @@ static void AVX2FF8FFTButterfly4Out(
         log01, log23, log02, byte_count);
 }
 
+template<bool Inverse>
+static void AVX2FF8Butterfly4RangePrepared(
+    void* const* work,
+    uint32_t distance,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02,
+    uint64_t byte_count);
+
 static void AVX2FF8IFFTButterfly4Range(
     void* const* work, unsigned distance,
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count, bool prefer_fused)
 {
     (void)prefer_fused;
+#if defined(LEO2_AVX512_VARIANT)
     for (unsigned i = 0; i < distance; ++i)
     {
         AVX2FF8IFFTButterfly4Kernel(
@@ -1705,6 +1715,10 @@ static void AVX2FF8IFFTButterfly4Range(
             work[i + distance * 2U], work[i + distance * 3U],
             log01, log23, log02, byte_count);
     }
+#else
+    AVX2FF8Butterfly4RangePrepared<true>(
+        work, distance, log01, log23, log02, byte_count);
+#endif
 }
 
 static void AVX2FF8FFTButterfly4Range(
@@ -1712,6 +1726,7 @@ static void AVX2FF8FFTButterfly4Range(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count, bool prefer_fused)
 {
+#if defined(LEO2_AVX512_VARIANT)
     if (prefer_fused)
     {
         for (unsigned i = 0; i < distance; ++i)
@@ -1723,6 +1738,18 @@ static void AVX2FF8FFTButterfly4Range(
         }
         return;
     }
+#else
+    static const uint64_t kFusedByteLimit = 1024;
+    if (prefer_fused || byte_count <= kFusedByteLimit)
+    {
+        AVX2FF8Butterfly4RangePrepared<false>(
+            work, distance, log01, log23, log02, byte_count);
+        return;
+    }
+#endif
+    // Retain the measured large-shard policy: each radix-two pass traverses
+    // a complete shard before the next pass, rather than interleaving four
+    // streams through the fused range kernel.
     for (unsigned i = 0; i < distance; ++i)
     {
         AVX2FF8FFTButterfly4(
@@ -2183,6 +2210,8 @@ static void AVX2FF8HighEncodeT8(
             inverse_skew, forward_skew, offset, byte_count);
 }
 
+#endif // LEO2_AVX512_VARIANT
+
 template<bool Inverse, bool AllNonzero>
 static void AVX2FF8Butterfly4RangePreparedImpl(
     void* const* work,
@@ -2345,6 +2374,8 @@ static void AVX2FF8Butterfly4RangePrepared(
         AVX2FF8Butterfly4RangePreparedImpl<Inverse, false>(
             work, distance, log01, log23, log02, byte_count);
 }
+
+#if defined(LEO2_AVX512_VARIANT)
 
 static void AVX2FF8IFFTButterfly2RangePrepared(
     void* const* work,

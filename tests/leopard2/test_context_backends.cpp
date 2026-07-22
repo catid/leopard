@@ -1726,6 +1726,102 @@ void test_process_default_immutable(
     }
 }
 
+void execute_gf8_range_oracle_case(
+    const leopard::backend::Ops* scalar,
+    const leopard::backend::Ops* avx2,
+    bool inverse,
+    bool prefer_fused,
+    unsigned distance,
+    size_t bytes,
+    uint16_t log01,
+    uint16_t log23,
+    uint16_t log02)
+{
+    static const size_t kGuardBytes = 41;
+    static const size_t kMaximumSkew = 7;
+    const size_t shard_count = 4U * distance;
+    Shards reference(shard_count,
+        Bytes(bytes + 2U * kGuardBytes + kMaximumSkew));
+    for (size_t shard = 0; shard < shard_count; ++shard)
+        for (size_t offset = 0; offset < reference[shard].size(); ++offset)
+            reference[shard][offset] = static_cast<uint8_t>(
+                0x5bU + shard * 73U + offset * 29U + bytes * 11U);
+    Shards candidate = reference;
+    std::vector<void*> reference_work(shard_count);
+    std::vector<void*> candidate_work(shard_count);
+    for (size_t shard = 0; shard < shard_count; ++shard)
+    {
+        const size_t skew = shard % kMaximumSkew;
+        reference_work[shard] =
+            &reference[shard][kGuardBytes + skew];
+        candidate_work[shard] =
+            &candidate[shard][kGuardBytes + skew];
+    }
+
+    const leopard::backend::Butterfly4Range scalar_operation = inverse
+        ? scalar->ff8_ifft_butterfly4_range
+        : scalar->ff8_fft_butterfly4_range;
+    const leopard::backend::Butterfly4Range avx2_operation = inverse
+        ? avx2->ff8_ifft_butterfly4_range
+        : avx2->ff8_fft_butterfly4_range;
+    scalar_operation(&reference_work[0], distance,
+        log01, log23, log02, bytes, prefer_fused);
+    avx2_operation(&candidate_work[0], distance,
+        log01, log23, log02, bytes, prefer_fused);
+
+    require(candidate == reference,
+        std::string("AVX2 GF8 prepared range mismatch: direction=") +
+        (inverse ? "inverse" : "forward") +
+        " fused=" + (prefer_fused ? "true" : "false") +
+        " distance=" + std::to_string(distance) +
+        " bytes=" + std::to_string(bytes) +
+        " logs=" + std::to_string(log01) + "," +
+        std::to_string(log23) + "," + std::to_string(log02));
+}
+
+void test_avx2_gf8_prepared_range_boundaries()
+{
+    const leopard::backend::Ops* const scalar =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_SCALAR);
+    const leopard::backend::Ops* const avx2 =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
+    if (!avx2)
+        return;
+    require(scalar != NULL, "scalar range oracle is unavailable");
+
+    // 255 is the zero-multiplier sentinel.  Exercise every sentinel position,
+    // the all-zero case, and the prepared all-nonzero specialization.
+    const uint16_t logs[][3] = {
+        { 11, 29, 47 },
+        { 255, 29, 47 },
+        { 11, 255, 47 },
+        { 11, 29, 255 },
+        { 255, 29, 255 },
+        { 255, 255, 255 }
+    };
+    // Cover the scalar tail, exact vector edge, forward-policy threshold,
+    // and the first split-policy byte.  Guarded, differently skewed pointers
+    // additionally prove that neither implementation touches adjacent data.
+    const size_t sizes[] = {
+        0, 1, 31, 32, 33, 1023, 1024, 1025
+    };
+    const unsigned distances[] = { 1, 3 };
+    for (size_t log_i = 0; log_i < sizeof(logs) / sizeof(logs[0]); ++log_i)
+        for (size_t size_i = 0;
+             size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+            for (size_t distance_i = 0;
+                 distance_i < sizeof(distances) / sizeof(distances[0]);
+                 ++distance_i)
+                for (unsigned inverse = 0; inverse < 2; ++inverse)
+                    for (unsigned prefer_fused = 0;
+                         prefer_fused < 2; ++prefer_fused)
+                        execute_gf8_range_oracle_case(
+                            scalar, avx2, inverse != 0,
+                            prefer_fused != 0, distances[distance_i],
+                            sizes[size_i], logs[log_i][0], logs[log_i][1],
+                            logs[log_i][2]);
+}
+
 void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
 {
     const CodecCase transform_cases[] = {
@@ -2533,6 +2629,7 @@ int main()
         contexts = create_contexts();
         require(!contexts.empty(), "no executable contexts");
         test_process_default_immutable(process_default);
+        test_avx2_gf8_prepared_range_boundaries();
         test_traced_context_dispatch(contexts);
         test_gf8_high_forward_fusion_policy(contexts);
         test_weighted_locator_boundary_dispatch(contexts);
