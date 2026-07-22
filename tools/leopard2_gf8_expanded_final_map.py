@@ -33,7 +33,7 @@ BASELINE_SHA256 = (
     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
 CANONICAL_MATRIX_CELL_COUNT = 341
 CANONICAL_MATRIX_SHA256 = (
-    "a2c7bc3873ead302e9254c03a7f0ae75bce8d0d48b6f1a565759f4df1a1d6a55")
+    "3d5d423fe35760727ac1e9751036d9e208be1e69886e27a18c95009204d85d6e")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
 
@@ -280,7 +280,10 @@ def make_matrix():
                  "r1_large_recovery")
     for byte_count in (2048, 65536, 1048576):
         for loss in DIRECT_ODD_LOSSES:
-            add_cell(cells, 65, 64, byte_count, loss, 8, 1,
+            # R=65 rounds to the same P=T=128 construction as K=65 and is
+            # therefore the measured expanded direct-repair profile.  R=64
+            # takes the transform decoder and would not exercise this path.
+            add_cell(cells, 65, 65, byte_count, loss, 8, 1,
                      "direct_odd_arity")
     result = sorted(cells.values(), key=lambda cell: cell["id"])
     for index, cell in enumerate(result):
@@ -1389,12 +1392,12 @@ def self_test():
             (promoted_k, byte_count, ("r1_selector_promoted",)))
     assert r1_boundaries == expected_r1_boundaries
     direct_odd = {
-        (cell["bytes"], cell["loss"])
+        (cell["K"], cell["R"], cell["bytes"], cell["loss"])
         for cell in matrix["cells"]
         if "direct_odd_arity" in cell["tags"]
     }
     assert direct_odd == {
-        (byte_count, loss)
+        (65, 65, byte_count, loss)
         for byte_count in (2048, 65536, 1048576)
         for loss in DIRECT_ODD_LOSSES
     }
