@@ -66,16 +66,25 @@ an immutable sealed snapshot captured into the run contract, so replacing an
 executable pathname during a campaign cannot mix binaries. Existing output can
 be resumed only when its complete run contract matches; stale cell files are
 rejected rather than mixed into a new result.
+The runner also rejects Git replace refs and stale or mixed production objects:
+it binds the exact Release compile/source/object/archive/link closure, extracts
+and compares every archive member with its external object, and performs a
+second runner-owned configure/build in an empty directory.  All linked object,
+archive, and executable bytes must reproduce before timing begins.  This
+fail-closed parser currently requires the Unix Makefiles generator.
 
 Configure this default-off diagnostic explicitly and build its attested target:
 
     JOBS="$(nproc)"
     if [ "$JOBS" -gt 128 ]; then JOBS=128; fi
 
-    cmake -S . -B /tmp/leopard2-all-k \
+    cmake -S . -B /tmp/leopard2-all-k -G "Unix Makefiles" \
         -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF \
+        -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
         -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_ALLK_DIAGNOSTIC=ON \
-        -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_ENABLE_CUDA=OFF
+        -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_ENABLE_CUDA=OFF \
+        -DLEO2_FLAG_MAVX512F=FALSE -DLEO2_FLAG_MAVX512BW=FALSE \
+        -DLEO2_FLAG_MAVX512VL=FALSE
     cmake --build /tmp/leopard2-all-k -j "$JOBS" \
         --target bench_leopard2_allk
 

@@ -9,11 +9,17 @@ The baseline is fixed in the tool to commit
 `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198` and executable SHA-256
 `a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910`.
 The runner rejects another baseline.  It also rejects a dirty or mismatched
-candidate source tree (including untracked files and non-default index flags),
-a build directory configured from another tree, an
+candidate source tree (including untracked files, Git replace refs, and
+non-default index flags), a build directory configured from another tree, an
 unexpected runtime backend/profile/field, digest disagreement, and any EVEX
 instruction in either whole executable.  Both executables must contain AVX2
-YMM instructions.  Before timing, the runner invokes the same candidate binary
+YMM instructions.  Evidence builds use the explicitly supported Unix Makefiles
+generator and retain the exact Release cache, compiler commands, source/object
+pairs, archive/link recipes, extracted archive-member bytes, and output bytes.
+While the campaign lock is held, the runner configures and builds the same
+target again in a new empty directory and requires every linked object,
+archive member, archive, and executable byte to reproduce.  Before timing, the
+runner invokes the same candidate binary
 once in schema-v5 source-attestation mode and requires the exact clean commit
 and tree.  This benchmark-only instrumentation is inactive during the timed
 schema-v3 decode-path calls unless `--attest-source` is explicitly requested.
@@ -21,7 +27,10 @@ Both input executables are copied into write-sealed Linux memory files while
 the campaign lock is held.  Disassembly, source attestation, and every timed
 child execute those sealed descriptors rather than mutable build-directory
 paths.  The runner records each original file identity and sealed-image digest,
-then verifies both the source files and seals again before publishing a stage.
+then verifies the source files, complete candidate build closure, and seals
+again before publishing a stage.  The authoritative ABBA selector is computed
+from one bounded snapshot of the diagnostic JSON; the exact bytes used for
+selection are retained and rechecked before publication.
 
 ## Prepare without benchmarking
 
@@ -43,8 +52,10 @@ rejected K=T+3 region.
 
 ## Stage 1: parallel diagnostic
 
-Freeze and build the candidate first.  Substitute its full 40-character SHA,
-source path, build path, and benchmark path below.  The runner uses every
+Freeze and build the candidate first.  A Ninja tree is intentionally rejected:
+the fail-closed evidence parser currently supports the reproducible Unix
+Makefiles recipe grammar only.  Substitute its full 40-character SHA, source
+path, build path, and benchmark path below.  The runner uses every
 allowed physical core by default and records activity on each SMT sibling.  It
 does not reject sibling activity in this deliberately non-authoritative
 saturation screen: the Python coordinator also needs CPU time, and requiring
@@ -54,6 +65,17 @@ diagnostic, or timing phase using the canonical lock from overlapping the
 screen.  Only the runner's own child jobs parallelize inside its lease.  Ratios
 from this stage remain diagnostic only; every near or slower result is repeated
 by the isolated ABBA stage below.
+
+    cmake -S /ABSOLUTE/FROZEN/CANDIDATE/SOURCE \
+      -B /ABSOLUTE/CANDIDATE/BUILD -G "Unix Makefiles" \
+      -DCMAKE_BUILD_TYPE=Release \
+      -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+      -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON \
+      -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF \
+      -DLEO2_FLAG_MAVX512F=FALSE -DLEO2_FLAG_MAVX512BW=FALSE \
+      -DLEO2_FLAG_MAVX512VL=FALSE
+    cmake --build /ABSOLUTE/CANDIDATE/BUILD \
+      --target bench_leopard2 --parallel 128
 
     python3 tools/leopard2_gf8_expanded_final_map.py diagnostic \
       --matrix /tmp/leopard-gf8-expanded-map/matrix.json \

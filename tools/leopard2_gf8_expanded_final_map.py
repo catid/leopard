@@ -28,6 +28,11 @@ import threading
 import time
 from pathlib import Path
 
+from leopard2_build_provenance import (
+    candidate_build_provenance,
+    verify_reproducible_candidate_build,
+)
+
 
 SCHEMA = "leopard2-expanded-final-map/v2"
 MATRIX_SCHEMA = "leopard2-expanded-final-matrix/v2"
@@ -186,6 +191,61 @@ def atomic_json(path, value):
 def read_json(path):
     with open(path, "r", encoding="utf-8") as stream:
         return json.load(stream)
+
+
+def read_json_snapshot(path, label, maximum_bytes=64 << 20):
+    """Parse exactly the bytes whose identity is retained by the caller."""
+    resolved = Path(path).resolve(strict=True)
+    descriptor = os.open(
+        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError(label + " is not a regular file")
+        if before.st_size < 1 or before.st_size > maximum_bytes:
+            raise RuntimeError(label + " exceeds its retained byte bound")
+        chunks = []
+        remaining = before.st_size
+        while remaining:
+            block = os.read(descriptor, min(1 << 20, remaining))
+            if not block:
+                raise RuntimeError(label + " ended before its recorded size")
+            chunks.append(block)
+            remaining -= len(block)
+        if os.read(descriptor, 1):
+            raise RuntimeError(label + " grew while it was read")
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    stable_fields = (
+        "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns",
+        "st_ctime_ns")
+    if any(getattr(before, field) != getattr(after, field)
+           for field in stable_fields):
+        raise RuntimeError(label + " changed while it was read")
+    path_status = resolved.stat()
+    if any(getattr(after, field) != getattr(path_status, field)
+           for field in stable_fields):
+        raise RuntimeError(label + " pathname changed while it was read")
+    content = b"".join(chunks)
+    try:
+        document = json.loads(content.decode("utf-8", errors="strict"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError(label + " is not valid strict UTF-8 JSON: " +
+                           str(error)) from error
+    identity = {
+        "path": str(resolved), "sha256": sha256_bytes(content),
+        "device": after.st_dev, "inode": after.st_ino,
+        "mode": after.st_mode, "size": after.st_size,
+        "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+    }
+    return document, identity
+
+
+def require_json_snapshot_unchanged(identity, label):
+    unused_document, observed = read_json_snapshot(identity["path"], label)
+    if observed != identity:
+        raise RuntimeError(label + " changed after its exact bytes were used")
 
 
 def stable_seed(key):
@@ -361,6 +421,28 @@ def checked_output(command, cwd=None, timeout=60):
     return completed.stdout.strip()
 
 
+def git_output(source, *arguments):
+    git = Path("/usr/bin/git").resolve(strict=True)
+    environment = {
+        "GIT_CONFIG_GLOBAL": "/dev/null",
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_NO_REPLACE_OBJECTS": "1",
+        "GIT_OPTIONAL_LOCKS": "0",
+        "LANG": "C", "LC_ALL": "C", "PATH": "/usr/bin:/bin",
+    }
+    completed = subprocess.run(
+        [str(git), "-C", str(source), *arguments],
+        stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, text=True, env=environment,
+        timeout=60, check=False)
+    if completed.returncode != 0:
+        raise RuntimeError(
+            "git %s failed rc=%d: %s" % (
+                " ".join(arguments), completed.returncode,
+                completed.stderr.strip()))
+    return completed.stdout.strip()
+
+
 def linux_memfd_create(name):
     flags = LINUX_MFD_CLOEXEC | LINUX_MFD_ALLOW_SEALING
     if hasattr(os, "memfd_create"):
@@ -530,26 +612,29 @@ def source_provenance(source, expected_commit):
         raise RuntimeError("candidate source is not a directory: " + source)
     if not COMMIT_PATTERN.match(expected_commit):
         raise RuntimeError("candidate commit must be a full lowercase SHA")
-    top = checked_output(
-        ["git", "rev-parse", "--show-toplevel"], cwd=source)
+    replace_refs = git_output(
+        source, "for-each-ref", "--format=%(refname)", "refs/replace")
+    if replace_refs:
+        raise RuntimeError(
+            "candidate repository contains replace refs; benchmark identity "
+            "requires an unmodified object graph")
+    top = git_output(source, "rev-parse", "--show-toplevel")
     if os.path.realpath(top) != source:
         raise RuntimeError("candidate source is not the Git top level")
-    head = checked_output(["git", "rev-parse", "HEAD"], cwd=source)
-    tree = checked_output(["git", "rev-parse", "HEAD^{tree}"], cwd=source)
-    expected_tree = checked_output(
-        ["git", "rev-parse", expected_commit + "^{tree}"], cwd=source)
+    head = git_output(source, "rev-parse", "HEAD")
+    tree = git_output(source, "rev-parse", "HEAD^{tree}")
+    expected_tree = git_output(source, "rev-parse", expected_commit + "^{tree}")
     for flag in ("-v", "-f"):
-        records = [record for record in checked_output(
-            ["git", "ls-files", flag, "-z"], cwd=source).split("\0")
+        records = [record for record in git_output(
+            source, "ls-files", flag, "-z").split("\0")
                    if record]
         if not records or any(not record.startswith("H ")
                               for record in records):
             raise RuntimeError(
                 "candidate index uses assume-unchanged, skip-worktree, "
                 "fsmonitor-valid, or another non-default flag")
-    status = checked_output(
-        ["git", "status", "--porcelain=v1", "--untracked-files=normal"],
-        cwd=source)
+    status = git_output(
+        source, "status", "--porcelain=v1", "--untracked-files=normal")
     if head != expected_commit or tree != expected_tree:
         raise RuntimeError(
             "candidate source does not exactly match expected commit")
@@ -559,37 +644,9 @@ def source_provenance(source, expected_commit):
             "status": "clean"}
 
 
-def cmake_provenance(build, source):
-    build = os.path.realpath(build)
-    cache = os.path.join(build, "CMakeCache.txt")
-    if not os.path.isfile(cache):
-        raise RuntimeError("candidate build lacks CMakeCache.txt: " + cache)
-    values = {}
-    with open(cache, encoding="utf-8", errors="replace") as stream:
-        for raw in stream:
-            if "=" not in raw:
-                continue
-            left, value = raw.rstrip("\n").split("=", 1)
-            if left in ("CMAKE_HOME_DIRECTORY:INTERNAL",
-                        "CMAKE_GENERATOR:INTERNAL",
-                        "CMAKE_BUILD_TYPE:STRING",
-                        "CMAKE_CXX_COMPILER:FILEPATH",
-                        "CMAKE_CXX_COMPILER_ID:STRING",
-                        "CMAKE_CXX_COMPILER_VERSION:STRING"):
-                values[left] = value
-    home = values.get("CMAKE_HOME_DIRECTORY:INTERNAL")
-    if os.path.realpath(home or "") != os.path.realpath(source):
-        raise RuntimeError("candidate build points at another source tree")
-    return {
-        "path": build, "cache": cache,
-        "cache_sha256": sha256_file(cache),
-        "source": os.path.realpath(home),
-        "generator": values.get("CMAKE_GENERATOR:INTERNAL"),
-        "build_type": values.get("CMAKE_BUILD_TYPE:STRING"),
-        "compiler": values.get("CMAKE_CXX_COMPILER:FILEPATH"),
-        "compiler_id": values.get("CMAKE_CXX_COMPILER_ID:STRING"),
-        "compiler_version": values.get("CMAKE_CXX_COMPILER_VERSION:STRING"),
-    }
+def cmake_provenance(build, source, executable):
+    return candidate_build_provenance(
+        build, source, executable, "bench_leopard2")
 
 
 def candidate_source_attestation(executable, source, snapshot_descriptor):
@@ -1039,7 +1096,9 @@ def machine_provenance():
 
 def common_provenance(args, matrix):
     source = source_provenance(args.candidate_source, args.candidate_commit)
-    build = cmake_provenance(args.candidate_build, args.candidate_source)
+    build = cmake_provenance(
+        args.candidate_build, args.candidate_source, args.candidate)
+    reproducible_build = verify_reproducible_candidate_build(build)
     descriptors = []
     try:
         baseline_source, baseline_descriptor, baseline_snapshot = \
@@ -1081,6 +1140,7 @@ def common_provenance(args, matrix):
             },
             "candidate_source": source,
             "candidate_build": build,
+            "candidate_reproducible_build": reproducible_build,
             "machine": machine_provenance(),
         }
         runtime = {
@@ -1129,6 +1189,14 @@ def source_still_frozen(provenance, runtime):
     observed = source_provenance(expected["path"], expected["head"])
     if observed != expected:
         raise RuntimeError("candidate source provenance changed during stage")
+    expected_build = provenance["candidate_build"]
+    observed_build = candidate_build_provenance(
+        expected_build["build_root"], expected_build["source_root"],
+        expected_build["executable"]["path"],
+        expected_build["executable_target"])
+    if observed_build != expected_build:
+        raise RuntimeError(
+            "candidate source/object/archive/link closure changed during stage")
     for role in ("baseline", "candidate"):
         recorded = provenance[role]
         if file_identity(recorded["path"], role + " benchmark") != \
@@ -1340,8 +1408,7 @@ def run_diagnostic(args):
             close_runtime_snapshots(runtime)
 
 
-def load_diagnostic_summary(path, matrix):
-    summary = read_json(path)
+def validate_diagnostic_summary(summary, matrix):
     if (summary.get("schema") != SCHEMA or
             summary.get("stage") != "diagnostic" or
             summary.get("status") != "complete"):
@@ -1353,6 +1420,10 @@ def load_diagnostic_summary(path, matrix):
     if ids != expected or len(summary["rows"]) != len(expected):
         raise RuntimeError("diagnostic summary is incomplete")
     return summary
+
+
+def load_diagnostic_summary(path, matrix):
+    return validate_diagnostic_summary(read_json(path), matrix)
 
 
 def selected_abba_cells(matrix, diagnostic, threshold, include, exclude):
@@ -1422,18 +1493,21 @@ def abba_cell(cell, pair, args, identity_digest, run_dir, runtime):
 def run_abba(args):
     matrix = read_json(args.matrix)
     validate_matrix(matrix)
-    diagnostic = load_diagnostic_summary(args.diagnostic_summary, matrix)
-    selected = selected_abba_cells(
-        matrix, diagnostic, args.near_ratio, args.include_cell,
-        args.exclude_cell)
-    if not selected:
-        raise RuntimeError("ABBA selection is empty")
     if (args.cpu is None) != (args.sibling is None):
         raise RuntimeError("--cpu and --sibling must be supplied together")
     pair = ((args.cpu, args.sibling) if args.cpu is not None
             else physical_cpu_pairs()[0])
     topology = validate_cpu_pair(*pair)
     with benchmark_lock(args.lock, True):
+        diagnostic_document, diagnostic_identity = read_json_snapshot(
+            args.diagnostic_summary, "diagnostic summary")
+        diagnostic = validate_diagnostic_summary(
+            diagnostic_document, matrix)
+        selected = selected_abba_cells(
+            matrix, diagnostic, args.near_ratio, args.include_cell,
+            args.exclude_cell)
+        if not selected:
+            raise RuntimeError("ABBA selection is empty")
         provenance, runtime = common_provenance(args, matrix)
         try:
             if diagnostic["candidate_binary_sha256"] != \
@@ -1448,10 +1522,7 @@ def run_abba(args):
                 "maximum_attempts": args.maximum_attempts,
                 "idle_sibling_required": True,
                 "near_ratio": args.near_ratio,
-                "diagnostic_summary": os.path.realpath(
-                    args.diagnostic_summary),
-                "diagnostic_summary_sha256": sha256_file(
-                    args.diagnostic_summary),
+                "diagnostic_summary": diagnostic_identity,
                 "include_cell": sorted(args.include_cell),
                 "exclude_cell": sorted(args.exclude_cell),
                 "selected_cell_ids": [cell["id"] for cell in selected],
@@ -1471,6 +1542,8 @@ def run_abba(args):
                     index, len(selected), cell["id"],
                     " resumed" if resumed else ""), flush=True)
             source_still_frozen(provenance, runtime)
+            require_json_snapshot_unchanged(
+                diagnostic_identity, "diagnostic summary")
             rows = sorted(results, key=lambda value: value["cell"]["id"])
             summary = {
                 "schema": SCHEMA, "status": "complete", "stage": "abba",
@@ -1548,8 +1621,10 @@ def make_dry_run_manifest(matrix, diagnostic_summary_path=None, near_ratio=1.10)
 
 
 def run_merge(args):
-    diagnostic = read_json(args.diagnostic_summary)
-    abba = read_json(args.abba_summary)
+    diagnostic, diagnostic_identity = read_json_snapshot(
+        args.diagnostic_summary, "diagnostic merge summary")
+    abba, abba_identity = read_json_snapshot(
+        args.abba_summary, "ABBA merge summary")
     if (diagnostic.get("schema") != SCHEMA or abba.get("schema") != SCHEMA or
             diagnostic.get("status") != "complete" or
             abba.get("status") != "complete" or
@@ -1574,11 +1649,14 @@ def run_merge(args):
         "abba_authoritative": True,
         "diagnostic_summary": diagnostic,
         "abba_summary": abba,
-        "input_sha256": {
-            "diagnostic": sha256_file(args.diagnostic_summary),
-            "abba": sha256_file(args.abba_summary),
+        "input_identity": {
+            "diagnostic": diagnostic_identity,
+            "abba": abba_identity,
         },
     }
+    require_json_snapshot_unchanged(
+        diagnostic_identity, "diagnostic merge summary")
+    require_json_snapshot_unchanged(abba_identity, "ABBA merge summary")
     atomic_json(args.output, bundle)
     print(json.dumps({"output": os.path.realpath(args.output),
                       "sha256": sha256_file(args.output)}, sort_keys=True))
@@ -1657,6 +1735,25 @@ def self_test():
                 descriptor, "self-test fixture") == snapshot_identity
         finally:
             os.close(descriptor)
+    with tempfile.TemporaryDirectory(prefix="leopard2-expanded-json-") \
+            as directory:
+        summary_path = Path(directory) / "summary.json"
+        summary_path.write_text('{"selected":"old"}\n', encoding="utf-8")
+        document, identity = read_json_snapshot(
+            summary_path, "self-test diagnostic summary")
+        assert document == {"selected": "old"}
+        assert identity["sha256"] == sha256_bytes(
+            b'{"selected":"old"}\n')
+        replacement = Path(directory) / "replacement.json"
+        replacement.write_text('{"selected":"new"}\n', encoding="utf-8")
+        os.replace(replacement, summary_path)
+        assert document == {"selected": "old"}
+        try:
+            require_json_snapshot_unchanged(
+                identity, "self-test diagnostic summary")
+            raise AssertionError("replaced diagnostic summary was accepted")
+        except RuntimeError as error:
+            assert "changed after" in str(error)
     with tempfile.TemporaryDirectory(prefix="leopard2-expanded-source-") \
             as directory:
         root = Path(directory)
@@ -1686,6 +1783,41 @@ def self_test():
             raise AssertionError("non-default index flag was accepted")
         except RuntimeError as error:
             assert "non-default flag" in str(error)
+        checked_output(
+            ["git", "update-index", "--no-assume-unchanged", "tracked.txt"],
+            cwd=root)
+        with tempfile.TemporaryDirectory(
+                prefix="leopard2-expanded-fake-git-") as fake_directory:
+            fake_bin = Path(fake_directory)
+            fake_git = fake_bin / "git"
+            fake_git.write_text("#!/bin/sh\nexit 97\n", encoding="utf-8")
+            fake_git.chmod(0o700)
+            saved_path = os.environ.get("PATH")
+            os.environ["PATH"] = str(fake_bin)
+            try:
+                assert source_provenance(root, commit)["head"] == commit
+            finally:
+                if saved_path is None:
+                    del os.environ["PATH"]
+                else:
+                    os.environ["PATH"] = saved_path
+        tracked.write_text("second\n", encoding="utf-8")
+        checked_output(["/usr/bin/git", "add", "tracked.txt"], cwd=root)
+        checked_output([
+            "/usr/bin/git", "-c", "user.name=Leopard2 Self Test", "-c",
+            "user.email=leopard2-self-test.invalid", "commit", "-qm",
+            "second"], cwd=root)
+        second = checked_output(
+            ["/usr/bin/git", "rev-parse", "HEAD"], cwd=root)
+        checked_output(
+            ["/usr/bin/git", "replace", commit, second], cwd=root)
+        checked_output(
+            ["/usr/bin/git", "reset", "--hard", "-q", commit], cwd=root)
+        try:
+            source_provenance(root, commit)
+            raise AssertionError("Git replace ref was accepted")
+        except RuntimeError as error:
+            assert "replace refs" in str(error)
     print(json.dumps({
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
         "matrix_sha256": matrix_digest(matrix),
@@ -1693,6 +1825,8 @@ def self_test():
         "r1_selector_boundary_cells": len(r1_boundaries),
         "direct_odd_arity_cells": len(direct_odd),
         "sealed_snapshot_execution": "passed",
+        "diagnostic_byte_identity": "passed",
+        "absolute_git_and_replace_ref_gate": "passed",
         "clean_source_identity": "passed",
     }, sort_keys=True))
 

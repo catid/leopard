@@ -29,6 +29,17 @@ import time
 from typing import Any, Mapping, Sequence
 
 
+TOOLS_DIRECTORY = Path(__file__).resolve().parents[3] / "tools"
+if str(TOOLS_DIRECTORY) not in sys.path:
+    sys.path.insert(0, str(TOOLS_DIRECTORY))
+from leopard2_build_provenance import (
+    CORE_LIBRARY_SOURCES,
+    candidate_build_provenance,
+    compare_reproducible_builds,
+    verify_reproducible_candidate_build,
+)
+
+
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 PURE_AVX2_MAIN_SHA256 = (
     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
@@ -155,6 +166,10 @@ def git_identity(source_root: Path, requested_commit: str) -> dict[str, Any]:
         strict=True)
     require(top == root,
             f"current source root is not the Git top level: {root} != {top}")
+    replace_refs = git_output(
+        root, "for-each-ref", "--format=%(refname)", "refs/replace")
+    require(not replace_refs,
+            "current source repository contains replace refs")
     head = require_hex(git_output(root, "rev-parse", "HEAD"),
                        "current source HEAD")
     require(head == requested,
@@ -988,6 +1003,12 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
                                  "current source commit")
     current_source_initial = git_identity(
         options.current_source_root, current_commit)
+    current_build_initial = candidate_build_provenance(
+        options.current.resolve(strict=True).parent,
+        options.current_source_root, options.current,
+        "bench_leopard2_allk")
+    current_reproducible_build = verify_reproducible_candidate_build(
+        current_build_initial)
     (main_executable_initial, main_snapshot_descriptor,
      main_snapshot_initial) = snapshot_executable(
         options.main, "exact-main benchmark")
@@ -1024,6 +1045,8 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
         "main_commit": main_commit, "current_commit": current_commit,
         "expected_main_sha256": expected_main_sha256,
         "current_source_initial": current_source_initial,
+        "current_build_initial": current_build_initial,
+        "current_reproducible_build": current_reproducible_build,
         "main_executable_initial": main_executable_initial,
         "current_executable_initial": current_executable_initial,
         "main_executable_snapshot": main_snapshot_initial,
@@ -1082,6 +1105,10 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
                 print(f"{completed}/{len(cells)} cells", flush=True)
     current_source_final = git_identity(
         options.current_source_root, current_commit)
+    current_build_final = candidate_build_provenance(
+        options.current.resolve(strict=True).parent,
+        options.current_source_root, options.current,
+        "bench_leopard2_allk")
     main_executable_final = file_identity(main_exe, "exact-main benchmark")
     current_executable_final = file_identity(
         current_exe, "Leopard2 benchmark")
@@ -1091,6 +1118,9 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
         current_snapshot_descriptor, "Leopard2 benchmark")
     require(current_source_final == current_source_initial,
             "current source identity changed during the all-K run")
+    require(current_build_final == current_build_initial,
+            "current source/object/archive/link closure changed during the "
+            "all-K run")
     require(main_executable_final == main_executable_initial,
             "exact-main executable identity changed during the all-K run")
     require(current_executable_final == current_executable_initial,
@@ -1101,6 +1131,7 @@ def run(options: argparse.Namespace, lock_path: str) -> int:
             "Leopard2 sealed executable snapshot changed")
     completion = {
         "current_source_final": current_source_final,
+        "current_build_final": current_build_final,
         "main_executable_final": main_executable_final,
         "current_executable_final": current_executable_final,
         "main_executable_snapshot_final": main_snapshot_final,

@@ -29,6 +29,140 @@ def expect_rejected(test: unittest.TestCase, callback, text: str) -> None:
         callback()
 
 
+class ProductionBuildFixture:
+    """Minimal byte-valid CMake build closure; no compiler execution needed."""
+
+    def __init__(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(
+            prefix="leo2-build-closure-")
+        self.root = Path(self.temporary.name)
+        self.source = self.root / "source"
+        self.build = self.root / "build"
+        self.source.mkdir()
+        self.build.mkdir()
+        sources = set(runner.CORE_LIBRARY_SOURCES)
+        sources.update({
+            "LeopardFF8.cpp", "LeopardFF16.cpp",
+            "Leopard2BackendSSSE3.cpp",
+            "Leopard2BackendAVX2.cpp", "bench/leopard2/benchmark.cpp",
+        })
+        for relative in sorted(sources):
+            path = self.source / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("// " + relative + "\n", encoding="utf-8")
+        subprocess.run(["/usr/bin/git", "init", "-q", str(self.source)],
+                       check=True)
+        subprocess.run(["/usr/bin/git", "-C", str(self.source), "config",
+                        "user.name", "Leopard2 Test"], check=True)
+        subprocess.run(["/usr/bin/git", "-C", str(self.source), "config",
+                        "user.email", "test@example.invalid"], check=True)
+        subprocess.run(["/usr/bin/git", "-C", str(self.source), "add", "."],
+                       check=True)
+        subprocess.run(["/usr/bin/git", "-C", str(self.source), "commit",
+                        "-qm", "fixture"], check=True)
+        self.executable = self.build / "bench_leopard2"
+        self.entries = []
+        self.archive_objects = []
+        compiler = str(Path("/usr/bin/c++").resolve(strict=True))
+        for relative in sorted(sources - {"bench/leopard2/benchmark.cpp"}):
+            if relative == "Leopard2BackendSSSE3.cpp":
+                output = Path("CMakeFiles/leopard2_backend_ssse3.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mssse3", "-mno-avx"]
+            elif relative.startswith("Leopard2BackendAVX2"):
+                output = Path("CMakeFiles/leopard2_backend_avx2.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
+            else:
+                output = Path("CMakeFiles/leopard.dir") / \
+                    (Path(relative).name + ".o")
+                flags = []
+            self._add_entry(relative, output, compiler, flags)
+            self.archive_objects.append(output)
+        benchmark_output = Path("CMakeFiles/bench_leopard2.dir/bench/leopard2") / \
+            "benchmark.cpp.o"
+        self._add_entry("bench/leopard2/benchmark.cpp", benchmark_output,
+                        compiler, [])
+        self.benchmark_object = benchmark_output
+        self._write_cache()
+        self._write_commands()
+        archive_recipe = self.build / "CMakeFiles/leopard.dir/link.txt"
+        archive_recipe.parent.mkdir(parents=True, exist_ok=True)
+        archive_recipe.write_text(
+            "/usr/bin/ar qc libleopard.a " +
+            " ".join(path.as_posix() for path in self.archive_objects) +
+            "\n/usr/bin/ranlib libleopard.a\n", encoding="utf-8")
+        executable_recipe = self.build / \
+            "CMakeFiles/bench_leopard2.dir/link.txt"
+        executable_recipe.parent.mkdir(parents=True, exist_ok=True)
+        executable_recipe.write_text(
+            compiler + " -O3 " + self.benchmark_object.as_posix() +
+            " -o bench_leopard2 libleopard.a\n", encoding="utf-8")
+        self._relink()
+
+    def close(self) -> None:
+        self.temporary.cleanup()
+
+    def _add_entry(self, relative, output, compiler, flags) -> None:
+        source = (self.source / relative).resolve()
+        target = self.build / output
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((relative + " object\n").encode())
+        arguments = [compiler, "-O3", *flags, "-c", str(source),
+                     "-o", output.as_posix()]
+        self.entries.append({
+            "directory": str(self.build.resolve()),
+            "arguments": arguments, "file": str(source),
+            "output": output.as_posix(),
+        })
+
+    def _write_cache(self, **overrides) -> None:
+        values = {
+            "CMAKE_BUILD_TYPE:STRING": "Release",
+            "CMAKE_EXPORT_COMPILE_COMMANDS:BOOL": "ON",
+            "CMAKE_GENERATOR:INTERNAL": "Unix Makefiles",
+            "CMAKE_HOME_DIRECTORY:INTERNAL": str(self.source.resolve()),
+            "CMAKE_CXX_COMPILER:FILEPATH": "/usr/bin/c++",
+            "CMAKE_CXX_FLAGS:STRING": "",
+            "CMAKE_CXX_FLAGS_RELEASE:STRING": "-O3 -DNDEBUG",
+            "CMAKE_AR:FILEPATH": "/usr/bin/ar",
+            "ENABLE_OPENMP:BOOL": "ON",
+            "LEO2_BUILD_BENCHMARKS:BOOL": "ON",
+            "LEO2_BUILD_FUZZERS:BOOL": "OFF",
+            "LEO2_ENABLE_CUDA:BOOL": "OFF",
+            "LEOPARD_ENABLE_GF8:BOOL": "ON",
+            "LEOPARD_ENABLE_GF16:BOOL": "ON",
+            "LEO2_BACKEND_VARIANT:STRING": "auto",
+            "LEO2_BUILD_ALLK_DIAGNOSTIC:BOOL": "OFF",
+            "LEO2_BUILD_TESTS:BOOL": "ON",
+            "LEO2_FLAG_MAVX2:INTERNAL": "1",
+            "LEO2_FLAG_MNO_AVX512F:INTERNAL": "1",
+            "LEO2_FLAG_MAVX512F:UNINITIALIZED": "FALSE",
+            "LEO2_FLAG_MAVX512BW:UNINITIALIZED": "FALSE",
+            "LEO2_FLAG_MAVX512VL:UNINITIALIZED": "FALSE",
+        }
+        values.update(overrides)
+        (self.build / "CMakeCache.txt").write_text(
+            "".join(f"{name}={value}\n" for name, value in values.items()),
+            encoding="utf-8")
+
+    def _write_commands(self) -> None:
+        (self.build / "compile_commands.json").write_text(
+            json.dumps(self.entries), encoding="utf-8")
+
+    def _relink(self) -> None:
+        archive = self.build / "libleopard.a"
+        if archive.exists():
+            archive.unlink()
+        subprocess.run(
+            ["/usr/bin/ar", "qc", str(archive),
+             *(str(self.build / path) for path in self.archive_objects)],
+            check=True)
+        subprocess.run(["/usr/bin/ranlib", str(archive)], check=True)
+        shutil.copyfile("/bin/true", self.executable)
+        self.executable.chmod(0o755)
+
+
 class AllKIdentityTests(unittest.TestCase):
     def setUp(self) -> None:
         self.main_commit = "a" * 40
@@ -297,14 +431,11 @@ class AllKIdentityTests(unittest.TestCase):
                 text=True).strip()
             subprocess.run(["/usr/bin/git", "-C", str(root), "replace",
                             first_commit, second_commit], check=True)
-            branch = subprocess.check_output(
-                ["/usr/bin/git", "-C", str(root), "symbolic-ref", "HEAD"],
-                text=True).strip()
-            subprocess.run(["/usr/bin/git", "-C", str(root), "update-ref",
-                            branch, first_commit], check=True)
+            subprocess.run(["/usr/bin/git", "-C", str(root), "reset",
+                            "--hard", "-q", first_commit], check=True)
             expect_rejected(
                 self, lambda: runner.git_identity(root, first_commit),
-                "tracked or untracked modifications")
+                "replace refs")
 
     def test_correctness_requires_exact_workload_digests(self) -> None:
         cell = runner.Cell("one", "gf8-all-k", 3, 2, 64, 1,
@@ -424,6 +555,142 @@ class AllKIdentityTests(unittest.TestCase):
             runner.write_json_atomic(path, value)
             self.assertEqual(json.loads(path.read_text(encoding="utf-8")), value)
             self.assertFalse(path.with_name(path.name + ".tmp").exists())
+
+
+class ProductionBuildClosureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.fixture = ProductionBuildFixture()
+
+    def tearDown(self) -> None:
+        self.fixture.close()
+
+    def provenance(self):
+        return runner.candidate_build_provenance(
+            self.fixture.build, self.fixture.source,
+            self.fixture.executable, "bench_leopard2")
+
+    def test_exact_release_pure_avx2_closure_is_accepted(self) -> None:
+        result = self.provenance()
+        self.assertEqual(result["schema"],
+                         "leopard2-production-build-closure/v1")
+        self.assertEqual(result["archive_members"], [
+            path.name for path in self.fixture.archive_objects])
+        profiles = {record["flag_profile"] for record in
+                    result["source_object_compile_closure"]}
+        self.assertEqual(profiles, {
+            "portable-core", "ssse3-no-avx", "avx2-no-avx512"})
+
+    def test_source_attestation_alone_can_accept_a_stale_library_object(self) \
+            -> None:
+        source = runner.git_identity(
+            self.fixture.source,
+            subprocess.check_output([
+                "/usr/bin/git", "-C", str(self.fixture.source),
+                "rev-parse", "HEAD"], text=True).strip())
+        snapshot = {"sha256": "a" * 64}
+        record = {
+            "role": "leopard2", "returncode": 0,
+            "executable_snapshot_sha256": snapshot["sha256"],
+            "result": {
+                "schema": "leopard2-benchmark-v5",
+                "parameters": {"attest_source": True},
+                "resolved": {"profile": "legacy_high_v1", "field": "gf8",
+                             "backend": "avx2"},
+                "build": {"source_commit": source["head"],
+                          "source_tree": source["tree"],
+                          "source_tracked_dirty": False},
+                "correctness": {"leopard2_round_trip": True},
+            },
+        }
+        runner.validate_source_attestation(record, source, snapshot)
+        victim = self.fixture.source / "Leopard2BackendAVX2.cpp"
+        object_path = self.fixture.build / next(
+            path for path in self.fixture.archive_objects
+            if path.name == "Leopard2BackendAVX2.cpp.o")
+        future = object_path.stat().st_mtime_ns + 2_000_000_000
+        os.utime(victim, ns=(future, future))
+        self.assertEqual(runner.git_identity(
+            self.fixture.source, source["head"])["tracked_status"], "clean")
+        expect_rejected(
+            self, self.provenance, "object predates source")
+
+    def test_avx512_cache_or_compile_flags_are_rejected(self) -> None:
+        self.fixture._write_cache(
+            **{"LEO2_FLAG_MAVX512F:UNINITIALIZED": "TRUE"})
+        expect_rejected(self, self.provenance, "did not disable")
+        self.fixture._write_cache()
+        entry = next(item for item in self.fixture.entries
+                     if item["file"].endswith("Leopard2BackendAVX2.cpp"))
+        entry["arguments"].append("-mavx512f")
+        self.fixture._write_commands()
+        expect_rejected(self, self.provenance, "AVX-512")
+
+    def test_noncanonical_generator_fails_before_recipe_inference(self) -> None:
+        self.fixture._write_cache(
+            **{"CMAKE_GENERATOR:INTERNAL": "Ninja"})
+        expect_rejected(
+            self, self.provenance,
+            "CMAKE_GENERATOR is 'Ninja', expected 'Unix Makefiles'")
+
+    def test_mixed_compile_source_and_archive_member_are_rejected(self) -> None:
+        entry = next(item for item in self.fixture.entries
+                     if item["file"].endswith("Leopard2Plan.cpp"))
+        wrong = str((self.fixture.source / "leopard2.cpp").resolve())
+        entry["file"] = wrong
+        entry["arguments"][entry["arguments"].index("-c") + 1] = wrong
+        self.fixture._write_commands()
+        expect_rejected(self, self.provenance, "source closure differs")
+        entry["file"] = str(
+            (self.fixture.source / "Leopard2Plan.cpp").resolve())
+        entry["arguments"][entry["arguments"].index("-c") + 1] = entry["file"]
+        self.fixture._write_commands()
+        extra = self.fixture.build / "unexpected.o"
+        extra.write_bytes(b"unexpected\n")
+        subprocess.run([
+            "/usr/bin/ar", "q", str(self.fixture.build / "libleopard.a"),
+            str(extra)], check=True)
+        shutil.copyfile("/bin/true", self.fixture.executable)
+        self.fixture.executable.chmod(0o755)
+        expect_rejected(self, self.provenance, "archive members differ")
+
+    def test_archive_member_bytes_are_bound_to_external_objects(self) -> None:
+        object_path = self.fixture.build / self.fixture.archive_objects[0]
+        old_status = object_path.stat()
+        old_bytes = object_path.read_bytes()
+        replacement = bytes([old_bytes[0] ^ 1]) + old_bytes[1:]
+        object_path.write_bytes(replacement)
+        os.utime(object_path, ns=(old_status.st_atime_ns,
+                                  old_status.st_mtime_ns))
+        expect_rejected(
+            self, self.provenance, "archive member bytes differ from object")
+
+    def test_rebuild_comparison_rejects_stale_object_archive_and_executable(self) \
+            -> None:
+        exact = self.provenance()
+        proof = runner.compare_reproducible_builds(
+            exact, copy.deepcopy(exact))
+        self.assertEqual(proof["archive_sha256"],
+                         exact["archive"]["sha256"])
+
+        mutations = []
+        stale_object = copy.deepcopy(exact)
+        stale_object["source_object_compile_closure"][0]["object"][
+            "sha256"] = "0" * 64
+        mutations.append((stale_object, "object bytes differ"))
+        stale_member = copy.deepcopy(exact)
+        stale_member["archive_member_identities"][0]["sha256"] = "1" * 64
+        mutations.append((stale_member, "archive member bytes differ"))
+        stale_archive = copy.deepcopy(exact)
+        stale_archive["archive"]["sha256"] = "2" * 64
+        mutations.append((stale_archive, "archive bytes differ"))
+        stale_executable = copy.deepcopy(exact)
+        stale_executable["executable"]["sha256"] = "3" * 64
+        mutations.append((stale_executable, "executable bytes differ"))
+        compare = runner.compare_reproducible_builds
+        for stale, message in mutations:
+            with self.subTest(message=message):
+                expect_rejected(
+                    self, lambda stale=stale: compare(stale, exact), message)
 
 
 if __name__ == "__main__":
