@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import tempfile
@@ -208,6 +209,34 @@ def main() -> int:
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
 
+    mixed_schema_rejection = subprocess.run(
+        [str(executable), "--attest-source", "--report-decode-path"],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
+    require(mixed_schema_rejection.returncode != 0,
+            "source-attested benchmark accepted mixed JSON schema modes")
+
+    standard_attested = run(executable, True, attest_source=True)
+    require(standard_attested["schema"] == "leopard2-benchmark-v5",
+            "standard benchmark source-attested schema changed")
+    validate_common(standard_attested, True)
+    validate_workload_digests(standard_attested)
+    require(set(standard_attested["parameters"]) ==
+            (expected_external_parameters | {"attest_source"}),
+            "standard source-attested parameter structure changed")
+    require(standard_attested["parameters"]["attest_source"] is True,
+            "standard benchmark did not record source-attestation opt-in")
+    expected_commit = os.environ.get("LEO2_EXPECTED_SOURCE_COMMIT")
+    expected_tree = os.environ.get("LEO2_EXPECTED_SOURCE_TREE")
+    expected_dirty = os.environ.get("LEO2_EXPECTED_SOURCE_DIRTY")
+    if expected_commit is not None:
+        require(standard_attested["build"]["source_commit"] == expected_commit,
+                "standard benchmark source commit differs from CMake identity")
+        require(standard_attested["build"]["source_tree"] == expected_tree,
+                "standard benchmark source tree differs from CMake identity")
+        require(standard_attested["build"]["source_tracked_dirty"] is
+                (expected_dirty != "0"),
+                "standard benchmark dirty flag differs from CMake identity")
+
     if len(sys.argv) == 3:
         attested_executable = Path(sys.argv[2]).resolve()
         attested_default = run(attested_executable, False)
@@ -216,30 +245,13 @@ def main() -> int:
         validate_common(attested_default, False)
         require(attested_default["build"] == default["build"],
                 "attested target exposed source identity without opt-in")
-
-        normal_rejection = subprocess.run(
-            [str(executable), "--attest-source"], stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, check=False)
-        require(normal_rejection.returncode != 0,
-                "normal benchmark accepted the diagnostic-only attestation flag")
-
-        mixed_schema_rejection = subprocess.run(
-            [str(attested_executable), "--attest-source",
-             "--report-decode-path"], stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, text=True, check=False)
-        require(mixed_schema_rejection.returncode != 0,
-                "source-attested benchmark accepted mixed JSON schema modes")
-
         attested = run(attested_executable, True, attest_source=True)
         require(attested["schema"] == "leopard2-benchmark-v5",
-                "source-attested benchmark schema changed")
+                "all-K source-attested benchmark schema changed")
         validate_common(attested, True)
         validate_workload_digests(attested)
-        require(set(attested["parameters"]) ==
-                (expected_external_parameters | {"attest_source"}),
-                "source-attested parameter structure changed")
-        require(attested["parameters"]["attest_source"] is True,
-                "source-attested benchmark did not record its opt-in")
+        require(attested["build"] == standard_attested["build"],
+                "standard and all-K source identities differ")
 
     path_report = run(executable, True, True)
     require(path_report["schema"] == "leopard2-benchmark-v3",

@@ -521,6 +521,14 @@ if(LEO2_BUILD_BENCHMARKS)
             set(LEO2_LOCATOR_SOURCE_DIRTY 0)
         endif()
     endif()
+    # The standard benchmark supports an untimed schema-v5 identity preflight
+    # as well as its ordinary timed schemas.  Keeping both modes in the same
+    # executable binds performance evidence to the exact committed source.
+    target_compile_definitions(bench_leopard2 PRIVATE
+        LEO2_BENCHMARK_SOURCE_ATTESTATION=1
+        LEO2_BENCHMARK_SOURCE_COMMIT="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
+        LEO2_BENCHMARK_SOURCE_TREE="${LEO2_LOCATOR_SOURCE_GIT_TREE}"
+        LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
     target_compile_definitions(bench_leopard2_locator PRIVATE
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
@@ -1531,6 +1539,9 @@ if(LEO2_BUILD_TESTS)
                         ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_benchmark_json_test.py
                         $<TARGET_FILE:bench_leopard2>)
             endif()
+            set_tests_properties(leopard2_benchmark_json_regression PROPERTIES
+                ENVIRONMENT
+                    "LEO2_EXPECTED_SOURCE_COMMIT=${LEO2_LOCATOR_SOURCE_GIT_SHA};LEO2_EXPECTED_SOURCE_TREE=${LEO2_LOCATOR_SOURCE_GIT_TREE};LEO2_EXPECTED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY};OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
             add_test(
                 NAME leopard2_pruned_transform_benchmark_smoke
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
