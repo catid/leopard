@@ -152,6 +152,7 @@ struct Counts
     uint64_t high_byte_tiling_checks;
     uint64_t gf8_coarse_oracle_checks;
     uint64_t high_small_transform_checks;
+    uint64_t high_tail_column_checks;
     uint64_t sparse_auto_promotion_checks;
 
     Counts()
@@ -162,6 +163,7 @@ struct Counts
         , high_source_staging_checks(0), high_byte_tiling_checks(0)
         , gf8_coarse_oracle_checks(0)
         , high_small_transform_checks(0)
+        , high_tail_column_checks(0)
         , sparse_auto_promotion_checks(0)
     {}
 };
@@ -480,7 +482,13 @@ void test_profile_matrix(
                 compare_requested(direct.recovery, expected, all, 0xa5,
                     "basis direct/oracle", counts);
                 require(transform.recovery == direct.recovery,
-                    "basis direct and transform encoders differ");
+                    "basis direct and transform encoders differ: K=" +
+                        std::to_string(k) + " R=" + std::to_string(r) +
+                        " basis=" + std::to_string(basis) +
+                        " profile=" +
+                            std::to_string(static_cast<unsigned>(profile)) +
+                        " field=" +
+                            std::to_string(static_cast<unsigned>(public_field)));
                 ++counts->basis_messages;
             }
 
@@ -827,7 +835,12 @@ void test_high_transform_source_staging(
         require(out_of_place_calls == c.expected_out_of_place_calls,
             "high source-staging out-of-place call count mismatch");
         require(copied_input_shards == c.expected_copied_input_shards,
-            "high source-staging input-copy count mismatch");
+            "high source-staging input-copy count mismatch: field=" +
+                std::to_string(static_cast<unsigned>(c.field)) +
+                " K=" + std::to_string(c.k) +
+                " actual=" + std::to_string(copied_input_shards) +
+                " expected=" +
+                    std::to_string(c.expected_copied_input_shards));
         ++counts->high_source_staging_checks;
         delete owner;
     }
@@ -1341,6 +1354,108 @@ void test_high_gf16_byte_tiling(
 
     ++counts->high_byte_tiling_checks;
     delete owner;
+}
+
+void test_gf8_high_tail_generator_column(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options context_options = {};
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AVX2;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(
+        &context_options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(context_result, "explicit AVX2 tail-column context");
+
+    static const unsigned transform_sizes[] = { 8, 16, 32, 64 };
+    const size_t bytes = 2051;
+    for (unsigned size_i = 0;
+         size_i < sizeof(transform_sizes) / sizeof(transform_sizes[0]);
+         ++size_i)
+    {
+        const unsigned t = transform_sizes[size_i];
+        const unsigned k = t + 1U;
+        CodecOwner* owner = make_codec(context, k, t,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Shards original(k, Bytes(bytes, 0));
+        original[k - 1] = random_shards(
+            1, bytes, UINT64_C(0x5441494c434f4c00) + t)[0];
+        const Shards original_before = original;
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, k, t);
+        std::vector<Element> systematic_points(
+            layout.systematic_coordinates.begin(),
+            layout.systematic_coordinates.end());
+        const Element source_coordinate = systematic_points[k - 1];
+        Element derivative = 1;
+        for (size_t point = 0; point < systematic_points.size(); ++point)
+        {
+            if (systematic_points[point] != source_coordinate)
+            {
+                derivative = gf8.multiply(derivative,
+                    gf8.add(systematic_points[point], source_coordinate));
+            }
+        }
+        require(derivative != 0,
+            "GF8 tail generator derivative was zero");
+        Shards expected(t, Bytes(bytes, 0));
+        for (unsigned parity = 0; parity < t; ++parity)
+        {
+            const Element parity_coordinate = static_cast<Element>(
+                layout.parity_coordinates[parity]);
+            Element vanishing = 1;
+            for (size_t point = 0; point < systematic_points.size(); ++point)
+            {
+                vanishing = gf8.multiply(vanishing,
+                    gf8.add(parity_coordinate, systematic_points[point]));
+            }
+            const Element denominator = gf8.multiply(derivative,
+                gf8.add(parity_coordinate, source_coordinate));
+            const Element coefficient = gf8.divide(vanishing, denominator);
+            require(coefficient != 0,
+                "GF8 tail generator column contained zero");
+            for (size_t offset = 0; offset < bytes; ++offset)
+            {
+                expected[parity][offset] = static_cast<uint8_t>(gf8.multiply(
+                    coefficient, original[k - 1][offset]));
+            }
+        }
+
+        const std::vector<uint8_t> all(t, 1);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult dense = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, all);
+        require_result(dense.result, "GF8 tail-column dense encode");
+        compare_requested(dense.recovery, expected, all, 0xa5,
+            "GF8 tail-column/direct generator", counts);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    tail_column_calls != 0,
+            "GF8 dense tail-column route was not exercised");
+        require(original == original_before,
+            "GF8 tail-column encode modified caller input");
+
+        std::vector<uint8_t> sparse(t, 0);
+        sparse[0] = 1;
+        sparse[t / 2] = 1;
+        sparse[t - 1] = 1;
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult partial = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse);
+        require_result(partial.result, "GF8 tail-column sparse encode");
+        compare_requested(partial.recovery, expected, sparse, 0xa5,
+            "GF8 sparse tail-column/direct generator", counts);
+        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    tail_column_calls == 0,
+            "GF8 sparse output used the dense tail-column path");
+
+        ++counts->high_tail_column_checks;
+        delete owner;
+    }
+    leo2_context_destroy(context);
 }
 
 void test_gf8_high_coarse_direct_oracle(
@@ -2408,6 +2523,7 @@ int main()
             context, gf8, gf16, &counts);
         test_high_small_coarse_kernel(context, gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
+        test_gf8_high_tail_generator_column(gf8, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
@@ -2434,6 +2550,8 @@ int main()
                   << counts.high_source_staging_checks
                   << " high_byte_tiling_checks="
                   << counts.high_byte_tiling_checks
+                  << " high_tail_column_checks="
+                  << counts.high_tail_column_checks
                   << " gf8_coarse_oracle_checks="
                   << counts.gf8_coarse_oracle_checks
                   << " high_small_transform_checks="

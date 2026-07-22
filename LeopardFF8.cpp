@@ -61,6 +61,7 @@ static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
 static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
 static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
+static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -223,7 +224,11 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 
 static ffe_t LogLUT[kOrder];
 static ffe_t ExpLUT[kOrder];
-static ffe_t HighK17T16TailGeneratorLogs[16];
+// For a legacy-high K=T+1,R=T code, the first T message shards form one
+// complete inverse-transform block.  The final source is one systematic
+// generator column in parity-coordinate space.  Entries for each supported T
+// occupy [T,2T), so the dyadic ranges are disjoint.
+static ffe_t HighTailGeneratorLogs[kOrder / 2];
 
 
 // Returns a * Log(b)
@@ -559,48 +564,59 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
 }
 
 
-static bool InitializeHighK17T16TailGeneratorLogs()
+static bool InitializeHighTailGeneratorLogs()
 {
-    // Legacy-high K=17,R=16 uses parent [64,48], with systematic coordinates
-    // 16..63 and the seventeenth public source at x=32.  Compute that source's
-    // systematic Lagrange column at parity coordinates 0..15:
+    // Legacy-high K=T+1,R=T uses parent [4T,3T], with systematic coordinates
+    // T..4T-1 and the final public source at x=2T.  Compute that source's
+    // systematic Lagrange column at parity coordinates 0..T-1:
     //
     //   L_x(y) = Z(y) / ((y + x) Z'(x)),
-    //   Z(t) = product_{s=16}^{63} (t + s).
+    //   Z(t) = product_{s=T}^{4T-1} (t + s).
     //
     // Setup is byte-independent and runs once after the legacy GF8 logarithm
     // tables exist.  Keeping the derivation here avoids embedding a generated
     // field-specific constant list in the execution path.
-    static const ffe_t kSourceCoordinate = 32;
-    ffe_t derivative = 1;
-    for (unsigned coordinate = 16; coordinate < 64; ++coordinate)
+    // T=128 would require a 512-coordinate parent and cannot exist in GF8.
+    static const unsigned kTransformSizes[] = { 8, 16, 32, 64 };
+    for (unsigned size_i = 0;
+         size_i < sizeof(kTransformSizes) / sizeof(kTransformSizes[0]);
+         ++size_i)
     {
-        if (coordinate != kSourceCoordinate)
+        const unsigned transform_size = kTransformSizes[size_i];
+        const unsigned source_coordinate = transform_size * 2U;
+        ffe_t derivative = 1;
+        for (unsigned coordinate = transform_size;
+             coordinate < transform_size * 4U; ++coordinate)
         {
-            derivative = MultiplyElements(derivative,
-                static_cast<ffe_t>(coordinate ^ kSourceCoordinate));
+            if (coordinate != source_coordinate)
+            {
+                derivative = MultiplyElements(derivative,
+                    static_cast<ffe_t>(coordinate ^ source_coordinate));
+            }
         }
-    }
-    if (derivative == 0)
-        return false;
+        if (derivative == 0)
+            return false;
 
-    for (unsigned parity = 0; parity < 16; ++parity)
-    {
-        ffe_t vanishing = 1;
-        for (unsigned coordinate = 16; coordinate < 64; ++coordinate)
+        for (unsigned parity = 0; parity < transform_size; ++parity)
         {
-            vanishing = MultiplyElements(vanishing,
-                static_cast<ffe_t>(parity ^ coordinate));
+            ffe_t vanishing = 1;
+            for (unsigned coordinate = transform_size;
+                 coordinate < transform_size * 4U; ++coordinate)
+            {
+                vanishing = MultiplyElements(vanishing,
+                    static_cast<ffe_t>(parity ^ coordinate));
+            }
+            const ffe_t denominator = MultiplyElements(derivative,
+                static_cast<ffe_t>(parity ^ source_coordinate));
+            if (vanishing == 0 || denominator == 0)
+                return false;
+            const ffe_t coefficient = MultiplyElements(
+                vanishing, InverseElement(denominator));
+            if (coefficient == 0)
+                return false;
+            HighTailGeneratorLogs[transform_size + parity] =
+                ElementLog(coefficient);
         }
-        const ffe_t denominator = MultiplyElements(derivative,
-            static_cast<ffe_t>(parity ^ kSourceCoordinate));
-        if (vanishing == 0 || denominator == 0)
-            return false;
-        const ffe_t coefficient = MultiplyElements(
-            vanishing, InverseElement(denominator));
-        if (coefficient == 0)
-            return false;
-        HighK17T16TailGeneratorLogs[parity] = ElementLog(coefficient);
     }
     return true;
 }
@@ -2361,21 +2377,26 @@ void ReedSolomonEncode(
             FFTSkewStorage, buffer_bytes);
         return;
     }
-    if (ops.kind == LEO2_BACKEND_AVX2 && m == 16 &&
-        original_count == 17 && recovery_count == 16 &&
-        requested_output_count == 16)
+    const bool direct_tail_column_size =
+        m == 8 || m == 16 || m == 32 || m == 64;
+    if (ops.kind == LEO2_BACKEND_AVX2 && direct_tail_column_size &&
+        original_count == m + 1U && recovery_count == m &&
+        requested_output_count == m)
     {
         // Encode the complete first message block through the mature
         // transform, then add the precomputed systematic generator column for
-        // message coordinate 32 directly in parity-coordinate space.
+        // message coordinate 2T directly in parity-coordinate space.
         ReedSolomonEncode(
-            ops, buffer_bytes, 16, 16, 16, 16,
+            ops, buffer_bytes, m, m, m, m,
             data, work, NULL);
-        for (unsigned output = 0; output < 16; ++output)
+        for (unsigned output = 0; output < m; ++output)
         {
-            MultiplyAddBytes(ops, work[output], data[16],
-                HighK17T16TailGeneratorLogs[output], buffer_bytes);
+            MultiplyAddBytes(ops, work[output], data[m],
+                HighTailGeneratorLogs[m + output], buffer_bytes);
         }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
         return;
     }
     if (ops.kind == LEO2_BACKEND_AVX512 &&
@@ -3351,6 +3372,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighForwardFusedCalls.store(0, std::memory_order_relaxed);
     TestHighWholeTransformCalls.store(0, std::memory_order_relaxed);
     TestHighSmallTransformCalls.store(0, std::memory_order_relaxed);
+    TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3367,6 +3389,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighWholeTransformCalls.load(std::memory_order_relaxed);
     result.small_transform_calls =
         TestHighSmallTransformCalls.load(std::memory_order_relaxed);
+    result.tail_column_calls =
+        TestHighTailColumnCalls.load(std::memory_order_relaxed);
     return result;
 }
 
@@ -4909,7 +4933,7 @@ bool Initialize()
         return true;
 
     InitializeLogarithmTables();
-    if (!InitializeHighK17T16TailGeneratorLogs())
+    if (!InitializeHighTailGeneratorLogs())
         return false;
     if (!InitializeMultiplyTables())
         return false;
