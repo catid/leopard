@@ -37,7 +37,8 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
 
 LEGACY_SCHEMA = "leopard2-backend-butterfly-abba/v6"
 PRE_XOR_SCHEMA = "leopard2-backend-butterfly-abba/v7"
-SCHEMA = "leopard2-backend-butterfly-abba/v8"
+POST_XOR_SCHEMA = "leopard2-backend-butterfly-abba/v8"
+SCHEMA = "leopard2-backend-butterfly-abba/v9"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
@@ -95,6 +96,10 @@ def load_current_matrix_contract():
     if not isinstance(contract, dict) or set(contract) != expected_keys or \
             contract.get("schema") != MATRIX_SCHEMA:
         raise RuntimeError("backend-matrix producer contract/schema changed")
+    field_keys = {"LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"}
+    if not field_keys <= set(contract.get("build_cache_keys", ())):
+        raise RuntimeError(
+            "backend-matrix v2 contract omits field-option provenance")
     return contract
 
 
@@ -450,6 +455,11 @@ MATRIX_TEST_SPECS = {
 MATRIX_BUILD_TARGETS = tuple(CURRENT_MATRIX_CONTRACT["build_targets"])
 MATRIX_BUILD_CACHE_KEYS = tuple(
     CURRENT_MATRIX_CONTRACT["build_cache_keys"])
+# v8 predates explicit field-option provenance.  Its v2 matrix producer used
+# the otherwise identical cache contract below, without the two field keys.
+POST_XOR_MATRIX_BUILD_CACHE_KEYS = tuple(
+    key for key in MATRIX_BUILD_CACHE_KEYS
+    if key not in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"))
 MATRIX_BASE_BACKEND_FAILURE_TESTS = tuple(
     CURRENT_MATRIX_CONTRACT["base_backend_failure_tests"])
 MATRIX_AVX512_BACKEND_FAILURE_TESTS = tuple(
@@ -515,7 +525,7 @@ PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
 MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     CURRENT_MATRIX_CONTRACT["expected_compile_source_counts"])
 
-CONFIGURATION_KEYS = (
+PRE_DUAL_FIELD_CONFIGURATION_KEYS = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_C_FLAGS",
     "CMAKE_C_FLAGS_RELEASE",
@@ -532,6 +542,11 @@ CONFIGURATION_KEYS = (
     "LEO2_BUILD_FUZZERS",
     "LEO2_BUILD_TESTS",
     "LEO2_ENABLE_CUDA",
+)
+
+CONFIGURATION_KEYS = PRE_DUAL_FIELD_CONFIGURATION_KEYS + (
+    "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16",
 )
 
 MATRIX_SOURCE_FILES = tuple(CURRENT_MATRIX_CONTRACT["source_files"])
@@ -554,7 +569,7 @@ PRE_XOR_CONFIGURED_TRANSLATION_UNITS = PRE_XOR_BUILD_TRANSLATION_UNITS + (
     "tests/experiments.cpp",
 )
 
-# Current v8 scopes the CMake File API proof to the benchmark and its complete
+# Current v9 scopes the CMake File API proof to the benchmark and its complete
 # target dependency graph.  Unrelated configured benchmarks cannot affect the
 # linked executable and no longer make its evidence schema drift accidentally.
 CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS
@@ -572,24 +587,37 @@ CANONICAL_CMAKE_IDENTITY = {
 SCHEMA_TO_CMAKE_IDENTITY = {
     LEGACY_SCHEMA: HISTORICAL_CMAKE_IDENTITY,
     PRE_XOR_SCHEMA: CANONICAL_CMAKE_IDENTITY,
+    POST_XOR_SCHEMA: CANONICAL_CMAKE_IDENTITY,
     SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 
-HARDENED_SCHEMAS = frozenset((PRE_XOR_SCHEMA, SCHEMA))
+HARDENED_SCHEMAS = frozenset(
+    (PRE_XOR_SCHEMA, POST_XOR_SCHEMA, SCHEMA))
+POST_XOR_SCHEMAS = frozenset((POST_XOR_SCHEMA, SCHEMA))
+
+
+def is_post_xor_schema(schema):
+    return schema in POST_XOR_SCHEMAS
+
+
+def configuration_keys_for_schema(schema):
+    cmake_identity_for_schema(schema)
+    return (CONFIGURATION_KEYS if schema == SCHEMA else
+            PRE_DUAL_FIELD_CONFIGURATION_KEYS)
 
 
 def build_translation_units_for_schema(schema):
-    return (BUILD_TRANSLATION_UNITS if schema == SCHEMA else
+    return (BUILD_TRANSLATION_UNITS if is_post_xor_schema(schema) else
             PRE_XOR_BUILD_TRANSLATION_UNITS)
 
 
 def configured_translation_units_for_schema(schema):
-    return (CONFIGURED_TRANSLATION_UNITS if schema == SCHEMA else
+    return (CONFIGURED_TRANSLATION_UNITS if is_post_xor_schema(schema) else
             PRE_XOR_CONFIGURED_TRANSLATION_UNITS)
 
 
 def archive_translation_units_for_schema(schema):
-    if schema == SCHEMA:
+    if is_post_xor_schema(schema):
         return CURRENT_ARCHIVE_TRANSLATION_UNITS
     if schema == PRE_XOR_SCHEMA:
         return PRE_XOR_ARCHIVE_TRANSLATION_UNITS
@@ -618,7 +646,8 @@ def cmake_identity_for_schema(schema):
 
 
 def relevant_targets_for_schema(schema):
-    non_library = (RELEVANT_NON_LIBRARY_TARGETS if schema == SCHEMA else
+    non_library = (RELEVANT_NON_LIBRARY_TARGETS
+                   if is_post_xor_schema(schema) else
                    PRE_XOR_RELEVANT_NON_LIBRARY_TARGETS)
     return (cmake_identity_for_schema(schema)["target"],) + non_library
 
@@ -2247,7 +2276,7 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
     configured_units = set()
     configured_documents = (
         [documents[name] for name in relevant_targets]
-        if schema == SCHEMA else documents.values())
+        if is_post_xor_schema(schema) else documents.values())
     for document in configured_documents:
         for source in document.get("sources", []):
             if "compileGroupIndex" not in source:
@@ -2270,7 +2299,7 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
         document = documents[name]
         artifacts = document.get("artifacts", [])
         expected_artifact_count = (
-            2 if schema == SCHEMA and
+            2 if is_post_xor_schema(schema) and
             name == "leopard2_backend_avx2" else 1)
         require(isinstance(artifacts, list) and
                 len(artifacts) == expected_artifact_count,
@@ -2336,7 +2365,7 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
                 value["path"], value["compiled"])),
             "link": normalized_link,
         }
-        if schema == SCHEMA:
+        if is_post_xor_schema(schema):
             targets[name]["artifacts"] = [
                 tagged_path(value, source_root, build_root)
                 for value in resolved_artifacts]
@@ -2348,11 +2377,11 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
             "benchmark target dependency identity")
     expected_library_dependencies = (
         ["leopard2_backend_avx2", "leopard2_backend_avx512",
-         "leopard2_backend_ssse3"] if schema == SCHEMA else
+         "leopard2_backend_ssse3"] if is_post_xor_schema(schema) else
         ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
     expected_object_targets = (
         ("leopard2_backend_ssse3", "leopard2_backend_avx2",
-         "leopard2_backend_avx512") if schema == SCHEMA else
+         "leopard2_backend_avx512") if is_post_xor_schema(schema) else
         ("leopard2_backend_ssse3", "leopard2_backend_avx2"))
     require(targets[cmake_identity["target"]]["type"] == "STATIC_LIBRARY" and
             targets[cmake_identity["target"]]["dependencies"] ==
@@ -2389,6 +2418,9 @@ def fresh_rebuild(source_root, template_cache, fresh_root, jobs):
             "evidence build must disable test hooks")
     require(values.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", ""),
             "evidence build must disable fuzzers")
+    require(values.get("LEOPARD_ENABLE_GF8") in ("ON", "1", "TRUE") and
+            values.get("LEOPARD_ENABLE_GF16") in ("ON", "1", "TRUE"),
+            "current butterfly evidence requires GF8 and GF16")
     require(isinstance(jobs, int) and 1 <= jobs <= 128,
             "build jobs must be in [1,128]")
     cmake_value = values.get("CMAKE_COMMAND")
@@ -2464,7 +2496,7 @@ def self_test_rebuild_record(jobs, cache_path, schema=SCHEMA):
     cmake_path = values["CMAKE_COMMAND"]
     configure_argv = ["@tool/cmake", "-S", "@source", "-B", "@build",
                       "-G", values["CMAKE_GENERATOR"]]
-    for key in CONFIGURATION_KEYS:
+    for key in configuration_keys_for_schema(schema):
         if key != "CMAKE_GENERATOR":
             configure_argv.append("-D{}={}".format(key, values[key]))
     configure_argv.extend([
@@ -2499,9 +2531,10 @@ def self_test_rebuild_record(jobs, cache_path, schema=SCHEMA):
     }
 
 
-def normalized_configuration(values, source_root, build_root, tool_paths):
+def normalized_configuration(
+        values, source_root, build_root, tool_paths, schema=SCHEMA):
     configuration = {}
-    for key in CONFIGURATION_KEYS:
+    for key in configuration_keys_for_schema(schema):
         require(key in values, "CMake cache omits configuration key: " + key)
         configuration[key] = values[key]
     configuration["CMAKE_HOME_DIRECTORY"] = tagged_path(
@@ -2528,6 +2561,12 @@ def normalized_configuration(values, source_root, build_root, tool_paths):
             "evidence build must not contain tests/fuzzers or test hooks")
     require(configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", ""),
             "butterfly evidence must not include optional CUDA")
+    if schema == SCHEMA:
+        require(configuration["LEOPARD_ENABLE_GF8"] in
+                    ("ON", "1", "TRUE") and
+                configuration["LEOPARD_ENABLE_GF16"] in
+                    ("ON", "1", "TRUE"),
+                "current butterfly evidence requires GF8 and GF16")
     return configuration
 
 
@@ -2822,7 +2861,7 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
         require(relative not in all_by_file,
                 "duplicate compile command for " + relative)
         all_by_file[relative] = normalized
-    if schema == SCHEMA:
+    if is_post_xor_schema(schema):
         # compile_commands.json is global to the configured build tree, while
         # the current evidence contract deliberately scopes the executable
         # closure to bench_leopard2 and its target dependencies.  Require every
@@ -2876,7 +2915,7 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
     record = {
         "source": source_identity,
         "configuration": normalized_configuration(
-            values, source_root, build_root, tool_paths),
+            values, source_root, build_root, tool_paths, schema),
         "build_input_files": {
             "compile_commands.json": sha256_file(compile_commands),
             "CMakeCache.txt": sha256_file(cmake_cache),
@@ -2922,7 +2961,8 @@ def validate_build_record(record, repo, schema):
             "build-record digest mismatch")
     validate_git_record(repo, record["source"])
     configuration = record["configuration"]
-    require(set(configuration) == set(CONFIGURATION_KEYS) | {
+    configuration_keys = configuration_keys_for_schema(schema)
+    require(set(configuration) == set(configuration_keys) | {
         "CMAKE_HOME_DIRECTORY", "CMAKE_CACHEFILE_DIR"} |
         {cache_key for _, cache_key in TOOL_CACHE_KEYS},
         "configuration key set")
@@ -2933,7 +2973,11 @@ def validate_build_record(record, repo, schema):
             configuration["LEO2_BUILD_BENCHMARKS"] in ("ON", "1", "TRUE") and
             configuration["LEO2_BUILD_TESTS"] in ("OFF", "0", "FALSE", "") and
             configuration["LEO2_BUILD_FUZZERS"] in ("OFF", "0", "FALSE", "") and
-            configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", ""),
+            configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", "") and
+            (schema != SCHEMA or
+             (configuration["LEOPARD_ENABLE_GF8"] in ("ON", "1", "TRUE") and
+              configuration["LEOPARD_ENABLE_GF16"] in
+                  ("ON", "1", "TRUE"))),
             "configuration identity")
     require(set(record["build_input_files"]) == {
         "compile_commands.json", "CMakeCache.txt"},
@@ -3059,7 +3103,7 @@ def validate_build_record(record, repo, schema):
     targets = target_graph["targets"]
     expected_library_dependencies = (
         ["leopard2_backend_avx2", "leopard2_backend_avx512",
-         "leopard2_backend_ssse3"] if schema == SCHEMA else
+         "leopard2_backend_ssse3"] if is_post_xor_schema(schema) else
         ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
     require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
             targets["bench_leopard2"]["artifact"] == "@build/bench_leopard2" and
@@ -3073,13 +3117,13 @@ def validate_build_record(record, repo, schema):
     for name, target in targets.items():
         expected_target_keys = {
             "type", "artifact", "dependencies", "sources", "link"}
-        if schema == SCHEMA:
+        if is_post_xor_schema(schema):
             expected_target_keys.add("artifacts")
         require(set(target) == expected_target_keys and
                 target["artifact"].startswith("@build/") and
                 isinstance(target["sources"], list),
                 "target record: " + name)
-        if schema == SCHEMA:
+        if is_post_xor_schema(schema):
             expected_count = 2 if name == "leopard2_backend_avx2" else 1
             require(isinstance(target["artifacts"], list) and
                     len(target["artifacts"]) == expected_count and
@@ -3234,7 +3278,7 @@ def validate_build_record(record, repo, schema):
         "@tool/cmake", "-S", "@source", "-B", "@build", "-G",
         configuration["CMAKE_GENERATOR"],
     ]
-    for key in CONFIGURATION_KEYS:
+    for key in configuration_keys:
         if key != "CMAKE_GENERATOR":
             expected_configure.append("-D{}={}".format(key, configuration[key]))
     expected_configure.extend([
@@ -3328,34 +3372,37 @@ def validate_matrix_command(command, label, extra_keys=()):
 def validate_matrix_document(
         document, repo, candidate_commit, evidence_schema=SCHEMA):
     current = evidence_schema == SCHEMA
+    post_xor = evidence_schema == POST_XOR_SCHEMA
+    modern = current or post_xor
     expected_matrix_schema = (
-        MATRIX_SCHEMA if current else MATRIX_SCHEMA_V1)
+        MATRIX_SCHEMA if modern else MATRIX_SCHEMA_V1)
     expected_source_files = (
-        MATRIX_SOURCE_FILES if current else
+        MATRIX_SOURCE_FILES if modern else
         PRE_XOR_MATRIX_SOURCE_FILES)
     expected_compile_source_counts = (
         MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS
-        if current else
+        if modern else
         PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS)
     matrix_compare_tests = (
-        MATRIX_COMPARE_TESTS if current else PRE_XOR_MATRIX_COMPARE_TESTS)
+        MATRIX_COMPARE_TESTS if modern else PRE_XOR_MATRIX_COMPARE_TESTS)
     matrix_run_tests = (
-        MATRIX_RUN_TESTS if current else PRE_XOR_MATRIX_RUN_TESTS)
+        MATRIX_RUN_TESTS if modern else PRE_XOR_MATRIX_RUN_TESTS)
     matrix_test_specs = (
-        MATRIX_TEST_SPECS if current else PRE_XOR_MATRIX_TEST_SPECS)
+        MATRIX_TEST_SPECS if modern else PRE_XOR_MATRIX_TEST_SPECS)
     matrix_build_targets = (
-        MATRIX_BUILD_TARGETS if current else PRE_XOR_MATRIX_BUILD_TARGETS)
+        MATRIX_BUILD_TARGETS if modern else PRE_XOR_MATRIX_BUILD_TARGETS)
     matrix_build_cache_keys = (
         MATRIX_BUILD_CACHE_KEYS if current else
-        PRE_XOR_MATRIX_BUILD_CACHE_KEYS)
+        (POST_XOR_MATRIX_BUILD_CACHE_KEYS if post_xor else
+         PRE_XOR_MATRIX_BUILD_CACHE_KEYS))
     backend_failure_ctest_regex = (
-        MATRIX_BACKEND_FAILURE_CTEST_REGEX if current else
+        MATRIX_BACKEND_FAILURE_CTEST_REGEX if modern else
         "^leopard2_backend_failure_")
     portable_ctest_regex = (
-        MATRIX_PORTABLE_CTEST_REGEX if current else
+        MATRIX_PORTABLE_CTEST_REGEX if modern else
         "^leopard2_portable_isa$")
     cuda_ctest_regex = (
-        MATRIX_CUDA_CTEST_REGEX if current else "^leopard2_cuda_optional$")
+        MATRIX_CUDA_CTEST_REGEX if modern else "^leopard2_cuda_optional$")
     require(set(document) == {
         "c_compiler", "compiler", "generator", "jobs", "jobs_per_variant",
         "machine", "mismatches",
@@ -3473,6 +3520,10 @@ def validate_matrix_document(
                 cache.get("LEO2_BUILD_BENCHMARKS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_ENABLE_CUDA") in ("OFF", "0", "FALSE", "") and
+                (not current or
+                 (cache.get("LEOPARD_ENABLE_GF8") in ("ON", "1", "TRUE") and
+                  cache.get("LEOPARD_ENABLE_GF16") in
+                      ("ON", "1", "TRUE"))) and
                 isinstance(identity["compile_commands"], list) and
                 identity["compile_commands"],
                 "matrix normalized CMake identity: " + str(variant))
@@ -3511,8 +3562,8 @@ def validate_matrix_document(
         matrix_backend_failure_tests = (
             MATRIX_BASE_BACKEND_FAILURE_TESTS +
             (MATRIX_AVX512_BACKEND_FAILURE_TESTS
-             if current and "Leopard2BackendAVX512.cpp" in counts else ())
-            if current else PRE_XOR_MATRIX_BACKEND_FAILURE_TESTS)
+             if modern and "Leopard2BackendAVX512.cpp" in counts else ())
+            if modern else PRE_XOR_MATRIX_BACKEND_FAILURE_TESTS)
 
         commands = value["commands"]
         require(len(commands) == 2 + len(matrix_run_tests) + 2 +
@@ -3521,7 +3572,7 @@ def validate_matrix_document(
         configure = commands[0]
         validate_matrix_command(configure, "configure")
         configure_argv = configure["argv"]
-        require(len(configure_argv) == 16 and
+        require(len(configure_argv) == (18 if current else 16) and
                 Path(configure_argv[0]).name == tools["cmake"]["basename"],
                 "matrix configure tool/shape: " + variant)
         source_root = configure_argv[2]
@@ -3535,6 +3586,11 @@ def validate_matrix_document(
             "-DLEO2_BACKEND_VARIANT={}".format(variant),
             "-DLEO2_BUILD_TESTS=ON", "-DLEO2_BUILD_BENCHMARKS=OFF",
             "-DLEO2_BUILD_FUZZERS=OFF", "-DLEO2_ENABLE_CUDA=OFF"]
+        if current:
+            expected_configure.extend([
+                "-DLEOPARD_ENABLE_GF8=ON",
+                "-DLEOPARD_ENABLE_GF16=ON",
+            ])
         require(configure_argv == expected_configure and
                 configure["cwd"] == source_root,
                 "matrix configure argv: " + variant)
@@ -4609,6 +4665,39 @@ def git_file_hashes(repo, commit, relatives):
     return {"digest": sha256_bytes(canonical_bytes(files)), "files": files}
 
 
+def post_xor_matrix_fixture(document):
+    """Downgrade a synthetic v9 matrix to v8's unpinned field contract."""
+    value = copy.deepcopy(document)
+    for variant in value["variants"]:
+        identity = variant["build_identity"]
+        for key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+            identity["cache"].pop(key, None)
+        identity["cache_sha256"] = sha256_bytes(
+            canonical_bytes(identity["cache"]))
+        identity_payload = dict(identity)
+        identity_payload.pop("digest", None)
+        identity["digest"] = sha256_bytes(canonical_bytes(identity_payload))
+
+        configure = variant["commands"][0]
+        configure["argv"] = [
+            argument for argument in configure["argv"]
+            if argument not in (
+                "-DLEOPARD_ENABLE_GF8=ON",
+                "-DLEOPARD_ENABLE_GF16=ON")
+        ]
+        command_payload = dict(configure)
+        command_payload.pop("command_sha256", None)
+        configure["command_sha256"] = sha256_bytes(
+            canonical_bytes(command_payload))
+        variant["fresh_build"]["identity_sha256"] = sha256_bytes(
+            canonical_bytes({
+                "configuration_id": variant["configuration_id"],
+                "configure_argv": configure["argv"],
+                "environment": variant["build_environment"],
+            }))
+    return value
+
+
 def pre_xor_matrix_fixture(document):
     """Downgrade a synthetic current matrix to the frozen v1 contract."""
     value = copy.deepcopy(document)
@@ -4634,6 +4723,10 @@ def pre_xor_matrix_fixture(document):
         variant["schema"] = MATRIX_SCHEMA_V1
         variant["source_fingerprint"] = fingerprint["digest"]
         identity = variant["build_identity"]
+        for key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+            identity["cache"].pop(key, None)
+        identity["cache_sha256"] = sha256_bytes(
+            canonical_bytes(identity["cache"]))
         retained_commands = []
         retained_counts = {}
         for command in identity["compile_commands"]:
@@ -4668,6 +4761,12 @@ def pre_xor_matrix_fixture(document):
         failures["argv"][-2] = "^leopard2_backend_failure_"
         rehash_command(failures)
         configure = variant["commands"][0]
+        configure["argv"] = [
+            argument for argument in configure["argv"]
+            if argument not in (
+                "-DLEOPARD_ENABLE_GF8=ON",
+                "-DLEOPARD_ENABLE_GF16=ON")
+        ]
         build = variant["commands"][1]
         target_index = build["argv"].index("--target") + 1
         build["argv"][target_index:] = list(PRE_XOR_MATRIX_BUILD_TARGETS)
@@ -4819,6 +4918,11 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
         "LEO2_BUILD_TESTS:BOOL=OFF",
         "LEO2_ENABLE_CUDA:BOOL=OFF",
     ])
+    if schema == SCHEMA:
+        cache_lines.extend([
+            "LEOPARD_ENABLE_GF8:BOOL=ON",
+            "LEOPARD_ENABLE_GF16:BOOL=ON",
+        ])
     cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
     library = root / cmake_identity["archive"]
     archive_order = archive_translation_units_for_schema(schema)
@@ -4862,7 +4966,7 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
                 "link": None}
     library_dependencies = (
         ["leopard2_backend_avx2", "leopard2_backend_avx512",
-         "leopard2_backend_ssse3"] if schema == SCHEMA else
+         "leopard2_backend_ssse3"] if is_post_xor_schema(schema) else
         ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
     targets = {
         cmake_identity["target"]: target(
@@ -4873,12 +4977,13 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
         "leopard2_backend_avx2": target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2.cpp"], [],
             ({"Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"}
-             if schema == SCHEMA else {"Leopard2BackendAVX2.cpp"})),
+             if is_post_xor_schema(schema) else
+             {"Leopard2BackendAVX2.cpp"})),
         "bench_leopard2": target(
             "EXECUTABLE", binary, [cmake_identity["target"]],
             {"bench/leopard2/benchmark.cpp"}),
     }
-    if schema == SCHEMA:
+    if is_post_xor_schema(schema):
         targets["leopard2_backend_avx512"] = target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendAVX512.cpp"], [],
             {"Leopard2BackendAVX512.cpp"})
@@ -5211,7 +5316,8 @@ def self_test(repo):
             "-G", "Unix Makefiles", "-DCMAKE_BUILD_TYPE=Release",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLEO2_BUILD_TESTS=OFF",
             "-DLEO2_BUILD_BENCHMARKS=ON", "-DLEO2_BUILD_FUZZERS=OFF",
-            "-DLEO2_ENABLE_CUDA=OFF",
+            "-DLEO2_ENABLE_CUDA=OFF", "-DLEOPARD_ENABLE_GF8=ON",
+            "-DLEOPARD_ENABLE_GF16=ON",
         ], repo, "current CMake File API integration configure")
         file_api_artifacts, file_api_graph = file_api_targets(
             repo, file_api_build, SCHEMA)
@@ -5399,6 +5505,10 @@ def self_test(repo):
                 "CMAKE_C_COMPILER": "@tool/cc",
                 "CMAKE_CXX_COMPILER": "@tool/cxx",
             }
+            for field_key in (
+                    "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+                if field_key in MATRIX_BUILD_CACHE_KEYS:
+                    build_cache[field_key] = "ON"
             tools = {
                 "cmake": matrix_tool_identity(matrix_cmake),
                 "ctest": matrix_tool_identity(matrix_ctest),
@@ -5447,6 +5557,11 @@ def self_test(repo):
                 "-DLEO2_BUILD_TESTS=ON", "-DLEO2_BUILD_BENCHMARKS=OFF",
                 "-DLEO2_BUILD_FUZZERS=OFF", "-DLEO2_ENABLE_CUDA=OFF",
             ]
+            if "LEOPARD_ENABLE_GF8" in MATRIX_BUILD_CACHE_KEYS:
+                configure_argv.extend([
+                    "-DLEOPARD_ENABLE_GF8=ON",
+                    "-DLEOPARD_ENABLE_GF16=ON",
+                ])
             commands = [matrix_command("configure", configure_argv)]
             commands.append(matrix_command("build", [
                 matrix_cmake, "--build", matrix_build_root, "--config", "Release",
@@ -5521,6 +5636,8 @@ def self_test(repo):
             "variants": variants,
         }
         atomic_json(matrix, matrix_document)
+        post_xor_matrix = root / "matrix-v2-post-xor.json"
+        atomic_json(post_xor_matrix, post_xor_matrix_fixture(matrix_document))
         pre_xor_matrix = root / "matrix-v1-pre-xor.json"
         atomic_json(pre_xor_matrix, pre_xor_matrix_fixture(matrix_document))
         reservation = root / "reservation.json"
@@ -5556,6 +5673,57 @@ def self_test(repo):
             ssse3_args.output / "abba_manifest.json", repo,
             ssse3_args.output / "abba_raw.json", None, matrix,
             allow_self_test=True)
+
+        post_xor_baseline_root = root / "post-xor-baseline-build"
+        post_xor_candidate_root = root / "post-xor-candidate-build"
+        post_xor_baseline_root.mkdir()
+        post_xor_candidate_root.mkdir()
+        post_xor_baseline = post_xor_baseline_root / "bench_leopard2"
+        post_xor_candidate = post_xor_candidate_root / "bench_leopard2"
+        write_mock(post_xor_baseline, 1.0)
+        write_mock(post_xor_candidate, 0.8)
+        post_xor_baseline_build = write_self_test_build_files(
+            post_xor_baseline_root, repo, post_xor_baseline,
+            POST_XOR_SCHEMA)
+        post_xor_candidate_build = write_self_test_build_files(
+            post_xor_candidate_root, repo, post_xor_candidate,
+            POST_XOR_SCHEMA)
+        post_xor_args = copy.copy(args)
+        post_xor_args.baseline = post_xor_baseline
+        post_xor_args.candidate = post_xor_candidate
+        post_xor_args.baseline_compile_commands = \
+            post_xor_baseline_build[0]
+        post_xor_args.candidate_compile_commands = \
+            post_xor_candidate_build[0]
+        post_xor_args.baseline_cmake_cache = post_xor_baseline_build[1]
+        post_xor_args.candidate_cmake_cache = post_xor_candidate_build[1]
+        post_xor_args.baseline_library = post_xor_baseline_build[2]
+        post_xor_args.candidate_library = post_xor_candidate_build[2]
+        post_xor_args.baseline_self_test_artifacts = \
+            post_xor_baseline_build[3]
+        post_xor_args.candidate_self_test_artifacts = \
+            post_xor_candidate_build[3]
+        post_xor_args.matrix = post_xor_matrix
+        post_xor_args.output = root / "post-xor-v8-evidence"
+        run_campaign(
+            post_xor_args, repo, allow_dirty=True, self_test=True,
+            evidence_schema=POST_XOR_SCHEMA)
+        post_xor_manifest_path = \
+            post_xor_args.output / "abba_manifest.json"
+        post_xor_bundle_path = post_xor_args.output / "abba_raw.json"
+        validate_manifest(
+            post_xor_manifest_path, repo, post_xor_bundle_path, None,
+            post_xor_matrix, allow_self_test=True)
+        relabeled_post_xor = read_json(
+            post_xor_manifest_path, "post-XOR v8 self-test manifest")
+        relabeled_post_xor["schema"] = SCHEMA
+        relabeled_post_xor_path = root / "post-xor-relabeled-v9.json"
+        atomic_json(relabeled_post_xor_path, relabeled_post_xor)
+        expect_failure(
+            lambda: validate_manifest(
+                relabeled_post_xor_path, repo, post_xor_bundle_path, None,
+                post_xor_matrix, allow_self_test=True),
+            "post-XOR v8 evidence relabeled as current v9")
 
         pre_xor_baseline_root = root / "pre-xor-baseline-build"
         pre_xor_candidate_root = root / "pre-xor-candidate-build"
@@ -5594,13 +5762,13 @@ def self_test(repo):
         relabeled_pre_xor = read_json(
             pre_xor_manifest_path, "pre-XOR self-test manifest")
         relabeled_pre_xor["schema"] = SCHEMA
-        relabeled_pre_xor_path = root / "pre-xor-relabeled-v8.json"
+        relabeled_pre_xor_path = root / "pre-xor-relabeled-v9.json"
         atomic_json(relabeled_pre_xor_path, relabeled_pre_xor)
         expect_failure(
             lambda: validate_manifest(
                 relabeled_pre_xor_path, repo, pre_xor_bundle_path, None,
                 pre_xor_matrix, allow_self_test=True),
-            "pre-XOR v7 evidence relabeled as current v8")
+            "pre-XOR v7 evidence relabeled as current v9")
 
         legacy_baseline_root = root / "legacy-baseline-build"
         legacy_candidate_root = root / "legacy-candidate-build"
@@ -5838,7 +6006,7 @@ def self_test(repo):
         validate(manifest_path, bundle_path)
 
         mutations = []
-        mutations.append(("current v8 target/archive relabeled as v6",
+        mutations.append(("current v9 target/archive relabeled as v6",
                           lambda m, b: m.__setitem__("schema", LEGACY_SCHEMA)))
         mutations.append(("passed status", lambda m, b:
                           m.__setitem__("status", "failed")))
@@ -5928,6 +6096,40 @@ def self_test(repo):
                 "-O0 -DNDEBUG"
             rehash_build_record(build)
         mutations.append(("coordinated configuration", mutate_configuration))
+
+        def field_option_disabled(field_key):
+            def mutation(m, b):
+                for build in m["provenance"]["builds"].values():
+                    build["configuration"][field_key] = "OFF"
+                    configure = build["rebuild"]["configure"]
+                    enabled = "-D{}=ON".format(field_key)
+                    disabled = "-D{}=OFF".format(field_key)
+                    configure["argv"] = [
+                        disabled if value == enabled else value
+                        for value in configure["argv"]]
+                    configure["command_sha256"] = sha256_bytes(
+                        canonical_bytes(configure["argv"]))
+                    rehash_build_record(build)
+            return mutation
+
+        for field_key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+            mutations.append((
+                "disabled current field option " + field_key,
+                field_option_disabled(field_key)))
+
+        def mutate_missing_field_options(m, b):
+            for build in m["provenance"]["builds"].values():
+                for field_key in (
+                        "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+                    build["configuration"].pop(field_key)
+                    argument = "-D{}=ON".format(field_key)
+                    build["rebuild"]["configure"]["argv"].remove(argument)
+                configure = build["rebuild"]["configure"]
+                configure["command_sha256"] = sha256_bytes(
+                    canonical_bytes(configure["argv"]))
+                rehash_build_record(build)
+        mutations.append(("missing current field options",
+                          mutate_missing_field_options))
 
         def mutate_test_hooks(m, b):
             build = m["provenance"]["builds"]["candidate"]
@@ -6644,8 +6846,8 @@ def self_test(repo):
             # lease; otherwise this legacy probe would still be rejected.
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
-        mutation_count = len(mutations) + len(failed_mutations) + 23
-    print("butterfly ABBA v8 self-test passed: canonical and historical replay + {} adversarial mutations".format(
+        mutation_count = len(mutations) + len(failed_mutations) + 24
+    print("butterfly ABBA v9 self-test passed: canonical and historical replay + {} adversarial mutations".format(
         mutation_count))
 
 
@@ -6690,7 +6892,7 @@ def main():
     try:
         if args.command == "run":
             run_campaign(args, repo)
-            print("butterfly ABBA v8 campaign passed: backend={} cells={} entries={}".format(
+            print("butterfly ABBA v9 campaign passed: backend={} cells={} entries={}".format(
                 args.backend,
                 len(CELLS), len(expected_jobs())))
         elif args.command == "verify":
