@@ -857,6 +857,92 @@ static void AVX2XorMemory2To1(
         *output++ ^= *input0++ ^ *input1++;
 }
 
+#if !defined(LEO2_AVX512_VARIANT)
+template<unsigned SourceCount>
+static void AVX2XorMemorySourceGroup(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* initial = static_cast<const uint8_t*>(initial_source);
+    const uint8_t* inputs[SourceCount];
+    for (unsigned lane = 0; lane < SourceCount; ++lane)
+        inputs[lane] = static_cast<const uint8_t*>(sources[lane]);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        __m256i result = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(initial + offset));
+        for (unsigned lane = 0; lane < SourceCount; ++lane)
+            result = _mm256_xor_si256(result, _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(inputs[lane] + offset)));
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + offset), result);
+        offset += 32;
+    }
+
+    /* The ragged suffix is at most 31 bytes.  Volatile prevents the compiler
+       from cloning large overlap-checking vector loops for this cold tail;
+       aligned shard traffic retains the fully unrolled AVX2 loop above. */
+    volatile uint8_t* const tail_output = output;
+    const volatile uint8_t* const tail_initial = initial;
+    while (offset < byte_count)
+    {
+        uint8_t result = tail_initial[offset];
+        for (unsigned lane = 0; lane < SourceCount; ++lane)
+            result ^= static_cast<const volatile uint8_t*>(
+                inputs[lane])[offset];
+        tail_output[offset++] = result;
+    }
+}
+
+static void AVX2XorMemorySources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    const void* waiting[8];
+    unsigned waiting_count = 0;
+    const void* accumulator = initial_source;
+    bool wrote_destination = false;
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (!sources[i])
+            continue;
+        waiting[waiting_count++] = sources[i];
+        if (waiting_count == 8)
+        {
+            AVX2XorMemorySourceGroup<8>(
+                destination, accumulator, waiting, byte_count);
+            accumulator = destination;
+            wrote_destination = true;
+            waiting_count = 0;
+        }
+    }
+    if (waiting_count == 7)
+    {
+        AVX2XorMemorySourceGroup<7>(
+            destination, accumulator, waiting, byte_count);
+        return;
+    }
+    if (!wrote_destination)
+        std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
+    while (waiting_count >= 2)
+    {
+        AVX2XorMemory2To1(
+            destination, waiting[0], waiting[1], byte_count);
+        waiting_count -= 2;
+        for (unsigned i = 0; i < waiting_count; ++i)
+            waiting[i] = waiting[i + 2];
+    }
+    if (waiting_count != 0)
+        AVX2XorMemory(destination, waiting[0], byte_count);
+}
+#else
 static void AVX2XorMemorySources(
     void* destination,
     const void* initial_source,
@@ -917,6 +1003,7 @@ static void AVX2XorMemorySources(
     if (waiting_count != 0)
         AVX2XorMemory(destination, waiting[0], byte_count);
 }
+#endif
 
 static void AVX2XorMemory4(
     void* destination0, const void* source0,

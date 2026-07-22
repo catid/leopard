@@ -1594,7 +1594,7 @@ static bool TestXor(const Ops& ops)
     uint8_t output[260];
     uint8_t expected[260];
     uint8_t sources4[3][260];
-    const void* reduction_sources[8];
+    const void* reduction_sources[16];
     uint8_t outputs4[4][260];
     uint8_t expected4[4][260];
     for (size_t i = 0; i < sizeof(source); ++i)
@@ -1633,6 +1633,28 @@ static bool TestXor(const Ops& ops)
                 source[i + 1] ^ sources4[0][i + 1]);
         ops.xor_memory_sources(
             output + 1, source + 1, reduction_sources, 8, bytes);
+        if (std::memcmp(output, expected, sizeof(output)) != 0)
+            return false;
+
+        // Preserve the seven-live-source case above, then qualify an exact
+        // eight-source group and a second group whose initial accumulator is
+        // the destination written by the first.  The scalar expected loop is
+        // deliberately independent of the backend grouping strategy.
+        for (unsigned source_i = 0; source_i < 16; ++source_i)
+            reduction_sources[source_i] =
+                sources4[source_i % 3U] + 1;
+        std::memset(output, 0x3c, sizeof(output));
+        std::memset(expected, 0x3c, sizeof(expected));
+        for (uint64_t i = 0; i < bytes; ++i)
+        {
+            uint8_t value = source[i + 1];
+            for (unsigned source_i = 0; source_i < 16; ++source_i)
+                value ^= static_cast<const uint8_t*>(
+                    reduction_sources[source_i])[i];
+            expected[i + 1] = value;
+        }
+        ops.xor_memory_sources(
+            output + 1, source + 1, reduction_sources, 16, bytes);
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
 
