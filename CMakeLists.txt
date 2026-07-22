@@ -45,6 +45,11 @@ option(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1
     "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate" OFF)
 
 if(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    if(NOT LEOPARD_ENABLE_GF8)
+        message(FATAL_ERROR
+            "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1 requires "
+            "LEOPARD_ENABLE_GF8=ON")
+    endif()
     # Keep attribution local to the codec translation unit and its focused
     # API-test source.  Backend, benchmark, and unrelated test objects must
     # retain the control build's compile recipe.

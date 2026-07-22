@@ -253,3 +253,43 @@ if(NOT fieldless_diagnostic MATCHES "At least one.*GF8.*GF16")
         "Fieldless rejection did not explain the requirement:\n"
         "${fieldless_diagnostic}")
 endif()
+
+# A GF8-specific diagnostic must not silently become an inert or misleading
+# option in a field-disabled build.  Reject the contradiction at configure
+# time, before its focused API test could request an unavailable codec.
+set(experimental_without_gf8_dir
+    "${LEO2_BINARY_DIR}/experimental-without-gf8-build")
+file(MAKE_DIRECTORY "${experimental_without_gf8_dir}")
+set(experimental_without_gf8_configure
+    "${CMAKE_COMMAND}" -G "${LEO2_GENERATOR}")
+if(LEO2_GENERATOR_PLATFORM)
+    list(APPEND experimental_without_gf8_configure
+        -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(LEO2_GENERATOR_TOOLSET)
+    list(APPEND experimental_without_gf8_configure
+        -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+list(APPEND experimental_without_gf8_configure
+    -DLEOPARD_ENABLE_GF8=OFF -DLEOPARD_ENABLE_GF16=ON
+    -DLEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=ON
+    -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=OFF
+    "${LEO2_SOURCE_DIR}")
+execute_process(
+    COMMAND ${experimental_without_gf8_configure}
+    WORKING_DIRECTORY "${experimental_without_gf8_dir}"
+    RESULT_VARIABLE experimental_without_gf8_result
+    OUTPUT_VARIABLE experimental_without_gf8_stdout
+    ERROR_VARIABLE experimental_without_gf8_stderr)
+if(experimental_without_gf8_result EQUAL 0)
+    message(FATAL_ERROR
+        "GF8 direct-L1 experiment unexpectedly accepted GF8=OFF")
+endif()
+set(experimental_without_gf8_diagnostic
+    "${experimental_without_gf8_stdout}\n${experimental_without_gf8_stderr}")
+if(NOT experimental_without_gf8_diagnostic MATCHES
+       "GF8_AVX2_GENERAL_DIRECT_L1 requires.*GF8=ON")
+    message(FATAL_ERROR
+        "GF8 direct-L1 rejection did not explain the requirement:\n"
+        "${experimental_without_gf8_diagnostic}")
+endif()
