@@ -6446,6 +6446,34 @@ def self_test(repo):
         mutations.append(("matrix coordinated build identity",
                           mutate_matrix_build_identity))
 
+        def matrix_field_option_disabled(field_key):
+            def mutation(m, b):
+                def callback(document):
+                    variant = document["variants"][0]
+                    identity = variant["build_identity"]
+                    identity["cache"][field_key] = "OFF"
+                    rehash_matrix_build_identity(identity)
+                    configure = variant["commands"][0]
+                    enabled = "-D{}=ON".format(field_key)
+                    disabled = "-D{}=OFF".format(field_key)
+                    configure["argv"] = [
+                        disabled if value == enabled else value
+                        for value in configure["argv"]]
+                    rehash_matrix_command(configure)
+                    variant["fresh_build"]["identity_sha256"] = \
+                        sha256_bytes(canonical_bytes({
+                            "configuration_id": variant["configuration_id"],
+                            "configure_argv": configure["argv"],
+                            "environment": variant["build_environment"],
+                        }))
+                mutate_embedded_matrix(m, b, callback)
+            return mutation
+
+        for field_key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+            mutations.append((
+                "matrix disabled field option " + field_key,
+                matrix_field_option_disabled(field_key)))
+
         def mutate_matrix_c_flags(m, b):
             def callback(document):
                 identity = document["variants"][0]["build_identity"]
