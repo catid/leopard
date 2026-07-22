@@ -6153,6 +6153,52 @@ leo2_result GetDecodeCodecScratchPathInfo(
 
 } // namespace leopard2_internal
 
+#if defined(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+/*
+    Return a no-loss verdict only after validating every presence byte.  The
+    original scan stops at the first erased coordinate and falls through to
+    the canonical plan constructor, which preserves validation after that
+    point and its exact error ordering.  Diagnostic forced-decoder modes also
+    fall through so their plan-construction constraints remain centralized.
+*/
+static leo2_result TryOneShotNoLoss(
+    const leo2_codec* codec,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    bool& no_loss_out)
+{
+    no_loss_out = false;
+    if (!codec || !original_present || !recovery_present)
+        return LEO2_SUCCESS;
+
+    AddressRange original_range;
+    AddressRange recovery_range;
+    if (!MakeArrayRange(original_present, codec->original_count,
+            sizeof(*original_present), original_range) ||
+        !MakeArrayRange(recovery_present, codec->recovery_count,
+            sizeof(*recovery_present), recovery_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        if (original_present[i] > 1)
+            return LEO2_INVALID_ARGUMENT;
+        if (!original_present[i])
+            return LEO2_SUCCESS;
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        if (recovery_present[i] > 1)
+            return LEO2_INVALID_ARGUMENT;
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return LEO2_SUCCESS;
+#endif
+    no_loss_out = true;
+    return LEO2_SUCCESS;
+}
+#endif
+
 extern "C" {
 
 LEO2_EXPORT const char* leo2_result_string(int result)
@@ -8277,6 +8323,16 @@ LEO2_EXPORT leo2_result leo2_decode(
     void* scratch,
     size_t scratch_bytes)
 {
+#if defined(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+    bool one_shot_no_loss = false;
+    const leo2_result no_loss_result = TryOneShotNoLoss(
+        codec, original_present, recovery_present, one_shot_no_loss);
+    if (no_loss_result != LEO2_SUCCESS)
+        return no_loss_result;
+    if (one_shot_no_loss)
+        return LEO2_SUCCESS;
+#endif
+
     /*
         In a legacy-high R=1 codeword, exactly one missing original implies
         that the parity and every other original are present.  Validate and

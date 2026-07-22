@@ -41,6 +41,8 @@ option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+option(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    "Attribute allocation-free one-shot no-loss decode" OFF)
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
@@ -247,6 +249,10 @@ add_library(leopard STATIC ${LIB_SOURCE_FILES})
 # conventional `leopard::leopard` export.  ALIAS targets do not create a
 # second archive.
 add_library(libleopard ALIAS leopard)
+if(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=1)
+endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
 else()
