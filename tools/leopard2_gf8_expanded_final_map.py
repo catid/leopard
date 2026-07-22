@@ -11,6 +11,7 @@ cells.  Both stages are resumable at one JSON document per cell.
 import argparse
 import concurrent.futures
 import contextlib
+import ctypes
 import fcntl
 import hashlib
 import json
@@ -18,9 +19,11 @@ import math
 import os
 import platform
 import re
+import stat
 import statistics
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -36,6 +39,14 @@ CANONICAL_MATRIX_SHA256 = (
     "3d5d423fe35760727ac1e9751036d9e208be1e69886e27a18c95009204d85d6e")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
+LINUX_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
+LINUX_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
+LINUX_F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+LINUX_F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+LINUX_F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 0x0004)
+LINUX_F_SEAL_WRITE = getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+LINUX_MFD_CLOEXEC = getattr(os, "MFD_CLOEXEC", 0x0001)
+LINUX_MFD_ALLOW_SEALING = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
 
 # This is the frozen 144-cell final-map shape set (48 shapes x three sizes).
 CORE_SHAPES = (
@@ -350,23 +361,146 @@ def checked_output(command, cwd=None, timeout=60):
     return completed.stdout.strip()
 
 
-def validate_executable(path, expected_sha256=None):
-    resolved = os.path.realpath(path)
-    if not os.path.isfile(resolved) or not os.access(resolved, os.X_OK):
-        raise RuntimeError("benchmark is not executable: " + resolved)
-    digest = sha256_file(resolved)
-    if expected_sha256 is not None and digest != expected_sha256:
+def linux_memfd_create(name):
+    flags = LINUX_MFD_CLOEXEC | LINUX_MFD_ALLOW_SEALING
+    if hasattr(os, "memfd_create"):
+        return os.memfd_create(name, flags)
+    libc = ctypes.CDLL(None, use_errno=True)
+    creator = getattr(libc, "memfd_create", None)
+    if creator is None:
+        raise RuntimeError(
+            "benchmark snapshots require Linux memfd_create support")
+    creator.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    creator.restype = ctypes.c_int
+    descriptor = creator(name.encode("utf-8"), flags)
+    if descriptor < 0:
+        error = ctypes.get_errno()
+        raise OSError(error, os.strerror(error), name)
+    return descriptor
+
+
+def file_identity(path, label):
+    resolved = Path(path).resolve(strict=True)
+    descriptor = os.open(
+        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise RuntimeError(label + " is not a regular file")
+        digest = hashlib.sha256()
+        while True:
+            block = os.read(descriptor, 1 << 20)
+            if not block:
+                break
+            digest.update(block)
+        after = os.fstat(descriptor)
+    finally:
+        os.close(descriptor)
+    stable_fields = (
+        "st_dev", "st_ino", "st_mode", "st_size", "st_mtime_ns",
+        "st_ctime_ns")
+    if any(getattr(before, name) != getattr(after, name)
+           for name in stable_fields):
+        raise RuntimeError(label + " changed while it was hashed")
+    path_status = resolved.stat()
+    if any(getattr(after, name) != getattr(path_status, name)
+           for name in stable_fields):
+        raise RuntimeError(label + " path changed while it was hashed")
+    if not os.access(resolved, os.X_OK):
+        raise RuntimeError(label + " is not executable")
+    return {
+        "path": str(resolved), "sha256": digest.hexdigest(),
+        "device": after.st_dev, "inode": after.st_ino,
+        "mode": after.st_mode, "size": after.st_size,
+        "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+    }
+
+
+def sealed_snapshot_identity(descriptor, label):
+    status = os.fstat(descriptor)
+    if not stat.S_ISREG(status.st_mode):
+        raise RuntimeError(label + " sealed snapshot is not regular")
+    digest = hashlib.sha256()
+    offset = 0
+    while offset < status.st_size:
+        block = os.pread(
+            descriptor, min(1 << 20, status.st_size - offset), offset)
+        if not block:
+            raise RuntimeError(label + " sealed snapshot ended early")
+        digest.update(block)
+        offset += len(block)
+    seals = fcntl.fcntl(descriptor, LINUX_F_GET_SEALS)
+    required = (LINUX_F_SEAL_SEAL | LINUX_F_SEAL_SHRINK |
+                LINUX_F_SEAL_GROW | LINUX_F_SEAL_WRITE)
+    if seals & required != required:
+        raise RuntimeError(label + " snapshot is not immutably sealed")
+    return {
+        "kind": "linux-sealed-memfd-v1", "sha256": digest.hexdigest(),
+        "size": status.st_size, "mode": status.st_mode, "seals": seals,
+    }
+
+
+def snapshot_executable(path, label, expected_sha256=None):
+    if not sys.platform.startswith("linux") or not hasattr(os, "pread"):
+        raise RuntimeError(
+            "benchmark snapshots require Linux sealed memfd support")
+    source_identity = file_identity(path, label)
+    if expected_sha256 is not None and \
+            source_identity["sha256"] != expected_sha256:
         raise RuntimeError(
             "frozen baseline SHA-256 mismatch: expected %s, got %s" %
-            (expected_sha256, digest))
-    return {"path": resolved, "sha256": digest}
+            (expected_sha256, source_identity["sha256"]))
+    source = os.open(
+        source_identity["path"], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    snapshot = -1
+    try:
+        snapshot = linux_memfd_create(
+            "leopard2-expanded-" + label.replace(" ", "-"))
+        copied_digest = hashlib.sha256()
+        while True:
+            block = os.read(source, 1 << 20)
+            if not block:
+                break
+            copied_digest.update(block)
+            view = memoryview(block)
+            while view:
+                written = os.write(snapshot, view)
+                if written <= 0:
+                    raise RuntimeError(label + " snapshot copy made no progress")
+                view = view[written:]
+        if copied_digest.hexdigest() != source_identity["sha256"]:
+            raise RuntimeError(label + " changed before snapshot completion")
+        if os.pread(snapshot, 4, 0) != b"\x7fELF":
+            raise RuntimeError(label + " is not an ELF executable")
+        if file_identity(source_identity["path"], label) != source_identity:
+            raise RuntimeError(label + " changed while snapshotting")
+        os.fchmod(snapshot, 0o500)
+        required = (LINUX_F_SEAL_SEAL | LINUX_F_SEAL_SHRINK |
+                    LINUX_F_SEAL_GROW | LINUX_F_SEAL_WRITE)
+        fcntl.fcntl(snapshot, LINUX_F_ADD_SEALS, required)
+        snapshot_identity = sealed_snapshot_identity(snapshot, label)
+        if (snapshot_identity["sha256"] != source_identity["sha256"] or
+                snapshot_identity["size"] != source_identity["size"]):
+            raise RuntimeError(label + " sealed snapshot identity mismatch")
+        return source_identity, snapshot, snapshot_identity
+    except BaseException:
+        if snapshot >= 0:
+            os.close(snapshot)
+        raise
+    finally:
+        os.close(source)
 
 
-def inspect_isa(path):
+def snapshot_path(descriptor):
+    return "/proc/self/fd/%d" % descriptor
+
+
+def inspect_isa(path, pass_fds=()):
     completed = subprocess.run(
         ["/usr/bin/objdump", "-d", "-M", "intel", path],
         stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, text=True, timeout=180, check=False)
+        stderr=subprocess.PIPE, text=True, timeout=180, check=False,
+        pass_fds=pass_fds)
     if completed.returncode != 0:
         raise RuntimeError("objdump failed: " + completed.stderr.strip())
     evex = 0
@@ -442,7 +576,7 @@ def cmake_provenance(build, source):
     }
 
 
-def candidate_source_attestation(executable, source):
+def candidate_source_attestation(executable, source, snapshot_descriptor):
     cpu = sorted(os.sched_getaffinity(0))[0]
     command = [
         "/usr/bin/taskset", "-c", str(cpu), executable,
@@ -456,7 +590,7 @@ def candidate_source_attestation(executable, source):
     completed = subprocess.run(
         command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
         stderr=subprocess.PIPE, env=benchmark_environment(), timeout=120,
-        check=False)
+        check=False, pass_fds=(snapshot_descriptor,))
     if completed.returncode != 0:
         raise InvocationError(
             "candidate source-attestation preflight failed",
@@ -498,8 +632,10 @@ def candidate_source_attestation(executable, source):
     if not correctness.get("leopard2_round_trip") or \
             correctness.get("legacy_comparison") is not None:
         raise RuntimeError("candidate attestation round trip failed")
+    recorded_command = list(command)
+    recorded_command[3] = "<sealed-candidate-snapshot>"
     stable = {
-        "command": command,
+        "command": recorded_command,
         "schema": document["schema"], "build": build,
         "parameters": parameters, "resolved": resolved,
         "correctness": correctness,
@@ -641,7 +777,7 @@ def benchmark_environment():
 
 def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
                      warmup, maximum_attempts, candidate_commit,
-                     require_idle_sibling):
+                     require_idle_sibling, snapshot_descriptor):
     common = [
         "--k", str(cell["K"]), "--r", str(cell["R"]),
         "--bytes", str(cell["bytes"]), "--loss", str(cell["loss"]),
@@ -665,7 +801,8 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
             process = subprocess.run(
                 command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, env=benchmark_environment(),
-                timeout=timeout, check=False)
+                timeout=timeout, check=False,
+                pass_fds=(snapshot_descriptor,))
         except subprocess.TimeoutExpired as error:
             details = {
                 "kind": kind, "command": command, "timeout_seconds": timeout,
@@ -758,8 +895,10 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
         if any(not isinstance(value, (int, float)) or value <= 0
                for value in times.values()):
             raise RuntimeError("non-positive benchmark timing")
+        recorded_command = list(command)
+        recorded_command[3] = "<sealed-%s-snapshot>" % kind
         return {
-            "kind": kind, "attempt": attempt, "command": command,
+            "kind": kind, "attempt": attempt, "command": recorded_command,
             "started_ns": started_ns, "ended_ns": ended_ns,
             "cpu_nonidle_jiffies": nonidle_delta(cpu_before, cpu_after),
             "sibling_nonidle_jiffies": sibling_work,
@@ -883,27 +1022,62 @@ def machine_provenance():
 
 
 def common_provenance(args, matrix):
-    baseline = validate_executable(args.baseline, BASELINE_SHA256)
-    candidate = validate_executable(args.candidate)
     source = source_provenance(args.candidate_source, args.candidate_commit)
     build = cmake_provenance(args.candidate_build, args.candidate_source)
-    attestation = candidate_source_attestation(candidate["path"], source)
-    return {
-        "schema": SCHEMA,
-        "runner": {"path": os.path.realpath(__file__),
-                   "sha256": sha256_file(__file__)},
-        "matrix": {"path": os.path.realpath(args.matrix),
-                   "sha256": matrix_digest(matrix),
-                   "file_sha256": sha256_file(args.matrix),
-                   "cell_count": len(matrix["cells"])},
-        "frozen_main_commit": MAIN_COMMIT,
-        "baseline": dict(baseline, isa=inspect_isa(baseline["path"])),
-        "candidate": dict(candidate, isa=inspect_isa(candidate["path"]),
-                          source_attestation=attestation),
-        "candidate_source": source,
-        "candidate_build": build,
-        "machine": machine_provenance(),
-    }
+    descriptors = []
+    try:
+        baseline_source, baseline_descriptor, baseline_snapshot = \
+            snapshot_executable(
+                args.baseline, "baseline benchmark", BASELINE_SHA256)
+        descriptors.append(baseline_descriptor)
+        candidate_source, candidate_descriptor, candidate_snapshot = \
+            snapshot_executable(args.candidate, "candidate benchmark")
+        descriptors.append(candidate_descriptor)
+        baseline_path = snapshot_path(baseline_descriptor)
+        candidate_path = snapshot_path(candidate_descriptor)
+        attestation = candidate_source_attestation(
+            candidate_path, source, candidate_descriptor)
+        provenance = {
+            "schema": SCHEMA,
+            "runner": {"path": os.path.realpath(__file__),
+                       "sha256": sha256_file(__file__)},
+            "matrix": {"path": os.path.realpath(args.matrix),
+                       "sha256": matrix_digest(matrix),
+                       "file_sha256": sha256_file(args.matrix),
+                       "cell_count": len(matrix["cells"])},
+            "frozen_main_commit": MAIN_COMMIT,
+            "baseline": {
+                "path": baseline_source["path"],
+                "sha256": baseline_snapshot["sha256"],
+                "source_file": baseline_source,
+                "snapshot": baseline_snapshot,
+                "isa": inspect_isa(
+                    baseline_path, (baseline_descriptor,)),
+            },
+            "candidate": {
+                "path": candidate_source["path"],
+                "sha256": candidate_snapshot["sha256"],
+                "source_file": candidate_source,
+                "snapshot": candidate_snapshot,
+                "isa": inspect_isa(
+                    candidate_path, (candidate_descriptor,)),
+                "source_attestation": attestation,
+            },
+            "candidate_source": source,
+            "candidate_build": build,
+            "machine": machine_provenance(),
+        }
+        runtime = {
+            "baseline": {
+                "path": baseline_path, "descriptor": baseline_descriptor},
+            "candidate": {
+                "path": candidate_path, "descriptor": candidate_descriptor},
+        }
+        return provenance, runtime
+    except BaseException:
+        for descriptor in descriptors:
+            os.close(descriptor)
+        raise
 
 
 def stage_identity(stage, provenance, options):
@@ -927,16 +1101,27 @@ def prepare_run_directory(run_dir, identity):
     return run_dir, sha256_bytes(canonical_bytes(identity))
 
 
-def source_still_frozen(provenance):
+def close_runtime_snapshots(runtime):
+    for role in ("baseline", "candidate"):
+        descriptor = runtime.get(role, {}).get("descriptor")
+        if isinstance(descriptor, int) and descriptor >= 0:
+            os.close(descriptor)
+
+
+def source_still_frozen(provenance, runtime):
     expected = provenance["candidate_source"]
     observed = source_provenance(expected["path"], expected["head"])
     if observed != expected:
         raise RuntimeError("candidate source provenance changed during stage")
-    candidate_digest = sha256_file(provenance["candidate"]["path"])
-    if candidate_digest != provenance["candidate"]["sha256"]:
-        raise RuntimeError("candidate benchmark changed during stage")
-    if sha256_file(provenance["baseline"]["path"]) != BASELINE_SHA256:
-        raise RuntimeError("baseline benchmark changed during stage")
+    for role in ("baseline", "candidate"):
+        recorded = provenance[role]
+        if file_identity(recorded["path"], role + " benchmark") != \
+                recorded["source_file"]:
+            raise RuntimeError(role + " benchmark source changed during stage")
+        observed_snapshot = sealed_snapshot_identity(
+            runtime[role]["descriptor"], role + " benchmark")
+        if observed_snapshot != recorded["snapshot"]:
+            raise RuntimeError(role + " sealed snapshot changed during stage")
 
 
 def completed_result(path, identity_digest, cell, stage):
@@ -985,7 +1170,8 @@ class MemoryGate:
                 self.condition.notify_all()
 
 
-def diagnostic_cell(cell, pair, args, identity_digest, run_dir, memory_gate):
+def diagnostic_cell(cell, pair, args, identity_digest, run_dir, memory_gate,
+                    runtime):
     result_path = Path(run_dir) / "cells" / (cell["id"] + ".json")
     resumed = completed_result(result_path, identity_digest, cell, "diagnostic")
     if resumed is not None:
@@ -998,13 +1184,13 @@ def diagnostic_cell(cell, pair, args, identity_digest, run_dir, memory_gate):
                 order = tuple(reversed(order))
             calls = []
             for kind in order:
-                executable = (args.baseline if kind == "baseline"
-                              else args.candidate)
+                executable = runtime[kind]["path"]
                 calls.append(invoke_benchmark(
                     kind, executable, cpu, sibling, cell,
                     cell["diagnostic_iterations"],
                     cell["diagnostic_warmup"], args.maximum_attempts,
-                    args.candidate_commit, False))
+                    args.candidate_commit, False,
+                    runtime[kind]["descriptor"]))
         identity = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "diagnostic",
@@ -1060,75 +1246,82 @@ def run_diagnostic(args):
     budget = args.memory_budget_gib * (1 << 30) if args.memory_budget_gib else \
         min(mem_total_bytes() // 4, 32 << 30)
     with benchmark_lock(args.lock, True):
-        provenance = common_provenance(args, matrix)
-        options = {
-            "cpu_pairs": [list(pair) for pair in pairs],
-            "maximum_attempts": args.maximum_attempts,
-            "memory_budget_bytes": budget,
-            "mode": "exclusive_parallel_non_authoritative_screen",
-            "idle_sibling_required": False,
-        }
-        identity = stage_identity("diagnostic", provenance, options)
-        run_dir, identity_digest = prepare_run_directory(args.run_dir, identity)
-        memory_gate = MemoryGate(budget)
-        started = time.monotonic()
-        ordered_cells = sorted(
-            matrix["cells"],
-            key=lambda cell: (cell["estimated_peak_bytes"], cell["id"]))
-        assignments = [[] for unused_pair in pairs]
-        for index, cell in enumerate(ordered_cells):
-            assignments[index % len(pairs)].append(cell)
-        progress_lock = threading.Lock()
-        progress = [0]
+        provenance, runtime = common_provenance(args, matrix)
+        try:
+            options = {
+                "cpu_pairs": [list(pair) for pair in pairs],
+                "maximum_attempts": args.maximum_attempts,
+                "memory_budget_bytes": budget,
+                "mode": "exclusive_parallel_non_authoritative_screen",
+                "idle_sibling_required": False,
+            }
+            identity = stage_identity("diagnostic", provenance, options)
+            run_dir, identity_digest = prepare_run_directory(
+                args.run_dir, identity)
+            memory_gate = MemoryGate(budget)
+            started = time.monotonic()
+            ordered_cells = sorted(
+                matrix["cells"],
+                key=lambda cell: (cell["estimated_peak_bytes"], cell["id"]))
+            assignments = [[] for unused_pair in pairs]
+            for index, cell in enumerate(ordered_cells):
+                assignments[index % len(pairs)].append(cell)
+            progress_lock = threading.Lock()
+            progress = [0]
 
-        def worker(pair, assigned_cells):
-            local_results = []
-            local_resumed = 0
-            local_errors = []
-            for cell in assigned_cells:
-                failed = False
-                try:
-                    result, resumed = diagnostic_cell(
-                        cell, pair, args, identity_digest, run_dir, memory_gate)
-                    local_results.append(result)
-                    local_resumed += int(resumed)
-                except Exception as error:
-                    failed = True
-                    local_errors.append((cell["id"], error))
-                with progress_lock:
-                    progress[0] += 1
-                    print("diagnostic %d/%d %s%s" % (
-                        progress[0], len(matrix["cells"]), cell["id"],
-                        " FAILED" if failed else ""), flush=True)
-            return local_results, local_resumed, local_errors
+            def worker(pair, assigned_cells):
+                local_results = []
+                local_resumed = 0
+                local_errors = []
+                for cell in assigned_cells:
+                    failed = False
+                    try:
+                        result, resumed = diagnostic_cell(
+                            cell, pair, args, identity_digest, run_dir,
+                            memory_gate, runtime)
+                        local_results.append(result)
+                        local_resumed += int(resumed)
+                    except Exception as error:
+                        failed = True
+                        local_errors.append((cell["id"], error))
+                    with progress_lock:
+                        progress[0] += 1
+                        print("diagnostic %d/%d %s%s" % (
+                            progress[0], len(matrix["cells"]), cell["id"],
+                            " FAILED" if failed else ""), flush=True)
+                return local_results, local_resumed, local_errors
 
-        results = []
-        resumed_count = 0
-        errors = []
-        with concurrent.futures.ThreadPoolExecutor(
-                max_workers=len(pairs), thread_name_prefix="gf8-map") as executor:
-            futures = [
-                executor.submit(worker, pair, assignment)
-                for pair, assignment in zip(pairs, assignments)]
-            for future in concurrent.futures.as_completed(futures):
-                worker_results, worker_resumed, worker_errors = future.result()
-                results.extend(worker_results)
-                resumed_count += worker_resumed
-                errors.extend(worker_errors)
-        if errors:
-            raise RuntimeError(
-                "%d diagnostic cells failed; first %s: %s" %
-                (len(errors), errors[0][0], errors[0][1]))
-        source_still_frozen(provenance)
-        summary = diagnostic_summary(
-            run_dir, identity, identity_digest, matrix, results,
-            resumed_count, time.monotonic() - started)
-        print(json.dumps({
-            "stage": "diagnostic", "run_dir": str(run_dir),
-            "cells": summary["cell_count"],
-            "elapsed_seconds": summary["elapsed_seconds"],
-            "summary_sha256": sha256_file(run_dir / "summary.json"),
-        }, sort_keys=True))
+            results = []
+            resumed_count = 0
+            errors = []
+            with concurrent.futures.ThreadPoolExecutor(
+                    max_workers=len(pairs),
+                    thread_name_prefix="gf8-map") as executor:
+                futures = [
+                    executor.submit(worker, pair, assignment)
+                    for pair, assignment in zip(pairs, assignments)]
+                for future in concurrent.futures.as_completed(futures):
+                    worker_results, worker_resumed, worker_errors = \
+                        future.result()
+                    results.extend(worker_results)
+                    resumed_count += worker_resumed
+                    errors.extend(worker_errors)
+            if errors:
+                raise RuntimeError(
+                    "%d diagnostic cells failed; first %s: %s" %
+                    (len(errors), errors[0][0], errors[0][1]))
+            source_still_frozen(provenance, runtime)
+            summary = diagnostic_summary(
+                run_dir, identity, identity_digest, matrix, results,
+                resumed_count, time.monotonic() - started)
+            print(json.dumps({
+                "stage": "diagnostic", "run_dir": str(run_dir),
+                "cells": summary["cell_count"],
+                "elapsed_seconds": summary["elapsed_seconds"],
+                "summary_sha256": sha256_file(run_dir / "summary.json"),
+            }, sort_keys=True))
+        finally:
+            close_runtime_snapshots(runtime)
 
 
 def load_diagnostic_summary(path, matrix):
@@ -1179,7 +1372,7 @@ def selected_abba_cells(matrix, diagnostic, threshold, include, exclude):
     return selected
 
 
-def abba_cell(cell, pair, args, identity_digest, run_dir):
+def abba_cell(cell, pair, args, identity_digest, run_dir, runtime):
     result_path = Path(run_dir) / "cells" / (cell["id"] + ".json")
     resumed = completed_result(result_path, identity_digest, cell, "abba")
     if resumed is not None:
@@ -1189,12 +1382,12 @@ def abba_cell(cell, pair, args, identity_digest, run_dir):
     try:
         for unused_round in range(args.rounds):
             for kind in ABBA_ORDER:
-                executable = (args.baseline if kind == "baseline"
-                              else args.candidate)
+                executable = runtime[kind]["path"]
                 calls.append(invoke_benchmark(
                     kind, executable, cpu, sibling, cell,
                     cell["abba_iterations"], cell["abba_warmup"],
-                    args.maximum_attempts, args.candidate_commit, True))
+                    args.maximum_attempts, args.candidate_commit, True,
+                    runtime[kind]["descriptor"]))
         exact = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "abba",
@@ -1225,65 +1418,72 @@ def run_abba(args):
             else physical_cpu_pairs()[0])
     topology = validate_cpu_pair(*pair)
     with benchmark_lock(args.lock, True):
-        provenance = common_provenance(args, matrix)
-        if diagnostic["candidate_binary_sha256"] != \
-                provenance["candidate"]["sha256"]:
-            raise RuntimeError("diagnostic used another candidate binary")
-        if diagnostic["baseline_binary_sha256"] != \
-                provenance["baseline"]["sha256"]:
-            raise RuntimeError("diagnostic used another baseline binary")
-        options = {
-            "cpu_pair": list(pair), "topology": topology,
-            "rounds": args.rounds, "order_per_round": list(ABBA_ORDER),
-            "maximum_attempts": args.maximum_attempts,
-            "idle_sibling_required": True,
-            "near_ratio": args.near_ratio,
-            "diagnostic_summary": os.path.realpath(args.diagnostic_summary),
-            "diagnostic_summary_sha256": sha256_file(args.diagnostic_summary),
-            "include_cell": sorted(args.include_cell),
-            "exclude_cell": sorted(args.exclude_cell),
-            "selected_cell_ids": [cell["id"] for cell in selected],
-        }
-        identity = stage_identity("abba", provenance, options)
-        run_dir, identity_digest = prepare_run_directory(args.run_dir, identity)
-        started = time.monotonic()
-        results = []
-        resumed_count = 0
-        for index, cell in enumerate(selected, 1):
-            result, resumed = abba_cell(
-                cell, pair, args, identity_digest, run_dir)
-            results.append(result)
-            resumed_count += int(resumed)
-            print("ABBA %d/%d %s%s" % (
-                index, len(selected), cell["id"],
-                " resumed" if resumed else ""), flush=True)
-        source_still_frozen(provenance)
-        rows = sorted(results, key=lambda value: value["cell"]["id"])
-        summary = {
-            "schema": SCHEMA, "status": "complete", "stage": "abba",
-            "authoritative": True, "identity_sha256": identity_digest,
-            "matrix_sha256": matrix_digest(matrix),
-            "cell_count": len(rows), "resumed_cell_count": resumed_count,
-            "accepted_child_invocations": len(rows) * args.rounds * 4,
-            "elapsed_seconds": time.monotonic() - started,
-            "candidate_binary_sha256": provenance["candidate"]["sha256"],
-            "baseline_binary_sha256": provenance["baseline"]["sha256"],
-            "rows": [{
-                "id": row["cell"]["id"], "cell": row["cell"],
-                "metrics": row["metrics"], "cpu_pair": row["cpu_pair"],
-                "selected_decode_path": row["selected_decode_path"],
-                "selected_decode_rule": row["selected_decode_rule"],
-                "workload_digests": row["workload_digests"],
-                "missing_original_indices": row["missing_original_indices"],
-            } for row in rows],
-        }
-        atomic_json(run_dir / "summary.json", summary)
-        print(json.dumps({
-            "stage": "abba", "run_dir": str(run_dir),
-            "cells": summary["cell_count"],
-            "elapsed_seconds": summary["elapsed_seconds"],
-            "summary_sha256": sha256_file(run_dir / "summary.json"),
-        }, sort_keys=True))
+        provenance, runtime = common_provenance(args, matrix)
+        try:
+            if diagnostic["candidate_binary_sha256"] != \
+                    provenance["candidate"]["sha256"]:
+                raise RuntimeError("diagnostic used another candidate binary")
+            if diagnostic["baseline_binary_sha256"] != \
+                    provenance["baseline"]["sha256"]:
+                raise RuntimeError("diagnostic used another baseline binary")
+            options = {
+                "cpu_pair": list(pair), "topology": topology,
+                "rounds": args.rounds, "order_per_round": list(ABBA_ORDER),
+                "maximum_attempts": args.maximum_attempts,
+                "idle_sibling_required": True,
+                "near_ratio": args.near_ratio,
+                "diagnostic_summary": os.path.realpath(
+                    args.diagnostic_summary),
+                "diagnostic_summary_sha256": sha256_file(
+                    args.diagnostic_summary),
+                "include_cell": sorted(args.include_cell),
+                "exclude_cell": sorted(args.exclude_cell),
+                "selected_cell_ids": [cell["id"] for cell in selected],
+            }
+            identity = stage_identity("abba", provenance, options)
+            run_dir, identity_digest = prepare_run_directory(
+                args.run_dir, identity)
+            started = time.monotonic()
+            results = []
+            resumed_count = 0
+            for index, cell in enumerate(selected, 1):
+                result, resumed = abba_cell(
+                    cell, pair, args, identity_digest, run_dir, runtime)
+                results.append(result)
+                resumed_count += int(resumed)
+                print("ABBA %d/%d %s%s" % (
+                    index, len(selected), cell["id"],
+                    " resumed" if resumed else ""), flush=True)
+            source_still_frozen(provenance, runtime)
+            rows = sorted(results, key=lambda value: value["cell"]["id"])
+            summary = {
+                "schema": SCHEMA, "status": "complete", "stage": "abba",
+                "authoritative": True, "identity_sha256": identity_digest,
+                "matrix_sha256": matrix_digest(matrix),
+                "cell_count": len(rows), "resumed_cell_count": resumed_count,
+                "accepted_child_invocations": len(rows) * args.rounds * 4,
+                "elapsed_seconds": time.monotonic() - started,
+                "candidate_binary_sha256": provenance["candidate"]["sha256"],
+                "baseline_binary_sha256": provenance["baseline"]["sha256"],
+                "rows": [{
+                    "id": row["cell"]["id"], "cell": row["cell"],
+                    "metrics": row["metrics"], "cpu_pair": row["cpu_pair"],
+                    "selected_decode_path": row["selected_decode_path"],
+                    "selected_decode_rule": row["selected_decode_rule"],
+                    "workload_digests": row["workload_digests"],
+                    "missing_original_indices":
+                        row["missing_original_indices"],
+                } for row in rows],
+            }
+            atomic_json(run_dir / "summary.json", summary)
+            print(json.dumps({
+                "stage": "abba", "run_dir": str(run_dir),
+                "cells": summary["cell_count"],
+                "elapsed_seconds": summary["elapsed_seconds"],
+                "summary_sha256": sha256_file(run_dir / "summary.json"),
+            }, sort_keys=True))
+        finally:
+            close_runtime_snapshots(runtime)
 
 
 def make_dry_run_manifest(matrix, diagnostic_summary_path=None, near_ratio=1.10):
@@ -1413,12 +1613,41 @@ def self_test():
     encoded = canonical_bytes(matrix)
     assert json.loads(encoded) == matrix
     assert matrix_digest(matrix) == hashlib.sha256(encoded).hexdigest()
+    with tempfile.TemporaryDirectory(prefix="leopard2-expanded-snapshot-") \
+            as directory:
+        executable = Path(directory) / "fixture"
+        executable.write_bytes(Path("/bin/true").read_bytes())
+        executable.chmod(0o500)
+        source_identity, descriptor, snapshot_identity = snapshot_executable(
+            executable, "self-test fixture")
+        try:
+            assert source_identity["sha256"] == snapshot_identity["sha256"]
+            executable.chmod(0o700)
+            executable.write_bytes(b"replaced after immutable snapshot\n")
+            executable.chmod(0o500)
+            assert file_identity(
+                executable, "mutated self-test fixture") != source_identity
+            completed = subprocess.run(
+                [snapshot_path(descriptor)], stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                pass_fds=(descriptor,), timeout=5, check=False)
+            assert completed.returncode == 0
+            try:
+                os.pwrite(descriptor, b"X", 0)
+                raise AssertionError("sealed snapshot accepted a write")
+            except OSError:
+                pass
+            assert sealed_snapshot_identity(
+                descriptor, "self-test fixture") == snapshot_identity
+        finally:
+            os.close(descriptor)
     print(json.dumps({
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
         "matrix_sha256": matrix_digest(matrix),
         "selector_isolation_cells": len(selectors),
         "r1_selector_boundary_cells": len(r1_boundaries),
         "direct_odd_arity_cells": len(direct_odd),
+        "sealed_snapshot_execution": "passed",
     }, sort_keys=True))
 
 

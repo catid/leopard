@@ -16,6 +16,11 @@ YMM instructions.  Before timing, the runner invokes the same candidate binary
 once in schema-v5 source-attestation mode and requires the exact clean commit
 and tree.  This benchmark-only instrumentation is inactive during the timed
 schema-v3 decode-path calls unless `--attest-source` is explicitly requested.
+Both input executables are copied into write-sealed Linux memory files while
+the campaign lock is held.  Disassembly, source attestation, and every timed
+child execute those sealed descriptors rather than mutable build-directory
+paths.  The runner records each original file identity and sealed-image digest,
+then verifies both the source files and seals again before publishing a stage.
 
 ## Prepare without benchmarking
 
