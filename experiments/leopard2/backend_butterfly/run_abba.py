@@ -3514,7 +3514,7 @@ def validate_matrix_document(
                 cache.get("LEO2_BUILD_BENCHMARKS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_ENABLE_CUDA") in ("OFF", "0", "FALSE", "") and
-                (not current or
+                (not modern or
                  (cache.get("LEOPARD_ENABLE_GF8") in ("ON", "1", "TRUE") and
                   cache.get("LEOPARD_ENABLE_GF16") in
                       ("ON", "1", "TRUE"))) and
@@ -5632,6 +5632,18 @@ def self_test(repo):
             require("-DLEOPARD_ENABLE_GF8=ON" not in configure_argv and
                     "-DLEOPARD_ENABLE_GF16=ON" not in configure_argv,
                     "post-XOR v8 fixture retained v9 configure arguments")
+        validate_matrix_document(
+            post_xor_document, repo, commit, POST_XOR_SCHEMA)
+        for field_key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+            disabled_post_xor = copy.deepcopy(post_xor_document)
+            identity = disabled_post_xor["variants"][0]["build_identity"]
+            identity["cache"][field_key] = "OFF"
+            rehash_matrix_build_identity(identity)
+            expect_failure(
+                lambda document=disabled_post_xor:
+                    validate_matrix_document(
+                        document, repo, commit, POST_XOR_SCHEMA),
+                "post-XOR v8 disabled field option " + field_key)
         atomic_json(post_xor_matrix, post_xor_document)
         pre_xor_matrix = root / "matrix-v1-pre-xor.json"
         atomic_json(pre_xor_matrix, pre_xor_matrix_fixture(matrix_document))
@@ -6869,7 +6881,7 @@ def self_test(repo):
             # lease; otherwise this legacy probe would still be rejected.
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
-        mutation_count = len(mutations) + len(failed_mutations) + 24
+        mutation_count = len(mutations) + len(failed_mutations) + 26
     print("butterfly ABBA v9 self-test passed: canonical and historical replay + {} adversarial mutations".format(
         mutation_count))
 
