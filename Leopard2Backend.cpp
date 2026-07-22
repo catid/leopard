@@ -13,6 +13,14 @@
 
 namespace leopard { namespace backend {
 
+#ifndef LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT
+# define LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT 0
+#endif
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT < 0 || \
+    LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT > 1
+# error "LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT must be 0 or 1"
+#endif
+
 static bool RangesOverlap(
     const void* first, const void* second, uint64_t byte_count)
 {
@@ -170,15 +178,23 @@ static bool TestFF8MultiplyAddOutputs(
     if (!ops.ff8_multiply_add_outputs)
         return true;
     static const uint64_t byte_counts[] = {
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT
         0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33,
         39, 40, 41, 47, 48, 49, 55, 56, 57, 63, 64, 65, 257
+#else
+        0, 1, 7, 31, 32, 33, 63, 64, 65, 257
+#endif
     };
     static const uint16_t log_sets[][8] = {
         { 0, 1, 17, 29, 63, 127, 254, 193 },
         { 0, 1, 17, UINT16_MAX, 63, 127, 254, UINT16_MAX },
         { UINT16_MAX, 1, UINT16_MAX, 29,
             UINT16_MAX, 127, UINT16_MAX, 193 },
-        { 0, UINT16_MAX, 17, 29, 63, UINT16_MAX, 254, 193 }
+        { 0, UINT16_MAX, 17, 29, 63, UINT16_MAX, 254, 193 },
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT
+        { UINT16_MAX, UINT16_MAX, UINT16_MAX, UINT16_MAX,
+            UINT16_MAX, UINT16_MAX, UINT16_MAX, UINT16_MAX }
+#endif
     };
     uint8_t source[260];
     uint8_t original_source[260];

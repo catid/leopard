@@ -118,6 +118,61 @@ class IsolationTests(unittest.TestCase):
         self.assertFalse(any(
             cell["exact_main_required"] for cell in tiny["cells"]))
 
+        xmm = RUNNER.make_xmm_tail_matrix()
+        self.assertEqual(xmm["schema"], RUNNER.XMM_TAIL_MATRIX_SCHEMA)
+        self.assertEqual(xmm["cell_count"], 135)
+        self.assertEqual(
+            xmm["matrix_sha256"],
+            RUNNER.make_xmm_tail_matrix()["matrix_sha256"])
+        self.assertEqual(
+            [cell["index"] for cell in xmm["cells"]],
+            list(range(xmm["cell_count"])))
+        self.assertEqual(
+            len({cell["id"] for cell in xmm["cells"]}),
+            xmm["cell_count"])
+        residues = {
+            value + delta
+            for value in (8, 16, 24, 32, 40, 48, 56, 64)
+            for delta in (-1, 0, 1)
+        }
+        self.assertEqual({
+            (cell["K"], cell["R"], cell["loss"], cell["bytes"])
+            for cell in xmm["cells"]
+        }, {
+            (8, 8, loss, byte_count)
+            for loss in (4, 5, 6, 7, 8)
+            for byte_count in residues
+        } | {
+            (65, 65, loss, byte_count)
+            for loss in (2, 4, 8)
+            for byte_count in (2048, 2063, 2064, 2079, 2080)
+        })
+        xmm_modes = RUNNER.comparison_modes(
+            RUNNER.XMM_TAIL_CONTROL_MODE,
+            RUNNER.XMM_TAIL_CANDIDATE_MODE)
+        RUNNER.validate_comparison_matrix_selection(
+            "xmm-tail", xmm_modes, xmm, xmm["cells"])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "every frozen matrix cell"):
+            RUNNER.validate_comparison_matrix_selection(
+                "xmm-tail", xmm_modes, xmm, xmm["cells"][1:])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "requires the XMM-tail comparison"):
+            RUNNER.validate_comparison_matrix_selection(
+                "xmm-tail",
+                RUNNER.comparison_modes("transform", "source"),
+                xmm, xmm["cells"])
+        k8_l4_b15 = next(cell for cell in xmm["cells"] if
+                         (cell["K"], cell["loss"], cell["bytes"]) ==
+                         (8, 4, 15))
+        k65_l4_b2063 = next(cell for cell in xmm["cells"] if
+                            (cell["K"], cell["loss"], cell["bytes"]) ==
+                            (65, 4, 2063))
+        self.assertFalse(k8_l4_b15["xmm_tail_executes"])
+        self.assertEqual(k8_l4_b15["expected_executor"], "output_major")
+        self.assertTrue(k65_l4_b2063["xmm_tail_executes"])
+        self.assertEqual(k65_l4_b2063["expected_executor"], "source_major")
+
     def test_small_direct_modes_are_explicit_and_directional(self) -> None:
         self.assertEqual(
             RUNNER.comparison_modes("transform", "output"),
@@ -128,6 +183,27 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(
             RUNNER.comparison_modes("transform", "production"),
             {"baseline": "transform", "candidate": "production"})
+        xmm_modes = RUNNER.comparison_modes(
+            RUNNER.XMM_TAIL_CONTROL_MODE,
+            RUNNER.XMM_TAIL_CANDIDATE_MODE)
+        self.assertTrue(RUNNER.is_xmm_tail_comparison(xmm_modes))
+        self.assertEqual(
+            RUNNER.comparison_schema(xmm_modes), RUNNER.XMM_TAIL_SCHEMA)
+        RUNNER.require_comparison_schema(
+            RUNNER.XMM_TAIL_SCHEMA, xmm_modes, "test")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "schema does not match"):
+            RUNNER.require_comparison_schema(
+                RUNNER.SCHEMA, xmm_modes, "stale test")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "requires source-xmm0"):
+            RUNNER.comparison_modes(
+                "source", RUNNER.XMM_TAIL_CANDIDATE_MODE)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "requires source-xmm0"):
+            RUNNER.comparison_modes(
+                RUNNER.XMM_TAIL_CANDIDATE_MODE,
+                RUNNER.XMM_TAIL_CONTROL_MODE)
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "distinct and known"):
             RUNNER.comparison_modes("source", "source")
@@ -147,10 +223,35 @@ class IsolationTests(unittest.TestCase):
             RUNNER.expected_direct_executor("source", loss5),
             "source_major")
         self.assertEqual(
+            RUNNER.expected_direct_executor(
+                RUNNER.XMM_TAIL_CONTROL_MODE, loss5),
+            "source_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor(
+                RUNNER.XMM_TAIL_CANDIDATE_MODE, loss5),
+            "source_major")
+        self.assertEqual(
             RUNNER.expected_direct_executor("production", loss5),
             "source_major")
         self.assertEqual(
             RUNNER.expected_direct_executor("transform", loss5), "none")
+        for loss in (2, 4, 8):
+            before = {"K": 65, "R": 65, "bytes": 2047, "loss": loss}
+            after = {"K": 65, "R": 65, "bytes": 2048, "loss": loss}
+            self.assertEqual(
+                RUNNER.expected_direct_executor(
+                    RUNNER.XMM_TAIL_CONTROL_MODE, before),
+                "output_major")
+            self.assertEqual(
+                RUNNER.expected_direct_executor(
+                    RUNNER.XMM_TAIL_CONTROL_MODE, after),
+                "source_major")
+        for byte_count in (2048, 2063, 2064, 2079, 2080):
+            self.assertEqual(
+                RUNNER.expected_direct_executor(
+                    RUNNER.XMM_TAIL_CANDIDATE_MODE,
+                    {"K": 65, "R": 65, "bytes": byte_count, "loss": 4}),
+                "source_major")
 
         arguments = ["c++", "-O3", RUNNER.MODE_COMPILE_DEFINITIONS["source"]]
         self.assertEqual(
@@ -168,6 +269,134 @@ class IsolationTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "exact mode definition once"):
             RUNNER.strip_mode_definition(["c++", "-O3"], "source", "test")
+
+        xmm_arguments = [
+            "c++", "-O3",
+            *RUNNER.mode_compile_arguments(RUNNER.XMM_TAIL_CANDIDATE_MODE),
+        ]
+        self.assertEqual(
+            RUNNER.strip_mode_definition(
+                xmm_arguments, RUNNER.XMM_TAIL_CANDIDATE_MODE, "test"),
+            ["c++", "-O3"])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "another mode definition"):
+            RUNNER.strip_mode_definition(
+                [*xmm_arguments,
+                 RUNNER.XMM_TAIL_COMPILE_ARGUMENTS[
+                     RUNNER.XMM_TAIL_CONTROL_MODE][-1]],
+                RUNNER.XMM_TAIL_CANDIDATE_MODE, "extra XMM definition")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "exact mode definition once"):
+            RUNNER.strip_mode_definition(
+                [argument for argument in xmm_arguments if
+                 argument != "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT=1"],
+                RUNNER.XMM_TAIL_CANDIDATE_MODE, "missing KAT definition")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "exact mode definition once"):
+            RUNNER.strip_mode_definition(
+                [*xmm_arguments,
+                 "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT=1"],
+                RUNNER.XMM_TAIL_CANDIDATE_MODE, "duplicate KAT definition")
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "another mode definition"):
+            RUNNER.strip_mode_definition(
+                [*xmm_arguments,
+                 "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT=0"],
+                RUNNER.XMM_TAIL_CANDIDATE_MODE, "wrong KAT definition")
+
+        baseline_objects = {
+            member: "baseline-%d" % index for index, member in
+            enumerate(RUNNER.EXPECTED_ARCHIVE_MEMBERS)
+        }
+        candidate_objects = dict(baseline_objects)
+        for member in RUNNER.comparison_changed_members(xmm_modes):
+            candidate_objects[member] += "-changed"
+        RUNNER.validate_comparison_object_deltas(
+            xmm_modes, baseline_objects, candidate_objects)
+        changed_non_avx2 = dict(candidate_objects)
+        changed_non_avx2["LeopardFF8.cpp.o"] += "-unexpected"
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "unexpected cross-build"):
+            RUNNER.validate_comparison_object_deltas(
+                xmm_modes, baseline_objects, changed_non_avx2)
+        identical_avx2 = dict(candidate_objects)
+        identical_avx2["Leopard2BackendAVX2.cpp.o"] = \
+            baseline_objects["Leopard2BackendAVX2.cpp.o"]
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "byte-identical"):
+            RUNNER.validate_comparison_object_deltas(
+                xmm_modes, baseline_objects, identical_avx2)
+
+    def test_xmm_tail_disassembly_and_delta_audits(self) -> None:
+        valid = RUNNER.summarize_avx2_disassembly(
+            b"0000000000000000 <AVX2FF8MultiplyAddOutputPair(void*)>:\n"
+            b"   0:\tc5 fa 6f 00\tvmovdqu (%rax),%xmm0\n"
+            b"   4:\tc4 e2 79 00 c1\tvpshufb %xmm1,%xmm0,%xmm0\n"
+            b"0000000000000008 <unrelated()>:\n"
+            b"   8:\t66 0f 6f c1\tmovdqa %xmm1,%xmm0\n"
+            b"000000000000000c <AVX2FF8MultiplyAddOutputGroup4(void*)>:\n"
+            b"   c:\tc5 fa 7f 00\tvmovdqu %xmm0,(%rax)\n"
+            b"  10:\tc4 e2 79 00 c1\tvpshufb %xmm1,%xmm0,%xmm0\n")
+        self.assertEqual(valid["vex_instruction_count"], 4)
+        self.assertEqual(valid["evex_instruction_count"], 0)
+        self.assertEqual(valid["target_pair_instruction_count"], 2)
+        self.assertEqual(valid["target_pair_xmm_instruction_count"], 2)
+        self.assertEqual(valid["target_pair_xmm_vpshufb_count"], 1)
+        self.assertEqual(
+            valid["target_pair_xmm_memory_instruction_count"], 1)
+        self.assertEqual(valid["target_group4_instruction_count"], 2)
+        self.assertEqual(valid["target_group4_xmm_vpshufb_count"], 1)
+        self.assertEqual(valid["target_legacy_xmm_instruction_count"], 0)
+
+        legacy = RUNNER.summarize_avx2_disassembly(
+            b"0000000000000000 <AVX2FF8MultiplyAddOutputPair(void*)>:\n"
+            b"   0:\tc5 f9 ef c0\tvpxor %xmm0,%xmm0,%xmm0\n"
+            b"   4:\t66 0f 6f c1\tmovdqa %xmm1,%xmm0\n")
+        self.assertEqual(legacy["target_pair_legacy_xmm_instruction_count"], 1)
+        spilled = RUNNER.summarize_avx2_disassembly(
+            b"0000000000000000 <AVX2FF8MultiplyAddOutputGroup4(void*)>:\n"
+            b"   0:\tc5 fa 7f 04 24\tvmovdqu %xmm0,(%rsp)\n")
+        self.assertEqual(
+            spilled["target_group4_stack_vector_access_count"], 1)
+
+        with self.assertRaisesRegex(RUNNER.EvidenceError, "EVEX"):
+            RUNNER.summarize_avx2_disassembly(
+                b"   0:\t62 f1 7d 28 ef c0\tvpxord %ymm0,%ymm0,%ymm0\n")
+
+        sections = RUNNER.summarize_text_sections(
+            b"  0 .text 00000010 0 0 0 0\n"
+            b"  1 .text.hot 00000020 0 0 0 0\n"
+            b"  2 .data 00000040 0 0 0 0\n")
+        self.assertEqual(sections["text_bytes"], 0x30)
+
+        baseline = {"text_bytes": 1000, "digest": "0" * 64}
+        candidate = {"text_bytes": 1200, "digest": "1" * 64}
+        for function in ("pair", "group4"):
+            for counter in (
+                    "instruction", "xmm_instruction", "xmm_vpshufb",
+                    "xmm_memory_instruction"):
+                key = "target_%s_%s_count" % (function, counter)
+                baseline[key] = 1
+                candidate[key] = 2
+        comparison = RUNNER.xmm_tail_comparison_audit(
+            baseline, candidate)
+        self.assertEqual(comparison["text_delta_bytes"], 200)
+        RUNNER.validate_xmm_tail_comparison_audit(
+            comparison, baseline, candidate)
+        tampered = dict(comparison)
+        tampered["text_delta_bytes"] += 1
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "does not reconstruct"):
+            RUNNER.validate_xmm_tail_comparison_audit(
+                tampered, baseline, candidate)
+        too_large = dict(candidate)
+        too_large["text_bytes"] = 5097
+        with self.assertRaisesRegex(RUNNER.EvidenceError, "4096-byte cap"):
+            RUNNER.validate_xmm_tail_audit_pair(baseline, too_large)
+        missing_pair = dict(candidate)
+        missing_pair["target_pair_xmm_vpshufb_count"] = 1
+        with self.assertRaisesRegex(RUNNER.EvidenceError, "pair XMM"):
+            RUNNER.validate_xmm_tail_audit_pair(baseline, missing_pair)
 
     def test_production_mode_source_contract_is_exact(self) -> None:
         with tempfile.TemporaryDirectory(

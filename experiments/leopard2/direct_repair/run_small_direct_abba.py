@@ -3,8 +3,11 @@
 
 This runner compares two already-built Leopard2 benchmark executables whose
 only semantic difference is an explicitly selected small-code direct-repair
-mode: transform, output-major, or source-major.  It is not for comparison to
-the historical Leopard executable (use ../main_compare/run_abba.py for that).
+mode: transform, output-major, or source-major.  Its separately versioned XMM
+tail comparison keeps source-major mode 2 identical and permits only the AVX2
+backend's explicit 0-versus-1 tail definition to change.  It is not for
+comparison to the historical Leopard executable (use
+../main_compare/run_abba.py for that).
 It owns the canonical GF8 and physical-pair leases for the complete campaign,
 moves all same-user threads off the held pair, pins every child to one logical
 CPU, requires its SMT sibling to remain idle, retains raw output, and verifies
@@ -30,6 +33,7 @@ import re
 import secrets
 import signal
 import shlex
+import shutil
 import stat
 import statistics
 import subprocess
@@ -40,9 +44,11 @@ from typing import Any, Sequence
 
 
 SCHEMA = "leopard2-small-direct-abba/v1"
+XMM_TAIL_SCHEMA = "leopard2-small-direct-xmm-tail-abba/v1"
 MATRIX_SCHEMA = "leopard2-small-direct-matrix/v1"
 LARGE_MATRIX_SCHEMA = "leopard2-small-direct-full-matrix/v1"
 TINY_MATRIX_SCHEMA = "leopard2-small-direct-tiny-matrix/v1"
+XMM_TAIL_MATRIX_SCHEMA = "leopard2-small-direct-xmm-tail-matrix/v1"
 CELL_SCHEMA = "leopard2-small-direct-cell/v1"
 ENVELOPE_SCHEMA = "leopard2-small-direct-envelope/v1"
 TILE_SPEC_SCHEMA = "leopard2-direct-tile-lab-spec/v2"
@@ -117,10 +123,32 @@ MODE_COMPILE_DEFINITIONS = {
     "transform": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
     "output": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1",
     "source": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
+    "source-xmm0": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
+    "source-xmm1": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
     # The production binary deliberately has no diagnostic definition.  Its
     # default is checked in leopard2.cpp before a campaign can start.
     "production": None,
 }
+XMM_TAIL_COMPILE_ARGUMENTS = {
+    "source-xmm0": (
+        "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT=1",
+        "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL=0",
+    ),
+    "source-xmm1": (
+        "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT=1",
+        "-DLEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL=1",
+    ),
+}
+DIAGNOSTIC_DEFINITION_NAMES = (
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+    "LEO2_EXPERIMENT_GF8_DIRECT_XMM_KAT",
+    "LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL",
+)
+XMM_TAIL_CONTROL_MODE = "source-xmm0"
+XMM_TAIL_CANDIDATE_MODE = "source-xmm1"
+XMM_TAIL_AUDIT_SCHEMA = "leopard2-avx2-xmm-tail-encoding-audit/v1"
+XMM_TAIL_COMPARISON_AUDIT_SCHEMA = \
+    "leopard2-avx2-xmm-tail-comparison-audit/v1"
 PRODUCTION_TARGETS = {
     source: target for unused_member, source, target in ARCHIVE_MEMBER_SPECS
 }
@@ -144,7 +172,9 @@ def mode_compile_definition(mode: str) -> str | None:
 
 def mode_compile_arguments(mode: str) -> list[str]:
     definition = mode_compile_definition(mode)
-    return [] if definition is None else [definition]
+    result = [] if definition is None else [definition]
+    result.extend(XMM_TAIL_COMPILE_ARGUMENTS.get(mode, ()))
+    return result
 
 
 def validate_production_mode_source(source_root: Path) -> None:
@@ -162,28 +192,78 @@ def comparison_modes(baseline: str, candidate: str) -> dict[str, str]:
             candidate in MODE_COMPILE_DEFINITIONS and
             baseline != candidate,
             "baseline and candidate modes must be distinct and known")
-    return {"baseline": baseline, "candidate": candidate}
+    result = {"baseline": baseline, "candidate": candidate}
+    if baseline in XMM_TAIL_COMPILE_ARGUMENTS or \
+            candidate in XMM_TAIL_COMPILE_ARGUMENTS:
+        require(baseline == XMM_TAIL_CONTROL_MODE and
+                candidate == XMM_TAIL_CANDIDATE_MODE,
+                "XMM-tail comparison requires source-xmm0 baseline and "
+                "source-xmm1 candidate")
+    return result
+
+
+def is_xmm_tail_comparison(modes: dict[str, str]) -> bool:
+    return modes == {
+        "baseline": XMM_TAIL_CONTROL_MODE,
+        "candidate": XMM_TAIL_CANDIDATE_MODE,
+    }
+
+
+def comparison_schema(modes: dict[str, str]) -> str:
+    comparison_modes(modes["baseline"], modes["candidate"])
+    return XMM_TAIL_SCHEMA if is_xmm_tail_comparison(modes) else SCHEMA
+
+
+def require_comparison_schema(
+        schema: Any, modes: dict[str, str], label: str) -> None:
+    require(schema == comparison_schema(modes),
+            "%s schema does not match comparison modes" % label)
 
 
 def strip_mode_definition(arguments: list[str], mode: str,
                           label: str) -> list[str]:
-    definition = mode_compile_definition(mode)
+    expected = mode_compile_arguments(mode)
     result = list(arguments)
-    known_definitions = tuple(
-        value for value in MODE_COMPILE_DEFINITIONS.values()
-        if value is not None)
-    if definition is None:
-        require(not any(value in result for value in known_definitions),
+    def is_diagnostic_definition(argument: str) -> bool:
+        return any(argument == "-D" + name or
+                   argument.startswith("-D" + name + "=")
+                   for name in DIAGNOSTIC_DEFINITION_NAMES)
+    if not expected:
+        require(not any(is_diagnostic_definition(value) for value in result),
                 "%s production build contains a diagnostic mode" % label)
         return result
-    require(result.count(definition) == 1,
-            "%s must contain its exact mode definition once" % label)
-    result.remove(definition)
-    for other_mode, other_definition in MODE_COMPILE_DEFINITIONS.items():
-        if other_mode != mode and other_definition is not None:
-            require(other_definition not in result,
-                    "%s contains another mode definition" % label)
+    for definition in expected:
+        require(result.count(definition) == 1,
+                "%s must contain its exact mode definition once" % label)
+        result.remove(definition)
+    require(not any(is_diagnostic_definition(value) for value in result),
+            "%s contains another mode definition" % label)
     return result
+
+
+def comparison_changed_members(modes: dict[str, str]) -> set[str]:
+    comparison_modes(modes["baseline"], modes["candidate"])
+    if is_xmm_tail_comparison(modes):
+        return {"Leopard2BackendAVX2.cpp.o"}
+    return {"leopard2.cpp.o"}
+
+
+def validate_comparison_object_deltas(
+        modes: dict[str, str],
+        baseline: dict[str, str],
+        candidate: dict[str, str]) -> None:
+    require(set(baseline) == set(EXPECTED_ARCHIVE_MEMBERS) and
+            set(candidate) == set(EXPECTED_ARCHIVE_MEMBERS),
+            "comparison object map does not cover the exact archive")
+    changed = comparison_changed_members(modes)
+    for member in EXPECTED_ARCHIVE_MEMBERS:
+        if member in changed:
+            require(baseline[member] != candidate[member],
+                    "comparison-changing object is byte-identical: %s" %
+                    member)
+        else:
+            require(baseline[member] == candidate[member],
+                    "unexpected cross-build object difference: %s" % member)
 
 
 def isolation_policy() -> dict[str, Any]:
@@ -238,6 +318,255 @@ def file_identity(path: Path) -> dict[str, Any]:
         "size": resolved.stat().st_size,
         "sha256": sha256_file(resolved),
     }
+
+
+def summarize_avx2_disassembly(output: bytes) -> dict[str, Any]:
+    instruction_count = 0
+    vex_instruction_count = 0
+    evex_instruction_count = 0
+    target_instruction_count = 0
+    target_stack_vector_access_count = 0
+    target_xmm_instruction_count = 0
+    target_xmm_vpshufb_count = 0
+    target_xmm_memory_instruction_count = 0
+    target_legacy_xmm_instruction_count = 0
+    per_function = {
+        "pair": {"instruction": 0, "stack_vector_access": 0,
+                 "xmm_instruction": 0, "xmm_vpshufb": 0,
+                 "xmm_memory_instruction": 0, "legacy_xmm_instruction": 0},
+        "group4": {"instruction": 0, "stack_vector_access": 0,
+                   "xmm_instruction": 0, "xmm_vpshufb": 0,
+                   "xmm_memory_instruction": 0,
+                   "legacy_xmm_instruction": 0},
+    }
+    target_function = None
+    pattern = re.compile(
+        r"^\s*[0-9a-fA-F]+:\s+"
+        r"((?:[0-9a-fA-F]{2}(?:\s+|$))+)\s*(.*)$")
+    for line in output.decode("utf-8", errors="replace").splitlines():
+        if re.match(r"^\s*[0-9a-fA-F]+\s+<.*>:$", line):
+            if "AVX2FF8MultiplyAddOutputPair" in line:
+                target_function = "pair"
+            elif "AVX2FF8MultiplyAddOutputGroup4" in line:
+                target_function = "group4"
+            else:
+                target_function = None
+            continue
+        match = pattern.match(line)
+        if match is None:
+            continue
+        encoding = match.group(1).split()
+        if not encoding:
+            continue
+        first = int(encoding[0], 16)
+        instruction_count += 1
+        if first in (0xc4, 0xc5):
+            vex_instruction_count += 1
+        elif first == 0x62:
+            evex_instruction_count += 1
+        if target_function:
+            counts = per_function[target_function]
+            target_instruction_count += 1
+            counts["instruction"] += 1
+            assembly = match.group(2)
+            has_xmm = "%xmm" in assembly
+            if has_xmm:
+                target_xmm_instruction_count += 1
+                counts["xmm_instruction"] += 1
+                if first not in (0xc4, 0xc5, 0x62):
+                    target_legacy_xmm_instruction_count += 1
+                    counts["legacy_xmm_instruction"] += 1
+                if assembly.lstrip().startswith("vpshufb"):
+                    target_xmm_vpshufb_count += 1
+                    counts["xmm_vpshufb"] += 1
+                if assembly.lstrip().startswith("vmov") and "(" in assembly:
+                    target_xmm_memory_instruction_count += 1
+                    counts["xmm_memory_instruction"] += 1
+            if assembly.lstrip().startswith("v") and re.search(
+                    r"\(%r(?:sp|bp)\)", assembly):
+                target_stack_vector_access_count += 1
+                counts["stack_vector_access"] += 1
+    require(instruction_count > 0,
+            "AVX2 object disassembly contains no instructions")
+    require(evex_instruction_count == 0,
+            "AVX2 object disassembly contains EVEX instructions")
+    require(vex_instruction_count > 0,
+            "AVX2 object disassembly contains no VEX instructions")
+    return {
+        "output_sha256": sha256_bytes(output),
+        "instruction_count": instruction_count,
+        "vex_instruction_count": vex_instruction_count,
+        "evex_instruction_count": evex_instruction_count,
+        "target_instruction_count": target_instruction_count,
+        "target_stack_vector_access_count":
+            target_stack_vector_access_count,
+        "target_xmm_instruction_count": target_xmm_instruction_count,
+        "target_xmm_vpshufb_count": target_xmm_vpshufb_count,
+        "target_xmm_memory_instruction_count":
+            target_xmm_memory_instruction_count,
+        "target_legacy_xmm_instruction_count":
+            target_legacy_xmm_instruction_count,
+        **{
+            "target_%s_%s_count" % (function, counter): value
+            for function, counters in per_function.items()
+            for counter, value in counters.items()
+        },
+    }
+
+
+def summarize_text_sections(output: bytes) -> dict[str, Any]:
+    text_bytes = 0
+    pattern = re.compile(
+        r"^\s*\d+\s+(\S+)\s+([0-9a-fA-F]+)(?:\s+|$)")
+    for line in output.decode("utf-8", errors="replace").splitlines():
+        match = pattern.match(line)
+        if match is not None and match.group(1).startswith(".text"):
+            text_bytes += int(match.group(2), 16)
+    require(text_bytes > 0, "AVX2 object has no executable text section")
+    return {
+        "section_output_sha256": sha256_bytes(output),
+        "text_bytes": text_bytes,
+    }
+
+
+def avx2_encoding_audit(path: Path) -> dict[str, Any]:
+    executable = shutil.which("objdump", path="/usr/bin:/bin")
+    require(executable is not None,
+            "objdump is required for the XMM-tail encoding audit")
+    tool = Path(executable).resolve(strict=True)
+    object_path = path.resolve(strict=True)
+    disassembly = subprocess.run(
+        [str(tool), "-d", "-w", "-C", str(object_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=CHILD_ENV,
+        check=False)
+    require(disassembly.returncode == 0 and not disassembly.stderr,
+            "cannot disassemble AVX2 object for XMM-tail audit")
+    sections = subprocess.run(
+        [str(tool), "-h", "-w", str(object_path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=CHILD_ENV,
+        check=False)
+    require(sections.returncode == 0 and not sections.stderr,
+            "cannot inspect AVX2 text sections for XMM-tail audit")
+    result = {
+        "schema": XMM_TAIL_AUDIT_SCHEMA,
+        "tool": file_identity(tool),
+        "object": file_identity(object_path),
+        **summarize_avx2_disassembly(disassembly.stdout),
+        **summarize_text_sections(sections.stdout),
+    }
+    result["digest"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
+def validate_avx2_encoding_audit(
+        value: Any, expected_object: dict[str, Any], label: str) -> None:
+    per_function_keys = {
+        "target_%s_%s_count" % (function, counter)
+        for function in ("pair", "group4")
+        for counter in (
+            "instruction", "stack_vector_access", "xmm_instruction",
+            "xmm_vpshufb", "xmm_memory_instruction",
+            "legacy_xmm_instruction")
+    }
+    require_exact_keys(value, {
+        "schema", "tool", "object", "output_sha256", "instruction_count",
+        "vex_instruction_count", "evex_instruction_count", "digest",
+        "target_instruction_count", "target_stack_vector_access_count",
+        "target_xmm_instruction_count", "target_xmm_vpshufb_count",
+        "target_xmm_memory_instruction_count",
+        "target_legacy_xmm_instruction_count",
+        "section_output_sha256", "text_bytes",
+    } | per_function_keys, label)
+    validate_file_identity_record(value["tool"], label + " tool")
+    validate_file_identity_record(value["object"], label + " object")
+    require(value["schema"] == XMM_TAIL_AUDIT_SCHEMA and
+            value["object"] == expected_object and
+            isinstance(value["output_sha256"], str) and
+            re.fullmatch(r"[0-9a-f]{64}", value["output_sha256"]) is not None and
+            isinstance(value["section_output_sha256"], str) and
+            re.fullmatch(r"[0-9a-f]{64}",
+                         value["section_output_sha256"]) is not None and
+            type(value["instruction_count"]) is int and
+            type(value["vex_instruction_count"]) is int and
+            type(value["evex_instruction_count"]) is int and
+            type(value["target_instruction_count"]) is int and
+            type(value["target_stack_vector_access_count"]) is int and
+            type(value["target_xmm_instruction_count"]) is int and
+            type(value["target_xmm_vpshufb_count"]) is int and
+            type(value["target_xmm_memory_instruction_count"]) is int and
+            type(value["target_legacy_xmm_instruction_count"]) is int and
+            all(type(value[key]) is int and value[key] >= 0
+                for key in per_function_keys) and
+            type(value["text_bytes"]) is int and
+            value["instruction_count"] >= value["vex_instruction_count"] > 0 and
+            value["evex_instruction_count"] == 0,
+            label + " contents are invalid")
+    require(value["target_instruction_count"] > 0 and
+            value["target_stack_vector_access_count"] == 0 and
+            value["target_legacy_xmm_instruction_count"] == 0 and
+            all(value["target_%s_instruction_count" % function] > 0 and
+                value["target_%s_stack_vector_access_count" % function] == 0
+                and value["target_%s_legacy_xmm_instruction_count" %
+                          function] == 0
+                for function in ("pair", "group4")) and
+            value["text_bytes"] > 0,
+            label + " target kernel has spills or missing text")
+    copy = dict(value)
+    digest = copy.pop("digest")
+    require(digest == sha256_bytes(canonical_bytes(copy)),
+            label + " digest is invalid")
+
+
+def validate_xmm_tail_audit_pair(
+        baseline: dict[str, Any], candidate: dict[str, Any]) -> None:
+    delta = candidate["text_bytes"] - baseline["text_bytes"]
+    require(0 < delta <= 4096,
+            "XMM-tail AVX2 text growth is outside the 1..4096-byte cap")
+    for function in ("pair", "group4"):
+        prefix = "target_%s_" % function
+        require(candidate[prefix + "xmm_instruction_count"] >
+                    baseline[prefix + "xmm_instruction_count"] and
+                candidate[prefix + "xmm_vpshufb_count"] >
+                    baseline[prefix + "xmm_vpshufb_count"] and
+                candidate[prefix + "xmm_memory_instruction_count"] >
+                    baseline[prefix + "xmm_memory_instruction_count"],
+                "candidate lacks an attributable %s XMM shuffle/load/store "
+                "delta" % function)
+
+
+def xmm_tail_comparison_audit(
+        baseline: dict[str, Any], candidate: dict[str, Any]) -> dict[str, Any]:
+    """Bind the exact code-size and per-kernel instruction deltas."""
+    validate_xmm_tail_audit_pair(baseline, candidate)
+    result = {
+        "schema": XMM_TAIL_COMPARISON_AUDIT_SCHEMA,
+        "baseline_audit_digest": baseline["digest"],
+        "candidate_audit_digest": candidate["digest"],
+        "text_delta_bytes": candidate["text_bytes"] - baseline["text_bytes"],
+    }
+    for function in ("pair", "group4"):
+        for counter in (
+                "instruction", "xmm_instruction", "xmm_vpshufb",
+                "xmm_memory_instruction"):
+            key = "target_%s_%s_count" % (function, counter)
+            result["target_%s_%s_delta" % (function, counter)] = \
+                candidate[key] - baseline[key]
+    require(all(result["target_%s_%s_delta" % (function, counter)] > 0
+                for function in ("pair", "group4")
+                for counter in (
+                    "instruction", "xmm_instruction", "xmm_vpshufb",
+                    "xmm_memory_instruction")),
+            "candidate per-kernel XMM code deltas are not all positive")
+    result["digest"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
+def validate_xmm_tail_comparison_audit(
+        value: Any, baseline: dict[str, Any],
+        candidate: dict[str, Any]) -> None:
+    expected = xmm_tail_comparison_audit(baseline, candidate)
+    require(value == expected,
+            "XMM-tail comparison audit does not reconstruct exactly")
 
 
 def archive_members_identity(
@@ -748,11 +1077,16 @@ def ceil_power_of_two(value: int) -> int:
 
 def expected_direct_executor(mode: str, cell: dict[str, Any]) -> str:
     mode_compile_definition(mode)
+    if (cell.get("K") == 65 and cell.get("R") == 65 and
+            2 <= cell.get("loss", 0) <= 8):
+        return "source_major" if cell.get("bytes", 0) >= 2048 \
+            else "output_major"
     if cell["loss"] <= 4:
         return "output_major"
     if mode == "transform":
         return "none"
-    if mode == "production":
+    if mode in ("source", "production",
+                XMM_TAIL_CONTROL_MODE, XMM_TAIL_CANDIDATE_MODE):
         return "source_major"
     return mode + "_major"
 
@@ -935,6 +1269,116 @@ def make_tiny_matrix() -> dict[str, Any]:
     return result
 
 
+def xmm_tail_segments(byte_count: int) -> list[int]:
+    """Return the VEX-XMM tail widths reached after complete YMM chunks."""
+    remainder = byte_count % 32
+    result = []
+    if remainder >= 16:
+        result.append(16)
+        remainder -= 16
+    if remainder >= 8:
+        result.append(8)
+    return result
+
+
+def direct_kernel_shape(loss_count: int) -> str:
+    shapes = {
+        2: "pair",
+        4: "group4",
+        5: "group4_single",
+        6: "group4_pair",
+        7: "group4_pair_single",
+        8: "group4_group4",
+    }
+    require(loss_count in shapes,
+            "XMM-tail matrix has an unsupported direct kernel shape")
+    return shapes[loss_count]
+
+
+def make_xmm_tail_matrix() -> dict[str, Any]:
+    """Attribute both direct kernels at every 8-byte tail transition.
+
+    The compact K=8 block exercises Group4, Pair, Pair+single, and composed
+    Group4 paths.  The five K=65 boundaries bind the experiment to the
+    existing production-size source-major regime and include exact no-tail
+    neighbors.  This is separately versioned so the historical 96-cell tiny
+    matrix and all retained evidence remain byte-stable.
+    """
+    cells = []
+    index = 0
+    residue_boundaries = tuple(sorted({
+        value + delta
+        for value in (8, 16, 24, 32, 40, 48, 56, 64)
+        for delta in (-1, 0, 1)
+    }))
+    shapes = [
+        (8, 8, loss_count, byte_count)
+        for loss_count in (4, 5, 6, 7, 8)
+        for byte_count in residue_boundaries
+    ]
+    shapes.extend(
+        (65, 65, loss_count, byte_count)
+        for loss_count in (2, 4, 8)
+        for byte_count in (2048, 2063, 2064, 2079, 2080)
+    )
+    for original_count, recovery_count, loss_count, byte_count in shapes:
+        kernel_shape = direct_kernel_shape(loss_count)
+        executor = expected_direct_executor(XMM_TAIL_CONTROL_MODE, {
+            "K": original_count, "R": recovery_count,
+            "bytes": byte_count, "loss": loss_count,
+        })
+        segments = xmm_tail_segments(byte_count) \
+            if executor == "source_major" else []
+        active = bool(segments)
+        identifier = "xmm-tail-k%d-r%d-b%d-l%d" % (
+            original_count, recovery_count, byte_count, loss_count)
+        iterations, warmup = iteration_policy(byte_count)
+        cells.append({
+            "index": index,
+            "id": identifier,
+            "K": original_count,
+            "R": recovery_count,
+            "bytes": byte_count,
+            "loss": loss_count,
+            "batch": 1,
+            "reuse": 8,
+            "iterations": iterations,
+            "warmup": warmup,
+            "seed": stable_seed(identifier, XMM_TAIL_MATRIX_SCHEMA),
+            "estimated_peak_bytes": 6 *
+                (original_count + recovery_count) * byte_count +
+                (64 << 20),
+            "role": ("xmm_tail_target_" if active else
+                     "no_xmm_regression_neighbor_") + kernel_shape,
+            "kernel_shape": kernel_shape,
+            "xmm_tail_executes": active,
+            "xmm_tail_segments": segments,
+            "expected_executor": executor,
+            "expected_decode_path": "direct",
+            "exact_main_required": False,
+        })
+        index += 1
+    result = {
+        "schema": XMM_TAIL_MATRIX_SCHEMA,
+        "cell_count": len(cells),
+        "cells": cells,
+        "same_source_promotion": {
+            "target": "whole decode_execution",
+            "candidate_ci95_low_at_least": 1.05,
+            "neighbor_ci95_high_at_least": 0.98,
+            "orientation": "baseline_time_over_candidate_time",
+        },
+        "coverage": (
+            "K=8/R=8 losses 4..8 at n-1/n/n+1 around every 8-byte "
+            "boundary from 8 through 64, plus K=65/R=65 losses 2,4,8 "
+            "at 2048/2063/2064/2079/2080 bytes.  Complete selection is "
+            "required so Group4, Pair, composed, active-tail, and no-tail "
+            "neighbor behavior are all retained together."),
+    }
+    result["matrix_sha256"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
 def matrix_for_preset(preset: str) -> dict[str, Any]:
     if preset == "core":
         return make_matrix()
@@ -942,7 +1386,51 @@ def matrix_for_preset(preset: str) -> dict[str, Any]:
         return make_large_matrix()
     if preset == "tiny":
         return make_tiny_matrix()
+    if preset == "xmm-tail":
+        return make_xmm_tail_matrix()
     raise EvidenceError("unknown matrix preset")
+
+
+def validate_comparison_matrix_selection(
+        preset: str, modes: dict[str, str], matrix: dict[str, Any],
+        selected: list[dict[str, Any]]) -> None:
+    """Keep XMM attribution inseparable from its complete control matrix."""
+    if not is_xmm_tail_comparison(modes):
+        require(preset != "xmm-tail",
+                "the XMM-tail preset requires the XMM-tail comparison")
+        return
+    require(preset == "xmm-tail" and
+            matrix.get("schema") == XMM_TAIL_MATRIX_SCHEMA,
+            "XMM-tail comparison requires the exact XMM-tail preset")
+    require([cell.get("id") for cell in selected] ==
+                [cell.get("id") for cell in matrix.get("cells", [])],
+            "XMM-tail comparison requires every frozen matrix cell")
+    active = set()
+    inactive = set()
+    executors = set()
+    for cell in selected:
+        shape = direct_kernel_shape(cell["loss"])
+        executor = expected_direct_executor(XMM_TAIL_CONTROL_MODE, cell)
+        segments = xmm_tail_segments(cell["bytes"]) \
+            if executor == "source_major" else []
+        require(cell.get("kernel_shape") == shape and
+                cell.get("xmm_tail_segments") == segments and
+                cell.get("xmm_tail_executes") == bool(segments) and
+                cell.get("expected_executor") == executor and
+                cell.get("expected_decode_path") == "direct" and
+                cell.get("role") == (("xmm_tail_target_" if segments else
+                    "no_xmm_regression_neighbor_") + shape),
+                "XMM-tail cell role or path contract is invalid")
+        (active if segments else inactive).add(shape)
+        executors.add(executor)
+    required_shapes = {
+        "pair", "group4", "group4_single", "group4_pair",
+        "group4_pair_single", "group4_group4",
+    }
+    require(active == required_shapes and
+            {"pair", "group4", "group4_group4"}.issubset(inactive) and
+            executors == {"output_major", "source_major"},
+            "XMM-tail selection does not attribute every required path")
 
 
 def parse_cpu_list(text: str) -> set[int]:
@@ -1417,6 +1905,10 @@ def validate_result(result: Any, cell: dict[str, Any], mode: str) -> dict[str, A
     expected_executor = expected_direct_executor(mode, cell)
     selected_path = resolved.get("selected_decode_path")
     selected_rule = resolved.get("selected_decode_rule")
+    if "expected_executor" in cell or "expected_decode_path" in cell:
+        require(cell.get("expected_executor") == expected_executor and
+                cell.get("expected_decode_path") == "direct",
+                "frozen cell has the wrong selector/path assertion")
     if expected_executor == "none":
         require(selected_path in ("generic", "materialized", "tiled") and
                 selected_rule not in ("no_op", "direct", "unsupported_profile"),
@@ -2037,6 +2529,19 @@ def validate_current_binary_identity(identity: dict[str, Any]) -> None:
     require(isinstance(recorded_source, dict) and
             source_identity(Path(recorded_source["root"])) == recorded_source,
             "current source snapshot changed")
+    modes = identity.get("comparison_modes")
+    require(isinstance(modes, dict),
+            "current comparison modes are missing")
+    if is_xmm_tail_comparison(modes):
+        for label in ("baseline", "candidate"):
+            require(avx2_encoding_audit(Path(
+                        identity[label + "_avx2_object"]["path"])) ==
+                    identity[label + "_avx2_encoding_audit"],
+                    "current %s AVX2 encoding audit changed" % label)
+        validate_xmm_tail_comparison_audit(
+            identity["xmm_tail_comparison_audit"],
+            identity["baseline_avx2_encoding_audit"],
+            identity["candidate_avx2_encoding_audit"])
     for label in ("baseline", "candidate"):
         require(build_provenance_identity(
                     Path(identity[label + "_executable"]["path"]),
@@ -2080,6 +2585,10 @@ def run_campaign_locked(
     require(options.timeout > 0 and options.lock_timeout >= 0,
             "benchmark timeout must be positive and lock timeout nonnegative")
     modes = comparison_modes(options.baseline_mode, options.candidate_mode)
+    if is_xmm_tail_comparison(modes):
+        require(options.preset == "xmm-tail" and not options.cell,
+                "XMM-tail comparison requires the complete exact XMM-tail "
+                "preset")
     execution_nonce = secrets.token_hex(16)
     topology_identity = require_smt_pair(
         options.cpu, options.reserved_sibling)
@@ -2099,6 +2608,8 @@ def run_campaign_locked(
         identifiers = set(options.cell)
         selected = [cell for cell in selected if cell["id"] in identifiers]
         require(len(selected) == len(identifiers), "unknown --cell identifier")
+    validate_comparison_matrix_selection(
+        options.preset, modes, matrix, selected)
     baseline_provenance = build_provenance_identity(
         baseline, options.baseline_archive,
         options.baseline_compile_commands, source_root)
@@ -2159,6 +2670,15 @@ def run_campaign_locked(
     binary_identity["candidate_avx512_object"] = file_identity(
         compile_entry_output(
             binary_identity["candidate_avx512_compile_entry"]))
+    if is_xmm_tail_comparison(modes):
+        binary_identity["baseline_avx2_encoding_audit"] = \
+            avx2_encoding_audit(options.baseline_avx2_object)
+        binary_identity["candidate_avx2_encoding_audit"] = \
+            avx2_encoding_audit(options.candidate_avx2_object)
+        binary_identity["xmm_tail_comparison_audit"] = \
+            xmm_tail_comparison_audit(
+                binary_identity["baseline_avx2_encoding_audit"],
+                binary_identity["candidate_avx2_encoding_audit"])
     for label in ("baseline", "candidate"):
         require(Path(binary_identity[label + "_avx2_object"]["path"]) ==
                 compile_entry_output(
@@ -2200,24 +2720,14 @@ def run_campaign_locked(
                 "%s core compile entry uses a different source" % label)
         require(compile_entry_source(avx512_entry) == expected_avx512_source,
                 "%s AVX-512 compile entry uses a different source" % label)
-    require(binary_identity["baseline_avx512_object"]["sha256"] ==
-            binary_identity["candidate_avx512_object"]["sha256"],
-            "direct-repair diagnostic unexpectedly changed the AVX-512 object")
-    require(binary_identity["baseline_avx2_xor_object"]["sha256"] ==
-            binary_identity["candidate_avx2_xor_object"]["sha256"],
-            "direct-repair diagnostic unexpectedly changed the AVX2 Xor object")
     baseline_members = baseline_provenance["object_closure"]["members"]
     candidate_members = candidate_provenance["object_closure"]["members"]
-    require(baseline_members["leopard2.cpp.o"]["compile"]["output"]["sha256"] !=
-            candidate_members["leopard2.cpp.o"]["compile"]["output"]["sha256"],
-            "diagnostic control did not change the direct-dispatch object")
-    for member in EXPECTED_ARCHIVE_MEMBERS:
-        if member == "leopard2.cpp.o":
-            continue
-        require(baseline_members[member]["compile"]["output"]["sha256"] ==
-                candidate_members[member]["compile"]["output"]["sha256"],
-                "diagnostic unexpectedly changed production object %s" %
-                    member)
+    validate_comparison_object_deltas(
+        modes,
+        {member: baseline_members[member]["compile"]["output"]["sha256"]
+         for member in EXPECTED_ARCHIVE_MEMBERS},
+        {member: candidate_members[member]["compile"]["output"]["sha256"]
+         for member in EXPECTED_ARCHIVE_MEMBERS})
     require(baseline_provenance["object_closure"]["benchmark"]["output"]
                 ["sha256"] ==
             candidate_provenance["object_closure"]["benchmark"]["output"]
@@ -2286,7 +2796,7 @@ def run_campaign_locked(
     # producing any timing observations.
     validate_binary_identity_structure(binary_identity)
     request = {
-        "schema": SCHEMA,
+        "schema": comparison_schema(modes),
         "matrix_sha256": matrix["matrix_sha256"],
         "matrix_preset": options.preset,
         "selected_cell_ids": [cell["id"] for cell in selected],
@@ -2402,7 +2912,7 @@ def run_campaign_locked(
             "restoration": affinity_restoration,
         }
         manifest = {
-            "schema": SCHEMA,
+            "schema": comparison_schema(modes),
             "created_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "request": request,
             "global_lock": lock_identity,
@@ -3180,6 +3690,12 @@ def validate_build_provenance_structure(
 
 
 def validate_binary_identity_structure(value: Any) -> None:
+    require(isinstance(value, dict), "binary identity is not an object")
+    modes = value.get("comparison_modes")
+    require(isinstance(modes, dict) and
+            set(modes) == {"baseline", "candidate"},
+            "binary identity comparison modes are invalid")
+    comparison_modes(modes["baseline"], modes["candidate"])
     expected_keys = set(BINARY_FILE_IDENTITY_KEYS) | {
         "comparison_modes",
         "baseline_avx2_compile_entry", "baseline_avx2_xor_compile_entry",
@@ -3191,12 +3707,13 @@ def validate_binary_identity_structure(value: Any) -> None:
         "baseline_archive_members", "candidate_archive_members",
         "baseline_build_provenance", "candidate_build_provenance",
     }
+    if is_xmm_tail_comparison(modes):
+        expected_keys.update({
+            "baseline_avx2_encoding_audit",
+            "candidate_avx2_encoding_audit",
+            "xmm_tail_comparison_audit",
+        })
     require_exact_keys(value, expected_keys, "binary identity")
-    modes = value.get("comparison_modes")
-    require(isinstance(modes, dict) and
-            set(modes) == {"baseline", "candidate"},
-            "binary identity comparison modes are invalid")
-    comparison_modes(modes["baseline"], modes["candidate"])
     require(isinstance(value.get("source"), dict) and
             isinstance(value["source"].get("root"), str),
             "binary identity source is invalid")
@@ -3244,6 +3761,19 @@ def validate_binary_identity_structure(value: Any) -> None:
                         binding["entry"],
                     "%s %s record is not bound to production closure" %
                         (label, component))
+        if is_xmm_tail_comparison(modes):
+            validate_avx2_encoding_audit(
+                value[label + "_avx2_encoding_audit"],
+                value[label + "_avx2_object"],
+                label + " AVX2 encoding audit")
+    if is_xmm_tail_comparison(modes):
+        validate_xmm_tail_audit_pair(
+            value["baseline_avx2_encoding_audit"],
+            value["candidate_avx2_encoding_audit"])
+        validate_xmm_tail_comparison_audit(
+            value["xmm_tail_comparison_audit"],
+            value["baseline_avx2_encoding_audit"],
+            value["candidate_avx2_encoding_audit"])
     require(value["baseline_executable"]["sha256"] !=
             value["candidate_executable"]["sha256"] and
             value["baseline_archive"]["sha256"] !=
@@ -3255,19 +3785,12 @@ def validate_binary_identity_structure(value: Any) -> None:
             "binary comparison identity is invalid")
     baseline_closure = value["baseline_build_provenance"]["object_closure"]
     candidate_closure = value["candidate_build_provenance"]["object_closure"]
-    require(baseline_closure["members"]["leopard2.cpp.o"]["compile"]
-                ["output"]["sha256"] !=
-            candidate_closure["members"]["leopard2.cpp.o"]["compile"]
-                ["output"]["sha256"],
-            "retained diagnostic core objects are byte-identical")
-    for member in EXPECTED_ARCHIVE_MEMBERS:
-        if member == "leopard2.cpp.o":
-            continue
-        require(baseline_closure["members"][member]["compile"]["output"]
-                    ["sha256"] ==
-                candidate_closure["members"][member]["compile"]["output"]
-                    ["sha256"],
-                "unexpected cross-build object difference: %s" % member)
+    validate_comparison_object_deltas(
+        modes,
+        {member: baseline_closure["members"][member]["compile"]["output"]
+            ["sha256"] for member in EXPECTED_ARCHIVE_MEMBERS},
+        {member: candidate_closure["members"][member]["compile"]["output"]
+            ["sha256"] for member in EXPECTED_ARCHIVE_MEMBERS})
     require(baseline_closure["benchmark"]["output"]["sha256"] ==
             candidate_closure["benchmark"]["output"]["sha256"],
             "benchmark object differs between diagnostic builds")
@@ -3373,7 +3896,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
         "affinity_exclusion", "isolation_epoch", "host", "statistics",
         "cell_summaries", "digest",
     }, "campaign manifest")
-    require(manifest["schema"] == SCHEMA, "wrong manifest schema")
+    require(manifest["schema"] in (SCHEMA, XMM_TAIL_SCHEMA),
+            "wrong manifest schema")
     manifest_copy = dict(manifest)
     expected_digest = manifest_copy.pop("digest")
     require(expected_digest == sha256_bytes(canonical_bytes(manifest_copy)),
@@ -3396,8 +3920,18 @@ def verify_campaign(options: argparse.Namespace) -> int:
     request_digest = request_copy.pop("request_digest")
     require(request_digest == sha256_bytes(canonical_bytes(request_copy)),
             "request digest mismatch")
-    require(request["schema"] == SCHEMA and
-            request["resume_policy"] ==
+    binary_identity = request.get("binary_identity")
+    modes = (binary_identity.get("comparison_modes")
+             if isinstance(binary_identity, dict) else None)
+    require(isinstance(modes, dict) and
+            set(modes) == {"baseline", "candidate"},
+            "request comparison modes are invalid")
+    comparison_modes(modes["baseline"], modes["candidate"])
+    require_comparison_schema(
+        request["schema"], modes, "request")
+    require_comparison_schema(
+        manifest["schema"], modes, "manifest")
+    require(request["resume_policy"] ==
                 "fresh complete authoritative campaign only" and
             request["isolation_policy"] == isolation_policy() and
             request["order"] == list(ORDER) and
@@ -3430,6 +3964,8 @@ def verify_campaign(options: argparse.Namespace) -> int:
                 if cell["id"] in set(selected_ids)]
     require([cell["id"] for cell in selected] == selected_ids,
             "selected cells are unknown or not in frozen order")
+    validate_comparison_matrix_selection(
+        request["matrix_preset"], modes, matrix, selected)
     request_path = campaign_root / "request.json"
     require(request_path.is_file() and
             json.loads(request_path.read_text()) == request,
@@ -3893,7 +4429,8 @@ def parser() -> argparse.ArgumentParser:
     matrix = commands.add_parser("matrix", help="write a frozen matrix")
     matrix.add_argument("--output", type=Path, default=Path("-"))
     matrix.add_argument(
-        "--preset", choices=("core", "large", "tiny"), default="core")
+        "--preset", choices=("core", "large", "tiny", "xmm-tail"),
+        default="core")
     matrix.set_defaults(function=write_matrix)
     run = commands.add_parser(
         "run", help="run a fresh, complete same-source campaign")
@@ -3918,7 +4455,8 @@ def parser() -> argparse.ArgumentParser:
         choices=tuple(MODE_COMPILE_DEFINITIONS))
     run.add_argument("--output", required=True, type=Path)
     run.add_argument(
-        "--preset", choices=("core", "large", "tiny"), default="core")
+        "--preset", choices=("core", "large", "tiny", "xmm-tail"),
+        default="core")
     run.add_argument("--cpu", required=True, type=int)
     run.add_argument("--reserved-sibling", required=True, type=int)
     run.add_argument("--reservation-file", required=True, type=Path)
