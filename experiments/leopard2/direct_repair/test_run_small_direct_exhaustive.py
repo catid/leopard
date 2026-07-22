@@ -34,6 +34,7 @@ def shard_record(index: int, count: int, mode: int = 1) -> dict:
         "basis_seed": 0,
         "assignment": "global_ordinal_mod_shard_count",
         "digest_fnv1a64": "%016x" % (index + 1),
+        "ordinal_digest_fnv1a64": "%016x" % (index + 101),
     }
 
 
@@ -67,6 +68,17 @@ class ExhaustiveRunnerTests(unittest.TestCase):
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "identity/counts"):
             RUNNER.validate_shard(value, 1, 28)
+
+    def test_ordinal_digest_is_independently_reproducible(self) -> None:
+        digests = RUNNER.expected_ordinal_digests(28)
+        self.assertEqual(len(digests), 28)
+        self.assertEqual(len(set(digests)), 28)
+        value = shard_record(0, 28)
+        value["ordinal_digest_fnv1a64"] = digests[0]
+        RUNNER.validate_shard(value, 0, 28, digests[0])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "identity/counts"):
+            RUNNER.validate_shard(value, 0, 28, "0" * 16)
 
 
 if __name__ == "__main__":
