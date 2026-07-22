@@ -455,11 +455,6 @@ MATRIX_TEST_SPECS = {
 MATRIX_BUILD_TARGETS = tuple(CURRENT_MATRIX_CONTRACT["build_targets"])
 MATRIX_BUILD_CACHE_KEYS = tuple(
     CURRENT_MATRIX_CONTRACT["build_cache_keys"])
-# v8 predates explicit field-option provenance.  Its v2 matrix producer used
-# the otherwise identical cache contract below, without the two field keys.
-POST_XOR_MATRIX_BUILD_CACHE_KEYS = tuple(
-    key for key in MATRIX_BUILD_CACHE_KEYS
-    if key not in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"))
 MATRIX_BASE_BACKEND_FAILURE_TESTS = tuple(
     CURRENT_MATRIX_CONTRACT["base_backend_failure_tests"])
 MATRIX_AVX512_BACKEND_FAILURE_TESTS = tuple(
@@ -3392,9 +3387,8 @@ def validate_matrix_document(
     matrix_build_targets = (
         MATRIX_BUILD_TARGETS if modern else PRE_XOR_MATRIX_BUILD_TARGETS)
     matrix_build_cache_keys = (
-        MATRIX_BUILD_CACHE_KEYS if current else
-        (POST_XOR_MATRIX_BUILD_CACHE_KEYS if post_xor else
-         PRE_XOR_MATRIX_BUILD_CACHE_KEYS))
+        MATRIX_BUILD_CACHE_KEYS if modern else
+        PRE_XOR_MATRIX_BUILD_CACHE_KEYS)
     backend_failure_ctest_regex = (
         MATRIX_BACKEND_FAILURE_CTEST_REGEX if modern else
         "^leopard2_backend_failure_")
@@ -4666,18 +4660,9 @@ def git_file_hashes(repo, commit, relatives):
 
 
 def post_xor_matrix_fixture(document):
-    """Downgrade a synthetic v9 matrix to v8's unpinned field contract."""
+    """Downgrade v9 to v8's cache-bound, implicit field configuration."""
     value = copy.deepcopy(document)
     for variant in value["variants"]:
-        identity = variant["build_identity"]
-        for key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
-            identity["cache"].pop(key, None)
-        identity["cache_sha256"] = sha256_bytes(
-            canonical_bytes(identity["cache"]))
-        identity_payload = dict(identity)
-        identity_payload.pop("digest", None)
-        identity["digest"] = sha256_bytes(canonical_bytes(identity_payload))
-
         configure = variant["commands"][0]
         configure["argv"] = [
             argument for argument in configure["argv"]
@@ -5637,7 +5622,17 @@ def self_test(repo):
         }
         atomic_json(matrix, matrix_document)
         post_xor_matrix = root / "matrix-v2-post-xor.json"
-        atomic_json(post_xor_matrix, post_xor_matrix_fixture(matrix_document))
+        post_xor_document = post_xor_matrix_fixture(matrix_document)
+        for variant in post_xor_document["variants"]:
+            cache = variant["build_identity"]["cache"]
+            require(cache.get("LEOPARD_ENABLE_GF8") == "ON" and
+                    cache.get("LEOPARD_ENABLE_GF16") == "ON",
+                    "post-XOR v8 fixture lost field cache provenance")
+            configure_argv = variant["commands"][0]["argv"]
+            require("-DLEOPARD_ENABLE_GF8=ON" not in configure_argv and
+                    "-DLEOPARD_ENABLE_GF16=ON" not in configure_argv,
+                    "post-XOR v8 fixture retained v9 configure arguments")
+        atomic_json(post_xor_matrix, post_xor_document)
         pre_xor_matrix = root / "matrix-v1-pre-xor.json"
         atomic_json(pre_xor_matrix, pre_xor_matrix_fixture(matrix_document))
         reservation = root / "reservation.json"
