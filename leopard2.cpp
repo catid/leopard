@@ -952,6 +952,35 @@ static bool PrunedPlanSavesByteHeavyWork(
          plan.one_output_butterflies != 0);
 }
 
+static bool SkipMeasuredDenseGF8AVX2HighPrunedSchedules(
+    const leo2_decode_plan* plan)
+{
+    if (!plan || !plan->codec)
+        return false;
+    const leo2_codec* codec = plan->codec;
+
+    /*
+        Pinned pure-AVX2 measurements found that compiling exact-mask input
+        and output schedules for these dense maximum-loss shapes costs more
+        than the mature regular transform saves.  Omitting both schedules
+        reduced plan setup by 3.0x at T=8 and 5.8--7.9x at T=64, while the
+        regular execution path was also 1--5% faster.  T=32 is deliberately
+        excluded: its 64-KiB neighbors regressed by more than the production
+        tolerance.  AUTO follows the backend selected for decode, while wider
+        backends keep their independently measured policy.  This setup choice
+        cannot alter the wire profile.
+    */
+    return codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 && codec->context &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        (codec->padded_side == 8 || codec->padded_side == 64) &&
+        codec->recovery_count == codec->padded_side &&
+        plan->missing_original_count == codec->recovery_count &&
+        static_cast<uint64_t>(codec->original_count) >=
+            static_cast<uint64_t>(codec->recovery_count) * 2U;
+}
+
 static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
 {
     const leo2_codec* codec = plan->codec;
@@ -968,6 +997,8 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
     // pays only for the metadata it can execute.
     const bool needs_generic = !force_specialized;
     const bool needs_specialized = !force_generic;
+    const bool compile_pruned_schedules =
+        !SkipMeasuredDenseGF8AVX2HighPrunedSchedules(plan);
 
     const std::vector<uint32_t>& execution_requested_coordinates =
         DecodeExecutionRequestedCoordinates(plan);
@@ -1147,7 +1178,7 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
             if (live_count == 0 || live_count == side)
                 continue;
             leopard2_internal::PrunedTransformPlan candidate;
-            if (PrepareCodecPrunedTransform(
+            if (compile_pruned_schedules && PrepareCodecPrunedTransform(
                     codec, side, offset, true, input_mask.data(),
                     output_mask.data(), candidate) &&
                 PrunedPlanSavesByteHeavyWork(candidate))
@@ -1175,7 +1206,7 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
                  ++i)
                 output_mask[execution_requested_coordinates[i] - offset] = 1;
             leopard2_internal::PrunedTransformPlan candidate;
-            if (!PrepareCodecPrunedTransform(
+            if (!compile_pruned_schedules || !PrepareCodecPrunedTransform(
                     codec, side, offset, false, input_mask.data(),
                     output_mask.data(), candidate) ||
                 !PrunedPlanSavesByteHeavyWork(candidate))
@@ -5675,6 +5706,27 @@ bool GetCodecDecodeMetadataInfo(
         codec->translated_low_permanent_locator16.size() * sizeof(uint16_t);
     info.translated_factor_bytes = codec->translated_low_factors8.size() +
         codec->translated_low_factors16.size() * sizeof(uint16_t);
+    *info_out = info;
+    return true;
+}
+
+bool GetDecodePlanPrunedScheduleInfo(
+    const leo2_decode_plan* plan,
+    DecodePlanPrunedScheduleInfo* info_out)
+{
+    if (!plan || !info_out)
+        return false;
+    DecodePlanPrunedScheduleInfo info;
+    info.low_input_plan_count = plan->low_pruned_input_blocks.size();
+    info.low_output_plan_count =
+        plan->low_pruned_output_plan.size == 0 ? 0 : 1;
+    info.high_input_plan_count = plan->high_pruned_input_blocks.size();
+    info.high_output_plan_count = 0;
+    for (size_t i = 0; i < plan->high_pruned_output_plans.size(); ++i)
+    {
+        if (plan->high_pruned_output_plans[i].size != 0)
+            ++info.high_output_plan_count;
+    }
     *info_out = info;
     return true;
 }

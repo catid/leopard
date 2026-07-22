@@ -1224,6 +1224,17 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_decode_plan_schedule PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1")
 
+    add_executable(leopard2_dense_plan_policy_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_dense_plan_policy.cpp)
+    target_include_directories(leopard2_dense_plan_policy_test
+        PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_dense_plan_policy_test leopard)
+    add_test(NAME leopard2_dense_plan_policy
+        COMMAND leopard2_dense_plan_policy_test)
+    set_tests_properties(leopard2_dense_plan_policy PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
     add_executable(leopard2_gf16_tails_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_gf16_tails.cpp)

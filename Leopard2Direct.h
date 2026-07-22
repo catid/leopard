@@ -141,6 +141,23 @@ bool GetCodecDecodeMetadataInfo(
     const leo2_codec* codec,
     CodecDecodeMetadataInfo* info_out);
 
+/*
+    Pattern-dependent structural accounting for an immutable decode plan.
+    Empty high-output entries select the mature full transform and are not
+    counted as compiled pruned schedules.
+*/
+struct DecodePlanPrunedScheduleInfo
+{
+    size_t low_input_plan_count;
+    size_t low_output_plan_count;
+    size_t high_input_plan_count;
+    size_t high_output_plan_count;
+};
+
+bool GetDecodePlanPrunedScheduleInfo(
+    const leo2_decode_plan* plan,
+    DecodePlanPrunedScheduleInfo* info_out);
+
 } // namespace leopard2_internal
 
 #endif /* __cplusplus */
