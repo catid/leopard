@@ -124,6 +124,7 @@ struct Counts
     uint64_t recovered_shards;
     uint64_t verified_basis_symbols;
     uint64_t digest;
+    uint64_t ordinal_digest;
 
     Counts()
         : total_patterns(0)
@@ -131,6 +132,7 @@ struct Counts
         , recovered_shards(0)
         , verified_basis_symbols(0)
         , digest(kFnvOffset)
+        , ordinal_digest(kFnvOffset)
     {
     }
 };
@@ -240,6 +242,8 @@ void verify_pattern(
             counts.digest = mix_u64(counts.digest, missing[i]);
         for (size_t i = 0; i < selected_parities.size(); ++i)
             counts.digest = mix_u64(counts.digest, selected_parities[i]);
+        counts.ordinal_digest = mix_u64(
+            counts.ordinal_digest, counts.total_patterns);
     }
     catch (...)
     {
@@ -375,7 +379,10 @@ int main(int argc, char** argv)
                   << "  \"assignment\": \"global_ordinal_mod_shard_count\",\n"
                   << "  \"digest_fnv1a64\": \""
                   << std::hex << std::setw(16) << std::setfill('0')
-                  << counts.digest << "\"\n"
+                  << counts.digest << "\",\n"
+                  << "  \"ordinal_digest_fnv1a64\": \""
+                  << std::setw(16) << std::setfill('0')
+                  << counts.ordinal_digest << "\"\n"
                   << "}\n";
         return 0;
     }

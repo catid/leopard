@@ -21,6 +21,9 @@ SCHEMA = "leopard2-small-direct-exhaustive-campaign/v1"
 SHARD_SCHEMA = "leopard2-small-direct-exhaustive/v1"
 EXPECTED_PATTERNS = 1_982_812
 DEFAULT_LOCK = Path("/tmp/leopard-gf8-authoritative.lock")
+FNV_OFFSET = 14_695_981_039_346_656_037
+FNV_PRIME = 1_099_511_628_211
+U64_MASK = (1 << 64) - 1
 
 
 class EvidenceError(RuntimeError):
@@ -62,6 +65,22 @@ def atomic_json(path: Path, value: Any) -> None:
     os.replace(temporary, path)
 
 
+def fnv_mix_u64(digest: int, value: int) -> int:
+    for byte in range(8):
+        digest ^= (value >> (byte * 8)) & 0xff
+        digest = (digest * FNV_PRIME) & U64_MASK
+    return digest
+
+
+def expected_ordinal_digests(shard_count: int) -> list[str]:
+    require(shard_count > 0, "ordinal digest requires nonzero shard count")
+    digests = [FNV_OFFSET] * shard_count
+    for ordinal in range(EXPECTED_PATTERNS):
+        shard = ordinal % shard_count
+        digests[shard] = fnv_mix_u64(digests[shard], ordinal)
+    return ["%016x" % value for value in digests]
+
+
 def acquire_lock(path: Path, timeout: float):
     require(path == DEFAULT_LOCK and path.is_absolute(),
             "exhaustive campaign requires the canonical GF8 lock")
@@ -80,11 +99,13 @@ def acquire_lock(path: Path, timeout: float):
 
 
 def validate_shard(
-        value: Any, shard_index: int, shard_count: int) -> dict[str, Any]:
+        value: Any, shard_index: int, shard_count: int,
+        expected_ordinal_digest: str | None = None) -> dict[str, Any]:
     require(isinstance(value, dict) and set(value) == {
         "schema", "mode", "shard_index", "shard_count", "total_patterns",
         "assigned_patterns", "recovered_shards", "verified_basis_symbols",
         "basis_seed", "assignment", "digest_fnv1a64",
+        "ordinal_digest_fnv1a64",
     }, "shard result has the wrong shape")
     expected_assigned = EXPECTED_PATTERNS // shard_count + (
         1 if shard_index < EXPECTED_PATTERNS % shard_count else 0)
@@ -106,13 +127,20 @@ def validate_shard(
             value["basis_seed"] == 0 and
             value["assignment"] == "global_ordinal_mod_shard_count" and
             isinstance(value["digest_fnv1a64"], str) and
-            re.fullmatch(r"[0-9a-f]{16}", value["digest_fnv1a64"]),
+            re.fullmatch(r"[0-9a-f]{16}", value["digest_fnv1a64"]) and
+            isinstance(value["ordinal_digest_fnv1a64"], str) and
+            re.fullmatch(r"[0-9a-f]{16}",
+                         value["ordinal_digest_fnv1a64"]) and
+            (expected_ordinal_digest is None or
+             value["ordinal_digest_fnv1a64"] == expected_ordinal_digest),
             "shard result identity/counts are invalid")
     return value
 
 
 def retained_shard(
-        root: Path, shard_index: int, shard_count: int) -> dict[str, Any] | None:
+        root: Path, shard_index: int, shard_count: int,
+        binary_identity: dict[str, Any], cpu: int, command: list[str],
+        expected_ordinal_digest: str) -> dict[str, Any] | None:
     directory = root / ("shard-%02d" % shard_index)
     result_path = directory / "result.json"
     stdout_path = directory / "stdout.json"
@@ -123,22 +151,26 @@ def retained_shard(
             "retained shard is missing stdout/stderr")
     record = json.loads(result_path.read_text())
     require(isinstance(record, dict) and set(record) == {
-        "shard", "stdout", "stderr",
+        "shard", "stdout", "stderr", "binary", "cpu", "command",
     }, "retained shard envelope has the wrong shape")
     stdout_identity = file_identity(stdout_path)
     stderr_identity = file_identity(stderr_path)
     require(record["stdout"] == stdout_identity and
-            record["stderr"] == stderr_identity,
+            record["stderr"] == stderr_identity and
+            record["binary"] == binary_identity and
+            record["cpu"] == cpu and record["command"] == command,
             "retained shard stream identity changed")
     parsed = json.loads(stdout_path.read_text())
     require(record["shard"] == parsed,
             "retained shard result differs from stdout")
-    return validate_shard(parsed, shard_index, shard_count)
+    return validate_shard(
+        parsed, shard_index, shard_count, expected_ordinal_digest)
 
 
 def launch_shards(
         binary: Path, output: Path, workers: int, timeout: float,
-        shard_count: int) -> list[dict[str, Any]]:
+        shard_count: int,
+        ordinal_digests: list[str]) -> list[dict[str, Any]]:
     allowed = sorted(os.sched_getaffinity(0))
     require(workers > 0 and workers <= len(allowed),
             "workers exceed the process-visible CPU set")
@@ -146,11 +178,20 @@ def launch_shards(
             "one deterministic shard per worker is required")
     taskset = shutil.which("taskset")
     require(taskset is not None, "taskset is required for pinned shard jobs")
+    binary_identity = file_identity(binary)
 
     results: list[dict[str, Any] | None] = [None] * shard_count
     pending: list[int] = []
     for shard_index in range(shard_count):
-        retained = retained_shard(output, shard_index, shard_count)
+        cpu = allowed[shard_index % workers]
+        command = [
+            taskset, "-c", str(cpu), str(binary),
+            "--shard-index", str(shard_index),
+            "--shard-count", str(shard_count),
+        ]
+        retained = retained_shard(
+            output, shard_index, shard_count, binary_identity, cpu, command,
+            ordinal_digests[shard_index])
         if retained is None:
             pending.append(shard_index)
         else:
@@ -158,7 +199,9 @@ def launch_shards(
     if not pending:
         return [value for value in results if value is not None]
 
-    processes: dict[int, tuple[subprocess.Popen[bytes], Any, Any, float]] = {}
+    processes: dict[
+        int, tuple[subprocess.Popen[bytes], Any, Any, float, int, list[str]]
+    ] = {}
     try:
         for shard_index in pending:
             directory = output / ("shard-%02d" % shard_index)
@@ -175,12 +218,13 @@ def launch_shards(
                 command, stdout=stdout_stream, stderr=stderr_stream,
                 start_new_session=True)
             processes[shard_index] = (
-                process, stdout_stream, stderr_stream, time.monotonic())
+                process, stdout_stream, stderr_stream, time.monotonic(), cpu,
+                command)
 
         completed_count = shard_count - len(pending)
         while processes:
             for shard_index in list(processes):
-                process, stdout_stream, stderr_stream, started = \
+                process, stdout_stream, stderr_stream, started, cpu, command = \
                     processes[shard_index]
                 return_code = process.poll()
                 if return_code is None and time.monotonic() - started > timeout:
@@ -202,11 +246,16 @@ def launch_shards(
                 except json.JSONDecodeError as error:
                     raise EvidenceError(
                         "shard %d emitted invalid JSON" % shard_index) from error
-                value = validate_shard(parsed, shard_index, shard_count)
+                value = validate_shard(
+                    parsed, shard_index, shard_count,
+                    ordinal_digests[shard_index])
                 envelope = {
                     "shard": value,
                     "stdout": file_identity(stdout_path),
                     "stderr": file_identity(stderr_path),
+                    "binary": binary_identity,
+                    "cpu": cpu,
+                    "command": command,
                 }
                 atomic_json(directory / "result.json", envelope)
                 results[shard_index] = value
@@ -217,7 +266,8 @@ def launch_shards(
             if processes:
                 time.sleep(0.05)
     finally:
-        for process, stdout_stream, stderr_stream, unused_started in \
+        for process, stdout_stream, stderr_stream, unused_started, \
+                unused_cpu, unused_command in \
                 processes.values():
             try:
                 process.kill()
@@ -232,15 +282,35 @@ def launch_shards(
 
 
 def run(options: argparse.Namespace) -> int:
-    binary = options.binary.resolve(strict=True)
-    require(binary.is_file() and os.access(binary, os.X_OK),
+    source_binary = options.binary.resolve(strict=True)
+    require(source_binary.is_file() and os.access(source_binary, os.X_OK),
             "exhaustive verifier is not executable")
     output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
+    source_binary_identity = file_identity(source_binary)
+    artifact_directory = output / "artifacts"
+    artifact_directory.mkdir(parents=True, exist_ok=True)
+    binary = artifact_directory / "leopard2_small_direct_exhaustive_test"
+    if binary.exists():
+        retained_binary = file_identity(binary)
+        require(retained_binary["size"] == source_binary_identity["size"] and
+                retained_binary["sha256"] == source_binary_identity["sha256"],
+                "frozen executable differs from the requested source binary")
+    else:
+        temporary = binary.with_name(binary.name + ".tmp-%d" % os.getpid())
+        shutil.copyfile(source_binary, temporary)
+        os.chmod(temporary, 0o755)
+        os.replace(temporary, binary)
+    frozen_binary_identity = file_identity(binary)
+    require(frozen_binary_identity["size"] == source_binary_identity["size"] and
+            frozen_binary_identity["sha256"] == source_binary_identity["sha256"],
+            "frozen executable copy changed bytes")
     workers = options.workers
+    ordinal_digests = expected_ordinal_digests(workers)
     request = {
         "schema": SCHEMA,
-        "binary": file_identity(binary),
+        "source_binary": source_binary_identity,
+        "frozen_binary": frozen_binary_identity,
         "runner": file_identity(Path(__file__)),
         "workers": workers,
         "shard_count": workers,
@@ -249,6 +319,7 @@ def run(options: argparse.Namespace) -> int:
         "allowed_cpus": sorted(os.sched_getaffinity(0)),
         "assignment": "global_ordinal_mod_shard_count",
         "basis_seed": 0,
+        "expected_ordinal_digests": ordinal_digests,
     }
     request["digest"] = sha256_bytes(canonical_bytes(request))
     request_path = output / "request.json"
@@ -261,10 +332,15 @@ def run(options: argparse.Namespace) -> int:
     lock = acquire_lock(options.lock, options.lock_timeout)
     try:
         shards = launch_shards(
-            binary, output, workers, options.timeout, workers)
+            binary, output, workers, options.timeout, workers,
+            ordinal_digests)
     finally:
         fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()
+    require(file_identity(binary) == frozen_binary_identity,
+            "frozen executable changed during the exhaustive campaign")
+    require(file_identity(source_binary) == source_binary_identity,
+            "source executable changed during the exhaustive campaign")
     modes = {value["mode"] for value in shards}
     require(len(modes) == 1,
             "exhaustive shards came from different experiment modes")
