@@ -36,10 +36,13 @@ except ImportError:  # Verification remains usable on non-POSIX hosts.
 
 
 LEGACY_SCHEMA = "leopard2-backend-butterfly-abba/v6"
-SCHEMA = "leopard2-backend-butterfly-abba/v7"
+PRE_XOR_SCHEMA = "leopard2-backend-butterfly-abba/v7"
+SCHEMA = "leopard2-backend-butterfly-abba/v8"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
+MATRIX_SCHEMA_V1 = "leopard2-backend-matrix/v1"
+MATRIX_SCHEMA = "leopard2-backend-matrix/v2"
 SUPPORTED_BACKENDS = ("ssse3", "avx2")
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
@@ -65,6 +68,37 @@ PR_GET_CHILD_SUBREAPER = 37
 # Keep authenticated policy rejection distinct from both evidence failure (1)
 # and argparse's command-line usage error (2).
 EXPECTED_POLICY_FAILURE_EXIT = 3
+
+
+def load_current_matrix_contract():
+    """Load the exact v2 producer contract used by current evidence.
+
+    Historical v1 constants remain frozen below.  Current evidence refuses a
+    producer schema change instead of silently accepting a drifted matrix.
+    """
+    path = Path(__file__).resolve().parents[3] / \
+        "tools/leopard2_backend_matrix.py"
+    specification = importlib.util.spec_from_file_location(
+        "leopard2_backend_matrix_contract_v2", str(path))
+    if specification is None or specification.loader is None:
+        raise RuntimeError("cannot load backend-matrix v2 contract")
+    module = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    contract = module.evidence_contract()
+    expected_keys = {
+        "schema", "source_files", "expected_compile_source_counts",
+        "compare_tests", "run_only_tests", "run_tests", "test_specs",
+        "build_targets", "build_cache_keys", "base_backend_failure_tests",
+        "avx512_backend_failure_tests", "backend_failure_ctest_regex",
+        "portable_ctest_regex", "cuda_ctest_regex",
+    }
+    if not isinstance(contract, dict) or set(contract) != expected_keys or \
+            contract.get("schema") != MATRIX_SCHEMA:
+        raise RuntimeError("backend-matrix producer contract/schema changed")
+    return contract
+
+
+CURRENT_MATRIX_CONTRACT = load_current_matrix_contract()
 
 
 def cell(name, k, r, profile, field, byte_count, loss, kind):
@@ -128,7 +162,7 @@ CELLS = (
     cell("low-gf16-loss1", 128, 1024, "low", "gf16", 16384, 1, "neighbor"),
 )
 
-BUILD_TRANSLATION_UNITS = (
+PRE_XOR_BUILD_TRANSLATION_UNITS = (
     "leopard.cpp",
     "leopard2.cpp",
     "Leopard2Backend.cpp",
@@ -143,10 +177,17 @@ BUILD_TRANSLATION_UNITS = (
     "bench/leopard2/benchmark.cpp",
 )
 
+BUILD_TRANSLATION_UNITS = (
+    *PRE_XOR_BUILD_TRANSLATION_UNITS[:6],
+    "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX512.cpp",
+    *PRE_XOR_BUILD_TRANSLATION_UNITS[6:],
+)
+
 # CMake appends GF8/GF16 and then the optional object-library sources to the
-# ordinary LIB_SOURCE_FILES list.  This is a semantic part of current v7's
+# ordinary LIB_SOURCE_FILES list.  This is a semantic part of pre-XOR v7's
 # retained archive recipe, not a sorted-set convention.
-CURRENT_ARCHIVE_TRANSLATION_UNITS = (
+PRE_XOR_ARCHIVE_TRANSLATION_UNITS = (
     "leopard.cpp",
     "leopard2.cpp",
     "Leopard2Backend.cpp",
@@ -158,6 +199,12 @@ CURRENT_ARCHIVE_TRANSLATION_UNITS = (
     "LeopardFF16.cpp",
     "Leopard2BackendSSSE3.cpp",
     "Leopard2BackendAVX2.cpp",
+)
+
+CURRENT_ARCHIVE_TRANSLATION_UNITS = (
+    *PRE_XOR_ARCHIVE_TRANSLATION_UNITS,
+    "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX512.cpp",
 )
 
 HISTORICAL_ARCHIVE_TRANSLATION_UNITS = (
@@ -174,7 +221,7 @@ HISTORICAL_ARCHIVE_TRANSLATION_UNITS = (
     "Leopard2BackendAVX2.cpp",
 )
 
-MATRIX_SOURCE_FILES = (
+PRE_XOR_MATRIX_SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
     "LeopardCommon.h",
@@ -243,7 +290,7 @@ MATRIX_SOURCE_FILES = (
     "tools/leopard2_backend_matrix.py",
 )
 
-MATRIX_COMPARE_TESTS = (
+PRE_XOR_MATRIX_COMPARE_TESTS = (
     "field_options",
     "direct_oracle",
     "backend_ops",
@@ -284,10 +331,11 @@ MATRIX_COMPARE_TESTS = (
 # This test intentionally reports which qualified backends were enumerated, so
 # its stdout differs between forced variants even though every byte check must
 # pass.  Preserve execution and provenance without requiring identical output.
-MATRIX_RUN_ONLY_TESTS = ("pruned_transform",)
-MATRIX_RUN_TESTS = MATRIX_COMPARE_TESTS + MATRIX_RUN_ONLY_TESTS
+PRE_XOR_MATRIX_RUN_ONLY_TESTS = ("pruned_transform",)
+PRE_XOR_MATRIX_RUN_TESTS = \
+    PRE_XOR_MATRIX_COMPARE_TESTS + PRE_XOR_MATRIX_RUN_ONLY_TESTS
 
-MATRIX_BACKEND_FAILURE_TESTS = (
+PRE_XOR_MATRIX_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
     "leopard2_backend_failure_scalar_ff16_allocation",
     "leopard2_backend_failure_scalar_kat",
@@ -299,7 +347,7 @@ MATRIX_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_avx2_kat",
 )
 
-MATRIX_TEST_SPECS = {
+PRE_XOR_MATRIX_TEST_SPECS = {
     "field_options": ("leopard2_field_options_test", []),
     "direct_oracle": ("leopard2_direct_oracle_test", []),
     "backend_ops": ("leopard2_backend_ops_test", []),
@@ -347,7 +395,7 @@ MATRIX_TEST_SPECS = {
     "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
 }
 
-MATRIX_BUILD_TARGETS = (
+PRE_XOR_MATRIX_BUILD_TARGETS = (
     "leopard2_field_options_test",
     "leopard2_direct_oracle_test",
     "leopard2_backend_ops_test",
@@ -382,7 +430,7 @@ MATRIX_BUILD_TARGETS = (
     "leopard2_pruned_fuzz_smoke",
 )
 
-MATRIX_BUILD_CACHE_KEYS = (
+PRE_XOR_MATRIX_BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_C_FLAGS",
     "CMAKE_C_FLAGS_RELEASE", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE",
     "CMAKE_EXE_LINKER_FLAGS", "CMAKE_EXE_LINKER_FLAGS_RELEASE",
@@ -392,7 +440,27 @@ MATRIX_BUILD_CACHE_KEYS = (
     "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER",
 )
 
-MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
+MATRIX_COMPARE_TESTS = tuple(CURRENT_MATRIX_CONTRACT["compare_tests"])
+MATRIX_RUN_ONLY_TESTS = tuple(CURRENT_MATRIX_CONTRACT["run_only_tests"])
+MATRIX_RUN_TESTS = tuple(CURRENT_MATRIX_CONTRACT["run_tests"])
+MATRIX_TEST_SPECS = {
+    name: (specification[0], list(specification[1]))
+    for name, specification in CURRENT_MATRIX_CONTRACT["test_specs"].items()
+}
+MATRIX_BUILD_TARGETS = tuple(CURRENT_MATRIX_CONTRACT["build_targets"])
+MATRIX_BUILD_CACHE_KEYS = tuple(
+    CURRENT_MATRIX_CONTRACT["build_cache_keys"])
+MATRIX_BASE_BACKEND_FAILURE_TESTS = tuple(
+    CURRENT_MATRIX_CONTRACT["base_backend_failure_tests"])
+MATRIX_AVX512_BACKEND_FAILURE_TESTS = tuple(
+    CURRENT_MATRIX_CONTRACT["avx512_backend_failure_tests"])
+MATRIX_BACKEND_FAILURE_CTEST_REGEX = \
+    CURRENT_MATRIX_CONTRACT["backend_failure_ctest_regex"]
+MATRIX_PORTABLE_CTEST_REGEX = \
+    CURRENT_MATRIX_CONTRACT["portable_ctest_regex"]
+MATRIX_CUDA_CTEST_REGEX = CURRENT_MATRIX_CONTRACT["cuda_ctest_regex"]
+
+PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
     "Leopard2Backend.cpp": 2,
     "Leopard2BackendAVX2.cpp": 1,
     "Leopard2BackendSSSE3.cpp": 1,
@@ -444,6 +512,9 @@ MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_transform_differential.cpp": 1,
 }
 
+MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+    CURRENT_MATRIX_CONTRACT["expected_compile_source_counts"])
+
 CONFIGURATION_KEYS = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_C_FLAGS",
@@ -463,6 +534,8 @@ CONFIGURATION_KEYS = (
     "LEO2_ENABLE_CUDA",
 )
 
+MATRIX_SOURCE_FILES = tuple(CURRENT_MATRIX_CONTRACT["source_files"])
+
 TOOL_CACHE_KEYS = (
     ("cmake", "CMAKE_COMMAND"),
     ("cc", "CMAKE_C_COMPILER"),
@@ -475,11 +548,16 @@ TOOL_CACHE_KEYS = (
     ("make", "CMAKE_MAKE_PROGRAM"),
 )
 
-CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS + (
+PRE_XOR_CONFIGURED_TRANSLATION_UNITS = PRE_XOR_BUILD_TRANSLATION_UNITS + (
     "bench/leopard2/locator_benchmark.cpp",
     "tests/benchmark.cpp",
     "tests/experiments.cpp",
 )
+
+# Current v8 scopes the CMake File API proof to the benchmark and its complete
+# target dependency graph.  Unrelated configured benchmarks cannot affect the
+# linked executable and no longer make its evidence schema drift accidentally.
+CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS
 
 HISTORICAL_CMAKE_IDENTITY = {
     "target": "libleopard",
@@ -493,12 +571,40 @@ CANONICAL_CMAKE_IDENTITY = {
 }
 SCHEMA_TO_CMAKE_IDENTITY = {
     LEGACY_SCHEMA: HISTORICAL_CMAKE_IDENTITY,
+    PRE_XOR_SCHEMA: CANONICAL_CMAKE_IDENTITY,
     SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 
+HARDENED_SCHEMAS = frozenset((PRE_XOR_SCHEMA, SCHEMA))
+
+
+def build_translation_units_for_schema(schema):
+    return (BUILD_TRANSLATION_UNITS if schema == SCHEMA else
+            PRE_XOR_BUILD_TRANSLATION_UNITS)
+
+
+def configured_translation_units_for_schema(schema):
+    return (CONFIGURED_TRANSLATION_UNITS if schema == SCHEMA else
+            PRE_XOR_CONFIGURED_TRANSLATION_UNITS)
+
+
+def archive_translation_units_for_schema(schema):
+    if schema == SCHEMA:
+        return CURRENT_ARCHIVE_TRANSLATION_UNITS
+    if schema == PRE_XOR_SCHEMA:
+        return PRE_XOR_ARCHIVE_TRANSLATION_UNITS
+    require(schema == LEGACY_SCHEMA, "unsupported butterfly archive schema")
+    return HISTORICAL_ARCHIVE_TRANSLATION_UNITS
+
+PRE_XOR_RELEVANT_NON_LIBRARY_TARGETS = (
+    "leopard2_backend_ssse3",
+    "leopard2_backend_avx2",
+    "bench_leopard2",
+)
 RELEVANT_NON_LIBRARY_TARGETS = (
     "leopard2_backend_ssse3",
     "leopard2_backend_avx2",
+    "leopard2_backend_avx512",
     "bench_leopard2",
 )
 
@@ -512,8 +618,9 @@ def cmake_identity_for_schema(schema):
 
 
 def relevant_targets_for_schema(schema):
-    return (cmake_identity_for_schema(schema)["target"],) + \
-        RELEVANT_NON_LIBRARY_TARGETS
+    non_library = (RELEVANT_NON_LIBRARY_TARGETS if schema == SCHEMA else
+                   PRE_XOR_RELEVANT_NON_LIBRARY_TARGETS)
+    return (cmake_identity_for_schema(schema)["target"],) + non_library
 
 POWER_STATE_FILES = (
     ("scaling_driver", "cpu{cpu}/cpufreq/scaling_driver"),
@@ -1625,7 +1732,7 @@ def check_raw(
         "missing_original_indices", "batch", "reuse", "iterations",
         "warmup", "thread_count", "seed",
     }
-    if evidence_schema == SCHEMA:
+    if evidence_schema in HARDENED_SCHEMAS:
         required_parameter_keys.update({
             "force_tiled_decode", "force_materialized_decode"})
     require(set(parameters) == required_parameter_keys,
@@ -1640,7 +1747,7 @@ def check_raw(
         "batch": 1, "reuse": 8, "iterations": 7, "warmup": 3,
         "thread_count": 1, "seed": 42,
     }
-    if evidence_schema == SCHEMA:
+    if evidence_schema in HARDENED_SCHEMAS:
         expected.update({
             "force_tiled_decode": False,
             "force_materialized_decode": False,
@@ -2108,6 +2215,9 @@ def command_evidence(argv, cwd, label, logical_argv, environment=None):
 def file_api_targets(source_root, build_root, schema=SCHEMA):
     cmake_identity = cmake_identity_for_schema(schema)
     relevant_targets = relevant_targets_for_schema(schema)
+    configured_translation_units = configured_translation_units_for_schema(
+        schema)
+    build_translation_units = build_translation_units_for_schema(schema)
     reply = build_root / ".cmake/api/v1/reply"
     indexes = sorted(reply.glob("index-*.json"))
     require(len(indexes) == 1, "CMake File API must produce exactly one index")
@@ -2135,7 +2245,10 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
             "CMake target graph omits evidence target")
 
     configured_units = set()
-    for document in documents.values():
+    configured_documents = (
+        [documents[name] for name in relevant_targets]
+        if schema == SCHEMA else documents.values())
+    for document in configured_documents:
         for source in document.get("sources", []):
             if "compileGroupIndex" not in source:
                 continue
@@ -2145,10 +2258,10 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
             require(relative_to(path, source_root) is not None,
                     "configured translation unit escapes source root: " + str(path))
             configured_units.add(path.resolve().relative_to(source_root).as_posix())
-    require(configured_units == set(CONFIGURED_TRANSLATION_UNITS),
+    require(configured_units == set(configured_translation_units),
             "configured translation-unit set mismatch: missing={} extra={}".format(
-                sorted(set(CONFIGURED_TRANSLATION_UNITS) - configured_units),
-                sorted(configured_units - set(CONFIGURED_TRANSLATION_UNITS))))
+                sorted(set(configured_translation_units) - configured_units),
+                sorted(configured_units - set(configured_translation_units))))
 
     targets = {}
     artifact_paths = {}
@@ -2156,15 +2269,22 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
     for name in relevant_targets:
         document = documents[name]
         artifacts = document.get("artifacts", [])
-        require(isinstance(artifacts, list) and len(artifacts) == 1,
-                "evidence target must have exactly one artifact: " + name)
-        artifact = Path(artifacts[0].get("path", ""))
-        if not artifact.is_absolute():
-            artifact = build_root / artifact
-        artifact = artifact.resolve()
-        require(relative_to(artifact, build_root) is not None,
-                "target artifact escapes fresh build: " + name)
-        artifact_paths[name] = artifact
+        expected_artifact_count = (
+            2 if schema == SCHEMA and
+            name == "leopard2_backend_avx2" else 1)
+        require(isinstance(artifacts, list) and
+                len(artifacts) == expected_artifact_count,
+                "evidence target artifact count changed: " + name)
+        resolved_artifacts = []
+        for artifact_record in artifacts:
+            artifact = Path(artifact_record.get("path", ""))
+            if not artifact.is_absolute():
+                artifact = build_root / artifact
+            artifact = artifact.resolve()
+            require(relative_to(artifact, build_root) is not None,
+                    "target artifact escapes fresh build: " + name)
+            resolved_artifacts.append(artifact)
+        artifact_paths[name] = resolved_artifacts[0]
         sources = []
         for source in document.get("sources", []):
             path = Path(source["path"])
@@ -2209,25 +2329,38 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
             }
         targets[name] = {
             "type": document.get("type"),
-            "artifact": tagged_path(artifact, source_root, build_root),
+            "artifact": tagged_path(
+                resolved_artifacts[0], source_root, build_root),
             "dependencies": dependencies,
             "sources": sorted(sources, key=lambda value: (
                 value["path"], value["compiled"])),
             "link": normalized_link,
         }
-    require(relevant_units == set(BUILD_TRANSLATION_UNITS),
+        if schema == SCHEMA:
+            targets[name]["artifacts"] = [
+                tagged_path(value, source_root, build_root)
+                for value in resolved_artifacts]
+    require(relevant_units == set(build_translation_units),
             "evidence target translation-unit closure mismatch")
     require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
             targets["bench_leopard2"]["dependencies"] ==
             [cmake_identity["target"]],
             "benchmark target dependency identity")
+    expected_library_dependencies = (
+        ["leopard2_backend_avx2", "leopard2_backend_avx512",
+         "leopard2_backend_ssse3"] if schema == SCHEMA else
+        ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
+    expected_object_targets = (
+        ("leopard2_backend_ssse3", "leopard2_backend_avx2",
+         "leopard2_backend_avx512") if schema == SCHEMA else
+        ("leopard2_backend_ssse3", "leopard2_backend_avx2"))
     require(targets[cmake_identity["target"]]["type"] == "STATIC_LIBRARY" and
             targets[cmake_identity["target"]]["dependencies"] ==
-            ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
+            expected_library_dependencies,
             "library target dependency identity")
     require(all(targets[name]["type"] == "OBJECT_LIBRARY" and
                 targets[name]["dependencies"] == []
-                for name in ("leopard2_backend_ssse3", "leopard2_backend_avx2")),
+                for name in expected_object_targets),
             "backend object-target identity")
     record = {
         "configured_translation_units": sorted(configured_units),
@@ -2415,10 +2548,10 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
             "evidence collection requires CMake literal link.txt recipes")
     library_content = exact_utf8_file_content(
         library_recipe_path, "static-library link recipe") \
-        if schema == SCHEMA else None
+        if schema in HARDENED_SCHEMAS else None
     benchmark_content = exact_utf8_file_content(
         benchmark_recipe_path, "benchmark link recipe") \
-        if schema == SCHEMA else None
+        if schema in HARDENED_SCHEMAS else None
     library_text = (library_content["text"] if library_content is not None else
                     library_recipe_path.read_text(encoding="utf-8"))
     benchmark_text = (benchmark_content["text"]
@@ -2479,7 +2612,7 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
                     "benchmark links a source-tree file directly")
             external = {"path": tagged_path(path, source_root, build_root),
                         "sha256": sha256_file(path)}
-            if schema == SCHEMA:
+            if schema in HARDENED_SCHEMAS:
                 external["raw_path"] = value
             external_inputs.append(external)
     require(resolved_file_inputs.count(benchmark_object) == 1 and
@@ -2516,7 +2649,7 @@ def literal_link_recipes(source_root, build_root, tool_paths, compile_entries,
             benchmark_content["sha256"] if benchmark_content is not None else
             sha256_file(benchmark_recipe_path)),
     }
-    if schema == SCHEMA:
+    if schema in HARDENED_SCHEMAS:
         recipes["library_recipe_size"] = library_content["size"]
         recipes["benchmark_recipe_size"] = benchmark_content["size"]
         recipes["library_recipe_content"] = library_content
@@ -2553,7 +2686,7 @@ def archive_manifest(library, ar_tool, expected_objects):
     return result
 
 
-def validate_retained_link_recipe_semantics(recipes, tools, units):
+def validate_retained_link_recipe_semantics(recipes, tools, units, schema):
     library_lines = parse_exact_recipe_content(
         recipes["library_recipe_content"],
         recipes["library_recipe_size"],
@@ -2591,15 +2724,19 @@ def validate_retained_link_recipe_semantics(recipes, tools, units):
             expected_prefix = "@build/CMakeFiles/bench_leopard2.dir/"
         elif relative == "Leopard2BackendSSSE3.cpp":
             expected_prefix = "@build/CMakeFiles/leopard2_backend_ssse3.dir/"
-        elif relative == "Leopard2BackendAVX2.cpp":
+        elif relative in (
+                "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"):
             expected_prefix = "@build/CMakeFiles/leopard2_backend_avx2.dir/"
+        elif relative == "Leopard2BackendAVX512.cpp":
+            expected_prefix = \
+                "@build/CMakeFiles/leopard2_backend_avx512.dir/"
         else:
             expected_prefix = "@build/CMakeFiles/leopard.dir/"
         require(entry["output"].startswith(expected_prefix),
                 "canonical CMake object directory: " + relative)
     expected_library_outputs = [
         units[relative]["output"]
-        for relative in CURRENT_ARCHIVE_TRANSLATION_UNITS]
+        for relative in archive_translation_units_for_schema(schema)]
     require(normalized_archive[3:] == expected_library_outputs,
             "retained archive translation-unit closure/order")
     require(index == [tools["ranlib"]["recipe_argv0"], "libleopard.a"] and
@@ -2654,6 +2791,9 @@ def validate_retained_link_recipe_semantics(recipes, tools, units):
 
 def build_record(source_root, source_identity, compile_commands, cmake_cache,
                  library, binary, rebuild, target_graph, schema=SCHEMA):
+    configured_translation_units = configured_translation_units_for_schema(
+        schema)
+    build_translation_units = build_translation_units_for_schema(schema)
     source_root = Path(source_root).resolve()
     compile_commands = Path(compile_commands).resolve()
     cmake_cache = Path(cmake_cache).resolve()
@@ -2682,23 +2822,43 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
         require(relative not in all_by_file,
                 "duplicate compile command for " + relative)
         all_by_file[relative] = normalized
-    require(set(all_by_file) == set(CONFIGURED_TRANSLATION_UNITS),
-            "configured compile-command set mismatch: missing={} extra={}".format(
-                sorted(set(CONFIGURED_TRANSLATION_UNITS) - set(all_by_file)),
-                sorted(set(all_by_file) - set(CONFIGURED_TRANSLATION_UNITS))))
+    if schema == SCHEMA:
+        # compile_commands.json is global to the configured build tree, while
+        # the current evidence contract deliberately scopes the executable
+        # closure to bench_leopard2 and its target dependencies.  Require every
+        # relevant command exactly once, retain the digest of the complete
+        # compile database below, and record only the commands that can reach
+        # the benchmark.  Unrelated configured tools must not become an
+        # accidental part of the benchmark's source identity.
+        missing_commands = set(configured_translation_units) - set(all_by_file)
+        require(not missing_commands,
+                "configured compile-command set omits relevant units: {}".format(
+                    sorted(missing_commands)))
+        configured_by_file = {
+            relative: all_by_file[relative]
+            for relative in configured_translation_units
+        }
+    else:
+        # Historical schemas described the entire configured compile database;
+        # preserve that exact replay contract.
+        require(set(all_by_file) == set(configured_translation_units),
+                "configured compile-command set mismatch: missing={} extra={}".format(
+                    sorted(set(configured_translation_units) - set(all_by_file)),
+                    sorted(set(all_by_file) - set(configured_translation_units))))
+        configured_by_file = all_by_file
     by_file = {relative: all_by_file[relative]
-               for relative in BUILD_TRANSLATION_UNITS}
-    require(set(by_file) == set(BUILD_TRANSLATION_UNITS),
+               for relative in build_translation_units}
+    require(set(by_file) == set(build_translation_units),
             "compile command translation-unit set mismatch: missing={} extra={}".format(
-                sorted(set(BUILD_TRANSLATION_UNITS) - set(by_file)),
-                sorted(set(by_file) - set(BUILD_TRANSLATION_UNITS))))
+                sorted(set(build_translation_units) - set(by_file)),
+                sorted(set(by_file) - set(build_translation_units))))
     require(all(value[0]["output_sha256"] is not None for value in by_file.values()),
             "evidence target compile output is missing")
     commands = {relative: by_file[relative][0]
                 for relative in sorted(by_file)}
     recipes, expected_objects = literal_link_recipes(
         source_root, build_root, tool_paths, by_file, library, binary, schema)
-    if schema == SCHEMA:
+    if schema in HARDENED_SCHEMAS:
         retained_library = parse_exact_recipe_content(
             recipes["library_recipe_content"],
             recipes["library_recipe_size"],
@@ -2723,7 +2883,7 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
         },
         "tools": tools,
         "translation_units": commands,
-        "configured_translation_units": sorted(all_by_file),
+        "configured_translation_units": sorted(configured_by_file),
         "dependency_closure": dependency_closure(
             by_file, source_root, build_root),
         "target_graph": target_graph,
@@ -2742,6 +2902,9 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
 def validate_build_record(record, repo, schema):
     cmake_identity = cmake_identity_for_schema(schema)
     relevant_targets = relevant_targets_for_schema(schema)
+    configured_translation_units = configured_translation_units_for_schema(
+        schema)
+    build_translation_units = build_translation_units_for_schema(schema)
     library_target = cmake_identity["target"]
     library_artifact = "@build/" + cmake_identity["archive"]
     expected_keys = {
@@ -2782,7 +2945,8 @@ def validate_build_record(record, repo, schema):
         tool = record["tools"][logical_name]
         expected_tool_keys = {"logical_name", "cache_key", "basename",
                               "binary_sha256", "version", "version_sha256"}
-        if schema == SCHEMA and logical_name in ("ar", "ranlib", "cxx"):
+        if schema in HARDENED_SCHEMAS and logical_name in (
+                "ar", "ranlib", "cxx"):
             expected_tool_keys.add("recipe_argv0")
         require(set(tool) == expected_tool_keys,
                 "tool identity keys: " + logical_name)
@@ -2801,7 +2965,7 @@ def validate_build_record(record, repo, schema):
         require(re.fullmatch(r"[0-9a-f]{64}", tool["binary_sha256"] or "") is not None,
                 "tool binary digest: " + logical_name)
     units = record["translation_units"]
-    require(set(units) == set(BUILD_TRANSLATION_UNITS),
+    require(set(units) == set(build_translation_units),
             "build translation-unit set")
     for relative, entry in units.items():
         require(set(entry) == {
@@ -2823,7 +2987,7 @@ def validate_build_record(record, repo, schema):
         require(sha256_bytes(canonical_bytes(payload)) == command_digest,
                 "translation-unit command digest: " + relative)
     require(record["configured_translation_units"] ==
-            sorted(CONFIGURED_TRANSLATION_UNITS),
+            sorted(configured_translation_units),
             "configured translation-unit closure")
     require(set(record["artifacts"]) == {
         "library_sha256", "benchmark_sha256"}, "build artifact key set")
@@ -2867,7 +3031,7 @@ def validate_build_record(record, repo, schema):
     require(source_count == closure["source_file_count"],
             "dependency source-file count")
     by_unit = closure["by_translation_unit"]
-    require(set(by_unit) == set(BUILD_TRANSLATION_UNITS),
+    require(set(by_unit) == set(build_translation_units),
             "dependency translation-unit set")
     for relative, dependencies in by_unit.items():
         require(isinstance(dependencies, list) and dependencies == sorted(set(dependencies)) and
@@ -2875,10 +3039,10 @@ def validate_build_record(record, repo, schema):
                 all(path in manifest_paths for path in dependencies),
                 "dependency list identity: " + relative)
     require(isinstance(closure["file_count"], int) and
-            closure["file_count"] >= len(BUILD_TRANSLATION_UNITS),
+            closure["file_count"] >= len(build_translation_units),
             "dependency-closure file count")
     require(isinstance(closure["source_file_count"], int) and
-            len(BUILD_TRANSLATION_UNITS) <= closure["source_file_count"] <=
+            len(build_translation_units) <= closure["source_file_count"] <=
             closure["file_count"], "dependency-closure source count")
 
     target_graph = record["target_graph"]
@@ -2889,25 +3053,46 @@ def validate_build_record(record, repo, schema):
     graph_digest = graph_payload.pop("digest")
     require(sha256_bytes(canonical_bytes(graph_payload)) == graph_digest and
             target_graph["configured_translation_units"] ==
-            sorted(CONFIGURED_TRANSLATION_UNITS) and
+            sorted(configured_translation_units) and
             set(target_graph["targets"]) == set(relevant_targets),
             "target graph identity")
     targets = target_graph["targets"]
+    expected_library_dependencies = (
+        ["leopard2_backend_avx2", "leopard2_backend_avx512",
+         "leopard2_backend_ssse3"] if schema == SCHEMA else
+        ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
     require(targets["bench_leopard2"]["type"] == "EXECUTABLE" and
             targets["bench_leopard2"]["artifact"] == "@build/bench_leopard2" and
             targets["bench_leopard2"]["dependencies"] == [library_target] and
             targets[library_target]["type"] == "STATIC_LIBRARY" and
             targets[library_target]["artifact"] == library_artifact and
             targets[library_target]["dependencies"] ==
-            ["leopard2_backend_avx2", "leopard2_backend_ssse3"],
+            expected_library_dependencies,
             "target dependency graph")
     compiled_target_sources = set()
     for name, target in targets.items():
-        require(set(target) == {"type", "artifact", "dependencies", "sources",
-                               "link"} and
+        expected_target_keys = {
+            "type", "artifact", "dependencies", "sources", "link"}
+        if schema == SCHEMA:
+            expected_target_keys.add("artifacts")
+        require(set(target) == expected_target_keys and
                 target["artifact"].startswith("@build/") and
                 isinstance(target["sources"], list),
                 "target record: " + name)
+        if schema == SCHEMA:
+            expected_count = 2 if name == "leopard2_backend_avx2" else 1
+            require(isinstance(target["artifacts"], list) and
+                    len(target["artifacts"]) == expected_count and
+                    target["artifacts"][0] == target["artifact"] and
+                    len(set(target["artifacts"])) == expected_count and
+                    all(value.startswith("@build/")
+                        for value in target["artifacts"]),
+                    "target artifact closure: " + name)
+            if name == "leopard2_backend_avx2":
+                require([Path(value).name for value in target["artifacts"]] == [
+                            "Leopard2BackendAVX2.cpp.o",
+                            "Leopard2BackendAVX2Xor.cpp.o"],
+                        "AVX2 object artifact order changed")
         for source in target["sources"]:
             require(set(source) == {"path", "compiled"} and
                     isinstance(source["compiled"], bool),
@@ -2916,14 +3101,14 @@ def validate_build_record(record, repo, schema):
                 require(source["path"].startswith("@source/"),
                         "compiled target source is not Git-backed")
                 compiled_target_sources.add(source["path"][len("@source/"):])
-    require(compiled_target_sources == set(BUILD_TRANSLATION_UNITS),
+    require(compiled_target_sources == set(build_translation_units),
             "target compiled-source closure")
 
     recipes = record["link_recipes"]
     expected_recipe_keys = {
         "library", "benchmark", "external_link_inputs",
         "library_recipe_sha256", "benchmark_recipe_sha256", "digest"}
-    if schema == SCHEMA:
+    if schema in HARDENED_SCHEMAS:
         expected_recipe_keys.update({
             "library_recipe_content", "benchmark_recipe_content",
             "library_recipe_size", "benchmark_recipe_size"})
@@ -2953,17 +3138,17 @@ def validate_build_record(record, repo, schema):
         "bench/leopard2/benchmark.cpp"]["output"]
     for external in recipes["external_link_inputs"]:
         expected_external_keys = {"path", "sha256"}
-        if schema == SCHEMA:
+        if schema in HARDENED_SCHEMAS:
             expected_external_keys.add("raw_path")
         require(set(external) == expected_external_keys and
                 external["path"].startswith("@external/") and
                 re.fullmatch(r"[0-9a-f]{64}", external["sha256"]) is not None and
-                (schema != SCHEMA or
+                (schema not in HARDENED_SCHEMAS or
                  (isinstance(external["raw_path"], str) and
                   external["raw_path"] and
                   not external["raw_path"].startswith("@"))),
                 "external link input identity")
-        if schema == SCHEMA:
+        if schema in HARDENED_SCHEMAS:
             raw_external = Path(external["raw_path"])
             require(raw_external.is_absolute() and raw_external.is_file() and
                     raw_external.resolve().name == Path(external["path"]).name and
@@ -2997,8 +3182,9 @@ def validate_build_record(record, repo, schema):
     expected_benchmark_command.extend(file_api_libraries)
     require(benchmark_command == expected_benchmark_command,
             "literal benchmark recipe differs from CMake target metadata")
-    if schema == SCHEMA:
-        validate_retained_link_recipe_semantics(recipes, record["tools"], units)
+    if schema in HARDENED_SCHEMAS:
+        validate_retained_link_recipe_semantics(
+            recipes, record["tools"], units, schema)
 
     archive = record["archive"]
     require(set(archive) == {"members", "member_count", "digest"},
@@ -3007,7 +3193,7 @@ def validate_build_record(record, repo, schema):
     archive_digest = archive_payload.pop("digest")
     require(sha256_bytes(canonical_bytes(archive_payload)) == archive_digest and
             archive["member_count"] == len(archive["members"]) ==
-            len(BUILD_TRANSLATION_UNITS) - 1,
+            len(build_translation_units) - 1,
             "archive manifest identity")
     expected_archive_members = {
         entry["output"]: entry["output_sha256"]
@@ -3139,14 +3325,44 @@ def validate_matrix_command(command, label, extra_keys=()):
             "matrix command digest: " + label)
 
 
-def validate_matrix_document(document, repo, candidate_commit):
+def validate_matrix_document(
+        document, repo, candidate_commit, evidence_schema=SCHEMA):
+    current = evidence_schema == SCHEMA
+    expected_matrix_schema = (
+        MATRIX_SCHEMA if current else MATRIX_SCHEMA_V1)
+    expected_source_files = (
+        MATRIX_SOURCE_FILES if current else
+        PRE_XOR_MATRIX_SOURCE_FILES)
+    expected_compile_source_counts = (
+        MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS
+        if current else
+        PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS)
+    matrix_compare_tests = (
+        MATRIX_COMPARE_TESTS if current else PRE_XOR_MATRIX_COMPARE_TESTS)
+    matrix_run_tests = (
+        MATRIX_RUN_TESTS if current else PRE_XOR_MATRIX_RUN_TESTS)
+    matrix_test_specs = (
+        MATRIX_TEST_SPECS if current else PRE_XOR_MATRIX_TEST_SPECS)
+    matrix_build_targets = (
+        MATRIX_BUILD_TARGETS if current else PRE_XOR_MATRIX_BUILD_TARGETS)
+    matrix_build_cache_keys = (
+        MATRIX_BUILD_CACHE_KEYS if current else
+        PRE_XOR_MATRIX_BUILD_CACHE_KEYS)
+    backend_failure_ctest_regex = (
+        MATRIX_BACKEND_FAILURE_CTEST_REGEX if current else
+        "^leopard2_backend_failure_")
+    portable_ctest_regex = (
+        MATRIX_PORTABLE_CTEST_REGEX if current else
+        "^leopard2_portable_isa$")
+    cuda_ctest_regex = (
+        MATRIX_CUDA_CTEST_REGEX if current else "^leopard2_cuda_optional$")
     require(set(document) == {
         "c_compiler", "compiler", "generator", "jobs", "jobs_per_variant",
         "machine", "mismatches",
         "schema", "source_changed_during_run", "source_fingerprint",
         "status", "variant_workers", "variants"},
         "matrix top-level key set")
-    require(document.get("schema") == "leopard2-backend-matrix/v1",
+    require(document.get("schema") == expected_matrix_schema,
             "matrix schema")
     require(document.get("status") == "passed", "matrix status")
     require(document.get("source_changed_during_run") is False,
@@ -3154,7 +3370,7 @@ def validate_matrix_document(document, repo, candidate_commit):
     fingerprint = document.get("source_fingerprint", {})
     files = fingerprint.get("files")
     require(isinstance(files, dict), "matrix source files")
-    require(set(files) == set(MATRIX_SOURCE_FILES),
+    require(set(files) == set(expected_source_files),
             "matrix source fingerprint file set")
     for relative, expected_digest in files.items():
         require(re.fullmatch(r"[0-9a-f]{64}", expected_digest or "") is not None,
@@ -3194,7 +3410,7 @@ def validate_matrix_document(document, repo, candidate_commit):
         }
         require(set(value) == expected_variant_keys,
                 "matrix variant key set: " + str(variant))
-        require(value.get("schema") == "leopard2-backend-matrix/v1" and
+        require(value.get("schema") == expected_matrix_schema and
                 value.get("status") == "passed" and
                 value.get("selected_cache_variant") == variant and
                 value.get("reason") == "" and
@@ -3238,7 +3454,7 @@ def validate_matrix_document(document, repo, candidate_commit):
         require(sha256_bytes(canonical_bytes(identity_payload)) == identity_digest,
                 "matrix build identity digest: " + str(variant))
         cache = identity["cache"]
-        require(set(cache) == set(MATRIX_BUILD_CACHE_KEYS) and
+        require(set(cache) == set(matrix_build_cache_keys) and
                 cache.get("CMAKE_BUILD_TYPE") == "Release" and
                 cache.get("CMAKE_GENERATOR") == document["generator"] and
                 cache.get("CMAKE_C_FLAGS") == "" and
@@ -3281,7 +3497,7 @@ def validate_matrix_document(document, repo, candidate_commit):
         for command in compile_commands:
             require(set(command) == {"file", "language", "argv"} and
                     isinstance(command["file"], str) and
-                    command["file"] in MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS and
+                    command["file"] in expected_compile_source_counts and
                     command["language"] ==
                     ("C" if command["file"].endswith(".c") else "CXX") and
                     isinstance(command["argv"], list) and command["argv"] and
@@ -3290,11 +3506,16 @@ def validate_matrix_document(document, repo, candidate_commit):
                     command["argv"].count("@source/" + command["file"]) == 1,
                     "matrix compile command identity")
             counts[command["file"]] = counts.get(command["file"], 0) + 1
-        require(counts == MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS,
+        require(counts == expected_compile_source_counts,
                 "matrix compile source multiset")
+        matrix_backend_failure_tests = (
+            MATRIX_BASE_BACKEND_FAILURE_TESTS +
+            (MATRIX_AVX512_BACKEND_FAILURE_TESTS
+             if current and "Leopard2BackendAVX512.cpp" in counts else ())
+            if current else PRE_XOR_MATRIX_BACKEND_FAILURE_TESTS)
 
         commands = value["commands"]
-        require(len(commands) == 2 + len(MATRIX_RUN_TESTS) + 2 +
+        require(len(commands) == 2 + len(matrix_run_tests) + 2 +
                 (1 if variant == "auto" else 0),
                 "matrix command count: " + variant)
         configure = commands[0]
@@ -3333,22 +3554,22 @@ def validate_matrix_document(document, repo, candidate_commit):
                 build_command["argv"] == [
                     configure_argv[0], "--build", build_root, "--config", "Release",
                     "-j", str(document["jobs_per_variant"]), "--target"] +
-                list(MATRIX_BUILD_TARGETS),
+                list(matrix_build_targets),
                 "matrix build argv: " + variant)
         require(value.get("source_fingerprint") == fingerprint["digest"],
                 "matrix variant source mismatch")
         tests = value.get("tests")
-        required_tests = set(MATRIX_RUN_TESTS) | {
+        required_tests = set(matrix_run_tests) | {
             "backend_failures", "portable_isa"}
         if value.get("variant") == "auto":
             required_tests.add("cuda_optional")
         require(isinstance(tests, dict) and set(tests) == required_tests,
                 "matrix test set: " + str(value.get("variant")))
         executables = identity["test_executables"]
-        require(set(executables) == set(MATRIX_RUN_TESTS),
+        require(set(executables) == set(matrix_run_tests),
                 "matrix executable set: " + variant)
         command_index = 2
-        for test_name in MATRIX_RUN_TESTS:
+        for test_name in matrix_run_tests:
             test = tests[test_name]
             validate_matrix_command(test, "test_" + test_name,
                                     {"executable_sha256"})
@@ -3356,7 +3577,7 @@ def validate_matrix_document(document, repo, candidate_commit):
                     "matrix test/command crosslink: " + test_name)
             command_index += 1
             executable = executables[test_name]
-            target, arguments = MATRIX_TEST_SPECS[test_name]
+            target, arguments = matrix_test_specs[test_name]
             require(set(executable) == {"path", "sha256"} and
                     executable["path"].startswith("@build/") and
                     Path(executable["path"]).name == target and
@@ -3377,7 +3598,7 @@ def validate_matrix_document(document, repo, candidate_commit):
         require(
             failures["ctest_executed"] is True and
             failures["ctest_executed_tests"] ==
-                sorted(MATRIX_BACKEND_FAILURE_TESTS) and
+                sorted(matrix_backend_failure_tests) and
             canonical_bytes(failures) ==
                 canonical_bytes(commands[command_index]) and
             failures["cwd"] == source_root and len(failures["argv"]) >= 4 and
@@ -3386,7 +3607,7 @@ def validate_matrix_document(document, repo, candidate_commit):
             Path(failures["argv"][3]).name == tools["ctest"]["basename"] and
             failures["argv"][4:] == [
                 "--test-dir", build_root, "-C", "Release", "-R",
-                "^leopard2_backend_failure_", "--output-on-failure"],
+                backend_failure_ctest_regex, "--output-on-failure"],
             "matrix backend-failure CTest command")
         command_index += 1
 
@@ -3398,7 +3619,7 @@ def validate_matrix_document(document, repo, candidate_commit):
                 portable["cwd"] == source_root and
                 Path(portable["argv"][0]).name == tools["ctest"]["basename"] and
                 portable["argv"][1:] == ["--test-dir", build_root, "-C", "Release",
-                    "-R", "^leopard2_portable_isa$", "--output-on-failure"],
+                    "-R", portable_ctest_regex, "--output-on-failure"],
                 "matrix portable-ISA CTest command")
         command_index += 1
         if variant == "auto":
@@ -3409,7 +3630,7 @@ def validate_matrix_document(document, repo, candidate_commit):
                     canonical_bytes(cuda) == canonical_bytes(commands[command_index]) and
                     cuda["cwd"] == source_root and
                     cuda["argv"] == [portable["argv"][0], "--test-dir", build_root,
-                        "-C", "Release", "-R", "^leopard2_cuda_optional$",
+                        "-C", "Release", "-R", cuda_ctest_regex,
                         "--output-on-failure"],
                     "matrix CUDA-optional CTest command")
             command_index += 1
@@ -3418,7 +3639,7 @@ def validate_matrix_document(document, repo, candidate_commit):
     recomputed_mismatches = []
     auto_tests = by_variant["auto"]["tests"]
     for variant in sorted(set(by_variant) - {"auto"}):
-        for test_name in MATRIX_COMPARE_TESTS:
+        for test_name in matrix_compare_tests:
             for stream in ("stdout", "stderr"):
                 key = stream + "_sha256"
                 expected_digest = auto_tests[test_name][key]
@@ -3451,11 +3672,12 @@ def validate_declared_template_paths(args, build, schema=SCHEMA):
         require(supplied.is_file(), attribute + " template artifact is missing")
 
 
-def matrix_record(path, repo, candidate_commit):
+def matrix_record(path, repo, candidate_commit, evidence_schema=SCHEMA):
     raw = Path(path).read_bytes()
     require(raw, "matrix artifact is empty")
     document = parse_json_bytes(raw, "backend matrix")
-    validate_matrix_document(document, repo, candidate_commit)
+    validate_matrix_document(
+        document, repo, candidate_commit, evidence_schema)
     return raw, {
         "sha256": sha256_bytes(raw),
         "source_fingerprint": document["source_fingerprint"]["digest"],
@@ -3998,7 +4220,8 @@ def validate_manifest(manifest_path, repo, raw_bundle_path=None,
             provenance["matrix"]["sha256"], "embedded matrix digest")
     matrix_document = parse_json_bytes(matrix_raw, "embedded backend matrix")
     validate_matrix_document(
-        matrix_document, repo, provenance["git"]["candidate"]["commit"])
+        matrix_document, repo, provenance["git"]["candidate"]["commit"],
+        manifest_schema)
     matrix_backend = next(
         (value for value in matrix_document["variants"]
          if value["variant"] == requested_backend), None)
@@ -4206,7 +4429,7 @@ def run_campaign(
     binaries = {build: isolated[build]["binary"].resolve()
                 for build in ("baseline", "candidate")}
     matrix_raw, matrix_info = matrix_record(
-        args.matrix, repo, commits["candidate"])
+        args.matrix, repo, commits["candidate"], evidence_schema)
     if not self_test:
         os.sched_setaffinity(0, set(initial_affinity))
         require(sorted(os.sched_getaffinity(0)) == initial_affinity,
@@ -4386,6 +4609,100 @@ def git_file_hashes(repo, commit, relatives):
     return {"digest": sha256_bytes(canonical_bytes(files)), "files": files}
 
 
+def pre_xor_matrix_fixture(document):
+    """Downgrade a synthetic current matrix to the frozen v1 contract."""
+    value = copy.deepcopy(document)
+    value["schema"] = MATRIX_SCHEMA_V1
+    current_files = value["source_fingerprint"]["files"]
+    require(set(PRE_XOR_MATRIX_SOURCE_FILES) <= set(current_files),
+            "current matrix fixture omits a historical v1 source")
+    files = {
+        relative: current_files[relative]
+        for relative in PRE_XOR_MATRIX_SOURCE_FILES
+    }
+    value["source_fingerprint"]["files"] = files
+    value["source_fingerprint"]["digest"] = \
+        sha256_bytes(canonical_bytes(files))
+    fingerprint = value["source_fingerprint"]
+
+    def rehash_command(command):
+        payload = dict(command)
+        payload.pop("command_sha256", None)
+        command["command_sha256"] = sha256_bytes(canonical_bytes(payload))
+
+    for variant in value["variants"]:
+        variant["schema"] = MATRIX_SCHEMA_V1
+        variant["source_fingerprint"] = fingerprint["digest"]
+        identity = variant["build_identity"]
+        retained_commands = []
+        retained_counts = {}
+        for command in identity["compile_commands"]:
+            relative = command["file"]
+            expected = PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS.get(
+                relative, 0)
+            used = retained_counts.get(relative, 0)
+            if used < expected:
+                retained_commands.append(command)
+                retained_counts[relative] = used + 1
+        require(retained_counts ==
+                PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS,
+                "current matrix fixture cannot reconstruct v1 compile closure")
+        identity["compile_commands"] = retained_commands
+        identity["test_executables"] = {
+            name: identity["test_executables"][name]
+            for name in PRE_XOR_MATRIX_RUN_TESTS
+        }
+        identity["compile_commands_sha256"] = sha256_bytes(
+            canonical_bytes(identity["compile_commands"]))
+        identity_payload = dict(identity)
+        identity_payload.pop("digest", None)
+        identity["digest"] = sha256_bytes(canonical_bytes(identity_payload))
+
+        tests = variant["tests"]
+        require("auto_encode_backend" in tests,
+                "current matrix fixture omits current-only auto test")
+        tests.pop("auto_encode_backend")
+        failures = tests["backend_failures"]
+        failures["ctest_executed_tests"] = sorted(
+            PRE_XOR_MATRIX_BACKEND_FAILURE_TESTS)
+        failures["argv"][-2] = "^leopard2_backend_failure_"
+        rehash_command(failures)
+        configure = variant["commands"][0]
+        build = variant["commands"][1]
+        target_index = build["argv"].index("--target") + 1
+        build["argv"][target_index:] = list(PRE_XOR_MATRIX_BUILD_TARGETS)
+        rehash_command(build)
+        commands = [configure, build]
+        commands.extend(tests[name] for name in PRE_XOR_MATRIX_RUN_TESTS)
+        commands.extend((failures, tests["portable_isa"]))
+        if variant["variant"] == "auto":
+            commands.append(tests["cuda_optional"])
+        for command in commands:
+            rehash_command(command)
+        variant["commands"] = commands
+
+        configuration_input = {
+            "c_compiler": value["c_compiler"],
+            "compiler": value["compiler"],
+            "generator": value["generator"],
+            "jobs_per_variant": value["jobs_per_variant"],
+            "machine": value["machine"],
+            "source": fingerprint,
+            "variant": variant["variant"],
+            "environment": variant["build_environment"],
+        }
+        variant["configuration_id"] = sha256_bytes(
+            canonical_bytes(configuration_input))
+        configure_argv = variant["commands"][0]["argv"]
+        variant["fresh_build"]["identity_sha256"] = sha256_bytes(
+            canonical_bytes({
+                "configuration_id": variant["configuration_id"],
+                "configure_argv": configure_argv,
+                "environment": variant["build_environment"],
+            }))
+    return value
+
+
 def write_mock(path, factor, historical=False):
     selector_fields = ("" if historical else
                        "'force_tiled_decode':False,"
@@ -4422,21 +4739,28 @@ print(json.dumps(out,sort_keys=True,allow_nan=False))
 
 def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
     cmake_identity = cmake_identity_for_schema(schema)
+    configured_translation_units = configured_translation_units_for_schema(
+        schema)
+    build_translation_units = build_translation_units_for_schema(schema)
     compiler = Path(shutil.which("c++") or "/usr/bin/c++").resolve()
     cc = Path(shutil.which("cc") or "/usr/bin/cc").resolve()
     ar = Path(shutil.which("ar") or "/usr/bin/ar").resolve()
     ranlib = Path(shutil.which("ranlib") or "/usr/bin/ranlib").resolve()
     compile_commands = []
     outputs = {}
-    for index, relative in enumerate(CONFIGURED_TRANSLATION_UNITS):
+    for index, relative in enumerate(configured_translation_units):
         if relative == "bench/leopard2/benchmark.cpp":
             output = root / "CMakeFiles/bench_leopard2.dir" / \
                 (relative + ".o")
         elif relative == "Leopard2BackendSSSE3.cpp":
             output = root / "CMakeFiles/leopard2_backend_ssse3.dir" / \
                 (relative + ".o")
-        elif relative == "Leopard2BackendAVX2.cpp":
+        elif relative in (
+                "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"):
             output = root / "CMakeFiles/leopard2_backend_avx2.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2BackendAVX512.cpp":
+            output = root / "CMakeFiles/leopard2_backend_avx512.dir" / \
                 (relative + ".o")
         else:
             output = root / "CMakeFiles" / \
@@ -4497,9 +4821,7 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
     ])
     cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
     library = root / cmake_identity["archive"]
-    archive_order = (CURRENT_ARCHIVE_TRANSLATION_UNITS
-                     if schema == SCHEMA else
-                     HISTORICAL_ARCHIVE_TRANSLATION_UNITS)
+    archive_order = archive_translation_units_for_schema(schema)
     archive_objects = [outputs[value] for value in archive_order]
     command_output([str(ar), "rcs", str(library)] +
                    [str(value) for value in archive_objects], root,
@@ -4528,8 +4850,9 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
             shlex.quote(library.name), shlex.quote(str(external_library))),
         encoding="utf-8")
 
-    core = set(BUILD_TRANSLATION_UNITS) - {
+    core = set(build_translation_units) - {
         "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
+        "Leopard2BackendAVX2Xor.cpp", "Leopard2BackendAVX512.cpp",
         "bench/leopard2/benchmark.cpp"}
     def target(target_type, artifact, dependencies, compiled):
         return {"type": target_type, "artifact": "@build/" + artifact.name,
@@ -4537,20 +4860,34 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
                 "sources": [{"path": "@source/" + value, "compiled": True}
                             for value in sorted(compiled)],
                 "link": None}
+    library_dependencies = (
+        ["leopard2_backend_avx2", "leopard2_backend_avx512",
+         "leopard2_backend_ssse3"] if schema == SCHEMA else
+        ["leopard2_backend_avx2", "leopard2_backend_ssse3"])
     targets = {
         cmake_identity["target"]: target(
-            "STATIC_LIBRARY", library,
-            ["leopard2_backend_avx2", "leopard2_backend_ssse3"], core),
+            "STATIC_LIBRARY", library, library_dependencies, core),
         "leopard2_backend_ssse3": target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendSSSE3.cpp"], [],
             {"Leopard2BackendSSSE3.cpp"}),
         "leopard2_backend_avx2": target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2.cpp"], [],
-            {"Leopard2BackendAVX2.cpp"}),
+            ({"Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"}
+             if schema == SCHEMA else {"Leopard2BackendAVX2.cpp"})),
         "bench_leopard2": target(
             "EXECUTABLE", binary, [cmake_identity["target"]],
             {"bench/leopard2/benchmark.cpp"}),
     }
+    if schema == SCHEMA:
+        targets["leopard2_backend_avx512"] = target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendAVX512.cpp"], [],
+            {"Leopard2BackendAVX512.cpp"})
+        for target_record in targets.values():
+            target_record["artifacts"] = [target_record["artifact"]]
+        targets["leopard2_backend_avx2"]["artifacts"] = [
+            "@build/" + outputs["Leopard2BackendAVX2.cpp"].name,
+            "@build/" + outputs["Leopard2BackendAVX2Xor.cpp"].name,
+        ]
     targets["bench_leopard2"]["link"] = {
         "language": "CXX",
         "fragments": [
@@ -4560,7 +4897,8 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
             {"role": "libraries",
              "fragment": tagged_path(external_library, source_root, root)},
         ]}
-    graph = {"configured_translation_units": sorted(CONFIGURED_TRANSLATION_UNITS),
+    graph = {"configured_translation_units": sorted(
+                 configured_translation_units),
              "targets": targets, "index_sha256": sha256_bytes(b"index"),
              "codemodel_sha256": sha256_bytes(b"codemodel")}
     graph["digest"] = sha256_bytes(canonical_bytes(graph))
@@ -4682,19 +5020,20 @@ def self_test_recipe_texts(build):
     }
 
 
-def relabel_historical_manifest_as_current(manifest, retained_texts_by_build):
+def relabel_historical_manifest_as_pre_xor(
+        manifest, retained_texts_by_build):
     replacements = (
         ("liblibleopard.a", "libleopard.a"),
         ("libleopard.dir", "leopard.dir"),
         ("libleopard", "leopard"),
     )
-    manifest["schema"] = SCHEMA
+    manifest["schema"] = PRE_XOR_SCHEMA
     for name, build in list(manifest["provenance"]["builds"].items()):
         build = replace_identity_strings(build, replacements)
         manifest["provenance"]["builds"][name] = build
         desired_objects = [
             build["translation_units"][relative]["output"]
-            for relative in CURRENT_ARCHIVE_TRANSLATION_UNITS]
+            for relative in PRE_XOR_ARCHIVE_TRANSLATION_UNITS]
         build["link_recipes"]["library"][0][3:] = desired_objects
         members_by_object = {
             member["object"]: member for member in build["archive"]["members"]}
@@ -4735,7 +5074,7 @@ def relabel_historical_manifest_as_current(manifest, retained_texts_by_build):
         rehash_relabelled_build(build)
 
 
-def downgrade_current_manifest_for_self_test(manifest, bundle):
+def downgrade_pre_xor_manifest_for_self_test(manifest, bundle):
     replacements = (
         ("libleopard.a", "liblibleopard.a"),
         ("leopard.dir", "libleopard.dir"),
@@ -4859,6 +5198,62 @@ def self_test(repo):
         ["git", "rev-parse", "HEAD"], repo, "self-test HEAD").decode("ascii").strip()
     with tempfile.TemporaryDirectory(prefix="leo2-butterfly-runner-") as temporary:
         root = Path(temporary)
+        # Exercise the current contract against CMake's real codemodel.  The
+        # synthetic graph below remains useful for adversarial replay, but it
+        # must not be able to hide a newly configured ISA object or target.
+        file_api_build = root / "real-file-api"
+        query = file_api_build / ".cmake/api/v1/query"
+        query.mkdir(parents=True)
+        (query / "codemodel-v2").write_bytes(b"")
+        cmake = Path(shutil.which("cmake") or "/usr/bin/cmake").resolve()
+        command_output([
+            str(cmake), "-S", str(repo), "-B", str(file_api_build),
+            "-G", "Unix Makefiles", "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLEO2_BUILD_TESTS=OFF",
+            "-DLEO2_BUILD_BENCHMARKS=ON", "-DLEO2_BUILD_FUZZERS=OFF",
+            "-DLEO2_ENABLE_CUDA=OFF",
+        ], repo, "current CMake File API integration configure")
+        file_api_artifacts, file_api_graph = file_api_targets(
+            repo, file_api_build, SCHEMA)
+        require(set(file_api_artifacts) == set(relevant_targets_for_schema(
+                    SCHEMA)) and
+                file_api_graph["configured_translation_units"] ==
+                    sorted(CONFIGURED_TRANSLATION_UNITS),
+                "current real CMake File API integration contract")
+        real_archive_recipe = file_api_build / \
+            "CMakeFiles/leopard.dir/link.txt"
+        recipe_lines = [
+            shlex.split(line) for line in
+            real_archive_recipe.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+        require(len(recipe_lines) == 2 and
+                [Path(value).name for value in recipe_lines[0][3:]] == [
+                    Path(relative).name + ".o"
+                    for relative in CURRENT_ARCHIVE_TRANSLATION_UNITS],
+                "current real CMake archive member order changed")
+        # The File API graph and compile_commands.json have intentionally
+        # different scopes.  Exercise the complete real collection path so an
+        # unrelated configured benchmark cannot either enter the linked-source
+        # closure or make every current campaign fail after a successful build.
+        real_build = fresh_rebuild(
+            repo, file_api_build / "CMakeCache.txt",
+            root / "real-build-record", 2)
+        compile_document = read_json(
+            real_build["compile_commands"],
+            "current real compile_commands integration")
+        require(isinstance(compile_document, list) and
+                len(compile_document) > len(CONFIGURED_TRANSLATION_UNITS),
+                "current integration must cover a global compile database")
+        real_record = build_record(
+            repo, git_record(repo, commit), real_build["compile_commands"],
+            real_build["cmake_cache"], real_build["library"],
+            real_build["binary"], real_build["rebuild"],
+            real_build["target_graph"], SCHEMA)
+        validate_build_record(real_record, repo, SCHEMA)
+        require(real_record["configured_translation_units"] ==
+                sorted(CONFIGURED_TRANSLATION_UNITS),
+                "current real build record leaked unrelated configured units")
         marker = root / "escaped-descendant-marker"
         ready = root / "escaped-descendant-ready"
         escaped_program = (
@@ -5070,16 +5465,19 @@ def self_test(repo):
                 "test_backend_failures",
                 [matrix_taskset, "-c", str(cpu), matrix_ctest,
                  "--test-dir", matrix_build_root, "-C", "Release", "-R",
-                 "^leopard2_backend_failure_", "--output-on-failure"],
+                 MATRIX_BACKEND_FAILURE_CTEST_REGEX,
+                 "--output-on-failure"],
                 {"ctest_executed": True,
                  "ctest_executed_tests":
-                     sorted(MATRIX_BACKEND_FAILURE_TESTS)})
+                     sorted(MATRIX_BASE_BACKEND_FAILURE_TESTS +
+                            MATRIX_AVX512_BACKEND_FAILURE_TESTS)})
             tests["backend_failures"] = failures
             commands.append(failures)
             portable = matrix_command(
                 "test_portable_isa",
                 [matrix_ctest, "--test-dir", matrix_build_root, "-C", "Release",
-                 "-R", "^leopard2_portable_isa$", "--output-on-failure"],
+                 "-R", MATRIX_PORTABLE_CTEST_REGEX,
+                 "--output-on-failure"],
                 {"ctest_executed": True})
             tests["portable_isa"] = portable
             commands.append(portable)
@@ -5087,14 +5485,15 @@ def self_test(repo):
                 cuda = matrix_command(
                     "test_cuda_optional",
                     [matrix_ctest, "--test-dir", matrix_build_root, "-C", "Release",
-                     "-R", "^leopard2_cuda_optional$", "--output-on-failure"],
+                     "-R", MATRIX_CUDA_CTEST_REGEX,
+                     "--output-on-failure"],
                     {"ctest_executed": True})
                 tests["cuda_optional"] = cuda
                 commands.append(cuda)
             variants.append({
                 "configuration_id": configuration_id, "resumed": False,
                 "variant": value, "status": "passed", "reason": "",
-                "schema": "leopard2-backend-matrix/v1",
+                "schema": MATRIX_SCHEMA,
                 "selected_cache_variant": value,
                 "expected_runtime_backend": None if value == "auto" else value,
                 "pin_cpu": cpu, "commands": commands,
@@ -5110,17 +5509,20 @@ def self_test(repo):
                 "tests": tests,
             })
         matrix = root / "matrix.json"
-        atomic_json(matrix, {
+        matrix_document = {
             "c_compiler": matrix_c_compiler,
             "compiler": matrix_cxx_compiler,
             "generator": matrix_generator,
             "jobs": 1, "jobs_per_variant": 1,
             "machine": matrix_machine,
-            "schema": "leopard2-backend-matrix/v1", "status": "passed",
+            "schema": MATRIX_SCHEMA, "status": "passed",
             "source_changed_during_run": False, "mismatches": [],
             "source_fingerprint": fingerprint, "variant_workers": 1,
             "variants": variants,
-        })
+        }
+        atomic_json(matrix, matrix_document)
+        pre_xor_matrix = root / "matrix-v1-pre-xor.json"
+        atomic_json(pre_xor_matrix, pre_xor_matrix_fixture(matrix_document))
         reservation = root / "reservation.json"
         reservation_document = {
             "schema": RESERVATION_SCHEMA, "status": "held",
@@ -5155,6 +5557,51 @@ def self_test(repo):
             ssse3_args.output / "abba_raw.json", None, matrix,
             allow_self_test=True)
 
+        pre_xor_baseline_root = root / "pre-xor-baseline-build"
+        pre_xor_candidate_root = root / "pre-xor-candidate-build"
+        pre_xor_baseline_root.mkdir()
+        pre_xor_candidate_root.mkdir()
+        pre_xor_baseline = pre_xor_baseline_root / "bench_leopard2"
+        pre_xor_candidate = pre_xor_candidate_root / "bench_leopard2"
+        write_mock(pre_xor_baseline, 1.0)
+        write_mock(pre_xor_candidate, 0.8)
+        pre_xor_baseline_build = write_self_test_build_files(
+            pre_xor_baseline_root, repo, pre_xor_baseline, PRE_XOR_SCHEMA)
+        pre_xor_candidate_build = write_self_test_build_files(
+            pre_xor_candidate_root, repo, pre_xor_candidate, PRE_XOR_SCHEMA)
+        pre_xor_args = copy.copy(args)
+        pre_xor_args.baseline = pre_xor_baseline
+        pre_xor_args.candidate = pre_xor_candidate
+        pre_xor_args.baseline_compile_commands = pre_xor_baseline_build[0]
+        pre_xor_args.candidate_compile_commands = pre_xor_candidate_build[0]
+        pre_xor_args.baseline_cmake_cache = pre_xor_baseline_build[1]
+        pre_xor_args.candidate_cmake_cache = pre_xor_candidate_build[1]
+        pre_xor_args.baseline_library = pre_xor_baseline_build[2]
+        pre_xor_args.candidate_library = pre_xor_candidate_build[2]
+        pre_xor_args.baseline_self_test_artifacts = pre_xor_baseline_build[3]
+        pre_xor_args.candidate_self_test_artifacts = pre_xor_candidate_build[3]
+        pre_xor_args.matrix = pre_xor_matrix
+        pre_xor_args.output = root / "pre-xor-v7-evidence"
+        run_campaign(
+            pre_xor_args, repo, allow_dirty=True, self_test=True,
+            evidence_schema=PRE_XOR_SCHEMA)
+        pre_xor_manifest_path = \
+            pre_xor_args.output / "abba_manifest.json"
+        pre_xor_bundle_path = pre_xor_args.output / "abba_raw.json"
+        validate_manifest(
+            pre_xor_manifest_path, repo, pre_xor_bundle_path, None,
+            pre_xor_matrix, allow_self_test=True)
+        relabeled_pre_xor = read_json(
+            pre_xor_manifest_path, "pre-XOR self-test manifest")
+        relabeled_pre_xor["schema"] = SCHEMA
+        relabeled_pre_xor_path = root / "pre-xor-relabeled-v8.json"
+        atomic_json(relabeled_pre_xor_path, relabeled_pre_xor)
+        expect_failure(
+            lambda: validate_manifest(
+                relabeled_pre_xor_path, repo, pre_xor_bundle_path, None,
+                pre_xor_matrix, allow_self_test=True),
+            "pre-XOR v7 evidence relabeled as current v8")
+
         legacy_baseline_root = root / "legacy-baseline-build"
         legacy_candidate_root = root / "legacy-candidate-build"
         legacy_baseline_root.mkdir()
@@ -5178,6 +5625,7 @@ def self_test(repo):
         legacy_args.candidate_library = legacy_candidate_build[2]
         legacy_args.baseline_self_test_artifacts = legacy_baseline_build[3]
         legacy_args.candidate_self_test_artifacts = legacy_candidate_build[3]
+        legacy_args.matrix = pre_xor_matrix
         legacy_args.output = root / "legacy-v6-evidence"
         run_campaign(
             legacy_args, repo, allow_dirty=True, self_test=True,
@@ -5185,7 +5633,8 @@ def self_test(repo):
         legacy_manifest_path = legacy_args.output / "abba_manifest.json"
         legacy_bundle_path = legacy_args.output / "abba_raw.json"
         validate_manifest(
-            legacy_manifest_path, repo, legacy_bundle_path, None, matrix,
+            legacy_manifest_path, repo, legacy_bundle_path, None,
+            pre_xor_matrix,
             allow_self_test=True)
         legacy_manifest = read_json(
             legacy_manifest_path, "legacy self-test manifest")
@@ -5251,12 +5700,12 @@ def self_test(repo):
             coordinated_manifest_mutation(
                 legacy_manifest, legacy_bundle, relabeled_root,
                 lambda manifest, _bundle:
-                    relabel_historical_manifest_as_current(
+                    relabel_historical_manifest_as_pre_xor(
                         manifest, legacy_recipe_texts))
         expect_failure(
             lambda: validate_manifest(
                 relabeled_manifest_path, repo, relabeled_bundle_path,
-                None, matrix, allow_self_test=True),
+                None, pre_xor_matrix, allow_self_test=True),
             "coherently re-signed historical v6 target/archive relabel retains old recipes")
 
         slow_root = root / "slow-candidate-build"
@@ -5288,22 +5737,52 @@ def self_test(repo):
 
         failed_bundle = read_json(
             failed_bundle_path, "negative-performance raw bundle")
+
+        pre_xor_slow_root = root / "pre-xor-slow-candidate-build"
+        pre_xor_slow_root.mkdir()
+        pre_xor_slow_candidate = \
+            pre_xor_slow_root / "bench_leopard2"
+        write_mock(pre_xor_slow_candidate, 1.25)
+        pre_xor_slow_build = write_self_test_build_files(
+            pre_xor_slow_root, repo, pre_xor_slow_candidate,
+            PRE_XOR_SCHEMA)
+        pre_xor_slow_args = copy.copy(pre_xor_args)
+        pre_xor_slow_args.candidate = pre_xor_slow_candidate
+        pre_xor_slow_args.candidate_compile_commands = \
+            pre_xor_slow_build[0]
+        pre_xor_slow_args.candidate_cmake_cache = pre_xor_slow_build[1]
+        pre_xor_slow_args.candidate_library = pre_xor_slow_build[2]
+        pre_xor_slow_args.candidate_self_test_artifacts = \
+            pre_xor_slow_build[3]
+        pre_xor_slow_args.output = root / "failed-performance-v7"
+        expect_failure(lambda: run_campaign(
+            pre_xor_slow_args, repo, allow_dirty=True, self_test=True,
+            evidence_schema=PRE_XOR_SCHEMA),
+            "pre-XOR negative-performance campaign")
+        pre_xor_failed_manifest = read_json(
+            pre_xor_slow_args.output / "abba_manifest.json",
+            "pre-XOR negative-performance manifest")
+        pre_xor_failed_bundle = read_json(
+            pre_xor_slow_args.output / "abba_raw.json",
+            "pre-XOR negative-performance raw bundle")
+
         historical_failed_root = root / "failed-policy-v6"
         historical_failed_root.mkdir()
         historical_failed_texts = {}
 
         def downgrade_failed_policy(manifest_value, _bundle_value):
             historical_failed_texts.update(
-                downgrade_current_manifest_for_self_test(
+                downgrade_pre_xor_manifest_for_self_test(
                     manifest_value, _bundle_value))
 
         historical_failed_manifest_path, historical_failed_bundle_path = \
             coordinated_manifest_mutation(
-                failed_manifest, failed_bundle, historical_failed_root,
+                pre_xor_failed_manifest, pre_xor_failed_bundle,
+                historical_failed_root,
                 downgrade_failed_policy)
         historical_failed_replay = validate_manifest(
             historical_failed_manifest_path, repo,
-            historical_failed_bundle_path, None, matrix,
+            historical_failed_bundle_path, None, pre_xor_matrix,
             allow_self_test=True)
         require(historical_failed_replay.get("status") == "failed" and
                 historical_failed_replay.get("schema") == LEGACY_SCHEMA,
@@ -5321,12 +5800,12 @@ def self_test(repo):
                 historical_failed_manifest, historical_failed_bundle,
                 relabeled_failed_root,
                 lambda manifest_value, _bundle_value:
-                    relabel_historical_manifest_as_current(
+                    relabel_historical_manifest_as_pre_xor(
                         manifest_value, historical_failed_texts))
         expect_failure(
             lambda: validate_manifest(
                 relabeled_failed_manifest_path, repo,
-                relabeled_failed_bundle_path, None, matrix,
+                relabeled_failed_bundle_path, None, pre_xor_matrix,
                 allow_self_test=True),
             "coherently re-signed failed v6 relabel retains old recipes")
         failed_mutations = (
@@ -5359,7 +5838,7 @@ def self_test(repo):
         validate(manifest_path, bundle_path)
 
         mutations = []
-        mutations.append(("current v7 target/archive relabeled as v6",
+        mutations.append(("current v8 target/archive relabeled as v6",
                           lambda m, b: m.__setitem__("schema", LEGACY_SCHEMA)))
         mutations.append(("passed status", lambda m, b:
                           m.__setitem__("status", "failed")))
@@ -5398,6 +5877,19 @@ def self_test(repo):
             rehash_build_record(build)
         mutations.append(("coordinated compile command", mutate_compile_command))
 
+        def mutate_xor_compile_command(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            entry = build["translation_units"][
+                "Leopard2BackendAVX2Xor.cpp"]
+            source_index = entry["argv"].index(
+                "@source/Leopard2BackendAVX2Xor.cpp")
+            entry["argv"][source_index] = \
+                "@source/Leopard2BackendAVX2.cpp"
+            rehash_compile_entry(entry)
+            rehash_build_record(build)
+        mutations.append(("AVX2 XOR compile source substitution",
+                          mutate_xor_compile_command))
+
         def mutate_source_closure(m, b):
             build = m["provenance"]["builds"]["candidate"]
             closure = build["dependency_closure"]
@@ -5408,6 +5900,18 @@ def self_test(repo):
             rehash_dependency_closure(closure)
             rehash_build_record(build)
         mutations.append(("coordinated source dependency", mutate_source_closure))
+
+        def mutate_xor_source_closure(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            closure = build["dependency_closure"]
+            dependency = next(value for value in closure["manifest"]
+                              if value["path"] ==
+                              "@source/Leopard2BackendAVX2Xor.cpp")
+            dependency["sha256"] = "0" * 64
+            rehash_dependency_closure(closure)
+            rehash_build_record(build)
+        mutations.append(("AVX2 XOR source dependency substitution",
+                          mutate_xor_source_closure))
 
         def mutate_toolchain(m, b):
             build = m["provenance"]["builds"]["candidate"]
@@ -5439,6 +5943,26 @@ def self_test(repo):
             rehash_nested_record(graph)
             rehash_build_record(build)
         mutations.append(("target artifact path substitution", mutate_target_artifact))
+
+        def mutate_xor_target_artifact_omission(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            graph = build["target_graph"]
+            graph["targets"]["leopard2_backend_avx2"]["artifacts"].pop()
+            rehash_nested_record(graph)
+            rehash_build_record(build)
+        mutations.append(("AVX2 XOR File API artifact omission",
+                          mutate_xor_target_artifact_omission))
+
+        def mutate_avx512_target_omission(m, b):
+            build = m["provenance"]["builds"]["candidate"]
+            graph = build["target_graph"]
+            graph["targets"].pop("leopard2_backend_avx512")
+            graph["targets"]["leopard"]["dependencies"].remove(
+                "leopard2_backend_avx512")
+            rehash_nested_record(graph)
+            rehash_build_record(build)
+        mutations.append(("AVX512 File API target omission",
+                          mutate_avx512_target_omission))
 
         def mutate_extra_translation_unit(m, b):
             build = m["provenance"]["builds"]["candidate"]
@@ -5613,6 +6137,30 @@ def self_test(repo):
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("coordinated matrix source set", mutate_matrix_source_set))
 
+        def mutate_matrix_xor_source_set(m, b):
+            def callback(document):
+                files = document["source_fingerprint"]["files"]
+                files.pop("Leopard2BackendAVX2Xor.cpp")
+                digest = sha256_bytes(canonical_bytes(files))
+                document["source_fingerprint"]["digest"] = digest
+                for variant in document["variants"]:
+                    variant["source_fingerprint"] = digest
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("coordinated matrix AVX2 XOR source omission",
+                          mutate_matrix_xor_source_set))
+
+        def mutate_matrix_avx512_source_set(m, b):
+            def callback(document):
+                files = document["source_fingerprint"]["files"]
+                files.pop("Leopard2BackendAVX512.cpp")
+                digest = sha256_bytes(canonical_bytes(files))
+                document["source_fingerprint"]["digest"] = digest
+                for variant in document["variants"]:
+                    variant["source_fingerprint"] = digest
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("coordinated matrix AVX512 source omission",
+                          mutate_matrix_avx512_source_set))
+
         def mutate_matrix_test(m, b):
             def callback(document):
                 document["variants"][0]["tests"]["backend_ops"]["returncode"] = 1
@@ -5625,6 +6173,22 @@ def self_test(repo):
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("matrix run-only test omission",
                           mutate_matrix_run_only_omission))
+
+        def mutate_matrix_auto_encode_omission(m, b):
+            def callback(document):
+                for variant in document["variants"]:
+                    variant["tests"].pop("auto_encode_backend")
+                    variant["build_identity"]["test_executables"].pop(
+                        "auto_encode_backend")
+                    variant["commands"] = [
+                        command for command in variant["commands"]
+                        if command.get("label") !=
+                        "test_auto_encode_backend"]
+                    rehash_matrix_build_identity(
+                        variant["build_identity"])
+            mutate_embedded_matrix(m, b, callback)
+        mutations.append(("matrix auto-encode test omission",
+                          mutate_matrix_auto_encode_omission))
 
         def mutate_matrix_output_mismatch(m, b):
             def callback(document):
@@ -5734,6 +6298,29 @@ def self_test(repo):
             mutate_embedded_matrix(m, b, callback)
         mutations.append(("matrix injected compile source",
                           mutate_matrix_compile_source))
+
+        def compile_action_omission(relative):
+            def mutation(m, b):
+                def callback(document):
+                    identity = document["variants"][0]["build_identity"]
+                    index = next(
+                        index for index, command in
+                        enumerate(identity["compile_commands"])
+                        if command["file"] == relative)
+                    identity["compile_commands"].pop(index)
+                    rehash_matrix_build_identity(identity)
+                mutate_embedded_matrix(m, b, callback)
+            return mutation
+
+        for relative in (
+                "Leopard2BackendAVX2Xor.cpp",
+                "Leopard2BackendAVX512.cpp",
+                "tests/leopard2/test_auto_encode_backend.cpp",
+                "tests/leopard2/test_decode_scratch_probe.cpp",
+                "tests/leopard2/test_high_pruned_legacy.cpp"):
+            mutations.append((
+                "matrix compile action omission " + relative,
+                compile_action_omission(relative)))
 
         def mutate_matrix_commands(m, b):
             def callback(document):
@@ -6058,7 +6645,7 @@ def self_test(repo):
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
         mutation_count = len(mutations) + len(failed_mutations) + 23
-    print("butterfly ABBA v7 self-test passed: canonical and historical replay + {} adversarial mutations".format(
+    print("butterfly ABBA v8 self-test passed: canonical and historical replay + {} adversarial mutations".format(
         mutation_count))
 
 
@@ -6103,7 +6690,7 @@ def main():
     try:
         if args.command == "run":
             run_campaign(args, repo)
-            print("butterfly ABBA v7 campaign passed: backend={} cells={} entries={}".format(
+            print("butterfly ABBA v8 campaign passed: backend={} cells={} entries={}".format(
                 args.backend,
                 len(CELLS), len(expected_jobs())))
         elif args.command == "verify":

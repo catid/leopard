@@ -24,7 +24,8 @@ import tempfile
 from pathlib import Path
 
 
-SCHEMA = "leopard2-backend-matrix/v1"
+HISTORICAL_SCHEMA = "leopard2-backend-matrix/v1"
+SCHEMA = "leopard2-backend-matrix/v2"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2", "avx512")
 COMPARE_TESTS = (
     "field_options",
@@ -70,6 +71,90 @@ COMPARE_TESTS = (
 # variant without requiring identical stdout.
 RUN_ONLY_TESTS = ("pruned_transform",)
 RUN_TESTS = COMPARE_TESTS + RUN_ONLY_TESTS
+TEST_SPECS = {
+    "field_options": ("leopard2_field_options_test", []),
+    "direct_oracle": ("leopard2_direct_oracle_test", []),
+    "backend_ops": ("leopard2_backend_ops_test", []),
+    "auto_encode_backend": ("leopard2_auto_encode_backend_test", []),
+    "context_backends": ("leopard2_context_backends_test", []),
+    "r1_xor": ("leopard2_r1_xor_test", []),
+    "legacy_golden": ("leopard2_legacy_golden_test", []),
+    "api": ("leopard2_api_test", []),
+    "public_api_contract": ("leopard2_public_api_contract_test", []),
+    "initialization_threads_legacy": (
+        "leopard2_initialization_threads_test", ["legacy"]),
+    "initialization_threads_explicit": (
+        "leopard2_initialization_threads_test", ["explicit"]),
+    "initialization_threads_default": (
+        "leopard2_initialization_threads_test", ["default"]),
+    "initialization_threads_gf16_high_codec": (
+        "leopard2_initialization_threads_test", ["gf16-high-codec"]),
+    "initialization_threads_gf16_high_plan": (
+        "leopard2_initialization_threads_test", ["gf16-high-plan"]),
+    "initialization_threads_gf16_low_plan": (
+        "leopard2_initialization_threads_test", ["gf16-low-plan"]),
+    "random": ("leopard2_random_test", [
+        "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
+    ]),
+    "locator": ("leopard2_locator_test", []),
+    "active_lch": ("leopard2_active_lch_test", []),
+    "gf16_tails": ("leopard2_gf16_tails_test", []),
+    "gf16_padded_odd": ("leopard2_gf16_padded_odd_test", []),
+    "gf16_legacy_encoder_matrix": (
+        "leopard2_gf16_legacy_encoder_matrix_test", []),
+    "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
+    "decode_high_acceptance": ("leopard2_decode_high_acceptance_test", []),
+    "high_pruned_legacy": ("leopard2_high_pruned_legacy_test", []),
+    "decode_low_acceptance": ("leopard2_decode_low_acceptance_test", []),
+    "decode_plan_schedule": ("leopard2_decode_plan_schedule_test", []),
+    "direct_encode": ("leopard2_direct_encode_test", []),
+    "arbitrary_counts_acceptance": (
+        "leopard2_arbitrary_counts_acceptance_test", []),
+    "max_counts": ("leopard2_max_counts_test", []),
+    "encode_concurrency": ("leopard2_encode_concurrency_test", []),
+    "codec_options_abi": ("leopard2_codec_options_abi_test", []),
+    "direct_repair": ("leopard2_direct_repair_test", []),
+    "boundaries": ("leopard2_boundaries_test", []),
+    "transform_differential": ("leopard2_transform_differential_test", []),
+    "pruned_transform": ("leopard2_pruned_transform_test", []),
+    "fuzz_smoke": ("leopard2_fuzz_smoke", []),
+    "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
+}
+BUILD_TARGETS = (
+    "leopard2_field_options_test",
+    "leopard2_direct_oracle_test",
+    "leopard2_backend_ops_test",
+    "leopard2_backend_failures_test",
+    "leopard2_auto_encode_backend_test",
+    "leopard2_context_backends_test",
+    "leopard2_r1_xor_test",
+    "leopard2_legacy_golden_test",
+    "leopard2_api_test",
+    "leopard2_public_api_contract_test",
+    "leopard2_initialization_threads_test",
+    "leopard2_random_test",
+    "leopard2_locator_test",
+    "leopard2_active_lch_test",
+    "leopard2_gf16_tails_test",
+    "leopard2_gf16_padded_odd_test",
+    "leopard2_gf16_legacy_encoder_matrix_test",
+    "leopard2_low_gf16_direct_rows_test",
+    "leopard2_decode_high_acceptance_test",
+    "leopard2_high_pruned_legacy_test",
+    "leopard2_decode_low_acceptance_test",
+    "leopard2_decode_plan_schedule_test",
+    "leopard2_direct_encode_test",
+    "leopard2_arbitrary_counts_acceptance_test",
+    "leopard2_max_counts_test",
+    "leopard2_encode_concurrency_test",
+    "leopard2_codec_options_abi_test",
+    "leopard2_direct_repair_test",
+    "leopard2_boundaries_test",
+    "leopard2_transform_differential_test",
+    "leopard2_pruned_transform_test",
+    "leopard2_fuzz_smoke",
+    "leopard2_pruned_fuzz_smoke",
+)
 BASE_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_scalar_ff8_allocation",
     "leopard2_backend_failure_scalar_ff16_allocation",
@@ -90,6 +175,10 @@ AVX512_BACKEND_FAILURE_TESTS = (
 BACKEND_FAILURE_TESTS = (
     BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
 )
+BACKEND_FAILURE_CTEST_REGEX = \
+    "^leopard2_backend_(failure_|auto_avx512_kat_fallback$)"
+PORTABLE_CTEST_REGEX = "^leopard2_portable_isa$"
+CUDA_CTEST_REGEX = "^leopard2_cuda_optional$"
 BUILD_CACHE_KEYS = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR",
     "CMAKE_C_FLAGS", "CMAKE_C_FLAGS_RELEASE",
@@ -232,6 +321,38 @@ SOURCE_FILES = (
     "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
+
+
+def evidence_contract():
+    """Return the exact schema-v2 producer contract consumed by ABBA tools.
+
+    Keeping this as data, rather than another hand-copied list, makes a matrix
+    producer change fail the consumer's schema/contract binding immediately.
+    A future producer schema must retain this v2 contract or require consumers
+    to introduce a new evidence schema before accepting its output.
+    """
+    return {
+        "schema": SCHEMA,
+        "source_files": tuple(SOURCE_FILES),
+        "expected_compile_source_counts": dict(
+            EXPECTED_COMPILE_SOURCE_COUNTS),
+        "compare_tests": tuple(COMPARE_TESTS),
+        "run_only_tests": tuple(RUN_ONLY_TESTS),
+        "run_tests": tuple(RUN_TESTS),
+        "test_specs": {
+            name: (specification[0], list(specification[1]))
+            for name, specification in TEST_SPECS.items()
+        },
+        "build_targets": tuple(BUILD_TARGETS),
+        "build_cache_keys": tuple(BUILD_CACHE_KEYS) + (
+            "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"),
+        "base_backend_failure_tests": tuple(BASE_BACKEND_FAILURE_TESTS),
+        "avx512_backend_failure_tests": tuple(
+            AVX512_BACKEND_FAILURE_TESTS),
+        "backend_failure_ctest_regex": BACKEND_FAILURE_CTEST_REGEX,
+        "portable_ctest_regex": PORTABLE_CTEST_REGEX,
+        "cuda_ctest_regex": CUDA_CTEST_REGEX,
+    }
 
 
 class MatrixError(Exception):
@@ -814,38 +935,10 @@ def run_variant(context, variant, index):
         atomic_write_json(result_path, base)
         return base
 
-    targets = [
-        "leopard2_field_options_test",
-        "leopard2_direct_oracle_test",
-        "leopard2_backend_ops_test", "leopard2_backend_failures_test",
-        "leopard2_auto_encode_backend_test",
-        "leopard2_context_backends_test",
-        "leopard2_r1_xor_test",
-        "leopard2_legacy_golden_test", "leopard2_api_test",
-        "leopard2_public_api_contract_test",
-        "leopard2_initialization_threads_test",
-        "leopard2_random_test", "leopard2_locator_test",
-        "leopard2_active_lch_test", "leopard2_gf16_tails_test",
-        "leopard2_gf16_padded_odd_test",
-        "leopard2_gf16_legacy_encoder_matrix_test",
-        "leopard2_low_gf16_direct_rows_test",
-        "leopard2_decode_high_acceptance_test",
-        "leopard2_high_pruned_legacy_test",
-        "leopard2_decode_low_acceptance_test",
-        "leopard2_decode_plan_schedule_test",
-        "leopard2_direct_encode_test",
-        "leopard2_arbitrary_counts_acceptance_test",
-        "leopard2_max_counts_test",
-        "leopard2_encode_concurrency_test", "leopard2_codec_options_abi_test",
-        "leopard2_direct_repair_test", "leopard2_boundaries_test",
-        "leopard2_transform_differential_test",
-        "leopard2_pruned_transform_test",
-        "leopard2_fuzz_smoke", "leopard2_pruned_fuzz_smoke",
-    ]
     build_command = [
         context["cmake"], "--build", build, "--config", "Release",
         "-j", str(context["jobs_per_variant"]), "--target",
-    ] + targets
+    ] + list(BUILD_TARGETS)
     command = run_command(
         "build", build_command, context["source"], result_dir,
         context["timeout"], environment
@@ -857,61 +950,10 @@ def run_variant(context, variant, index):
         atomic_write_json(result_path, base)
         return base
 
-    test_specs = {
-        "field_options": ("leopard2_field_options_test", []),
-        "direct_oracle": ("leopard2_direct_oracle_test", []),
-        "backend_ops": ("leopard2_backend_ops_test", []),
-        "auto_encode_backend": ("leopard2_auto_encode_backend_test", []),
-        "context_backends": ("leopard2_context_backends_test", []),
-        "r1_xor": ("leopard2_r1_xor_test", []),
-        "legacy_golden": ("leopard2_legacy_golden_test", []),
-        "api": ("leopard2_api_test", []),
-        "public_api_contract": ("leopard2_public_api_contract_test", []),
-        "initialization_threads_legacy": (
-            "leopard2_initialization_threads_test", ["legacy"]),
-        "initialization_threads_explicit": (
-            "leopard2_initialization_threads_test", ["explicit"]),
-        "initialization_threads_default": (
-            "leopard2_initialization_threads_test", ["default"]),
-        "initialization_threads_gf16_high_codec": (
-            "leopard2_initialization_threads_test", ["gf16-high-codec"]),
-        "initialization_threads_gf16_high_plan": (
-            "leopard2_initialization_threads_test", ["gf16-high-plan"]),
-        "initialization_threads_gf16_low_plan": (
-            "leopard2_initialization_threads_test", ["gf16-low-plan"]),
-        "random": ("leopard2_random_test", [
-            "--seed", "0x4c656f7061726432", "--cases", "64", "--threads", "1"
-        ]),
-        "locator": ("leopard2_locator_test", []),
-        "active_lch": ("leopard2_active_lch_test", []),
-        "gf16_tails": ("leopard2_gf16_tails_test", []),
-        "gf16_padded_odd": ("leopard2_gf16_padded_odd_test", []),
-        "gf16_legacy_encoder_matrix": (
-            "leopard2_gf16_legacy_encoder_matrix_test", []),
-        "low_gf16_direct_rows": ("leopard2_low_gf16_direct_rows_test", []),
-        "decode_high_acceptance": (
-            "leopard2_decode_high_acceptance_test", []),
-        "high_pruned_legacy": ("leopard2_high_pruned_legacy_test", []),
-        "decode_low_acceptance": (
-            "leopard2_decode_low_acceptance_test", []),
-        "decode_plan_schedule": ("leopard2_decode_plan_schedule_test", []),
-        "direct_encode": ("leopard2_direct_encode_test", []),
-        "arbitrary_counts_acceptance": (
-            "leopard2_arbitrary_counts_acceptance_test", []),
-        "max_counts": ("leopard2_max_counts_test", []),
-        "encode_concurrency": ("leopard2_encode_concurrency_test", []),
-        "codec_options_abi": ("leopard2_codec_options_abi_test", []),
-        "direct_repair": ("leopard2_direct_repair_test", []),
-        "boundaries": ("leopard2_boundaries_test", []),
-        "transform_differential": ("leopard2_transform_differential_test", []),
-        "pruned_transform": ("leopard2_pruned_transform_test", []),
-        "fuzz_smoke": ("leopard2_fuzz_smoke", []),
-        "pruned_fuzz_smoke": ("leopard2_pruned_fuzz_smoke", []),
-    }
     tests = {}
     pin_cpu = context["allowed_cpus"][index % len(context["allowed_cpus"])]
     for name in RUN_TESTS:
-        target, arguments = test_specs[name]
+        target, arguments = TEST_SPECS[name]
         executable = executable_path(build, target)
         argv = pinned_command(
             [str(executable)] + arguments, context["taskset"], pin_cpu
@@ -947,7 +989,7 @@ def run_variant(context, variant, index):
 
     failure_command = [
         context["ctest"], "--test-dir", build, "-C", "Release",
-        "-R", "^leopard2_backend_(failure_|auto_avx512_kat_fallback$)",
+        "-R", BACKEND_FAILURE_CTEST_REGEX,
         "--output-on-failure",
     ]
     failure_command = pinned_command(
@@ -992,7 +1034,7 @@ def run_variant(context, variant, index):
     if variant in VARIANTS:
         portable_command = [
             context["ctest"], "--test-dir", build, "-C", "Release",
-            "-R", "^leopard2_portable_isa$", "--output-on-failure",
+            "-R", PORTABLE_CTEST_REGEX, "--output-on-failure",
         ]
         command = run_command(
             "test_portable_isa", portable_command, context["source"], result_dir,
@@ -1028,7 +1070,7 @@ def run_variant(context, variant, index):
     if variant == "auto":
         cuda_command = [
             context["ctest"], "--test-dir", build, "-C", "Release",
-            "-R", "^leopard2_cuda_optional$", "--output-on-failure",
+            "-R", CUDA_CTEST_REGEX, "--output-on-failure",
         ]
         command = run_command(
             "test_cuda_optional", cuda_command, context["source"], result_dir,
