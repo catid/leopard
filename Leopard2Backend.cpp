@@ -879,11 +879,30 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
     if (!ops.ff8_high_encode_small)
         return true;
 
-    static const uint64_t kBytes = 65;
     static const unsigned kMaximumOriginals = 11;
     static const unsigned kMaximumWork = 8;
-    static const unsigned kSides[] = { 2, 4 };
-    static const unsigned kOriginalCounts[] = { 9, 11 };
+    struct TestCase
+    {
+        unsigned side;
+        unsigned original_count;
+        uint64_t bytes;
+    };
+    static const TestCase kCases[] = {
+        // Preserve arbitrary-tail coverage for both supported transform sizes.
+        { 2, 9, 65 },
+        { 4, 11, 65 },
+        // Exercise every register-fused T=4 specialization during backend
+        // qualification.  The synthetic skews below include the 255 zero-skew
+        // sentinel in each inverse block and in the forward transform.
+        { 4, 3, 64 },
+        { 4, 4, 64 },
+        { 4, 5, 64 },
+        { 4, 6, 64 },
+        { 4, 7, 64 },
+        { 4, 9, 64 },
+        { 4, 10, 64 },
+        { 4, 11, 64 }
+    };
     uint8_t input[kMaximumOriginals][68];
     uint8_t input_before[kMaximumOriginals][68];
     uint8_t actual[kMaximumWork][68];
@@ -894,18 +913,20 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
     uint8_t inverse_skew[16];
     uint8_t forward_skew[4];
 
-    for (unsigned side_i = 0;
-         side_i < sizeof(kSides) / sizeof(kSides[0]); ++side_i)
+    for (unsigned case_i = 0;
+         case_i < sizeof(kCases) / sizeof(kCases[0]); ++case_i)
     {
-        const unsigned side = kSides[side_i];
-        const unsigned original_count = kOriginalCounts[side_i];
+        const TestCase& test_case = kCases[case_i];
+        const unsigned side = test_case.side;
+        const unsigned original_count = test_case.original_count;
+        const uint64_t bytes = test_case.bytes;
         for (unsigned lane = 0; lane < kMaximumOriginals; ++lane)
         {
             for (size_t i = 0; i < sizeof(input[lane]); ++i)
             {
                 input[lane][i] = input_before[lane][i] =
                     static_cast<uint8_t>(
-                        lane * 41U + i * 29U + side_i * 17U + 7U);
+                        lane * 41U + i * 29U + case_i * 17U + 7U);
             }
             input_pointers[lane] = input[lane] + 1;
         }
@@ -915,7 +936,7 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
             {
                 actual[lane][i] = expected[lane][i] =
                     static_cast<uint8_t>(
-                        0xb5U + lane * 13U + i * 31U + side_i * 23U);
+                        0xb5U + lane * 13U + i * 31U + case_i * 23U);
             }
             actual_pointers[lane] = actual[lane] + 1;
             expected_pointers[lane] = expected[lane] + 1;
@@ -923,14 +944,15 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
         for (unsigned i = 0; i < sizeof(inverse_skew); ++i)
             inverse_skew[i] = i % 5U == 1U
                 ? static_cast<uint8_t>(255)
-                : static_cast<uint8_t>((i * 37U + side_i * 11U) % 255U);
+                : static_cast<uint8_t>((i * 37U + case_i * 11U) % 255U);
         for (unsigned i = 0; i < sizeof(forward_skew); ++i)
             forward_skew[i] = i == side - 1U
                 ? static_cast<uint8_t>(255)
-                : static_cast<uint8_t>((i * 53U + side_i * 19U) % 255U);
+                : static_cast<uint8_t>((i * 53U + case_i * 19U) % 255U);
 
         for (unsigned lane = 0; lane < side; ++lane)
-            std::memset(expected_pointers[lane], 0, kBytes);
+            std::memset(expected_pointers[lane], 0,
+                static_cast<size_t>(bytes));
         for (unsigned base = 0; base < original_count; base += side)
         {
             const unsigned remaining = std::min(
@@ -939,20 +961,21 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
             {
                 if (lane < remaining)
                     std::memcpy(expected_pointers[side + lane],
-                        input_pointers[base + lane], kBytes);
+                        input_pointers[base + lane], static_cast<size_t>(bytes));
                 else
-                    std::memset(expected_pointers[side + lane], 0, kBytes);
+                    std::memset(expected_pointers[side + lane], 0,
+                        static_cast<size_t>(bytes));
             }
             if (side == 2)
             {
                 const uint8_t log = inverse_skew[base + 1U];
                 if (log == 255)
                     ops.xor_memory(expected_pointers[3],
-                        expected_pointers[2], kBytes);
+                        expected_pointers[2], bytes);
                 else
                     ops.ff8_ifft_butterfly2(
                         expected_pointers[2], expected_pointers[3],
-                        log, kBytes);
+                        log, bytes);
             }
             else
             {
@@ -961,47 +984,47 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
                     expected_pointers[6], expected_pointers[7],
                     inverse_skew[base + 1U],
                     inverse_skew[base + 3U],
-                    inverse_skew[base + 2U], kBytes);
+                    inverse_skew[base + 2U], bytes);
             }
             for (unsigned lane = 0; lane < side; ++lane)
                 ops.xor_memory(expected_pointers[lane],
-                    expected_pointers[side + lane], kBytes);
+                    expected_pointers[side + lane], bytes);
         }
         if (side == 2)
         {
             if (forward_skew[1] == 255)
                 ops.xor_memory(
-                    expected_pointers[1], expected_pointers[0], kBytes);
+                    expected_pointers[1], expected_pointers[0], bytes);
             else
                 ops.ff8_fft_butterfly2(
                     expected_pointers[0], expected_pointers[1],
-                    forward_skew[1], kBytes);
+                    forward_skew[1], bytes);
         }
         else
         {
             ops.ff8_fft_butterfly4(
                 expected_pointers[0], expected_pointers[1],
                 expected_pointers[2], expected_pointers[3],
-                forward_skew[1], forward_skew[3], forward_skew[2], kBytes);
+                forward_skew[1], forward_skew[3], forward_skew[2], bytes);
         }
 
         ops.ff8_high_encode_small(
             input_pointers, original_count, actual_pointers, side,
-            inverse_skew, forward_skew, kBytes);
+            inverse_skew, forward_skew, bytes);
         if (std::memcmp(input, input_before, sizeof(input)) != 0)
             return false;
         for (unsigned lane = 0; lane < side; ++lane)
         {
             if (std::memcmp(actual[lane] + 1, expected[lane] + 1,
-                    static_cast<size_t>(kBytes)) != 0)
+                    static_cast<size_t>(bytes)) != 0)
                 return false;
         }
         for (unsigned lane = 0; lane < kMaximumWork; ++lane)
         {
             if (actual[lane][0] != expected[lane][0] ||
-                std::memcmp(actual[lane] + kBytes + 1,
-                    expected[lane] + kBytes + 1,
-                    sizeof(actual[lane]) - static_cast<size_t>(kBytes) - 1U) != 0)
+                std::memcmp(actual[lane] + bytes + 1,
+                    expected[lane] + bytes + 1,
+                    sizeof(actual[lane]) - static_cast<size_t>(bytes) - 1U) != 0)
                 return false;
         }
     }

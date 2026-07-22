@@ -1838,6 +1838,205 @@ static void AVX2FF8IFFTButterfly4XorRange(
 }
 
 #if !defined(LEO2_AVX512_VARIANT)
+struct AVX2FF8T4Tables
+{
+    __m256i low01;
+    __m256i high01;
+    __m256i low23;
+    __m256i high23;
+    __m256i low02;
+    __m256i high02;
+    bool has01;
+    bool has23;
+    bool has02;
+};
+
+static LEO2_AVX2_FORCE_INLINE AVX2FF8T4Tables AVX2FF8PrepareT4Tables(
+    uint16_t log01, uint16_t log23, uint16_t log02)
+{
+    static const uint16_t kZeroSkew = 255;
+    AVX2FF8T4Tables result;
+    result.low01 = result.high01 = _mm256_setzero_si256();
+    result.low23 = result.high23 = _mm256_setzero_si256();
+    result.low02 = result.high02 = _mm256_setzero_si256();
+    result.has01 = log01 != kZeroSkew;
+    result.has23 = log23 != kZeroSkew;
+    result.has02 = log02 != kZeroSkew;
+    if (result.has01)
+    {
+        result.low01 = BroadcastTable(FF8Tables[log01].low);
+        result.high01 = BroadcastTable(FF8Tables[log01].high);
+    }
+    if (result.has23)
+    {
+        result.low23 = BroadcastTable(FF8Tables[log23].low);
+        result.high23 = BroadcastTable(FF8Tables[log23].high);
+    }
+    if (result.has02)
+    {
+        result.low02 = BroadcastTable(FF8Tables[log02].low);
+        result.high02 = BroadcastTable(FF8Tables[log02].high);
+    }
+    return result;
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T4Inverse(
+    __m256i& x0, __m256i& x1, __m256i& x2, __m256i& x3,
+    const AVX2FF8T4Tables& tables)
+{
+    x1 = _mm256_xor_si256(x1, x0);
+    if (tables.has01)
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x1, tables.low01, tables.high01));
+    x3 = _mm256_xor_si256(x3, x2);
+    if (tables.has23)
+        x2 = _mm256_xor_si256(x2,
+            AVX2FF8ProductVector(x3, tables.low23, tables.high23));
+    x2 = _mm256_xor_si256(x2, x0);
+    x3 = _mm256_xor_si256(x3, x1);
+    if (tables.has02)
+    {
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x2, tables.low02, tables.high02));
+        x1 = _mm256_xor_si256(x1,
+            AVX2FF8ProductVector(x3, tables.low02, tables.high02));
+    }
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8T4Forward(
+    __m256i& x0, __m256i& x1, __m256i& x2, __m256i& x3,
+    const AVX2FF8T4Tables& tables)
+{
+    if (tables.has02)
+    {
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x2, tables.low02, tables.high02));
+        x1 = _mm256_xor_si256(x1,
+            AVX2FF8ProductVector(x3, tables.low02, tables.high02));
+    }
+    x2 = _mm256_xor_si256(x2, x0);
+    x3 = _mm256_xor_si256(x3, x1);
+    if (tables.has01)
+        x0 = _mm256_xor_si256(x0,
+            AVX2FF8ProductVector(x1, tables.low01, tables.high01));
+    x1 = _mm256_xor_si256(x1, x0);
+    if (tables.has23)
+        x2 = _mm256_xor_si256(x2,
+            AVX2FF8ProductVector(x3, tables.low23, tables.high23));
+    x3 = _mm256_xor_si256(x3, x2);
+}
+
+template<uint32_t OriginalCount>
+static void AVX2FF8HighEncodeT4Blocks(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    static_assert(
+        (OriginalCount >= 3 && OriginalCount <= 7) ||
+        (OriginalCount >= 9 && OriginalCount <= 11),
+        "T=4 fused encoder instantiated outside its measured K set");
+    LEO_DEBUG_ASSERT((byte_count & 31U) == 0);
+    const AVX2FF8T4Tables inverse0 = AVX2FF8PrepareT4Tables(
+        inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+    const AVX2FF8T4Tables forward = AVX2FF8PrepareT4Tables(
+        forward_skew[1], forward_skew[3], forward_skew[2]);
+    AVX2FF8T4Tables inverse1;
+    if (OriginalCount > 4)
+        inverse1 = AVX2FF8PrepareT4Tables(
+            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+    AVX2FF8T4Tables inverse2;
+    if (OriginalCount > 8)
+        inverse2 = AVX2FF8PrepareT4Tables(
+            inverse_skew[9], inverse_skew[11], inverse_skew[10]);
+
+    const uint8_t* input[OriginalCount];
+    for (uint32_t i = 0; i < OriginalCount; ++i)
+        input[i] = static_cast<const uint8_t*>(data[i]);
+    uint8_t* output0 = static_cast<uint8_t*>(work[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(work[1]);
+    uint8_t* output2 = static_cast<uint8_t*>(work[2]);
+    uint8_t* output3 = static_cast<uint8_t*>(work[3]);
+
+    // Keep the transformed accumulator live across all source blocks and the
+    // final forward transform.  This removes both the temporary ragged block
+    // and every full-shard accumulator round trip from the selected tiny-T
+    // shapes.  OriginalCount is a template argument so missing suffix lanes
+    // fold to a zero register without a branch in the byte loop.
+    for (uint64_t offset = 0; offset < byte_count; offset += 32)
+    {
+        __m256i x0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[0] + offset));
+        __m256i x1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[1] + offset));
+        __m256i x2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[2] + offset));
+        __m256i x3 = OriginalCount >= 4
+            ? _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[3] + offset))
+            : _mm256_setzero_si256();
+        AVX2FF8T4Inverse(x0, x1, x2, x3, inverse0);
+
+        if (OriginalCount > 4)
+        {
+            __m256i y0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[4] + offset));
+            __m256i y1 = OriginalCount >= 6
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[5] + offset))
+                : _mm256_setzero_si256();
+            __m256i y2 = OriginalCount >= 7
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[6] + offset))
+                : _mm256_setzero_si256();
+            __m256i y3 = OriginalCount >= 8
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[7] + offset))
+                : _mm256_setzero_si256();
+            AVX2FF8T4Inverse(y0, y1, y2, y3, inverse1);
+            x0 = _mm256_xor_si256(x0, y0);
+            x1 = _mm256_xor_si256(x1, y1);
+            x2 = _mm256_xor_si256(x2, y2);
+            x3 = _mm256_xor_si256(x3, y3);
+        }
+
+        if (OriginalCount > 8)
+        {
+            __m256i z0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[8] + offset));
+            __m256i z1 = OriginalCount >= 10
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[9] + offset))
+                : _mm256_setzero_si256();
+            __m256i z2 = OriginalCount >= 11
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[10] + offset))
+                : _mm256_setzero_si256();
+            __m256i z3 = OriginalCount >= 12
+                ? _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(input[11] + offset))
+                : _mm256_setzero_si256();
+            AVX2FF8T4Inverse(z0, z1, z2, z3, inverse2);
+            x0 = _mm256_xor_si256(x0, z0);
+            x1 = _mm256_xor_si256(x1, z1);
+            x2 = _mm256_xor_si256(x2, z2);
+            x3 = _mm256_xor_si256(x3, z3);
+        }
+
+        AVX2FF8T4Forward(x0, x1, x2, x3, forward);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output0 + offset), x0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output1 + offset), x1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output2 + offset), x2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output3 + offset), x3);
+    }
+}
+
 static void AVX2FF8HighEncodeSmall(
     const void* const* data,
     uint32_t original_count,
@@ -1849,6 +2048,32 @@ static void AVX2FF8HighEncodeSmall(
 {
     static const uint16_t kZeroSkew = 255;
 
+    const bool fused_t4_count =
+        (original_count >= 3 && original_count <= 7) ||
+        (original_count >= 9 && original_count <= 11);
+    if (side == 4 && fused_t4_count && (byte_count & 31U) == 0)
+    {
+        switch (original_count)
+        {
+        case 3: AVX2FF8HighEncodeT4Blocks<3>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 4: AVX2FF8HighEncodeT4Blocks<4>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 5: AVX2FF8HighEncodeT4Blocks<5>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 6: AVX2FF8HighEncodeT4Blocks<6>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 7: AVX2FF8HighEncodeT4Blocks<7>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 9: AVX2FF8HighEncodeT4Blocks<9>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 10: AVX2FF8HighEncodeT4Blocks<10>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        case 11: AVX2FF8HighEncodeT4Blocks<11>(
+            data, work, inverse_skew, forward_skew, byte_count); return;
+        }
+    }
+
     // Materialize the first complete message block directly into the
     // accumulator.  This avoids both a separate output clear and the
     // redundant zero-valued accumulator load in the first XOR transform.
@@ -1858,10 +2083,19 @@ static void AVX2FF8HighEncodeSmall(
             data[0], data[1], work[0], work[1],
             inverse_skew[1], byte_count);
     }
-    else
+    else if (original_count >= 4)
     {
         AVX2FF8IFFTButterfly4Out(
             data[0], data[1], data[2], data[3],
+            work[0], work[1], work[2], work[3],
+            inverse_skew[1], inverse_skew[3], inverse_skew[2],
+            byte_count);
+    }
+    else
+    {
+        LEO_DEBUG_ASSERT(side == 4 && original_count == 3);
+        AVX2FF8Butterfly4Out<true, true>(
+            data[0], data[1], data[2], NULL,
             work[0], work[1], work[2], work[3],
             inverse_skew[1], inverse_skew[3], inverse_skew[2],
             byte_count);

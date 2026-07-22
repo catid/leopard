@@ -2275,22 +2275,21 @@ void ReedSolomonEncode(
         m == 8 || m == 16 || m == 32 || m == 64;
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
-    // The direct-input accumulator removes one complete source copy for each
-    // full T=2/T=4 message block.  Exact-main AVX2 crossover measurements
-    // qualify every valid T=2 shape from 2 KiB.  T=4 has a measured staircase:
-    // small block counts need more bytes to amortize fixed work, while the
-    // exact K=8 shape clears the 4-KiB gate independently of its K=9..11
-    // neighbors.  Keep the irregular boundary explicit rather than assuming
-    // a monotone K crossover.  buffer_bytes is the current execution pass, so
-    // a padded 64-byte tail cannot inherit its aligned prefix's decision.
+    // Exact-main AVX2 crossover measurements qualify every valid T=2 shape
+    // from 2 KiB.  For T=4, register-fused K=3..7 and K=9..11 kernels remove
+    // every accumulator round trip, while K=8 and K>=12 retain the mature
+    // direct-input callback.  Their measured byte thresholds are deliberately
+    // non-monotonic in K.  Keep the boundaries explicit: buffer_bytes is the
+    // current execution pass, so a padded 64-byte tail cannot inherit its
+    // aligned prefix's decision.
     const bool small_transform_shape =
         m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
-        m == 4 && original_count >= 4 && (
-            (original_count >= 16 && buffer_bytes >= 2U * 1024U) ||
-            ((original_count == 8 || original_count >= 12) &&
-                buffer_bytes >= 4U * 1024U) ||
-            (original_count >= 9 && buffer_bytes >= 8U * 1024U) ||
-            buffer_bytes >= 64U * 1024U);
+        m == 4 && (
+            ((original_count == 5 || original_count == 6 ||
+                original_count >= 9) && buffer_bytes >= 2U * 1024U) ||
+            ((original_count == 3 || original_count == 7 ||
+                original_count == 8) && buffer_bytes >= 4U * 1024U) ||
+            (original_count == 4 && buffer_bytes >= 8U * 1024U));
     if (ops.kind == LEO2_BACKEND_AVX2 &&
         ops.ff8_high_encode_small && small_transform_shape &&
         requested_output_count == recovery_count &&
@@ -2298,8 +2297,13 @@ void ReedSolomonEncode(
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighSmallTransformCalls.fetch_add(1, std::memory_order_relaxed);
+        const bool fused_t4 = m == 4 &&
+            ((original_count >= 3 && original_count <= 7) ||
+             (original_count >= 9 && original_count <= 11)) &&
+            (buffer_bytes & 31U) == 0;
         TestHighInputCopyShards.fetch_add(
-            original_count % m, std::memory_order_relaxed);
+            fused_t4 ? 0U : original_count % m,
+            std::memory_order_relaxed);
 #endif
         ops.ff8_high_encode_small(
             data, original_count, work, m, FFTSkewStorage + m,

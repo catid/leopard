@@ -979,6 +979,21 @@ void test_high_small_coarse_kernel(
     const Case cases[] = {
         { 2, 2, 2048 },
         { 254, 2, 2049 },
+        // Independently check every register-fused T=4 specialization against
+        // the direct systematic generator.  R=3 is the contiguous punctured
+        // prefix of the same four-coordinate parent transform.
+        { 3, 3, 4096 },
+        { 3, 4, 4096 },
+        { 5, 3, 2048 },
+        { 5, 4, 2048 },
+        { 6, 3, 2048 },
+        { 6, 4, 2048 },
+        { 7, 3, 4096 },
+        { 7, 4, 4096 },
+        { 10, 3, 2048 },
+        { 10, 4, 2048 },
+        { 11, 3, 2048 },
+        { 11, 4, 2048 },
         { 16, 4, 2048 },
         { 8, 4, 4096 },
         { 12, 3, 4097 },
