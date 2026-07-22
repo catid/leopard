@@ -1792,6 +1792,61 @@ static size_t MergeRanges(AddressRange* ranges, size_t count)
     return merged;
 }
 
+static bool RangesSortedByBegin(
+    const AddressRange* ranges,
+    size_t count)
+{
+    for (size_t i = 1; i < count; ++i)
+        if (ranges[i].begin < ranges[i - 1].begin)
+            return false;
+    return true;
+}
+
+static leo2_result ValidateAlreadySortedDisjointRanges(
+    const AddressRange* input_ranges,
+    size_t input_count,
+    const AddressRange* output_ranges,
+    size_t output_count)
+{
+    /*
+        The ordinary application layout stores shards in monotonically
+        increasing slabs.  Validate that common case with one linear sweep
+        instead of sorting K inputs and R outputs on every encode call.
+
+        Read-only inputs may overlap or alias exactly, so retain the furthest
+        end reached by every input whose begin precedes the current output's
+        end.  If that frontier crosses the output begin, some input overlaps
+        it.  Outputs remain pairwise disjoint and are checked independently.
+        Callers reach this helper only after both lists prove monotonic by
+        begin; arbitrary pointer orders retain the established sort/merge
+        fallback below.
+    */
+    size_t input_i = 0;
+    uintptr_t furthest_input_end = 0;
+    bool have_input = false;
+    for (size_t output_i = 0; output_i < output_count; ++output_i)
+    {
+        if (output_i != 0 &&
+            RangesOverlap(output_ranges[output_i - 1],
+                output_ranges[output_i]))
+            return LEO2_OVERLAP;
+
+        const AddressRange& output = output_ranges[output_i];
+        while (input_i < input_count &&
+            input_ranges[input_i].begin < output.end)
+        {
+            if (!have_input ||
+                input_ranges[input_i].end > furthest_input_end)
+                furthest_input_end = input_ranges[input_i].end;
+            have_input = true;
+            ++input_i;
+        }
+        if (have_input && furthest_input_end > output.begin)
+            return LEO2_OVERLAP;
+    }
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateDisjointRanges(
     AddressRange* input_ranges,
     size_t input_count,
@@ -1816,6 +1871,11 @@ static leo2_result ValidateDisjointRanges(
                 return LEO2_OVERLAP;
         return LEO2_SUCCESS;
     }
+
+    if (RangesSortedByBegin(input_ranges, input_count) &&
+        RangesSortedByBegin(output_ranges, output_count))
+        return ValidateAlreadySortedDisjointRanges(
+            input_ranges, input_count, output_ranges, output_count);
 
     input_count = MergeRanges(input_ranges, input_count);
     std::sort(output_ranges, output_ranges + output_count, RangeLess);

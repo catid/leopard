@@ -770,6 +770,59 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         &encoded_pointers[0], source_scratch.data(), source_scratch.size()),
         LEO2_SUCCESS, "decode fixture encode");
 
+    /*
+        Exercise the monotonic range-validation path used by ordinary packed
+        shard slabs.  Touching adjacent ranges are legal; a sorted output that
+        enters an input range and two sorted outputs that overlap must still
+        fail before arithmetic begins.
+    */
+    Bytes monotonic_storage(bytes * 5, 0);
+    const void* monotonic_original[3];
+    void* monotonic_recovery[2];
+    for (size_t i = 0; i < 3; ++i)
+    {
+        uint8_t* destination = &monotonic_storage[i * bytes];
+        memcpy(destination, source_pointers[i], bytes);
+        monotonic_original[i] = destination;
+    }
+    for (size_t i = 0; i < 2; ++i)
+        monotonic_recovery[i] = &monotonic_storage[(3 + i) * bytes];
+    require_result(leo2_encode(codec.codec, bytes, monotonic_original,
+        monotonic_recovery, source_scratch.data(), source_scratch.size()),
+        LEO2_SUCCESS, "monotonic packed encode ranges");
+    for (size_t i = 0; i < 2; ++i)
+        require(memcmp(monotonic_recovery[i], &encoded[i][0], bytes) == 0,
+            "monotonic packed encode changed parity");
+
+    const void* monotonic_aliased_original[3] = {
+        monotonic_original[0], monotonic_original[0], monotonic_original[2]
+    };
+    require_result(leo2_encode(codec.codec, bytes,
+        monotonic_aliased_original, monotonic_recovery,
+        source_scratch.data(), source_scratch.size()),
+        LEO2_SUCCESS, "monotonic aliased encode inputs");
+    require_result(leo2_encode(codec.codec, bytes, monotonic_original,
+        monotonic_recovery, source_scratch.data(), source_scratch.size()),
+        LEO2_SUCCESS, "restore monotonic packed encode fixture");
+    const Bytes monotonic_storage_before_rejections = monotonic_storage;
+
+    void* monotonic_input_overlap[2] = {
+        const_cast<void*>(monotonic_original[1]), monotonic_recovery[1]
+    };
+    require_result(leo2_encode(codec.codec, bytes, monotonic_original,
+        monotonic_input_overlap, source_scratch.data(), source_scratch.size()),
+        LEO2_OVERLAP, "monotonic output/input overlap");
+    void* monotonic_output_overlap[2] = {
+        monotonic_recovery[0],
+        static_cast<uint8_t*>(monotonic_recovery[0]) + 1
+    };
+    require_result(leo2_encode(codec.codec, bytes, monotonic_original,
+        monotonic_output_overlap, source_scratch.data(), source_scratch.size()),
+        LEO2_OVERLAP, "monotonic output/output overlap");
+    require(monotonic_storage == monotonic_storage_before_rejections,
+        "rejected monotonic encode overlap changed shard storage");
+    counts->alias_checks += 4;
+
     const Shards exact_encoded = encoded;
     AlignedBuffer general_metadata_scratch(source_scratch_bytes);
     const void** general_scratch_original =
@@ -922,6 +975,57 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         decode_recovery, restored_original, decode_scratch.data(),
         decode_scratch_bytes), LEO2_SUCCESS, "valid decode after rejections");
     require(restored == source[0], "valid decode restored wrong bytes");
+
+    uint8_t multi_original_present[3] = { 0, 0, 1 };
+    uint8_t multi_recovery_present[2] = { 1, 1 };
+    PlanOwner multi_plan;
+    require_result(leo2_decode_plan_create(codec.codec,
+        multi_original_present, multi_recovery_present, &multi_plan.plan),
+        LEO2_SUCCESS, "monotonic multi-output plan create");
+    size_t multi_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(multi_plan.plan, bytes,
+        &multi_scratch_bytes), LEO2_SUCCESS,
+        "monotonic multi-output scratch query");
+    AlignedBuffer multi_scratch(multi_scratch_bytes);
+    Bytes multi_storage(bytes * 5, 0);
+    memcpy(&multi_storage[0], &source[2][0], bytes);
+    memcpy(&multi_storage[bytes], &encoded[0][0], bytes);
+    memcpy(&multi_storage[bytes * 2], &encoded[1][0], bytes);
+    const void* multi_original[3] = {
+        NULL, NULL, &multi_storage[0]
+    };
+    const void* multi_recovery[2] = {
+        &multi_storage[bytes], &multi_storage[bytes * 2]
+    };
+    void* multi_restored[3] = {
+        &multi_storage[bytes * 3], &multi_storage[bytes * 4], NULL
+    };
+    require_result(leo2_decode_plan_execute(multi_plan.plan, bytes,
+        multi_original, multi_recovery, multi_restored, multi_scratch.data(),
+        multi_scratch.size()), LEO2_SUCCESS,
+        "monotonic packed multi-output decode");
+    require(memcmp(multi_restored[0], &source[0][0], bytes) == 0 &&
+            memcmp(multi_restored[1], &source[1][0], bytes) == 0,
+        "monotonic packed multi-output decode restored wrong bytes");
+    const Bytes multi_storage_before_rejections = multi_storage;
+
+    void* multi_input_overlap[3] = {
+        &multi_storage[bytes], &multi_storage[bytes * 4], NULL
+    };
+    require_result(leo2_decode_plan_execute(multi_plan.plan, bytes,
+        multi_original, multi_recovery, multi_input_overlap,
+        multi_scratch.data(), multi_scratch.size()), LEO2_OVERLAP,
+        "monotonic decode output/input overlap");
+    void* multi_output_overlap[3] = {
+        &multi_storage[bytes * 3], &multi_storage[bytes * 3 + 1], NULL
+    };
+    require_result(leo2_decode_plan_execute(multi_plan.plan, bytes,
+        multi_original, multi_recovery, multi_output_overlap,
+        multi_scratch.data(), multi_scratch.size()), LEO2_OVERLAP,
+        "monotonic decode output/output overlap");
+    require(multi_storage == multi_storage_before_rejections,
+        "rejected monotonic decode overlap changed shard storage");
+    counts->alias_checks += 3;
 }
 
 void test_one_shot_presence_alias_contracts(
