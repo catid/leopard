@@ -149,6 +149,50 @@ static void AVX2FF8Butterfly2(
     const FF8NibbleTable& table = FF8Tables[multiplier_log];
     const __m256i low_table = BroadcastTable(table.low);
     const __m256i high_table = BroadcastTable(table.high);
+    // Two independent vectors hide shuffle latency for small shards.  Keep
+    // the measured 4 KiB cutoff: an unconditional unroll regressed T8 at
+    // 64 KiB, while the mature single-vector loop remains neutral above it.
+    if (byte_count <= 4096)
+    {
+        while (byte_count >= 64)
+        {
+            __m256i x_value0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x));
+            __m256i y_value0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(y));
+            __m256i x_value1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x + 32));
+            __m256i y_value1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(y + 32));
+            if (Inverse)
+            {
+                y_value0 = _mm256_xor_si256(y_value0, x_value0);
+                y_value1 = _mm256_xor_si256(y_value1, x_value1);
+                x_value0 = _mm256_xor_si256(x_value0,
+                    AVX2FF8ProductVector(y_value0, low_table, high_table));
+                x_value1 = _mm256_xor_si256(x_value1,
+                    AVX2FF8ProductVector(y_value1, low_table, high_table));
+            }
+            else
+            {
+                x_value0 = _mm256_xor_si256(x_value0,
+                    AVX2FF8ProductVector(y_value0, low_table, high_table));
+                x_value1 = _mm256_xor_si256(x_value1,
+                    AVX2FF8ProductVector(y_value1, low_table, high_table));
+                y_value0 = _mm256_xor_si256(y_value0, x_value0);
+                y_value1 = _mm256_xor_si256(y_value1, x_value1);
+            }
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(x), x_value0);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(y), y_value0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(x + 32), x_value1);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(y + 32), y_value1);
+            x += 64;
+            y += 64;
+            byte_count -= 64;
+        }
+    }
     while (byte_count >= 32)
     {
         __m256i x_value = _mm256_loadu_si256(

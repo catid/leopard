@@ -1822,6 +1822,70 @@ void test_avx2_gf8_prepared_range_boundaries()
                             logs[log_i][2]);
 }
 
+void test_avx2_gf8_inplace_butterfly2_boundaries()
+{
+    const leopard::backend::Ops* const scalar =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_SCALAR);
+    const leopard::backend::Ops* const avx2 =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
+    if (!avx2)
+        return;
+    require(scalar != NULL, "scalar GF8 butterfly oracle is unavailable");
+
+    static const size_t kGuardBytes = 23;
+    const size_t sizes[] = {
+        1, 31, 32, 33, 63, 64, 65,
+        4032, 4095, 4096, 4097, 4160
+    };
+    const uint16_t logs[] = { 0, 37, 254 };
+    for (size_t size_i = 0;
+         size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+    {
+        const size_t bytes = sizes[size_i];
+        const size_t allocation_bytes = bytes + 2U * kGuardBytes + 5U;
+        for (size_t log_i = 0;
+             log_i < sizeof(logs) / sizeof(logs[0]); ++log_i)
+        {
+            const uint16_t log = logs[log_i];
+            Bytes original_x(allocation_bytes);
+            Bytes original_y(allocation_bytes);
+            for (size_t i = 0; i < allocation_bytes; ++i)
+            {
+                original_x[i] = static_cast<uint8_t>(
+                    i * 17U + bytes * 29U + log * 3U);
+                original_y[i] = static_cast<uint8_t>(
+                    i * 43U + bytes * 7U + log * 11U);
+            }
+
+            for (unsigned inverse = 0; inverse < 2; ++inverse)
+            {
+                Bytes reference_x = original_x;
+                Bytes reference_y = original_y;
+                Bytes candidate_x = original_x;
+                Bytes candidate_y = original_y;
+                const leopard::backend::Butterfly2 reference_butterfly =
+                    inverse ? scalar->ff8_ifft_butterfly2
+                            : scalar->ff8_fft_butterfly2;
+                const leopard::backend::Butterfly2 candidate_butterfly =
+                    inverse ? avx2->ff8_ifft_butterfly2
+                            : avx2->ff8_fft_butterfly2;
+                reference_butterfly(
+                    &reference_x[kGuardBytes + 1],
+                    &reference_y[kGuardBytes + 3], log, bytes);
+                candidate_butterfly(
+                    &candidate_x[kGuardBytes + 1],
+                    &candidate_y[kGuardBytes + 3], log, bytes);
+                require(candidate_x == reference_x &&
+                        candidate_y == reference_y,
+                    std::string("AVX2 GF8 in-place radix-two mismatch: ") +
+                    (inverse ? "inverse" : "forward") +
+                    " bytes=" + std::to_string(bytes) +
+                    " log=" + std::to_string(log));
+            }
+        }
+    }
+}
+
 void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
 {
     const CodecCase transform_cases[] = {
@@ -2635,6 +2699,7 @@ int main()
         require(!contexts.empty(), "no executable contexts");
         test_process_default_immutable(process_default);
         test_avx2_gf8_prepared_range_boundaries();
+        test_avx2_gf8_inplace_butterfly2_boundaries();
         test_traced_context_dispatch(contexts);
         test_gf8_high_forward_fusion_policy(contexts);
         test_weighted_locator_boundary_dispatch(contexts);
