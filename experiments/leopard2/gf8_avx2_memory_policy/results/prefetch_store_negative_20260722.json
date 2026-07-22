@@ -1,0 +1,133 @@
+{
+  "schema": "leopard2-gf8-avx2-memory-policy-negative-v1",
+  "date_utc": "2026-07-22",
+  "base_commit": "f7a0b2751cbf3858137fa7aa27aaef1776b59386",
+  "bead": "leopard-79h.18.20.1.30",
+  "disposition": "rejected_and_reverted",
+  "hypothesis": "Explicit prefetch or a different store policy may hide latency in the four-stream in-place transform and eight-stream IFFT-accumulate AVX2 GF8 loops.",
+  "promotion_rule": {
+    "minimum_credible_whole_codec_speedup": 1.05,
+    "maximum_neighbor_regression": 0.02,
+    "correctness_and_wire_identity_required": true
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "pinned_cpu": 3,
+    "idle_smt_sibling": 19,
+    "l2_per_core": "1024K",
+    "l3_visible_to_cpu3": "98304K",
+    "benchmark_lock": "/tmp/leopard-gf8-authoritative.lock"
+  },
+  "analysis": {
+    "in_place_transform_stores": "Every stage is read by a later transform stage, so non-temporal stores would force immediate refetch and are not eligible.",
+    "final_stores": "Final in-place butterflies are read-modify-write operations, so the destination line is already resident. Public outputs may be unaligned and may be consumed immediately; streaming stores would add an alignment path and an sfence without avoiding the load.",
+    "out_of_place_stores": "The same backend callbacks also execute non-final stages and carry no final-stage contract, so silently applying streaming stores is unsafe as a general memory policy.",
+    "alignment": "Public shards explicitly support unaligned pointers. Zen 5 has no aligned-instruction advantage for the already non-crossing aligned cases, while runtime alignment branches would remain in every hot callback.",
+    "restrict": "The loops use explicit intrinsic loads and stores, so restrict does not remove alias checks or change the generated vector sequence; callback alias contracts also cannot be strengthened locally.",
+    "prefetch_scope": "Measured T0 read hints and PREFETCHW output hints at 256, 512, and 1024 byte lead distances, issued once per 64-byte cache line with all hinted addresses kept inside their shard objects."
+  },
+  "candidate_binaries": {
+    "control_sha256": "84bc6e2e59f1576162749a16bb83fd6bf51938695902582922ce990af2624698",
+    "range_t0_256_sha256": "ce1df2b6707d1a6d6d873b018d4dd9f3a9c641d2838d6c1855655d9a60b256e2",
+    "range_t0_512_sha256": "2251b1737689ef65d147901c41ec752d85452f1686a6bbc73f700977afdb94d7",
+    "range_t0_1024_sha256": "62f581782569674a09013056658b189a80dd6e272deb195d81b8bc353e64b857",
+    "xor_t0_256_sha256": "e14a3543ac155e41076c008a3627ba5dffa48c1fb6009b76ce4dd8f6a1e3c8dd",
+    "xor_t0_512_sha256": "54b3d3713ea3eb03655a045224d46522d7846ce6721997fd245a94326102b7b1",
+    "xor_t0_1024_sha256": "4a82c5fb3ba88e6f75f12563f7f37c28b1dce7187c42b2f06f12108d43e8bea5",
+    "range_prefetchw_512_sha256": "9449ce08125f32362b2ffde66e59c6d7b5d685b5eeb50380aca97e8fe329d8c8",
+    "xor_prefetchw_512_sha256": "834c8f6f79a9d86825e867c805bc0a6de7a6df46b1a2586196601924bef5e8c1",
+    "combined_prefetchw_512_sha256": "b89dc8b28318264c48a8514771caa26f3faf7c496984a2456e423315ab8f59b0"
+  },
+  "screen": {
+    "parameters": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "threads": 1,
+      "batch": 1,
+      "reuse": 4,
+      "sides": [16, 32, 64, 128],
+      "shard_bytes": [4096, 65536, 1048576],
+      "high_rate_shapes": [[240, 16], [224, 32], [192, 64]],
+      "balanced_shape": [128, 128]
+    },
+    "result": "No candidate had a credible 5 percent whole-codec gain. Several variants regressed the T=16 4 KiB encode by 6 to 9 percent; range or combined variants also produced reproducible neighboring losses above 2 percent.",
+    "notable_initial_hint": {
+      "candidate": "combined_prefetchw_512",
+      "K": 224,
+      "R": 32,
+      "shard_bytes": 1048576,
+      "initial_two_pair_encode_median_speedup": 1.0523680037215826,
+      "reason_for_followup": "This was the only preliminary median at the promotion boundary, but the same candidate regressed T=64/K=192/1MiB to 0.9636124593444677 and T=128/K=128/64KiB to 0.9542876793945343."
+    }
+  },
+  "decisive_followup": {
+    "candidate": "combined_prefetchw_512",
+    "rounds": 4,
+    "abba_speedup_observations_per_cell": 8,
+    "iterations_per_invocation": 7,
+    "cells": [
+      {
+        "K": 224,
+        "R": 32,
+        "shard_bytes": 524288,
+        "encode_geomean_speedup": 1.0111872862680522,
+        "encode_ci95": [0.9610648600105691, 1.062858072638725],
+        "decode_geomean_speedup": 0.9978227179277921,
+        "decode_ci95": [0.9928572709432175, 1.0049368890528452]
+      },
+      {
+        "K": 224,
+        "R": 32,
+        "shard_bytes": 1048576,
+        "encode_geomean_speedup": 0.977104069410418,
+        "encode_ci95": [0.973411673402947, 0.9800838805668741],
+        "decode_geomean_speedup": 0.9947804037980342,
+        "decode_ci95": [0.9923394145782847, 0.9976545812474537]
+      },
+      {
+        "K": 224,
+        "R": 32,
+        "shard_bytes": 2097152,
+        "encode_geomean_speedup": 0.9992179087500577,
+        "encode_ci95": [0.9844663949412383, 1.0213048370716162],
+        "decode_geomean_speedup": 0.9997421911644766,
+        "decode_ci95": [0.9955394942637698, 1.0037746197979787]
+      }
+    ]
+  },
+  "correctness": {
+    "all_benchmark_round_trips": true,
+    "workload_digests_identical_between_control_and_candidates": true,
+    "prototype_source_fully_reverted_before_commit": true
+  },
+  "code_generation": {
+    "compiler": "GCC 13.3.0",
+    "flags": "-O3 -mavx2 -mno-avx512f -falign-functions=64",
+    "baseline_avx2_object_text_bytes": 96165,
+    "range_t0_512_object_text_bytes": 96613,
+    "xor_t0_512_object_text_bytes": 97125,
+    "combined_prefetchw_512_object_text_bytes": 97317,
+    "zmm_or_mask_register_references": 0
+  },
+  "raw_summary_artifacts": [
+    {
+      "description": "512-byte T0 IFFT-accumulate broad ABBA",
+      "sha256": "428ba5555175edf814f8fa94ffd5b685115d0fd7b85af269c8e0dc4bd46513a7"
+    },
+    {
+      "description": "512-byte T0 four-stream range broad ABBA",
+      "sha256": "0ad8873bc4c002a69e60962d2d7d3a4ccf3814392fea3ef5baa0d11300528d3f"
+    },
+    {
+      "description": "all distance and read/write-hint variants",
+      "sha256": "3dd688397da9c1defdf422dc059eea1fb56363abb3df4983d213c105a0e5d4e7"
+    },
+    {
+      "description": "decisive combined-candidate followup",
+      "sha256": "35949fc0d06c783446ccb4e828c165f767625b9623952208dc7e66a1a1418138"
+    }
+  ],
+  "conclusion": "Zen 5 hardware prefetch plus the retained cache-resident payload tiling already covers these regular streams. Explicit hints add branch, prefetch, and code-footprint cost; no tested policy meets promotion criteria. Keep the production kernels unchanged."
+}
