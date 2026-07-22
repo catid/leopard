@@ -1,0 +1,238 @@
+{
+  "schema": "leopard2.avx2_r1_negative_experiment.v1",
+  "created_utc": "2026-07-22T15:00:43Z",
+  "decision": {
+    "status": "rejected",
+    "production_change": "none",
+    "reason": "Destination-disjoint qualification, explicit four-lane source-first scheduling, and a cold exact-tail split produced no statistically credible 5 percent end-to-end improvement. The explicit schedule compiled to the same callback bytes as the simpler candidate, and the cold-tail candidate was neutral to mixed across every selected production boundary.",
+    "retained_production_path": "commit 39fc6d42bd10658285b3d394f0b022de34af412b AVX2 large-shard pair selector"
+  },
+  "identity": {
+    "experiment_base_commit": "20367f79271e7d3195738d5625af3766e051c1fc",
+    "production_selector_source_commit": "39fc6d42bd10658285b3d394f0b022de34af412b",
+    "production_selector_executable_sha256": "55500d931e1ad964d9668ba3612a75a7e760821e16d0adc972ef539c0e945980",
+    "disjoint_candidate_executable_sha256": "a5f838f53ad51fdcf45f2d4b1b86383cc31bb8677ee56300f69e2e95d430158a",
+    "cold_tail_candidate_executable_sha256": "ef641220796e9122b45cdd76dd592cd421ebb0cc9e5fb26ef52257c9f7c7c0ed",
+    "cold_tail_source_diff_sha256": "a57dcceec069279ea49dac35aea9e2029cccf1f8f823a9e79977290d78f3eec1"
+  },
+  "machine": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "allowed_cpu_set": "0-14,16-30",
+    "compiler_gcc": "GCC 13.3.0",
+    "compiler_clang": "Clang 18.1.3",
+    "kernel": "Linux 6.8.0-134-generic",
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "scaling_governor": "powersave",
+    "energy_performance_preference": "performance",
+    "parallelism_note": "Builds and tests used all 30 logical CPUs allowed to this process. Cache- and bandwidth-sensitive ABBA measurements intentionally used one pinned physical core while requiring exactly zero non-idle /proc/stat jiffies on SMT sibling 30."
+  },
+  "contract_and_static_audit": {
+    "destination_aliasing": "destination is disjoint from both sources",
+    "source_aliasing": "read-only sources may alias exactly or partially",
+    "qualified_pointer": "destination only",
+    "tail_coverage": "test_r1_xor covers every byte count 0 through 257 plus 511/512/513, 1023/1024/1025, 4095/4096/4097, 65535/65536/65537, and 1048575/1048576/1048579",
+    "source_alias_coverage": "test_r1_xor covers exact and one-byte-displaced read-only source aliases",
+    "manual_schedule_result": "Both GCC and Clang emitted the same instruction bytes as the simpler disjoint candidate; no timing was run for an identical executable kernel.",
+    "normalized_gcc_disassembly_sha256_both_variants": "c7f61b48a849c56b47dc79995646ea08bea5f695dd2d41f59557e4a4eb78a112",
+    "normalized_clang_disassembly_sha256_both_variants": "28430f73f223c415a89b4aa1ac461b081f1685c290ebae2e31503ec6b30cc3c5",
+    "cold_tail_gcc_mature_text_sha256": "1c5570cb5204a15ce158e855412a27e63a515f0f6071a649696770767b5ff67b",
+    "selector_control_gcc_mature_text_sha256": "1c5570cb5204a15ce158e855412a27e63a515f0f6071a649696770767b5ff67b",
+    "cold_tail_sections_bytes": {
+      "gcc_hot": 294,
+      "gcc_tail": 49,
+      "clang_hot": 323,
+      "clang_tail": 28
+    },
+    "original_disjoint_hot_section_bytes": {
+      "gcc": 327,
+      "clang": 410
+    },
+    "unexpected_zmm_or_mask_registers": false,
+    "stack_spills_in_candidate_sections": false
+  },
+  "correctness_gates": {
+    "gcc13_release_targeted_ctest": "6/6 passed",
+    "clang18_release_targeted_ctest": "6/6 passed",
+    "clang18_asan_ubsan_targeted_ctest": "6/6 passed",
+    "targeted_tests": [
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_r1_xor",
+      "leopard2_public_api_contract",
+      "leopard2_legacy_golden",
+      "leopard2_r1_xor_crossover_self_test"
+    ],
+    "wire_and_round_trip_digests_match": true
+  },
+  "method": {
+    "baseline": "disjoint-destination helper with inline exact scalar tail",
+    "candidate": "same helper with the at-most-31-byte exact suffix in a noinline cold section",
+    "comparison_order_per_round": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "rounds": 5,
+    "statistics": "Point estimates are the geometric ratio over all accepted calls. Intervals use one independent mean-log ABBA contrast per round and a two-sided Student-t 95 percent interval with four degrees of freedom.",
+    "ratio_orientation": "baseline_time_over_candidate_time",
+    "promotion_gate": "At least 5 percent statistically credible improvement in the target region and no unexplained regression above 2 percent in neighboring cells.",
+    "isolation_acceptance": "Every accepted child observed zero non-idle jiffies on reserved sibling CPU 30."
+  },
+  "cold_tail_results_percent": [
+    {
+      "K": 7,
+      "bytes": 8388608,
+      "selected": false,
+      "tail": false,
+      "encode_gain": -1.81,
+      "encode_ci95": [-5.63, 2.17],
+      "decode_gain": -0.08,
+      "decode_ci95": [-2.89, 2.82]
+    },
+    {
+      "K": 8,
+      "bytes": 8388608,
+      "selected": true,
+      "tail": false,
+      "encode_gain": -2.04,
+      "encode_ci95": [-6.75, 2.91],
+      "decode_gain": -0.39,
+      "decode_ci95": [-4.33, 3.71]
+    },
+    {
+      "K": 8,
+      "bytes": 8388625,
+      "selected": true,
+      "tail": true,
+      "encode_gain": -1.87,
+      "encode_ci95": [-8.40, 5.12],
+      "decode_gain": -0.29,
+      "decode_ci95": [-3.25, 2.75]
+    },
+    {
+      "K": 9,
+      "bytes": 4194304,
+      "selected": false,
+      "tail": false,
+      "encode_gain": -0.30,
+      "encode_ci95": [-1.46, 0.88],
+      "decode_gain": -0.20,
+      "decode_ci95": [-1.41, 1.03]
+    },
+    {
+      "K": 10,
+      "bytes": 4194304,
+      "selected": true,
+      "tail": false,
+      "encode_gain": 0.02,
+      "encode_ci95": [-2.09, 2.17],
+      "decode_gain": -1.03,
+      "decode_ci95": [-3.80, 1.82]
+    },
+    {
+      "K": 10,
+      "bytes": 4194321,
+      "selected": true,
+      "tail": true,
+      "encode_gain": 2.79,
+      "encode_ci95": [-5.18, 11.44],
+      "decode_gain": 2.25,
+      "decode_ci95": [-2.26, 6.97]
+    },
+    {
+      "K": 30,
+      "bytes": 2097152,
+      "selected": false,
+      "tail": false,
+      "encode_gain": 0.21,
+      "encode_ci95": [-1.98, 2.45],
+      "decode_gain": -0.12,
+      "decode_ci95": [-0.52, 0.28]
+    },
+    {
+      "K": 31,
+      "bytes": 2097152,
+      "selected": true,
+      "tail": false,
+      "encode_gain": -2.33,
+      "encode_ci95": [-6.75, 2.31],
+      "decode_gain": -0.78,
+      "decode_ci95": [-3.13, 1.62]
+    },
+    {
+      "K": 31,
+      "bytes": 2097169,
+      "selected": true,
+      "tail": true,
+      "encode_gain": 0.67,
+      "encode_ci95": [-2.05, 3.46],
+      "decode_gain": 0.18,
+      "decode_ci95": [-1.35, 1.74]
+    },
+    {
+      "K": 50,
+      "bytes": 1048576,
+      "selected": false,
+      "tail": false,
+      "encode_gain": -0.22,
+      "encode_ci95": [-1.43, 1.01],
+      "decode_gain": -0.46,
+      "decode_ci95": [-1.52, 0.62]
+    },
+    {
+      "K": 51,
+      "bytes": 1048576,
+      "selected": true,
+      "tail": false,
+      "encode_gain": -1.58,
+      "encode_ci95": [-4.77, 1.72],
+      "decode_gain": -0.25,
+      "decode_ci95": [-2.48, 2.03]
+    },
+    {
+      "K": 51,
+      "bytes": 1048593,
+      "selected": true,
+      "tail": true,
+      "encode_gain": -0.58,
+      "encode_ci95": [-10.52, 10.47],
+      "decode_gain": -0.52,
+      "decode_ci95": [-2.76, 1.78]
+    }
+  ],
+  "initial_disjoint_screen": {
+    "rounds": 3,
+    "interpretation": "No selected target exceeded 2.72 percent encode gain or 7.22 percent decode gain, and unrelated unselected controls moved by more than 10 percent, exposing code-layout/noise sensitivity. This candidate was not promoted; the five-round cold-tail residual comparison above is the final gate.",
+    "selected_target_point_gains_percent": [
+      {"K": 8, "bytes": 8388608, "encode": -0.85, "decode": 0.32},
+      {"K": 10, "bytes": 4194304, "encode": 0.23, "decode": 1.31},
+      {"K": 31, "bytes": 2097152, "encode": 0.50, "decode": 0.00},
+      {"K": 51, "bytes": 1048576, "encode": 2.14, "decode": -0.87}
+    ]
+  },
+  "retained_raw_artifacts": {
+    "disjoint_vs_selector_three_round_json": {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/disjoint-vs-selector-screen3.json",
+      "sha256": "6a48f9c3f87ce65284b4c50fe57672b8cbc59e247441769e4316a22b96a7d74f"
+    },
+    "cold_tail_vs_disjoint_five_round_json": {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/coldtail-vs-disjoint-final5.json",
+      "sha256": "b847452c02142dd2686247fe35e40b0f488cdee5b451a757763316bfaf2e2a62"
+    },
+    "cold_tail_gcc_hot_disassembly_sha256": "3d07027dca2fd954bcbe2df1d900cd0c3bb85d013fcbeb0d252f08c848613d42",
+    "cold_tail_gcc_tail_disassembly_sha256": "267c35442b8fd484d3079c15dcd51f7f7dfa5e91c5ebd23969ee33dcb9791957",
+    "cold_tail_clang_hot_disassembly_sha256": "be66864f38a586d3647a4f0f2a9c844d628ea7b991a0055617ff6423d1ad6a0b",
+    "cold_tail_clang_tail_disassembly_sha256": "95b99be6147bc34ba1965d51d690738a9ae63002272d413814cc44efd720a2d3"
+  },
+  "reproduction": {
+    "build_gcc": "cmake --build build/production-gcc-avx2 -j30",
+    "build_clang": "cmake --build build/production-clang18-avx2 -j30",
+    "build_sanitized": "cmake --build build/asan-ubsan-clang18-avx2 -j30",
+    "targeted_test_regex": "^leopard2_(backend_ops|context_backends|r1_xor|public_api_contract|legacy_golden|r1_xor_crossover_self_test)$",
+    "one_target_cell": "taskset -c 14 build/production-gcc-avx2/bench_leopard2 --k 31 --r 1 --bytes 2097152 --loss 1 --batch 1 --reuse 1 --iterations 3 --warmup 1 --threads 1 --seed 735197152 --profile high --field gf8 --backend avx2 --skip-legacy --retain-samples --report-decode-path --json -",
+    "authoritative_note": "Use immutable baseline/candidate executables in baseline/candidate/candidate/baseline order for five rounds; reject and retry any child if CPU 30 accumulates a nonzero non-idle /proc/stat delta."
+  }
+}
