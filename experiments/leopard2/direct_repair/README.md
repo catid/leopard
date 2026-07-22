@@ -13,9 +13,13 @@ requires the general experiment.  It qualifies an AVX2 operation that forms
 one output from two independently scaled sources in one pass.  The direct
 executor then initializes from its first source pair and accumulates later
 pairs, halving hot-output loads/stores for the paired terms.  The original
-runner pins this nested option OFF so its results continue to isolate the
-simple direct candidate; pair fusion has its own kernel, text-size, and codec
-promotion evidence.
+runner defaults this nested option OFF so its results continue to isolate the
+simple direct candidate.  `--pair-fusion` measures the complete fused candidate
+against the transform control, while `--pair-attribution` compiles simple
+direct repair into both binaries and permits only the qualification and AVX2
+backend objects to differ.  The latter comparison determines whether pair
+fusion needs a byte threshold instead of routing every shard size through the
+paired traversal.
 
 For one loss, plan construction generates one exact systematic generator row,
 selects one received parity equation, and stores at most `K` execution terms.
@@ -87,12 +91,15 @@ count.  Codec setup is not hidden inside plan reuse.  A candidate clears the def
 only when the lower 95% confidence bound is at least 1.05x.  A credible
 neighbor regression below 0.98x is retained separately.
 
-The runner configures same-source OFF and ON builds, permits exactly one
-compile/object delta (`leopard2.cpp`), excludes AVX-512 at configuration and
-disassembly, freezes and hashes both executables, and rechecks hashes on
+By default the runner configures same-source OFF and ON builds and permits
+exactly one compile/object delta (`leopard2.cpp`).  In `--pair-fusion` mode the
+two pair-backend objects are the only additional deltas.  In
+`--pair-attribution` mode `leopard2.cpp` must be byte-identical and only those
+two backend objects may differ.  Every mode excludes AVX-512 at configuration
+and disassembly, freezes and hashes both executables, and rechecks hashes on
 resume.  An optional exact Leopard-main benchmark runs only after a valid
 legacy-high cell first wins the same-source comparison.  LOW and non-winning
-cells cannot invoke it.
+cells cannot invoke it, and pair-only attribution never invokes it.
 
 Example commands after acquiring the canonical campaign lease:
 
@@ -103,6 +110,13 @@ Example commands after acquiring the canonical campaign lease:
         --source "$PWD" --commit "$(git rev-parse HEAD)" \
         --build-root /tmp/leopard2-general-l1-build \
         --run-dir /tmp/leopard2-general-l1-results
+
+    python3 experiments/leopard2/direct_repair/run_general_l1_abba.py run \
+        --pair-attribution --tiers core,byte-neighbor \
+        --cell-regex='-u8$' \
+        --source "$PWD" --commit "$(git rev-parse HEAD)" \
+        --build-root /tmp/leopard2-general-l1-pair-build \
+        --run-dir /tmp/leopard2-general-l1-pair-results
 
 Pass `--main-benchmark`, the exact 40-character `--main-commit`, and its
 pre-recorded 64-character `--main-sha256` only when a verified Leopard-main

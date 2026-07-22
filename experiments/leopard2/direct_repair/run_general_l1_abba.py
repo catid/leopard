@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """Authoritative same-source screen for the general GF8/AVX2 L=1 repair.
 
-The control and candidate are compiled from one clean commit.  Their only
-permitted compile-command and object difference is the source-scoped
-LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1 definition on leopard2.cpp.
+The control and candidate are compiled from one clean commit.  By default,
+their only permitted compile-command and object difference is the
+source-scoped LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1 definition on
+leopard2.cpp.  --pair-fusion additionally permits its one definition on the
+backend qualification and AVX2 implementation sources, and no other delta.
+--pair-attribution instead compiles direct repair into both executables and
+permits only the pair-fusion backend sources to differ.  This isolates the
+two-source kernel and exposes any byte range where a runtime threshold is
+needed.
 The runner freezes both executables before timing, forces and attests AVX2,
 uses serial ABBA rounds on one physical core, and reports decode-plan setup
 separately from byte-heavy execution.  An exact Leopard-main executable is
@@ -45,12 +51,15 @@ from leopard2_build_provenance import (  # noqa: E402
 )
 
 
-SCHEMA = "leopard2-general-direct-l1-abba/v1"
+SCHEMA = "leopard2-general-direct-l1-abba/v2"
 MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v1"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EXPERIMENT = "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1"
 PAIR_FUSION = "LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION"
+TRANSFORM_VS_SIMPLE = "transform-vs-simple"
+TRANSFORM_VS_PAIR = "transform-vs-pair"
+SIMPLE_VS_PAIR = "simple-vs-pair"
 ABBA = ("control", "candidate", "candidate", "control")
 BASE_BYTES = (64, 2048, 4096, 65536, 1048576)
 BASE_REUSE = (1, 8, 64)
@@ -354,8 +363,11 @@ def configure_and_build(
     source: Path,
     build: Path,
     enabled: bool,
+    pair_fusion: bool,
     jobs: int,
 ) -> None:
+    require(not pair_fusion or enabled,
+            "pair fusion requires the general direct-L1 candidate")
     cmake = "/usr/bin/cmake"
     configure = (
         cmake, "-S", str(source), "-B", str(build),
@@ -377,7 +389,7 @@ def configure_and_build(
         "-DLEO2_FLAG_MAVX512F=FALSE",
         "-DLEO2_FLAG_MAVX512BW=FALSE",
         "-DLEO2_FLAG_MAVX512VL=FALSE",
-        "-D%s=OFF" % PAIR_FUSION,
+        "-D%s=%s" % (PAIR_FUSION, "ON" if pair_fusion else "OFF"),
         "-D%s=%s" % (EXPERIMENT, "ON" if enabled else "OFF"),
     )
     checked(configure, timeout=300)
@@ -424,20 +436,50 @@ def compare_build_closures(
     candidate_build: Path,
     control: Mapping[str, Any],
     candidate: Mapping[str, Any],
+    control_general: bool = False,
+    control_pair: bool = False,
+    candidate_general: bool = True,
+    candidate_pair: bool = False,
 ) -> dict[str, Any]:
-    require(cache_values(control_build).get(EXPERIMENT) == "OFF",
-            "control did not compile with the experiment OFF")
-    require(cache_values(candidate_build).get(EXPERIMENT) == "ON",
-            "candidate did not compile with the experiment ON")
-    require(cache_values(control_build).get(PAIR_FUSION) == "OFF" and
-            cache_values(candidate_build).get(PAIR_FUSION) == "OFF",
-            "general-L1 campaign must isolate pair fusion OFF")
+    require(not control_pair or control_general,
+            "control pair fusion requires general direct L1")
+    require(not candidate_pair or candidate_general,
+            "candidate pair fusion requires general direct L1")
+    require((control_general, control_pair) !=
+            (candidate_general, candidate_pair),
+            "control and candidate configurations are identical")
+    control_cache = cache_values(control_build)
+    candidate_cache = cache_values(candidate_build)
+    require(control_cache.get(EXPERIMENT) ==
+                ("ON" if control_general else "OFF") and
+            control_cache.get(PAIR_FUSION) ==
+                ("ON" if control_pair else "OFF") and
+            candidate_cache.get(EXPERIMENT) ==
+                ("ON" if candidate_general else "OFF") and
+            candidate_cache.get(PAIR_FUSION) ==
+                ("ON" if candidate_pair else "OFF"),
+            "control/candidate experiment cache identity differs")
     left = closure_by_source(control)
     right = closure_by_source(candidate)
     require(set(left) == set(right), "control/candidate source closure differs")
     comparison = []
     changed_objects = []
     macro = "-D%s=1" % EXPERIMENT
+    pair_macro = "-D%s=1" % PAIR_FUSION
+    def configured_macros(general: bool, pair: bool) -> dict[str, str]:
+        result = {"leopard2.cpp": macro} if general else {}
+        if pair:
+            result.update({
+                "Leopard2Backend.cpp": pair_macro,
+                "Leopard2BackendAVX2.cpp": pair_macro,
+            })
+        return result
+
+    control_macros = configured_macros(control_general, control_pair)
+    candidate_macros = configured_macros(candidate_general, candidate_pair)
+    expected_changed = sorted(
+        relative for relative in set(control_macros) | set(candidate_macros)
+        if control_macros.get(relative) != candidate_macros.get(relative))
     for relative in sorted(left):
         control_record = left[relative]
         candidate_record = right[relative]
@@ -449,31 +491,32 @@ def compare_build_closures(
                 "ISA flag profile differs for " + relative)
         control_args = normalized_arguments(control_record, control_build)
         candidate_args = normalized_arguments(candidate_record, candidate_build)
-        require(macro not in control_args,
-                "control unexpectedly defines the experiment")
-        if relative == "leopard2.cpp":
-            require(candidate_args.count(macro) == 1,
-                    "candidate definition is not scoped to leopard2.cpp")
-            candidate_without_macro = [
-                item for item in candidate_args if item != macro]
-            require(candidate_without_macro == control_args,
-                    "leopard2.cpp compile recipe differs beyond the macro")
-        else:
-            require(macro not in candidate_args,
-                    "experiment definition escaped into " + relative)
-            require(candidate_args == control_args,
-                    "unrelated compile recipe differs for " + relative)
+        control_expected = control_macros.get(relative)
+        candidate_expected = candidate_macros.get(relative)
+        for arguments, expected, role in (
+                (control_args, control_expected, "control"),
+                (candidate_args, candidate_expected, "candidate")):
+            for definition in (macro, pair_macro):
+                require(arguments.count(definition) ==
+                        (1 if definition == expected else 0),
+                        role + " definition scope differs for " + relative)
+        control_base = [item for item in control_args
+                        if item not in (macro, pair_macro)]
+        candidate_base = [item for item in candidate_args
+                          if item not in (macro, pair_macro)]
+        require(candidate_base == control_base,
+                relative + " compile recipe differs beyond approved macros")
         same_object = (
             control_record["object"]["sha256"] ==
             candidate_record["object"]["sha256"] and
             control_record["object"]["size"] ==
             candidate_record["object"]["size"])
         if same_object:
-            require(relative != "leopard2.cpp",
-                    "candidate macro did not change leopard2.cpp object")
+            require(relative not in expected_changed,
+                    "candidate macro did not change " + relative + " object")
         else:
             changed_objects.append(relative)
-            require(relative == "leopard2.cpp",
+            require(relative in expected_changed,
                     "unrelated object bytes differ for " + relative)
         comparison.append({
             "source": relative,
@@ -483,14 +526,16 @@ def compare_build_closures(
             "candidate_object_sha256": candidate_record["object"]["sha256"],
             "flag_profile": control_record["flag_profile"],
         })
-    require(changed_objects == ["leopard2.cpp"],
-            "object delta is not exactly leopard2.cpp")
+    require(changed_objects == expected_changed,
+            "object delta differs from the permitted source scope")
     require(not any(name.startswith("Leopard2BackendAVX512") for name in left),
             "pure AVX2 closure contains an AVX-512 source")
     return {
-        "schema": "leopard2-general-l1-source-scoped-closure/v1",
+        "schema": "leopard2-general-l1-source-scoped-closure/v2",
         "source_root": str(source),
-        "allowed_compile_delta": macro,
+        "control_macros": sorted(control_macros.items()),
+        "candidate_macros": sorted(candidate_macros.items()),
+        "allowed_changed_sources": expected_changed,
         "changed_objects": changed_objects,
         "records": comparison,
         "control_archive_sha256": control["archive"]["sha256"],
@@ -532,6 +577,133 @@ def inspect_pure_avx2(executable: Path) -> dict[str, Any]:
                 errors="replace").splitlines()[0],
     })
     return result
+
+
+def inspect_object_footprints(
+    provenance: Mapping[str, Any], sources: Sequence[str],
+) -> dict[str, Any]:
+    records = closure_by_source(provenance)
+    result: dict[str, Any] = {}
+    for relative in sources:
+        require(relative in records,
+                "footprint source is absent from compile closure: " + relative)
+        path = Path(records[relative]["object"]["path"])
+        require(path.is_file(), "footprint object is missing: " + str(path))
+        completed = subprocess.run(
+            ("/usr/bin/size", "-A", "-d", str(path)),
+            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, text=True, timeout=60, check=False)
+        require(completed.returncode == 0,
+                "size failed for %s: %s" % (
+                    relative, completed.stderr.strip()))
+        sections: dict[str, int] = {}
+        for line in completed.stdout.splitlines():
+            columns = line.split()
+            if len(columns) >= 2 and columns[0].startswith("."):
+                try:
+                    sections[columns[0]] = int(columns[1], 10)
+                except ValueError:
+                    continue
+        require(any(name.startswith(".text") for name in sections),
+                "size emitted no text section for " + relative)
+        result[relative] = {
+            "path": str(path.resolve(strict=True)),
+            "sha256": sha256_file(path),
+            "file_bytes": path.stat().st_size,
+            "text_bytes": sum(value for name, value in sections.items()
+                              if name.startswith(".text")),
+            "rodata_bytes": sum(value for name, value in sections.items()
+                                if name.startswith(".rodata")),
+            "sections": sections,
+        }
+    return {
+        "size_version": checked(
+            ("/usr/bin/size", "--version"), timeout=30).decode(
+                errors="replace").splitlines()[0],
+        "objects": result,
+    }
+
+
+def inspect_pair_object(
+    provenance: Mapping[str, Any], expected: bool,
+) -> dict[str, Any]:
+    records = closure_by_source(provenance)
+    relative = "Leopard2BackendAVX2.cpp"
+    require(relative in records,
+            "AVX2 backend is absent from the compile closure")
+    path = Path(records[relative]["object"]["path"])
+    names = checked((
+        "/usr/bin/nm", "-C", "--defined-only", str(path)),
+        timeout=60).decode(errors="replace")
+    pair_names = sorted(line.strip() for line in names.splitlines()
+                        if "AVX2FF8LinearCombination2" in line)
+    require(bool(pair_names) == expected,
+            "pair-fusion symbols do not match the configured option")
+    disassembly = checked((
+        "/usr/bin/objdump", "-d", "-C", "-M", "intel", str(path)),
+        timeout=180).decode(errors="replace")
+    pair_lines = [line for line in disassembly.splitlines()
+                  if "AVX2FF8LinearCombination2" in line]
+    functions: dict[str, list[str]] = {}
+    active_name = None
+    for line in disassembly.splitlines():
+        label = re.match(r"^\s*[0-9a-f]+ <(.*)>:$", line)
+        if label:
+            active_name = label.group(1)
+            functions.setdefault(active_name, [])
+        elif active_name is not None:
+            functions[active_name].append(line)
+    loop_specializations = {}
+    loop_pattern = re.compile(
+        r"AVX2FF8LinearCombination2Loop<"
+        r"(true|false), (true|false), (true|false)>")
+    for name, lines in functions.items():
+        match = loop_pattern.search(name)
+        if not match:
+            continue
+        add, identity0, identity1 = match.groups()
+        key = "add=%s,identity0=%s,identity1=%s" % (
+            add, identity0, identity1)
+        body = "\n".join(lines)
+        loop_specializations[key] = {
+            "symbol": name,
+            "vbroadcast_count": len(re.findall(
+                r"\bvbroadcast(?:i128|f128|ss|sd)\b", body)),
+            "vpshufb_count": len(re.findall(r"\bvpshufb\b", body)),
+            "body_sha256": sha256_bytes(body.encode()),
+        }
+    identity_loops = [value for key, value in loop_specializations.items()
+                      if "identity0=true,identity1=true" in key]
+    if identity_loops:
+        require(all(value["vbroadcast_count"] == 0 and
+                    value["vpshufb_count"] == 0
+                    for value in identity_loops),
+                "both-identity pair specialization retained table work")
+    if expected:
+        require(any("AVX2FF8LinearCombination2(" in name
+                    for name in pair_names),
+                "pair-fusion callback symbol is missing")
+        require(re.search(r"\bymm[0-9]+\b", disassembly) is not None and
+                "vpshufb" in disassembly,
+                "pair-fusion object has no visible AVX2 table work")
+    return {
+        "object_path": str(path.resolve(strict=True)),
+        "object_sha256": sha256_file(path),
+        "pair_symbol_count": len(pair_names),
+        "pair_symbols": pair_names,
+        "pair_reference_line_count": len(pair_lines),
+        "loop_specializations": loop_specializations,
+        "both_identity_table_work_elided": (
+            bool(identity_loops) and all(
+                value["vbroadcast_count"] == 0 and
+                value["vpshufb_count"] == 0
+                for value in identity_loops)),
+        "complete_disassembly_sha256": sha256_bytes(disassembly.encode()),
+        "complete_vbroadcast_count": len(re.findall(
+            r"\bvbroadcast(?:i128|f128|ss|sd)\b", disassembly)),
+        "complete_vpshufb_count": len(re.findall(
+            r"\bvpshufb\b", disassembly)),
+    }
 
 
 def freeze_executable(source: Path, destination: Path) -> dict[str, Any]:
@@ -778,6 +950,7 @@ def validate_leopard2_document(
     role: str,
     document: Mapping[str, Any],
     cell: Mapping[str, Any],
+    direct_control: bool = False,
 ) -> None:
     require(document.get("schema") == "leopard2-benchmark-v3",
             role + " did not emit path-report schema v3")
@@ -818,17 +991,45 @@ def validate_leopard2_document(
     require(document["correctness"]["leopard2_round_trip"] is True,
             role + " round trip did not pass")
     path = resolved["selected_decode_path"]
-    if role == "control":
+    direct_counts = (
+        resolved["decode_direct_term_count"],
+        resolved["decode_direct_unit_term_count"],
+        resolved["decode_direct_pair_count"],
+        resolved["decode_direct_pair_with_unit_count"],
+    )
+    if role == "control" and not direct_control:
         require(path != "direct",
                 "control unexpectedly selected direct repair")
+        require(direct_counts == (0, 0, 0, 0),
+                "control exposed direct-plan terms")
     elif cell["candidate_expected_path"] == "direct":
         require(path == "direct",
                 "candidate did not select direct repair")
         require(resolved["selected_decode_rule"] == "direct",
                 "candidate direct path has a non-direct rule")
+        require(direct_counts[0] == cell["K"],
+                "one-loss direct plan did not retain exactly K terms")
+        require(0 <= direct_counts[1] <= direct_counts[0] and
+                direct_counts[2] == direct_counts[0] // 2 and
+                0 <= direct_counts[3] <= direct_counts[2] and
+                direct_counts[3] <= direct_counts[1],
+                "direct-plan pair/unit accounting is inconsistent")
     else:
         require(path != "direct",
                 "negative selector control unexpectedly selected direct repair")
+        require(direct_counts == (0, 0, 0, 0),
+                "negative selector control exposed direct-plan terms")
+
+
+def direct_plan_mix(document: Mapping[str, Any]) -> dict[str, int]:
+    resolved = document["resolved"]
+    return {
+        "term_count": int(resolved["decode_direct_term_count"]),
+        "unit_term_count": int(resolved["decode_direct_unit_term_count"]),
+        "pair_count": int(resolved["decode_direct_pair_count"]),
+        "pair_with_unit_count": int(
+            resolved["decode_direct_pair_with_unit_count"]),
+    }
 
 
 def timings(document: Mapping[str, Any], reuse: int) -> dict[str, float]:
@@ -1081,6 +1282,7 @@ def run_cell(
     maximum_attempts: int,
     promotion_threshold: float,
     main_commit: str | None,
+    comparison_mode: str,
 ) -> dict[str, Any]:
     verify_frozen_artifact(frozen["control"], "control")
     verify_frozen_artifact(frozen["candidate"], "candidate")
@@ -1101,7 +1303,9 @@ def run_cell(
                 cell_dir / "same-source" / ("round-%d-slot-%d" % (
                     round_index, slot)), iterations_for(cell["bytes"]),
                 maximum_attempts, leopard2=True)
-            validate_leopard2_document(role, invocation["document"], cell)
+            validate_leopard2_document(
+                role, invocation["document"], cell,
+                direct_control=comparison_mode == SIMPLE_VS_PAIR)
             invocation["timings"] = timings(
                 invocation["document"], cell["reuse"])
             calls.append(invocation)
@@ -1113,6 +1317,18 @@ def run_cell(
     require(all(missing_tuple(call["document"], cell, call["role"]) ==
                 expected_missing for call in calls),
             "control/candidate missing-original identities differ")
+    expected_plan_mix = {
+        role: direct_plan_mix(next(
+            call for call in calls if call["role"] == role)["document"])
+        for role in ("control", "candidate")
+    }
+    require(all(direct_plan_mix(call["document"]) ==
+                expected_plan_mix[call["role"]] for call in calls),
+            "a repeated direct-plan coefficient mix differs")
+    if comparison_mode == SIMPLE_VS_PAIR:
+        require(expected_plan_mix["control"] ==
+                expected_plan_mix["candidate"],
+                "pair attribution changed the direct-plan coefficients")
     metrics = same_source_metrics(calls, rounds, cell["reuse"])
     winner = (
         cell["candidate_expected_path"] == "direct" and
@@ -1144,7 +1360,15 @@ def run_cell(
             "recovered_originals": expected_digest[2],
         },
         "same_source": {
-            "control_option": "OFF", "candidate_option": "ON",
+            "comparison_mode": comparison_mode,
+            "control_configuration": (
+                "general-on,pair-off" if comparison_mode == SIMPLE_VS_PAIR
+                else "general-off,pair-off"),
+            "candidate_configuration": (
+                "general-on,pair-on" if comparison_mode in
+                    (TRANSFORM_VS_PAIR, SIMPLE_VS_PAIR)
+                else "general-on,pair-off"),
+            "direct_plan_mix": expected_plan_mix,
             "metrics": metrics,
             "memory": {
                 "control": next(call for call in calls
@@ -1167,6 +1391,7 @@ def run_cell(
 
 def summarize(
     results: Sequence[Mapping[str, Any]], promotion_threshold: float,
+    comparison_mode: str,
 ) -> dict[str, Any]:
     profiles: dict[str, list[dict[str, Any]]] = {"high": [], "low": []}
     credible_regressions = []
@@ -1184,6 +1409,7 @@ def summarize(
             "amortized": metrics["decode_amortized_us"],
             "cold_codec_plan": metrics["decode_cold_codec_plan_us"],
             "memory": result["same_source"]["memory"],
+            "direct_plan_mix": result["same_source"]["direct_plan_mix"],
             "same_source_candidate_win": result[
                 "same_source_candidate_win"],
             "exact_main": (
@@ -1196,11 +1422,12 @@ def summarize(
             credible_regressions.append(cell["id"])
     for values in profiles.values():
         values.sort(key=lambda value: value["id"])
-    return {
+    result = {
         "schema": SCHEMA,
         "promotion_threshold": promotion_threshold,
         "regression_threshold": 0.98,
         "ratio_orientation": "control_time_over_candidate_time",
+        "comparison_mode": comparison_mode,
         "high": profiles["high"], "low": profiles["low"],
         "same_source_winner_count": sum(
             bool(result["same_source_candidate_win"]) for result in results),
@@ -1208,6 +1435,75 @@ def summarize(
         "exact_main_followup_count": sum(
             result["exact_main"] is not None for result in results),
     }
+    coefficient_mix: dict[str, dict[str, int]] = {}
+    for cell_result in results:
+        cell = cell_result["cell"]
+        if cell["candidate_expected_path"] != "direct":
+            continue
+        key = "%s:k=%d:r=%d" % (
+            cell["profile"], cell["K"], cell["R"])
+        mix = cell_result["same_source"]["direct_plan_mix"]["candidate"]
+        if key in coefficient_mix:
+            require(coefficient_mix[key] == mix,
+                    "direct coefficient mix changed with bytes or reuse")
+        else:
+            coefficient_mix[key] = mix
+    result["candidate_direct_coefficient_mix_by_shape"] = coefficient_mix
+
+    if comparison_mode == SIMPLE_VS_PAIR:
+        direct_results = [cell_result for cell_result in results
+                          if cell_result["cell"][
+                              "candidate_expected_path"] == "direct"]
+
+        def observed_threshold(
+            selected: Sequence[Mapping[str, Any]],
+        ) -> dict[str, Any]:
+            byte_values = sorted({entry["cell"]["bytes"]
+                                  for entry in selected})
+            accepted = None
+            for byte_count in byte_values:
+                tail = [entry for entry in selected
+                        if entry["cell"]["bytes"] >= byte_count]
+                if tail and all(entry["same_source"]["metrics"][
+                        "decode_execution_us"]["ci95_low"] >=
+                        promotion_threshold for entry in tail):
+                    accepted = byte_count
+                    break
+            return {
+                "observed_execution_threshold_bytes": accepted,
+                "observed_byte_values": byte_values,
+                "execution_winner_ids": sorted(
+                    entry["cell"]["id"] for entry in selected
+                    if entry["same_source"]["metrics"][
+                        "decode_execution_us"]["ci95_low"] >=
+                        promotion_threshold),
+                "execution_regression_ids": sorted(
+                    entry["cell"]["id"] for entry in selected
+                    if entry["same_source"]["metrics"][
+                        "decode_execution_us"]["ci95_high"] < 0.98),
+            }
+
+        by_shape_reuse: dict[str, Any] = {}
+        keys = sorted({(
+            entry["cell"]["profile"], entry["cell"]["K"],
+            entry["cell"]["R"], entry["cell"]["reuse"])
+            for entry in direct_results})
+        for profile, k, r, reuse in keys:
+            selected = [entry for entry in direct_results
+                        if (entry["cell"]["profile"], entry["cell"]["K"],
+                            entry["cell"]["R"], entry["cell"]["reuse"]) ==
+                            (profile, k, r, reuse)]
+            by_shape_reuse["%s:k=%d:r=%d:u=%d" % (
+                profile, k, r, reuse)] = observed_threshold(selected)
+        result["pair_fusion_threshold_screen"] = {
+            "scope": (
+                "observed cells only; a production boundary still requires "
+                "neighbor confirmation"),
+            "gate": "decode execution CI95 low >= promotion threshold",
+            "all_direct_cells": observed_threshold(direct_results),
+            "by_shape_and_reuse": by_shape_reuse,
+        }
+    return result
 
 
 def machine_identity(topology: Mapping[str, Any]) -> dict[str, Any]:
@@ -1262,6 +1558,14 @@ def synthetic_document(
             "thread_count": 1, "parent_count": cell["parent_count"],
             "selected_decode_path": path,
             "selected_decode_rule": "direct" if path == "direct" else "auto",
+            "decode_direct_term_count": (
+                cell["K"] if path == "direct" else 0),
+            "decode_direct_unit_term_count": (
+                1 if path == "direct" else 0),
+            "decode_direct_pair_count": (
+                cell["K"] // 2 if path == "direct" else 0),
+            "decode_direct_pair_with_unit_count": (
+                1 if path == "direct" and cell["K"] >= 2 else 0),
         },
         "correctness": {"leopard2_round_trip": True},
         "workload_digests": {
@@ -1273,14 +1577,21 @@ def synthetic_document(
 
 def synthetic_build_closure(
     source: Path, control_build: Path, candidate_build: Path,
+    control_general: bool = False,
+    control_pair: bool = False,
+    candidate_general: bool = True,
+    candidate_pair: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     sources = (
         ("leopard2.cpp", "portable-core"),
+        ("Leopard2Backend.cpp", "portable-core"),
         ("Leopard2BackendAVX2.cpp", "avx2-no-avx512"),
         ("bench/leopard2/benchmark.cpp", "portable-core"),
     )
 
-    def provenance(build: Path, candidate: bool) -> dict[str, Any]:
+    def provenance(
+        build: Path, label: str, general: bool, pair: bool,
+    ) -> dict[str, Any]:
         records = []
         for index, (relative, flag_profile) in enumerate(sources):
             source_path = source / relative
@@ -1289,12 +1600,17 @@ def synthetic_build_closure(
                 "/usr/bin/c++", "-O3", "-c", str(source_path),
                 "-o", str(object_path),
             ]
-            if candidate and relative == "leopard2.cpp":
+            if general and relative == "leopard2.cpp":
                 arguments.insert(2, "-D%s=1" % EXPERIMENT)
-            object_hash = "candidate-leopard2" if (
-                candidate and relative == "leopard2.cpp") else (
-                    "control-leopard2" if relative == "leopard2.cpp"
-                    else "same-%d" % index)
+            if pair and relative in {
+                    "Leopard2Backend.cpp", "Leopard2BackendAVX2.cpp"}:
+                arguments.insert(2, "-D%s=1" % PAIR_FUSION)
+            relevant = (
+                "general=%d" % general if relative == "leopard2.cpp" else
+                "pair=%d" % pair if relative in {
+                    "Leopard2Backend.cpp", "Leopard2BackendAVX2.cpp"} else
+                "same")
+            object_hash = "%s:%s" % (relative, relevant)
             records.append({
                 "role": (
                     "benchmark" if relative.startswith("bench/")
@@ -1313,17 +1629,29 @@ def synthetic_build_closure(
         return {
             "source_root": str(source),
             "source_object_compile_closure": records,
-            "archive": {"sha256": "archive-%s" % candidate},
-            "executable": {"sha256": "executable-%s" % candidate},
+            "archive": {"sha256": "archive-%s" % label},
+            "executable": {"sha256": "executable-%s" % label},
         }
 
     (control_build / "CMakeCache.txt").write_text(
-        "%s:BOOL=OFF\n%s:BOOL=OFF\n" % (EXPERIMENT, PAIR_FUSION),
+        "%s:BOOL=%s\n%s:BOOL=%s\n" % (
+            EXPERIMENT, "ON" if control_general else "OFF",
+            PAIR_FUSION, "ON" if control_pair else "OFF"),
         encoding="utf-8")
     (candidate_build / "CMakeCache.txt").write_text(
-        "%s:BOOL=ON\n%s:BOOL=OFF\n" % (EXPERIMENT, PAIR_FUSION),
+        "%s:BOOL=ON\n%s:BOOL=%s\n" % (
+            EXPERIMENT, PAIR_FUSION, "ON" if candidate_pair else "OFF"),
         encoding="utf-8")
-    return provenance(control_build, False), provenance(candidate_build, True)
+    if not candidate_general:
+        (candidate_build / "CMakeCache.txt").write_text(
+            "%s:BOOL=OFF\n%s:BOOL=%s\n" % (
+                EXPERIMENT, PAIR_FUSION,
+                "ON" if candidate_pair else "OFF"), encoding="utf-8")
+    return (
+        provenance(control_build, "control", control_general, control_pair),
+        provenance(candidate_build, "candidate",
+                   candidate_general, candidate_pair),
+    )
 
 
 def adversarial_self_tests() -> dict[str, str]:
@@ -1361,6 +1689,56 @@ def adversarial_self_tests() -> dict[str, str]:
         expect_campaign_error(lambda: compare_build_closures(
             source, control_build, candidate_build, control, mixed),
             "mixed unrelated OFF/ON object")
+
+        pair_control, pair_candidate = synthetic_build_closure(
+            source, control_build, candidate_build, candidate_pair=True)
+        compare_build_closures(source, control_build, candidate_build,
+            pair_control, pair_candidate, candidate_pair=True)
+
+        missing_pair_macro = copy.deepcopy(pair_candidate)
+        missing_pair_macro["source_object_compile_closure"][2][
+            "compile_entry"]["arguments"] = [argument for argument in
+                missing_pair_macro["source_object_compile_closure"][2][
+                    "compile_entry"]["arguments"]
+                if argument != "-D%s=1" % PAIR_FUSION]
+        expect_campaign_error(lambda: compare_build_closures(
+            source, control_build, candidate_build, pair_control,
+            missing_pair_macro, candidate_pair=True),
+            "missing AVX2 pair-fusion macro")
+
+        leaked_pair_macro = copy.deepcopy(pair_candidate)
+        leaked_pair_macro["source_object_compile_closure"][3][
+            "compile_entry"]["arguments"].insert(
+                2, "-D%s=1" % PAIR_FUSION)
+        expect_campaign_error(lambda: compare_build_closures(
+            source, control_build, candidate_build, pair_control,
+            leaked_pair_macro, candidate_pair=True),
+            "pair-fusion macro leakage")
+
+        stale_pair_object = copy.deepcopy(pair_candidate)
+        stale_pair_object["source_object_compile_closure"][1]["object"][
+            "sha256"] = pair_control["source_object_compile_closure"][1][
+                "object"]["sha256"]
+        expect_campaign_error(lambda: compare_build_closures(
+            source, control_build, candidate_build, pair_control,
+            stale_pair_object, candidate_pair=True),
+            "stale pair-fusion qualification object")
+
+        direct_control, fused_candidate = synthetic_build_closure(
+            source, control_build, candidate_build,
+            control_general=True, candidate_pair=True)
+        compare_build_closures(
+            source, control_build, candidate_build,
+            direct_control, fused_candidate,
+            control_general=True, candidate_pair=True)
+        changed_direct_object = copy.deepcopy(fused_candidate)
+        changed_direct_object["source_object_compile_closure"][0]["object"][
+            "sha256"] = "unexpected-direct-object-drift"
+        expect_campaign_error(lambda: compare_build_closures(
+            source, control_build, candidate_build,
+            direct_control, changed_direct_object,
+            control_general=True, candidate_pair=True),
+            "pair attribution changed direct executor object")
 
         analyze_disassembly(
             "  0: c5 fd ef c0          vpxor ymm0,ymm0,ymm0\n")
@@ -1423,6 +1801,8 @@ def adversarial_self_tests() -> dict[str, str]:
 
     return {
         "option_source_scope_leakage": "rejected",
+        "pair_fusion_source_scope": "accepted_exact_rejected_drift",
+        "pair_attribution_source_scope": "accepted_exact_rejected_drift",
         "stale_or_mixed_objects": "rejected",
         "evex_injection": "rejected",
         "wrong_profile_field_backend": "rejected",
@@ -1438,10 +1818,16 @@ def run_campaign(args: argparse.Namespace) -> None:
             "--maximum-attempts must be in 1..10")
     require(1.0 < args.promotion_threshold < 2.0,
             "--promotion-threshold must be in (1,2)")
+    comparison_mode = (
+        SIMPLE_VS_PAIR if args.pair_attribution else
+        TRANSFORM_VS_PAIR if args.pair_fusion else
+        TRANSFORM_VS_SIMPLE)
     main_arguments = (
         args.main_benchmark, args.main_commit, args.main_sha256)
     require(all(main_arguments) or not any(main_arguments),
             "exact main arguments must be supplied together")
+    require(comparison_mode != SIMPLE_VS_PAIR or not any(main_arguments),
+            "pair attribution does not invoke the exact-main follow-up")
     jobs = args.jobs if args.jobs is not None else min(
         128, len(os.sched_getaffinity(0)))
     require(1 <= jobs <= 128, "--jobs must be in 1..128")
@@ -1462,6 +1848,12 @@ def run_campaign(args: argparse.Namespace) -> None:
     require(selected_tiers and selected_tiers.issubset(known_tiers),
             "--tiers contains an unknown or empty tier")
     cells = [cell for cell in cells if cell["tier"] in selected_tiers]
+    if args.cell_regex:
+        try:
+            cell_pattern = re.compile(args.cell_regex)
+        except re.error as error:
+            raise CampaignError("--cell-regex is invalid: %s" % error)
+        cells = [cell for cell in cells if cell_pattern.search(cell["id"])]
     require(cells, "selected matrix is empty")
     source_record = source_identity(source, args.commit)
     topology = cpu_topology(args.cpu)
@@ -1469,14 +1861,20 @@ def run_campaign(args: argparse.Namespace) -> None:
     owner = {
         "schema": SCHEMA, "source_head": args.commit,
         "runner": str(Path(__file__).resolve(strict=True)),
+        "comparison_mode": comparison_mode,
     }
     with campaign_lock(args.lock):
         prepare_owned_directory(build_root, {**owner, "role": "build"})
         prepare_owned_directory(run_dir, {**owner, "role": "results"})
         control_build = build_root / "control"
         candidate_build = build_root / "candidate"
-        configure_and_build(source, control_build, False, jobs)
-        configure_and_build(source, candidate_build, True, jobs)
+        control_general = comparison_mode == SIMPLE_VS_PAIR
+        candidate_pair = comparison_mode in (
+            TRANSFORM_VS_PAIR, SIMPLE_VS_PAIR)
+        configure_and_build(
+            source, control_build, control_general, False, jobs)
+        configure_and_build(
+            source, candidate_build, True, candidate_pair, jobs)
         # The build and timing phases share one exclusive lease so another
         # worker cannot replace either binary between provenance and timing.
         control_provenance = candidate_build_provenance(
@@ -1487,7 +1885,9 @@ def run_campaign(args: argparse.Namespace) -> None:
             "bench_leopard2")
         closure = compare_build_closures(
             source, control_build, candidate_build,
-            control_provenance, candidate_provenance)
+            control_provenance, candidate_provenance,
+            control_general=control_general,
+            candidate_pair=candidate_pair)
         require(closure["control_executable_sha256"] !=
                 closure["candidate_executable_sha256"],
                 "control and candidate executable bytes are unexpectedly equal")
@@ -1496,6 +1896,33 @@ def run_campaign(args: argparse.Namespace) -> None:
             "candidate": inspect_pure_avx2(
                 candidate_build / "bench_leopard2"),
         }
+        footprint_sources = sorted(
+            set(dict(closure["control_macros"])) |
+            set(dict(closure["candidate_macros"])))
+        object_footprints = {
+            "control": inspect_object_footprints(
+                control_provenance, footprint_sources),
+            "candidate": inspect_object_footprints(
+                candidate_provenance, footprint_sources),
+        }
+        pair_object_inspection = {
+            "control": inspect_pair_object(
+                control_provenance, expected=False),
+            "candidate": inspect_pair_object(
+                candidate_provenance, expected=candidate_pair),
+        }
+        footprint_deltas = {}
+        for relative in footprint_sources:
+            control_object = object_footprints["control"]["objects"][relative]
+            candidate_object = object_footprints["candidate"]["objects"][relative]
+            footprint_deltas[relative] = {
+                "file_bytes": candidate_object["file_bytes"] -
+                    control_object["file_bytes"],
+                "text_bytes": candidate_object["text_bytes"] -
+                    control_object["text_bytes"],
+                "rodata_bytes": candidate_object["rodata_bytes"] -
+                    control_object["rodata_bytes"],
+            }
         frozen = {
             "control": freeze_executable(
                 control_build / "bench_leopard2",
@@ -1528,12 +1955,17 @@ def run_campaign(args: argparse.Namespace) -> None:
             },
             "matrix_sha256": matrix["matrix_sha256"],
             "selected_tiers": sorted(selected_tiers),
+            "cell_regex": args.cell_regex,
             "selected_cell_ids": [cell["id"] for cell in cells],
             "rounds": args.rounds,
             "maximum_attempts": args.maximum_attempts,
             "promotion_threshold": args.promotion_threshold,
+            "comparison_mode": comparison_mode,
             "build_closure": closure,
             "pure_avx2": isa,
+            "object_footprints": object_footprints,
+            "object_footprint_candidate_minus_control": footprint_deltas,
+            "pair_object_inspection": pair_object_inspection,
             "frozen_executables": frozen,
             "main_commit": main_commit,
             "l2_fallback_probe_ids": [
@@ -1564,14 +1996,29 @@ def run_campaign(args: argparse.Namespace) -> None:
             results.append(run_cell(
                 cell, frozen, topology, run_dir, identity_sha256,
                 args.rounds, args.maximum_attempts,
-                args.promotion_threshold, main_commit))
+                args.promotion_threshold, main_commit, comparison_mode))
         # Re-attest immutable source and frozen binary bytes after all timing.
         require(source_identity(source, args.commit) == source_record,
                 "source identity changed during campaign")
         for role, artifact in frozen.items():
             require(sha256_file(artifact["frozen_path"]) == artifact["sha256"],
                     role + " frozen executable changed during campaign")
-        summary = summarize(results, args.promotion_threshold)
+        require(inspect_object_footprints(
+                    control_provenance, footprint_sources) ==
+                object_footprints["control"] and
+                inspect_object_footprints(
+                    candidate_provenance, footprint_sources) ==
+                object_footprints["candidate"],
+                "source object footprint or bytes changed during campaign")
+        require(inspect_pair_object(
+                    control_provenance, expected=False) ==
+                pair_object_inspection["control"] and
+                inspect_pair_object(
+                    candidate_provenance, expected=candidate_pair) ==
+                pair_object_inspection["candidate"],
+                "pair object or assembly changed during campaign")
+        summary = summarize(
+            results, args.promotion_threshold, comparison_mode)
         summary["identity_sha256"] = identity_sha256
         atomic_json(run_dir / "summary.json", summary)
         print(json.dumps({
@@ -1632,11 +2079,21 @@ def parse_arguments() -> argparse.Namespace:
     run.add_argument("--rounds", type=int, default=5)
     run.add_argument("--maximum-attempts", type=int, default=3)
     run.add_argument("--promotion-threshold", type=float, default=1.05)
+    comparison = run.add_mutually_exclusive_group()
+    comparison.add_argument(
+        "--pair-fusion", action="store_true",
+        help="enable the nested two-source/one-output AVX2 candidate")
+    comparison.add_argument(
+        "--pair-attribution", action="store_true",
+        help="compare general direct repair with pair fusion OFF versus ON")
     run.add_argument(
         "--tiers",
         default="core,balanced-neighbor,shape-neighbor,byte-neighbor",
         help="comma-separated subset of core, balanced-neighbor, "
              "shape-neighbor, byte-neighbor")
+    run.add_argument(
+        "--cell-regex",
+        help="optional regular expression selecting cell IDs after tiers")
     run.add_argument("--lock", default=DEFAULT_LOCK)
     return parser.parse_args()
 
