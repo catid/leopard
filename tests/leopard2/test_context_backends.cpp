@@ -2188,10 +2188,16 @@ void test_gf8_high_forward_fusion_policy(
         // Every promoted size retains the mature per-butterfly policy at the
         // exact 1-KiB boundary.  A 1,025-byte shard executes a 1-KiB aligned
         // prefix plus a padded tail, neither of which crosses the boundary.
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024 },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1025 },
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1024 },
         { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1025 },
-        // T=16, 32, and 64 each execute one 1,088-byte aligned pass plus a
-        // padded one-byte tail.  Only the aligned pass selects stage fusion.
+        // Each case executes one 1,088-byte aligned pass plus a padded
+        // one-byte tail.  Only the aligned pass selects stage fusion.  T=8
+        // covers a full block and both shortening and puncturing neighbors.
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
+        { 7, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
+        { 8, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
         { 16, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
         { 32, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
         { 65, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 1089 },
@@ -2200,9 +2206,7 @@ void test_gf8_high_forward_fusion_policy(
         // The policy is based on T, not the public rate within a promoted
         // transform size.
         { 190, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
-        // T=8 uses the independent whole-transform callback; the low profile
-        // and GF16 remain inactive for this per-stage fusion policy.
-        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 4096 },
+        // The low profile and GF16 remain inactive for this per-stage policy.
         { 64, 192, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, 4096 },
         { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 4096 }
     };
@@ -2237,7 +2241,8 @@ void test_gf8_high_forward_fusion_policy(
                 test_case.bytes - test_case.bytes % alignment;
             const uint32_t side = transform_side(test_case);
             const bool promoted_side =
-                side == 16 || side == 32 || side == 64 || side == 128;
+                side == 8 || side == 16 || side == 32 ||
+                side == 64 || side == 128;
             const bool expect_fused_forward =
                 test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
                 test_case.field == LEO2_FIELD_GF8 && promoted_side &&

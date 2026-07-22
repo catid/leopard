@@ -2404,12 +2404,11 @@ skip_body:
         // The AVX2 leaf already uses the fused radix-four kernel through
         // 1 KiB.  Above that boundary, whole-forward measurements favor
         // retaining the same one-pass schedule for these explicit transform
-        // sizes.  T=16/64 are complete radix-four stacks; T=32/128 retain
-        // their existing final radix-two layer.  Keep this an allowlist so an
-        // unmeasured parent size or another backend cannot silently inherit
-        // the policy.
+        // sizes.  T=8/32/128 retain a final radix-two layer; T=16/64 are
+        // complete radix-four stacks.  Keep this an allowlist so an unmeasured
+        // parent size or another backend cannot silently inherit the policy.
         const bool fused_forward_size =
-            m == 16 || m == 32 || m == 64 || m == 128;
+            m == 8 || m == 16 || m == 32 || m == 64 || m == 128;
         const bool prefer_fused_forward =
             ops.kind == LEO2_BACKEND_AVX2 && fused_forward_size &&
             buffer_bytes > 1024;
