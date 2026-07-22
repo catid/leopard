@@ -414,8 +414,8 @@ void test_small_high_encode(
             encode(avx2_codec.get(), original, test_case.r, true), actual);
         const uint64_t sparse_calls = leopard::ff8::
             TestOnlyGetHighEncodeCounts().small_transform_calls;
-        require(sparse_calls == 0,
-            "T=2/T=4 coarse kernel accepted a partial/holey output mask");
+        require((sparse_calls != 0) == (test_case.r == 2),
+            "T=2/T=4 coarse kernel mishandled a prefix/holey output mask");
 
         if (test_case.k == 64 && test_case.r == 3)
         {
@@ -425,8 +425,8 @@ void test_small_high_encode(
             require(prefix[0] == actual[0] && prefix[1] == actual[1],
                 "T=4 coarse kernel changed a requested parity prefix");
             require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                        small_transform_calls == 0,
-                "T=4 parity prefix used the dense coarse kernel");
+                        small_transform_calls == 1,
+                "T=4 parity prefix missed the coarse kernel");
         }
 
         if (scalar.result() == LEO2_SUCCESS)

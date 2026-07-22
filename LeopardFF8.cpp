@@ -2266,7 +2266,6 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const* data,
     void** work,
-    bool allow_small_transform,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
@@ -2293,8 +2292,7 @@ void ReedSolomonEncode(
             (original_count >= 9 && buffer_bytes >= 8U * 1024U) ||
             buffer_bytes >= 64U * 1024U);
     if (ops.kind == LEO2_BACKEND_AVX2 &&
-        ops.ff8_high_encode_small && allow_small_transform &&
-        small_transform_shape &&
+        ops.ff8_high_encode_small && small_transform_shape &&
         requested_output_count == recovery_count &&
         dense_schedule)
     {
@@ -2442,7 +2440,7 @@ void ReedSolomonEncode(
     void** work)
 {
     ReedSolomonEncode(ops, buffer_bytes, original_count, recovery_count,
-        recovery_count, m, data, work, true, NULL);
+        recovery_count, m, data, work, NULL);
 }
 
 

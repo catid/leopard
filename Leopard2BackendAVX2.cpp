@@ -149,9 +149,12 @@ static void AVX2FF8Butterfly2(
     const FF8NibbleTable& table = FF8Tables[multiplier_log];
     const __m256i low_table = BroadcastTable(table.low);
     const __m256i high_table = BroadcastTable(table.high);
-    // Two independent vectors hide shuffle latency for small shards.  Keep
-    // the measured 4 KiB cutoff: an unconditional unroll regressed T8 at
-    // 64 KiB, while the mature single-vector loop remains neutral above it.
+#if !defined(LEO2_AVX512_VARIANT)
+    // Two independent vectors hide shuffle latency for small shards on the
+    // explicitly qualified AVX2 backend.  Keep the measured 4 KiB cutoff: an
+    // unconditional unroll regressed T8 at 64 KiB, while the mature
+    // single-vector loop remains neutral above it.  The separately qualified
+    // AVX-512VL variant retains its measured schedule.
     if (byte_count <= 4096)
     {
         while (byte_count >= 64)
@@ -193,6 +196,7 @@ static void AVX2FF8Butterfly2(
             byte_count -= 64;
         }
     }
+#endif
     while (byte_count >= 32)
     {
         __m256i x_value = _mm256_loadu_si256(
