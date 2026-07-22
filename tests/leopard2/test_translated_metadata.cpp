@@ -250,7 +250,18 @@ void test_plan_reachability(leo2_context* context, const Shape& shape)
             " AUTO transform plan did not capture translated Algorithm 4");
 #if LEO2_EXPECT_HOOK_NATIVE_METADATA
     require_success(leo2_test_codec_set_decode_mode(automatic,
+        LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
+        "select translated-low no-loss hook");
+    require(plan_path(automatic, 0).path ==
+            leopard2_internal::kDecodePathNoOp,
+        std::string(shape.name) +
+            " forced translated-low no-loss plan was not a no-op");
+    require_success(leo2_test_codec_set_decode_mode(automatic,
         LEO2_TEST_DECODE_FORCE_NATIVE_HIGH), "select native-high hook");
+    require(plan_path(automatic, 0).path ==
+            leopard2_internal::kDecodePathNoOp,
+        std::string(shape.name) +
+            " forced native-high no-loss plan was not a no-op");
     const leopard2_internal::DecodePathInfo native = plan_path(automatic, 1);
     require(native.path == leopard2_internal::kDecodePathMaterialized ||
             native.path == leopard2_internal::kDecodePathTiled,

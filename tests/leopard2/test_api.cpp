@@ -646,9 +646,53 @@ void test_no_loss_no_op(leo2_context* context)
         context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     std::vector<uint8_t> original_present(9, 1);
     std::vector<uint8_t> recovery_present(7, 0);
+
+    /* The shortcut must remain after the complete presence scan.  Put each
+       malformed value at the end so an accidental prefix-only validation is
+       observable, and require failure atomicity of the public output. */
+    leo2_decode_plan* rejected = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    original_present.back() = 2;
+    require(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &rejected) == LEO2_INVALID_ARGUMENT,
+        "no-loss shortcut skipped late original-presence validation");
+    require(rejected == NULL,
+        "rejected original presence retained the plan output");
+    original_present.back() = 1;
+    rejected = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    recovery_present.back() = 2;
+    require(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &rejected) == LEO2_INVALID_ARGUMENT,
+        "no-loss shortcut skipped late recovery-presence validation");
+    require(rejected == NULL,
+        "rejected recovery presence retained the plan output");
+    recovery_present.back() = 0;
+
     leo2_decode_plan* plan = NULL;
     require_result(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &plan), "no-loss plan create");
+    leopard2_internal::DecodePlanPresenceStorageInfo storage;
+    require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+            plan, &storage), "no-loss storage introspection");
+#if defined(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+    require(storage.original_present_size == 0 &&
+            storage.original_present_capacity == 0 &&
+            storage.recovery_present_size == 0 &&
+            storage.recovery_present_capacity == 0 &&
+            storage.coordinate_erased_size == 0 &&
+            storage.coordinate_erased_capacity == 0,
+        "no-loss plan retained K/R/N presence-vector allocation");
+#else
+    require(storage.original_present_size == original_present.size() &&
+            storage.original_present_capacity >= original_present.size() &&
+            storage.recovery_present_size == recovery_present.size() &&
+            storage.recovery_present_capacity >= recovery_present.size() &&
+            storage.coordinate_erased_size == leo2_codec_parent_count(codec) &&
+            storage.coordinate_erased_capacity >=
+                leo2_codec_parent_count(codec),
+        "control no-loss plan did not retain expected K/R/N vectors");
+#endif
     size_t scratch_bytes = 99;
     require_result(leo2_decode_plan_scratch_size(plan, 17, &scratch_bytes),
         "no-loss scratch query");
@@ -670,6 +714,48 @@ void test_no_loss_no_op(leo2_context* context)
     require_result(leo2_decode_plan_execute(
         plan, 0, NULL, NULL, NULL, NULL, 0),
         "no-loss zero-byte no-op execute");
+    leo2_decode_plan_destroy(plan);
+
+    std::fill(recovery_present.begin(), recovery_present.end(), 1);
+    plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "surplus-parity no-loss plan create");
+    require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+            plan, &storage), "surplus-parity no-loss storage introspection");
+#if defined(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+    require(storage.original_present_capacity == 0 &&
+            storage.recovery_present_capacity == 0 &&
+            storage.coordinate_erased_capacity == 0,
+        "surplus-parity no-loss plan retained K/R/N presence vectors");
+#else
+    require(storage.original_present_size == original_present.size() &&
+            storage.recovery_present_size == recovery_present.size() &&
+            storage.coordinate_erased_size == leo2_codec_parent_count(codec),
+        "control surplus-parity plan lost K/R/N presence vectors");
+#endif
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+
+    codec = make_codec(
+        context, 7, 9, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+    original_present.assign(7, 1);
+    recovery_present.assign(9, 0);
+    plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "low-profile no-loss plan create");
+    require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+            plan, &storage), "low-profile no-loss storage introspection");
+#if defined(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+    require(storage.original_present_capacity == 0 &&
+            storage.recovery_present_capacity == 0 &&
+            storage.coordinate_erased_capacity == 0,
+        "low-profile no-loss plan retained K/R/N presence vectors");
+#else
+    require(storage.original_present_size == original_present.size() &&
+            storage.recovery_present_size == recovery_present.size() &&
+            storage.coordinate_erased_size == leo2_codec_parent_count(codec),
+        "control low-profile no-loss plan lost K/R/N presence vectors");
+#endif
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
 }
@@ -1346,6 +1432,22 @@ void test_gf16_byte_granularity(leo2_context* context)
     leo2_decode_plan* no_loss_plan = NULL;
     require_result(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &no_loss_plan), "odd GF16 no-loss plan create");
+    leopard2_internal::DecodePlanPresenceStorageInfo no_loss_storage;
+    require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+            no_loss_plan, &no_loss_storage),
+        "odd GF16 no-loss storage introspection");
+#if defined(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+    require(no_loss_storage.original_present_capacity == 0 &&
+            no_loss_storage.recovery_present_capacity == 0 &&
+            no_loss_storage.coordinate_erased_capacity == 0,
+        "odd GF16 no-loss plan retained K/R/N presence vectors");
+#else
+    require(no_loss_storage.original_present_size == original_present.size() &&
+            no_loss_storage.recovery_present_size == recovery_present.size() &&
+            no_loss_storage.coordinate_erased_size ==
+                leo2_codec_parent_count(codec),
+        "control GF16 no-loss plan lost K/R/N presence vectors");
+#endif
     scratch_bytes = 99;
     require_result(leo2_decode_plan_scratch_size(no_loss_plan, 65, &scratch_bytes),
         "odd GF16 no-loss scratch query");

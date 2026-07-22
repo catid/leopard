@@ -167,6 +167,29 @@ bool GetDecodePlanPrunedScheduleInfo(
     const leo2_decode_plan* plan,
     DecodePlanPrunedScheduleInfo* info_out);
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+/*
+    Exact storage accounting for the three presence/erasure vectors whose
+    sizes otherwise scale with public K, public R, and parent N.  Capacity is
+    reported as well as logical size so tests can distinguish an empty view
+    from retained heap storage.  This remains test-only C++ introspection and
+    is not part of the public Leopard2 ABI.
+*/
+struct DecodePlanPresenceStorageInfo
+{
+    size_t original_present_size;
+    size_t original_present_capacity;
+    size_t recovery_present_size;
+    size_t recovery_present_capacity;
+    size_t coordinate_erased_size;
+    size_t coordinate_erased_capacity;
+};
+
+bool GetDecodePlanPresenceStorageInfo(
+    const leo2_decode_plan* plan,
+    DecodePlanPresenceStorageInfo* info_out);
+#endif
+
 } // namespace leopard2_internal
 
 #endif /* __cplusplus */

@@ -41,6 +41,8 @@ option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+option(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+    "Attribute allocation-free no-loss decode-plan setup" OFF)
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
@@ -247,6 +249,10 @@ add_library(leopard STATIC ${LIB_SOURCE_FILES})
 # conventional `leopard::leopard` export.  ALIAS targets do not create a
 # second archive.
 add_library(libleopard ALIAS leopard)
+if(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT=1)
+endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
 else()
@@ -625,6 +631,10 @@ if(LEO2_BUILD_TESTS)
         ${LIB_SOURCE_FILES})
     target_compile_definitions(leopard_test_hooks PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT=1)
+    endif()
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -1192,6 +1202,10 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_api.cpp)
     target_compile_definitions(leopard2_api_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+        target_compile_definitions(leopard2_api_test PRIVATE
+            LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT=1)
+    endif()
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test leopard_test_hooks)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)

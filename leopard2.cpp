@@ -7072,6 +7072,25 @@ bool GetDecodePlanPrunedScheduleInfo(
     return true;
 }
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+bool GetDecodePlanPresenceStorageInfo(
+    const leo2_decode_plan* plan,
+    DecodePlanPresenceStorageInfo* info_out)
+{
+    if (!plan || !info_out)
+        return false;
+    DecodePlanPresenceStorageInfo info;
+    info.original_present_size = plan->original_present.size();
+    info.original_present_capacity = plan->original_present.capacity();
+    info.recovery_present_size = plan->recovery_present.size();
+    info.recovery_present_capacity = plan->recovery_present.capacity();
+    info.coordinate_erased_size = plan->coordinate_erased.size();
+    info.coordinate_erased_capacity = plan->coordinate_erased.capacity();
+    *info_out = info;
+    return true;
+}
+#endif
+
 } // namespace leopard2_internal
 
 static leo2_result EncodeInternal(
@@ -7535,6 +7554,22 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_repair = false;
+
+        /*
+            Presence values, availability, output overlap, and diagnostic
+            decoder-mode constraints have all been validated above.  A
+            no-loss plan is immutable scalar state only: every execution API
+            returns before consulting pattern metadata, so retaining K, R,
+            and N byte vectors would add setup allocation and memory traffic
+            without preserving any observable information.
+        */
+#if defined(LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT)
+        if (plan->no_op)
+        {
+            *plan_out = plan;
+            return LEO2_SUCCESS;
+        }
+#endif
 
         if (plan->direct_xor &&
             (codec->original_count == 1 ||
