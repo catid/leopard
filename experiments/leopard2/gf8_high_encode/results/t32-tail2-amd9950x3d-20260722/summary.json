@@ -1,0 +1,78 @@
+{
+  "schema": "leopard2-gf8-t32-tail2-evidence/v1",
+  "source_base": "dc3d09e6aa3af748474813d7947ff64c417868f9",
+  "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+  "compiler": "g++ 13.3.0",
+  "isa": "pure AVX2; AVX-512 disabled; zero EVEX",
+  "executables": {
+    "source_identical_control_sha256": "9c262e64a98c64f395e756154c32a292befc898b579d03b6a89e78dad1a623bf",
+    "candidate_sha256": "48ec959c62bdc1bb65259fba7af31d57bb49d899710b0be839a653e635937642",
+    "exact_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "artifacts": {
+    "final_boundary": {
+      "path": "/tmp/leopard-gf8-residual-tail2-final-abba-dc3d09e-1784715200/summary.json",
+      "sha256": "185b98f6187427ad2c89d8cf959da6a7d5ae40b64a704fcd905e160453af7b0a"
+    },
+    "neighbors": {
+      "path": "/tmp/leopard-gf8-residual-tail2-neighbors-abba-dc3d09e-1784715700/summary.json",
+      "sha256": "b5de1dccbb78f2b4aa11b2d17b9fc8cef236a6af62feb652f47c2480284242a0"
+    },
+    "exact_main": {
+      "path": "/tmp/leopard-gf8-residual-tail2-exact-main-dc3d09e-1784715900/summary.json",
+      "sha256": "47504030d08bd1bc2b1528d008a6554b6f5e728ca58a7317f26ed72b3db1a958"
+    },
+    "two_output_vs_one_output": {
+      "path": "/tmp/leopard-gf8-residual-tail2-fused2out-v-fused1-dc3d09e-1784713300/summary.json",
+      "sha256": "7d8e955a2a5eec36427c1fb32b9819e9271d27457cdf5e7a8f0d348298580034"
+    },
+    "three_tail_rejection": {
+      "path": "/tmp/leopard-gf8-residual-tail3-fused-abba-dc3d09e-1784714000/summary.json",
+      "sha256": "ddce1687a8c7b6272dd1942cf3ead1538ed5ff854b9e516e71f3e540f55aebaa"
+    }
+  },
+  "selector": {
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "K": 34,
+    "R": 32,
+    "T": 32,
+    "minimum_tile_bytes": 16384,
+    "requires_all_outputs": true
+  },
+  "source_identical_encode_speedups": [
+    {"bytes": 16383, "ratio": 1.0069689216, "ci95": [0.9919540591, 1.0255073852]},
+    {"bytes": 16384, "ratio": 1.1467882335, "ci95": [1.1385669854, 1.1562295971]},
+    {"bytes": 16385, "ratio": 1.1323250248, "ci95": [1.1251354506, 1.1384037211]},
+    {"bytes": 32768, "ratio": 1.1825408302, "ci95": [1.1718527347, 1.1997853030]},
+    {"bytes": 65536, "ratio": 1.1871512170, "ci95": [1.1783746896, 1.1993515541]}
+  ],
+  "exact_main_encode_speedups_65536": [
+    {"K": 33, "R": 32, "ratio": 1.4096, "ci95": [1.3139, 1.5124]},
+    {"K": 34, "R": 32, "ratio": 1.3115, "ci95": [1.3009, 1.3221]},
+    {"K": 35, "R": 32, "ratio": 1.1145, "ci95": [1.1117, 1.1172]},
+    {"K": 34, "R": 31, "ratio": 1.1129, "ci95": [1.1020, 1.1240]}
+  ],
+  "release_tests": {
+    "status": "passed",
+    "tests_passed": 96,
+    "tests_failed": 0,
+    "tests_skipped": 0,
+    "elapsed_seconds": 109.69,
+    "junit_path": "/tmp/leopard-gf8-tail2-release-junit.xml",
+    "junit_sha256": "4557a2c71b8a173f3b402f80e9fb80d5e7769190248a62b577024c2639ba2f3d"
+  },
+  "clang18_asan_ubsan_lsan": {
+    "status": "passed",
+    "compiler": "Clang 18.1.3",
+    "build_type": "Debug (-O0)",
+    "sanitizers": ["address", "undefined", "leak"],
+    "tests_passed": 8,
+    "tests_failed": 0,
+    "elapsed_seconds": 557.35,
+    "leak_detection": true,
+    "undefined_behavior_recovery": false
+  }
+}

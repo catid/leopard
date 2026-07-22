@@ -102,6 +102,17 @@ typedef void (*FF8MultiplyAddOutputs)(
     uint32_t output_count,
     uint64_t byte_count);
 
+// Accumulate two independently scaled GF8 sources into two destinations in a
+// single pass.  Destination ranges must be pairwise disjoint and disjoint
+// from both sources.  The two read-only source ranges may alias each other.
+typedef void (*FF8MultiplyAdd2Sources2Outputs)(
+    void* const* destinations,
+    const void* source0,
+    const void* source1,
+    const uint16_t* multiplier_logs0,
+    const uint16_t* multiplier_logs1,
+    uint64_t byte_count);
+
 // Four independent in-place XOR pairs.  Destination ranges must be pairwise
 // disjoint and disjoint from all source ranges.  Read-only source ranges may
 // alias one another, matching the public API's allowed input-input aliasing.
@@ -355,6 +366,7 @@ struct Ops
     FF8HighEncodeSmall ff8_high_encode_small;
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;
+    FF8MultiplyAdd2Sources2Outputs ff8_multiply_add_2_sources_2_outputs;
 };
 
 struct X86Features

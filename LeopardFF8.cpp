@@ -224,11 +224,11 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 
 static ffe_t LogLUT[kOrder];
 static ffe_t ExpLUT[kOrder];
-// For a legacy-high K=T+1,R=T code, the first T message shards form one
-// complete inverse-transform block.  The final source is one systematic
-// generator column in parity-coordinate space.  Entries for each supported T
-// occupy [T,2T), so the dyadic ranges are disjoint.
-static ffe_t HighTailGeneratorLogs[kOrder / 2];
+// For legacy-high K=T+d,R=T codes with d in {1,2}, the first T message shards
+// form one complete inverse-transform block.  The remaining source(s) are
+// systematic generator columns in parity-coordinate space.  Entries for each
+// supported T occupy [T,2T), so the dyadic ranges are disjoint.
+static ffe_t HighTailGeneratorLogs[2][kOrder / 2];
 
 
 // Returns a * Log(b)
@@ -566,9 +566,10 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
 
 static bool InitializeHighTailGeneratorLogs()
 {
-    // Legacy-high K=T+1,R=T uses parent [4T,3T], with systematic coordinates
-    // T..4T-1 and the final public source at x=2T.  Compute that source's
-    // systematic Lagrange column at parity coordinates 0..T-1:
+    // Legacy-high K=T+d,R=T for d in {1,2} uses parent [4T,3T], with
+    // systematic coordinates T..4T-1 and tail public sources at x=2T+d-1.
+    // Compute those sources' systematic Lagrange columns at parity
+    // coordinates 0..T-1:
     //
     //   L_x(y) = Z(y) / ((y + x) Z'(x)),
     //   Z(t) = product_{s=T}^{4T-1} (t + s).
@@ -583,39 +584,44 @@ static bool InitializeHighTailGeneratorLogs()
          ++size_i)
     {
         const unsigned transform_size = kTransformSizes[size_i];
-        const unsigned source_coordinate = transform_size * 2U;
-        ffe_t derivative = 1;
-        for (unsigned coordinate = transform_size;
-             coordinate < transform_size * 4U; ++coordinate)
+        for (unsigned tail = 0; tail < 2; ++tail)
         {
-            if (coordinate != source_coordinate)
-            {
-                derivative = MultiplyElements(derivative,
-                    static_cast<ffe_t>(coordinate ^ source_coordinate));
-            }
-        }
-        if (derivative == 0)
-            return false;
-
-        for (unsigned parity = 0; parity < transform_size; ++parity)
-        {
-            ffe_t vanishing = 1;
+            const unsigned source_coordinate =
+                transform_size * 2U + tail;
+            ffe_t derivative = 1;
             for (unsigned coordinate = transform_size;
                  coordinate < transform_size * 4U; ++coordinate)
             {
-                vanishing = MultiplyElements(vanishing,
-                    static_cast<ffe_t>(parity ^ coordinate));
+                if (coordinate != source_coordinate)
+                {
+                    derivative = MultiplyElements(derivative,
+                        static_cast<ffe_t>(
+                            coordinate ^ source_coordinate));
+                }
             }
-            const ffe_t denominator = MultiplyElements(derivative,
-                static_cast<ffe_t>(parity ^ source_coordinate));
-            if (vanishing == 0 || denominator == 0)
+            if (derivative == 0)
                 return false;
-            const ffe_t coefficient = MultiplyElements(
-                vanishing, InverseElement(denominator));
-            if (coefficient == 0)
-                return false;
-            HighTailGeneratorLogs[transform_size + parity] =
-                ElementLog(coefficient);
+
+            for (unsigned parity = 0; parity < transform_size; ++parity)
+            {
+                ffe_t vanishing = 1;
+                for (unsigned coordinate = transform_size;
+                     coordinate < transform_size * 4U; ++coordinate)
+                {
+                    vanishing = MultiplyElements(vanishing,
+                        static_cast<ffe_t>(parity ^ coordinate));
+                }
+                const ffe_t denominator = MultiplyElements(derivative,
+                    static_cast<ffe_t>(parity ^ source_coordinate));
+                if (vanishing == 0 || denominator == 0)
+                    return false;
+                const ffe_t coefficient = MultiplyElements(
+                    vanishing, InverseElement(denominator));
+                if (coefficient == 0)
+                    return false;
+                HighTailGeneratorLogs[tail][transform_size + parity] =
+                    ElementLog(coefficient);
+            }
         }
     }
     return true;
@@ -2411,20 +2417,55 @@ void ReedSolomonEncode(
     }
     const bool direct_tail_column_size =
         m == 8 || m == 16 || m == 32 || m == 64;
-    if (ops.kind == LEO2_BACKEND_AVX2 && direct_tail_column_size &&
-        original_count == m + 1U && recovery_count == m &&
+    const bool direct_one_tail =
+        direct_tail_column_size && original_count == m + 1U;
+    const bool direct_two_tails =
+        m == 32U && original_count == m + 2U && buffer_bytes >= 16384U;
+    if (ops.kind == LEO2_BACKEND_AVX2 &&
+        (direct_one_tail || direct_two_tails) &&
+        recovery_count == m &&
         requested_output_count == m)
     {
         // Encode the complete first message block through the mature
         // transform, then add the precomputed systematic generator column for
-        // message coordinate 2T directly in parity-coordinate space.
+        // message coordinates 2T and (when selected) 2T+1 directly in
+        // parity-coordinate space.
         ReedSolomonEncode(
             ops, buffer_bytes, m, m, m, m,
             data, work, NULL);
-        for (unsigned output = 0; output < m; ++output)
+        const unsigned tail_count = original_count - m;
+        if (tail_count == 2 &&
+            ops.ff8_multiply_add_2_sources_2_outputs)
         {
-            MultiplyAddBytes(ops, work[output], data[m],
-                HighTailGeneratorLogs[m + output], buffer_bytes);
+            for (unsigned output = 0; output < m; output += 2)
+            {
+                void* destinations[2] = {
+                    work[output], work[output + 1]
+                };
+                const uint16_t logs0[2] = {
+                    HighTailGeneratorLogs[0][m + output],
+                    HighTailGeneratorLogs[0][m + output + 1]
+                };
+                const uint16_t logs1[2] = {
+                    HighTailGeneratorLogs[1][m + output],
+                    HighTailGeneratorLogs[1][m + output + 1]
+                };
+                ops.ff8_multiply_add_2_sources_2_outputs(
+                    destinations, data[m], data[m + 1], logs0, logs1,
+                    buffer_bytes);
+            }
+        }
+        else
+        {
+            for (unsigned output = 0; output < m; ++output)
+            {
+                for (unsigned tail = 0; tail < tail_count; ++tail)
+                {
+                    MultiplyAddBytes(ops, work[output], data[m + tail],
+                        HighTailGeneratorLogs[tail][m + output],
+                        buffer_bytes);
+                }
+            }
         }
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);

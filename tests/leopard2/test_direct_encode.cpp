@@ -1641,6 +1641,124 @@ void test_high_gf8_byte_tiling(
     leo2_context_destroy(scalar_context);
 }
 
+void test_gf8_high_two_tail_generator_columns(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options context_options = {};
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AVX2;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(
+        &context_options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(context_result, "explicit AVX2 two-tail context");
+
+    static const size_t byte_counts[] = {
+        65, 4097, 16383, 16384, 16385
+    };
+    static const unsigned t = 32;
+    static const unsigned k = t + 2;
+    CodecOwner* owner = make_codec(context, k, t,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, t);
+    std::vector<Element> systematic_points(
+        layout.systematic_coordinates.begin(),
+        layout.systematic_coordinates.end());
+    const std::vector<uint8_t> all(t, 1);
+
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        const size_t bytes = byte_counts[count_i];
+        Shards original(k, Bytes(bytes, 0));
+        const Shards tails = random_shards(
+            2, bytes, UINT64_C(0x325441494c000000) + bytes);
+        original[t] = tails[0];
+        original[t + 1] = tails[1];
+        const Shards original_before = original;
+        Shards expected(t, Bytes(bytes, 0));
+        for (unsigned tail = 0; tail < 2; ++tail)
+        {
+            const Element source_coordinate = systematic_points[t + tail];
+            Element derivative = 1;
+            for (size_t point = 0; point < systematic_points.size(); ++point)
+            {
+                if (systematic_points[point] != source_coordinate)
+                {
+                    derivative = gf8.multiply(derivative,
+                        gf8.add(systematic_points[point], source_coordinate));
+                }
+            }
+            require(derivative != 0,
+                "GF8 two-tail generator derivative was zero");
+            for (unsigned parity = 0; parity < t; ++parity)
+            {
+                const Element parity_coordinate = static_cast<Element>(
+                    layout.parity_coordinates[parity]);
+                Element vanishing = 1;
+                for (size_t point = 0; point < systematic_points.size();
+                     ++point)
+                {
+                    vanishing = gf8.multiply(vanishing,
+                        gf8.add(parity_coordinate,
+                            systematic_points[point]));
+                }
+                const Element denominator = gf8.multiply(derivative,
+                    gf8.add(parity_coordinate, source_coordinate));
+                const Element coefficient = gf8.divide(
+                    vanishing, denominator);
+                require(coefficient != 0,
+                    "GF8 two-tail generator column contained zero");
+                require(coefficient != 1,
+                    "GF8 two-tail generator column contained one");
+                for (size_t offset = 0; offset < bytes; ++offset)
+                {
+                    expected[parity][offset] ^= static_cast<uint8_t>(
+                        gf8.multiply(coefficient,
+                            original[t + tail][offset]));
+                }
+            }
+        }
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        const EncodeResult dense = encode(owner->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, all);
+        require_result(dense.result, "GF8 two-tail dense encode");
+        compare_requested(dense.recovery, expected, all, 0xa5,
+            "GF8 two-tail/direct generator", counts);
+        const bool expected_direct = bytes >= 16384;
+        require((leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    tail_column_calls != 0) == expected_direct,
+            "GF8 two-tail route selected at the wrong byte boundary");
+        require(original == original_before,
+            "GF8 two-tail encode modified caller input");
+
+        if (bytes == 16385)
+        {
+            std::vector<uint8_t> sparse(t, 0);
+            sparse[0] = 1;
+            sparse[15] = 1;
+            sparse[31] = 1;
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            const EncodeResult partial = encode(owner->codec,
+                LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse);
+            require_result(partial.result, "GF8 two-tail sparse encode");
+            compare_requested(partial.recovery, expected, sparse, 0xa5,
+                "GF8 sparse two-tail/direct generator", counts);
+            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                        tail_column_calls == 0,
+                "GF8 sparse output used the dense two-tail path");
+        }
+        ++counts->high_tail_column_checks;
+    }
+    delete owner;
+    leo2_context_destroy(context);
+}
+
 void test_gf8_high_coarse_direct_oracle(
     const BinaryField& gf8,
     Counts* counts)
@@ -2707,6 +2825,7 @@ int main()
         test_high_small_coarse_kernel(context, gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
         test_gf8_high_tail_generator_column(gf8, &counts);
+        test_gf8_high_two_tail_generator_columns(gf8, &counts);
         test_high_gf8_byte_tiling(gf8, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);

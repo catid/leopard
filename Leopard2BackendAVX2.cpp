@@ -3824,6 +3824,64 @@ static void AVX2FF8MultiplyAddOutputs(
             destinations + 4, source, multiplier_logs + 4, byte_count);
     }
 }
+
+static void AVX2FF8MultiplyAdd2Sources2Outputs(
+    void* const* destination_pointers,
+    const void* source0_pointer,
+    const void* source1_pointer,
+    const uint16_t* multiplier_logs0,
+    const uint16_t* multiplier_logs1,
+    uint64_t byte_count)
+{
+    uint8_t* destination0 = static_cast<uint8_t*>(destination_pointers[0]);
+    uint8_t* destination1 = static_cast<uint8_t*>(destination_pointers[1]);
+    const uint8_t* source0 = static_cast<const uint8_t*>(source0_pointer);
+    const uint8_t* source1 = static_cast<const uint8_t*>(source1_pointer);
+    const __m256i low00 = BroadcastTable(FF8Tables[multiplier_logs0[0]].low);
+    const __m256i high00 = BroadcastTable(FF8Tables[multiplier_logs0[0]].high);
+    const __m256i low01 = BroadcastTable(FF8Tables[multiplier_logs0[1]].low);
+    const __m256i high01 = BroadcastTable(FF8Tables[multiplier_logs0[1]].high);
+    const __m256i low10 = BroadcastTable(FF8Tables[multiplier_logs1[0]].low);
+    const __m256i high10 = BroadcastTable(FF8Tables[multiplier_logs1[0]].high);
+    const __m256i low11 = BroadcastTable(FF8Tables[multiplier_logs1[1]].low);
+    const __m256i high11 = BroadcastTable(FF8Tables[multiplier_logs1[1]].high);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        const __m256i input0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source0 + offset));
+        const __m256i input1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source1 + offset));
+        __m256i result = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination0 + offset));
+        result = _mm256_xor_si256(result,
+            AVX2FF8ProductVector(input0, low00, high00));
+        result = _mm256_xor_si256(result,
+            AVX2FF8ProductVector(input1, low10, high10));
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(destination0 + offset), result);
+        result = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination1 + offset));
+        result = _mm256_xor_si256(result,
+            AVX2FF8ProductVector(input0, low01, high01));
+        result = _mm256_xor_si256(result,
+            AVX2FF8ProductVector(input1, low11, high11));
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(destination1 + offset), result);
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        destination0[offset] ^=
+            FF8Product(multiplier_logs0[0], source0[offset]) ^
+            FF8Product(multiplier_logs1[0], source1[offset]);
+        destination1[offset] ^=
+            FF8Product(multiplier_logs0[1], source0[offset]) ^
+            FF8Product(multiplier_logs1[1], source1[offset]);
+        ++offset;
+    }
+}
+
 #endif
 
 static const Ops AVX2Ops = {
@@ -3914,6 +3972,11 @@ static const Ops AVX2Ops = {
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8MultiplyAddOutputs
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+    , AVX2FF8MultiplyAdd2Sources2Outputs
 #else
     , NULL
 #endif
