@@ -536,8 +536,7 @@ void execute_public_r1_multi_item_batch(
         require_result(leo2_decode_plan_batch_preflight_scratch_size(
             fixture.plan, batch_count, &preflight_bytes), LEO2_SUCCESS,
             "R=1 compact scalable preflight scratch query");
-        require((fixture.k == 1 && preflight_bytes == 0) ||
-                (fixture.k == 9 && preflight_bytes != 0),
+        require(preflight_bytes != 0,
             "R=1 compact scalable preflight scratch mismatch");
         AlignedScratch preflight(preflight_bytes);
         for (size_t item_i = 0; item_i < batch_count; ++item_i)
@@ -548,6 +547,40 @@ void execute_public_r1_multi_item_batch(
             preflight_bytes), LEO2_SUCCESS,
             "R=1 compact scalable batch decode execute");
         check_outputs();
+
+        if (fixture.k == 1)
+        {
+            AlignedScratch optional_item_scratch(64);
+            items[0].scratch = optional_item_scratch.data();
+            items[0].scratch_bytes = 64;
+            for (size_t item_i = 0; item_i < batch_count; ++item_i)
+                std::fill(restored_storage[item_i].begin(),
+                    restored_storage[item_i].end(), 0x5a);
+            require_result(
+                leo2_decode_plan_execute_batch_with_preflight_scratch(
+                    fixture.plan, &items[0], items.size(), preflight.data(),
+                    preflight_bytes), LEO2_SUCCESS,
+                "K=1 scalable batch optional item scratch execute");
+            check_outputs();
+            items[0].scratch = NULL;
+            items[0].scratch_bytes = 0;
+
+            for (size_t item_i = 0; item_i < batch_count; ++item_i)
+                std::fill(restored_storage[item_i].begin(),
+                    restored_storage[item_i].end(), 0x6b);
+            const std::vector<Bytes> scalable_before_failure =
+                restored_storage;
+            const void* const* const saved_recovery = items.back().recovery;
+            items.back().recovery = NULL;
+            require_result(
+                leo2_decode_plan_execute_batch_with_preflight_scratch(
+                    fixture.plan, &items[0], items.size(), preflight.data(),
+                    preflight_bytes), LEO2_INVALID_ARGUMENT,
+                "K=1 scalable batch late-item pointer rejection");
+            require(restored_storage == scalable_before_failure,
+                "K=1 scalable batch ran work before preflight failure");
+            items.back().recovery = saved_recovery;
+        }
     }
 
     if (!adversarial)
@@ -617,8 +650,10 @@ void execute_public_k1_encode_batch(
     require_result(leo2_encode_batch_preflight_scratch_size(
         fixture.codec, batch_count, &preflight_bytes), LEO2_SUCCESS,
         "K=1 encode batch preflight scratch query");
-    require(scratch_bytes == 0 && preflight_bytes == 0,
-        "K=1 encode batch unexpectedly requires scratch");
+    require(scratch_bytes == 0 &&
+            (batch_count < 9 ? preflight_bytes == 0 : preflight_bytes != 0),
+        "K=1 encode batch scratch query mismatch");
+    AlignedScratch preflight(preflight_bytes);
 
     std::vector<Bytes> output_storage(
         batch_count, Bytes(fixture.bytes + 11U, 0x5a));
@@ -659,9 +694,41 @@ void execute_public_k1_encode_batch(
         std::fill(output_storage[item_i].begin(),
             output_storage[item_i].end(), 0x5a);
     require_result(leo2_encode_batch_with_preflight_scratch(
-        fixture.codec, &items[0], items.size(), NULL, 0), LEO2_SUCCESS,
+        fixture.codec, &items[0], items.size(), preflight.data(),
+        preflight_bytes), LEO2_SUCCESS,
         "K=1 scalable encode batch execute");
     check_outputs();
+
+    if (batch_count >= 9 && fixture.bytes == 4097)
+    {
+        AlignedScratch optional_item_scratch(64);
+        items[0].scratch = optional_item_scratch.data();
+        items[0].scratch_bytes = 64;
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+            std::fill(output_storage[item_i].begin(),
+                output_storage[item_i].end(), 0x5a);
+        require_result(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &items[0], items.size(), preflight.data(),
+            preflight_bytes), LEO2_SUCCESS,
+            "K=1 scalable encode optional item scratch execute");
+        check_outputs();
+        items[0].scratch = NULL;
+        items[0].scratch_bytes = 0;
+
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+            std::fill(output_storage[item_i].begin(),
+                output_storage[item_i].end(), 0x6b);
+        const std::vector<Bytes> scalable_before_failure = output_storage;
+        const void* const* const saved_original = items.back().original;
+        items.back().original = NULL;
+        require_result(leo2_encode_batch_with_preflight_scratch(
+            fixture.codec, &items[0], items.size(), preflight.data(),
+            preflight_bytes), LEO2_INVALID_ARGUMENT,
+            "K=1 scalable encode late-item pointer rejection");
+        require(output_storage == scalable_before_failure,
+            "K=1 scalable encode ran work before preflight failure");
+        items.back().original = saved_original;
+    }
 
     for (size_t item_i = 0; item_i < batch_count; ++item_i)
         std::fill(output_storage[item_i].begin(),

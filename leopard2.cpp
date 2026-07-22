@@ -5027,8 +5027,6 @@ static leo2_result EncodeBatchPreflightScratchBytes(
         return LEO2_INVALID_ARGUMENT;
     if (item_count > 0xffffffffu)
         return LEO2_INVALID_ARGUMENT;
-    if (UseSingleSideEncodeLayout(codec) && IsLegacyHighK1R1Codec(codec))
-        return LEO2_SUCCESS;
     size_t ranges_per_item = 0;
     if (!CheckedAdd(codec->original_count, codec->recovery_count,
             ranges_per_item) ||
@@ -5048,10 +5046,7 @@ static leo2_result DecodeBatchPreflightScratchBytes(
         return LEO2_INVALID_ARGUMENT;
     if (item_count > 0xffffffffu)
         return LEO2_INVALID_ARGUMENT;
-    if (item_count < kScalableBatchPreflightMinItems || plan->no_op ||
-        (PlanHasCompactDirectXor(plan) &&
-         IsLegacyHighK1R1Codec(plan->codec) &&
-         plan->direct_xor_original == 0))
+    if (item_count < kScalableBatchPreflightMinItems || plan->no_op)
         return LEO2_SUCCESS;
 
     size_t recovery_input_count = 0;
@@ -5806,10 +5801,13 @@ static leo2_result PreflightEncodeBatchScalable(
             return LEO2_INTERNAL_ERROR;
         if (!append(range, false))
             return LEO2_INTERNAL_ERROR;
-        if (!MakeRange(item.scratch, item.scratch_bytes, range))
-            return LEO2_INTERNAL_ERROR;
-        if (!append(range, true))
-            return LEO2_INTERNAL_ERROR;
+        if (item.scratch_bytes != 0)
+        {
+            if (!MakeRange(item.scratch, item.scratch_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, true))
+                return LEO2_INTERNAL_ERROR;
+        }
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
             if (!MakeRange(item.original[i], item.shard_bytes, range))
@@ -5896,10 +5894,13 @@ static leo2_result PreflightDecodeBatchScalable(
             return LEO2_INTERNAL_ERROR;
         if (!append(range, false))
             return LEO2_INTERNAL_ERROR;
-        if (!MakeRange(item.scratch, item.scratch_bytes, range))
-            return LEO2_INTERNAL_ERROR;
-        if (!append(range, true))
-            return LEO2_INTERNAL_ERROR;
+        if (item.scratch_bytes != 0)
+        {
+            if (!MakeRange(item.scratch, item.scratch_bytes, range))
+                return LEO2_INTERNAL_ERROR;
+            if (!append(range, true))
+                return LEO2_INTERNAL_ERROR;
+        }
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
             const bool writable = item.original[i] == NULL;
@@ -7407,9 +7408,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
 {
     /* Preserve the established empty/single-item validation, metadata
        protection, and lazy-worker behavior without imposing a new workspace. */
-    if (item_count < kScalableBatchPreflightMinItems ||
-        (UseSingleSideEncodeLayout(codec) &&
-         IsLegacyHighK1R1Codec(codec)))
+    if (item_count < kScalableBatchPreflightMinItems)
         return EncodeBatchCompatibilityInternal(codec, items, item_count);
     if (item_count > 0xffffffffu || !items || !codec)
         return LEO2_INVALID_ARGUMENT;
@@ -8194,10 +8193,7 @@ leo2_decode_plan_execute_batch_with_preflight_scratch(
        semantics, including validation of only top-level item-array arithmetic
        for a no-loss plan. */
     if (item_count < kScalableBatchPreflightMinItems ||
-        (plan && (plan->no_op ||
-            (PlanHasCompactDirectXor(plan) &&
-             IsLegacyHighK1R1Codec(plan->codec) &&
-             plan->direct_xor_original == 0))))
+        (plan && plan->no_op))
         return DecodeBatchCompatibilityInternal(plan, items, item_count);
     if (item_count > 0xffffffffu || !items || !plan)
         return LEO2_INVALID_ARGUMENT;
