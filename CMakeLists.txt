@@ -41,6 +41,8 @@ option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+option(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE
+    "Diagnostic: force-inline the K=1 decode buffer validator" OFF)
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
@@ -247,6 +249,13 @@ add_library(leopard STATIC ${LIB_SOURCE_FILES})
 # conventional `leopard::leopard` export.  ALIAS targets do not create a
 # second archive.
 add_library(libleopard ALIAS leopard)
+if(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)
+    # Keep attribution local to the production codec target.  In particular,
+    # do not contaminate the test-hooks archive used by unrelated attribution
+    # experiments with this diagnostic definition.
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE=1)
+endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
 else()
@@ -1195,6 +1204,16 @@ if(LEO2_BUILD_TESTS)
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test leopard_test_hooks)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
+
+    add_executable(leopard2_k1_inline_marker_test
+        tests/leopard2/test_k1_inline_marker.cpp)
+    if(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)
+        target_compile_definitions(leopard2_k1_inline_marker_test PRIVATE
+            LEO2_EXPECT_K1_DECODE_VALIDATOR_INLINE=1)
+    endif()
+    target_link_libraries(leopard2_k1_inline_marker_test leopard)
+    add_test(NAME leopard2_k1_inline_marker
+        COMMAND leopard2_k1_inline_marker_test)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)

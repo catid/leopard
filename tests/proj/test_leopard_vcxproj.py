@@ -525,7 +525,8 @@ class CMakeProductionGraph(object):
         r"LEOPARD_ENABLE_GF(?:8|16)|"
         r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
         r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
-        r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT)|"
+        r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT|"
+        r"EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)|"
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
     _approved_production_mutations = {
@@ -548,6 +549,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF16=1")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
@@ -706,6 +709,10 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE",
+            "Diagnostic: force-inline the K=1 decode buffer validator",
+            "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -775,6 +782,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE",
+            "Diagnostic: force-inline the K=1 decode buffer validator",
+            "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
@@ -813,6 +824,8 @@ class CMakeProductionGraph(object):
             "leopard", "STATIC", "${LIB_SOURCE_FILES}"))),
         ("trusted", ("add_library", (
             "libleopard", "ALIAS", "leopard"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
@@ -1205,6 +1218,11 @@ class CMakeProductionGraph(object):
             return bool_and(
                 guard, bool_not(avx2),
                 cls._backend_variant_comparison("avx512"))
+        if (target == "leopard" and specification == (
+                "PRIVATE",
+                "LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE=1")):
+            return bool_atom(
+                "option:LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE")
         if (target == "leopard2_backend_avx2" or
                 specification == ("PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1")):
             return bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
@@ -5153,6 +5171,9 @@ endif()'''
             'option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)',
             'option(LEO2_PORTABLE_ISA_RELEASE_AUDIT\n'
             '    "Require the strict x86-64 portable-ISA release audit" OFF)',
+            'option(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE\n'
+            '    "Diagnostic: force-inline the K=1 decode buffer validator" '
+            'OFF)',
             'string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
             'LEO2_BACKEND_VARIANT_NORMALIZED)',
             'check_cxx_compiler_flag("/O2" CXX_FLAG_O2)',

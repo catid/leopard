@@ -4145,7 +4145,20 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
         leopard::xor_mem(ops, output, waiting, shard_bytes);
 }
 
-static leo2_result ValidateK1R1DecodeBuffers(
+#if defined(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)
+#define LEO2_K1_DECODE_VALIDATOR_INLINE LEO_FORCE_INLINE
+#else
+#define LEO2_K1_DECODE_VALIDATOR_INLINE
+#endif
+
+/*
+    Diagnostic only: screen whether removing the remaining K=1 terminal
+    validator call boundary pays for the resulting code growth.  Production
+    builds retain the compiler's ordinary inlining policy unless the experiment
+    macro is explicitly defined.
+*/
+static LEO2_K1_DECODE_VALIDATOR_INLINE leo2_result
+ValidateK1R1DecodeBuffers(
     uint64_t shard_bytes,
     const AddressRange& scratch_range,
     const AddressRange* protected_ranges,
@@ -4191,6 +4204,8 @@ static leo2_result ValidateK1R1DecodeBuffers(
 
     return LEO2_SUCCESS;
 }
+
+#undef LEO2_K1_DECODE_VALIDATOR_INLINE
 
 static leo2_result DecodeDirectXorValidated(
     const leo2_codec* codec,
@@ -7070,6 +7085,15 @@ bool GetDecodePlanPrunedScheduleInfo(
     }
     *info_out = info;
     return true;
+}
+
+bool K1DecodeValidatorInlineExperimentEnabled()
+{
+#if defined(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)
+    return true;
+#else
+    return false;
+#endif
 }
 
 } // namespace leopard2_internal

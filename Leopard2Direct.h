@@ -167,6 +167,9 @@ bool GetDecodePlanPrunedScheduleInfo(
     const leo2_decode_plan* plan,
     DecodePlanPrunedScheduleInfo* info_out);
 
+/* Fail-closed provenance marker for the diagnostic K=1 inline build. */
+bool K1DecodeValidatorInlineExperimentEnabled();
+
 } // namespace leopard2_internal
 
 #endif /* __cplusplus */
