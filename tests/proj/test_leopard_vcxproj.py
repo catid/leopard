@@ -32,6 +32,10 @@ COMPILE_SUFFIXES = (".c", ".cc", ".cpp", ".cxx")
 HEADER_SUFFIXES = (".h", ".hh", ".hpp", ".hxx", ".inl")
 CUDA_SUFFIXES = (".cu", ".cuh")
 KNOWN_SOURCE_SUFFIXES = COMPILE_SUFFIXES + HEADER_SUFFIXES + CUDA_SUFFIXES
+AVX2_SOURCE_FILES = {
+    "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX2Xor.cpp",
+}
 EXPECTED_CONFIGS = {
     "debug|win32": ("Debug", "Win32"),
     "debug|x64": ("Debug", "x64"),
@@ -2907,9 +2911,11 @@ def validate_msbuild_root_order(tree):
 
 
 def validate_no_wpo_overrides(tree):
-    allowed_additional_options = set(tree.findall(
-        ".//msb:ClCompile[@Include='..\\Leopard2BackendAVX2.cpp']/"
-        "msb:AdditionalOptions", NS))
+    allowed_additional_options = set()
+    for path in AVX2_SOURCE_FILES:
+        allowed_additional_options.update(tree.findall(
+            (".//msb:ClCompile[@Include='..\\{}']/"
+             "msb:AdditionalOptions").format(path), NS))
     for node in tree.iter():
         name = xml_local_name(node)
         text = node.text or ""
@@ -3535,7 +3541,7 @@ def validate_per_file_isa(tree):
         if path in options:
             raise ContractError("duplicate per-file compile item: " + path)
         metadata = [xml_local_name(child) for child in list(node)]
-        if path == "Leopard2BackendAVX2.cpp":
+        if path in AVX2_SOURCE_FILES:
             if metadata != ["AdditionalOptions"]:
                 raise ContractError(
                     "AVX2 source metadata is not the exact contract")
@@ -3588,11 +3594,13 @@ def validate_per_file_isa(tree):
                 for child in enhanced):
             raise ContractError(
                 "per-file enhanced ISA metadata is unsupported: " + path)
-    avx2 = options.get("Leopard2BackendAVX2.cpp", "")
-    if avx2.strip() != "/arch:AVX2 %(AdditionalOptions)":
-        raise ContractError("AVX2 backend options are not the exact contract")
+    for path in AVX2_SOURCE_FILES:
+        avx2 = options.get(path, "")
+        if avx2.strip() != "/arch:AVX2 %(AdditionalOptions)":
+            raise ContractError(
+                "AVX2 backend options are not the exact contract: " + path)
     for path, flags in options.items():
-        if path != "Leopard2BackendAVX2.cpp" and re.search(
+        if path not in AVX2_SOURCE_FILES and re.search(
                 r"/arch\s*:\s*avx", flags, re.IGNORECASE):
             raise ContractError("non-AVX2 source raises ISA: " + path)
 
@@ -3727,7 +3735,8 @@ class LeopardVisualStudioProjectTest(unittest.TestCase):
             self.sources, self.expected_sources, "compiled production sources")
         self.assertTrue(self.object_targets)
         self.assertTrue({
-            "Leopard2BackendAVX2.cpp", "Leopard2BackendSSSE3.cpp"
+            "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendSSSE3.cpp"
         }.issubset(set(self.object_sources)))
 
     def test_reachable_production_headers_are_visible(self):

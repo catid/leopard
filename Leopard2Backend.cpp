@@ -1725,7 +1725,8 @@ static bool TestXor(const Ops& ops)
     uint8_t output[260];
     uint8_t expected[260];
     uint8_t sources4[3][260];
-    const void* reduction_sources[16];
+    uint8_t reduction_data[24][260];
+    const void* reduction_sources[24];
     uint8_t outputs4[4][260];
     uint8_t expected4[4][260];
     for (size_t i = 0; i < sizeof(source); ++i)
@@ -1734,6 +1735,15 @@ static bool TestXor(const Ops& ops)
         for (unsigned source_i = 0; source_i < 3; ++source_i)
             sources4[source_i][i] = static_cast<uint8_t>(
                 i * (37U + source_i * 18U) + source_i * 53U + 11U);
+        for (unsigned source_i = 0; source_i < 24; ++source_i)
+        {
+            uint32_t value = static_cast<uint32_t>(i + 1U) * 0x85ebca6bU ^
+                static_cast<uint32_t>(source_i + 1U) * 0x9e3779b9U;
+            value ^= value >> 16;
+            value *= 0x7feb352dU;
+            value ^= value >> 15;
+            reduction_data[source_i][i] = static_cast<uint8_t>(value);
+        }
     }
     for (size_t count_i = 0;
          count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
@@ -1788,6 +1798,66 @@ static bool TestXor(const Ops& ops)
             output + 1, source + 1, reduction_sources, 16, bytes);
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
+
+        if (ops.xor_memory_sources_fused_final)
+        {
+            /* Internal zero-byte operations promise no pointer access, even
+               though the public codec API requires positive shard sizes. */
+            ops.xor_memory_sources_fused_final(
+                NULL, NULL, NULL, UINT32_MAX, 0);
+            static const unsigned live_counts[] = {
+                3, 4, 5, 6, 11, 12, 13, 14, 19, 20, 21, 22
+            };
+            static const unsigned hole_positions[] = {
+                24, 0, 7, 8, 15, 16
+            };
+            for (size_t live_i = 0;
+                 live_i < sizeof(live_counts) / sizeof(live_counts[0]);
+                 ++live_i)
+            {
+                const unsigned live = live_counts[live_i];
+                for (size_t hole_i = 0;
+                     hole_i <= sizeof(hole_positions) /
+                         sizeof(hole_positions[0]);
+                     ++hole_i)
+                {
+                    const unsigned hole = hole_i ==
+                            sizeof(hole_positions) /
+                                sizeof(hole_positions[0])
+                        ? live : hole_positions[hole_i];
+                    if (hole != 24 && hole > live)
+                        continue;
+                    const unsigned source_count = live + (hole != 24);
+                    unsigned data_i = 0;
+                    for (unsigned source_i = 0;
+                         source_i < source_count; ++source_i)
+                    {
+                        if (source_i == hole)
+                            reduction_sources[source_i] = NULL;
+                        else
+                            reduction_sources[source_i] =
+                                reduction_data[data_i++] + 1;
+                    }
+                    std::memset(output, 0x6d, sizeof(output));
+                    std::memset(expected, 0x6d, sizeof(expected));
+                    for (uint64_t byte = 0; byte < bytes; ++byte)
+                    {
+                        uint8_t value = source[byte + 1];
+                        for (unsigned source_i = 0;
+                             source_i < source_count; ++source_i)
+                            if (reduction_sources[source_i])
+                                value ^= static_cast<const uint8_t*>(
+                                    reduction_sources[source_i])[byte];
+                        expected[byte + 1] = value;
+                    }
+                    ops.xor_memory_sources_fused_final(
+                        output + 1, source + 1, reduction_sources,
+                        source_count, bytes);
+                    if (std::memcmp(output, expected, sizeof(output)) != 0)
+                        return false;
+                }
+            }
+        }
 
         if (ops.xor_memory_dense)
         {
@@ -1922,6 +1992,14 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
         !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
         return false;
+#ifdef LEO_HAS_FF8
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.xor_memory_sources_fused_final != NULL))
+        return false;
+#else
+    if (ops.xor_memory_sources_fused_final)
+        return false;
+#endif
     if ((ops.kind == LEO2_BACKEND_AVX2) !=
         (ops.xor_memory_dense != NULL))
         return false;

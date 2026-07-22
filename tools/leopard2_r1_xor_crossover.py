@@ -275,6 +275,129 @@ def full_grid(backends):
     return result
 
 
+def final_remainders_grid(backends):
+    result = []
+    target_counts = (7, 12, 13, 14, 15, 20, 21, 22, 23)
+    counts = (6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16,
+              17, 18, 19, 20, 21, 22, 23, 24, 31, 255)
+    for backend in backends:
+        for k in counts:
+            shard_sizes = [
+                1024, 1041, 4095, 4096, 4097, 4113,
+                65536, 65553, 1048576, 1048593]
+            if k == 7:
+                shard_sizes.extend((
+                    4194304, 4194321,
+                    8388608, 8388625,
+                    16777216, 16777233))
+            for shard_bytes in shard_sizes:
+                result.append(cell(
+                    "target_r1" if k in target_counts else "neighbor_r1",
+                    backend, k, 1, shard_bytes, 1))
+    return result
+
+
+def final_remainders_confirmation_grid(backends):
+    """Focused repeat grid for final-remainder cache/layout attribution.
+
+    The broad screen found a K=7 crossover between one and eight MiB plus
+    bimodal one-MiB observations around K=20..23.  It also observed a
+    surprising aligned K=255 regression even though that codec cannot select
+    the candidate callback.  Keep those target and untouched-control cells in
+    one deterministic grid so a resumed campaign cannot silently omit the
+    negative evidence.
+    """
+    result = []
+    target_counts = {7, 12, 13, 14, 15, 20, 21, 22, 23}
+    k7_sizes = (
+        65536, 65553,
+        1048576, 1048593,
+        2097152, 2097169,
+        3145728, 3145745,
+        4194304, 4194321,
+        6291456, 6291473,
+        8388608, 8388625,
+        16777216, 16777233,
+    )
+    one_mib_counts = (19, 20, 21, 22, 23, 24)
+    one_mib_sizes = (1048576, 1048593)
+    positive_anchors = (
+        (14, 65536), (14, 65553),
+        (20, 65536), (20, 65553),
+        (22, 65536), (22, 65553),
+        (23, 65536), (23, 65553),
+    )
+    untouched_layout_controls = (
+        (16, 65536), (16, 1048576),
+        (254, 1048575), (254, 1048576),
+        (254, 1048577), (254, 1048593),
+        (255, 1048575), (255, 1048576),
+        (255, 1048577), (255, 1048593),
+    )
+    for backend in backends:
+        for shard_bytes in k7_sizes:
+            result.append(cell(
+                "target_r1", backend, 7, 1, shard_bytes, 1))
+        for k in one_mib_counts:
+            for shard_bytes in one_mib_sizes:
+                result.append(cell(
+                    "target_r1" if k in target_counts else "neighbor_r1",
+                    backend, k, 1, shard_bytes, 1))
+        for k, shard_bytes in positive_anchors:
+            result.append(cell(
+                "target_r1", backend, k, 1, shard_bytes, 1))
+        for k, shard_bytes in untouched_layout_controls:
+            result.append(cell(
+                "neighbor_r1", backend, k, 1, shard_bytes, 1))
+    return result
+
+
+def final_remainders_production_grid(backends):
+    """Final selector boundaries, arbitrary tails, and immediate controls."""
+    result = []
+    target_counts = (12, 13, 14, 15, 22, 23)
+    target_sizes = (
+        1024, 2048,
+        4095, 4096, 4097, 4113,
+        65536, 65553,
+        1048575, 1048576, 1048577, 1048593,
+    )
+    k7_sizes = (
+        1024, 2048,
+        4095, 4096, 4097, 4113,
+        65536, 65553,
+        1048576, 1048593,
+        2097152, 3145728,
+        4194303, 4194304, 4194305, 4194321,
+        8388608,
+    )
+    control_cases = (
+        (6, 4096), (8, 4096), (11, 4096), (16, 4096),
+        (20, 4096), (21, 4096), (24, 4096),
+        (6, 65553), (8, 65553), (11, 65553), (16, 65553),
+        (20, 65553), (21, 65553), (24, 65553),
+        (6, 1048576), (8, 1048576), (11, 1048576),
+        (16, 1048576), (20, 1048576), (21, 1048576),
+        (24, 1048576),
+    )
+    for backend in backends:
+        for shard_bytes in k7_sizes:
+            result.append(cell(
+                "target_r1" if 4096 <= shard_bytes <= 4194304
+                else "neighbor_r1",
+                backend, 7, 1, shard_bytes, 1))
+        for k in target_counts:
+            for shard_bytes in target_sizes:
+                result.append(cell(
+                    "target_r1" if 4096 <= shard_bytes <= 1048576
+                    else "neighbor_r1",
+                    backend, k, 1, shard_bytes, 1))
+        for k, shard_bytes in control_cases:
+            result.append(cell(
+                "neighbor_r1", backend, k, 1, shard_bytes, 1))
+    return result
+
+
 def parse_backends(value):
     result = []
     for item in value.split(","):
@@ -301,7 +424,16 @@ def choose_reuse(item, target_work_bytes, maximum_reuse):
 
 def make_manifest(args):
     backends = parse_backends(args.backends)
-    cells = full_grid(backends) if args.grid == "full" else compact_grid(backends)
+    if args.grid == "full":
+        cells = full_grid(backends)
+    elif args.grid == "final-remainders":
+        cells = final_remainders_grid(backends)
+    elif args.grid == "final-remainders-confirmation":
+        cells = final_remainders_confirmation_grid(backends)
+    elif args.grid == "final-remainders-production":
+        cells = final_remainders_production_grid(backends)
+    else:
+        cells = compact_grid(backends)
     cells = sorted(cells, key=lambda item: (
         item["backend"], item["region"], item["r"], item["k"],
         item["shard_bytes"], item["batch"]))
@@ -948,6 +1080,32 @@ def command_self_test(_args):
     assert max(item["shard_bytes"] for item in values) == 1048576
     assert max(item["k"] for item in values) >= 240
     assert {item["batch"] for item in values}.issuperset({1, 8, 64})
+    confirmation = final_remainders_confirmation_grid(["avx2"])
+    assert len(confirmation) == 46
+    assert any(item["k"] == 7 and item["shard_bytes"] == 3145728
+               for item in confirmation)
+    assert any(item["k"] == 255 and item["shard_bytes"] == 1048576
+               for item in confirmation)
+    production = final_remainders_production_grid(["avx2"])
+    assert len(production) == 110
+    for k in (7, 12, 13, 14, 15, 22, 23):
+        for shard_bytes in (1024, 2048):
+            control = next(item for item in production
+                           if item["k"] == k and
+                           item["shard_bytes"] == shard_bytes)
+            assert control["region"] == "neighbor_r1"
+    assert any(item["k"] == 7 and item["shard_bytes"] == 4194305
+               for item in production)
+    assert next(item for item in production
+                if item["k"] == 7 and item["shard_bytes"] == 4194305)[
+                    "region"] == "neighbor_r1"
+    for k in (12, 13, 14, 15, 22, 23):
+        assert any(item["k"] == k and item["shard_bytes"] == 1048577
+                   for item in production)
+        assert next(item for item in production
+                    if item["k"] == k and
+                    item["shard_bytes"] == 1048577)["region"] == \
+            "neighbor_r1"
     fake = {
         "job_id": "0" * 24,
         "measurements": [],
@@ -1021,7 +1179,12 @@ def parser():
     run.add_argument("--result-dir", required=True)
     run.add_argument("--cpu", type=int, required=True)
     run.add_argument("--backends", default=",".join(BACKENDS))
-    run.add_argument("--grid", choices=("compact", "full"), default="compact")
+    run.add_argument(
+        "--grid", choices=(
+            "compact", "full", "final-remainders",
+            "final-remainders-confirmation", "final-remainders-production",
+            ),
+        default="compact")
     run.add_argument("--abba-rounds", type=int, default=5)
     run.add_argument("--iterations", type=int, default=9)
     run.add_argument("--warmup", type=int, default=2)

@@ -203,6 +203,7 @@ require_expected_members()
             cpu_features) expected_member=Leopard2CpuFeatures.cpp.o ;;
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
+            avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
             avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
             '') continue ;;
             *)
@@ -274,7 +275,8 @@ scan_archive()
         case "$member" in
             Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
                 object_class=ssse3 ;;
-            Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj)
+            Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
+            Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj)
                 object_class=avx2 ;;
             Leopard2BackendAVX512.cpp.o|Leopard2BackendAVX512.cpp.obj)
                 object_class=avx512 ;;
@@ -390,7 +392,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev 'Leopard2Backend(SSSE3|AVX2|AVX512)[.]cpp' > \
+            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -421,22 +423,29 @@ scan_build_metadata()
             echo "portable ISA check: SSSE3 object has an unrelated ISA/LTO flag" >&2
             return 1
         fi
-        if grep -q 'Leopard2BackendAVX2[.]cpp' "$compile_commands" &&
-           ! grep 'Leopard2BackendAVX2[.]cpp' "$compile_commands" |
-               grep -q -- '-mavx2'
-        then
-            echo "portable ISA check: AVX2 object lacks its ISA flag" >&2
-            return 1
-        fi
-        avx2_command="$scratch_root/avx2-command"
-        grep 'Leopard2BackendAVX2[.]cpp' "$compile_commands" |
-            sed 's/-mavx2//g' > "$avx2_command" || true
-        if [ -s "$avx2_command" ] &&
-           grep -Ein -- "$forbidden_metadata" "$avx2_command"
-        then
-            echo "portable ISA check: AVX2 object has an unrelated ISA/LTO flag" >&2
-            return 1
-        fi
+        for avx2_source in \
+            Leopard2BackendAVX2.cpp \
+            Leopard2BackendAVX2Xor.cpp
+        do
+            avx2_stem=${avx2_source%.cpp}
+            avx2_pattern="(^|[/[:space:]\"])$avx2_stem[.]cpp([[:space:]\",]|$)"
+            if grep -Eq "$avx2_pattern" "$compile_commands" &&
+               ! grep -E "$avx2_pattern" "$compile_commands" |
+                   grep -q -- '-mavx2'
+            then
+                echo "portable ISA check: $avx2_source lacks its ISA flag" >&2
+                return 1
+            fi
+            avx2_command="$scratch_root/$avx2_source-command"
+            grep -E "$avx2_pattern" "$compile_commands" |
+                sed 's/-mavx2//g' > "$avx2_command" || true
+            if [ -s "$avx2_command" ] &&
+               grep -Ein -- "$forbidden_metadata" "$avx2_command"
+            then
+                echo "portable ISA check: $avx2_source has an unrelated ISA/LTO flag" >&2
+                return 1
+            fi
+        done
         if grep -q 'Leopard2BackendAVX512[.]cpp' "$compile_commands"; then
             avx512_lines="$scratch_root/avx512-lines"
             grep 'Leopard2BackendAVX512[.]cpp' "$compile_commands" > \
@@ -607,6 +616,26 @@ expect_missing_expected_member_rejected()
     fi
 }
 
+expect_missing_avx2_xor_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_avx2_xor \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-avx2-xor-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,avx2_xor' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing AVX2 XOR member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one avx2_xor member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing AVX2 XOR rejection reason missing" >&2
+        return 1
+    fi
+}
+
 expect_listing_failure_rejected()
 {
     fixture_archive=$(write_assembly_archive listing_failure_archive \
@@ -762,6 +791,8 @@ run_negative_controls()
         'Leopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_accepted good_avx2 \
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx2_xor \
+        'Leopard2BackendAVX2Xor.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx512vl \
         'Leopard2BackendAVX512.cpp.o' \
         'vpternlogq $0, %ymm0, %ymm0, %ymm0'
@@ -797,6 +828,9 @@ run_negative_controls()
         'Leopard2BackendSSSE3.cpp.o' 'vpextrq $1, %xmm0, %rax'
     expect_classified_archive_rejected avx2_leaks_fma \
         'Leopard2BackendAVX2.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_xor_leaks_fma \
+        'Leopard2BackendAVX2Xor.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected avx2_leaks_f16c \
         'Leopard2BackendAVX2.cpp.o' 'vcvtph2ps %xmm0, %ymm0'
@@ -834,12 +868,33 @@ run_negative_controls()
         'vpxor %ymm0, %ymm0, %ymm0' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
     expect_missing_expected_member_rejected
+    expect_missing_avx2_xor_member_rejected
     expect_listing_failure_rejected
 
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
     expect_metadata_rejected flag_compile_sse41 compile_commands '-msse4.1'
     expect_metadata_rejected flag_march make '-march=native'
     expect_metadata_rejected flag_lto make '-flto=auto'
+
+    avx2_xor_source=/src/Leopard2BackendAVX2Xor.cpp
+    avx2_xor_output=CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2Xor.cpp.o
+    expect_fixture_metadata_accepted exact_avx2_xor_source \
+        "c++ -mavx2 -mno-avx512f -o $avx2_xor_output -c $avx2_xor_source" \
+        "$avx2_xor_source" "$avx2_xor_output"
+    expect_fixture_metadata_rejected avx2_xor_missing_flag \
+        "c++ -mno-avx512f -o $avx2_xor_output -c $avx2_xor_source" \
+        "$avx2_xor_source" "$avx2_xor_output"
+    expect_fixture_metadata_rejected avx2_xor_unrelated_isa \
+        "c++ -mavx2 -mno-avx512f -mfma -o $avx2_xor_output -c $avx2_xor_source" \
+        "$avx2_xor_source" "$avx2_xor_output"
+    expect_fixture_metadata_rejected avx2_xor_lookalike_prefix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/NotLeopard2BackendAVX2Xor.cpp.o -c /src/NotLeopard2BackendAVX2Xor.cpp' \
+        /src/NotLeopard2BackendAVX2Xor.cpp \
+        CMakeFiles/leopard2_backend_avx2.dir/NotLeopard2BackendAVX2Xor.cpp.o
+    expect_fixture_metadata_rejected avx2_xor_lookalike_suffix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o -c /src/Leopard2BackendAVX2XorXcpp' \
+        /src/Leopard2BackendAVX2XorXcpp \
+        CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o
 
     fixture_prefix='c++ -DLEO2_ENABLE_TEST_HOOKS=1 -DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1 -mssse3 -mno-avx'
     expect_fixture_metadata_accepted exact_legacy_fixture \

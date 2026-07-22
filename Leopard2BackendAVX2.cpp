@@ -1008,6 +1008,7 @@ static void AVX2XorMemorySources(
     if (waiting_count != 0)
         AVX2XorMemory(destination, waiting[0], byte_count);
 }
+
 #else
 static void AVX2XorMemorySources(
     void* destination,
@@ -4145,6 +4146,11 @@ static const Ops AVX2Ops = {
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8MultiplyAdd2Sources2Outputs
+#else
+    , NULL
+#endif
+#if !defined(LEO2_AVX512_VARIANT) && defined(LEO_HAS_FF8)
+    , AVX2XorMemorySourcesFusedFinal
 #else
     , NULL
 #endif

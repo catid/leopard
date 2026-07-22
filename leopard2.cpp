@@ -3878,6 +3878,67 @@ static bool UseCoarseR1Xor(
         codec->original_count, shard_bytes);
 }
 
+#if defined(_MSC_VER)
+#define LEO2_R1_FUSED_POLICY_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_R1_FUSED_POLICY_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_r1_fused_policy")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_R1_FUSED_POLICY_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_R1_FUSED_POLICY_NOINLINE
+#endif
+
+static LEO2_R1_FUSED_POLICY_NOINLINE bool UseFusedFinalR1Xor(
+    uint32_t original_count,
+    size_t shard_bytes)
+{
+    /* The remainder-specific callback folds the final 3..6 sources into the
+       coarse reduction instead of returning to the generic loop.  Retained
+       Zen 5 AVX2 screens promoted the exact K groups below.  K=7 crosses back
+       to the mature coarse loop above 4 MiB; K=20/21 missed the 5% threshold;
+       K=8 Group7, K=31, explicit prefetch, and byte-loop unrolling all
+       regressed and remain excluded. */
+    /* This layout-isolated policy is reached only after the inline eligibility
+       gate has proved the field, backend, callback, lower byte bound, and K
+       set.  Keep those preconditions explicit while avoiding duplicate loads
+       and branches at both encode and decode call sites. */
+    LEO_DEBUG_ASSERT(shard_bytes >= 4096);
+    LEO_DEBUG_ASSERT(original_count == 7 ||
+        (original_count >= 12 && original_count <= 15) ||
+        (original_count >= 22 && original_count <= 23));
+    if (original_count == 7)
+        return shard_bytes <= 4U * 1024U * 1024U;
+    return shard_bytes <= 1024U * 1024U;
+}
+
+#undef LEO2_R1_FUSED_POLICY_NOINLINE
+
+static LEO_FORCE_INLINE bool IsFusedFinalR1XorEligible(
+    const leo2_codec* codec,
+    const leopard::backend::Ops& ops,
+    size_t shard_bytes)
+{
+#if defined(LEO2_R1_FUSED_FINAL_CONTROL)
+    /* Diagnostic same-source benchmark control.  This definition is never
+       enabled by the default build: it preserves every implementation object
+       while disabling only the new dispatch edge so retained ABBA evidence
+       can attribute the difference to the fused-final selector. */
+    (void)codec;
+    (void)ops;
+    (void)shard_bytes;
+    return false;
+#else
+    if (shard_bytes < 4096 || codec->field != LEO2_FIELD_GF8 ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !ops.xor_memory_sources_fused_final)
+        return false;
+
+    const uint32_t k = codec->original_count;
+    return k == 7 || (k >= 12 && k <= 15) || (k >= 22 && k <= 23);
+#endif
+}
+
 static LEO_FORCE_INLINE bool UseDenseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
@@ -3916,7 +3977,12 @@ static void ExecuteSingleSideEncode(
         return;
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
-        ops.xor_memory_sources(recovery[0], original[0], original + 1,
+        const leopard::backend::XorMemorySources reduce =
+            IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
+                    UseFusedFinalR1Xor(
+                        codec->original_count, shard_bytes) ?
+                ops.xor_memory_sources_fused_final : ops.xor_memory_sources;
+        reduce(recovery[0], original[0], original + 1,
             codec->original_count - 1, shard_bytes);
         return;
     }
@@ -3947,7 +4013,12 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
     const leopard::backend::Ops& ops = *codec->context->ops;
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
-        ops.xor_memory_sources(restored_original[missing], recovery[0],
+        const leopard::backend::XorMemorySources reduce =
+            IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
+                    UseFusedFinalR1Xor(
+                        codec->original_count, shard_bytes) ?
+                ops.xor_memory_sources_fused_final : ops.xor_memory_sources;
+        reduce(restored_original[missing], recovery[0],
             original, codec->original_count, shard_bytes);
         return;
     }

@@ -98,6 +98,7 @@ BUILD_CACHE_KEYS = (
     "CMAKE_STATIC_LINKER_FLAGS", "CMAKE_STATIC_LINKER_FLAGS_RELEASE",
     "ENABLE_OPENMP", "LEO2_BACKEND_VARIANT", "LEO2_BUILD_TESTS",
     "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
+    "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
 )
 
 EXPECTED_COMPILE_SOURCE_COUNTS = {
@@ -107,6 +108,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     # test-hook object libraries when their compiler probes succeed.
     "Leopard2Backend.cpp": 3,
     "Leopard2BackendAVX2.cpp": 2,
+    "Leopard2BackendAVX2Xor.cpp": 2,
     "Leopard2BackendAVX512.cpp": 2,
     "Leopard2BackendSSSE3.cpp": 2,
     "Leopard2BackendScalar.cpp": 3,
@@ -167,6 +169,7 @@ SOURCE_FILES = (
     "Leopard2BackendScalar.cpp",
     "Leopard2BackendSSSE3.cpp",
     "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp",
     "Leopard2CpuFeatures.cpp",
     "LeopardFF8.cpp",
@@ -282,9 +285,12 @@ def expected_compile_source_counts(cache):
         cmake_cache_true(cache, "LEO2_FLAG_MAVX512VL") and
         cmake_cache_true(cache, "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256")
     )
+    have_gf8 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF8") \
+        if "LEOPARD_ENABLE_GF8" in cache else True
     for source, available in (
             ("Leopard2BackendSSSE3.cpp", have_ssse3),
             ("Leopard2BackendAVX2.cpp", have_avx2),
+            ("Leopard2BackendAVX2Xor.cpp", have_avx2 and have_gf8),
             ("Leopard2BackendAVX512.cpp", have_avx512)):
         if not available:
             expected.pop(source)
@@ -1283,6 +1289,7 @@ def self_test():
     no_isa = expected_compile_source_counts({})
     assert "Leopard2BackendSSSE3.cpp" not in no_isa
     assert "Leopard2BackendAVX2.cpp" not in no_isa
+    assert "Leopard2BackendAVX2Xor.cpp" not in no_isa
     assert "Leopard2BackendAVX512.cpp" not in no_isa
     avx2_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
@@ -1292,7 +1299,18 @@ def self_test():
     })
     assert avx2_only["Leopard2BackendSSSE3.cpp"] == 2
     assert avx2_only["Leopard2BackendAVX2.cpp"] == 2
+    assert avx2_only["Leopard2BackendAVX2Xor.cpp"] == 2
     assert "Leopard2BackendAVX512.cpp" not in avx2_only
+    gf16_only = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEOPARD_ENABLE_GF8": "OFF",
+        "LEOPARD_ENABLE_GF16": "ON",
+    })
+    assert "Leopard2BackendAVX2Xor.cpp" not in gf16_only
+    assert gf16_only["Leopard2BackendAVX2.cpp"] == 2
     all_isa = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",

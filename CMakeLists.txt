@@ -296,6 +296,10 @@ if(LEO2_X86_TARGET)
         if(LEO2_FLAG_MAVX2 AND LEO2_FLAG_MNO_AVX512F)
             add_library(leopard2_backend_avx2 OBJECT
                 Leopard2BackendAVX2.cpp)
+            if(LEOPARD_ENABLE_GF8)
+                target_sources(leopard2_backend_avx2 PRIVATE
+                    Leopard2BackendAVX2Xor.cpp)
+            endif()
             target_include_directories(leopard2_backend_avx2 PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR})
             target_compile_options(leopard2_backend_avx2 PRIVATE
@@ -345,6 +349,10 @@ if(LEO2_X86_TARGET)
         if(LEO2_FLAG_ARCH_AVX2)
             add_library(leopard2_backend_avx2 OBJECT
                 Leopard2BackendAVX2.cpp)
+            if(LEOPARD_ENABLE_GF8)
+                target_sources(leopard2_backend_avx2 PRIVATE
+                    Leopard2BackendAVX2Xor.cpp)
+            endif()
             target_include_directories(leopard2_backend_avx2 PRIVATE
                 ${CMAKE_CURRENT_SOURCE_DIR})
             target_compile_options(leopard2_backend_avx2 PRIVATE /arch:AVX2)
@@ -668,6 +676,10 @@ if(LEO2_BUILD_TESTS)
     if(LEO2_HAVE_AVX2_BACKEND)
         add_library(leopard2_backend_avx2_test_hooks OBJECT EXCLUDE_FROM_ALL
             Leopard2BackendAVX2.cpp)
+        if(LEOPARD_ENABLE_GF8)
+            target_sources(leopard2_backend_avx2_test_hooks PRIVATE
+                Leopard2BackendAVX2Xor.cpp)
+        endif()
         target_include_directories(leopard2_backend_avx2_test_hooks PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
@@ -949,6 +961,9 @@ if(LEO2_BUILD_TESTS)
             endif()
             if(LEO2_HAVE_AVX2_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
+                if(LEOPARD_ENABLE_GF8)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
+                endif()
             endif()
             if(LEO2_HAVE_AVX512_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx512)
@@ -1870,6 +1885,10 @@ if(LEO2_BUILD_FUZZERS)
     if(LEO2_HAVE_AVX2_BACKEND)
         add_library(leopard2_backend_avx2_fuzz OBJECT
             Leopard2BackendAVX2.cpp)
+        if(LEOPARD_ENABLE_GF8)
+            target_sources(leopard2_backend_avx2_fuzz PRIVATE
+                Leopard2BackendAVX2Xor.cpp)
+        endif()
         target_include_directories(leopard2_backend_avx2_fuzz PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE

@@ -211,11 +211,12 @@ void test_primitive(const leopard::backend::Ops& ops)
     static const uint64_t coarse_byte_counts[] = {
         0, 1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33,
         63, 64, 65, 127, 128, 129, 255, 256, 257,
-        1023, 1024, 1025, 4097, 65537
+        1023, 1024, 1025, 4095, 4096, 4097, 4113, 65537, 65553
     };
     static const uint32_t coarse_source_counts[] = {
         0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11,
-        12, 13, 14, 15, 16, 17, 23, 31, 32, 33
+        12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23,
+        31, 32, 33
     };
     for (size_t byte_i = 0;
          byte_i < sizeof(coarse_byte_counts) / sizeof(coarse_byte_counts[0]);
@@ -743,6 +744,81 @@ void test_public_r1(leo2_backend backend)
             execute_and_check_decode(fixture);
         }
 
+    /* These K values leave final live-source remainders three through six
+       after one or two complete eight-source groups.  R1Fixture offsets each
+       shard independently, so the loop covers threshold, tail, unaligned,
+       encode, and one-loss decode behavior against the scalar XOR oracle. */
+    static const uint32_t final_remainder_counts[] = {
+        7, 12, 13, 14, 15, 20, 21, 22, 23
+    };
+    static const size_t final_remainder_sizes[] = {
+        4096, 4097, 4113, 65553, 1048593
+    };
+    for (size_t count_i = 0;
+         count_i < sizeof(final_remainder_counts) /
+             sizeof(final_remainder_counts[0]); ++count_i)
+        for (size_t size_i = 0;
+             size_i < sizeof(final_remainder_sizes) /
+                 sizeof(final_remainder_sizes[0]); ++size_i)
+        {
+            R1Fixture fixture(backend, final_remainder_counts[count_i],
+                final_remainder_sizes[size_i], false, LEO2_FIELD_GF8,
+                LEO2_SHARD_LAYOUT_NATIVE_V1,
+                final_remainder_counts[count_i] / 2U);
+            execute_and_check_decode(fixture);
+        }
+
+    /* K=7 is the smallest live remainder-six case and has no complete
+       eight-source group, so the final group is the entire coarse reduction.
+       Exercise the large shard sizes where one pass can matter most. */
+    static const size_t k7_large_sizes[] = {
+        1048576, 1048593,
+        4194304, 4194321,
+        8388608, 8388625,
+        16777216, 16777233
+    };
+    for (size_t size_i = 0;
+         size_i < sizeof(k7_large_sizes) / sizeof(k7_large_sizes[0]); ++size_i)
+    {
+        R1Fixture fixture(backend, 7, k7_large_sizes[size_i], false,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 3);
+        execute_and_check_decode(fixture);
+    }
+
+    /* Null positions before, at, and after a complete eight-source group must
+       produce the same K-1 live count and final-remainder selection. */
+    static const uint32_t null_boundary_counts[] = { 7, 12, 22, 23 };
+    static const size_t null_boundary_sizes[] = { 4097, 65553 };
+    for (size_t count_i = 0;
+         count_i < sizeof(null_boundary_counts) /
+             sizeof(null_boundary_counts[0]); ++count_i)
+    {
+        const uint32_t k = null_boundary_counts[count_i];
+        static const uint32_t boundary_positions[] = { 0, 7, 8, 15, 16 };
+        std::vector<uint32_t> positions;
+        for (size_t boundary_i = 0;
+             boundary_i < sizeof(boundary_positions) /
+                 sizeof(boundary_positions[0]); ++boundary_i)
+            if (boundary_positions[boundary_i] < k)
+                positions.push_back(boundary_positions[boundary_i]);
+        positions.push_back(k - 1U);
+        std::sort(positions.begin(), positions.end());
+        positions.erase(std::unique(positions.begin(), positions.end()),
+            positions.end());
+        for (size_t position_i = 0;
+             position_i < positions.size();
+             ++position_i)
+            for (size_t size_i = 0;
+                 size_i < sizeof(null_boundary_sizes) /
+                     sizeof(null_boundary_sizes[0]); ++size_i)
+            {
+                R1Fixture fixture(backend, k, null_boundary_sizes[size_i],
+                    false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                    positions[position_i]);
+                execute_and_check_decode(fixture);
+            }
+    }
+
     // GF16 uses the same bytewise XOR identity, but exercises a distinct codec
     // selection and shard-layout contract.  Even physical byte counts include
     // vector tails; padded-odd physical sizes represent an odd payload with a
@@ -897,7 +973,9 @@ int main()
         require(effective_tested,
             "effective runtime backend lacked public R=1 coverage");
         std::printf("Leopard2 R=1 fused XOR passed: backends=qualified "
-            "tails=0..257 max_bytes=1048579 fields=gf8,gf16 "
+            "tails=0..257 max_bytes=16777233 fields=gf8,gf16 "
+            "final_remainder_k=7,12..15,20..23 "
+            "null_boundaries=0,7,8,15,16,last "
             "batch=2,8,64 batch_k=7,9,129 batch_bytes=4096,4097 "
             "batch_threads=1,4 concurrency=pass\n");
         return 0;

@@ -367,6 +367,9 @@ struct Ops
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;
     FF8MultiplyAdd2Sources2Outputs ff8_multiply_add_2_sources_2_outputs;
+    // Optional remainder-specific source groups selected only by measured R=1
+    // GF8 policies.  Keeping them separate preserves mature coarse codegen.
+    XorMemorySources xor_memory_sources_fused_final;
 };
 
 struct X86Features
@@ -405,6 +408,17 @@ const Ops* InitializeScalar(const InitializeArgs& args);
 
 #if defined(LEO2_HAVE_SSSE3_BACKEND)
 const Ops* InitializeSSSE3(const InitializeArgs& args);
+#endif
+
+// Kept in a separate AVX2 translation unit so adding exact final-remainder
+// arities cannot perturb mature backend function layout or inlining.
+#if !defined(NO_LEO_HAS_FF8)
+void AVX2XorMemorySourcesFusedFinal(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count);
 #endif
 
 #if defined(LEO2_HAVE_AVX2_BACKEND)

@@ -41,6 +41,9 @@
     <ClCompile Include="..\Leopard2BackendAVX2.cpp">
       <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
     </ClCompile>
+    <ClCompile Include="..\Leopard2BackendAVX2Xor.cpp">
+      <AdditionalOptions>/arch:AVX2 %(AdditionalOptions)</AdditionalOptions>
+    </ClCompile>
     <ClCompile Include="..\LeopardCommon.cpp" />
     <ClCompile Include="..\LeopardFF16.cpp" />
     <ClCompile Include="..\LeopardFF8.cpp" />

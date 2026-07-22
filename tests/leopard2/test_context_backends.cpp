@@ -121,6 +121,7 @@ struct TraceState
     std::atomic<uint64_t> xor_calls;
     std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> xor_sources_calls;
+    std::atomic<uint64_t> xor_fused_final_sources_calls;
     std::atomic<uint64_t> ff8_ifft_four_calls;
     std::atomic<uint64_t> ff8_ifft_four_out_calls;
     std::atomic<uint64_t> ff8_weighted_ifft_four_calls;
@@ -207,6 +208,20 @@ void trace_xor_sources(
 {
     g_trace.xor_sources_calls.fetch_add(1, std::memory_order_relaxed);
     trace_delegate()->xor_memory_sources(
+        destination, initial_source, sources, source_count, bytes);
+}
+
+void trace_xor_fused_final_sources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t bytes)
+{
+    g_trace.xor_sources_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.xor_fused_final_sources_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->xor_memory_sources_fused_final(
         destination, initial_source, sources, source_count, bytes);
 }
 
@@ -515,6 +530,9 @@ public:
         tracing_.ff8_high_encode_one_block = NULL;
         tracing_.ff8_high_encode_small = NULL;
         tracing_.ff8_multiply_add_outputs = NULL;
+        if (entry.table->xor_memory_sources_fused_final)
+            tracing_.xor_memory_sources_fused_final =
+                trace_xor_fused_final_sources;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
@@ -543,6 +561,8 @@ public:
         g_trace.xor_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_sources_calls.store(0, std::memory_order_relaxed);
+        g_trace.xor_fused_final_sources_calls.store(
+            0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_weighted_ifft_four_calls.store(
@@ -601,6 +621,11 @@ public:
     uint64_t xor_sources_calls() const
     {
         return g_trace.xor_sources_calls.load(std::memory_order_relaxed);
+    }
+    uint64_t xor_fused_final_sources_calls() const
+    {
+        return g_trace.xor_fused_final_sources_calls.load(
+            std::memory_order_relaxed);
     }
     uint64_t ff8_ifft_four_calls() const
     {
@@ -1592,6 +1617,7 @@ void require_r1_xor_trace(
     const TraceOpsGuard& trace,
     uint32_t original_count,
     bool expect_coarse,
+    bool expect_fused,
     const std::string& operation)
 {
     const uint64_t expected_pairs = (original_count - 1U) / 2U;
@@ -1602,6 +1628,9 @@ void require_r1_xor_trace(
                 trace.xor_two_to_one_calls() == 0 &&
                 trace.xor_calls() == 0,
             operation + " did not select exactly one coarse reduction");
+        require(trace.xor_fused_final_sources_calls() ==
+                (expect_fused ? 1U : 0U),
+            operation + " selected the wrong coarse reduction callback");
     }
     else
     {
@@ -1609,6 +1638,8 @@ void require_r1_xor_trace(
                 trace.xor_two_to_one_calls() == expected_pairs &&
                 trace.xor_calls() == expected_single,
             operation + " did not retain the exact paired/single reduction");
+        require(trace.xor_fused_final_sources_calls() == 0,
+            operation + " unexpectedly selected the fused reduction");
     }
 }
 
@@ -1618,7 +1649,8 @@ void execute_r1_xor_dispatch_case(
     uint32_t original_count,
     size_t bytes,
     bool expect_coarse,
-    leo2_field field = LEO2_FIELD_GF8)
+    leo2_field field = LEO2_FIELD_GF8,
+    bool expect_fused = false)
 {
     const CodecCase test_case = {
         original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -1638,7 +1670,8 @@ void execute_r1_xor_dispatch_case(
     const Shards recovery = encode_case(
         entry.context, test_case, originals, &codec);
     require_r1_xor_trace(
-        trace, original_count, expect_coarse, identity + " encode");
+        trace, original_count, expect_coarse, expect_fused,
+        identity + " encode");
 
     std::vector<uint8_t> original_present(original_count, 1);
     std::vector<uint8_t> recovery_present(1, 1);
@@ -1665,7 +1698,8 @@ void execute_r1_xor_dispatch_case(
         LEO2_SUCCESS, identity + " decode");
     require(restored == originals[0], identity + " restored data mismatch");
     require_r1_xor_trace(
-        trace, original_count, expect_coarse, identity + " decode");
+        trace, original_count, expect_coarse, expect_fused,
+        identity + " decode");
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
@@ -1695,47 +1729,170 @@ void test_avx2_gf8_large_r1_xor_dispatch(
         uint32_t original_count;
         size_t bytes;
         bool expect_coarse;
+        bool expect_fused;
     };
     static const DispatchCase cases[] = {
+        /* Exact final-remainder policy boundaries. */
+        { 7, 1024, true, false },
+        { 7, 2048, true, false },
+        { 7, 4095, true, false },
+        { 7, 4096, true, true },
+        { 7, 4U * 1024U * 1024U, true, true },
+        { 7, 4U * 1024U * 1024U + 1U, true, false },
+        { 6, 4096, false, false },
+        { 8, 4096, true, false },
+        { 9, 4096, true, false },
+        { 10, 4096, true, false },
+        { 11, 4096, true, false },
+        { 12, 1024, true, false },
+        { 12, 2048, true, false },
+        { 12, 4095, true, false },
+        { 12, 4096, true, true },
+        { 13, 4096, true, true },
+        { 14, 4096, true, true },
+        { 15, 4096, true, true },
+        { 16, 4096, true, false },
+        { 17, 4096, true, false },
+        { 18, 4096, true, false },
+        { 19, 4096, true, false },
+        { 12, 1024U * 1024U, true, true },
+        { 12, 1024U * 1024U + 1U, true, false },
+        { 13, 1024U * 1024U, true, true },
+        { 13, 1024U * 1024U + 1U, true, false },
+        { 14, 1024U * 1024U, true, true },
+        { 14, 1024U * 1024U + 1U, true, false },
+        { 15, 1024U * 1024U, true, true },
+        { 15, 1024U * 1024U + 1U, true, false },
+        { 20, 65536, true, false },
+        { 21, 65536, true, false },
+        { 22, 1024, true, false },
+        { 22, 2048, true, false },
+        { 22, 4095, true, false },
+        { 22, 4096, true, true },
+        { 22, 65536, true, true },
+        { 23, 4096, true, true },
+        { 23, 65536, true, true },
+        { 24, 65536, true, false },
+        { 22, 1024U * 1024U, true, true },
+        { 22, 1024U * 1024U + 1U, true, false },
+        { 23, 1024U * 1024U, true, true },
+        { 23, 1024U * 1024U + 1U, true, false },
         /* Each measured staircase boundary retains the coarse reduction just
            below its K or byte threshold and selects the pairwise reduction at
            the exact threshold. */
-        { 7, 8U * 1024U * 1024U, true },
-        { 8, 8U * 1024U * 1024U - 1U, true },
-        { 8, 8U * 1024U * 1024U, false },
-        { 9, 4U * 1024U * 1024U, true },
-        { 10, 4U * 1024U * 1024U - 1U, true },
-        { 10, 4U * 1024U * 1024U, false },
-        { 30, 2U * 1024U * 1024U, true },
-        { 31, 2U * 1024U * 1024U - 1U, true },
-        { 31, 2U * 1024U * 1024U, false },
-        { 50, 1024U * 1024U, true },
-        { 51, 1024U * 1024U - 1U, true },
-        { 51, 1024U * 1024U, false },
+        { 7, 8U * 1024U * 1024U, true, false },
+        { 8, 8U * 1024U * 1024U - 1U, true, false },
+        { 8, 8U * 1024U * 1024U, false, false },
+        { 9, 4U * 1024U * 1024U, true, false },
+        { 10, 4U * 1024U * 1024U - 1U, true, false },
+        { 10, 4U * 1024U * 1024U, false, false },
+        { 30, 2U * 1024U * 1024U, true, false },
+        { 31, 2U * 1024U * 1024U - 1U, true, false },
+        { 31, 2U * 1024U * 1024U, false, false },
+        { 50, 1024U * 1024U, true, false },
+        { 51, 1024U * 1024U - 1U, true, false },
+        { 51, 1024U * 1024U, false, false },
         /* Public byte tails must follow the same route and remain exact. */
-        { 8, 8U * 1024U * 1024U + 17U, false },
-        { 10, 4U * 1024U * 1024U + 17U, false },
-        { 31, 2U * 1024U * 1024U + 17U, false },
-        { 51, 1024U * 1024U + 17U, false }
+        { 8, 8U * 1024U * 1024U + 17U, false, false },
+        { 10, 4U * 1024U * 1024U + 17U, false, false },
+        { 31, 2U * 1024U * 1024U + 17U, false, false },
+        { 51, 1024U * 1024U + 17U, false, false }
     };
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
         execute_r1_xor_dispatch_case(*avx2, trace,
             cases[i].original_count, cases[i].bytes,
-            cases[i].expect_coarse);
+            cases[i].expect_coarse, LEO2_FIELD_GF8,
+            cases[i].expect_fused);
 
     /* The measured policy is deliberately limited to GF8.  GF16 retains its
        established coarse policy at every otherwise-promoted boundary. */
     static const DispatchCase gf16_cases[] = {
-        { 8, 8U * 1024U * 1024U, true },
-        { 10, 4U * 1024U * 1024U, true },
-        { 31, 2U * 1024U * 1024U, true },
-        { 51, 1024U * 1024U, true }
+        { 12, 1024, true, false },
+        { 12, 2048, true, false },
+        { 12, 4096, true, false },
+        { 22, 65536, true, false },
+        { 8, 8U * 1024U * 1024U, true, false },
+        { 10, 4U * 1024U * 1024U, true, false },
+        { 31, 2U * 1024U * 1024U, true, false },
+        { 51, 1024U * 1024U, true, false }
     };
     for (size_t i = 0;
          i < sizeof(gf16_cases) / sizeof(gf16_cases[0]); ++i)
         execute_r1_xor_dispatch_case(*avx2, trace,
             gf16_cases[i].original_count, gf16_cases[i].bytes,
             gf16_cases[i].expect_coarse, LEO2_FIELD_GF16);
+}
+
+void test_avx2_r1_absent_parity_noop(
+    const std::vector<ContextEntry>& contexts)
+{
+    const ContextEntry* const avx2 = find_effective_context(
+        contexts, LEO2_BACKEND_AVX2);
+    if (!avx2)
+        return;
+
+    TraceOpsGuard trace(*avx2);
+    static const uint32_t counts[] = { 7, 12 };
+    for (size_t count_i = 0;
+         count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
+    {
+        const CodecCase test_case = {
+            counts[count_i], 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+            LEO2_FIELD_GF8, 4096
+        };
+        const Shards originals = make_originals(
+            test_case, 0x3c6ef372U + counts[count_i]);
+        leo2_codec* codec = NULL;
+        require_result(leo2_codec_create(avx2->context,
+            test_case.k, test_case.r, test_case.profile, test_case.field,
+            NULL, &codec), LEO2_SUCCESS, "absent parity codec create");
+
+        size_t encode_scratch_bytes = 0;
+        require_result(leo2_encode_scratch_size(
+            codec, test_case.bytes, &encode_scratch_bytes), LEO2_SUCCESS,
+            "absent parity encode scratch query");
+        AlignedBuffer encode_scratch(encode_scratch_bytes);
+        const std::vector<const void*> original_pointers =
+            const_pointers(originals);
+        void* recovery_output[1] = { NULL };
+        trace.reset();
+        require_result(leo2_encode(codec, test_case.bytes,
+            &original_pointers[0], recovery_output, encode_scratch.data(),
+            encode_scratch_bytes), LEO2_SUCCESS,
+            "absent parity encode");
+        require(trace.xor_sources_calls() == 0 &&
+                trace.xor_fused_final_sources_calls() == 0 &&
+                trace.xor_two_to_one_calls() == 0 &&
+                trace.xor_calls() == 0,
+            "absent parity encode executed an R=1 reduction");
+
+        std::vector<uint8_t> original_present(test_case.k, 1);
+        const uint8_t recovery_present[1] = { 0 };
+        leo2_decode_plan* plan = NULL;
+        require_result(leo2_decode_plan_create(codec,
+            &original_present[0], recovery_present, &plan), LEO2_SUCCESS,
+            "missing parity no-loss plan create");
+        size_t decode_scratch_bytes = 0;
+        require_result(leo2_decode_plan_scratch_size(
+            plan, test_case.bytes, &decode_scratch_bytes), LEO2_SUCCESS,
+            "missing parity no-loss scratch query");
+        AlignedBuffer decode_scratch(decode_scratch_bytes);
+        const void* recovery_input[1] = { NULL };
+        std::vector<void*> restored(test_case.k, NULL);
+        trace.reset();
+        require_result(leo2_decode_plan_execute(plan, test_case.bytes,
+            &original_pointers[0], recovery_input, &restored[0],
+            decode_scratch.data(), decode_scratch_bytes), LEO2_SUCCESS,
+            "missing parity no-loss decode");
+        require(trace.xor_sources_calls() == 0 &&
+                trace.xor_fused_final_sources_calls() == 0 &&
+                trace.xor_two_to_one_calls() == 0 &&
+                trace.xor_calls() == 0,
+            "missing parity no-loss decode executed an R=1 reduction");
+
+        leo2_decode_plan_destroy(plan);
+        leo2_codec_destroy(codec);
+    }
 }
 
 void test_non_avx2_large_r1_xor_exclusion(
@@ -1750,7 +1907,18 @@ void test_non_avx2_large_r1_xor_exclusion(
             contexts, backends[i]);
         if (!entry)
             continue;
+        if (backends[i] == LEO2_BACKEND_AVX512)
+            require(entry->table->xor_memory_sources_fused_final == NULL,
+                "AVX-512 unexpectedly exposes the AVX2 fused R=1 callback");
         TraceOpsGuard trace(*entry);
+        execute_r1_xor_dispatch_case(*entry, trace, 12, 1024,
+            backends[i] != LEO2_BACKEND_AVX512);
+        execute_r1_xor_dispatch_case(*entry, trace, 12, 2048,
+            backends[i] != LEO2_BACKEND_AVX512);
+        execute_r1_xor_dispatch_case(*entry, trace, 12, 4096,
+            backends[i] != LEO2_BACKEND_AVX512);
+        execute_r1_xor_dispatch_case(*entry, trace, 22, 65536,
+            backends[i] != LEO2_BACKEND_AVX512);
         execute_r1_xor_dispatch_case(*entry, trace, 51,
             1024U * 1024U, backends[i] != LEO2_BACKEND_AVX512);
     }
@@ -2791,6 +2959,7 @@ int main()
         test_avx2_gf8_inplace_butterfly2_boundaries();
         test_traced_context_dispatch(contexts);
         test_avx2_gf8_large_r1_xor_dispatch(contexts);
+        test_avx2_r1_absent_parity_noop(contexts);
         test_non_avx2_large_r1_xor_exclusion(contexts);
         test_gf8_high_forward_fusion_policy(contexts);
         test_weighted_locator_boundary_dispatch(contexts);
