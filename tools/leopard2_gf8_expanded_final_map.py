@@ -26,14 +26,14 @@ import time
 from pathlib import Path
 
 
-SCHEMA = "leopard2-expanded-final-map/v1"
-MATRIX_SCHEMA = "leopard2-expanded-final-matrix/v1"
+SCHEMA = "leopard2-expanded-final-map/v2"
+MATRIX_SCHEMA = "leopard2-expanded-final-matrix/v2"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 BASELINE_SHA256 = (
     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
-CANONICAL_MATRIX_CELL_COUNT = 319
+CANONICAL_MATRIX_CELL_COUNT = 341
 CANONICAL_MATRIX_SHA256 = (
-    "faf00be8db6405a9dafec4cb891a748367f939a85d40d9b34e78484aa3b62fb7")
+    "a2c7bc3873ead302e9254c03a7f0ae75bce8d0d48b6f1a565759f4df1a1d6a55")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
 
@@ -120,10 +120,27 @@ LARGE_SHAPES = (
 )
 SELECTOR_ISOLATION_SHAPES = ((33, 32), (34, 32), (35, 32))
 
+# The large-shard R=1 selector deliberately changes implementation at these
+# four measured boundaries.  Retain the immediate lower-K fallback alongside
+# each promoted cell, and exercise recovery rather than only no-loss decode.
+R1_SELECTOR_BOUNDARIES = (
+    (50, 51, 1048576),
+    (30, 31, 2097152),
+    (9, 10, 4194304),
+    (7, 8, 8388608),
+)
+
+# The AVX2 source-major direct executor has specialized even-output kernels
+# and composed odd-output paths.  The ordinary loss sweep contains only
+# powers of two, so keep each non-power arity at the dispatch boundary, a
+# cache-resident representative, and a large-shard tiling point.
+DIRECT_ODD_LOSSES = (3, 5, 6, 7)
+
 BYTE_LABELS = {
     64: "64b", 256: "256b", 1024: "1k", 2048: "2k",
     4096: "4k", 8192: "8k", 16384: "16k", 65536: "64k",
-    1048576: "1m", 16777216: "16m",
+    1048576: "1m", 2097152: "2m", 4194304: "4m",
+    8388608: "8m", 16777216: "16m",
 }
 
 
@@ -253,6 +270,18 @@ def make_matrix():
         for byte_count in (16384, 65536):
             add_cell(cells, k, r, byte_count, r, 8, 1,
                      "selector_isolation")
+    for lower_k, promoted_k, byte_count in R1_SELECTOR_BOUNDARIES:
+        add_cell(cells, lower_k, 1, byte_count, 1, 8, 1,
+                 "r1_selector_fallback")
+        add_cell(cells, promoted_k, 1, byte_count, 1, 8, 1,
+                 "r1_selector_promoted")
+    for k in (129, 255):
+        add_cell(cells, k, 1, 1048576, 1, 8, 1,
+                 "r1_large_recovery")
+    for byte_count in (2048, 65536, 1048576):
+        for loss in DIRECT_ODD_LOSSES:
+            add_cell(cells, 65, 64, byte_count, loss, 8, 1,
+                     "direct_odd_arity")
     result = sorted(cells.values(), key=lambda cell: cell["id"])
     for index, cell in enumerate(result):
         cell["index"] = index
@@ -295,7 +324,7 @@ def validate_matrix(matrix):
     if len(ids) != len(set(ids)) or len(seeds) != len(set(seeds)):
         raise RuntimeError("matrix IDs or seeds are not unique")
     required_sizes = {64, 256, 1024, 2048, 4096, 8192, 16384, 65536,
-                      1048576, 16777216}
+                      1048576, 2097152, 4194304, 8388608, 16777216}
     if set(matrix["sizes"]) != required_sizes:
         raise RuntimeError("matrix size coverage drifted")
     if set(matrix["transform_sides"]) != {1, 2, 4, 8, 16, 32, 64, 128}:
@@ -1123,7 +1152,8 @@ def selected_abba_cells(matrix, diagnostic, threshold, include, exclude):
         raise RuntimeError("unknown selected cell IDs: " + ", ".join(sorted(unknown)))
     mandatory_tags = {
         "loss_sweep", "reuse_sweep", "batch_sweep", "large_tiling",
-        "selector_isolation",
+        "selector_isolation", "r1_selector_fallback",
+        "r1_selector_promoted", "r1_large_recovery", "direct_odd_arity",
     }
     selected = []
     for cell in matrix["cells"]:
@@ -1255,7 +1285,9 @@ def run_abba(args):
 
 def make_dry_run_manifest(matrix, diagnostic_summary_path=None, near_ratio=1.10):
     mandatory_tags = {"loss_sweep", "reuse_sweep", "batch_sweep",
-                      "large_tiling", "selector_isolation"}
+                      "large_tiling", "selector_isolation",
+                      "r1_selector_fallback", "r1_selector_promoted",
+                      "r1_large_recovery", "direct_odd_arity"}
     mandatory = [cell for cell in matrix["cells"]
                  if set(cell["tags"]) & mandatory_tags]
     selected = None
@@ -1343,6 +1375,29 @@ def self_test():
         cell_key(k, 32, size, 32, 8, 1)
         for k in (33, 34, 35) for size in (16384, 65536)}
     assert selectors == expected_selectors
+    r1_boundaries = {
+        (cell["K"], cell["bytes"], tuple(cell["tags"]))
+        for cell in matrix["cells"]
+        if "r1_selector_fallback" in cell["tags"] or
+           "r1_selector_promoted" in cell["tags"]
+    }
+    expected_r1_boundaries = set()
+    for lower_k, promoted_k, byte_count in R1_SELECTOR_BOUNDARIES:
+        expected_r1_boundaries.add(
+            (lower_k, byte_count, ("r1_selector_fallback",)))
+        expected_r1_boundaries.add(
+            (promoted_k, byte_count, ("r1_selector_promoted",)))
+    assert r1_boundaries == expected_r1_boundaries
+    direct_odd = {
+        (cell["bytes"], cell["loss"])
+        for cell in matrix["cells"]
+        if "direct_odd_arity" in cell["tags"]
+    }
+    assert direct_odd == {
+        (byte_count, loss)
+        for byte_count in (2048, 65536, 1048576)
+        for loss in DIRECT_ODD_LOSSES
+    }
     calls = []
     for kind, value in zip(ABBA_ORDER * 3,
                            (10, 5, 5, 10) * 3):
@@ -1359,6 +1414,8 @@ def self_test():
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
         "matrix_sha256": matrix_digest(matrix),
         "selector_isolation_cells": len(selectors),
+        "r1_selector_boundary_cells": len(r1_boundaries),
+        "direct_odd_arity_cells": len(direct_odd),
     }, sort_keys=True))
 
 
