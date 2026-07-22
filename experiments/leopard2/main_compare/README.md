@@ -74,21 +74,30 @@ Configure this default-off diagnostic explicitly and build its attested target:
 
     cmake -S . -B /tmp/leopard2-all-k \
         -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF \
-        -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_ALLK_DIAGNOSTIC=ON
+        -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_ALLK_DIAGNOSTIC=ON \
+        -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_ENABLE_CUDA=OFF
     cmake --build /tmp/leopard2-all-k -j "$JOBS" \
         --target bench_leopard2_allk
 
     python3 experiments/leopard2/main_compare/run_allk_gap.py \
-        --main /tmp/leopard-main-compare/leopard_main_benchmark \
+        --main /tmp/leopard-gf8-final-map-9b1d439-20260722T030328Z/main-build/leopard_main_benchmark \
         --main-commit 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198 \
         --current /tmp/leopard2-all-k/bench_leopard2_allk \
         --current-source-root "$PWD" \
         --current-commit "$(git rev-parse HEAD)" \
         --output /tmp/leopard2-all-k-gap --workers "$JOBS" \
-        --with-current-legacy
+        --gf8-only --with-current-legacy \
+        --lock /tmp/leopard-gf8-authoritative.lock
 
-This all-K run intentionally saturates the allowed CPUs and identifies regions
-for follow-up. Its output is not authoritative single-core performance evidence.
+The final GF8 run contains 2,522 cells spanning every `K=1..255`, three
+redundancy bands where distinct, 4 KiB and 64 KiB shards, and one/maximum
+losses.  The runner requires the frozen pure-AVX2 Leopard-main executable SHA,
+rejects EVEX in either executable, forces the Leopard2 GF8/AVX2 context, and
+holds the canonical benchmark lock for the complete campaign.  It intentionally
+saturates the allowed CPUs and identifies regions for follow-up; its output is
+not authoritative single-core performance evidence.  Every near or losing
+region still requires the isolated ABBA runner before a promotion or final
+disposition.
 
 ## Counterbalanced comparison
 

@@ -92,6 +92,38 @@ class AllKIdentityTests(unittest.TestCase):
             self.records(), self.main_commit, self.current_source,
             self.main_snapshot, self.current_snapshot)
 
+    def test_pure_avx2_disassembly_gate(self) -> None:
+        avx2 = """
+  10: c5 fd ef c0          vpxor  ymm0,ymm0,ymm0
+  14: c5 fe 7f 07          vmovdqu YMMWORD PTR [rdi],ymm0
+"""
+        identity = runner.inspect_isa_disassembly(avx2)
+        self.assertEqual(identity["evex_prefixed_instruction_count"], 0)
+        self.assertEqual(identity["ymm_operand_instruction_count"], 2)
+        evex = avx2 + \
+            "  20: 62 f1 7d 48 ef c0    vpxord zmm0,zmm0,zmm0\n"
+        self.assertEqual(
+            runner.inspect_isa_disassembly(evex)[
+                "evex_prefixed_instruction_count"], 1)
+
+    def test_gf8_only_matrix_is_all_k_and_stable(self) -> None:
+        cells = runner.make_cells(gf8_only=True)
+        self.assertEqual(len(cells), 2522)
+        self.assertEqual({cell.k for cell in cells}, set(range(1, 256)))
+        self.assertEqual({cell.family for cell in cells}, {"gf8-all-k"})
+        self.assertEqual(runner.make_cells()[:len(cells)], cells)
+
+    def test_current_command_forces_profile_field_and_avx2(self) -> None:
+        gf8 = runner.Cell("one", "gf8-all-k", 3, 2, 4096, 1,
+                          "low-R", "one-loss", 7, 5, 16, 1)
+        command = runner.command(
+            "leopard2", Path("/tmp/bench"), gf8, 2, False)
+        self.assertEqual(command[command.index("--profile") + 1], "high")
+        self.assertEqual(command[command.index("--field") + 1], "gf8")
+        self.assertEqual(command[command.index("--backend") + 1], "avx2")
+        self.assertIn("--attest-source", command)
+        self.assertIn("--skip-legacy", command)
+
     def test_embedded_identities_reject_every_mismatch(self) -> None:
         mutations = []
         wrong_main = self.records()

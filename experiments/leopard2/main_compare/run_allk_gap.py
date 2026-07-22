@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import contextlib
 import ctypes
 import dataclasses
 import fcntl
@@ -19,6 +20,7 @@ import json
 import math
 import os
 from pathlib import Path
+import re
 import stat
 import statistics
 import subprocess
@@ -28,6 +30,8 @@ from typing import Any, Mapping, Sequence
 
 
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+PURE_AVX2_MAIN_SHA256 = (
+    "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
 ORDER = ("main", "leopard2", "leopard2", "main")
 CHILD_ENV = {
     "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
@@ -71,6 +75,61 @@ def require_hex(value: str, label: str) -> str:
             all(character in "0123456789abcdef" for character in value),
             f"{label} must be exactly 40 lowercase hexadecimal characters")
     return value
+
+
+def require_sha256(value: str, label: str) -> str:
+    require(isinstance(value, str) and len(value) == 64 and
+            all(character in "0123456789abcdef" for character in value),
+            f"{label} must be exactly 64 lowercase hexadecimal characters")
+    return value
+
+
+def inspect_isa_disassembly(disassembly: str) -> dict[str, int]:
+    evex = 0
+    ymm = 0
+    for line in disassembly.splitlines():
+        fields = line.lstrip().split()
+        if fields and fields[0].endswith(":") and len(fields) > 1 and \
+                fields[1] == "62":
+            evex += 1
+        if re.search(r"\bymm[0-9]+\b", line):
+            ymm += 1
+    return {"evex_prefixed_instruction_count": evex,
+            "ymm_operand_instruction_count": ymm}
+
+
+def inspect_pure_avx2(path: Path, label: str) -> dict[str, Any]:
+    completed = subprocess.run(
+        ["/usr/bin/objdump", "-d", "-M", "intel", str(path)],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        timeout=180.0, check=False)
+    require(completed.returncode == 0,
+            f"objdump failed for {label}: {completed.stderr.strip()}")
+    result = inspect_isa_disassembly(completed.stdout)
+    require(result["evex_prefixed_instruction_count"] == 0,
+            f"{label} contains EVEX-prefixed instructions")
+    require(result["ymm_operand_instruction_count"] > 0,
+            f"{label} contains no visible AVX2 YMM instructions")
+    return {
+        **result,
+        "objdump_version": subprocess.check_output(
+            ["/usr/bin/objdump", "--version"], text=True).splitlines()[0],
+    }
+
+
+@contextlib.contextmanager
+def benchmark_lock(path: Path):
+    resolved = path.resolve()
+    resolved.parent.mkdir(parents=True, exist_ok=True)
+    descriptor = os.open(resolved, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        print(f"waiting for exclusive benchmark lock {resolved}", flush=True)
+        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        print("acquired benchmark lock", flush=True)
+        yield str(resolved)
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
 
 
 def git_output(root: Path, *arguments: str) -> str:
@@ -326,7 +385,7 @@ def gf16_r_values(k: int) -> list[tuple[str, int]]:
     return result
 
 
-def make_cells() -> list[Cell]:
+def make_cells(*, gf8_only: bool = False) -> list[Cell]:
     cells: list[Cell] = []
     seed = 0x38000000
     for k in range(1, 256):
@@ -343,21 +402,23 @@ def make_cells() -> list[Cell]:
                         f"gf8-k{k}-r{r}-b{shard_bytes}-l{losses}", "gf8-all-k",
                         k, r, shard_bytes, losses, redundancy_band, loss_band,
                         seed, 5, 16 if shard_bytes == 4096 else 4, 1))
-    for k in GF16_K:
-        for redundancy_band, r in gf16_r_values(k):
-            parent, _ = parent_for(k, r)
-            require(256 < parent <= 65536,
-                    "GF16 representative matrix generated an invalid parent")
-            for shard_bytes in (512, 4096):
-                for loss_band, losses in (("one-loss", 1), ("max-loss", r)):
-                    if loss_band == "max-loss" and losses == 1:
-                        continue
-                    seed += 1
-                    cells.append(Cell(
-                        f"gf16-k{k}-r{r}-b{shard_bytes}-l{losses}",
-                        "gf16-representative", k, r, shard_bytes, losses,
-                        redundancy_band, loss_band, seed, 5,
-                        16 if shard_bytes == 512 else 8, 1))
+    if not gf8_only:
+        for k in GF16_K:
+            for redundancy_band, r in gf16_r_values(k):
+                parent, _ = parent_for(k, r)
+                require(256 < parent <= 65536,
+                        "GF16 representative matrix generated an invalid parent")
+                for shard_bytes in (512, 4096):
+                    for loss_band, losses in (("one-loss", 1),
+                                              ("max-loss", r)):
+                        if loss_band == "max-loss" and losses == 1:
+                            continue
+                        seed += 1
+                        cells.append(Cell(
+                            f"gf16-k{k}-r{r}-b{shard_bytes}-l{losses}",
+                            "gf16-representative", k, r, shard_bytes, losses,
+                            redundancy_band, loss_band, seed, 5,
+                            16 if shard_bytes == 512 else 8, 1))
     require(len({cell.identifier for cell in cells}) == len(cells),
             "all-K cell identifiers are not unique")
     return cells
@@ -386,6 +447,11 @@ def classify_paths(cell: Cell, result: Mapping[str, Any]) -> dict[str, Any]:
     padded = int(resolved["padded_side"])
     require(profile == "legacy_high_v1",
             "all-K current benchmark selected a non-legacy-high profile")
+    expected_field = "gf8" if cell.family == "gf8-all-k" else "gf16"
+    require(field == expected_field,
+            "all-K current benchmark selected the wrong finite field")
+    require(backend == "avx2",
+            "all-K current benchmark did not select explicit AVX2")
     if padded == 1:
         encode = "direct-xor-single-parity"
     else:
@@ -443,8 +509,9 @@ def command(role: str, executable: Path, cell: Cell, cpu: int,
         "--threads", "1", "--seed", str(cell.seed),
     ]
     if role == "leopard2":
-        common.extend(("--profile", "high", "--field", "auto",
-                       "--backend", "auto", "--retain-samples",
+        field = "gf8" if cell.family == "gf8-all-k" else "gf16"
+        common.extend(("--profile", "high", "--field", field,
+                       "--backend", "avx2", "--retain-samples",
                        "--attest-source"))
         if not with_current_legacy:
             common.append("--skip-legacy")
@@ -880,20 +947,10 @@ def summarize(results: Sequence[Mapping[str, Any]], metadata: Mapping[str, Any])
     return summary
 
 
-def main(arguments: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--main", type=Path, required=True)
-    parser.add_argument("--main-commit", default=MAIN_COMMIT)
-    parser.add_argument("--current", type=Path, required=True)
-    parser.add_argument("--current-source-root", type=Path, required=True)
-    parser.add_argument("--current-commit", required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--workers", type=int, default=min(128, os.cpu_count() or 1))
-    parser.add_argument("--timeout", type=float, default=120.0)
-    parser.add_argument("--with-current-legacy", action="store_true",
-                        help="also time the current tree's retained legacy API")
-    options = parser.parse_args(arguments)
+def run(options: argparse.Namespace, lock_path: str) -> int:
     main_commit = require_hex(options.main_commit, "exact-main source commit")
+    expected_main_sha256 = require_sha256(
+        options.main_sha256, "exact-main executable SHA-256")
     current_commit = require_hex(options.current_commit,
                                  "current source commit")
     current_source_initial = git_identity(
@@ -904,8 +961,13 @@ def main(arguments: Sequence[str] | None = None) -> int:
     (current_executable_initial, current_snapshot_descriptor,
      current_snapshot_initial) = snapshot_executable(
         options.current, "Leopard2 benchmark")
+    require(main_executable_initial["sha256"] == expected_main_sha256,
+            "exact-main executable SHA-256 does not match the frozen "
+            "pure-AVX2 baseline")
     main_exe = Path(main_executable_initial["path"])
     current_exe = Path(current_executable_initial["path"])
+    main_isa = inspect_pure_avx2(main_exe, "exact-main benchmark")
+    current_isa = inspect_pure_avx2(current_exe, "Leopard2 benchmark")
     output = options.output.resolve()
     output.mkdir(parents=True, exist_ok=True)
     cpus = sorted(os.sched_getaffinity(0))
@@ -915,21 +977,29 @@ def main(arguments: Sequence[str] | None = None) -> int:
     workers = min(options.workers, len(cpus), 128)
     require(workers > 0, "the process has no allowed CPUs")
     cpus = cpus[:workers]
-    cells = make_cells()
+    cells = make_cells(gf8_only=options.gf8_only)
     contract = {
         "schema": "leopard2-all-k-gap-contract/v2",
         "main_commit": main_commit, "current_commit": current_commit,
+        "expected_main_sha256": expected_main_sha256,
         "current_source_initial": current_source_initial,
         "main_executable_initial": main_executable_initial,
         "current_executable_initial": current_executable_initial,
         "main_executable_snapshot": main_snapshot_initial,
         "current_executable_snapshot": current_snapshot_initial,
+        "main_isa": main_isa, "current_isa": current_isa,
+        "benchmark_lock": lock_path,
         "allowed_cpus": sorted(os.sched_getaffinity(0)), "used_cpus": cpus,
         "workers": workers, "order": list(ORDER),
         "timeout_seconds": options.timeout,
         "with_current_legacy": options.with_current_legacy,
-        "matrix": {"gf8_K": [1, 255], "gf8_shard_bytes": [4096, 65536],
-                   "gf16_K": list(GF16_K), "gf16_shard_bytes": [512, 4096]},
+        "matrix": {
+            "gf8_K": [1, 255], "gf8_shard_bytes": [4096, 65536],
+            "gf16_K": [] if options.gf8_only else list(GF16_K),
+            "gf16_shard_bytes": [] if options.gf8_only else [512, 4096],
+            "gf8_only": options.gf8_only,
+            "cell_count": len(cells),
+        },
         "measurement_note": "all CPUs saturated; diagnostic crossover map, not isolated promotion evidence",
     }
     contract_digest = canonical_digest(contract)
@@ -1026,6 +1096,31 @@ def main(arguments: Sequence[str] | None = None) -> int:
     os.close(current_snapshot_descriptor)
     os.close(main_snapshot_descriptor)
     return exit_code
+
+
+def main(arguments: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--main", type=Path, required=True)
+    parser.add_argument("--main-commit", default=MAIN_COMMIT)
+    parser.add_argument("--main-sha256", default=PURE_AVX2_MAIN_SHA256,
+                        help="required frozen pure-AVX2 baseline digest")
+    parser.add_argument("--current", type=Path, required=True)
+    parser.add_argument("--current-source-root", type=Path, required=True)
+    parser.add_argument("--current-commit", required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--workers", type=int,
+                        default=min(128, os.cpu_count() or 1))
+    parser.add_argument("--timeout", type=float, default=120.0)
+    parser.add_argument("--gf8-only", action="store_true",
+                        help="run the 2,522-cell GF8 K=1..255 matrix only")
+    parser.add_argument("--lock", type=Path,
+                        default=Path("/tmp/leopard-gf8-authoritative.lock"),
+                        help="exclusive lock shared by every build/test/timing lane")
+    parser.add_argument("--with-current-legacy", action="store_true",
+                        help="also time the current tree's retained legacy API")
+    options = parser.parse_args(arguments)
+    with benchmark_lock(options.lock) as lock_path:
+        return run(options, lock_path)
 
 
 if __name__ == "__main__":
