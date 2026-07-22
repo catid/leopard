@@ -41,7 +41,7 @@
 #include <vector>
 
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
-#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
 namespace {
@@ -166,8 +166,7 @@ void verify_pattern(
                 path.rule == leopard2_internal::kDecodeRuleDirect,
             "eligible loss pattern did not select direct repair");
         const leopard2_internal::DirectRepairExecutor expected_executor =
-            (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 ||
-             LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3)
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
                 ? leopard2_internal::kDirectRepairExecutorSourceMajor
                 : leopard2_internal::kDirectRepairExecutorOutputMajor;
         require(path.direct_executor == expected_executor,
@@ -258,9 +257,8 @@ void verify_pattern(
 void run_shard(uint32_t shard_index, uint32_t shard_count, Counts& counts)
 {
     require(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 1 ||
-            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 ||
-            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3,
-        "exhaustive small-direct verifier requires mode 1, 2, or 3");
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2,
+        "exhaustive small-direct verifier requires mode 1 or 2");
     require(shard_count != 0 && shard_index < shard_count,
         "shard index must be smaller than nonzero shard count");
 

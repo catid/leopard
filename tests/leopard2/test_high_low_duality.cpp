@@ -62,7 +62,7 @@
 #endif
 
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
-#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
 namespace {
@@ -673,8 +673,7 @@ void test_direct_dispatch_bypass(leo2_context* context)
                 automatic_path.rule == leopard2_internal::kDecodeRuleDirect,
             "experimental AUTO reported the wrong direct dispatch rule");
         const leopard2_internal::DirectRepairExecutor expected_executor =
-            (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 ||
-             LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3)
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
                 ? leopard2_internal::kDirectRepairExecutorSourceMajor
                 : leopard2_internal::kDirectRepairExecutorOutputMajor;
         require(automatic_path.direct_executor == expected_executor,

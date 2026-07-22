@@ -65,15 +65,16 @@
 /*
     Build-time-only selector used by the bounded AVX2 loss-5-through-8
     experiment.  Zero retains the transform control, one selects the existing
-    output-major executor, two selects the source-major executor, and three is
-    the evidence-backed production default.  It is absent from the public ABI.
+    output-major executor, and two selects the source-major executor.  It is
+    absent from the public ABI and remains default-off: exhaustive tiny-tail
+    timing found valid byte counts where both direct executors regress.
 */
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
-#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE < 0 || \
-    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE > 3
-#error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, 2, or 3"
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE > 2
+#error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
 #endif
 
 class leo2_thread_pool;
@@ -1491,8 +1492,10 @@ static bool IsSmallDirectRepairCodec(const leo2_codec* codec)
         direct repair won all 330 targets (weakest directional result 1.166x).
         Five-round head-to-head confirmation against output-major retained a
         1.118x lower confidence bound in its weakest target; the largest
-        neighboring four-loss point regression was 1.351 percent.  Keep the
-        production rule tied to that measured GF8/AVX2 legacy-high region.
+        neighboring four-loss point regression was 1.351 percent.  A later
+        1..63-byte screen found non-monotonic regressions in both direct loop
+        orders, so retain this region only for explicit diagnostics until a
+        byte-size-aware dual transform/direct plan is qualified.
     */
     return codec && codec->context &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -4778,8 +4781,7 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
     {
         const bool expanded_k65 = shard_bytes >= 2048 &&
             IsExpandedDirectRepairCodec(codec);
-#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 || \
-    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
         const bool measured_small = output_count >= 5 &&
             IsSmallDirectRepairCodec(codec);
 #else
