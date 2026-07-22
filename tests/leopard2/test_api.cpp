@@ -1025,10 +1025,48 @@ void run_experimental_general_direct_l1_case(
             transform_output == direct_output,
         "general direct-L1 differs from the specialized transform oracle");
 
-    counts->recovered_shards += 2;
-    counts->plan_executions += 2;
+    leo2_codec_options generic_options;
+    memset(&generic_options, 0, sizeof(generic_options));
+    generic_options.struct_size = sizeof(generic_options);
+    generic_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+    leo2_codec* generic_codec = NULL;
+    require_result(leo2_codec_create(context, k, r, profile, LEO2_FIELD_GF8,
+        &generic_options, &generic_codec),
+        "general direct-L1 forced-generic codec create");
+    leo2_decode_plan* generic_plan = NULL;
+    require_result(leo2_decode_plan_create(generic_codec,
+        &original_present[0], &recovery_present[0], &generic_plan),
+        "general direct-L1 forced-generic plan create");
+    leopard2_internal::DecodePathInfo generic_path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        generic_plan, bytes, false, &generic_path),
+        "general direct-L1 forced-generic path query");
+    require(generic_path.path == leopard2_internal::kDecodePathGeneric,
+        "forced generic control did not select the generic decoder");
+    size_t generic_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        generic_plan, bytes, &generic_scratch_bytes),
+        "general direct-L1 forced-generic scratch query");
+    require(generic_scratch_bytes > direct_scratch_bytes,
+        "general direct-L1 generic control did not retain transform work");
+    AlignedBuffer generic_scratch(generic_scratch_bytes);
+    std::vector<uint8_t> generic_output(bytes, 0);
+    std::vector<void*> generic_outputs(k, NULL);
+    generic_outputs[missing_original] = &generic_output[0];
+    require_result(leo2_decode_plan_execute(generic_plan, bytes,
+        &original_input[0], &recovery_input[0], &generic_outputs[0],
+        generic_scratch.data, generic_scratch.bytes),
+        "general direct-L1 forced-generic execute");
+    require(generic_output == source[missing_original] &&
+            generic_output == direct_output,
+        "general direct-L1 differs from the generic transform oracle");
+
+    counts->recovered_shards += 3;
+    counts->plan_executions += 3;
     if ((bytes & 63U) != 0)
         ++counts->tail_cases;
+    leo2_decode_plan_destroy(generic_plan);
+    leo2_codec_destroy(generic_codec);
     leo2_decode_plan_destroy(transform_plan);
     leo2_codec_destroy(transform_codec);
     leo2_decode_plan_destroy(direct_plan);
@@ -1128,6 +1166,10 @@ void test_experimental_general_direct_l1_execution(
         { 224, 32, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 16, 65 },
         { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 97, 63, 257 },
         { 200, 30, LEO2_PROFILE_LEGACY_HIGH_V1, 199, 29, 127 },
+        // Explicit legacy-high remains a valid fixed wire profile when R>K,
+        // even though AUTO would select LOW for a new code identifier.
+        { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, 8, 32, 33 },
+        { 17, 128, LEO2_PROFILE_LEGACY_HIGH_V1, 16, 127, 129 },
         // Low parents cover shortened messages, punctured parity, and the
         // maximum redundancy-dominant GF8 boundary.
         { 17, 31, LEO2_PROFILE_LOW_V1, 16, 3, 63 },

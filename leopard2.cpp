@@ -1478,7 +1478,8 @@ static bool IsExperimentalGeneralDirectOneLossCodec(const leo2_codec* codec)
         already measured equal-rounded family, and bound every persistent or
         temporary coefficient vector by the GF8 parent: the codec retains K
         barycentric weights, while a plan generates one K-element row and
-        stores at most K+1 execution terms.  No R-by-K row table is retained.
+        stores at most K execution terms (one parity plus K-1 surviving
+        originals).  No R-by-K row table is retained.
 
         These are the two unmeasured shapes where transform depth can dominate
         that stream: unequal legacy-high parents, and low profiles whose
