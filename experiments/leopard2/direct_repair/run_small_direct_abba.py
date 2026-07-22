@@ -117,6 +117,9 @@ MODE_COMPILE_DEFINITIONS = {
     "transform": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
     "output": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1",
     "source": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
+    # The production binary deliberately has no diagnostic definition.  Its
+    # default is checked in leopard2.cpp before a campaign can start.
+    "production": None,
 }
 PRODUCTION_TARGETS = {
     source: target for unused_member, source, target in ARCHIVE_MEMBER_SPECS
@@ -133,10 +136,25 @@ def require(condition: bool, message: str) -> None:
         raise EvidenceError(message)
 
 
-def mode_compile_definition(mode: str) -> str:
+def mode_compile_definition(mode: str) -> str | None:
     require(mode in MODE_COMPILE_DEFINITIONS,
             "unknown small-direct comparison mode")
     return MODE_COMPILE_DEFINITIONS[mode]
+
+
+def mode_compile_arguments(mode: str) -> list[str]:
+    definition = mode_compile_definition(mode)
+    return [] if definition is None else [definition]
+
+
+def validate_production_mode_source(source_root: Path) -> None:
+    source = (source_root / "leopard2.cpp").read_text()
+    pattern = re.compile(
+        r"#ifndef\s+LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE\s+"
+        r"#define\s+LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE\s+3\s+"
+        r"#endif")
+    require(len(pattern.findall(source)) == 1,
+            "production source does not bind small-direct mode 3 exactly")
 
 
 def comparison_modes(baseline: str, candidate: str) -> dict[str, str]:
@@ -151,11 +169,18 @@ def strip_mode_definition(arguments: list[str], mode: str,
                           label: str) -> list[str]:
     definition = mode_compile_definition(mode)
     result = list(arguments)
+    known_definitions = tuple(
+        value for value in MODE_COMPILE_DEFINITIONS.values()
+        if value is not None)
+    if definition is None:
+        require(not any(value in result for value in known_definitions),
+                "%s production build contains a diagnostic mode" % label)
+        return result
     require(result.count(definition) == 1,
             "%s must contain its exact mode definition once" % label)
     result.remove(definition)
     for other_mode, other_definition in MODE_COMPILE_DEFINITIONS.items():
-        if other_mode != mode:
+        if other_mode != mode and other_definition is not None:
             require(other_definition not in result,
                     "%s contains another mode definition" % label)
     return result
@@ -727,6 +752,8 @@ def expected_direct_executor(mode: str, cell: dict[str, Any]) -> str:
         return "output_major"
     if mode == "transform":
         return "none"
+    if mode == "production":
+        return "source_major"
     return mode + "_major"
 
 
@@ -2057,6 +2084,8 @@ def run_campaign_locked(
     topology_identity = require_smt_pair(
         options.cpu, options.reserved_sibling)
     source_root = options.source_root.resolve(strict=True)
+    if "production" in modes.values():
+        validate_production_mode_source(source_root)
     PairLease, pair_lease_source = load_pair_lease(source_root)
     reservation = reservation_identity(
         options.reservation_file, options.cpu, options.reserved_sibling)
@@ -2197,9 +2226,9 @@ def run_campaign_locked(
     baseline_cache = baseline_provenance["cache_values"]
     candidate_cache = candidate_provenance["cache_values"]
     require(shlex.split(baseline_cache["CMAKE_CXX_FLAGS"]) ==
-                [mode_compile_definition(modes["baseline"])] and
+                mode_compile_arguments(modes["baseline"]) and
             shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) ==
-                [mode_compile_definition(modes["candidate"])] and
+                mode_compile_arguments(modes["candidate"]) and
             baseline_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 candidate_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 "-O3 -DNDEBUG",
@@ -3245,9 +3274,9 @@ def validate_binary_identity_structure(value: Any) -> None:
     baseline_cache = value["baseline_build_provenance"]["cache_values"]
     candidate_cache = value["candidate_build_provenance"]["cache_values"]
     require(shlex.split(baseline_cache["CMAKE_CXX_FLAGS"]) ==
-                [mode_compile_definition(modes["baseline"])] and
+                mode_compile_arguments(modes["baseline"]) and
             shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) ==
-                [mode_compile_definition(modes["candidate"])] and
+                mode_compile_arguments(modes["candidate"]) and
             baseline_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 candidate_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 "-O3 -DNDEBUG",

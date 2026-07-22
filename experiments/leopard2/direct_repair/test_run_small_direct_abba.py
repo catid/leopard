@@ -125,6 +125,9 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(
             RUNNER.comparison_modes("transform", "source"),
             {"baseline": "transform", "candidate": "source"})
+        self.assertEqual(
+            RUNNER.comparison_modes("transform", "production"),
+            {"baseline": "transform", "candidate": "production"})
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "distinct and known"):
             RUNNER.comparison_modes("source", "source")
@@ -144,15 +147,45 @@ class IsolationTests(unittest.TestCase):
             RUNNER.expected_direct_executor("source", loss5),
             "source_major")
         self.assertEqual(
+            RUNNER.expected_direct_executor("production", loss5),
+            "source_major")
+        self.assertEqual(
             RUNNER.expected_direct_executor("transform", loss5), "none")
 
         arguments = ["c++", "-O3", RUNNER.MODE_COMPILE_DEFINITIONS["source"]]
         self.assertEqual(
             RUNNER.strip_mode_definition(arguments, "source", "test"),
             ["c++", "-O3"])
+        self.assertEqual(
+            RUNNER.strip_mode_definition(
+                ["c++", "-O3"], "production", "test"),
+            ["c++", "-O3"])
+        self.assertEqual(RUNNER.mode_compile_arguments("production"), [])
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "contains a diagnostic mode"):
+            RUNNER.strip_mode_definition(
+                arguments, "production", "test")
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "exact mode definition once"):
             RUNNER.strip_mode_definition(["c++", "-O3"], "source", "test")
+
+    def test_production_mode_source_contract_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-production-mode-") as directory:
+            root = Path(directory)
+            source = root / "leopard2.cpp"
+            source.write_text(
+                "#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE\n"
+                "#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3\n"
+                "#endif\n")
+            RUNNER.validate_production_mode_source(root)
+            source.write_text(
+                "#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE\n"
+                "#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 2\n"
+                "#endif\n")
+            with self.assertRaisesRegex(
+                    RUNNER.EvidenceError, "does not bind"):
+                RUNNER.validate_production_mode_source(root)
 
     @staticmethod
     def physical_pairs() -> list[tuple[int, int]]:
