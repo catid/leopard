@@ -1205,15 +1205,15 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_api_test leopard_test_hooks)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
 
-    add_executable(leopard2_k1_inline_marker_test
+    add_executable(leopard2_k1_inline_production_test
         tests/leopard2/test_k1_inline_marker.cpp)
     if(LEO2_EXPERIMENT_K1_DECODE_VALIDATOR_INLINE)
-        target_compile_definitions(leopard2_k1_inline_marker_test PRIVATE
+        target_compile_definitions(leopard2_k1_inline_production_test PRIVATE
             LEO2_EXPECT_K1_DECODE_VALIDATOR_INLINE=1)
     endif()
-    target_link_libraries(leopard2_k1_inline_marker_test leopard)
-    add_test(NAME leopard2_k1_inline_marker
-        COMMAND leopard2_k1_inline_marker_test)
+    target_link_libraries(leopard2_k1_inline_production_test leopard)
+    add_test(NAME leopard2_k1_inline_production
+        COMMAND leopard2_k1_inline_production_test)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)
