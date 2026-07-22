@@ -63,17 +63,17 @@
 #endif
 
 /*
-    Experimental, build-time-only selector used by the bounded AVX2
-    loss-5-through-8 screen.  Zero preserves the production dispatch;
-    one enables the existing output-major executor; two enables the
-    source-major executor.  It is deliberately absent from the public ABI.
+    Build-time-only selector used by the bounded AVX2 loss-5-through-8
+    experiment.  Zero retains the transform control, one selects the existing
+    output-major executor, two selects the source-major executor, and three is
+    the evidence-backed production default.  It is absent from the public ABI.
 */
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
-#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3
 #endif
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE < 0 || \
-    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE > 2
-#error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE > 3
+#error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, 2, or 3"
 #endif
 
 class leo2_thread_pool;
@@ -1483,13 +1483,16 @@ static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
 }
 
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
-static bool IsExperimentalSmallDirectRepairCodec(const leo2_codec* codec)
+static bool IsSmallDirectRepairCodec(const leo2_codec* codec)
 {
     /*
-        Keep this diagnostic exactly inside the frozen experiment matrix.
-        A winning region is promoted later as an evidence-backed production
-        rule rather than broadening dispatch merely because the bounded
-        solver can represent more losses.
+        A same-source screen covered every K=5..16, R=5..8, and valid loss
+        count from five through eight at 64, 65, and 2048 bytes.  Source-major
+        direct repair won all 330 targets (weakest directional result 1.166x).
+        Five-round head-to-head confirmation against output-major retained a
+        1.118x lower confidence bound in its weakest target; the largest
+        neighboring four-loss point regression was 1.351 percent.  Keep the
+        production rule tied to that measured GF8/AVX2 legacy-high region.
     */
     return codec && codec->context &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -1519,7 +1522,7 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
     if (IsExpandedDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
-    if (IsExperimentalSmallDirectRepairCodec(codec))
+    if (IsSmallDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
@@ -4775,13 +4778,14 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
     {
         const bool expanded_k65 = shard_bytes >= 2048 &&
             IsExpandedDirectRepairCodec(codec);
-#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
-        const bool experimental_small = output_count >= 5 &&
-            IsExperimentalSmallDirectRepairCodec(codec);
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 || \
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3
+        const bool measured_small = output_count >= 5 &&
+            IsSmallDirectRepairCodec(codec);
 #else
-        const bool experimental_small = false;
+        const bool measured_small = false;
 #endif
-        if (expanded_k65 || experimental_small)
+        if (expanded_k65 || measured_small)
             return leopard2_internal::kDirectRepairExecutorSourceMajor;
     }
 #else

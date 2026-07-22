@@ -49,7 +49,7 @@
 #endif
 
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
-#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 3
 #endif
 
 namespace {
@@ -833,7 +833,8 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
             const bool experimental_small_source_major =
                 test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
-                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2;
+                (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2 ||
+                 LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 3);
             const leopard2_internal::DirectRepairExecutor expected_executor =
                 expanded_k65_source_major || experimental_small_source_major
                     ? leopard2_internal::kDirectRepairExecutorSourceMajor
