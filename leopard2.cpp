@@ -3042,16 +3042,22 @@ static bool UseAutoAVX512Encode(
     if (codec->field == LEO2_FIELD_GF8)
     {
         // The whole-transform AVX-512VL calibration screen is positive in
-        // this cache-resident interval.  Exact T=8 and T=32, plus the
-        // previously qualified exact T=64 shape, clear it at 2 KiB.  T=16
-        // needs 4 KiB.  A one-row-punctured T=64 code clears the exact-main
-        // threshold only at 64 KiB.  The shortened K=63,R=64 shape has no
-        // legal Leopard1 counterpart and retains the positive same-source
-        // AVX2 interval.  Above the upper bound the backends converge as shard
-        // traffic becomes the bottleneck.
+        // these cache-resident regions.  Exact T=8 clears the exact-main gate
+        // at 2 KiB and from 8 through 64 KiB, but its negative 4-KiB cell
+        // requires a disjoint predicate.  Exact T=32 and the previously
+        // qualified exact T=64 shape clear it at 2 KiB; T=16 needs 4 KiB.  A
+        // one-row-punctured T=64 code clears the exact-main threshold only at
+        // 64 KiB.  The shortened K=63,R=64 shape has no legal Leopard1
+        // counterpart and retains the positive same-source AVX2 interval.
+        // Above the upper bound the backends converge as shard traffic becomes
+        // the bottleneck.
         if (codec->padded_side == 64 &&
             codec->recovery_count + 1U == codec->padded_side)
             return buffer_bytes == 64U * 1024U;
+        if (codec->padded_side == 8)
+            return buffer_bytes == 2U * 1024U ||
+                (buffer_bytes >= 8U * 1024U &&
+                 buffer_bytes <= 64U * 1024U);
         const size_t minimum_bytes = codec->padded_side == 16
             ? 4U * 1024U : 2U * 1024U;
         return buffer_bytes >= minimum_bytes &&

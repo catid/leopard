@@ -1,0 +1,117 @@
+{
+  "schema": "leopard2-t8-legacy-kernel-evidence/v1",
+  "created_utc": "2026-07-22T00:25:00Z",
+  "disposition": "promote_narrow_auto_region",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "k": 8,
+    "r": 8,
+    "candidate_kernel": "register_resident_avx512vl_t8",
+    "candidate_commit": "75aade8fcb2a74eb79774783174337e574987c4d",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_time"
+  },
+  "method": {
+    "runner_schema": "leopard2-main-compare-manifest/v6",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "threads": 1,
+    "batch": 1,
+    "rounds": 3,
+    "order": [
+      "baseline",
+      "candidate",
+      "candidate",
+      "baseline"
+    ],
+    "independent_round_count_per_metric": 3,
+    "constituent_pair_count_per_metric": 6,
+    "confidence": 0.95,
+    "critical_distribution": "Student-t",
+    "degrees_of_freedom": 2,
+    "all_cells_valid": true,
+    "all_cells_reserved_sibling_nonidle_jiffies": 0,
+    "wire_validation": "input, transmitted parity, and recovered-original digests matched"
+  },
+  "artifact_identity": {
+    "baseline_archive_sha256": "8f7ab47c7e5f27684b15844375b14e2bf56c14e3e6067006486a03043d0a2060",
+    "candidate_archive_sha256": "6d5854fd4d9d4f24f7046b9ea5a457ffb0124bcd21ccb83dc3ba1dc757e0f828",
+    "baseline_executable_sha256": "e799969b22fdbd05a8929b00d54afbd84bf2016157ec872bfdd7aedb9a197695",
+    "candidate_executable_sha256": "7a77cae67e4cbff4a2555484bc3f360f67b788547284656637ad7f25a8a593fb"
+  },
+  "cells": [
+    {
+      "shard_bytes": 2048,
+      "encode_speedup": 1.1566701847326972,
+      "ci95_lower": 1.1068192956453937,
+      "ci95_upper": 1.2087663465149852,
+      "auto_disposition": "promote",
+      "manifest_sha256": "377a6873feb1f3667c05450d8ff35863728266ff6792448f848df4f4484ddf81",
+      "raw_sha256": "71d32b825abeca7c4b6a4e03043e5325105fb2bbe02d6656bacf3630e2c12dcb",
+      "manifest_digest": "16bd1609ec9df6ac89c2d645b4794c5feddb058d361b780da7f29daa8e32e856"
+    },
+    {
+      "shard_bytes": 4096,
+      "encode_speedup": 0.9773366736457479,
+      "ci95_lower": 0.9469510213137468,
+      "ci95_upper": 1.0086973371946548,
+      "auto_disposition": "reject",
+      "manifest_sha256": "38d64b7f63fe1724cc8d7c260a7d4541708f5c6c9e4fda77a5566d7437a2b301",
+      "raw_sha256": "f725801fe30b05a159a3b1702783de74a333076758e7ac9259998e4496c8e740",
+      "manifest_digest": "18c9c46721e43bbb493b63288313f085c427ea907c9803e7b3c877a4f45a6e1d"
+    },
+    {
+      "shard_bytes": 8192,
+      "encode_speedup": 1.1364267517347777,
+      "ci95_lower": 1.1020540932266678,
+      "ci95_upper": 1.1718714807158135,
+      "auto_disposition": "promote_interval_start",
+      "manifest_sha256": "c510f9075fc1493510ba51530535ec51c64b1382969c558cca844fa3649cff60",
+      "raw_sha256": "ce848b2fc6674bfe1916c09619817c1aac573610fb8be79a18fa07665f47dc20",
+      "manifest_digest": "54cbb0abb0d7affb3d62bade321974b3d1804bd36595a7dae4c92bcd7ed37cb5"
+    },
+    {
+      "shard_bytes": 16384,
+      "encode_speedup": 1.3022079465522578,
+      "ci95_lower": 1.2881910125911022,
+      "ci95_upper": 1.3163774001597635,
+      "auto_disposition": "promote",
+      "manifest_sha256": "11144a4920c668cd5e2eb45488c62cb75c56dd3d895fc26f02c2aa0d09d4f629",
+      "raw_sha256": "e71ff8d1ad5c05ec9fbe9c2d4ba00d8b9fb6289296e52b9161a4f0a2f32e18ad",
+      "manifest_digest": "bb771c659ec2d244611ea6dd9dd4e8835662b40b9d1824b40b3c07a7b10b4c3a"
+    },
+    {
+      "shard_bytes": 32768,
+      "encode_speedup": 1.3040950259200712,
+      "ci95_lower": 1.2639636664193366,
+      "ci95_upper": 1.345500572375831,
+      "auto_disposition": "promote",
+      "manifest_sha256": "c23a91370637e512d687be2e81169e085001bf80fa24e64bc40d48f854571bca",
+      "raw_sha256": "a3cc454198217febc8431d59ab13ebbd2216421deb7463f849bd56da6405da18",
+      "manifest_digest": "323c2be90e852b7c4dd4b9d80dedb6cb01254b76d7c6c36ff1a38c221ef68447"
+    },
+    {
+      "shard_bytes": 65536,
+      "encode_speedup": 1.3939288172779958,
+      "ci95_lower": 1.096635650283114,
+      "ci95_upper": 1.7718168720271004,
+      "auto_disposition": "promote_interval_end",
+      "manifest_sha256": "86610041d9ed286fc0bbd3cba7d4c69d81643fa6d99ef2a70f940e7b13aa5537",
+      "raw_sha256": "fc6efaebf6dcf84b6a492a62c5c5cd281c3443036e2bb142d0da03671d609d11",
+      "manifest_digest": "bf404cc78f0336f00a8a36aedc49ac07f211f77d63de80b66030c3021f65089d"
+    }
+  ],
+  "auto_gate": {
+    "shape": "K=8,R=8,GF8,LEGACY_HIGH_V1,dense full parity,aligned",
+    "shard_bytes": "2048 or [8192,65536]",
+    "explicit_avx512": "remains available outside AUTO for diagnostics",
+    "neighbor_policy": "shortened, punctured, partial-output, ragged, 4-KiB, and byte-boundary neighbors retain AVX2"
+  },
+  "validation": {
+    "release": "leopard2_auto_encode_backend 1/1 passed",
+    "clang18_asan_ubsan": "leopard2_auto_encode_backend 1/1 passed",
+    "portable_isa": "leopard2_portable_isa and registration 2/2 passed",
+    "broad_fuzzing": "not run; intentionally out of scope for this optimization gate"
+  }
+}

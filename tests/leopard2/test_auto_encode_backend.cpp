@@ -575,22 +575,48 @@ void test_selection_and_bytes(
         const uint32_t side = gf8_sides[side_i];
         Codec balanced(automatic.get(), side, side,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-        const uint64_t minimum_bytes = side == 16 ? 4096 : 2048;
-        require(selected_backend(
-                    balanced.get(), minimum_bytes - 64, side, side) ==
-                LEO2_BACKEND_AVX2,
-            "balanced GF8 AUTO widened below the calibrated byte range");
-        require(selected_backend(
-                    balanced.get(), minimum_bytes, side, side) ==
-                LEO2_BACKEND_AVX512,
-            "balanced GF8 AUTO did not widen at the lower byte boundary");
+        const size_t execution_bytes = side == 8 ? 8192 : 4096;
+        if (side == 8)
+        {
+            require(selected_backend(balanced.get(), 1984, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 T=8 widened below the 2 KiB singleton");
+            require(selected_backend(balanced.get(), 2048, side, side) ==
+                    LEO2_BACKEND_AVX512,
+                "balanced GF8 T=8 did not widen at 2 KiB");
+            require(selected_backend(balanced.get(), 2112, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 T=8 widened above the 2 KiB singleton");
+            require(selected_backend(balanced.get(), 4096, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 T=8 ignored the 4 KiB exact-main veto");
+            require(selected_backend(balanced.get(), 8128, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 T=8 widened below the upper interval");
+            require(selected_backend(balanced.get(), 8192, side, side) ==
+                    LEO2_BACKEND_AVX512,
+                "balanced GF8 T=8 did not widen at 8 KiB");
+        }
+        else
+        {
+            const uint64_t minimum_bytes = side == 16 ? 4096 : 2048;
+            require(selected_backend(
+                        balanced.get(), minimum_bytes - 64, side, side) ==
+                    LEO2_BACKEND_AVX2,
+                "balanced GF8 AUTO widened below the calibrated byte range");
+            require(selected_backend(
+                        balanced.get(), minimum_bytes, side, side) ==
+                    LEO2_BACKEND_AVX512,
+                "balanced GF8 AUTO did not widen at the lower byte boundary");
+        }
         if (side == 16)
             require(selected_backend(balanced.get(), 2048, side, side) ==
                     LEO2_BACKEND_AVX2,
                 "balanced GF8 T=16 widened at the inconclusive 2 KiB cell");
-        require(selected_backend(balanced.get(), 4096, side, side) ==
+        require(selected_backend(
+                    balanced.get(), execution_bytes, side, side) ==
                 LEO2_BACKEND_AVX512,
-            "balanced GF8 AUTO did not widen in the calibrated region");
+            "balanced GF8 AUTO did not widen in a calibrated cell");
         require(selected_backend(balanced.get(), 65536, side, side) ==
                 LEO2_BACKEND_AVX512,
             "balanced GF8 AUTO did not widen at the upper byte boundary");
@@ -600,7 +626,8 @@ void test_selection_and_bytes(
         require(selected_backend(balanced.get(), 4097, side, side) ==
                 LEO2_BACKEND_AVX2,
             "balanced GF8 AUTO widened a ragged tail");
-        require(selected_backend(balanced.get(), 4096, side - 1, side) ==
+        require(selected_backend(
+                    balanced.get(), execution_bytes, side - 1, side) ==
                 LEO2_BACKEND_AVX2,
             "balanced GF8 AUTO widened a partial-output encode");
 
@@ -619,7 +646,7 @@ void test_selection_and_bytes(
                 LEO2_BACKEND_AVX512,
             "balanced GF8 explicit AVX512 was constrained by AUTO bounds");
 
-        Shards balanced_original = make_original(side, 4096);
+        Shards balanced_original = make_original(side, execution_bytes);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
         const Shards balanced_auto = encode(
             balanced.get(), balanced_original, side, false);
@@ -686,7 +713,7 @@ void test_selection_and_bytes(
     // route independently of the larger neighboring callback below.
     Codec concurrent_t8(automatic.get(), 8, 8,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    const Shards concurrent_t8_original = make_original(8, 4096);
+    const Shards concurrent_t8_original = make_original(8, 8192);
     const Shards concurrent_t8_reference = encode(
         concurrent_t8.get(), concurrent_t8_original, 8, false);
     std::atomic<unsigned> concurrent_t8_failures(0);
@@ -722,6 +749,9 @@ void test_selection_and_bytes(
     Codec gf8_punctured(automatic.get(), 16, 15,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require(selected_backend(gf8_t8.get(), 4096, 8, 8) ==
+            LEO2_BACKEND_AVX2,
+        "balanced GF8 AUTO ignored the T=8 4 KiB veto");
+    require(selected_backend(gf8_t8.get(), 8192, 8, 8) ==
             LEO2_BACKEND_AVX512,
         "balanced GF8 AUTO did not widen qualified T=8");
     require(selected_backend(gf8_above_side.get(), 4096, 128, 128) ==
@@ -746,7 +776,7 @@ void test_selection_and_bytes(
         { 63, 64 }, { 64, 63 }, { 63, 63 }
     };
     static const size_t coarse_bytes[] = {
-        2048, 2049, 4096, 4097, 65536, 65537
+        2048, 2049, 4096, 4097, 8192, 65536, 65537
     };
     for (size_t case_i = 0;
          case_i < sizeof(coarse_cases) / sizeof(coarse_cases[0]); ++case_i)
@@ -779,7 +809,8 @@ void test_selection_and_bytes(
         {
             const size_t bytes = coarse_bytes[byte_i];
             const bool qualified_bytes = side == 8
-                ? bytes >= 2U * 1024U && bytes <= 64U * 1024U
+                ? bytes == 2U * 1024U ||
+                    (bytes >= 8U * 1024U && bytes <= 64U * 1024U)
                 : current.r == 64 || bytes == 64U * 1024U;
             const leo2_backend expected_auto = qualified_shape &&
                     qualified_bytes && (bytes & 63U) == 0
@@ -806,10 +837,14 @@ void test_selection_and_bytes(
             require(leopard::ff8::TestOnlyGetHighEncodeCounts().
                         whole_transform_calls == 1,
                 "GF8 coarse neighbor did not execute one aligned-prefix callback");
-            require(reference == widened &&
-                    reference == encode(
-                        automatic_codec.get(), original, current.r, false),
+            const Shards automatic_result = encode(
+                automatic_codec.get(), original, current.r, false);
+            require(reference == widened && reference == automatic_result,
                 "GF8 coarse neighbor changed parity bytes");
+            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                        whole_transform_calls ==
+                    (expected_auto == LEO2_BACKEND_AVX512 ? 2U : 1U),
+                "GF8 coarse neighbor executed the wrong AUTO callback route");
             if ((bytes & 63U) == 0 && current.r <= current.k)
                 require(reference == encode_legacy(original, current.r),
                     "GF8 coarse neighbor differs from legacy Leopard");
