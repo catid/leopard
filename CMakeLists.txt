@@ -1396,6 +1396,19 @@ if(LEO2_BUILD_TESTS)
     target_include_directories(leopard2_direct_repair_test PRIVATE tests/leopard2)
     add_test(NAME leopard2_direct_repair COMMAND leopard2_direct_repair_test)
 
+    # Bounded experiment-only verifier for the AVX2 loss-5-through-8 direct
+    # repair screen.  It is intentionally excluded from ordinary builds and
+    # CTest: the campaign launches 28 deterministic shards and verifies all
+    # 1,982,812 missing-original/selected-parity coefficient matrices.
+    if(LEOPARD_ENABLE_GF8 AND LEO2_HAVE_AVX2_BACKEND)
+        add_executable(leopard2_small_direct_exhaustive_test EXCLUDE_FROM_ALL
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_small_direct_exhaustive.cpp)
+        target_include_directories(leopard2_small_direct_exhaustive_test
+            PRIVATE tests/leopard2)
+        target_link_libraries(leopard2_small_direct_exhaustive_test leopard)
+    endif()
+
     add_executable(leopard2_legacy_golden_test
         tests/leopard2/test_legacy_golden.cpp)
     target_link_libraries(leopard2_legacy_golden_test leopard)

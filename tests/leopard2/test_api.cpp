@@ -730,6 +730,14 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           66, 4, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           63, 8, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 2, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 2, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 8, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 8, true, true },
         { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -819,10 +827,15 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
             "direct-repair path introspection disagrees with scratch shape");
         if (expect_direct)
         {
-            const leopard2_internal::DirectRepairExecutor expected_executor =
+            const bool expanded_k65_source_major =
+                test.k == 65 && test.r == 65 && test.losses >= 2 &&
+                test.bytes >= 2048;
+            const bool experimental_small_source_major =
                 test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
-                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2;
+            const leopard2_internal::DirectRepairExecutor expected_executor =
+                expanded_k65_source_major || experimental_small_source_major
                     ? leopard2_internal::kDirectRepairExecutorSourceMajor
                     : leopard2_internal::kDirectRepairExecutorOutputMajor;
             require(path_info.direct_executor == expected_executor,
