@@ -706,6 +706,10 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1",
+            "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate",
+            "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -775,6 +779,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1",
+            "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate",
+            "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
@@ -2641,6 +2649,14 @@ class CMakeProductionGraph(object):
             if any(bool_satisfiable(bool_and(property_guard, source_guard))
                    for unused_path, source_guard in
                    resolved_by_windows_key.get(reference.casefold(), [])):
+                approved_guard = bool_atom(
+                    "option:LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1")
+                if (reference == "leopard2.cpp" and tuple(properties) == (
+                        "COMPILE_DEFINITIONS",
+                        "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=1") and
+                        self._formula_equivalent(
+                            property_guard, approved_guard)):
+                    continue
                 raise ContractError(
                     "CMake source properties affect production " + reference +
                     ": " + " ".join(properties))
@@ -5153,6 +5169,9 @@ endif()'''
             'option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)',
             'option(LEO2_PORTABLE_ISA_RELEASE_AUDIT\n'
             '    "Require the strict x86-64 portable-ISA release audit" OFF)',
+            'option(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1\n'
+            '    "Enable the diagnostic GF8/AVX2 direct one-loss repair '
+            'candidate" OFF)',
             'string(TOLOWER "${LEO2_BACKEND_VARIANT}" '
             'LEO2_BACKEND_VARIANT_NORMALIZED)',
             'check_cxx_compiler_flag("/O2" CXX_FLAG_O2)',

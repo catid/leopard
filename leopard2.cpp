@@ -1468,6 +1468,48 @@ static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
         codec->original_count == 65 && codec->padded_side == 128;
 }
 
+static bool IsExperimentalGeneralDirectOneLossCodec(const leo2_codec* codec)
+{
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    /*
+        Diagnostic candidate only.  Exact generator rows make a one-loss
+        repair a single streaming linear combination of one parity and the
+        K-1 surviving originals.  Keep the experiment separate from the
+        already measured equal-rounded family, and bound every persistent or
+        temporary coefficient vector by the GF8 parent: the codec retains K
+        barycentric weights, while a plan generates one K-element row and
+        stores at most K+1 execution terms.  No R-by-K row table is retained.
+
+        These are the two unmeasured shapes where transform depth can dominate
+        that stream: unequal legacy-high parents, and low profiles whose
+        redundancy side is larger than the public message.  Runtime promotion
+        remains impossible unless this CMake experiment is explicitly enabled
+        and the immutable context selected the AVX2 backend.
+    */
+    if (!codec || !codec->context || codec->field != LEO2_FIELD_GF8 ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        codec->original_count <= kDirectLegacyMaxRepairOriginals ||
+        codec->parent_count > kGF8Order ||
+        codec->parent_dimension > kDirectMaxParentDimension)
+        return false;
+
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    {
+        // R=1 has its own zero-coefficient XOR/copy plan.
+        return codec->recovery_count > 1 &&
+            !CanUseTranslatedLowDecode(codec);
+    }
+    /* The first low-profile screen is deliberately redundancy-dominant.
+       Explicit LOW R==K is a neighboring control, not evidence that this
+       selector should silently extend to balanced codes. */
+    return codec->profile == LEO2_PROFILE_LOW_V1 &&
+        codec->recovery_count > codec->original_count;
+#else
+    (void)codec;
+    return false;
+#endif
+}
+
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
     return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
@@ -1476,7 +1518,8 @@ static bool CanPrepareDirectRepair(const leo2_codec* codec)
                            LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
         (codec->original_count <= kDirectLegacyMaxRepairOriginals ||
-         IsMeasuredEqualRoundedDirectRepairCodec(codec)) &&
+         IsMeasuredEqualRoundedDirectRepairCodec(codec) ||
+         IsExperimentalGeneralDirectOneLossCodec(codec)) &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
         codec->padded_side >= 2;
 }
@@ -1486,6 +1529,8 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
     if (IsExpandedDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
+        return 1;
+    if (IsExperimentalGeneralDirectOneLossCodec(codec))
         return 1;
     return 4;
 }

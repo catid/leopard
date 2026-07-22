@@ -676,6 +676,12 @@ void test_no_loss_no_op(leo2_context* context)
 
 void test_direct_repair_dispatch_bounds(leo2_context* context)
 {
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    const bool experimental_general_l1 = context != NULL &&
+        leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+#else
+    const bool experimental_general_l1 = false;
+#endif
     struct Case
     {
         unsigned k;
@@ -699,13 +705,13 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 17, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, experimental_general_l1, false },
         { 17, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, experimental_general_l1, false },
         { 32, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           63, 1, true, true },
         { 32, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, experimental_general_l1, false },
         { 33, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           65, 1, true, true },
         { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -749,9 +755,29 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1024, 4, false, false },
         { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, experimental_general_l1, false },
+        { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, experimental_general_l1, false },
         { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, false, false },
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 1, experimental_general_l1, false },
+        { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          65, 1, experimental_general_l1, false },
+        { 17, 31, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          65, 2, false, false },
+        { 32, 224, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          257, 1, experimental_general_l1, false },
+        { 127, 128, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          63, 1, experimental_general_l1, false },
+        // LOW R==K is the unmeasured balanced neighbor of this first R>K
+        // screen and must retain Algorithm 4 until it has its own evidence.
+        { 32, 32, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          64, 1, false, false },
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+          64, 1, false, false },
+        { 32, 224, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+          64, 1, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
           64, 8, false, false },
         { 65, 65, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
@@ -892,6 +918,234 @@ void test_generalized_one_loss_direct_repair_execution(
     }
 }
 
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+void run_experimental_general_direct_l1_case(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    leo2_profile profile,
+    unsigned missing_original,
+    unsigned selected_recovery,
+    size_t bytes,
+    TestCounts* counts)
+{
+    require(context != NULL &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "general direct-L1 case requires an AVX2 context");
+    require(missing_original < k && selected_recovery < r,
+        "invalid general direct-L1 test coordinate");
+
+    leo2_codec* codec = make_codec(
+        context, k, r, profile, LEO2_FIELD_GF8);
+    const Shards source = make_originals(k, bytes,
+        UINT64_C(0x39d1a2c400000000) +
+            static_cast<uint64_t>(k) * 257U + r * 17U + bytes);
+    const Shards parity = encode_new(codec, source, bytes);
+
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 0);
+    original_present[missing_original] = 0;
+    recovery_present[selected_recovery] = 1;
+    std::vector<const void*> original_input = const_pointers(source);
+    std::vector<const void*> recovery_input(r, NULL);
+    original_input[missing_original] = NULL;
+    recovery_input[selected_recovery] = &parity[selected_recovery][0];
+
+    leo2_decode_plan* direct_plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &direct_plan),
+        "general direct-L1 plan create");
+    leopard2_internal::DecodePathInfo direct_path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        direct_plan, bytes, false, &direct_path),
+        "general direct-L1 path query");
+    require(direct_path.path == leopard2_internal::kDecodePathDirect,
+        "general direct-L1 AUTO plan did not select direct repair");
+
+    size_t one_byte_scratch = 0;
+    size_t large_scratch = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        direct_plan, 1, &one_byte_scratch),
+        "general direct-L1 one-byte scratch query");
+    require_result(leo2_decode_plan_scratch_size(
+        direct_plan, 1024U * 1024U, &large_scratch),
+        "general direct-L1 large scratch query");
+    require(one_byte_scratch == large_scratch,
+        "general direct-L1 scratch unexpectedly retained shard data");
+
+    size_t direct_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        direct_plan, bytes, &direct_scratch_bytes),
+        "general direct-L1 scratch query");
+    AlignedBuffer direct_scratch(direct_scratch_bytes);
+    std::vector<uint8_t> direct_output(bytes, 0);
+    std::vector<void*> direct_outputs(k, NULL);
+    direct_outputs[missing_original] = &direct_output[0];
+    require_result(leo2_decode_plan_execute(direct_plan, bytes,
+        &original_input[0], &recovery_input[0], &direct_outputs[0],
+        direct_scratch.data, direct_scratch.bytes),
+        "general direct-L1 execute");
+    require(direct_output == source[missing_original],
+        "general direct-L1 output differs from the source oracle");
+
+    leo2_codec_options transform_options;
+    memset(&transform_options, 0, sizeof(transform_options));
+    transform_options.struct_size = sizeof(transform_options);
+    transform_options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+    leo2_codec* transform_codec = NULL;
+    require_result(leo2_codec_create(context, k, r, profile, LEO2_FIELD_GF8,
+        &transform_options, &transform_codec),
+        "general direct-L1 forced-transform codec create");
+    leo2_decode_plan* transform_plan = NULL;
+    require_result(leo2_decode_plan_create(transform_codec,
+        &original_present[0], &recovery_present[0], &transform_plan),
+        "general direct-L1 forced-transform plan create");
+    leopard2_internal::DecodePathInfo transform_path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        transform_plan, bytes, false, &transform_path),
+        "general direct-L1 forced-transform path query");
+    require(transform_path.path != leopard2_internal::kDecodePathDirect,
+        "forced specialized control selected general direct-L1 repair");
+
+    size_t transform_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        transform_plan, bytes, &transform_scratch_bytes),
+        "general direct-L1 forced-transform scratch query");
+    require(transform_scratch_bytes > direct_scratch_bytes,
+        "general direct-L1 transform control did not retain transform work");
+    AlignedBuffer transform_scratch(transform_scratch_bytes);
+    std::vector<uint8_t> transform_output(bytes, 0);
+    std::vector<void*> transform_outputs(k, NULL);
+    transform_outputs[missing_original] = &transform_output[0];
+    require_result(leo2_decode_plan_execute(transform_plan, bytes,
+        &original_input[0], &recovery_input[0], &transform_outputs[0],
+        transform_scratch.data, transform_scratch.bytes),
+        "general direct-L1 forced-transform execute");
+    require(transform_output == source[missing_original] &&
+            transform_output == direct_output,
+        "general direct-L1 differs from the specialized transform oracle");
+
+    counts->recovered_shards += 2;
+    counts->plan_executions += 2;
+    if ((bytes & 63U) != 0)
+        ++counts->tail_cases;
+    leo2_decode_plan_destroy(transform_plan);
+    leo2_codec_destroy(transform_codec);
+    leo2_decode_plan_destroy(direct_plan);
+    leo2_codec_destroy(codec);
+}
+
+void require_experimental_general_direct_l1_fallbacks(
+    leo2_context* avx2_context)
+{
+    // The experiment is intentionally L=1.  Two losses must retain the
+    // specialized Algorithm 4 transform, even in an otherwise eligible low
+    // shape.
+    std::vector<uint8_t> original_present(32, 1);
+    std::vector<uint8_t> recovery_present(224, 0);
+    original_present[0] = 0;
+    original_present[31] = 0;
+    recovery_present[3] = 1;
+    recovery_present[217] = 1;
+    leo2_codec* codec = make_codec(avx2_context, 32, 224,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan),
+        "general direct-L1 two-loss fallback plan create");
+    leopard2_internal::DecodePathInfo path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, 65, false, &path),
+        "general direct-L1 two-loss fallback path query");
+    require(path.path != leopard2_internal::kDecodePathDirect,
+        "general direct-L1 experiment broadened to two losses");
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+
+    // Backend identity is part of the selector.  Explicit scalar, SSSE3, and
+    // AVX512 contexts must remain on their transform implementations.
+    const leo2_backend non_avx2_backends[] = {
+        LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3, LEO2_BACKEND_AVX512
+    };
+    for (size_t backend_i = 0;
+         backend_i < sizeof(non_avx2_backends) /
+             sizeof(non_avx2_backends[0]);
+         ++backend_i)
+    {
+        leo2_context_options options;
+        memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.backend = non_avx2_backends[backend_i];
+        options.thread_count = 1;
+        leo2_context* context = NULL;
+        const leo2_result result = leo2_context_create(&options, &context);
+        require(result == LEO2_SUCCESS || result == LEO2_UNSUPPORTED,
+            "lower-backend direct-L1 context returned an unexpected result");
+        if (result == LEO2_UNSUPPORTED)
+        {
+            require(context == NULL,
+                "unsupported lower-backend context was not cleared");
+            continue;
+        }
+        std::vector<uint8_t> lower_original_present(240, 1);
+        std::vector<uint8_t> lower_recovery_present(16, 0);
+        lower_original_present[239] = 0;
+        lower_recovery_present[7] = 1;
+        leo2_codec* lower_codec = make_codec(context, 240, 16,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        leo2_decode_plan* lower_plan = NULL;
+        require_result(leo2_decode_plan_create(lower_codec,
+            &lower_original_present[0], &lower_recovery_present[0],
+            &lower_plan), "lower-backend direct-L1 plan create");
+        leopard2_internal::DecodePathInfo lower_path;
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            lower_plan, 65, false, &lower_path),
+            "lower-backend direct-L1 path query");
+        require(lower_path.path != leopard2_internal::kDecodePathDirect,
+            "general direct-L1 selected a non-AVX2 backend");
+        leo2_decode_plan_destroy(lower_plan);
+        leo2_codec_destroy(lower_codec);
+        leo2_context_destroy(context);
+    }
+}
+
+void test_experimental_general_direct_l1_execution(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    struct Case
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        unsigned missing_original;
+        unsigned selected_recovery;
+        size_t bytes;
+    };
+    const Case cases[] = {
+        // Exact and shortened/punctured unequal legacy-high parents.
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1, 239, 7, 1 },
+        { 224, 32, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 16, 65 },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 97, 63, 257 },
+        { 200, 30, LEO2_PROFILE_LEGACY_HIGH_V1, 199, 29, 127 },
+        // Low parents cover shortened messages, punctured parity, and the
+        // maximum redundancy-dominant GF8 boundary.
+        { 17, 31, LEO2_PROFILE_LOW_V1, 16, 3, 63 },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 0, 199, 127 },
+        { 32, 224, LEO2_PROFILE_LOW_V1, 31, 112, 65 },
+        { 127, 128, LEO2_PROFILE_LOW_V1, 126, 127, 257 }
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        const Case& test = cases[i];
+        run_experimental_general_direct_l1_case(context,
+            test.k, test.r, test.profile, test.missing_original,
+            test.selected_recovery, test.bytes, counts);
+    }
+    require_experimental_general_direct_l1_fallbacks(context);
+}
+#endif
+
 void test_concurrent_expanded_direct_repair_cache(
     leo2_context* context,
     TestCounts* counts)
@@ -1030,6 +1284,9 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     test_concurrent_expanded_direct_repair_cache(context, counts);
     test_direct_repair_dispatch_bounds(context);
     test_generalized_one_loss_direct_repair_execution(context, counts);
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    test_experimental_general_direct_l1_execution(context, counts);
+#endif
     const std::vector<unsigned> missing_originals = {
         0, 1, 7, 16, 32, 48, 63, 64
     };

@@ -41,6 +41,17 @@ option(LEOPARD_ENABLE_GF8 "Include the GF(2^8) codec" ON)
 option(LEOPARD_ENABLE_GF16 "Include the GF(2^16) codec" ON)
 option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
+option(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1
+    "Enable the diagnostic GF8/AVX2 direct one-loss repair candidate" OFF)
+
+if(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    # Keep attribution local to the codec translation unit and its focused
+    # API-test source.  Backend, benchmark, and unrelated test objects must
+    # retain the control build's compile recipe.
+    set_source_files_properties(leopard2.cpp tests/leopard2/test_api.cpp
+        PROPERTIES COMPILE_DEFINITIONS
+        LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=1)
+endif()
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
