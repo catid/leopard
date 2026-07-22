@@ -346,8 +346,24 @@ void test_small_high_encode(
         size_t bytes;
     };
     static const TestCase cases[] = {
-        { 16, 2, 65536 },
-        { 16, 4, 65536 },
+        // T=2 crosses at 2 KiB for every valid K.  Cover the minimum K, an
+        // odd message count and ragged byte tail, and the largest GF8 K.
+        { 2, 2, 2048 },
+        { 3, 2, 2049 },
+        { 254, 2, 2048 },
+        // T=4 uses the evidence-derived K/byte staircase.  Each lower edge
+        // appears here, including punctured R=3 and ragged byte tails.
+        { 16, 4, 2048 },
+        { 16, 3, 2049 },
+        { 8, 4, 4096 },
+        { 8, 3, 4097 },
+        { 12, 4, 4096 },
+        { 12, 3, 4097 },
+        { 9, 4, 8192 },
+        { 11, 3, 8193 },
+        { 4, 4, 65536 },
+        { 5, 3, 65537 },
+        // Retain the previously qualified interior and upper-bound cases.
         { 64, 2, 4096 },
         { 64, 3, 4097 },
         { 240, 4, 65536 },
@@ -398,8 +414,8 @@ void test_small_high_encode(
             encode(avx2_codec.get(), original, test_case.r, true), actual);
         const uint64_t sparse_calls = leopard::ff8::
             TestOnlyGetHighEncodeCounts().small_transform_calls;
-        require((sparse_calls != 0) == (test_case.r == 2),
-            "T=2/T=4 coarse kernel mishandled a prefix/holey output mask");
+        require(sparse_calls == 0,
+            "T=2/T=4 coarse kernel accepted a partial/holey output mask");
 
         if (test_case.k == 64 && test_case.r == 3)
         {
@@ -409,8 +425,8 @@ void test_small_high_encode(
             require(prefix[0] == actual[0] && prefix[1] == actual[1],
                 "T=4 coarse kernel changed a requested parity prefix");
             require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                        small_transform_calls == 1,
-                "T=4 parity prefix missed the coarse kernel");
+                        small_transform_calls == 0,
+                "T=4 parity prefix used the dense coarse kernel");
         }
 
         if (scalar.result() == LEO2_SUCCESS)
@@ -439,15 +455,20 @@ void test_small_high_encode(
         }
     }
 
-    // Lock the evidence-derived shape and byte boundaries.  These cases also
-    // preserve the explicit negative results from the exact-main gate.
+    // Lock every immediate lower K/byte boundary in the measured staircase.
+    // The K<side and T=8 controls also protect the callback's preconditions.
     const TestCase controls[] = {
-        { 8, 4, 65536 },
-        { 15, 4, 65536 },
-        { 16, 2, 4096 },
-        { 64, 4, 4095 },
-        { 65, 2, 65536 },
-        { 240, 2, 65536 },
+        { 1, 2, 65536 },
+        { 2, 2, 2047 },
+        { 3, 4, 65536 },
+        { 4, 4, 65535 },
+        { 8, 4, 4095 },
+        { 9, 4, 4096 },
+        { 11, 4, 4096 },
+        { 7, 4, 8192 },
+        { 9, 4, 8191 },
+        { 12, 4, 4095 },
+        { 16, 4, 2047 },
         { 64, 5, 65536 }
     };
     for (size_t case_i = 0;

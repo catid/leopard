@@ -761,7 +761,7 @@ struct GF8
         const leopard2_internal::SparseForwardPlanBatchView* plan)
     {
         leopard::ff8::ReedSolomonEncode(
-            ops, bytes, k, prefix, requested, side, data, work, plan);
+            ops, bytes, k, prefix, requested, side, data, work, false, plan);
     }
     static void low(const leopard::backend::Ops& ops, uint64_t bytes,
         unsigned k, unsigned r, unsigned side, const void* const* data,

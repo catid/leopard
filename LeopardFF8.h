@@ -159,6 +159,7 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const * const data,
     void** work,
+    bool allow_small_transform, // Full public parity set is requested.
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,

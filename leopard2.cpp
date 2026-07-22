@@ -3147,7 +3147,13 @@ static void ExecuteTransformEncodePass(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
-                padded_original, work, sparse_plans);
+                padded_original, work,
+                // The extended FF8 routine otherwise sees only the requested
+                // prefix length; a prefix-only request can therefore have
+                // requested_output_count == recovery_count without being the
+                // codec's complete public parity set.
+                requested_recovery_count == codec->recovery_count,
+                sparse_plans);
 #else
             return;
 #endif

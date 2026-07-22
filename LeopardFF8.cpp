@@ -2266,6 +2266,7 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const* data,
     void** work,
+    bool allow_small_transform,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
@@ -2276,21 +2277,24 @@ void ReedSolomonEncode(
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     // The direct-input accumulator removes one complete source copy for each
-    // full T=2/T=4 message block.  Keep its production region tied to the
-    // isolated exact-main cells that cleared the project's 5% promotion gate:
-    // T=2 through K=64, T=4 for larger GF8 high-rate codes, and enough bytes
-    // to amortize fixed API/backend overhead.  In particular, the rejected
-    // K=8/R=4 cell and timing-inconclusive K=240/R=2 cell stay on the mature
-    // path.  A ragged sub-64-byte pass also stays on that path.
+    // full T=2/T=4 message block.  Exact-main AVX2 crossover measurements
+    // qualify every valid T=2 shape from 2 KiB.  T=4 has a measured staircase:
+    // small block counts need more bytes to amortize fixed work, while the
+    // exact K=8 shape clears the 4-KiB gate independently of its K=9..11
+    // neighbors.  Keep the irregular boundary explicit rather than assuming
+    // a monotone K crossover.  buffer_bytes is the current execution pass, so
+    // a padded 64-byte tail cannot inherit its aligned prefix's decision.
     const bool small_transform_shape =
-        m == 4 ? original_count >= 16 :
-        m == 2 && original_count >= 16 && original_count <= 64;
-    const bool small_transform_bytes =
-        buffer_bytes >= 64U * 1024U ||
-        (original_count >= 64 && buffer_bytes >= 4U * 1024U);
+        m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
+        m == 4 && original_count >= 4 && (
+            (original_count >= 16 && buffer_bytes >= 2U * 1024U) ||
+            ((original_count == 8 || original_count >= 12) &&
+                buffer_bytes >= 4U * 1024U) ||
+            (original_count >= 9 && buffer_bytes >= 8U * 1024U) ||
+            buffer_bytes >= 64U * 1024U);
     if (ops.kind == LEO2_BACKEND_AVX2 &&
-        ops.ff8_high_encode_small && small_transform_shape &&
-        small_transform_bytes &&
+        ops.ff8_high_encode_small && allow_small_transform &&
+        small_transform_shape &&
         requested_output_count == recovery_count &&
         dense_schedule)
     {
@@ -2438,7 +2442,7 @@ void ReedSolomonEncode(
     void** work)
 {
     ReedSolomonEncode(ops, buffer_bytes, original_count, recovery_count,
-        recovery_count, m, data, work, NULL);
+        recovery_count, m, data, work, true, NULL);
 }
 
 
