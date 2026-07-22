@@ -1847,6 +1847,61 @@ static leo2_result ValidateAlreadySortedDisjointRanges(
     return LEO2_SUCCESS;
 }
 
+static leo2_result ValidateMonotonicEncodePointers(
+    const void* const* original,
+    size_t original_count,
+    void* const* recovery,
+    size_t recovery_count,
+    uint64_t shard_bytes)
+{
+    /*
+        Every pointer and end address has already passed MakeRange, and both
+        caller arrays have already proved monotonic by range begin.  Sweep the
+        caller arrays directly so the ordinary packed-shard encode path does
+        not stage K+R AddressRange records in scratch and then scan them again.
+
+        Inputs are immutable and may alias.  Preserve the furthest end of all
+        inputs beginning before the current output ends; that catches a long
+        or exactly aliased input even after the input cursor advances.  Null
+        recovery entries are unrequested coordinates and do not participate.
+    */
+    const uintptr_t bytes = static_cast<uintptr_t>(shard_bytes);
+    size_t input_i = 0;
+    uintptr_t furthest_input_end = 0;
+    uintptr_t furthest_output_end = 0;
+    bool have_input = false;
+    bool have_output = false;
+    for (size_t output_i = 0; output_i < recovery_count; ++output_i)
+    {
+        if (!recovery[output_i])
+            continue;
+        const uintptr_t output_begin =
+            reinterpret_cast<uintptr_t>(recovery[output_i]);
+        const uintptr_t output_end = output_begin + bytes;
+        if (have_output && furthest_output_end > output_begin)
+            return LEO2_OVERLAP;
+        if (!have_output || output_end > furthest_output_end)
+            furthest_output_end = output_end;
+        have_output = true;
+
+        while (input_i < original_count)
+        {
+            const uintptr_t input_begin =
+                reinterpret_cast<uintptr_t>(original[input_i]);
+            if (input_begin >= output_end)
+                break;
+            const uintptr_t input_end = input_begin + bytes;
+            if (!have_input || input_end > furthest_input_end)
+                furthest_input_end = input_end;
+            have_input = true;
+            ++input_i;
+        }
+        if (have_input && furthest_input_end > output_begin)
+            return LEO2_OVERLAP;
+    }
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateDisjointRanges(
     AddressRange* input_ranges,
     size_t input_count,
@@ -1963,6 +2018,9 @@ static leo2_result ValidateEncodeBuffers(
 
     size_t output_count = 0;
     AddressRange single_output = { 0, 0 };
+    bool outputs_monotonic = true;
+    bool have_previous_output = false;
+    uintptr_t previous_output_begin = 0;
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
         if (!recovery[i])
@@ -1973,6 +2031,10 @@ static leo2_result ValidateEncodeBuffers(
         if (RangesOverlap(range, scratch_range) ||
             RangeOverlapsAny(range, metadata_ranges, metadata_count))
             return LEO2_OVERLAP;
+        if (have_previous_output && range.begin < previous_output_begin)
+            outputs_monotonic = false;
+        previous_output_begin = range.begin;
+        have_previous_output = true;
         if (++output_count == 1)
             single_output = range;
     }
@@ -1993,6 +2055,9 @@ static leo2_result ValidateEncodeBuffers(
         return LEO2_SUCCESS;
     }
 
+    bool inputs_monotonic = true;
+    bool have_previous_input = false;
+    uintptr_t previous_input_begin = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         AddressRange range;
@@ -2002,7 +2067,16 @@ static leo2_result ValidateEncodeBuffers(
             return LEO2_OVERLAP;
         if (!HasValidSystematicPad(codec, original[i], shard_bytes))
             return LEO2_INVALID_ARGUMENT;
+        if (have_previous_input && range.begin < previous_input_begin)
+            inputs_monotonic = false;
+        previous_input_begin = range.begin;
+        have_previous_input = true;
     }
+    if (inputs_monotonic && outputs_monotonic)
+        return ValidateMonotonicEncodePointers(original,
+            codec->original_count, recovery, codec->recovery_count,
+            shard_bytes);
+
     AddressRange* ranges = reinterpret_cast<AddressRange*>(scratch);
     size_t input_count = 0;
     output_count = 0;

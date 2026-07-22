@@ -821,7 +821,77 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         LEO2_OVERLAP, "monotonic output/output overlap");
     require(monotonic_storage == monotonic_storage_before_rejections,
         "rejected monotonic encode overlap changed shard storage");
-    counts->alias_checks += 4;
+
+    /* Pointer order is part of neither the wire profile nor the aliasing
+       contract.  Keep the sort/merge fallback covered for callers that store
+       shards in an arbitrary allocation order. */
+    Bytes unordered_storage(bytes * 5, 0);
+    const size_t unordered_input_slot[3] = { 2, 0, 1 };
+    for (size_t i = 0; i < 3; ++i)
+        memcpy(&unordered_storage[unordered_input_slot[i] * bytes],
+            source_pointers[i], bytes);
+    const void* unordered_original[3] = {
+        &unordered_storage[bytes * 2],
+        &unordered_storage[0],
+        &unordered_storage[bytes]
+    };
+    void* unordered_recovery[2] = {
+        &unordered_storage[bytes * 4],
+        &unordered_storage[bytes * 3]
+    };
+    require_result(leo2_encode(codec.codec, bytes, unordered_original,
+        unordered_recovery, source_scratch.data(), source_scratch.size()),
+        LEO2_SUCCESS, "unordered encode range fallback");
+    require(memcmp(unordered_recovery[0], &encoded[0][0], bytes) == 0 &&
+            memcmp(unordered_recovery[1], &encoded[1][0], bytes) == 0,
+        "unordered encode range fallback changed parity");
+    const Bytes unordered_before_rejection = unordered_storage;
+    void* unordered_input_overlap[2] = {
+        unordered_recovery[0], const_cast<void*>(unordered_original[1])
+    };
+    require_result(leo2_encode(codec.codec, bytes, unordered_original,
+        unordered_input_overlap, source_scratch.data(), source_scratch.size()),
+        LEO2_OVERLAP, "unordered encode overlap fallback");
+    require(unordered_storage == unordered_before_rejection,
+        "rejected unordered encode overlap changed shard storage");
+
+    /* A null hole in the public parity array must not split or reorder the
+       monotonic requested-output sequence used by the direct sweep. */
+    CodecOwner subset_codec;
+    require_result(leo2_codec_create(context, 3, 3,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
+        &subset_codec.codec), LEO2_SUCCESS,
+        "monotonic parity-subset codec create");
+    size_t subset_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(subset_codec.codec, bytes,
+        &subset_scratch_bytes), LEO2_SUCCESS,
+        "monotonic parity-subset scratch query");
+    AlignedBuffer subset_scratch(subset_scratch_bytes);
+    Shards subset_expected(3, Bytes(bytes, 0));
+    std::vector<void*> subset_expected_pointers =
+        mutable_pointers(subset_expected);
+    require_result(leo2_encode(subset_codec.codec, bytes,
+        &source_pointers[0], &subset_expected_pointers[0],
+        subset_scratch.data(), subset_scratch.size()), LEO2_SUCCESS,
+        "monotonic parity-subset fixture encode");
+
+    Bytes subset_storage(bytes * 5, 0);
+    const void* subset_original[3];
+    for (size_t i = 0; i < 3; ++i)
+    {
+        memcpy(&subset_storage[i * bytes], source_pointers[i], bytes);
+        subset_original[i] = &subset_storage[i * bytes];
+    }
+    void* subset_recovery[3] = {
+        &subset_storage[bytes * 3], NULL, &subset_storage[bytes * 4]
+    };
+    require_result(leo2_encode(subset_codec.codec, bytes, subset_original,
+        subset_recovery, subset_scratch.data(), subset_scratch.size()),
+        LEO2_SUCCESS, "monotonic parity subset with null hole");
+    require(memcmp(subset_recovery[0], &subset_expected[0][0], bytes) == 0 &&
+            memcmp(subset_recovery[2], &subset_expected[2][0], bytes) == 0,
+        "monotonic parity subset changed requested parity");
+    counts->alias_checks += 7;
 
     const Shards exact_encoded = encoded;
     AlignedBuffer general_metadata_scratch(source_scratch_bytes);
