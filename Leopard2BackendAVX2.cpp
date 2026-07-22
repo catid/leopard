@@ -3729,6 +3729,30 @@ static void AVX2FF16FFTButterfly4Range(
 #endif // LEO_HAS_FF16
 
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+#ifndef LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL
+# define LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL 0
+#endif
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL < 0 || \
+    LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL > 1
+# error "LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL must be 0 or 1"
+#endif
+
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL
+static LEO_FORCE_INLINE __m128i AVX2FF8DirectProduct128(
+    __m128i data,
+    __m128i low_table,
+    __m128i high_table,
+    __m128i nibble_mask)
+{
+    const __m128i low_indices = _mm_and_si128(data, nibble_mask);
+    const __m128i high_indices = _mm_and_si128(
+        _mm_srli_epi64(data, 4), nibble_mask);
+    return _mm_xor_si128(
+        _mm_shuffle_epi8(low_table, low_indices),
+        _mm_shuffle_epi8(high_table, high_indices));
+}
+#endif
+
 #if defined(_MSC_VER)
 # define LEO2_AVX2_DIRECT_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -3783,6 +3807,54 @@ AVX2FF8MultiplyAddOutputPair(
             destination1 + offset), product);
         offset += 32;
     }
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL
+    const __m128i mask128 = _mm256_castsi256_si128(nibble_mask);
+    const __m128i low0_128 = _mm256_castsi256_si128(low0);
+    const __m128i high0_128 = _mm256_castsi256_si128(high0);
+    const __m128i low1_128 = _mm256_castsi256_si128(low1);
+    const __m128i high1_128 = _mm256_castsi256_si128(high1);
+    if (byte_count - offset >= 16)
+    {
+        /*
+            The AVX2 translation unit VEX-encodes these XMM operations.  Reuse
+            the already prepared lower table lanes so the 16- and 8-byte tails
+            add no table loads and cannot incur an AVX-to-legacy-SSE transition.
+        */
+        const __m128i data = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(source + offset));
+        __m128i product = AVX2FF8DirectProduct128(
+            data, low0_128, high0_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination0 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination0 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low1_128, high1_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination1 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination1 + offset),
+            product);
+        offset += 16;
+    }
+    if (byte_count - offset >= 8)
+    {
+        const __m128i data = _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(source + offset));
+        __m128i product = AVX2FF8DirectProduct128(
+            data, low0_128, high0_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination0 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination0 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low1_128, high1_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination1 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination1 + offset),
+            product);
+        offset += 8;
+    }
+#endif
     while (offset < byte_count)
     {
         const uint8_t value = source[offset];
@@ -3951,6 +4023,77 @@ AVX2FF8MultiplyAddOutputGroup4(
             destination3 + offset), product);
         offset += 32;
     }
+#if LEO2_EXPERIMENT_GF8_DIRECT_XMM_TAIL
+    const __m128i mask128 = _mm256_castsi256_si128(nibble_mask);
+    const __m128i low0_128 = _mm256_castsi256_si128(low0);
+    const __m128i high0_128 = _mm256_castsi256_si128(high0);
+    const __m128i low1_128 = _mm256_castsi256_si128(low1);
+    const __m128i high1_128 = _mm256_castsi256_si128(high1);
+    const __m128i low2_128 = _mm256_castsi256_si128(low2);
+    const __m128i high2_128 = _mm256_castsi256_si128(high2);
+    const __m128i low3_128 = _mm256_castsi256_si128(low3);
+    const __m128i high3_128 = _mm256_castsi256_si128(high3);
+    if (byte_count - offset >= 16)
+    {
+        const __m128i data = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(source + offset));
+        __m128i product = AVX2FF8DirectProduct128(
+            data, low0_128, high0_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination0 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination0 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low1_128, high1_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination1 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination1 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low2_128, high2_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination2 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination2 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low3_128, high3_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(destination3 + offset)));
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination3 + offset),
+            product);
+        offset += 16;
+    }
+    if (byte_count - offset >= 8)
+    {
+        const __m128i data = _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(source + offset));
+        __m128i product = AVX2FF8DirectProduct128(
+            data, low0_128, high0_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination0 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination0 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low1_128, high1_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination1 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination1 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low2_128, high2_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination2 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination2 + offset),
+            product);
+        product = AVX2FF8DirectProduct128(
+            data, low3_128, high3_128, mask128);
+        product = _mm_xor_si128(product, _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(destination3 + offset)));
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination3 + offset),
+            product);
+        offset += 8;
+    }
+#endif
     while (offset < byte_count)
     {
         const uint8_t value = source[offset];

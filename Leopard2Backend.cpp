@@ -170,7 +170,8 @@ static bool TestFF8MultiplyAddOutputs(
     if (!ops.ff8_multiply_add_outputs)
         return true;
     static const uint64_t byte_counts[] = {
-        0, 1, 7, 31, 32, 33, 63, 64, 65, 257
+        0, 1, 7, 8, 9, 15, 16, 17, 23, 24, 25, 31, 32, 33,
+        39, 40, 41, 47, 48, 49, 55, 56, 57, 63, 64, 65, 257
     };
     static const uint16_t log_sets[][8] = {
         { 0, 1, 17, 29, 63, 127, 254, 193 },
