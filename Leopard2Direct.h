@@ -167,6 +167,9 @@ bool GetDecodePlanPrunedScheduleInfo(
     const leo2_decode_plan* plan,
     DecodePlanPrunedScheduleInfo* info_out);
 
+/* Fail-closed provenance marker for the one-shot no-loss experiment. */
+bool OneShotNoLossShortCircuitExperimentEnabled();
+
 } // namespace leopard2_internal
 
 #endif /* __cplusplus */

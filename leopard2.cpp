@@ -6151,6 +6151,15 @@ leo2_result GetDecodeCodecScratchPathInfo(
     return LEO2_SUCCESS;
 }
 
+bool OneShotNoLossShortCircuitExperimentEnabled()
+{
+#if defined(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+    return true;
+#else
+    return false;
+#endif
+}
+
 } // namespace leopard2_internal
 
 #if defined(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)

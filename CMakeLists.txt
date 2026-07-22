@@ -483,6 +483,13 @@ if(LEO2_BUILD_BENCHMARKS)
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
     target_link_libraries(bench_leopard2 leopard)
 
+    # Attribution-only setup benchmark.  Keep it out of the default build so
+    # ordinary users do not pay for an experimental executable, while making
+    # the identical target available in both option-OFF and option-ON builds.
+    add_executable(bench_leopard2_no_loss_setup EXCLUDE_FROM_ALL
+        bench/leopard2/benchmark_no_loss_setup.cpp)
+    target_link_libraries(bench_leopard2_no_loss_setup leopard)
+
     if(LEOPARD_ENABLE_GF8)
         add_executable(bench_leopard2_batch_preflight
             bench/leopard2/batch_preflight_benchmark.cpp)

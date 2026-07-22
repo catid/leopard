@@ -325,7 +325,9 @@ def candidate_build_provenance(
     source = Path(source_root).resolve(strict=True)
     require(build.is_dir(), "candidate build root is not a directory")
     require(source.is_dir(), "candidate source root is not a directory")
-    require(executable_target in {"bench_leopard2", "bench_leopard2_allk"},
+    require(executable_target in {
+                "bench_leopard2", "bench_leopard2_allk",
+                "bench_leopard2_no_loss_setup"},
             "unsupported candidate benchmark target")
 
     expected_executable = (build / executable_target).resolve(strict=True)

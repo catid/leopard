@@ -26,12 +26,9 @@
     POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "Leopard2Direct.h"
 #include "leopard2.h"
 #include "allocation_audit_config.h"
-
-#if defined(LEO2_TEST_ONE_SHOT_NO_LOSS_HOOK_BUILD)
-#include "Leopard2Direct.h"
-#endif
 
 #include <algorithm>
 #include <atomic>
@@ -539,6 +536,16 @@ int main()
 {
     try
     {
+#if LEO2_TEST_EXPECT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+        const bool expected_short_circuit = true;
+#else
+        const bool expected_short_circuit = false;
+#endif
+        require(leopard2_internal::
+                OneShotNoLossShortCircuitExperimentEnabled() ==
+                    expected_short_circuit,
+            "linked one-shot no-loss experiment marker mismatch");
+
         leo2_context_options options;
         memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
