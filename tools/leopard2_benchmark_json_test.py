@@ -21,6 +21,7 @@ def run(
     executable: Path,
     external_evidence: bool,
     report_decode_path: bool = False,
+    report_pair_fusion: bool = False,
     attest_source: bool = False,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
@@ -36,6 +37,8 @@ def run(
             command.extend(("--skip-legacy", "--retain-samples"))
         if report_decode_path:
             command.append("--report-decode-path")
+        if report_pair_fusion:
+            command.append("--report-pair-fusion")
         if attest_source:
             command.append("--attest-source")
         command.extend(("--json", str(output)))
@@ -55,7 +58,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "memory", "metrics", "legacy"}
     if document["schema"] in {
         "leopard2-benchmark-v2", "leopard2-benchmark-v3",
-        "leopard2-benchmark-v5"
+        "leopard2-benchmark-v5", "leopard2-benchmark-v6"
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -76,7 +79,9 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     expected_resolved = {
         "profile", "field", "backend", "thread_count", "parent_count",
         "padded_side"}
-    if document["schema"] == "leopard2-benchmark-v3":
+    if document["schema"] in {
+        "leopard2-benchmark-v3", "leopard2-benchmark-v6"
+    }:
         expected_resolved.update({
             "selected_decode_path", "selected_decode_rule",
             "decode_required_work_slots", "decode_aligned_prefix_bytes",
@@ -84,9 +89,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "decode_direct_term_count", "decode_direct_unit_term_count",
             "decode_direct_pair_count",
             "decode_direct_pair_with_unit_count",
-            "decode_direct_pair_fusion_selected",
             "decode_multi_item_batch",
         })
+    if document["schema"] == "leopard2-benchmark-v6":
+        expected_resolved.add("decode_direct_pair_fusion_selected")
     require(set(document["resolved"]) == expected_resolved,
             "resolved keys changed")
     require(set(document["correctness"]) == {
@@ -277,6 +283,26 @@ def main() -> int:
             resolved["decode_rounded_bytes"] == 64 and
             resolved["decode_multi_item_batch"] is False,
             "path-report byte/batch geometry differs")
+    require("decode_direct_pair_fusion_selected" not in resolved,
+            "schema v3 silently acquired pair-fusion metadata")
+
+    pair_report = run(
+        executable, True, report_pair_fusion=True)
+    require(pair_report["schema"] == "leopard2-benchmark-v6",
+            "pair-report benchmark schema changed")
+    validate_common(pair_report, True)
+    validate_workload_digests(pair_report)
+    require(set(pair_report["parameters"]) ==
+            (expected_external_parameters |
+             {"report_decode_path", "report_direct_pair_fusion"}),
+            "pair-report parameter structure changed")
+    require(pair_report["parameters"]["report_decode_path"] is True and
+            pair_report["parameters"][
+                "report_direct_pair_fusion"] is True,
+            "pair-report opt-in was not recorded")
+    require(pair_report["resolved"][
+                "decode_direct_pair_fusion_selected"] is False,
+            "default-OFF build reported pair fusion selected")
     print("leopard2 benchmark JSON regression passed")
     return 0
 

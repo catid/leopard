@@ -51,8 +51,8 @@ from leopard2_build_provenance import (  # noqa: E402
 )
 
 
-SCHEMA = "leopard2-general-direct-l1-abba/v3"
-MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v2"
+SCHEMA = "leopard2-general-direct-l1-abba/v4"
+MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v3"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EXPERIMENT = "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1"
@@ -78,8 +78,8 @@ HIGH_CORE = (
 LOW_CORE = (
     (17, 31), (31, 200), (32, 224), (127, 128),
 )
-TINY_HIGH = ((240, 16), (192, 64))
-TINY_LOW = ((17, 31), (127, 128))
+TINY_HIGH = HIGH_CORE
+TINY_LOW = LOW_CORE
 
 # Stay on the GF8 side of each dyadic boundary.  Some requested core cells
 # sit exactly at N=256, so their +K or +R neighbor is intentionally invalid.
@@ -902,7 +902,7 @@ def benchmark_command(
         result.extend((
             "--profile", cell["profile"], "--field", "gf8",
             "--backend", "avx2", "--skip-legacy", "--retain-samples",
-            "--report-decode-path",
+            "--report-pair-fusion",
         ))
     return result
 
@@ -1016,8 +1016,8 @@ def validate_leopard2_document(
     direct_control: bool = False,
     pair_candidate: bool = False,
 ) -> None:
-    require(document.get("schema") == "leopard2-benchmark-v3",
-            role + " did not emit path-report schema v3")
+    require(document.get("schema") == "leopard2-benchmark-v6",
+            role + " did not emit pair-report schema v6")
     parameters = document["parameters"]
     expected_profile = (
         "legacy_high_v1" if cell["profile"] == "high" else "low_v1")
@@ -1046,6 +1046,8 @@ def validate_leopard2_document(
             parameters["retain_samples"] is True and
             parameters["report_decode_path"] is True,
             role + " benchmark-mode attestation differs")
+    require(parameters.get("report_direct_pair_fusion") is True,
+            role + " pair-report opt-in is missing")
     missing_tuple(document, cell, role)
     resolved = document["resolved"]
     require(resolved["profile"] == expected_profile and
@@ -1177,6 +1179,24 @@ def same_source_metrics(
             contrasts, "control_time_over_candidate_time")
     result["reuse_count"] = reuse
     return result
+
+
+def classify_candidate_win(
+    cell: Mapping[str, Any],
+    metrics: Mapping[str, Any],
+    comparison_mode: str,
+    pair_selected: bool,
+    promotion_threshold: float,
+) -> tuple[bool, bool]:
+    general_direct_win = (
+        cell["candidate_expected_path"] == "direct" and
+        metrics["decode_amortized_us"]["ci95_low"] >= promotion_threshold)
+    pair_comparison = comparison_mode in (
+        TRANSFORM_VS_PAIR, SIMPLE_VS_PAIR)
+    attributed_win = (
+        general_direct_win and
+        (not pair_comparison or pair_selected))
+    return general_direct_win, attributed_win
 
 
 def validate_main_document(
@@ -1417,11 +1437,9 @@ def run_cell(
                 pair_selection[call["role"]] for call in calls),
             "a repeated pair-fusion selection differs")
     metrics = same_source_metrics(calls, rounds, cell["reuse"])
-    winner = (
-        cell["candidate_expected_path"] == "direct" and
-        (comparison_mode != SIMPLE_VS_PAIR or
-         pair_selection["candidate"]) and
-        metrics["decode_amortized_us"]["ci95_low"] >= promotion_threshold)
+    general_direct_win, winner = classify_candidate_win(
+        cell, metrics, comparison_mode, pair_selection["candidate"],
+        promotion_threshold)
     exact_main = None
     if frozen.get("main") is not None:
         # The exact-main executable is never used as a discovery oracle.
@@ -1471,6 +1489,7 @@ def run_cell(
             },
             "calls": calls,
         },
+        "same_source_general_direct_win": general_direct_win,
         "same_source_candidate_win": winner,
         "exact_main": exact_main,
         "completed_at": time.strftime(
@@ -1505,6 +1524,8 @@ def summarize(
                 "pair_fusion_selected"],
             "same_source_candidate_win": result[
                 "same_source_candidate_win"],
+            "same_source_general_direct_win": result[
+                "same_source_general_direct_win"],
             "exact_main": (
                 result["exact_main"]["metrics"]
                 if result["exact_main"] is not None else None),
@@ -1524,6 +1545,9 @@ def summarize(
         "high": profiles["high"], "low": profiles["low"],
         "same_source_winner_count": sum(
             bool(result["same_source_candidate_win"]) for result in results),
+        "same_source_general_direct_winner_count": sum(
+            bool(result["same_source_general_direct_win"])
+            for result in results),
         "credible_regressions": sorted(credible_regressions),
         "exact_main_followup_count": sum(
             result["exact_main"] is not None for result in results),
@@ -1635,7 +1659,7 @@ def synthetic_document(
 ) -> dict[str, Any]:
     profile = "legacy_high_v1" if cell["profile"] == "high" else "low_v1"
     return {
-        "schema": "leopard2-benchmark-v3",
+        "schema": "leopard2-benchmark-v6",
         "parameters": {
             "K": cell["K"], "R": cell["R"],
             "shard_bytes": cell["bytes"],
@@ -1654,6 +1678,7 @@ def synthetic_document(
             "force_materialized_decode": False,
             "skip_legacy": True, "retain_samples": True,
             "report_decode_path": True,
+            "report_direct_pair_fusion": True,
         },
         "resolved": {
             "profile": profile, "field": "gf8", "backend": "avx2",
@@ -1871,6 +1896,17 @@ def adversarial_self_tests() -> dict[str, str]:
         expect_campaign_error(lambda: validate_leopard2_document(
             "candidate", wrong_pair, pair_cell, pair_candidate=True),
             "missing pair selector attestation")
+        winning_metrics = {
+            "decode_amortized_us": {"ci95_low": 1.10},
+        }
+        general_win, pair_win = classify_candidate_win(
+            cell, winning_metrics, TRANSFORM_VS_PAIR, False, 1.05)
+        require(general_win and not pair_win,
+                "inactive pair selector received candidate attribution")
+        general_win, pair_win = classify_candidate_win(
+            pair_cell, winning_metrics, TRANSFORM_VS_PAIR, True, 1.05)
+        require(general_win and pair_win,
+                "active pair selector lost candidate attribution")
         for section, name, bad_value in (
             ("resolved", "profile", "low_v1"),
             ("resolved", "field", "gf16"),
@@ -1926,6 +1962,7 @@ def adversarial_self_tests() -> dict[str, str]:
         "evex_injection": "rejected",
         "wrong_profile_field_backend": "rejected",
         "pair_selector_attestation": "rejected_missing_and_spurious",
+        "inactive_pair_winner_attribution": "rejected",
         "l2_direct_path": "rejected",
         "high_low_cross_label": "rejected",
         "resumed_artifact_hash_mismatch": "rejected",
@@ -2146,6 +2183,8 @@ def run_campaign(args: argparse.Namespace) -> None:
             "status": "complete", "run_dir": str(run_dir),
             "cells": len(results),
             "same_source_winners": summary["same_source_winner_count"],
+            "general_direct_winners": summary[
+                "same_source_general_direct_winner_count"],
             "credible_regressions": len(summary["credible_regressions"]),
             "exact_main_followups": summary["exact_main_followup_count"],
         }, sort_keys=True))

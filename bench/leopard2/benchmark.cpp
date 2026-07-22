@@ -112,6 +112,7 @@ struct Options
     bool skip_legacy;
     bool retain_samples;
     bool report_decode_path;
+    bool report_direct_pair_fusion;
     bool attest_source;
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     bool force_translated_low;
@@ -148,6 +149,7 @@ struct Options
         , skip_legacy(false)
         , retain_samples(false)
         , report_decode_path(false)
+        , report_direct_pair_fusion(false)
         , attest_source(false)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         , force_translated_low(false)
@@ -410,6 +412,7 @@ static void Usage(std::ostream& output, const char* program)
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+        << "  --report-pair-fusion  Emit path plus paired-direct selector metadata using schema v6\n"
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         << "  --attest-source       Embed committed source identity using schema v5\n"
 #endif
@@ -458,6 +461,11 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+        else if (argument == "--report-pair-fusion")
+        {
+            options.report_decode_path = true;
+            options.report_direct_pair_fusion = true;
+        }
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         else if (argument == "--attest-source") options.attest_source = true;
 #endif
@@ -505,6 +513,9 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--attest-source and --report-decode-path use distinct JSON schemas");
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    if (options.report_direct_pair_fusion)
+        Fail("the high-evaluator attribution benchmark does not support "
+             "--report-pair-fusion");
     if (options.attest_source)
         Fail("the attribution benchmark does not support --attest-source");
     if (options.high_evaluator_mode == Options::HighEvaluatorUnset)
@@ -1162,6 +1173,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.report_direct_pair_fusion ? 6 :
         options.attest_source ? 5 :
         (options.report_decode_path ? 3 : (extended_schema ? 2 : 1));
 #endif
@@ -1413,6 +1425,8 @@ static int Run(const Options& options)
              << (options.retain_samples ? "true" : "false") << ",\n";
         if (options.report_decode_path)
             json << "    \"report_decode_path\": true,\n";
+        if (options.report_direct_pair_fusion)
+            json << "    \"report_direct_pair_fusion\": true,\n";
         if (options.attest_source)
             json << "    \"attest_source\": true,\n";
     }
@@ -1464,11 +1478,14 @@ static int Run(const Options& options)
              << "    \"decode_direct_pair_count\": "
              << decode_path_info.direct_pair_count << ",\n"
              << "    \"decode_direct_pair_with_unit_count\": "
-             << decode_path_info.direct_pair_with_unit_count << ",\n"
-             << "    \"decode_direct_pair_fusion_selected\": "
-             << (decode_path_info.direct_pair_fusion_selected
-                    ? "true" : "false") << ",\n"
-             << "    \"decode_multi_item_batch\": "
+             << decode_path_info.direct_pair_with_unit_count << ",\n";
+        if (options.report_direct_pair_fusion)
+        {
+            json << "    \"decode_direct_pair_fusion_selected\": "
+                 << (decode_path_info.direct_pair_fusion_selected
+                        ? "true" : "false") << ",\n";
+        }
+        json << "    \"decode_multi_item_batch\": "
              << (decode_path_info.multi_item_batch ? "true" : "false");
     }
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)

@@ -40,7 +40,9 @@ above these byte counts; every other K/R shape retains the simple executor:
 The focused API suite executes each source shape at threshold minus one and
 at threshold, and executes every valid immediate K/R neighbor at the source
 threshold.  The benchmark JSON reports the actual selector decision, so a
-campaign cannot attribute a no-op control cell to the paired kernel.
+campaign cannot attribute a no-op control cell to the paired kernel.  This
+uses the explicit `--report-pair-fusion` schema v6 mode; the older strict
+path-report schema v3 remains byte-for-byte structurally unchanged.
 
 For one loss, plan construction generates one exact systematic generator row,
 selects one received parity equation, and stores at most `K` execution terms.
@@ -102,17 +104,24 @@ each at plan reuse 1, 8, and 64 (120 cells).
 3. `shape-neighbor`: valid GF8 `K`/`R` neighbors plus explicit legacy-high
    `(17,33)` and `(17,128)` at 4 KiB and 64 KiB with reuse 8 (44 cells).
 4. `byte-neighbor`: each core shape at +/-1 around 64 B, 2 KiB, 4 KiB,
-   64 KiB, and 1 MiB with reuse 8.  Four 63-byte coordinates are owned by
-   the tiny-byte tier below, leaving 76 cells in this tier.
+   64 KiB, and 1 MiB with reuse 8.  The eight 63-byte coordinates are owned by
+   the tiny-byte tier below, leaving 72 cells in this tier.
 5. `pair-selector-neighbor`: immediate K/R neighbors evaluated at the exact
    source-shape threshold when that coordinate is not already covered by the
    balanced or shape-neighbor tiers.
-6. `tiny-byte`: HIGH `(240,16)` and `(192,64)`, plus LOW `(17,31)` and
-   `(127,128)`, at 1,2,3,7,8,15,16,17,31,32,33,63 bytes and reuse 1 and 8
-   (96 cells).  Run this tier in both the default transform-versus-simple mode
+6. `tiny-byte`: all eight measured HIGH/LOW shapes at
+   1,2,3,7,8,15,16,17,31,32,33,63 bytes and reuse 1 and 8 (192 cells).
+   Run this tier in both the default transform-versus-simple mode
    and `--pair-fusion` mode.  Pair fusion itself must remain unselected below
    64 bytes; these cells gate the byte-independent general direct-plan choice
    and coordinate with the separate XMM-tail experiment.
+
+The grouped-output XMM-tail work does not modify
+`AVX2FF8LinearCombination2`, whose paired loop currently begins at 32 bytes
+and uses scalar cleanup.  If forced-pair attribution confirms a 15/31/63-byte
+cliff, a separate default-OFF follow-up will evaluate 16-byte and 8-byte VEX
+tails for its generic and identity-specialized variants.  The conservative
+selector remains unchanged until that complete-codec evidence exists.
 
 Before timing, eight 65-byte `L=2` probes must select a non-direct path.  Each
 timed cell uses five serial ABBA rounds by default, pins one physical core,
