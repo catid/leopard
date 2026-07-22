@@ -174,7 +174,10 @@ static bool TestFF8MultiplyAddOutputs(
     };
     static const uint16_t log_sets[][8] = {
         { 0, 1, 17, 29, 63, 127, 254, 193 },
-        { 0, 1, 17, UINT16_MAX, 63, 127, 254, UINT16_MAX }
+        { 0, 1, 17, UINT16_MAX, 63, 127, 254, UINT16_MAX },
+        { UINT16_MAX, 1, UINT16_MAX, 29,
+            UINT16_MAX, 127, UINT16_MAX, 193 },
+        { 0, UINT16_MAX, 17, 29, 63, UINT16_MAX, 254, 193 }
     };
     uint8_t source[260];
     uint8_t original_source[260];
@@ -191,20 +194,21 @@ static bool TestFF8MultiplyAddOutputs(
              log_set < sizeof(log_sets) / sizeof(log_sets[0]); ++log_set)
         {
             const uint16_t* logs = log_sets[log_set];
-            for (unsigned output = 0; output < 8; ++output)
-            {
-                output_pointers[output] = outputs[output] + 1;
-                for (size_t i = 0; i < sizeof(outputs[output]); ++i)
-                {
-                    outputs[output][i] = expected[output][i] =
-                        static_cast<uint8_t>(i * (29U + output * 6U) +
-                            count_i + log_set * 7U + output * 13U);
-                }
-            }
             const uint64_t bytes = byte_counts[count_i];
             for (unsigned output_count = 2;
-                 output_count <= 8; output_count *= 2)
+                 output_count <= 8; ++output_count)
             {
+                for (unsigned output = 0; output < 8; ++output)
+                {
+                    output_pointers[output] = outputs[output] + 1;
+                    for (size_t i = 0; i < sizeof(outputs[output]); ++i)
+                    {
+                        outputs[output][i] = expected[output][i] =
+                            static_cast<uint8_t>(
+                                i * (29U + output * 6U) + count_i +
+                                log_set * 7U + output * 13U + output_count);
+                    }
+                }
                 for (unsigned output = 0; output < output_count; ++output)
                 {
                     if (logs[output] == UINT16_MAX)

@@ -3975,22 +3975,53 @@ static void AVX2FF8MultiplyAddOutputs(
     {
         AVX2FF8MultiplyAddOutputGroup2(
             destinations, source, multiplier_logs, byte_count);
+        return;
     }
-    else if (output_count == 4)
+    if (output_count == 3)
+    {
+        AVX2FF8MultiplyAddOutputGroup2(
+            destinations, source, multiplier_logs, byte_count);
+        if (multiplier_logs[2] != UINT16_MAX)
+        {
+            AVX2FF8MultiplyAdd(destinations[2], source,
+                multiplier_logs[2], byte_count);
+        }
+        return;
+    }
+    if (output_count == 4)
     {
         AVX2FF8MultiplyAddOutputGroup4(
             destinations, source, multiplier_logs, byte_count);
+        return;
     }
-    else if (output_count == 8)
+    if (output_count < 5 || output_count > 8)
+        return;
+
+    // Compose the established zero-spill four- and two-output kernels and
+    // handle an optional final output.  This rereads each source at most
+    // three times, versus once per missing original in the output-major
+    // executor.  Eight outputs retain two regular four-output passes because
+    // sixteen nibble-table vectors do not fit alongside the source indices
+    // and destinations in AVX2's sixteen-register file.
+    AVX2FF8MultiplyAddOutputGroup4(
+        destinations, source, multiplier_logs, byte_count);
+    const uint32_t remaining = output_count - 4;
+    if (remaining == 4)
     {
-        // Eight pairs of nibble tables do not fit in the sixteen-register
-        // AVX2 file alongside source and destination values.  Two regular
-        // four-output passes retain tables in registers and reread each source
-        // only twice, versus eight times in the output-major executor.
-        AVX2FF8MultiplyAddOutputGroup4(
-            destinations, source, multiplier_logs, byte_count);
         AVX2FF8MultiplyAddOutputGroup4(
             destinations + 4, source, multiplier_logs + 4, byte_count);
+        return;
+    }
+    if (remaining >= 2)
+    {
+        AVX2FF8MultiplyAddOutputGroup2(
+            destinations + 4, source, multiplier_logs + 4, byte_count);
+    }
+    if ((remaining & 1U) != 0 &&
+        multiplier_logs[output_count - 1] != UINT16_MAX)
+    {
+        AVX2FF8MultiplyAdd(destinations[output_count - 1], source,
+            multiplier_logs[output_count - 1], byte_count);
     }
 }
 

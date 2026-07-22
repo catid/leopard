@@ -89,7 +89,7 @@ typedef void (*XorMemoryDense)(
     uint32_t source_count,
     uint64_t byte_count);
 
-// Accumulate one GF8 source into two, four, or eight independent outputs.
+// Accumulate one GF8 source into two through eight independent outputs.
 // multiplier_logs is indexed in output order.  UINT16_MAX suppresses an
 // output; every other entry is a Leopard GF8 logarithmic fixed multiplier.
 // Outputs are pairwise disjoint and disjoint from source.  This optional

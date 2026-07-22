@@ -4429,6 +4429,15 @@ ExecuteGF8SourceMajorDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
     const uint32_t output_count = plan->missing_original_count;
+    if (output_count < 2 || output_count > kDirectMaxRepairLosses ||
+        codec->original_count > kDirectMaxParentDimension ||
+        codec->recovery_count > kDirectMaxParentDimension ||
+        plan->missing_originals.size() != output_count ||
+        plan->direct_term_offsets.size() !=
+            static_cast<size_t>(output_count) + 1U ||
+        plan->direct_term_offsets.front() != 0 ||
+        plan->direct_term_offsets.back() != plan->direct_terms.size())
+        return LEO2_INTERNAL_ERROR;
 
     // Preserve the compact immutable output-major plan because it is faster
     // for short shards and has no extra cold-plan allocation.  For a large
@@ -4453,7 +4462,7 @@ ExecuteGF8SourceMajorDirectRepair(
     {
         const size_t begin = plan->direct_term_offsets[output_index];
         const size_t end = plan->direct_term_offsets[output_index + 1];
-        if (begin == end)
+        if (begin >= end || end > plan->direct_terms.size())
             return LEO2_INTERNAL_ERROR;
 
         // The output-major plan places a unit coefficient first when one
@@ -4493,8 +4502,13 @@ ExecuteGF8SourceMajorDirectRepair(
     for (uint32_t output_index = 0;
          output_index < output_count; ++output_index)
     {
-        outputs[output_index] = restored_original[
-            plan->missing_originals[output_index]];
+        const uint32_t missing_original =
+            plan->missing_originals[output_index];
+        if (missing_original >= codec->original_count)
+            return LEO2_INTERNAL_ERROR;
+        outputs[output_index] = restored_original[missing_original];
+        if (!outputs[output_index])
+            return LEO2_INTERNAL_ERROR;
         const size_t begin = plan->direct_term_offsets[output_index];
         const leo2_direct_repair_term& initial = plan->direct_terms[begin];
         const bool parity =
@@ -4548,8 +4562,7 @@ static leo2_result ExecuteDirectRepair(
 #ifdef LEO_HAS_FF8
     const uint32_t source_major_outputs = plan->missing_original_count;
     if (shard_bytes >= 2048 &&
-        (source_major_outputs == 2 || source_major_outputs == 4 ||
-         source_major_outputs == 8) &&
+        source_major_outputs >= 2 && source_major_outputs <= 8 &&
         codec->field == LEO2_FIELD_GF8 &&
         IsExpandedDirectRepairCodec(codec) &&
         ops.ff8_multiply_add_outputs &&
