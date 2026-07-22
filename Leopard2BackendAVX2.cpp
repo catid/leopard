@@ -4156,9 +4156,29 @@ static void AVX2FF8MultiplyOutputs(
 {
     if (output_count < 2 || output_count > 8)
         return;
+    bool all_active = true;
     for (uint32_t output = 0; output < output_count; ++output)
-        if (multiplier_logs[output] == UINT16_MAX)
-            return;
+        all_active = all_active && multiplier_logs[output] != UINT16_MAX;
+    if (!all_active)
+    {
+        void* active_destinations[8] = {};
+        uint16_t active_logs[8] = {};
+        uint32_t active_count = 0;
+        for (uint32_t output = 0; output < output_count; ++output)
+        {
+            if (multiplier_logs[output] == UINT16_MAX)
+                continue;
+            active_destinations[active_count] = destinations[output];
+            active_logs[active_count++] = multiplier_logs[output];
+        }
+        if (active_count == 1)
+            AVX2FF8Multiply(active_destinations[0], source,
+                active_logs[0], byte_count);
+        else if (active_count >= 2)
+            AVX2FF8MultiplyOutputs(active_destinations, source,
+                active_logs, active_count, byte_count);
+        return;
+    }
 
     if (output_count >= 4)
     {

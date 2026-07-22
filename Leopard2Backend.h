@@ -104,8 +104,8 @@ typedef void (*FF8MultiplyAddOutputs)(
 
 // Write one GF8 source, independently scaled, to two through eight fresh
 // outputs.  Unlike FF8MultiplyAddOutputs this operation must not read the
-// destination ranges.  Every multiplier is active; callers must not pass
-// UINT16_MAX.  Outputs are pairwise disjoint and disjoint from source.
+// destination ranges.  UINT16_MAX suppresses an output and leaves its range
+// untouched.  Outputs are pairwise disjoint and disjoint from source.
 typedef void (*FF8MultiplyOutputs)(
     void* const* destinations,
     const void* source,

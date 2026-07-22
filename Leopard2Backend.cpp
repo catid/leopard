@@ -239,8 +239,13 @@ static bool TestFF8MultiplyOutputs(
     static const uint64_t byte_counts[] = {
         0, 1, 7, 31, 32, 33, 63, 64, 65, 257
     };
-    static const uint16_t logs[8] = {
-        0, 1, 17, 29, 63, 127, 254, 193
+    static const uint16_t log_sets[][8] = {
+        { 0, 1, 17, 29, 63, 127, 254, 193 },
+        { 0, UINT16_MAX, 17, 29, UINT16_MAX, 127, 254, 193 },
+        { UINT16_MAX, UINT16_MAX, 17, UINT16_MAX,
+            UINT16_MAX, 127, UINT16_MAX, UINT16_MAX },
+        { UINT16_MAX, UINT16_MAX, UINT16_MAX, UINT16_MAX,
+            UINT16_MAX, UINT16_MAX, UINT16_MAX, UINT16_MAX }
     };
     uint8_t source[260];
     uint8_t original_source[260];
@@ -254,29 +259,39 @@ static bool TestFF8MultiplyOutputs(
         for (size_t i = 0; i < sizeof(source); ++i)
             source[i] = original_source[i] = static_cast<uint8_t>(
                 i * 73U + count_i * 19U + 11U);
-        for (unsigned output_count = 2;
-             output_count <= 8; ++output_count)
+        for (size_t log_set = 0;
+             log_set < sizeof(log_sets) / sizeof(log_sets[0]); ++log_set)
         {
-            for (unsigned output = 0; output < 8; ++output)
+            const uint16_t* logs = log_sets[log_set];
+            for (unsigned output_count = 2;
+                 output_count <= 8; ++output_count)
             {
-                output_pointers[output] = outputs[output] + 1;
-                for (size_t i = 0; i < sizeof(outputs[output]); ++i)
+                for (unsigned output = 0; output < 8; ++output)
                 {
-                    outputs[output][i] = expected[output][i] =
-                        static_cast<uint8_t>(
-                            i * (29U + output * 6U) + count_i +
-                            output * 13U + output_count);
+                    output_pointers[output] = outputs[output] + 1;
+                    for (size_t i = 0; i < sizeof(outputs[output]); ++i)
+                    {
+                        outputs[output][i] = expected[output][i] =
+                            static_cast<uint8_t>(
+                                i * (29U + output * 6U) + count_i +
+                                log_set * 7U + output * 13U + output_count);
+                    }
+                    if (output < output_count &&
+                        logs[output] != UINT16_MAX)
+                    {
+                        for (uint64_t i = 0; i < bytes; ++i)
+                            expected[output][i + 1] = reference(
+                                source[i + 1],
+                                static_cast<uint8_t>(logs[output]));
+                    }
                 }
-                if (output < output_count)
-                    for (uint64_t i = 0; i < bytes; ++i)
-                        expected[output][i + 1] = reference(
-                            source[i + 1], static_cast<uint8_t>(logs[output]));
+                ops.ff8_multiply_outputs(
+                    output_pointers, source + 1, logs, output_count, bytes);
+                if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                    std::memcmp(source, original_source,
+                        sizeof(source)) != 0)
+                    return false;
             }
-            ops.ff8_multiply_outputs(
-                output_pointers, source + 1, logs, output_count, bytes);
-            if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
-                std::memcmp(source, original_source, sizeof(source)) != 0)
-                return false;
         }
     }
     return true;
