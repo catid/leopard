@@ -1045,6 +1045,29 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
             byte_counts[i], missing_originals, missing_recovery, counts);
     }
+    /* The AVX2 source-major executor has distinct two- and four-output
+       kernels.  Exercise both at the exact 2 KiB dispatch boundary and with
+       an unaligned vector tail, comparing each result with the independent
+       forced-generic decoder inside run_decode_case. */
+    static const size_t source_major_bytes[] = { 2048, 2049 };
+    static const size_t source_major_losses[] = { 2, 4 };
+    for (size_t loss_i = 0;
+         loss_i < sizeof(source_major_losses) /
+             sizeof(source_major_losses[0]); ++loss_i)
+    {
+        const std::vector<unsigned> missing(
+            missing_originals.begin(),
+            missing_originals.begin() + source_major_losses[loss_i]);
+        for (size_t byte_i = 0;
+             byte_i < sizeof(source_major_bytes) /
+                 sizeof(source_major_bytes[0]); ++byte_i)
+        {
+            run_decode_case(context, 65, 65,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                source_major_bytes[byte_i], missing, missing_recovery,
+                counts);
+        }
+    }
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);

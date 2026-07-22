@@ -505,18 +505,46 @@ void execute_public_r1_multi_item_batch(
     require_result(leo2_decode_plan_execute_batch(
         fixture.plan, &items[0], items.size()), LEO2_SUCCESS,
         "R=1 multi-item batch decode execute");
-    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+    const auto check_outputs = [&]()
     {
-        require(std::memcmp(restored[item_i][fixture.missing],
-                    fixture.original[fixture.missing], fixture.bytes) == 0,
-            "R=1 multi-item batch restored the wrong original");
-        for (size_t i = 0; i < kOutputOffset; ++i)
-            require(restored_storage[item_i][i] == 0x5a,
-                "R=1 multi-item batch changed an output prefix guard");
-        for (size_t i = kOutputOffset + fixture.bytes;
-             i < restored_storage[item_i].size(); ++i)
-            require(restored_storage[item_i][i] == 0x5a,
-                "R=1 multi-item batch changed an output suffix guard");
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        {
+            require(std::memcmp(restored[item_i][fixture.missing],
+                        fixture.original[fixture.missing], fixture.bytes) == 0,
+                "R=1 multi-item batch restored the wrong original");
+            for (size_t i = 0; i < kOutputOffset; ++i)
+                require(restored_storage[item_i][i] == 0x5a,
+                    "R=1 multi-item batch changed an output prefix guard");
+            for (size_t i = kOutputOffset + fixture.bytes;
+                 i < restored_storage[item_i].size(); ++i)
+                require(restored_storage[item_i][i] == 0x5a,
+                    "R=1 multi-item batch changed an output suffix guard");
+        }
+    };
+    check_outputs();
+
+    /* Nine or more items may use the allocation-free, caller-supplied
+       interval preflight.  Compact R=1 plans omit all presence vectors, so
+       exercise one representative serial/pool case through that independent
+       entry point instead of relying on the compatibility preflight above to
+       cover the reconstructed scalar metadata. */
+    if (batch_count >= 9 && fixture.k == 9 && fixture.bytes == 4097)
+    {
+        size_t preflight_bytes = 0;
+        require_result(leo2_decode_plan_batch_preflight_scratch_size(
+            fixture.plan, batch_count, &preflight_bytes), LEO2_SUCCESS,
+            "R=1 compact scalable preflight scratch query");
+        require(preflight_bytes != 0,
+            "R=1 compact scalable preflight omitted required scratch");
+        AlignedScratch preflight(preflight_bytes);
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+            std::fill(restored_storage[item_i].begin(),
+                restored_storage[item_i].end(), 0x5a);
+        require_result(leo2_decode_plan_execute_batch_with_preflight_scratch(
+            fixture.plan, &items[0], items.size(), preflight.data(),
+            preflight_bytes), LEO2_SUCCESS,
+            "R=1 compact scalable batch decode execute");
+        check_outputs();
     }
 
     if (!adversarial)
