@@ -35,11 +35,13 @@
 #include "leopard2.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <sstream>
 #include <stdexcept>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -879,6 +881,120 @@ void test_generalized_one_loss_direct_repair_execution(
     }
 }
 
+void test_concurrent_expanded_direct_repair_cache(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    /*
+        This must run before any other K=65 codec is created on this context:
+        all lanes race the context-owned call_once cache, then compare every
+        promoted loss count with an independently forced transform plan.
+    */
+    static const unsigned lane_count = 8;
+    static const unsigned recovery_counts[lane_count] = {
+        65, 66, 96, 127, 128, 65, 96, 128
+    };
+    static const unsigned missing_candidates[lane_count] = {
+        0, 1, 7, 16, 32, 48, 63, 64
+    };
+    std::atomic<unsigned> ready(0);
+    std::atomic<bool> go(false);
+    std::vector<TestCounts> lane_counts(lane_count);
+    std::vector<std::string> errors(lane_count);
+    std::vector<std::thread> threads;
+    threads.reserve(lane_count);
+
+    for (unsigned lane = 0; lane < lane_count; ++lane)
+    {
+        threads.push_back(std::thread(
+            [context, lane, &ready, &go, &lane_counts, &errors]() {
+            try
+            {
+                const unsigned recovery_count = recovery_counts[lane];
+                const unsigned loss_count = lane + 1;
+                std::vector<unsigned> missing_originals(
+                    missing_candidates,
+                    missing_candidates + loss_count);
+                const std::vector<unsigned> missing_recovery = {
+                    0, recovery_count / 2, recovery_count - 1
+                };
+                std::vector<uint8_t> original_present(65, 1);
+                std::vector<uint8_t> recovery_present(recovery_count, 1);
+                for (size_t i = 0; i < missing_originals.size(); ++i)
+                    original_present[missing_originals[i]] = 0;
+                for (size_t i = 0; i < missing_recovery.size(); ++i)
+                    recovery_present[missing_recovery[i]] = 0;
+
+                ready.fetch_add(1, std::memory_order_release);
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+
+                leo2_codec* automatic = make_codec(context, 65,
+                    recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
+                    LEO2_FIELD_GF8);
+                leo2_decode_plan* automatic_plan = NULL;
+                require_result(leo2_decode_plan_create(automatic,
+                    &original_present[0], &recovery_present[0],
+                    &automatic_plan), "concurrent direct plan create");
+                size_t automatic_scratch = 0;
+                require_result(leo2_decode_plan_scratch_size(
+                    automatic_plan, 64, &automatic_scratch),
+                    "concurrent direct scratch query");
+
+                leo2_codec_options transform_options;
+                memset(&transform_options, 0, sizeof(transform_options));
+                transform_options.struct_size = sizeof(transform_options);
+                transform_options.flags = LEO2_CODEC_FORCE_GENERIC_DECODE;
+                leo2_codec* transform = NULL;
+                require_result(leo2_codec_create(context, 65,
+                    recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
+                    LEO2_FIELD_GF8, &transform_options, &transform),
+                    "concurrent transform codec create");
+                leo2_decode_plan* transform_plan = NULL;
+                require_result(leo2_decode_plan_create(transform,
+                    &original_present[0], &recovery_present[0],
+                    &transform_plan), "concurrent transform plan create");
+                size_t transform_scratch = 0;
+                require_result(leo2_decode_plan_scratch_size(
+                    transform_plan, 64, &transform_scratch),
+                    "concurrent transform scratch query");
+                require(automatic_scratch < transform_scratch,
+                    "concurrent K=65 plan did not select direct repair");
+                leo2_decode_plan_destroy(transform_plan);
+                leo2_codec_destroy(transform);
+                leo2_decode_plan_destroy(automatic_plan);
+                leo2_codec_destroy(automatic);
+
+                run_decode_case(context, 65, recovery_count,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 64,
+                    missing_originals, missing_recovery,
+                    &lane_counts[lane]);
+            }
+            catch (const std::exception& error)
+            {
+                errors[lane] = error.what();
+            }
+        }));
+    }
+
+    while (ready.load(std::memory_order_acquire) != lane_count)
+        std::this_thread::yield();
+    go.store(true, std::memory_order_release);
+    for (size_t lane = 0; lane < threads.size(); ++lane)
+        threads[lane].join();
+    for (unsigned lane = 0; lane < lane_count; ++lane)
+    {
+        require(errors[lane].empty(),
+            std::string("concurrent direct cache lane failed: ") +
+                errors[lane]);
+        counts->high_compatibility += lane_counts[lane].high_compatibility;
+        counts->low_oracle_symbols += lane_counts[lane].low_oracle_symbols;
+        counts->recovered_shards += lane_counts[lane].recovered_shards;
+        counts->tail_cases += lane_counts[lane].tail_cases;
+        counts->plan_executions += lane_counts[lane].plan_executions;
+    }
+}
+
 void test_expanded_direct_repair_execution(TestCounts* counts)
 {
     leo2_context_options options;
@@ -900,6 +1016,7 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
             leo2_context_backend(context) == LEO2_BACKEND_AVX2,
         "explicit AVX2 direct-repair context selected the wrong backend");
 
+    test_concurrent_expanded_direct_repair_cache(context, counts);
     test_direct_repair_dispatch_bounds(context);
     test_generalized_one_loss_direct_repair_execution(context, counts);
     const std::vector<unsigned> missing_originals = {

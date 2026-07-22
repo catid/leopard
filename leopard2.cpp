@@ -73,6 +73,10 @@ struct leo2_context
     bool auto_avx512_encode_host;
     uint32_t thread_count;
     leo2_thread_pool* pool;
+    // Lazily populated once per context for the measured GF8/AVX2 K=65
+    // multi-loss repair family, then read immutably by every codec/plan.
+    std::once_flag direct_repair_rows8_once;
+    std::vector<uint8_t> direct_repair_generator_rows8;
 };
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -157,6 +161,8 @@ struct leo2_codec
     // populated only for the rigorously bounded direct-repair dispatch region.
     std::vector<uint8_t> direct_barycentric8;
     std::vector<uint16_t> direct_barycentric16;
+    uint16_t direct_generator_numerator_log;
+    bool direct_generator_numerator_valid;
     // Exact row-major generator coefficients, represented as Leopard field
     // logarithms, for the bounded allocation-free direct encoder.
     std::vector<uint8_t> direct_generator_logs8;
@@ -1259,6 +1265,7 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
 struct DirectField8
 {
     typedef leopard::ff8::ffe_t Element;
+    static const uint32_t Modulus = 255;
     static Element Multiply(Element a, Element b)
     {
         return leopard::ff8::MultiplyElements(a, b);
@@ -1270,6 +1277,23 @@ struct DirectField8
     static Element Log(Element value)
     {
         return leopard::ff8::ElementLog(value);
+    }
+    static Element FromLog(Element value_log)
+    {
+        return leopard::ff8::MultiplyLogElement(1, value_log);
+    }
+    static Element AddLogs(Element a, Element b)
+    {
+        uint32_t sum = static_cast<uint32_t>(a) + b;
+        if (sum >= Modulus)
+            sum -= Modulus;
+        return static_cast<Element>(sum);
+    }
+    static Element SubtractLogs(Element a, Element b)
+    {
+        return static_cast<Element>(a >= b
+            ? a - b
+            : static_cast<uint32_t>(a) + Modulus - b);
     }
     static void MultiplyBytes(
         const leopard::backend::Ops& ops,
@@ -1298,6 +1322,7 @@ struct DirectField8
 struct DirectField16
 {
     typedef leopard::ff16::ffe_t Element;
+    static const uint32_t Modulus = 65535;
     static Element Multiply(Element a, Element b)
     {
         return leopard::ff16::MultiplyElements(a, b);
@@ -1309,6 +1334,23 @@ struct DirectField16
     static Element Log(Element value)
     {
         return leopard::ff16::ElementLog(value);
+    }
+    static Element FromLog(Element value_log)
+    {
+        return leopard::ff16::MultiplyLogElement(1, value_log);
+    }
+    static Element AddLogs(Element a, Element b)
+    {
+        uint32_t sum = static_cast<uint32_t>(a) + b;
+        if (sum >= Modulus)
+            sum -= Modulus;
+        return static_cast<Element>(sum);
+    }
+    static Element SubtractLogs(Element a, Element b)
+    {
+        return static_cast<Element>(a >= b
+            ? a - b
+            : static_cast<uint32_t>(a) + Modulus - b);
     }
     static void MultiplyBytes(
         const leopard::backend::Ops& ops,
@@ -1498,16 +1540,25 @@ static bool PrepareDirectGeneratorRow(
     // This is the systematic Lagrange row over the complete parent message
     // set.  Coordinates after the K public originals are shortened zeros, but
     // remain factors in both Z(parity) and each public derivative Z'(x_i).
-    Element vanishing_value = 1;
-    for (uint32_t coordinate = systematic_begin;
-         coordinate < systematic_end;
-         ++coordinate)
+    const bool have_numerator_log =
+        codec->direct_generator_numerator_valid;
+    Element vanishing_log = have_numerator_log
+        ? static_cast<Element>(codec->direct_generator_numerator_log)
+        : 0;
+    if (!have_numerator_log)
     {
-        vanishing_value = Field::Multiply(vanishing_value,
-            static_cast<Element>(parity_coordinate ^ coordinate));
+        for (uint32_t coordinate = systematic_begin;
+             coordinate < systematic_end;
+             ++coordinate)
+        {
+            const Element difference = static_cast<Element>(
+                parity_coordinate ^ coordinate);
+            if (difference == 0)
+                return false;
+            vanishing_log =
+                Field::AddLogs(vanishing_log, Field::Log(difference));
+        }
     }
-    if (vanishing_value == 0)
-        return false;
 
     for (uint32_t original = 0; original < codec->original_count; ++original)
     {
@@ -1515,11 +1566,15 @@ static bool PrepareDirectGeneratorRow(
             parity_coordinate ^ (systematic_begin + original));
         if (difference == 0)
             return false;
-        row[original] = Field::Multiply(
-            Field::Multiply(vanishing_value, Field::Inverse(difference)),
-            barycentric_weights[original]);
-        if (row[original] == 0)
+        const Element weight = barycentric_weights[original];
+        if (weight == 0)
             return false;
+        Element coefficient_log = Field::SubtractLogs(
+            vanishing_log, Field::Log(difference));
+        if (!have_numerator_log)
+            coefficient_log =
+                Field::AddLogs(coefficient_log, Field::Log(weight));
+        row[original] = Field::FromLog(coefficient_log);
     }
     return true;
 }
@@ -1574,6 +1629,36 @@ static bool HasDirectGeneratorRows(const leo2_codec* codec)
         ? codec->direct_generator_logs8.size() == coefficient_count
         : codec->field == LEO2_FIELD_GF16 &&
             codec->direct_generator_logs16.size() == coefficient_count;
+}
+
+template<class Field>
+static bool PrepareDirectRepairGeneratorRows(
+    const leo2_codec* codec,
+    const std::vector<typename Field::Element>& barycentric_weights,
+    std::vector<typename Field::Element>& generator_rows)
+{
+    typedef typename Field::Element Element;
+    size_t coefficient_count = 0;
+    if (!codec || !CheckedMultiply(
+            static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), coefficient_count))
+        return false;
+
+    generator_rows.resize(coefficient_count);
+    for (uint32_t recovery = 0;
+         recovery < codec->recovery_count;
+         ++recovery)
+    {
+        Element* row = generator_rows.data() +
+            static_cast<size_t>(recovery) * codec->original_count;
+        if (!PrepareDirectGeneratorRow<Field>(
+                codec, recovery, barycentric_weights, row))
+        {
+            generator_rows.clear();
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool AutoDirectEncodePreferred(
@@ -1652,9 +1737,152 @@ static bool InvertDirectRepairMatrix(
 }
 
 template<class Field>
+static bool PrepareDirectRepairCauchyInverse(
+    const leo2_decode_plan* plan,
+    const std::vector<typename Field::Element>& barycentric_weights,
+    const std::vector<typename Field::Element>& cached_generator_rows,
+    const uint32_t* selected_parities,
+    typename Field::Element inverse
+        [kDirectMaxRepairLosses][kDirectMaxRepairLosses])
+{
+    typedef typename Field::Element Element;
+    const leo2_codec* codec = plan->codec;
+    const uint32_t losses = plan->missing_original_count;
+    if (!codec || losses == 0 || losses > kDirectMaxRepairLosses ||
+        !selected_parities || barycentric_weights.size() !=
+            codec->original_count)
+        return false;
+
+    size_t coefficient_count = 0;
+    if (!CheckedMultiply(static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), coefficient_count) ||
+        cached_generator_rows.size() < coefficient_count)
+        return false;
+
+    Element parity_coordinates[kDirectMaxRepairLosses] = {};
+    Element missing_coordinates[kDirectMaxRepairLosses] = {};
+    Element row_factor_logs[kDirectMaxRepairLosses] = {};
+    Element column_factor_logs[kDirectMaxRepairLosses] = {};
+    Element parity_at_missing_logs[kDirectMaxRepairLosses] = {};
+    for (uint32_t equation = 0; equation < losses; ++equation)
+    {
+        parity_coordinates[equation] = static_cast<Element>(
+            CoordinateForRecovery(codec, selected_parities[equation]));
+    }
+    for (uint32_t missing = 0; missing < losses; ++missing)
+    {
+        missing_coordinates[missing] = static_cast<Element>(
+            CoordinateForOriginal(codec,
+                plan->missing_originals[missing]));
+    }
+
+    const Element reference_coordinate = static_cast<Element>(
+        CoordinateForOriginal(codec, 0));
+    const Element reference_weight_log =
+        Field::Log(barycentric_weights[0]);
+    for (uint32_t equation = 0; equation < losses; ++equation)
+    {
+        const Element* generator_row = cached_generator_rows.data() +
+            static_cast<size_t>(selected_parities[equation]) *
+                codec->original_count;
+        const Element reference_difference = static_cast<Element>(
+            parity_coordinates[equation] ^ reference_coordinate);
+        if (reference_difference == 0 || generator_row[0] == 0)
+            return false;
+        Element row_scale_log = Field::AddLogs(
+            Field::Log(generator_row[0]),
+            Field::Log(reference_difference));
+        row_scale_log =
+            Field::SubtractLogs(row_scale_log, reference_weight_log);
+
+        Element message_vanishing_log = 0;
+        for (uint32_t missing = 0; missing < losses; ++missing)
+        {
+            const Element difference = static_cast<Element>(
+                parity_coordinates[equation] ^
+                missing_coordinates[missing]);
+            if (difference == 0)
+                return false;
+            message_vanishing_log = Field::AddLogs(
+                message_vanishing_log, Field::Log(difference));
+        }
+        Element parity_derivative_log = 0;
+        for (uint32_t other = 0; other < losses; ++other)
+        {
+            if (other == equation)
+                continue;
+            const Element difference = static_cast<Element>(
+                parity_coordinates[equation] ^
+                parity_coordinates[other]);
+            if (difference == 0)
+                return false;
+            parity_derivative_log = Field::AddLogs(
+                parity_derivative_log, Field::Log(difference));
+        }
+        row_factor_logs[equation] = Field::SubtractLogs(
+            Field::SubtractLogs(message_vanishing_log, row_scale_log),
+            parity_derivative_log);
+    }
+
+    for (uint32_t missing = 0; missing < losses; ++missing)
+    {
+        Element parity_vanishing_log = 0;
+        for (uint32_t equation = 0; equation < losses; ++equation)
+        {
+            const Element difference = static_cast<Element>(
+                missing_coordinates[missing] ^
+                parity_coordinates[equation]);
+            if (difference == 0)
+                return false;
+            parity_vanishing_log = Field::AddLogs(
+                parity_vanishing_log, Field::Log(difference));
+        }
+        parity_at_missing_logs[missing] = parity_vanishing_log;
+
+        Element message_derivative_log = 0;
+        for (uint32_t other = 0; other < losses; ++other)
+        {
+            if (other == missing)
+                continue;
+            const Element difference = static_cast<Element>(
+                missing_coordinates[missing] ^
+                missing_coordinates[other]);
+            if (difference == 0)
+                return false;
+            message_derivative_log = Field::AddLogs(
+                message_derivative_log, Field::Log(difference));
+        }
+        column_factor_logs[missing] = Field::SubtractLogs(0,
+            Field::AddLogs(Field::Log(barycentric_weights[
+                plan->missing_originals[missing]]),
+                message_derivative_log));
+    }
+
+    for (uint32_t missing = 0; missing < losses; ++missing)
+    {
+        for (uint32_t equation = 0; equation < losses; ++equation)
+        {
+            const Element difference = static_cast<Element>(
+                missing_coordinates[missing] ^
+                parity_coordinates[equation]);
+            Element inverse_log = Field::AddLogs(
+                row_factor_logs[equation],
+                column_factor_logs[missing]);
+            inverse_log = Field::AddLogs(
+                inverse_log, parity_at_missing_logs[missing]);
+            inverse_log =
+                Field::SubtractLogs(inverse_log, Field::Log(difference));
+            inverse[missing][equation] = Field::FromLog(inverse_log);
+        }
+    }
+    return true;
+}
+
+template<class Field>
 static bool PrepareDirectRepairTerms(
     leo2_decode_plan* plan,
-    const std::vector<typename Field::Element>& barycentric_weights)
+    const std::vector<typename Field::Element>& barycentric_weights,
+    const std::vector<typename Field::Element>* cached_generator_rows)
 {
     typedef typename Field::Element Element;
     const leo2_codec* codec = plan->codec;
@@ -1675,16 +1903,35 @@ static bool PrepareDirectRepairTerms(
     if (selected_count != losses)
         return false;
 
-    std::vector<Element> generator_rows(
-        static_cast<size_t>(losses) * codec->original_count);
-    for (uint32_t equation = 0; equation < losses; ++equation)
+    size_t complete_row_count = 0;
+    const bool have_cached_rows = CheckedMultiply(
+        static_cast<size_t>(codec->original_count),
+        static_cast<size_t>(codec->recovery_count), complete_row_count) &&
+        cached_generator_rows &&
+        cached_generator_rows->size() >= complete_row_count;
+    std::vector<Element> generated_rows;
+    if (!have_cached_rows)
     {
-        Element* row = &generator_rows[
-            static_cast<size_t>(equation) * codec->original_count];
-        if (!PrepareDirectGeneratorRow<Field>(
-                codec, selected_parities[equation], barycentric_weights, row))
-            return false;
+        generated_rows.resize(
+            static_cast<size_t>(losses) * codec->original_count);
+        for (uint32_t equation = 0; equation < losses; ++equation)
+        {
+            Element* row = generated_rows.data() +
+                static_cast<size_t>(equation) * codec->original_count;
+            if (!PrepareDirectGeneratorRow<Field>(codec,
+                    selected_parities[equation], barycentric_weights, row))
+                return false;
+        }
     }
+
+    const auto generator_row = [&](uint32_t equation) -> const Element* {
+        if (have_cached_rows)
+            return cached_generator_rows->data() +
+                static_cast<size_t>(selected_parities[equation]) *
+                    codec->original_count;
+        return generated_rows.data() +
+            static_cast<size_t>(equation) * codec->original_count;
+    };
 
     Element augmented
         [kDirectMaxRepairLosses][kDirectMaxRepairLosses * 2] = {};
@@ -1692,17 +1939,42 @@ static bool PrepareDirectRepairTerms(
     {
         for (uint32_t missing = 0; missing < losses; ++missing)
         {
-            augmented[equation][missing] = generator_rows[
-                static_cast<size_t>(equation) * codec->original_count +
-                plan->missing_originals[missing]];
+            augmented[equation][missing] =
+                generator_row(equation)[plan->missing_originals[missing]];
         }
         augmented[equation][losses + equation] = 1;
     }
-    if (!InvertDirectRepairMatrix<Field>(augmented, losses))
+    bool inverted = false;
+    if (have_cached_rows && codec->field == LEO2_FIELD_GF8)
+    {
+        Element cauchy_inverse
+            [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
+        if (PrepareDirectRepairCauchyInverse<Field>(plan,
+                barycentric_weights, *cached_generator_rows,
+                selected_parities, cauchy_inverse))
+        {
+            for (uint32_t output = 0; output < losses; ++output)
+            {
+                for (uint32_t equation = 0; equation < losses; ++equation)
+                {
+                    augmented[output][losses + equation] =
+                        cauchy_inverse[output][equation];
+                }
+            }
+            inverted = true;
+        }
+    }
+    if (!inverted && !InvertDirectRepairMatrix<Field>(augmented, losses))
         return false;
 
     plan->direct_term_offsets.clear();
     plan->direct_terms.clear();
+    plan->direct_term_offsets.reserve(static_cast<size_t>(losses) + 1U);
+    size_t maximum_term_count = 0;
+    if (!CheckedMultiply(static_cast<size_t>(losses),
+            static_cast<size_t>(codec->original_count), maximum_term_count))
+        return false;
+    plan->direct_terms.reserve(maximum_term_count);
     plan->direct_term_offsets.push_back(0);
     for (uint32_t output = 0; output < losses; ++output)
     {
@@ -1717,17 +1989,59 @@ static bool PrepareDirectRepairTerms(
             };
             plan->direct_terms.push_back(term);
         }
-        for (uint32_t original = 0; original < codec->original_count; ++original)
+
+        alignas(kScratchAlignment)
+            Element combined_row[kDirectMaxParentDimension] = {};
+        bool have_combined_row = false;
+        if (have_cached_rows && codec->field == LEO2_FIELD_GF8 &&
+            codec->context && codec->context->ops)
+        {
+            const leopard::backend::Ops& ops = *codec->context->ops;
+            for (uint32_t equation = 0; equation < losses; ++equation)
+            {
+                const Element coefficient =
+                    augmented[output][losses + equation];
+                if (coefficient == 0)
+                    continue;
+                const uint16_t multiplier_log =
+                    static_cast<uint16_t>(Field::Log(coefficient));
+                const Element* row = generator_row(equation);
+                if (!have_combined_row)
+                {
+                    if (multiplier_log == 0)
+                        memcpy(combined_row, row, codec->original_count);
+                    else
+                        ops.ff8_multiply(combined_row, row, multiplier_log,
+                            codec->original_count);
+                    have_combined_row = true;
+                }
+                else if (multiplier_log == 0)
+                {
+                    ops.xor_memory(combined_row, row, codec->original_count);
+                }
+                else
+                {
+                    ops.ff8_multiply_add(combined_row, row, multiplier_log,
+                        codec->original_count);
+                }
+            }
+        }
+
+        for (uint32_t original = 0;
+             original < codec->original_count;
+             ++original)
         {
             if (!plan->original_present[original])
                 continue;
-            Element coefficient = 0;
-            for (uint32_t equation = 0; equation < losses; ++equation)
+            Element coefficient = combined_row[original];
+            if (!have_combined_row)
             {
-                coefficient ^= Field::Multiply(
-                    augmented[output][losses + equation],
-                    generator_rows[static_cast<size_t>(equation) *
-                        codec->original_count + original]);
+                for (uint32_t equation = 0; equation < losses; ++equation)
+                {
+                    coefficient ^= Field::Multiply(
+                        augmented[output][losses + equation],
+                        generator_row(equation)[original]);
+                }
             }
             if (coefficient == 0)
                 continue;
@@ -5443,6 +5757,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->field = field;
     codec->shard_layout = shard_layout;
     codec->flags = options ? options->flags : 0;
+    codec->direct_generator_numerator_log = 0;
+    codec->direct_generator_numerator_valid = false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     codec->test_encode_mode = LEO2_TEST_ENCODE_AUTO;
     codec->test_decode_mode = LEO2_TEST_DECODE_AUTO;
@@ -5502,11 +5818,59 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                 std::vector<DirectField8::Element> weights;
                 if (PrepareDirectBarycentricWeights<DirectField8>(codec, weights))
                 {
+                    if (IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+                        !weights.empty() &&
+                        std::all_of(weights.begin(), weights.end(),
+                            [&](DirectField8::Element value) {
+                                return value == weights[0];
+                            }))
+                    {
+                        DirectField8::Element numerator_log =
+                            DirectField8::Log(weights[0]);
+                        for (uint32_t coordinate = codec->padded_side;
+                             coordinate < codec->parent_count;
+                             ++coordinate)
+                        {
+                            numerator_log = DirectField8::AddLogs(
+                                numerator_log, DirectField8::Log(
+                                    static_cast<DirectField8::Element>(
+                                        coordinate)));
+                        }
+                        codec->direct_generator_numerator_log = numerator_log;
+                        codec->direct_generator_numerator_valid = true;
+                    }
                     if (prepare_direct_encode)
                         PrepareDirectGeneratorLogs<DirectField8>(codec, weights,
                             codec->direct_generator_logs8);
                     if (prepare_direct_repair)
+                    {
+                        if (IsExpandedDirectRepairCodec(codec))
+                        {
+                            std::call_once(
+                                codec->context->direct_repair_rows8_once,
+                                [&]() {
+                                    leo2_codec canonical = {};
+                                    canonical.original_count = 65;
+                                    canonical.recovery_count = 128;
+                                    canonical.parent_count = 256;
+                                    canonical.padded_side = 128;
+                                    canonical.parent_dimension = 128;
+                                    canonical.profile =
+                                        LEO2_PROFILE_LEGACY_HIGH_V1;
+                                    canonical.field = LEO2_FIELD_GF8;
+                                    canonical.direct_generator_numerator_log =
+                                        codec->direct_generator_numerator_log;
+                                    canonical.direct_generator_numerator_valid =
+                                        codec->
+                                            direct_generator_numerator_valid;
+                                    PrepareDirectRepairGeneratorRows<
+                                        DirectField8>(&canonical, weights,
+                                        codec->context->
+                                            direct_repair_generator_rows8);
+                                });
+                        }
                         codec->direct_barycentric8.swap(weights);
+                    }
                 }
             }
             if (permanent_erasure_count != 0 &&
@@ -6368,21 +6732,56 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             original_present, original_present + codec->original_count);
         plan->recovery_present.assign(
             recovery_present, recovery_present + codec->recovery_count);
-        plan->coordinate_erased = codec->permanent_erased;
-
+        plan->missing_originals.reserve(missing_original_count);
         for (uint32_t i = 0; i < codec->original_count; ++i)
-        {
             if (!original_present[i])
-            {
                 plan->missing_originals.push_back(i);
-                const uint32_t coordinate = CoordinateForOriginal(codec, i);
+
+        bool force_test_transform = false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        force_test_transform =
+            codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
+#endif
+        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
+            !force_test_transform &&
+            missing_original_count <= DirectRepairLossLimit(codec))
+        {
+#ifdef LEO_HAS_FF8
+            if (codec->field == LEO2_FIELD_GF8 &&
+                !codec->direct_barycentric8.empty())
+            {
+                plan->direct_repair = PrepareDirectRepairTerms<DirectField8>(
+                    plan, codec->direct_barycentric8,
+                    IsExpandedDirectRepairCodec(codec)
+                        ? &codec->context->direct_repair_generator_rows8
+                        : NULL);
+            }
+#endif
+#ifdef LEO_HAS_FF16
+            if (codec->field == LEO2_FIELD_GF16 &&
+                !codec->direct_barycentric16.empty())
+            {
+                plan->direct_repair = PrepareDirectRepairTerms<DirectField16>(
+                    plan, codec->direct_barycentric16, NULL);
+            }
+#endif
+        }
+
+        if (!plan->direct_repair)
+        {
+            plan->coordinate_erased = codec->permanent_erased;
+            plan->requested_coordinates.reserve(missing_original_count);
+            for (uint32_t i = 0; i < missing_original_count; ++i)
+            {
+                const uint32_t original = plan->missing_originals[i];
+                const uint32_t coordinate =
+                    CoordinateForOriginal(codec, original);
                 plan->coordinate_erased[coordinate] = 1;
                 plan->requested_coordinates.push_back(coordinate);
             }
-        }
-        for (uint32_t i = 0; i < codec->recovery_count; ++i)
-            if (!recovery_present[i])
-                plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                if (!recovery_present[i])
+                    plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
 
         /*
             Specialized decoders use exactly parent redundancy erasures.  Keep
@@ -6390,24 +6789,24 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             shards needed to reach K public survivors; mark surplus received
             parity as deterministic virtual erasures.
         */
-        uint32_t public_survivors_needed = codec->original_count;
-        for (uint32_t i = 0; i < codec->original_count; ++i)
-            if (original_present[i])
-                --public_survivors_needed;
-        for (uint32_t i = 0; i < codec->recovery_count; ++i)
-        {
-            if (!recovery_present[i])
-                continue;
+            uint32_t public_survivors_needed = codec->original_count;
+            for (uint32_t i = 0; i < codec->original_count; ++i)
+                if (original_present[i])
+                    --public_survivors_needed;
+            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            {
+                if (!recovery_present[i])
+                    continue;
+                if (public_survivors_needed != 0)
+                    --public_survivors_needed;
+                else
+                    plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
+            }
             if (public_survivors_needed != 0)
-                --public_survivors_needed;
-            else
-                plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
-        }
-        if (public_survivors_needed != 0)
-        {
-            delete plan;
-            return LEO2_NEED_MORE_DATA;
-        }
+            {
+                delete plan;
+                return LEO2_NEED_MORE_DATA;
+            }
 
 #ifdef LEO_DEBUG
         /*
@@ -6428,50 +6827,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         LEO_DEBUG_ASSERT(dynamic_erasure_count == codec->recovery_count);
 #endif
 
-        if (plan->direct_copy)
-        {
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            if (plan->direct_copy)
             {
-                const uint32_t coordinate = CoordinateForRecovery(codec, i);
-                if (recovery_present[i] && !plan->coordinate_erased[coordinate])
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
                 {
-                    plan->direct_copy_recovery = i;
-                    break;
+                    const uint32_t coordinate = CoordinateForRecovery(codec, i);
+                    if (recovery_present[i] &&
+                        !plan->coordinate_erased[coordinate])
+                    {
+                        plan->direct_copy_recovery = i;
+                        break;
+                    }
+                }
+                if (plan->direct_copy_recovery ==
+                    std::numeric_limits<uint32_t>::max())
+                {
+                    delete plan;
+                    return LEO2_INTERNAL_ERROR;
                 }
             }
-            if (plan->direct_copy_recovery ==
-                std::numeric_limits<uint32_t>::max())
-            {
-                delete plan;
-                return LEO2_INTERNAL_ERROR;
-            }
-        }
-
-        bool force_test_transform = false;
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        force_test_transform =
-            codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
-#endif
-        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
-            !force_test_transform &&
-            missing_original_count <= DirectRepairLossLimit(codec))
-        {
-#ifdef LEO_HAS_FF8
-            if (codec->field == LEO2_FIELD_GF8 &&
-                !codec->direct_barycentric8.empty())
-            {
-                plan->direct_repair = PrepareDirectRepairTerms<DirectField8>(
-                    plan, codec->direct_barycentric8);
-            }
-#endif
-#ifdef LEO_HAS_FF16
-            if (codec->field == LEO2_FIELD_GF16 &&
-                     !codec->direct_barycentric16.empty())
-            {
-                plan->direct_repair = PrepareDirectRepairTerms<DirectField16>(
-                    plan, codec->direct_barycentric16);
-            }
-#endif
         }
 
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
