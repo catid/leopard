@@ -1026,7 +1026,8 @@ void test_experimental_small_direct_repair_execution(
     };
     static const Shape shapes[] = {
         { 5, 5, 5 }, { 8, 8, 5 }, { 8, 8, 8 },
-        { 9, 6, 6 }, { 12, 7, 7 }, { 16, 8, 5 }, { 16, 8, 8 }
+        { 9, 6, 6 }, { 12, 7, 7 }, { 14, 8, 8 },
+        { 16, 6, 6 }, { 16, 8, 5 }, { 16, 8, 7 }, { 16, 8, 8 }
     };
     static const size_t boundary_bytes[] = {
         2047, 2048, 2049, 4095, 4096, 4097,
@@ -2679,10 +2680,24 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                     plans[path], bytes, &scratch[path]),
                     "balanced family scratch query");
             }
-            require_balanced_family(
-                scratch[0] == scratch[1] && scratch[0] == scratch[2],
-                k, bytes,
-                "AUTO, generic, and materialized scratch differ");
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+            const bool experimental_auto_direct = k <= 8 &&
+                leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+            if (experimental_auto_direct)
+            {
+                require_balanced_family(
+                    scratch[0] < scratch[1] && scratch[1] == scratch[2],
+                    k, bytes,
+                    "experimental AUTO direct scratch did not beat transforms");
+            }
+            else
+#endif
+            {
+                require_balanced_family(
+                    scratch[0] == scratch[1] && scratch[0] == scratch[2],
+                    k, bytes,
+                    "AUTO, generic, and materialized scratch differ");
+            }
             require_balanced_family(
                 scratch[3] == scratch[2], k, bytes,
                 "translated tiled and materialized scratch differ at N=2P");
@@ -2691,9 +2706,22 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
             require_result(leo2_decode_scratch_size(
                 codecs[0], bytes, &one_shot_scratch),
                 "balanced family one-shot scratch query");
-            require_balanced_family(
-                one_shot_scratch == scratch[0], k, bytes,
-                "one-shot query does not cover the full-loss AUTO plan");
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+            if (experimental_auto_direct)
+            {
+                require_balanced_family(
+                    one_shot_scratch == scratch[1] &&
+                        one_shot_scratch > scratch[0],
+                    k, bytes,
+                    "one-shot query does not retain the conservative bound");
+            }
+            else
+#endif
+            {
+                require_balanced_family(
+                    one_shot_scratch == scratch[0], k, bytes,
+                    "one-shot query does not cover the full-loss AUTO plan");
+            }
             if (bytes == execution_bytes)
                 std::copy(scratch, scratch + path_count, execution_scratch);
         }
