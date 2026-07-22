@@ -130,6 +130,7 @@ class ProductionBuildFixture:
             "LEO2_BUILD_BENCHMARKS:BOOL": "ON",
             "LEO2_BUILD_FUZZERS:BOOL": "OFF",
             "LEO2_ENABLE_CUDA:BOOL": "OFF",
+            "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT:BOOL": "OFF",
             "LEOPARD_ENABLE_GF8:BOOL": "ON",
             "LEOPARD_ENABLE_GF16:BOOL": "ON",
             "LEO2_BACKEND_VARIANT:STRING": "auto",
