@@ -531,6 +531,9 @@ static Options ParseOptions(int argc, char** argv)
              "--retain-samples, --report-decode-path, and one thread");
 #endif
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.report_direct_pair_fusion)
+        Fail("the high/low duality attribution benchmark does not support "
+             "--report-pair-fusion");
     if (options.attest_source)
         Fail("the high/low duality benchmark does not support --attest-source");
     if (options.force_translated_low && options.force_native_high)
