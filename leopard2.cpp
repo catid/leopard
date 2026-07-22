@@ -981,6 +981,9 @@ static bool SkipMeasuredDenseGF8AVX2HighPrunedSchedules(
             static_cast<uint64_t>(codec->recovery_count) * 2U;
 }
 
+static bool SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
+    const leo2_decode_plan* plan);
+
 static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
 {
     const leo2_codec* codec = plan->codec;
@@ -998,7 +1001,8 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
     const bool needs_generic = !force_specialized;
     const bool needs_specialized = !force_generic;
     const bool compile_pruned_schedules =
-        !SkipMeasuredDenseGF8AVX2HighPrunedSchedules(plan);
+        !SkipMeasuredDenseGF8AVX2HighPrunedSchedules(plan) &&
+        !SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(plan);
 
     const std::vector<uint32_t>& execution_requested_coordinates =
         DecodeExecutionRequestedCoordinates(plan);
@@ -6787,3 +6791,48 @@ LEO2_EXPORT leo2_result leo2_decode(
 }
 
 } // extern "C"
+
+namespace {
+
+#if defined(_MSC_VER)
+#define LEO2_PLAN_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_PLAN_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_plan_policy")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_PLAN_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_PLAN_NOINLINE
+#endif
+
+static LEO2_PLAN_NOINLINE bool
+SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
+    const leo2_decode_plan* plan)
+{
+    if (!plan || !plan->codec)
+        return false;
+    const leo2_codec* codec = plan->codec;
+    if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 || !codec->context ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        plan->missing_original_count != codec->recovery_count)
+        return false;
+
+    /*
+        This measured extension covers the one-coordinate K boundary and one
+        punctured parity at T=8, T=16, and T=64.  Omitting both schedules cut
+        setup by 3.0--7.3x; the 48-cell pattern screen's worst execution change
+        was a 0.7% loss.  Keeping the extension out of line and, on ELF,
+        isolated in its own section preserves the existing hot-function layout.
+    */
+    const uint64_t side = codec->padded_side;
+    const uint64_t recovery = codec->recovery_count;
+    const uint64_t originals = codec->original_count;
+    return (side == 8 || side == 16 || side == 64) &&
+        recovery + 1U >= side && originals + 1U >= recovery * 2U;
+}
+
+#undef LEO2_PLAN_NOINLINE
+
+} // namespace
