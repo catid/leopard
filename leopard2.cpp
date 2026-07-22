@@ -62,6 +62,16 @@
 #include <omp.h>
 #endif
 
+// Default-off AVX2 experiment used to rescreen multi-loss direct repair for
+// every equal-rounded GF8 parent after the source-major backend was added.
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#endif
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS < 0 || \
+    LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS > 1
+#error "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -1486,7 +1496,11 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
     if (IsExpandedDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+        return kDirectMaxRepairLosses;
+#else
         return 1;
+#endif
     return 4;
 }
 
@@ -4731,7 +4745,11 @@ static leo2_result ExecuteDirectRepair(
     if (shard_bytes >= 2048 &&
         source_major_outputs >= 2 && source_major_outputs <= 8 &&
         codec->field == LEO2_FIELD_GF8 &&
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+        IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+#else
         IsExpandedDirectRepairCodec(codec) &&
+#endif
         ops.ff8_multiply_add_outputs &&
         codec->original_count <= kDirectMaxParentDimension &&
         codec->recovery_count <= kDirectMaxParentDimension)

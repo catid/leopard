@@ -48,6 +48,10 @@
 #include <malloc.h>
 #endif
 
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -695,7 +699,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1, 1, true, true },
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          1, 4, false, false },
+          1, 4, LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0, true },
         { 17, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -747,7 +751,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1024, 1, true, true },
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          1024, 4, false, false },
+          1024, 4, LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0, true },
         { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, false, false },
         { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -1108,6 +1112,38 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
             }
         }
     }
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+    const unsigned equal_rounded_counts[] = {
+        17, 31, 32, 33, 64, 66, 96, 127, 128
+    };
+    const unsigned equal_rounded_losses[] = { 2, 4, 8 };
+    const size_t equal_rounded_bytes[] = { 64, 2049 };
+    for (size_t count_i = 0;
+         count_i < sizeof(equal_rounded_counts) /
+             sizeof(equal_rounded_counts[0]); ++count_i)
+    {
+        const unsigned count = equal_rounded_counts[count_i];
+        for (size_t loss_i = 0;
+             loss_i < sizeof(equal_rounded_losses) /
+                 sizeof(equal_rounded_losses[0]); ++loss_i)
+        {
+            const unsigned loss_count = equal_rounded_losses[loss_i];
+            std::vector<unsigned> missing;
+            for (unsigned i = 0; i < loss_count; ++i)
+                missing.push_back(i);
+            for (size_t byte_i = 0;
+                 byte_i < sizeof(equal_rounded_bytes) /
+                     sizeof(equal_rounded_bytes[0]); ++byte_i)
+            {
+                run_decode_case(context, count, count,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                    equal_rounded_bytes[byte_i], missing,
+                    std::vector<unsigned>{0, count / 2, count - 1},
+                    counts);
+            }
+        }
+    }
+#endif
     leo2_context_destroy(context);
 }
 
