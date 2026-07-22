@@ -578,8 +578,10 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
             )
         )
     required_direct = (
-        "constsize_trange_count=static_cast<size_t>(codec->original_count)*2+"
-        "codec->recovery_count;",
+        "constsize_trange_count=codec->profile=="
+        "LEO2_PROFILE_LEGACY_HIGH_V1&&codec->original_count==1&&"
+        "codec->recovery_count==1?0:static_cast<size_t>("
+        "codec->original_count)*2+codec->recovery_count;",
         "ComputeScratchLayout(range_count,0,0,rounded_bytes,layout)",
     )
     if any(token not in direct for token in required_direct):
@@ -1006,7 +1008,10 @@ def decode_scratch_accounting(
     # split layout below deliberately sizes ragged work from the aligned prefix.
     round_shard_bytes(shard_bytes, pointer_bytes)
 
-    range_count = checked_size_add(
+    k1_legacy_high = profile == "high" and k == 1 and r == 1
+    if k1_legacy_high and not (no_op or direct):
+        raise ModelError("legacy-high K=1,R=1 plans are direct or no-op")
+    range_count = 0 if k1_legacy_high else checked_size_add(
         checked_size_multiply(2, k, maximum), r, maximum
     )
     tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
@@ -1047,17 +1052,28 @@ def decode_scratch_accounting(
 
     if codec_workspace is None:
         codec_workspace = plan_workspace
-    codec_work_slots = _decode_transform_work_slots(
-        parent, padded, profile,
-        r if profile == "high" else loss_count,
-        codec_workspace,
-        maximum,
-    )
-    codec_pointer_count = checked_size_add(parent, codec_work_slots, maximum)
-    codec_values = _scratch_components(
-        range_count, codec_pointer_count, tail_reserved_slots,
-        codec_work_slots, work_slot_bytes, pointer_bytes
-    )
+    if k1_legacy_high:
+        codec_work_slots = 0
+        codec_pointer_count = 0
+        codec_values = _scratch_components(
+            0, 0, 0, 0, work_slot_bytes, pointer_bytes
+        )
+        codec_tail_slots = 0
+    else:
+        codec_work_slots = _decode_transform_work_slots(
+            parent, padded, profile,
+            r if profile == "high" else loss_count,
+            codec_workspace,
+            maximum,
+        )
+        codec_pointer_count = checked_size_add(
+            parent, codec_work_slots, maximum
+        )
+        codec_values = _scratch_components(
+            range_count, codec_pointer_count, tail_reserved_slots,
+            codec_work_slots, work_slot_bytes, pointer_bytes
+        )
+        codec_tail_slots = tail_reserved_slots
 
     (plan_range_bytes, plan_pointer_bytes, plan_alignment, plan_data_offset,
      plan_tail_bytes, plan_work_bytes, plan_total) = plan_values
@@ -1101,7 +1117,7 @@ def decode_scratch_accounting(
         codec_pointer_map_bytes=codec_pointer_bytes,
         codec_metadata_alignment_bytes=codec_alignment,
         codec_data_offset=codec_data_offset,
-        codec_tail_reserved_slots=tail_reserved_slots,
+        codec_tail_reserved_slots=codec_tail_slots,
         codec_tail_reserved_bytes=codec_tail_bytes,
         codec_work_slots=codec_work_slots,
         codec_work_bytes=codec_work_bytes,
@@ -1464,13 +1480,15 @@ def select_codec_transform_execution(
     force: str = "auto",
 ) -> DecodeSelection:
     """Mirror the pattern-independent one-shot codec scratch query."""
-    padded = geometry["padded_side"]
-    parent = geometry["parent_count"]
-    rounded = rounded_kernel_bytes(shard_bytes)
-    tiled_slots = 2 * padded + (r if profile == "high" else 0)
     if force not in ("auto", "specialized"):
         if force not in ("generic", "materialized", "tiled"):
             raise ModelError("unsupported codec decode selection")
+    padded = geometry["padded_side"]
+    parent = geometry["parent_count"]
+    rounded = rounded_kernel_bytes(shard_bytes)
+    if profile == "high" and k == 1 and r == 1:
+        return DecodeSelection("direct", "direct", 0, 0)
+    tiled_slots = 2 * padded + (r if profile == "high" else 0)
     measured_materialized = (
         profile == "high" and field_name == "gf8" and
         k == 224 and r == 32 and padded == 32 and parent == 256 and
@@ -2783,6 +2801,22 @@ def run_self_test(verbose: bool = True) -> None:
     else:
         raise AssertionError("shard length above uint64_t was accepted")
     checks += 1
+
+    k1_scratch = decode_scratch_accounting(
+        1, 1, 2, 1, "high", 17, 1, "direct", direct=True
+    )
+    assert k1_scratch.plan_total_bytes == 0
+    assert k1_scratch.codec_total_bytes == 0
+    assert k1_scratch.range_count == 0
+    assert k1_scratch.codec_range_count == 0
+    assert k1_scratch.plan_work_slots == 0
+    assert k1_scratch.codec_work_slots == 0
+    k1_selection = select_codec_transform_execution(
+        1, 1, "high", "gf8", "avx2",
+        parent_geometry(1, 1, "high"), 17
+    )
+    assert k1_selection == DecodeSelection("direct", "direct", 0, 0)
+    checks += 7
 
     low = model_low_encode(8, 248, 8, 1024, set(range(248)))
     assert low.butterflies == 384

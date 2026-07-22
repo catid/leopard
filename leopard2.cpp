@@ -6130,6 +6130,18 @@ leo2_result GetDecodeCodecScratchPathInfo(
         return LEO2_INVALID_ARGUMENT;
     FillTerminalDecodePathInfo(kDecodePathNoOp, kDecodeRuleNoOp,
         0, false, *info_out);
+    if (IsLegacyHighK1R1Codec(codec))
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        const leo2_result result = DirectDecodeLayout(
+            codec, shard_bytes, layout, rounded_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+        FillTerminalDecodePathInfo(kDecodePathDirect, kDecodeRuleDirect,
+            shard_bytes, false, *info_out);
+        return LEO2_SUCCESS;
+    }
     DecodeScratchGeometry geometry;
     const leo2_result result = DecodeLayout(
         codec, NULL, shard_bytes, false, geometry);

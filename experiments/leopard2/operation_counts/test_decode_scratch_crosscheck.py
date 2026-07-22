@@ -53,6 +53,8 @@ def load_rows(probe: pathlib.Path) -> List[Dict[str, object]]:
 
 
 def normalized_workspace(path: str) -> str:
+    if path == "direct":
+        return "direct"
     if path == "generic":
         return "generic"
     if path == "materialized":
@@ -237,7 +239,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         "forced_high_materialized_ragged", "forced_high_tiled_aligned",
         "forced_high_tiled_ragged", "forced_generic_ragged",
         "forced_low_materialized_ragged", "forced_low_tiled_aligned",
-        "direct_xor", "direct_copy", "direct_repair",
+        "direct_xor", "direct_k1_r1", "direct_copy", "direct_repair",
         "auto_ordinary_high", "auto_balanced_64", "auto_balanced_256",
         "auto_high_16k", "auto_high_32k", "auto_high_128k", "auto_low",
         "auto_high_32k_batch",
@@ -271,6 +273,11 @@ def mutation_checks() -> int:
             "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
             "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
             "direct-pointer mutation",
+        ),
+        (
+            "codec->original_count == 1 && codec->recovery_count == 1",
+            "codec->original_count == 2 && codec->recovery_count == 1",
+            "K1 zero-range mutation",
         ),
         (
             "static_cast<size_t>(codec->parent_count),\n            geometry.work_slot_count,\n            pointer_count",

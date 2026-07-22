@@ -73,7 +73,11 @@ size_t transform_scratch_bytes(
 
 size_t direct_scratch_bytes(const ProbeCase& test)
 {
-    const size_t range_count = static_cast<size_t>(test.k) * 2 + test.r;
+    const size_t range_count =
+        test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                test.k == 1 && test.r == 1
+            ? 0
+            : static_cast<size_t>(test.k) * 2 + test.r;
     return align_up(range_count * sizeof(uintptr_t) * 2, 64);
 }
 
@@ -178,8 +182,12 @@ void emit_case(
     const size_t plan_work_slots = direct || no_op
         ? 0
         : observe_work_slots(test, parent, padded, plan_scratch, false);
-    const size_t codec_work_slots = observe_work_slots(
-        test, parent, padded, codec_scratch, true);
+    const bool k1_legacy_high =
+        test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        test.k == 1 && test.r == 1;
+    const size_t codec_work_slots = k1_legacy_high
+        ? 0
+        : observe_work_slots(test, parent, padded, codec_scratch, true);
 
     std::cout
         << "{\"schema\":\"leopard2-decode-scratch-probe/v2\""
@@ -317,6 +325,8 @@ int main()
               LEO2_CODEC_FORCE_TILED_DECODE, 66, 1, false },
             { "direct_xor", 9, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
               LEO2_FIELD_GF8, 0, 65, 1, false },
+            { "direct_k1_r1", 1, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
+              LEO2_FIELD_GF8, 0, 17, 1, false },
             { "direct_copy", 1, 8, LEO2_PROFILE_LOW_V1,
               LEO2_FIELD_GF8, 0, 65, 1, false },
             { "direct_repair", 16, 8, LEO2_PROFILE_LOW_V1,
