@@ -1617,15 +1617,17 @@ void execute_r1_xor_dispatch_case(
     TraceOpsGuard& trace,
     uint32_t original_count,
     size_t bytes,
-    bool expect_coarse)
+    bool expect_coarse,
+    leo2_field field = LEO2_FIELD_GF8)
 {
     const CodecCase test_case = {
         original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
-        LEO2_FIELD_GF8, bytes
+        field, bytes
     };
     const std::string identity = "R=1 backend=" +
         std::to_string(static_cast<unsigned>(
             leo2_context_backend(entry.context))) +
+        " field=" + std::to_string(static_cast<unsigned>(field)) +
         " K=" + std::to_string(original_count) +
         " bytes=" + std::to_string(bytes);
     const Shards originals = make_originals(test_case,
@@ -1667,6 +1669,91 @@ void execute_r1_xor_dispatch_case(
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
+}
+
+const ContextEntry* find_effective_context(
+    const std::vector<ContextEntry>& contexts,
+    leo2_backend backend)
+{
+    for (size_t i = 0; i < contexts.size(); ++i)
+        if (leo2_context_backend(contexts[i].context) == backend)
+            return &contexts[i];
+    return NULL;
+}
+
+void test_avx2_gf8_large_r1_xor_dispatch(
+    const std::vector<ContextEntry>& contexts)
+{
+    const ContextEntry* const avx2 = find_effective_context(
+        contexts, LEO2_BACKEND_AVX2);
+    if (!avx2)
+        return;
+
+    TraceOpsGuard trace(*avx2);
+    struct DispatchCase
+    {
+        uint32_t original_count;
+        size_t bytes;
+        bool expect_coarse;
+    };
+    static const DispatchCase cases[] = {
+        /* Each measured staircase boundary retains the coarse reduction just
+           below its K or byte threshold and selects the pairwise reduction at
+           the exact threshold. */
+        { 7, 8U * 1024U * 1024U, true },
+        { 8, 8U * 1024U * 1024U - 1U, true },
+        { 8, 8U * 1024U * 1024U, false },
+        { 9, 4U * 1024U * 1024U, true },
+        { 10, 4U * 1024U * 1024U - 1U, true },
+        { 10, 4U * 1024U * 1024U, false },
+        { 30, 2U * 1024U * 1024U, true },
+        { 31, 2U * 1024U * 1024U - 1U, true },
+        { 31, 2U * 1024U * 1024U, false },
+        { 50, 1024U * 1024U, true },
+        { 51, 1024U * 1024U - 1U, true },
+        { 51, 1024U * 1024U, false },
+        /* Public byte tails must follow the same route and remain exact. */
+        { 8, 8U * 1024U * 1024U + 17U, false },
+        { 10, 4U * 1024U * 1024U + 17U, false },
+        { 31, 2U * 1024U * 1024U + 17U, false },
+        { 51, 1024U * 1024U + 17U, false }
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+        execute_r1_xor_dispatch_case(*avx2, trace,
+            cases[i].original_count, cases[i].bytes,
+            cases[i].expect_coarse);
+
+    /* The measured policy is deliberately limited to GF8.  GF16 retains its
+       established coarse policy at every otherwise-promoted boundary. */
+    static const DispatchCase gf16_cases[] = {
+        { 8, 8U * 1024U * 1024U, true },
+        { 10, 4U * 1024U * 1024U, true },
+        { 31, 2U * 1024U * 1024U, true },
+        { 51, 1024U * 1024U, true }
+    };
+    for (size_t i = 0;
+         i < sizeof(gf16_cases) / sizeof(gf16_cases[0]); ++i)
+        execute_r1_xor_dispatch_case(*avx2, trace,
+            gf16_cases[i].original_count, gf16_cases[i].bytes,
+            gf16_cases[i].expect_coarse, LEO2_FIELD_GF16);
+}
+
+void test_non_avx2_large_r1_xor_exclusion(
+    const std::vector<ContextEntry>& contexts)
+{
+    static const leo2_backend backends[] = {
+        LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3, LEO2_BACKEND_AVX512
+    };
+    for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); ++i)
+    {
+        const ContextEntry* const entry = find_effective_context(
+            contexts, backends[i]);
+        if (!entry)
+            continue;
+        TraceOpsGuard trace(*entry);
+        execute_r1_xor_dispatch_case(*entry, trace, 51,
+            1024U * 1024U, backends[i] != LEO2_BACKEND_AVX512);
+    }
 }
 
 void test_r1_xor_dispatch_boundaries(
@@ -2703,6 +2790,8 @@ int main()
         test_avx2_gf8_prepared_range_boundaries();
         test_avx2_gf8_inplace_butterfly2_boundaries();
         test_traced_context_dispatch(contexts);
+        test_avx2_gf8_large_r1_xor_dispatch(contexts);
+        test_non_avx2_large_r1_xor_exclusion(contexts);
         test_gf8_high_forward_fusion_policy(contexts);
         test_weighted_locator_boundary_dispatch(contexts);
         test_public_codecs(contexts);

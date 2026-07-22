@@ -3836,6 +3836,10 @@ static const leopard::backend::Ops& SelectTransformEncodeOps(
     return *codec->context->ops;
 }
 
+static bool UseAVX2GF8PairwiseLargeR1Xor(
+    uint32_t original_count,
+    size_t shard_bytes);
+
 static bool UseCoarseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
@@ -3864,7 +3868,14 @@ static bool UseCoarseR1Xor(
            a coarse implementation has backend-specific measurements. */
         return false;
     }
-    return codec->original_count >= minimum_originals;
+    if (codec->original_count < minimum_originals)
+        return false;
+    if (codec->context->backend != LEO2_BACKEND_AVX2 ||
+        codec->original_count <= 7 || codec->field != LEO2_FIELD_GF8 ||
+        shard_bytes < 1024U * 1024U)
+        return true;
+    return !UseAVX2GF8PairwiseLargeR1Xor(
+        codec->original_count, shard_bytes);
 }
 
 static LEO_FORCE_INLINE bool UseDenseR1Xor(
@@ -7853,6 +7864,30 @@ LEO2_EXPORT leo2_result leo2_decode(
 } // extern "C"
 
 namespace {
+
+#if defined(_MSC_VER)
+#define LEO2_R1_PAIR_POLICY_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_R1_PAIR_POLICY_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_r1_pair_policy")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_R1_PAIR_POLICY_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_R1_PAIR_POLICY_NOINLINE
+#endif
+
+static LEO2_R1_PAIR_POLICY_NOINLINE bool
+UseAVX2GF8PairwiseLargeR1Xor(
+    uint32_t original_count,
+    size_t shard_bytes)
+{
+    return (original_count >= 51 && shard_bytes >= 1024U * 1024U) ||
+        (original_count >= 31 && shard_bytes >= 2U * 1024U * 1024U) ||
+        (original_count >= 10 && shard_bytes >= 4U * 1024U * 1024U) ||
+        (original_count >= 8 && shard_bytes >= 8U * 1024U * 1024U);
+}
+
+#undef LEO2_R1_PAIR_POLICY_NOINLINE
 
 #if defined(_MSC_VER)
 #define LEO2_PLAN_NOINLINE __declspec(noinline)
