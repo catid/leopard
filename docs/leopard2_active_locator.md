@@ -158,3 +158,46 @@ Representative reproduction commands:
       build/release/bench_leopard2_locator \
       --field gf16 --n 2048 --erasures 15 --calls 64 \
       --iterations 31 --warmup 3 --seed 7
+
+## GF8 AVX2 cold-plan screen (negative, 2026-07-22)
+
+A bounded follow-up tested whether the remaining GF8 active-parent work should
+move into the AVX2 backend.  The prototype formed the union erasure bitmap with
+AVX2 and evaluated both modulo-255 Walsh transforms plus their pointwise
+log-kernel product in 16-bit lanes.  It was context-specific: scalar and SSSE3
+contexts retained the scalar routine, and the AVX2 translation unit remained
+compiled with `-mavx2 -mno-avx512f`.
+
+The arithmetic idea worked.  A same-binary ABBA microbenchmark measured the
+complete locator kernel at 2.81x to 3.60x the scalar active-parent routine for
+`N=32,64,128,256`.  The prototype matched the scalar/full-field oracles for
+every basis erasure and 1,024 dense patterns at every one of those sizes, plus
+permanent/dynamic unions: 579,040 additional compared locator entries.  A
+production round trip also matched, and disassembly found zero EVEX-prefixed
+instructions in the AVX2 object.
+
+It was not promoted because the public first-use result missed the gate.  Five
+paired ABBA rounds covered `(K,R)=(16,8),(16,10),(128,64),(192,64)`, one and
+maximum loss where valid, 2 and 4 KiB shards, and reuse counts 1, 8, and 64.
+For shapes that actually selected Walsh setup, plan construction improved by
+1.067x--1.564x, but decode including amortized setup ranged from 0.992x to
+1.026x by cell.  At reuse one its median was 1.011x and its best cell was only
+1.026x, below the required 1.05x.  Neighbor checks at `K=15,17,127,129,191`
+and the direct/Walsh `R=9/10` boundary likewise produced no first-use gain over
+1.017x.  The two transforms are only about 0.19 us after vectorization; byte
+execution and the rest of immutable-plan construction dominate.  Roughly 300
+lines of backend/API/test plumbing are not justified by that end-to-end result.
+
+The frozen target and neighbor artifacts are:
+
+- `experiments/leopard2/locator_construction/results/avx2_walsh_negative_20260722.json`
+  (SHA-256 `0dfa61b0fa7d589f7c8b855e3d9982955dd0648aba174c49594df5516c508c42`);
+- `experiments/leopard2/locator_construction/results/avx2_walsh_neighbors_20260722.json`
+  (SHA-256 `302b3d8eaf2ed6583a972d8664488ad878d1c48b173e304902ad9ba2132b652b`).
+
+Both identify the exact frozen control and candidate binaries.  The control is
+clean source commit `f85970de031a6aeb74e437a34b5b92b6588e398f`; CPU 14 was
+pinned with sibling 30 idle, and the global benchmark lock excluded concurrent
+compilation and timing.  This is a negative production result for GF8 AVX2
+cold-plan acceleration, not a rejection of the vector arithmetic itself on a
+future workload whose setup dominates execution.
