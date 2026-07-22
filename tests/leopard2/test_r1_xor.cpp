@@ -529,14 +529,16 @@ void execute_public_r1_multi_item_batch(
        exercise one representative serial/pool case through that independent
        entry point instead of relying on the compatibility preflight above to
        cover the reconstructed scalar metadata. */
-    if (batch_count >= 9 && fixture.k == 9 && fixture.bytes == 4097)
+    if (batch_count >= 9 &&
+        (fixture.k == 1 || fixture.k == 9) && fixture.bytes == 4097)
     {
         size_t preflight_bytes = 0;
         require_result(leo2_decode_plan_batch_preflight_scratch_size(
             fixture.plan, batch_count, &preflight_bytes), LEO2_SUCCESS,
             "R=1 compact scalable preflight scratch query");
-        require(preflight_bytes != 0,
-            "R=1 compact scalable preflight omitted required scratch");
+        require((fixture.k == 1 && preflight_bytes == 0) ||
+                (fixture.k == 9 && preflight_bytes != 0),
+            "R=1 compact scalable preflight scratch mismatch");
         AlignedScratch preflight(preflight_bytes);
         for (size_t item_i = 0; item_i < batch_count; ++item_i)
             std::fill(restored_storage[item_i].begin(),
@@ -555,29 +557,146 @@ void execute_public_r1_multi_item_batch(
         std::fill(restored_storage[item_i].begin(),
             restored_storage[item_i].end(), 0x6b);
     const std::vector<Bytes> before_failure = restored_storage;
-    --items.back().scratch_bytes;
-    require_result(leo2_decode_plan_execute_batch(
-        fixture.plan, &items[0], items.size()), LEO2_SCRATCH_TOO_SMALL,
-        "R=1 compact batch late-item scratch rejection");
-    require(restored_storage == before_failure,
-        "R=1 compact batch ran an item before late validation failure");
-    ++items.back().scratch_bytes;
+    if (items.back().scratch_bytes != 0)
+    {
+        --items.back().scratch_bytes;
+        require_result(leo2_decode_plan_execute_batch(
+            fixture.plan, &items[0], items.size()), LEO2_SCRATCH_TOO_SMALL,
+            "R=1 compact batch late-item scratch rejection");
+        require(restored_storage == before_failure,
+            "R=1 compact batch ran an item before late validation failure");
+        ++items.back().scratch_bytes;
+    }
 
+    const void* const* const saved_recovery = items.back().recovery;
+    items.back().recovery = NULL;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &items[0], items.size()), LEO2_INVALID_ARGUMENT,
+        "R=1 compact batch late-item pointer rejection");
+    require(restored_storage == before_failure,
+        "R=1 compact batch ran an item before late pointer rejection");
+    items.back().recovery = saved_recovery;
+
+    void* const saved_output = restored[0][fixture.missing];
     restored[0][fixture.missing] =
-        const_cast<void*>(received[1][fixture.missing + 1U]);
-    const Bytes aliased_input_before = fixture.storage[fixture.missing + 1U];
+        const_cast<void*>(static_cast<const void*>(&received[1][0]));
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &items[0], items.size()), LEO2_OVERLAP,
+        "R=1 compact batch cross-item output/metadata overlap");
+    require(restored_storage == before_failure,
+        "R=1 compact batch metadata rejection modified an output");
+    restored[0][fixture.missing] = saved_output;
+
+    const Bytes aliased_input_before = fixture.k == 1
+        ? fixture.recovery_storage
+        : fixture.storage[fixture.missing + 1U];
+    restored[0][fixture.missing] = fixture.k == 1
+        ? const_cast<void*>(fixture.recovery[0])
+        : const_cast<void*>(received[1][fixture.missing + 1U]);
     require_result(leo2_decode_plan_execute_batch(
         fixture.plan, &items[0], items.size()), LEO2_OVERLAP,
         "R=1 compact batch cross-item output/input overlap");
-    require(fixture.storage[fixture.missing + 1U] == aliased_input_before,
+    require((fixture.k == 1
+            ? fixture.recovery_storage
+            : fixture.storage[fixture.missing + 1U]) == aliased_input_before,
         "R=1 compact batch alias rejection modified an input");
     require(restored_storage == before_failure,
         "R=1 compact batch alias rejection modified an output");
 }
 
+void execute_public_k1_encode_batch(
+    const R1Fixture& fixture, size_t batch_count)
+{
+    require(fixture.k == 1, "K=1 encode batch received another code");
+    static const size_t kOutputOffset = 5;
+    size_t scratch_bytes = 1;
+    size_t preflight_bytes = 1;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &scratch_bytes), LEO2_SUCCESS,
+        "K=1 encode batch scratch query");
+    require_result(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, batch_count, &preflight_bytes), LEO2_SUCCESS,
+        "K=1 encode batch preflight scratch query");
+    require(scratch_bytes == 0 && preflight_bytes == 0,
+        "K=1 encode batch unexpectedly requires scratch");
+
+    std::vector<Bytes> output_storage(
+        batch_count, Bytes(fixture.bytes + 11U, 0x5a));
+    std::vector<std::vector<void*> > outputs(
+        batch_count, std::vector<void*>(1, NULL));
+    std::vector<leo2_encode_batch_item> items(batch_count);
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+    {
+        outputs[item_i][0] = &output_storage[item_i][kOutputOffset];
+        items[item_i].shard_bytes = fixture.bytes;
+        items[item_i].original = &fixture.original[0];
+        items[item_i].recovery = &outputs[item_i][0];
+        items[item_i].scratch = NULL;
+        items[item_i].scratch_bytes = 0;
+    }
+    const auto check_outputs = [&]()
+    {
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        {
+            require(std::memcmp(outputs[item_i][0], fixture.recovery[0],
+                        fixture.bytes) == 0,
+                "K=1 encode batch produced the wrong parity");
+            for (size_t i = 0; i < kOutputOffset; ++i)
+                require(output_storage[item_i][i] == 0x5a,
+                    "K=1 encode batch changed an output prefix guard");
+            for (size_t i = kOutputOffset + fixture.bytes;
+                 i < output_storage[item_i].size(); ++i)
+                require(output_storage[item_i][i] == 0x5a,
+                    "K=1 encode batch changed an output suffix guard");
+        }
+    };
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_SUCCESS,
+        "K=1 encode batch execute");
+    check_outputs();
+
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(output_storage[item_i].begin(),
+            output_storage[item_i].end(), 0x5a);
+    require_result(leo2_encode_batch_with_preflight_scratch(
+        fixture.codec, &items[0], items.size(), NULL, 0), LEO2_SUCCESS,
+        "K=1 scalable encode batch execute");
+    check_outputs();
+
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(output_storage[item_i].begin(),
+            output_storage[item_i].end(), 0x6b);
+    const std::vector<Bytes> before_failure = output_storage;
+
+    const void* const* const saved_original = items.back().original;
+    items.back().original = NULL;
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_INVALID_ARGUMENT,
+        "K=1 encode batch late-item pointer rejection");
+    require(output_storage == before_failure,
+        "K=1 encode batch ran an item before late pointer rejection");
+    items.back().original = saved_original;
+
+    void* const saved_output = outputs[0][0];
+    outputs[0][0] = &outputs[1][0];
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_OVERLAP,
+        "K=1 encode batch cross-item output/metadata overlap");
+    require(output_storage == before_failure,
+        "K=1 encode batch metadata rejection modified an output");
+    outputs[0][0] = saved_output;
+
+    outputs[0][0] = outputs[1][0];
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_OVERLAP,
+        "K=1 encode batch cross-item output overlap");
+    require(output_storage == before_failure,
+        "K=1 encode batch alias rejection modified an output");
+}
+
 void test_public_r1_multi_item_batch(leo2_backend backend)
 {
-    static const uint32_t counts[] = { 7, 9, 129 };
+    static const uint32_t counts[] = { 1, 7, 9, 129 };
     static const size_t sizes[] = { 4096, 4097 };
     static const size_t batches[] = { 2, 8, 64 };
     static const uint32_t thread_counts[] = { 1, 4 };
@@ -600,10 +719,14 @@ void test_public_r1_multi_item_batch(leo2_backend backend)
                      ++batch_i)
                 {
                     const bool adversarial =
-                        thread_counts[thread_i] == 4 && k == 9 &&
+                        thread_counts[thread_i] == 4 &&
+                        (k == 1 || k == 9) &&
                         sizes[size_i] == 4096 && batches[batch_i] == 8;
                     execute_public_r1_multi_item_batch(
                         fixture, batches[batch_i], adversarial);
+                    if (k == 1)
+                        execute_public_k1_encode_batch(
+                            fixture, batches[batch_i]);
                 }
             }
         }
@@ -694,10 +817,112 @@ void test_public_r1_overlap_rejection(leo2_backend backend)
         fixture.recovery, &restored[0], decode_scratch.data(),
         decode_scratch_bytes), LEO2_OVERLAP,
         "R=1 one-shot output/recovery-presence overlap");
+
+    /* Repeat the alias-sensitive cases through the zero-scratch K=1
+       specialization rather than relying on the general K=9 validator. */
+    R1Fixture single(backend, 1, 65, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    size_t single_encode_scratch = 1;
+    require_result(leo2_encode_scratch_size(single.codec, single.bytes,
+        &single_encode_scratch), LEO2_SUCCESS,
+        "K=1 R=1 overlap encode scratch query");
+    require(single_encode_scratch == 0,
+        "K=1 R=1 overlap encode unexpectedly requires scratch");
+    AlignedScratch optional_encode_scratch(65);
+    Bytes optional_parity_storage(single.bytes + 9U, 0);
+    void* optional_parity[1] = { &optional_parity_storage[3] };
+    require_result(leo2_encode(single.codec, single.bytes,
+        &single.original[0], optional_parity, optional_encode_scratch.data(),
+        64), LEO2_SUCCESS, "K=1 R=1 optional encode scratch");
+    require_result(leo2_encode(single.codec, single.bytes,
+        &single.original[0], optional_parity,
+        static_cast<uint8_t*>(optional_encode_scratch.data()) + 1, 64),
+        LEO2_BAD_ALIGNMENT, "K=1 R=1 misaligned optional encode scratch");
+    void* scratch_parity[1] = { optional_encode_scratch.data() };
+    require_result(leo2_encode(single.codec, single.bytes,
+        &single.original[0], scratch_parity, optional_encode_scratch.data(),
+        64), LEO2_OVERLAP, "K=1 R=1 encode output/scratch overlap");
+    void* single_parity[1] = {
+        const_cast<void*>(single.original[0])
+    };
+    require_result(leo2_encode(single.codec, single.bytes,
+        &single.original[0], single_parity, NULL, 0), LEO2_OVERLAP,
+        "K=1 R=1 encode input/output overlap");
+
+    size_t single_decode_scratch = 1;
+    require_result(leo2_decode_plan_scratch_size(single.plan, single.bytes,
+        &single_decode_scratch), LEO2_SUCCESS,
+        "K=1 R=1 overlap decode scratch query");
+    require(single_decode_scratch == 0,
+        "K=1 R=1 overlap decode unexpectedly requires scratch");
+    const void* single_received[1] = { NULL };
+    void* single_restored[1] = {
+        const_cast<void*>(single.recovery[0])
+    };
+    require_result(leo2_decode_plan_execute(single.plan, single.bytes,
+        single_received, single.recovery, single_restored, NULL, 0),
+        LEO2_OVERLAP, "K=1 R=1 decode recovery/output overlap");
+
+    AlignedScratch optional_decode_scratch(65);
+    Bytes optional_restored_storage(single.bytes + 9U, 0);
+    single_restored[0] = &optional_restored_storage[3];
+    require_result(leo2_decode_plan_execute(single.plan, single.bytes,
+        single_received, single.recovery, single_restored,
+        optional_decode_scratch.data(), 64), LEO2_SUCCESS,
+        "K=1 R=1 optional decode scratch");
+    require_result(leo2_decode_plan_execute(single.plan, single.bytes,
+        single_received, single.recovery, single_restored,
+        static_cast<uint8_t*>(optional_decode_scratch.data()) + 1, 64),
+        LEO2_BAD_ALIGNMENT, "K=1 R=1 misaligned optional decode scratch");
+    single_restored[0] = optional_decode_scratch.data();
+    require_result(leo2_decode_plan_execute(single.plan, single.bytes,
+        single_received, single.recovery, single_restored,
+        optional_decode_scratch.data(), 64), LEO2_OVERLAP,
+        "K=1 R=1 decode output/scratch overlap");
+
+    uint8_t single_original_present[65] = {};
+    const uint8_t single_recovery_present[1] = { 1 };
+    single_restored[0] = single_original_present;
+    require_result(leo2_decode(single.codec, single.bytes,
+        single_original_present, single_recovery_present, single_received,
+        single.recovery, single_restored, NULL, 0), LEO2_OVERLAP,
+        "K=1 R=1 one-shot output/original-presence overlap");
+
+    uint8_t single_recovery_presence[65] = {};
+    single_recovery_presence[0] = 1;
+    const uint8_t missing_original[1] = { 0 };
+    single_restored[0] = single_recovery_presence;
+    require_result(leo2_decode(single.codec, single.bytes, missing_original,
+        single_recovery_presence, single_received, single.recovery,
+        single_restored, NULL, 0), LEO2_OVERLAP,
+        "K=1 R=1 one-shot output/recovery-presence overlap");
 }
 
 void test_public_r1(leo2_backend backend)
 {
+    /* K=1 is a copy-only code.  Its specialized validators do not stage any
+       ranges, so both operations must accept the queried zero-byte scratch. */
+    {
+        R1Fixture fixture(backend, 1, 65, false, LEO2_FIELD_GF8,
+            LEO2_SHARD_LAYOUT_NATIVE_V1);
+        size_t encode_scratch = 1;
+        size_t decode_scratch = 1;
+        size_t one_shot_decode_scratch = 1;
+        require_result(leo2_encode_scratch_size(
+            fixture.codec, fixture.bytes, &encode_scratch), LEO2_SUCCESS,
+            "K=1 R=1 encode scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+            fixture.plan, fixture.bytes, &decode_scratch), LEO2_SUCCESS,
+            "K=1 R=1 decode scratch query");
+        require_result(leo2_decode_scratch_size(
+            fixture.codec, fixture.bytes, &one_shot_decode_scratch),
+            LEO2_SUCCESS, "K=1 R=1 one-shot decode scratch query");
+        require(encode_scratch == 0 && decode_scratch == 0 &&
+                one_shot_decode_scratch == 0,
+            "K=1 R=1 copy-only path unexpectedly requires scratch");
+        execute_and_check_decode(fixture);
+    }
+
     // The production R=1 path needs only address-range validation scratch.
     // Its scratch footprint must therefore not grow with shard bytes as a
     // transform workspace would.
@@ -729,7 +954,7 @@ void test_public_r1(leo2_backend backend)
     /* K=8 has seven live originals during one-loss repair and exercises the
        fused initial-plus-seven AVX2 reduction; K=9 exercises the full group
        of eight live sources. */
-    static const uint32_t counts[] = { 2, 3, 4, 8, 9, 10, 31 };
+    static const uint32_t counts[] = { 1, 2, 3, 4, 8, 9, 10, 31 };
     static const size_t sizes[] = {
         1, 2, 3, 17, 31, 32, 33, 64, 65, 1025, 65537, 1048579
     };
@@ -834,6 +1059,27 @@ void test_public_r1(leo2_backend backend)
             gf16_native_sizes[size_i], size_i == 0, LEO2_FIELD_GF16,
             LEO2_SHARD_LAYOUT_NATIVE_V1);
         execute_and_check_decode(fixture);
+    }
+    R1Fixture gf16_single(backend, 1, 66, false, LEO2_FIELD_GF16,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    execute_and_check_decode(gf16_single);
+    R1Fixture gf16_single_odd_payload(backend, 1, 34, false,
+        LEO2_FIELD_GF16, LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
+    execute_and_check_decode(gf16_single_odd_payload);
+    static const uint32_t gf16_k1_threads[] = { 1, 4 };
+    for (size_t thread_i = 0;
+         thread_i < sizeof(gf16_k1_threads) / sizeof(gf16_k1_threads[0]);
+         ++thread_i)
+    {
+        R1Fixture native_batch(backend, 1, 66, false, LEO2_FIELD_GF16,
+            LEO2_SHARD_LAYOUT_NATIVE_V1, 0, gf16_k1_threads[thread_i]);
+        execute_public_r1_multi_item_batch(native_batch, 9, false);
+        execute_public_k1_encode_batch(native_batch, 9);
+        R1Fixture padded_batch(backend, 1, 34, false, LEO2_FIELD_GF16,
+            LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1, 0,
+            gf16_k1_threads[thread_i]);
+        execute_public_r1_multi_item_batch(padded_batch, 9, false);
+        execute_public_k1_encode_batch(padded_batch, 9);
     }
     R1Fixture gf16_odd_payload(backend, 9, 34, true, LEO2_FIELD_GF16,
         LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1);
