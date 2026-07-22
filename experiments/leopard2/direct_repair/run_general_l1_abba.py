@@ -756,6 +756,19 @@ def digest_tuple(document: Mapping[str, Any]) -> tuple[str, str, str]:
     )
 
 
+def missing_tuple(
+    document: Mapping[str, Any], cell: Mapping[str, Any], role: str,
+) -> tuple[int, ...]:
+    values = document["parameters"].get("missing_original_indices")
+    require(isinstance(values, list) and
+            len(values) == cell["loss"] and
+            all(type(value) is int and 0 <= value < cell["K"]
+                for value in values) and
+            values == sorted(set(values)),
+            role + " missing-original identity is malformed")
+    return tuple(values)
+
+
 def validate_leopard2_document(
     role: str,
     document: Mapping[str, Any],
@@ -772,12 +785,24 @@ def validate_leopard2_document(
             parameters["loss_count"] == cell["loss"] and
             parameters["batch"] == 1 and
             parameters["reuse"] == cell["reuse"] and
+            parameters["iterations"] == iterations_for(cell["bytes"]) and
+            parameters["warmup"] == 2 and
+            parameters["thread_count"] == 1 and
             parameters["seed"] == cell["seed"],
             role + " parameters differ from the cell")
     require(parameters["requested_profile"] == expected_profile and
             parameters["requested_field"] == "gf8" and
             parameters["requested_backend"] == "avx2",
             role + " request attestation differs")
+    require(parameters["force_generic_decode"] is False and
+            parameters["force_specialized_decode"] is False and
+            parameters["force_tiled_decode"] is False and
+            parameters["force_materialized_decode"] is False and
+            parameters["skip_legacy"] is True and
+            parameters["retain_samples"] is True and
+            parameters["report_decode_path"] is True,
+            role + " benchmark-mode attestation differs")
+    missing_tuple(document, cell, role)
     resolved = document["resolved"]
     require(resolved["profile"] == expected_profile and
             resolved["field"] == "gf8" and
@@ -890,9 +915,14 @@ def validate_main_document(
             parameters["R"] == cell["R"] and
             parameters["shard_bytes"] == cell["bytes"] and
             parameters["loss_count"] == 1 and
+            parameters["batch"] == 1 and
             parameters["reuse"] == cell["reuse"] and
+            parameters["iterations"] == iterations_for(cell["bytes"]) and
+            parameters["warmup"] == 2 and
+            parameters["thread_count"] == 1 and
             parameters["seed"] == cell["seed"],
             "exact main parameters differ")
+    missing_tuple(document, cell, "exact main")
     require(document["resolved"]["profile"] == "legacy_high_v1" and
             document["resolved"]["field"] == "gf8" and
             document["resolved"]["thread_count"] == 1,
@@ -942,6 +972,10 @@ def run_exact_main_followup(
     require(all(digest_tuple(call["document"]) == expected_digest
                 for call in calls),
             "exact main and candidate workload digests differ")
+    expected_missing = missing_tuple(calls[0]["document"], cell, "exact main")
+    require(all(missing_tuple(call["document"], cell, call["role"]) ==
+                expected_missing for call in calls),
+            "exact main and candidate missing-original identities differ")
     contrasts = []
     for round_index in range(rounds):
         group = calls[round_index * 4:(round_index + 1) * 4]
@@ -1070,6 +1104,10 @@ def run_cell(
     require(all(digest_tuple(call["document"]) == expected_digest
                 for call in calls),
             "control/candidate workload digests differ")
+    expected_missing = missing_tuple(calls[0]["document"], cell, "control")
+    require(all(missing_tuple(call["document"], cell, call["role"]) ==
+                expected_missing for call in calls),
+            "control/candidate missing-original identities differ")
     metrics = same_source_metrics(calls, rounds, cell["reuse"])
     winner = (
         cell["candidate_expected_path"] == "direct" and
@@ -1200,10 +1238,19 @@ def synthetic_document(
         "parameters": {
             "K": cell["K"], "R": cell["R"],
             "shard_bytes": cell["bytes"],
-            "loss_count": cell["loss"], "batch": 1,
-            "reuse": cell["reuse"], "seed": cell["seed"],
+            "loss_count": cell["loss"],
+            "missing_original_indices": list(range(cell["loss"])),
+            "batch": 1, "reuse": cell["reuse"],
+            "iterations": iterations_for(cell["bytes"]), "warmup": 2,
+            "thread_count": 1, "seed": cell["seed"],
             "requested_profile": profile,
             "requested_field": "gf8", "requested_backend": "avx2",
+            "force_generic_decode": False,
+            "force_specialized_decode": False,
+            "force_tiled_decode": False,
+            "force_materialized_decode": False,
+            "skip_legacy": True, "retain_samples": True,
+            "report_decode_path": True,
         },
         "resolved": {
             "profile": profile, "field": "gf8", "backend": "avx2",
@@ -1397,6 +1444,9 @@ def run_campaign(args: argparse.Namespace) -> None:
     require(not build_root.is_relative_to(source) and
             not run_dir.is_relative_to(source),
             "authoritative build and run roots must be outside the source tree")
+    require(not build_root.is_relative_to(run_dir) and
+            not run_dir.is_relative_to(build_root),
+            "authoritative build and result roots must be disjoint")
     matrix = build_matrix()
     cells = validate_matrix(matrix)
     selected_tiers = set(args.tiers.split(","))

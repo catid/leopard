@@ -41,6 +41,7 @@ foreach(field_variant gf8 gf16)
     list(APPEND configure_command
         -DLEO2_BUILD_TESTS=ON
         -DLEO2_BUILD_BENCHMARKS=OFF
+        -DLEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1=OFF
         -DLEOPARD_ENABLE_GF8=${enable_gf8}
         -DLEOPARD_ENABLE_GF16=${enable_gf16}
         -DCMAKE_BUILD_TYPE=Release
