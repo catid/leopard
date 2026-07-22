@@ -45,6 +45,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__linux__)
+#include <sched.h>
+#endif
+
 static std::atomic<bool> g_track_allocations(false);
 static std::atomic<uint64_t> g_tracked_allocations(0);
 
@@ -130,6 +134,7 @@ struct Options
     size_t codec_repetitions;
     size_t setup_repetitions;
     size_t execute_repetitions;
+    int cpu;
     std::string output;
 
     Options()
@@ -145,6 +150,7 @@ struct Options
         , codec_repetitions(5)
         , setup_repetitions(10000)
         , execute_repetitions(100000)
+        , cpu(-1)
         , output("-")
     {}
 };
@@ -196,6 +202,31 @@ size_t parse_size(const char* text, const char* option)
     if (value > std::numeric_limits<size_t>::max())
         fail(std::string("out-of-range ") + option);
     return static_cast<size_t>(value);
+}
+
+int parse_cpu(const char* text)
+{
+    const uint64_t value = parse_u64(text, "--cpu");
+    if (value > static_cast<uint64_t>(std::numeric_limits<int>::max()))
+        fail("out-of-range --cpu");
+    return static_cast<int>(value);
+}
+
+void pin_current_thread(int cpu)
+{
+    if (cpu < 0)
+        return;
+#if defined(__linux__)
+    if (cpu >= CPU_SETSIZE)
+        fail("--cpu exceeds CPU_SETSIZE");
+    cpu_set_t mask;
+    CPU_ZERO(&mask);
+    CPU_SET(cpu, &mask);
+    if (sched_setaffinity(0, sizeof(mask), &mask) != 0)
+        fail(std::string("sched_setaffinity: ") + strerror(errno));
+#else
+    fail("--cpu is supported only on Linux");
+#endif
 }
 
 const char* need_value(int argc, char** argv, int& index)
@@ -270,6 +301,8 @@ Options parse_options(int argc, char** argv)
         else if (argument == "--execute-repetitions")
             options.execute_repetitions = parse_size(
                 need_value(argc, argv, i), "--execute-repetitions");
+        else if (argument == "--cpu")
+            options.cpu = parse_cpu(need_value(argc, argv, i));
         else if (argument == "--json")
             options.output = need_value(argc, argv, i);
         else if (argument == "--help" || argument == "-h")
@@ -281,7 +314,7 @@ Options parse_options(int argc, char** argv)
                 << "  --bytes N --parity missing|mixed|all\n"
                 << "  --iterations N --warmup N\n"
                 << "  --codec-repetitions N --setup-repetitions N\n"
-                << "  --execute-repetitions N --json PATH|-\n";
+                << "  --execute-repetitions N --cpu N --json PATH|-\n";
             exit(0);
         }
         else
@@ -413,6 +446,7 @@ int main(int argc, char** argv)
     try
     {
         const Options options = parse_options(argc, argv);
+        pin_current_thread(options.cpu);
         leo2_context_options context_options;
         memset(&context_options, 0, sizeof(context_options));
         context_options.struct_size = sizeof(context_options);
@@ -548,6 +582,7 @@ int main(int argc, char** argv)
             << "\",\"parent_count\":" << leo2_codec_parent_count(codec)
             << ",\"padded_side\":" << leo2_codec_padded_side(codec)
             << ",\"bytes\":" << options.bytes
+            << ",\"cpu\":" << options.cpu
             << ",\"parity\":\"" << options.parity
             << "\",\"iterations\":" << options.iterations
             << ",\"warmup\":" << options.warmup
