@@ -3707,6 +3707,125 @@ static void AVX2FF16FFTButterfly4Range(
 }
 #endif // LEO_HAS_FF16
 
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+template<unsigned OutputCount, bool CheckActive>
+static uint64_t AVX2FF8MultiplyAddOutputVectors(
+    uint8_t* const* destinations,
+    const uint8_t* source,
+    const __m256i* low_tables,
+    const __m256i* high_tables,
+    const bool* active,
+    uint64_t byte_count)
+{
+    const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        const __m256i data = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + offset));
+        // Every destination uses the same source nibbles.  Derive their
+        // shuffle indices once per source vector rather than repeating both
+        // masks for every fixed multiplier.
+        const __m256i low_indices = _mm256_and_si256(data, nibble_mask);
+        const __m256i high_indices = _mm256_and_si256(
+            _mm256_srli_epi64(data, 4), nibble_mask);
+        for (unsigned output = 0; output < OutputCount; ++output)
+        {
+            if (CheckActive && !active[output])
+                continue;
+            const __m256i product = _mm256_xor_si256(
+                _mm256_shuffle_epi8(low_tables[output], low_indices),
+                _mm256_shuffle_epi8(high_tables[output], high_indices));
+            const __m256i result = _mm256_xor_si256(product,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    destinations[output] + offset)));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+                destinations[output] + offset), result);
+        }
+        offset += 32;
+    }
+    return offset;
+}
+
+template<unsigned OutputCount>
+static void AVX2FF8MultiplyAddOutputGroup(
+    void* const* destination_pointers,
+    const void* source_pointer,
+    const uint16_t* multiplier_logs,
+    uint64_t byte_count)
+{
+    static_assert(OutputCount == 2 || OutputCount == 4,
+        "unsupported source-major repair output group");
+    uint8_t* destinations[OutputCount];
+    __m256i low_tables[OutputCount];
+    __m256i high_tables[OutputCount];
+    bool active[OutputCount];
+    bool all_active = true;
+    for (unsigned output = 0; output < OutputCount; ++output)
+    {
+        destinations[output] =
+            static_cast<uint8_t*>(destination_pointers[output]);
+        low_tables[output] = _mm256_setzero_si256();
+        high_tables[output] = _mm256_setzero_si256();
+        active[output] = multiplier_logs[output] != UINT16_MAX;
+        all_active = all_active && active[output];
+        if (active[output])
+        {
+            const FF8NibbleTable& table = FF8Tables[multiplier_logs[output]];
+            low_tables[output] = BroadcastTable(table.low);
+            high_tables[output] = BroadcastTable(table.high);
+        }
+    }
+    const uint8_t* source = static_cast<const uint8_t*>(source_pointer);
+    uint64_t offset = all_active
+        ? AVX2FF8MultiplyAddOutputVectors<OutputCount, false>(
+            destinations, source, low_tables, high_tables, active, byte_count)
+        : AVX2FF8MultiplyAddOutputVectors<OutputCount, true>(
+            destinations, source, low_tables, high_tables, active, byte_count);
+    while (offset < byte_count)
+    {
+        const uint8_t value = source[offset];
+        for (unsigned output = 0; output < OutputCount; ++output)
+        {
+            if (active[output])
+                destinations[output][offset] ^=
+                    FF8Product(multiplier_logs[output], value);
+        }
+        ++offset;
+    }
+}
+
+static void AVX2FF8MultiplyAddOutputs(
+    void* const* destinations,
+    const void* source,
+    const uint16_t* multiplier_logs,
+    uint32_t output_count,
+    uint64_t byte_count)
+{
+    if (output_count == 2)
+    {
+        AVX2FF8MultiplyAddOutputGroup<2>(
+            destinations, source, multiplier_logs, byte_count);
+    }
+    else if (output_count == 4)
+    {
+        AVX2FF8MultiplyAddOutputGroup<4>(
+            destinations, source, multiplier_logs, byte_count);
+    }
+    else if (output_count == 8)
+    {
+        // Eight pairs of nibble tables do not fit in the sixteen-register
+        // AVX2 file alongside source and destination values.  Two regular
+        // four-output passes retain tables in registers and reread each source
+        // only twice, versus eight times in the output-major executor.
+        AVX2FF8MultiplyAddOutputGroup<4>(
+            destinations, source, multiplier_logs, byte_count);
+        AVX2FF8MultiplyAddOutputGroup<4>(
+            destinations + 4, source, multiplier_logs + 4, byte_count);
+    }
+}
+#endif
+
 static const Ops AVX2Ops = {
     LEO2_AVX_BACKEND_KIND,
     LEO2_AVX_BACKEND_NAME,
@@ -3790,6 +3909,11 @@ static const Ops AVX2Ops = {
 #endif
 #if !defined(LEO2_AVX512_VARIANT)
     , AVX2XorMemoryDense
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+    , AVX2FF8MultiplyAddOutputs
 #else
     , NULL
 #endif

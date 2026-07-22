@@ -1035,7 +1035,8 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     };
     const std::vector<unsigned> missing_recovery = { 0, 3, 64 };
     const size_t byte_counts[] = {
-        1, 7, 31, 63, 64, 65, 127, 128, 1024, 1025
+        1, 7, 31, 63, 64, 65, 127, 128, 1024, 1025,
+        2048, 2049, 4099, 65536
     };
     for (size_t i = 0;
          i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++i)
@@ -1048,7 +1049,7 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
     const unsigned recovery_counts[] = { 66, 96, 128 };
-    const unsigned loss_counts[] = { 1, 4, 8 };
+    const unsigned loss_counts[] = { 1, 2, 4, 8 };
     for (size_t recovery_i = 0;
          recovery_i < sizeof(recovery_counts) / sizeof(recovery_counts[0]);
          ++recovery_i)
@@ -1068,6 +1069,19 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
                     0, recovery_count / 2, recovery_count - 1
                 },
                 counts);
+            if (loss_count > 1)
+            {
+                run_decode_case(context, 65, recovery_count,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                    2049,
+                    std::vector<unsigned>(
+                        missing_originals.begin(),
+                        missing_originals.begin() + loss_count),
+                    std::vector<unsigned>{
+                        0, recovery_count / 2, recovery_count - 1
+                    },
+                    counts);
+            }
         }
     }
     leo2_context_destroy(context);

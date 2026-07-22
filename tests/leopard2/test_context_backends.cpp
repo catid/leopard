@@ -514,6 +514,7 @@ public:
         // table instead of allowing an untraced call to bypass the assertions.
         tracing_.ff8_high_encode_one_block = NULL;
         tracing_.ff8_high_encode_small = NULL;
+        tracing_.ff8_multiply_add_outputs = NULL;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;

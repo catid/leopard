@@ -163,6 +163,69 @@ static bool TestFF8(const Ops& ops, FF8MultiplyLog reference)
     return true;
 }
 
+static bool TestFF8MultiplyAddOutputs(
+    const Ops& ops,
+    FF8MultiplyLog reference)
+{
+    if (!ops.ff8_multiply_add_outputs)
+        return true;
+    static const uint64_t byte_counts[] = {
+        0, 1, 7, 31, 32, 33, 63, 64, 65, 257
+    };
+    static const uint16_t log_sets[][8] = {
+        { 0, 1, 17, 29, 63, 127, 254, 193 },
+        { 0, 1, 17, UINT16_MAX, 63, 127, 254, UINT16_MAX }
+    };
+    uint8_t source[260];
+    uint8_t original_source[260];
+    uint8_t outputs[8][260];
+    uint8_t expected[8][260];
+    void* output_pointers[8];
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        for (size_t i = 0; i < sizeof(source); ++i)
+            source[i] = original_source[i] = static_cast<uint8_t>(
+                i * 73U + count_i * 19U + 11U);
+        for (size_t log_set = 0;
+             log_set < sizeof(log_sets) / sizeof(log_sets[0]); ++log_set)
+        {
+            const uint16_t* logs = log_sets[log_set];
+            for (unsigned output = 0; output < 8; ++output)
+            {
+                output_pointers[output] = outputs[output] + 1;
+                for (size_t i = 0; i < sizeof(outputs[output]); ++i)
+                {
+                    outputs[output][i] = expected[output][i] =
+                        static_cast<uint8_t>(i * (29U + output * 6U) +
+                            count_i + log_set * 7U + output * 13U);
+                }
+            }
+            const uint64_t bytes = byte_counts[count_i];
+            for (unsigned output_count = 2;
+                 output_count <= 8; output_count *= 2)
+            {
+                for (unsigned output = 0; output < output_count; ++output)
+                {
+                    if (logs[output] == UINT16_MAX)
+                        continue;
+                    for (uint64_t i = 0; i < bytes; ++i)
+                    {
+                        expected[output][i + 1] ^= reference(source[i + 1],
+                            static_cast<uint8_t>(logs[output]));
+                    }
+                }
+                ops.ff8_multiply_add_outputs(
+                    output_pointers, source + 1, logs, output_count, bytes);
+                if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                    std::memcmp(source, original_source, sizeof(source)) != 0)
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 template<bool Inverse>
 static void ReferenceFF8Butterfly2(
     uint8_t* x,
@@ -1798,6 +1861,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         (ops.xor_memory_dense != NULL))
         return false;
 #ifdef LEO_HAS_FF8
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.ff8_multiply_add_outputs != NULL))
+        return false;
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||
         !ops.ff8_multiply_add || !ops.ff8_ifft_butterfly2 ||
         !ops.ff8_fft_butterfly2 || !ops.ff8_fft_butterfly2_out ||
@@ -1808,6 +1874,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff8_fft_butterfly4_range ||
         !ops.ff8_ifft_butterfly4_xor_range ||
         !TestFF8(ops, args.ff8_multiply_log) ||
+        !TestFF8MultiplyAddOutputs(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
         !TestFF8ButterflyRanges(ops) ||
@@ -1836,7 +1903,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_fft_butterfly4_range ||
         ops.ff8_ifft_butterfly4_xor_range ||
         ops.ff8_high_encode_one_block ||
-        ops.ff8_high_encode_small)
+        ops.ff8_high_encode_small ||
+        ops.ff8_multiply_add_outputs)
         return false;
 #endif
 #ifdef LEO_HAS_FF16
