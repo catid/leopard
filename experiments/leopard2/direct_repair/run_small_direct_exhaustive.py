@@ -89,10 +89,14 @@ def validate_shard(
     expected_assigned = EXPECTED_PATTERNS // shard_count + (
         1 if shard_index < EXPECTED_PATTERNS % shard_count else 0)
     require(value["schema"] == SHARD_SCHEMA and
-            value["mode"] in (1, 2) and
+            type(value["mode"]) is int and value["mode"] in (1, 2) and
+            type(value["shard_index"]) is int and
             value["shard_index"] == shard_index and
+            type(value["shard_count"]) is int and
             value["shard_count"] == shard_count and
+            type(value["total_patterns"]) is int and
             value["total_patterns"] == EXPECTED_PATTERNS and
+            type(value["assigned_patterns"]) is int and
             value["assigned_patterns"] == expected_assigned and
             type(value["recovered_shards"]) is int and
             value["recovered_shards"] >= expected_assigned * 5 and

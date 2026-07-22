@@ -945,6 +945,75 @@ void test_generalized_one_loss_direct_repair_execution(
 }
 
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+void test_experimental_small_direct_unaligned(
+    leo2_context* context,
+    size_t bytes,
+    TestCounts* counts)
+{
+    const unsigned k = 16;
+    const unsigned r = 8;
+    const unsigned losses = 5;
+    leo2_codec* codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards source = make_originals(
+        k, bytes, UINT64_C(0x51a11d0000000000) + bytes);
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (unsigned i = 0; i < losses; ++i)
+        original_present[i] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, original_present.data(),
+        recovery_present.data(), &plan), "unaligned small-direct plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes), "unaligned small-direct scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+
+    Shards original_storage(k, std::vector<uint8_t>(bytes + 2, 0x5a));
+    Shards recovery_storage(r, std::vector<uint8_t>(bytes + 2, 0x5a));
+    Shards output_storage(k, std::vector<uint8_t>(bytes + 2, 0xa5));
+    std::vector<const void*> original_input(k, NULL);
+    std::vector<const void*> recovery_input(r, NULL);
+    std::vector<void*> output(k, NULL);
+    for (unsigned i = 0; i < k; ++i)
+    {
+        std::memcpy(&original_storage[i][1], source[i].data(), bytes);
+        if (original_present[i])
+            original_input[i] = &original_storage[i][1];
+        else
+            output[i] = &output_storage[i][1];
+    }
+    for (unsigned i = 0; i < r; ++i)
+    {
+        std::memcpy(&recovery_storage[i][1], parity[i].data(), bytes);
+        recovery_input[i] = &recovery_storage[i][1];
+    }
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        original_input.data(), recovery_input.data(), output.data(),
+        scratch.data, scratch.bytes), "unaligned small-direct execute");
+    for (unsigned i = 0; i < losses; ++i)
+    {
+        require(std::memcmp(&output_storage[i][1], source[i].data(), bytes) == 0,
+            "unaligned small-direct output differs from source");
+        require(output_storage[i][0] == 0xa5 &&
+                output_storage[i][bytes + 1] == 0xa5,
+            "unaligned small-direct output changed a guard byte");
+    }
+    for (unsigned i = losses; i < k; ++i)
+        require(original_storage[i][0] == 0x5a &&
+                original_storage[i][bytes + 1] == 0x5a,
+            "unaligned small-direct execution changed an input guard");
+    for (unsigned i = 0; i < r; ++i)
+        require(recovery_storage[i][0] == 0x5a &&
+                recovery_storage[i][bytes + 1] == 0x5a,
+            "unaligned small-direct execution changed a parity guard");
+    counts->recovered_shards += losses;
+    ++counts->plan_executions;
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
 void test_experimental_small_direct_repair_execution(
     leo2_context* context,
     TestCounts* counts)
@@ -993,6 +1062,8 @@ void test_experimental_small_direct_repair_execution(
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
             bytes, all_missing, std::vector<unsigned>(), counts);
     }
+    test_experimental_small_direct_unaligned(context, 65, counts);
+    test_experimental_small_direct_unaligned(context, 2049, counts);
 }
 #endif
 
