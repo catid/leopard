@@ -120,6 +120,7 @@ struct DecodePathInfo
     size_t direct_unit_term_count;
     size_t direct_pair_count;
     size_t direct_pair_with_unit_count;
+    bool direct_pair_fusion_selected;
     bool multi_item_batch;
 };
 
@@ -227,6 +228,7 @@ static inline bool SelectDecodePath(
     selection.direct_unit_term_count = 0;
     selection.direct_pair_count = 0;
     selection.direct_pair_with_unit_count = 0;
+    selection.direct_pair_fusion_selected = false;
     selection.multi_item_batch = input.multi_item_batch;
 
     const uint32_t supported_flags =

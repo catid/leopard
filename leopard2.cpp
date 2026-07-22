@@ -1511,6 +1511,59 @@ static bool IsExperimentalGeneralDirectOneLossCodec(const leo2_codec* codec)
 #endif
 }
 
+static bool ShouldUseExperimentalGF8DirectOneLossPairFusion(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+#if defined(LEO_HAS_FF8) && \
+    defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    /*
+        The paired AVX2 primitive remains an explicitly enabled experiment:
+        ordinary builds leave its Ops entry null.  Within that experiment,
+        select only the eight exact profile/count shapes and conservative
+        byte thresholds that cleared the immutable simple-versus-paired ABBA
+        screen.  Immediate byte and K/R neighbors remain controls until they
+        independently justify a broader region.  Backend choice changes only
+        execution, never the field, coordinate map, or wire profile.
+    */
+    if (!IsExperimentalGeneralDirectOneLossCodec(codec) ||
+        !codec->context || !codec->context->ops ||
+        !codec->context->ops->ff8_linear_combination2)
+        return false;
+
+    struct MeasuredShape
+    {
+        leo2_profile profile;
+        uint32_t original_count;
+        uint32_t recovery_count;
+        uint64_t minimum_shard_bytes;
+    };
+    static const MeasuredShape kMeasuredShapes[] = {
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 192, 64, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 200, 30, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 224, 32, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 240, 16, 64U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 17, 31, 1024U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 31, 200, 64 },
+        { LEO2_PROFILE_LOW_V1, 32, 224, 2048 },
+        { LEO2_PROFILE_LOW_V1, 127, 128, 64U * 1024U }
+    };
+    for (size_t i = 0;
+         i < sizeof(kMeasuredShapes) / sizeof(kMeasuredShapes[0]); ++i)
+    {
+        const MeasuredShape& shape = kMeasuredShapes[i];
+        if (codec->profile == shape.profile &&
+            codec->original_count == shape.original_count &&
+            codec->recovery_count == shape.recovery_count)
+            return shard_bytes >= shape.minimum_shard_bytes;
+    }
+#else
+    (void)codec;
+    (void)shard_bytes;
+#endif
+    return false;
+}
+
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
     return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
@@ -2920,6 +2973,7 @@ static bool SelectTransformDecodePath(
         selection.direct_unit_term_count = 0;
         selection.direct_pair_count = 0;
         selection.direct_pair_with_unit_count = 0;
+        selection.direct_pair_fusion_selected = false;
         selection.multi_item_batch = multi_item_batch;
         return true;
     }
@@ -4793,6 +4847,8 @@ static leo2_result ExecuteExperimentalGF8DirectOneLoss(
         restored_original[missing_original]);
     const leopard::backend::Ops& ops = *codec->context->ops;
     const size_t kTileBytes = 64U * 1024U;
+    const bool use_pair_fusion =
+        ShouldUseExperimentalGF8DirectOneLossPairFusion(codec, shard_bytes);
 
     /*
         The ordinary output-major executor visits the complete output once per
@@ -4807,8 +4863,7 @@ static leo2_result ExecuteExperimentalGF8DirectOneLoss(
     {
         const size_t bytes = std::min(kTileBytes, shard_bytes - offset);
         size_t term_index = 0;
-        if (ops.ff8_linear_combination2 &&
-            plan->direct_terms.size() >= 2)
+        if (use_pair_fusion && plan->direct_terms.size() >= 2)
         {
             while (term_index + 1 < plan->direct_terms.size())
             {
@@ -4900,7 +4955,9 @@ static leo2_result ExecuteDirectRepair(
 #ifdef LEO_HAS_FF8
     if (plan->missing_original_count == 1 &&
         IsExperimentalGeneralDirectOneLossCodec(codec) &&
-        (shard_bytes > 64U * 1024U || ops.ff8_linear_combination2))
+        (shard_bytes > 64U * 1024U ||
+         ShouldUseExperimentalGF8DirectOneLossPairFusion(
+            codec, shard_bytes)))
         return ExecuteExperimentalGF8DirectOneLoss(plan, shard_bytes, original,
             recovery, restored_original);
 
@@ -6250,6 +6307,7 @@ static void FillTerminalDecodePathInfo(
     info.direct_unit_term_count = 0;
     info.direct_pair_count = 0;
     info.direct_pair_with_unit_count = 0;
+    info.direct_pair_fusion_selected = false;
     info.multi_item_batch = multi_item_batch;
     size_t rounded = 0;
     if (shard_bytes != 0 && RoundShardBytes(shard_bytes, rounded))
@@ -6299,6 +6357,10 @@ leo2_result GetDecodePlanPathInfo(
              plan->direct_term_offsets.back() != plan->direct_terms.size()))
             return LEO2_INTERNAL_ERROR;
         info_out->direct_term_count = plan->direct_terms.size();
+        info_out->direct_pair_fusion_selected =
+            plan->direct_repair && plan->missing_original_count == 1 &&
+            ShouldUseExperimentalGF8DirectOneLossPairFusion(
+                plan->codec, shard_bytes);
         for (size_t output = 0;
              output + 1 < plan->direct_term_offsets.size(); ++output)
         {

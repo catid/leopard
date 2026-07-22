@@ -919,6 +919,45 @@ void test_generalized_one_loss_direct_repair_execution(
 }
 
 #if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+bool expected_experimental_pair_fusion(
+    leo2_profile profile,
+    unsigned k,
+    unsigned r,
+    size_t bytes)
+{
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
+    struct MeasuredShape
+    {
+        leo2_profile profile;
+        unsigned k;
+        unsigned r;
+        size_t minimum_bytes;
+    };
+    static const MeasuredShape shapes[] = {
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 192, 64, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 200, 30, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 224, 32, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 240, 16, 64U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 17, 31, 1024U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 31, 200, 64 },
+        { LEO2_PROFILE_LOW_V1, 32, 224, 2048 },
+        { LEO2_PROFILE_LOW_V1, 127, 128, 64U * 1024U }
+    };
+    for (size_t i = 0; i < sizeof(shapes) / sizeof(shapes[0]); ++i)
+    {
+        if (profile == shapes[i].profile && k == shapes[i].k &&
+            r == shapes[i].r)
+            return bytes >= shapes[i].minimum_bytes;
+    }
+#else
+    (void)profile;
+    (void)k;
+    (void)r;
+    (void)bytes;
+#endif
+    return false;
+}
+
 void run_experimental_general_direct_l1_case(
     leo2_context* context,
     unsigned k,
@@ -961,6 +1000,9 @@ void run_experimental_general_direct_l1_case(
         "general direct-L1 path query");
     require(direct_path.path == leopard2_internal::kDecodePathDirect,
         "general direct-L1 AUTO plan did not select direct repair");
+    require(direct_path.direct_pair_fusion_selected ==
+            expected_experimental_pair_fusion(profile, k, r, bytes),
+        "general direct-L1 pair selector differs at a measured boundary");
     require(direct_path.direct_term_count == k &&
             direct_path.direct_unit_term_count <= k &&
             direct_path.direct_pair_count == k / 2 &&
@@ -1017,7 +1059,8 @@ void run_experimental_general_direct_l1_case(
     require(transform_path.direct_term_count == 0 &&
             transform_path.direct_unit_term_count == 0 &&
             transform_path.direct_pair_count == 0 &&
-            transform_path.direct_pair_with_unit_count == 0,
+            transform_path.direct_pair_with_unit_count == 0 &&
+            !transform_path.direct_pair_fusion_selected,
         "forced specialized control retained direct-plan accounting");
 
     size_t transform_scratch_bytes = 0;
@@ -1056,6 +1099,8 @@ void run_experimental_general_direct_l1_case(
         "general direct-L1 forced-generic path query");
     require(generic_path.path == leopard2_internal::kDecodePathGeneric,
         "forced generic control did not select the generic decoder");
+    require(!generic_path.direct_pair_fusion_selected,
+        "forced generic control selected pair fusion");
     size_t generic_scratch_bytes = 0;
     require_result(leo2_decode_plan_scratch_size(
         generic_plan, bytes, &generic_scratch_bytes),
@@ -1086,6 +1131,65 @@ void run_experimental_general_direct_l1_case(
     leo2_codec_destroy(codec);
 }
 
+void run_experimental_pair_neighbor_case(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    leo2_profile profile,
+    size_t bytes,
+    TestCounts* counts)
+{
+    require(context != NULL &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "pair-neighbor case requires an AVX2 context");
+    leo2_codec* codec = make_codec(
+        context, k, r, profile, LEO2_FIELD_GF8);
+    const Shards source = make_originals(k, bytes,
+        UINT64_C(0x73a8214d00000000) +
+            static_cast<uint64_t>(k) * 257U + r * 17U + bytes);
+    const Shards parity = encode_new(codec, source, bytes);
+
+    const unsigned missing_original = k - 1;
+    const unsigned selected_recovery = r - 1;
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 0);
+    original_present[missing_original] = 0;
+    recovery_present[selected_recovery] = 1;
+    std::vector<const void*> original_input = const_pointers(source);
+    std::vector<const void*> recovery_input(r, NULL);
+    original_input[missing_original] = NULL;
+    recovery_input[selected_recovery] = &parity[selected_recovery][0];
+
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "pair-neighbor plan create");
+    leopard2_internal::DecodePathInfo path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, bytes, false, &path), "pair-neighbor path query");
+    require(!path.direct_pair_fusion_selected,
+        "pair fusion escaped an exact measured K/R shape");
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes), "pair-neighbor scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    std::vector<uint8_t> output(bytes, 0);
+    std::vector<void*> outputs(k, NULL);
+    outputs[missing_original] = &output[0];
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        &original_input[0], &recovery_input[0], &outputs[0],
+        scratch.data, scratch.bytes), "pair-neighbor execute");
+    require(output == source[missing_original],
+        "pair-neighbor recovery differs from source oracle");
+
+    ++counts->recovered_shards;
+    ++counts->plan_executions;
+    if ((bytes & 63U) != 0)
+        ++counts->tail_cases;
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
 void require_experimental_general_direct_l1_fallbacks(
     leo2_context* avx2_context)
 {
@@ -1110,6 +1214,8 @@ void require_experimental_general_direct_l1_fallbacks(
         "general direct-L1 two-loss fallback path query");
     require(path.path != leopard2_internal::kDecodePathDirect,
         "general direct-L1 experiment broadened to two losses");
+    require(!path.direct_pair_fusion_selected,
+        "two-loss fallback selected pair fusion");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
 
@@ -1154,6 +1260,8 @@ void require_experimental_general_direct_l1_fallbacks(
             "lower-backend direct-L1 path query");
         require(lower_path.path != leopard2_internal::kDecodePathDirect,
             "general direct-L1 selected a non-AVX2 backend");
+        require(!lower_path.direct_pair_fusion_selected,
+            "pair fusion selected a non-AVX2 backend");
         leo2_decode_plan_destroy(lower_plan);
         leo2_codec_destroy(lower_codec);
         leo2_context_destroy(context);
@@ -1198,6 +1306,74 @@ void test_experimental_general_direct_l1_execution(
         run_experimental_general_direct_l1_case(context,
             test.k, test.r, test.profile, test.missing_original,
             test.selected_recovery, test.bytes, counts);
+    }
+
+    struct PairBoundary
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        size_t threshold;
+    };
+    const PairBoundary boundaries[] = {
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 200, 30, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 224, 32, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1, 64U * 1024U },
+        { 17, 31, LEO2_PROFILE_LOW_V1, 1024U * 1024U },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 64 },
+        { 32, 224, LEO2_PROFILE_LOW_V1, 2048 },
+        { 127, 128, LEO2_PROFILE_LOW_V1, 64U * 1024U }
+    };
+    for (size_t i = 0;
+         i < sizeof(boundaries) / sizeof(boundaries[0]); ++i)
+    {
+        const PairBoundary& test = boundaries[i];
+        run_experimental_general_direct_l1_case(context,
+            test.k, test.r, test.profile, test.k - 1, test.r - 1,
+            test.threshold - 1, counts);
+        run_experimental_general_direct_l1_case(context,
+            test.k, test.r, test.profile, test.k - 1, test.r - 1,
+            test.threshold, counts);
+    }
+
+    struct PairNeighbor
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        size_t bytes;
+    };
+    const PairNeighbor neighbors[] = {
+        { 191, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 192, 63, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 199, 30, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 201, 30, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 200, 29, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 200, 31, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 223, 32, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 224, 31, LEO2_PROFILE_LEGACY_HIGH_V1, 64 },
+        { 239, 16, LEO2_PROFILE_LEGACY_HIGH_V1, 64U * 1024U },
+        { 240, 15, LEO2_PROFILE_LEGACY_HIGH_V1, 64U * 1024U },
+        { 16, 31, LEO2_PROFILE_LOW_V1, 1024U * 1024U },
+        { 18, 31, LEO2_PROFILE_LOW_V1, 1024U * 1024U },
+        { 17, 30, LEO2_PROFILE_LOW_V1, 1024U * 1024U },
+        { 17, 32, LEO2_PROFILE_LOW_V1, 1024U * 1024U },
+        { 30, 200, LEO2_PROFILE_LOW_V1, 64 },
+        { 32, 200, LEO2_PROFILE_LOW_V1, 64 },
+        { 31, 199, LEO2_PROFILE_LOW_V1, 64 },
+        { 31, 201, LEO2_PROFILE_LOW_V1, 64 },
+        { 31, 224, LEO2_PROFILE_LOW_V1, 2048 },
+        { 32, 223, LEO2_PROFILE_LOW_V1, 2048 },
+        { 126, 128, LEO2_PROFILE_LOW_V1, 64U * 1024U },
+        { 128, 128, LEO2_PROFILE_LOW_V1, 64U * 1024U },
+        { 127, 127, LEO2_PROFILE_LOW_V1, 64U * 1024U }
+    };
+    for (size_t i = 0; i < sizeof(neighbors) / sizeof(neighbors[0]); ++i)
+    {
+        const PairNeighbor& test = neighbors[i];
+        run_experimental_pair_neighbor_case(context,
+            test.k, test.r, test.profile, test.bytes, counts);
     }
     require_experimental_general_direct_l1_fallbacks(context);
 }
@@ -2499,6 +2675,7 @@ leopard2_internal::DecodePathInfo require_decode_path(
             selection.direct_unit_term_count == 0 &&
             selection.direct_pair_count == 0 &&
             selection.direct_pair_with_unit_count == 0 &&
+            !selection.direct_pair_fusion_selected &&
             selection.multi_item_batch == input.multi_item_batch,
         std::string(operation) + " lost byte or batch state");
     return selection;

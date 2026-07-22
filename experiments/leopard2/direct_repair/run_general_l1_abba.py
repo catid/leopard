@@ -51,8 +51,8 @@ from leopard2_build_provenance import (  # noqa: E402
 )
 
 
-SCHEMA = "leopard2-general-direct-l1-abba/v2"
-MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v1"
+SCHEMA = "leopard2-general-direct-l1-abba/v3"
+MATRIX_SCHEMA = "leopard2-general-direct-l1-matrix/v2"
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 EXPERIMENT = "LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1"
@@ -67,6 +67,8 @@ BYTE_NEIGHBORS = (
     63, 65, 2047, 2049, 4095, 4097,
     65535, 65537, 1048575, 1048577,
 )
+TINY_BYTES = (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63)
+TINY_REUSE = (1, 8)
 DEFAULT_LOCK = "/tmp/leopard-gf8-authoritative.lock"
 
 # Required cells from the experiment bead.
@@ -76,6 +78,8 @@ HIGH_CORE = (
 LOW_CORE = (
     (17, 31), (31, 200), (32, 224), (127, 128),
 )
+TINY_HIGH = ((240, 16), (192, 64))
+TINY_LOW = ((17, 31), (127, 128))
 
 # Stay on the GF8 side of each dyadic boundary.  Some requested core cells
 # sit exactly at N=256, so their +K or +R neighbor is intentionally invalid.
@@ -97,6 +101,38 @@ LOW_NEIGHBORS = (
 )
 LOW_BALANCED_NEIGHBORS = (
     (17, 17), (31, 31), (32, 32), (127, 127), (128, 128),
+)
+
+# Immutable pair-only ABBA evidence established these exact conservative
+# boundaries.  They select an execution kernel only; they never alter the
+# field, coordinate map, or wire profile.
+PAIR_THRESHOLDS = {
+    ("high", 192, 64): 64,
+    ("high", 200, 30): 64,
+    ("high", 224, 32): 64,
+    ("high", 240, 16): 65536,
+    ("low", 17, 31): 1048576,
+    ("low", 31, 200): 64,
+    ("low", 32, 224): 2048,
+    ("low", 127, 128): 65536,
+}
+
+# Every valid immediate K/R neighbor at the source shape's threshold.  A
+# coordinate already present in another tier retains that tier; build_matrix
+# adds only missing coordinates and self_test verifies full value coverage.
+PAIR_SELECTOR_NEIGHBORS = (
+    ("high", 191, 64, 64), ("high", 192, 63, 64),
+    ("high", 199, 30, 64), ("high", 201, 30, 64),
+    ("high", 200, 29, 64), ("high", 200, 31, 64),
+    ("high", 223, 32, 64), ("high", 224, 31, 64),
+    ("high", 239, 16, 65536), ("high", 240, 15, 65536),
+    ("low", 16, 31, 1048576), ("low", 18, 31, 1048576),
+    ("low", 17, 30, 1048576), ("low", 17, 32, 1048576),
+    ("low", 30, 200, 64), ("low", 32, 200, 64),
+    ("low", 31, 199, 64), ("low", 31, 201, 64),
+    ("low", 31, 224, 2048), ("low", 32, 223, 2048),
+    ("low", 126, 128, 65536), ("low", 128, 128, 65536),
+    ("low", 127, 127, 65536),
 )
 
 
@@ -159,12 +195,12 @@ def make_cell(
     reuse: int,
     tier: str,
 ) -> dict[str, Any]:
-    require(k > 16 and r > 1 and shard_bytes > 0 and reuse > 0,
-            "matrix contains an ineligible direct-repair cell")
+    require(k > 0 and r > 1 and shard_bytes > 0 and reuse > 0,
+            "matrix contains an invalid direct-repair control cell")
     parent = parent_count(profile, k, r)
     require(parent <= 256, "matrix cell escapes the GF8 parent")
-    if profile == "low" and tier != "balanced-neighbor":
-        require(r > k, "non-balanced LOW candidate must have R > K")
+    if profile == "low":
+        require(r >= k, "LOW candidate/control must have R >= K")
     key = "%s:k=%d:r=%d:b=%d:u=%d" % (
         profile, k, r, shard_bytes, reuse)
     seed = int.from_bytes(hashlib.sha256(key.encode()).digest()[:8], "big")
@@ -182,8 +218,17 @@ def make_cell(
         "reuse": reuse,
         "seed": seed,
         "candidate_expected_path": (
-            "transform" if profile == "low" and r == k else "direct"),
+            "direct" if k > 16 and
+            (profile == "high" or r > k) else "transform"),
     }
+
+
+def pair_fusion_expected(cell: Mapping[str, Any]) -> bool:
+    threshold = PAIR_THRESHOLDS.get(
+        (cell["profile"], cell["K"], cell["R"]))
+    return (threshold is not None and
+            cell["candidate_expected_path"] == "direct" and
+            cell["loss"] == 1 and cell["bytes"] >= threshold)
 
 
 def build_matrix() -> dict[str, Any]:
@@ -195,11 +240,14 @@ def build_matrix() -> dict[str, Any]:
         byte_values: Iterable[int],
         reuse_values: Iterable[int],
         tier: str,
+        skip_existing: bool = False,
     ) -> None:
         for k, r in shapes:
             for shard_bytes in byte_values:
                 for reuse in reuse_values:
                     key = (profile, k, r, shard_bytes, reuse)
+                    if key in cells and skip_existing:
+                        continue
                     require(key not in cells,
                             "matrix tiers overlap at %r" % (key,))
                     cells[key] = make_cell(
@@ -211,6 +259,11 @@ def build_matrix() -> dict[str, Any]:
     # complete size/reuse matrix rather than a token spot check.
     add("low", LOW_BALANCED_NEIGHBORS, BASE_BYTES, BASE_REUSE,
         "balanced-neighbor")
+    # Plan selection is byte-independent.  Screen both setup-amortization
+    # extremes below the former 64-byte floor, where the existing AVX2
+    # callbacks also lack an XMM-sized tail.
+    add("high", TINY_HIGH, TINY_BYTES, TINY_REUSE, "tiny-byte")
+    add("low", TINY_LOW, TINY_BYTES, TINY_REUSE, "tiny-byte")
     # Shape-neighbor screens are compact: two representative working-set
     # sizes and the middle reuse point.  Full expansion follows only if one
     # of these exposes a boundary regression.
@@ -218,8 +271,16 @@ def build_matrix() -> dict[str, Any]:
     add("low", LOW_NEIGHBORS, (4096, 65536), (8,), "shape-neighbor")
     # Exercise vector/tile tails around every requested byte boundary while
     # holding reuse at the representative amortization point.
-    add("high", HIGH_CORE, BYTE_NEIGHBORS, (8,), "byte-neighbor")
-    add("low", LOW_CORE, BYTE_NEIGHBORS, (8,), "byte-neighbor")
+    add("high", HIGH_CORE, BYTE_NEIGHBORS, (8,), "byte-neighbor",
+        skip_existing=True)
+    add("low", LOW_CORE, BYTE_NEIGHBORS, (8,), "byte-neighbor",
+        skip_existing=True)
+    for profile, k, r, shard_bytes in PAIR_SELECTOR_NEIGHBORS:
+        key = (profile, k, r, shard_bytes, 8)
+        if key not in cells:
+            cells[key] = make_cell(
+                profile, k, r, shard_bytes, 8,
+                "pair-selector-neighbor")
 
     high = sorted(
         (cell for cell in cells.values() if cell["profile"] == "high"),
@@ -236,6 +297,8 @@ def build_matrix() -> dict[str, Any]:
             "base_bytes": list(BASE_BYTES),
             "base_reuse": list(BASE_REUSE),
             "byte_neighbors": list(BYTE_NEIGHBORS),
+            "tiny_bytes": list(TINY_BYTES),
+            "tiny_reuse": list(TINY_REUSE),
         },
         "high": high,
         "low": low,
@@ -951,6 +1014,7 @@ def validate_leopard2_document(
     document: Mapping[str, Any],
     cell: Mapping[str, Any],
     direct_control: bool = False,
+    pair_candidate: bool = False,
 ) -> None:
     require(document.get("schema") == "leopard2-benchmark-v3",
             role + " did not emit path-report schema v3")
@@ -999,6 +1063,12 @@ def validate_leopard2_document(
         resolved["decode_direct_pair_count"],
         resolved["decode_direct_pair_with_unit_count"],
     )
+    pair_selected = resolved.get("decode_direct_pair_fusion_selected")
+    require(type(pair_selected) is bool,
+            role + " pair-fusion selection is not boolean")
+    require(pair_selected == (pair_candidate and
+                              pair_fusion_expected(cell)),
+            role + " pair-fusion selection differs from the frozen table")
     if role == "control" and not direct_control:
         require(path != "direct",
                 "control unexpectedly selected direct repair")
@@ -1150,6 +1220,7 @@ def run_exact_main_followup(
     cell_dir: Path,
     rounds: int,
     maximum_attempts: int,
+    pair_candidate: bool,
 ) -> dict[str, Any]:
     require(cell["profile"] == "high" and cell["R"] <= cell["K"] and
             cell["bytes"] % 64 == 0,
@@ -1170,7 +1241,8 @@ def run_exact_main_followup(
                 value = float(document["metrics"]["decode_including_setup"][
                     "median_us_per_batch_call"])
             else:
-                validate_leopard2_document(role, document, cell)
+                validate_leopard2_document(
+                    role, document, cell, pair_candidate=pair_candidate)
                 value = timings(document, cell["reuse"])[
                     "decode_amortized_us"]
             require(value > 0, "exact-main comparison timing is nonpositive")
@@ -1308,7 +1380,9 @@ def run_cell(
                 maximum_attempts, leopard2=True)
             validate_leopard2_document(
                 role, invocation["document"], cell,
-                direct_control=comparison_mode == SIMPLE_VS_PAIR)
+                direct_control=comparison_mode == SIMPLE_VS_PAIR,
+                pair_candidate=(role == "candidate" and comparison_mode in
+                                (TRANSFORM_VS_PAIR, SIMPLE_VS_PAIR)))
             invocation["timings"] = timings(
                 invocation["document"], cell["reuse"])
             calls.append(invocation)
@@ -1332,9 +1406,21 @@ def run_cell(
         require(expected_plan_mix["control"] ==
                 expected_plan_mix["candidate"],
                 "pair attribution changed the direct-plan coefficients")
+    pair_selection = {
+        role: bool(next(call for call in calls if call["role"] == role)[
+            "document"]["resolved"][
+                "decode_direct_pair_fusion_selected"])
+        for role in ("control", "candidate")
+    }
+    require(all(bool(call["document"]["resolved"][
+                    "decode_direct_pair_fusion_selected"]) ==
+                pair_selection[call["role"]] for call in calls),
+            "a repeated pair-fusion selection differs")
     metrics = same_source_metrics(calls, rounds, cell["reuse"])
     winner = (
         cell["candidate_expected_path"] == "direct" and
+        (comparison_mode != SIMPLE_VS_PAIR or
+         pair_selection["candidate"]) and
         metrics["decode_amortized_us"]["ci95_low"] >= promotion_threshold)
     exact_main = None
     if frozen.get("main") is not None:
@@ -1350,7 +1436,8 @@ def run_cell(
                 frozen["candidate"]["sha256"],
                 Path(frozen["main"]["frozen_path"]),
                 frozen["main"]["sha256"],
-                main_commit, topology, cell_dir, rounds, maximum_attempts)
+                main_commit, topology, cell_dir, rounds, maximum_attempts,
+                pair_candidate=comparison_mode == TRANSFORM_VS_PAIR)
     result = {
         "schema": SCHEMA,
         "status": "complete",
@@ -1372,6 +1459,7 @@ def run_cell(
                     (TRANSFORM_VS_PAIR, SIMPLE_VS_PAIR)
                 else "general-on,pair-off"),
             "direct_plan_mix": expected_plan_mix,
+            "pair_fusion_selected": pair_selection,
             "metrics": metrics,
             "memory": {
                 "control": next(call for call in calls
@@ -1413,6 +1501,8 @@ def summarize(
             "cold_codec_plan": metrics["decode_cold_codec_plan_us"],
             "memory": result["same_source"]["memory"],
             "direct_plan_mix": result["same_source"]["direct_plan_mix"],
+            "pair_fusion_selected": result["same_source"][
+                "pair_fusion_selected"],
             "same_source_candidate_win": result[
                 "same_source_candidate_win"],
             "exact_main": (
@@ -1456,7 +1546,13 @@ def summarize(
     if comparison_mode == SIMPLE_VS_PAIR:
         direct_results = [cell_result for cell_result in results
                           if cell_result["cell"][
-                              "candidate_expected_path"] == "direct"]
+                              "candidate_expected_path"] == "direct" and
+                          cell_result["same_source"][
+                              "pair_fusion_selected"]["candidate"]]
+        inactive_pair_selector_ids = sorted(
+            cell_result["cell"]["id"] for cell_result in results
+            if not cell_result["same_source"][
+                "pair_fusion_selected"]["candidate"])
 
         def observed_threshold(
             selected: Sequence[Mapping[str, Any]],
@@ -1500,11 +1596,12 @@ def summarize(
                 profile, k, r, reuse)] = observed_threshold(selected)
         result["pair_fusion_threshold_screen"] = {
             "scope": (
-                "observed cells only; a production boundary still requires "
-                "neighbor confirmation"),
+                "only cells where the frozen per-shape selector enabled the "
+                "paired executor; inactive cells are negative controls"),
             "gate": "decode execution CI95 low >= promotion threshold",
             "all_direct_cells": observed_threshold(direct_results),
             "by_shape_and_reuse": by_shape_reuse,
+            "inactive_selector_ids": inactive_pair_selector_ids,
         }
     return result
 
@@ -1534,7 +1631,7 @@ def expect_campaign_error(callable_value, label: str) -> None:
 
 
 def synthetic_document(
-    cell: Mapping[str, Any], path: str,
+    cell: Mapping[str, Any], path: str, pair_selected: bool = False,
 ) -> dict[str, Any]:
     profile = "legacy_high_v1" if cell["profile"] == "high" else "low_v1"
     return {
@@ -1571,6 +1668,7 @@ def synthetic_document(
                 cell["K"] // 2 if path == "direct" else 0),
             "decode_direct_pair_with_unit_count": (
                 1 if path == "direct" and cell["K"] >= 2 else 0),
+            "decode_direct_pair_fusion_selected": pair_selected,
         },
         "correctness": {"leopard2_round_trip": True},
         "workload_digests": {
@@ -1757,6 +1855,22 @@ def adversarial_self_tests() -> dict[str, str]:
         cell = make_cell("high", 240, 16, 64, 1, "core")
         valid = synthetic_document(cell, "direct")
         validate_leopard2_document("candidate", valid, cell)
+        spurious_pair = copy.deepcopy(valid)
+        spurious_pair["resolved"][
+            "decode_direct_pair_fusion_selected"] = True
+        expect_campaign_error(lambda: validate_leopard2_document(
+            "candidate", spurious_pair, cell),
+            "spurious pair selector attestation")
+        pair_cell = make_cell("high", 240, 16, 65536, 8, "core")
+        pair_valid = synthetic_document(pair_cell, "direct", True)
+        validate_leopard2_document(
+            "candidate", pair_valid, pair_cell, pair_candidate=True)
+        wrong_pair = copy.deepcopy(pair_valid)
+        wrong_pair["resolved"][
+            "decode_direct_pair_fusion_selected"] = False
+        expect_campaign_error(lambda: validate_leopard2_document(
+            "candidate", wrong_pair, pair_cell, pair_candidate=True),
+            "missing pair selector attestation")
         for section, name, bad_value in (
             ("resolved", "profile", "low_v1"),
             ("resolved", "field", "gf16"),
@@ -1811,6 +1925,7 @@ def adversarial_self_tests() -> dict[str, str]:
         "stale_or_mixed_objects": "rejected",
         "evex_injection": "rejected",
         "wrong_profile_field_backend": "rejected",
+        "pair_selector_attestation": "rejected_missing_and_spurious",
         "l2_direct_path": "rejected",
         "high_low_cross_label": "rejected",
         "resumed_artifact_hash_mismatch": "rejected",
@@ -1849,7 +1964,8 @@ def run_campaign(args: argparse.Namespace) -> None:
     cells = validate_matrix(matrix)
     selected_tiers = set(args.tiers.split(","))
     known_tiers = {
-        "core", "balanced-neighbor", "shape-neighbor", "byte-neighbor"}
+        "core", "balanced-neighbor", "shape-neighbor", "byte-neighbor",
+        "pair-selector-neighbor", "tiny-byte"}
     require(selected_tiers and selected_tiers.issubset(known_tiers),
             "--tiers contains an unknown or empty tier")
     cells = [cell for cell in cells if cell["tier"] in selected_tiers]
@@ -2051,6 +2167,29 @@ def self_test() -> None:
             "balanced LOW is not a negative selector control")
     require(all(cell["parent_count"] <= 256 for cell in cells),
             "matrix escaped GF8")
+    covered = {(cell["profile"], cell["K"], cell["R"], cell["bytes"])
+               for cell in cells if cell["reuse"] == 8}
+    require(set(PAIR_SELECTOR_NEIGHBORS).issubset(covered),
+            "pair-selector immediate-neighbor coverage differs")
+    tiny = [cell for cell in cells if cell["tier"] == "tiny-byte"]
+    require({(cell["profile"], cell["K"], cell["R"])
+             for cell in tiny} ==
+            {("high", k, r) for k, r in TINY_HIGH} |
+            {("low", k, r) for k, r in TINY_LOW} and
+            {cell["bytes"] for cell in tiny} == set(TINY_BYTES) and
+            {cell["reuse"] for cell in tiny} == set(TINY_REUSE) and
+            len(tiny) == (len(TINY_HIGH) + len(TINY_LOW)) *
+                len(TINY_BYTES) * len(TINY_REUSE),
+            "tiny-byte plan-selection matrix differs")
+    for (profile, k, r), threshold in PAIR_THRESHOLDS.items():
+        require(any(cell["profile"] == profile and cell["K"] == k and
+                    cell["R"] == r and cell["bytes"] == threshold - 1 and
+                    not pair_fusion_expected(cell) for cell in cells),
+                "pair-selector threshold-1 coverage differs")
+        require(any(cell["profile"] == profile and cell["K"] == k and
+                    cell["R"] == r and cell["bytes"] == threshold and
+                    pair_fusion_expected(cell) for cell in cells),
+                "pair-selector threshold coverage differs")
     expected_core = (len(HIGH_CORE) + len(LOW_CORE)) * len(BASE_BYTES) * \
         len(BASE_REUSE)
     require(sum(cell["tier"] == "core" for cell in cells) == expected_core,
@@ -2093,9 +2232,11 @@ def parse_arguments() -> argparse.Namespace:
         help="compare general direct repair with pair fusion OFF versus ON")
     run.add_argument(
         "--tiers",
-        default="core,balanced-neighbor,shape-neighbor,byte-neighbor",
+        default=("core,balanced-neighbor,shape-neighbor,byte-neighbor,"
+                 "pair-selector-neighbor,tiny-byte"),
         help="comma-separated subset of core, balanced-neighbor, "
-             "shape-neighbor, byte-neighbor")
+             "shape-neighbor, byte-neighbor, pair-selector-neighbor, "
+             "tiny-byte")
     run.add_argument(
         "--cell-regex",
         help="optional regular expression selecting cell IDs after tiers")

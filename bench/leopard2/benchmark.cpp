@@ -1465,6 +1465,9 @@ static int Run(const Options& options)
              << decode_path_info.direct_pair_count << ",\n"
              << "    \"decode_direct_pair_with_unit_count\": "
              << decode_path_info.direct_pair_with_unit_count << ",\n"
+             << "    \"decode_direct_pair_fusion_selected\": "
+             << (decode_path_info.direct_pair_fusion_selected
+                    ? "true" : "false") << ",\n"
              << "    \"decode_multi_item_batch\": "
              << (decode_path_info.multi_item_batch ? "true" : "false");
     }

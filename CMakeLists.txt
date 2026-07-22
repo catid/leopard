@@ -73,6 +73,11 @@ if(LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION)
         Leopard2Backend.cpp Leopard2BackendAVX2.cpp
         PROPERTIES COMPILE_DEFINITIONS
         LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=1)
+    # Let the focused API test assert the runtime selector boundary without
+    # changing any additional production-object compile recipe.
+    set_property(SOURCE tests/leopard2/test_api.cpp APPEND PROPERTY
+        COMPILE_DEFINITIONS
+        LEO2_EXPERIMENTAL_GF8_AVX2_DIRECT_L1_PAIR_FUSION=1)
 endif()
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)

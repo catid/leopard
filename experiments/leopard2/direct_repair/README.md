@@ -21,6 +21,27 @@ backend objects to differ.  The latter comparison determines whether pair
 fusion needs a byte threshold instead of routing every shard size through the
 paired traversal.
 
+The pair experiment now uses a deterministic, exact-shape selector derived
+from the immutable pair-only campaign.  Ordinary builds still compile with
+the option OFF.  An enabled experimental build selects pair fusion only at or
+above these byte counts; every other K/R shape retains the simple executor:
+
+| Profile | K | R | Minimum shard bytes |
+|---|---:|---:|---:|
+| HIGH | 192 | 64 | 64 |
+| HIGH | 200 | 30 | 64 |
+| HIGH | 224 | 32 | 64 |
+| HIGH | 240 | 16 | 65,536 |
+| LOW | 17 | 31 | 1,048,576 |
+| LOW | 31 | 200 | 64 |
+| LOW | 32 | 224 | 2,048 |
+| LOW | 127 | 128 | 65,536 |
+
+The focused API suite executes each source shape at threshold minus one and
+at threshold, and executes every valid immediate K/R neighbor at the source
+threshold.  The benchmark JSON reports the actual selector decision, so a
+campaign cannot attribute a no-op control cell to the paired kernel.
+
 For one loss, plan construction generates one exact systematic generator row,
 selects one received parity equation, and stores at most `K` execution terms.
 The immutable codec retains `K` barycentric weights.  Row generation costs
@@ -81,7 +102,17 @@ each at plan reuse 1, 8, and 64 (120 cells).
 3. `shape-neighbor`: valid GF8 `K`/`R` neighbors plus explicit legacy-high
    `(17,33)` and `(17,128)` at 4 KiB and 64 KiB with reuse 8 (44 cells).
 4. `byte-neighbor`: each core shape at +/-1 around 64 B, 2 KiB, 4 KiB,
-   64 KiB, and 1 MiB with reuse 8 (80 cells).
+   64 KiB, and 1 MiB with reuse 8.  Four 63-byte coordinates are owned by
+   the tiny-byte tier below, leaving 76 cells in this tier.
+5. `pair-selector-neighbor`: immediate K/R neighbors evaluated at the exact
+   source-shape threshold when that coordinate is not already covered by the
+   balanced or shape-neighbor tiers.
+6. `tiny-byte`: HIGH `(240,16)` and `(192,64)`, plus LOW `(17,31)` and
+   `(127,128)`, at 1,2,3,7,8,15,16,17,31,32,33,63 bytes and reuse 1 and 8
+   (96 cells).  Run this tier in both the default transform-versus-simple mode
+   and `--pair-fusion` mode.  Pair fusion itself must remain unselected below
+   64 bytes; these cells gate the byte-independent general direct-plan choice
+   and coordinate with the separate XMM-tail experiment.
 
 Before timing, eight 65-byte `L=2` probes must select a non-direct path.  Each
 timed cell uses five serial ABBA rounds by default, pins one physical core,
@@ -112,11 +143,34 @@ Example commands after acquiring the canonical campaign lease:
         --run-dir /tmp/leopard2-general-l1-results
 
     python3 experiments/leopard2/direct_repair/run_general_l1_abba.py run \
-        --pair-attribution --tiers core,byte-neighbor \
+        --pair-attribution \
+        --tiers core,byte-neighbor,shape-neighbor,balanced-neighbor,pair-selector-neighbor \
         --cell-regex='-u8$' \
         --source "$PWD" --commit "$(git rev-parse HEAD)" \
         --build-root /tmp/leopard2-general-l1-pair-build \
         --run-dir /tmp/leopard2-general-l1-pair-results
+
+    python3 experiments/leopard2/direct_repair/run_general_l1_abba.py run \
+        --pair-fusion --tiers core \
+        --cell-regex='(high-core-k(192-r64-b64|200-r30-b64|224-r32-b64|240-r16-b65536)-u8)$' \
+        --main-benchmark /absolute/path/to/frozen-main-benchmark \
+        --main-commit FULL_40_HEX_MAIN_COMMIT \
+        --main-sha256 FULL_64_HEX_MAIN_EXECUTABLE_SHA256 \
+        --source "$PWD" --commit "$(git rev-parse HEAD)" \
+        --build-root /tmp/leopard2-general-l1-main-build \
+        --run-dir /tmp/leopard2-general-l1-main-results
+
+    python3 experiments/leopard2/direct_repair/run_general_l1_abba.py run \
+        --tiers tiny-byte \
+        --source "$PWD" --commit "$(git rev-parse HEAD)" \
+        --build-root /tmp/leopard2-general-l1-tiny-simple-build \
+        --run-dir /tmp/leopard2-general-l1-tiny-simple-results
+
+    python3 experiments/leopard2/direct_repair/run_general_l1_abba.py run \
+        --pair-fusion --tiers tiny-byte \
+        --source "$PWD" --commit "$(git rev-parse HEAD)" \
+        --build-root /tmp/leopard2-general-l1-tiny-pair-build \
+        --run-dir /tmp/leopard2-general-l1-tiny-pair-results
 
 Pass `--main-benchmark`, the exact 40-character `--main-commit`, and its
 pre-recorded 64-character `--main-sha256` only when a verified Leopard-main
