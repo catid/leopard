@@ -4119,9 +4119,17 @@ static leo2_result ValidateDecodeBuffers(
     uint32_t single_output_index = 0;
     if (single_output)
     {
-        if (plan->missing_originals.size() != 1)
-            return LEO2_INTERNAL_ERROR;
-        single_output_index = plan->missing_originals[0];
+        /* Compact R=1 plans deliberately omit every pattern vector.  Batch
+           preflight still shares this validator, so recover the sole output
+           from the compact scalar instead of requiring missing_originals. */
+        if (PlanHasCompactDirectXor(plan))
+            single_output_index = plan->direct_xor_original;
+        else
+        {
+            if (plan->missing_originals.size() != 1)
+                return LEO2_INTERNAL_ERROR;
+            single_output_index = plan->missing_originals[0];
+        }
         if (single_output_index >= codec->original_count ||
             !restored[single_output_index] ||
             !MakeRange(
@@ -4139,7 +4147,7 @@ static leo2_result ValidateDecodeBuffers(
     size_t output_count = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
-        if ((original[i] != NULL) != (plan->original_present[i] != 0))
+        if ((original[i] != NULL) != PlanOriginalPresent(plan, i))
             return LEO2_INVALID_ARGUMENT;
         if (original[i])
         {
@@ -4171,7 +4179,7 @@ static leo2_result ValidateDecodeBuffers(
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
-        if ((recovery[i] != NULL) != (plan->recovery_present[i] != 0))
+        if ((recovery[i] != NULL) != PlanRecoveryPresent(plan, i))
             return LEO2_INVALID_ARGUMENT;
         if (recovery[i])
         {

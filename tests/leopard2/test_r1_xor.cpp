@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -309,7 +310,8 @@ struct R1Fixture
 
     R1Fixture(leo2_backend backend, uint32_t original_count,
         size_t shard_bytes, bool alias_inputs, leo2_field field,
-        leo2_shard_layout layout, uint32_t missing_index = 0)
+        leo2_shard_layout layout, uint32_t missing_index = 0,
+        uint32_t thread_count = 0)
         : context(NULL)
         , codec(NULL)
         , plan(NULL)
@@ -325,6 +327,7 @@ struct R1Fixture
         std::memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
         options.backend = backend;
+        options.thread_count = thread_count;
         require_result(leo2_context_create(&options, &context), LEO2_SUCCESS,
             "R=1 context create");
         leo2_codec_options codec_options;
@@ -464,6 +467,118 @@ void execute_and_check_decode(const R1Fixture& fixture)
     for (size_t i = 5 + fixture.bytes; i < restored_storage.size(); ++i)
         require(restored_storage[i] == 0x3c,
             "R=1 one-shot decode changed a suffix guard");
+}
+
+void execute_public_r1_multi_item_batch(
+    const R1Fixture& fixture, size_t batch_count, bool adversarial)
+{
+    static const size_t kOutputOffset = 5;
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        fixture.plan, fixture.bytes, &scratch_bytes), LEO2_SUCCESS,
+        "R=1 multi-item decode scratch query");
+
+    std::vector<std::vector<const void*> > received(
+        batch_count, fixture.original);
+    std::vector<Bytes> restored_storage(
+        batch_count, Bytes(fixture.bytes + 11U, 0x5a));
+    std::vector<std::vector<void*> > restored(
+        batch_count, std::vector<void*>(fixture.k, NULL));
+    std::vector<std::unique_ptr<AlignedScratch> > scratch;
+    std::vector<leo2_decode_batch_item> items(batch_count);
+    scratch.reserve(batch_count);
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+    {
+        received[item_i][fixture.missing] = NULL;
+        restored[item_i][fixture.missing] =
+            &restored_storage[item_i][kOutputOffset];
+        scratch.push_back(std::unique_ptr<AlignedScratch>(
+            new AlignedScratch(scratch_bytes)));
+        items[item_i].shard_bytes = fixture.bytes;
+        items[item_i].original = &received[item_i][0];
+        items[item_i].recovery = fixture.recovery;
+        items[item_i].restored_original = &restored[item_i][0];
+        items[item_i].scratch = scratch[item_i]->data();
+        items[item_i].scratch_bytes = scratch_bytes;
+    }
+
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &items[0], items.size()), LEO2_SUCCESS,
+        "R=1 multi-item batch decode execute");
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+    {
+        require(std::memcmp(restored[item_i][fixture.missing],
+                    fixture.original[fixture.missing], fixture.bytes) == 0,
+            "R=1 multi-item batch restored the wrong original");
+        for (size_t i = 0; i < kOutputOffset; ++i)
+            require(restored_storage[item_i][i] == 0x5a,
+                "R=1 multi-item batch changed an output prefix guard");
+        for (size_t i = kOutputOffset + fixture.bytes;
+             i < restored_storage[item_i].size(); ++i)
+            require(restored_storage[item_i][i] == 0x5a,
+                "R=1 multi-item batch changed an output suffix guard");
+    }
+
+    if (!adversarial)
+        return;
+
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(restored_storage[item_i].begin(),
+            restored_storage[item_i].end(), 0x6b);
+    const std::vector<Bytes> before_failure = restored_storage;
+    --items.back().scratch_bytes;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &items[0], items.size()), LEO2_SCRATCH_TOO_SMALL,
+        "R=1 compact batch late-item scratch rejection");
+    require(restored_storage == before_failure,
+        "R=1 compact batch ran an item before late validation failure");
+    ++items.back().scratch_bytes;
+
+    restored[0][fixture.missing] =
+        const_cast<void*>(received[1][fixture.missing + 1U]);
+    const Bytes aliased_input_before = fixture.storage[fixture.missing + 1U];
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &items[0], items.size()), LEO2_OVERLAP,
+        "R=1 compact batch cross-item output/input overlap");
+    require(fixture.storage[fixture.missing + 1U] == aliased_input_before,
+        "R=1 compact batch alias rejection modified an input");
+    require(restored_storage == before_failure,
+        "R=1 compact batch alias rejection modified an output");
+}
+
+void test_public_r1_multi_item_batch(leo2_backend backend)
+{
+    static const uint32_t counts[] = { 7, 9, 129 };
+    static const size_t sizes[] = { 4096, 4097 };
+    static const size_t batches[] = { 2, 8, 64 };
+    static const uint32_t thread_counts[] = { 1, 4 };
+    for (size_t thread_i = 0;
+         thread_i < sizeof(thread_counts) / sizeof(thread_counts[0]);
+         ++thread_i)
+    {
+        for (size_t count_i = 0;
+             count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
+        {
+            for (size_t size_i = 0;
+                 size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+            {
+                const uint32_t k = counts[count_i];
+                R1Fixture fixture(backend, k, sizes[size_i], false,
+                    LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, k / 2U,
+                    thread_counts[thread_i]);
+                for (size_t batch_i = 0;
+                     batch_i < sizeof(batches) / sizeof(batches[0]);
+                     ++batch_i)
+                {
+                    const bool adversarial =
+                        thread_counts[thread_i] == 4 && k == 9 &&
+                        sizes[size_i] == 4096 && batches[batch_i] == 8;
+                    execute_public_r1_multi_item_batch(
+                        fixture, batches[batch_i], adversarial);
+                }
+            }
+        }
+    }
 }
 
 void test_public_r1_overlap_rejection(leo2_backend backend)
@@ -640,6 +755,7 @@ void test_public_r1(leo2_backend backend)
     execute_and_check_decode(final_missing);
 
     test_public_r1_overlap_rejection(backend);
+    test_public_r1_multi_item_batch(backend);
 
     // Shared immutable codec/plan execution must remain race-free.
     R1Fixture fixture(backend, 9, 4097, true, LEO2_FIELD_GF8,
@@ -754,7 +870,8 @@ int main()
             "effective runtime backend lacked public R=1 coverage");
         std::printf("Leopard2 R=1 fused XOR passed: backends=qualified "
             "tails=0..257 max_bytes=1048579 fields=gf8,gf16 "
-            "concurrency=pass\n");
+            "batch=2,8,64 batch_k=7,9,129 batch_bytes=4096,4097 "
+            "batch_threads=1,4 concurrency=pass\n");
         return 0;
     }
     catch (const std::exception& error)
