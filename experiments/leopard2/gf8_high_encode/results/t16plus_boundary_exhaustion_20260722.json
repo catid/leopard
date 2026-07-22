@@ -1,0 +1,187 @@
+{
+  "schema": "leopard2-gf8-avx2-encoder-boundary-exhaustion/v1",
+  "date_utc": "2026-07-22",
+  "bead": "leopard-79h.18.20.1.12",
+  "source": {
+    "commit": "dc3d09e6aa3af748474813d7947ff64c417868f9",
+    "leopard_ff8_cpp_sha256": "c8126c12b1cd4f8bf1575fba4c159a805dd8bf2006862264cb24026a7883139e"
+  },
+  "scope": "Pure-AVX2 GF8 legacy-high encoder input, inverse-transform, and XOR-accumulation boundaries at T=16,32,64,128 after the retained T=2/T=4 kernels.",
+  "production_audit": {
+    "complete_input_groups": "For every T greater than four, each complete four-source group is loaded directly by ff8_ifft_butterfly4_out and stored only after the first two inverse layers. There is no source-to-work copy for a complete group.",
+    "final_accumulation": "Every later message block sends the last inverse radix-four layer through ff8_ifft_butterfly4_xor_range or the last inverse radix-two layer through IFFT_DIT2_xor/xor_mem_2to1. There is no standalone final temporary-to-accumulator XOR pass.",
+    "ragged_input_groups": "The measured mask-specialized direct ragged leaf is retained for T=8 at qualified byte sizes and for T=16 at 64 KiB or larger. Wider T retain compatibility staging because the saved boundary is too small a fraction of execution.",
+    "large_payloads": "The existing byte-range tiler applies to T=16,32,64,128 and bounds the working set without changing the transform schedule or wire bytes.",
+    "t128_constraint": "A GF8 legacy-high T=128 code has K at most 128 because the active parent must fit 256 coordinates. It therefore has no second message block and no later-block partial-tail or XOR-accumulation boundary to optimize. Its first complete input block already uses direct four-source leaves."
+  },
+  "ragged_leaf_traffic_bound": {
+    "derivation": "Replacing copy plus zero-fill plus one in-place radix-four leaf by a mask-specialized out-of-place leaf saves exactly eight shard-byte stream units for a one-, two-, or three-source ragged group. Even if the forward transform and all other encoder work were free, a fused-radix-four inverse transform moves at least 2*T*ceil(log2(T)/2) shard-byte stream units.",
+    "units": "one read or one write of one shard byte range",
+    "sizes": [
+      {
+        "T": 16,
+        "inverse_lower_bound_units": 64,
+        "saved_units": 8,
+        "inverse_only_maximum_percent": 12.5,
+        "disposition": "measured and retained only for at least 64 KiB"
+      },
+      {
+        "T": 32,
+        "inverse_lower_bound_units": 192,
+        "saved_units": 8,
+        "inverse_only_maximum_percent": 4.166667,
+        "disposition": "below the 5 percent gate before shared forward-transform and framework cost"
+      },
+      {
+        "T": 64,
+        "inverse_lower_bound_units": 384,
+        "saved_units": 8,
+        "inverse_only_maximum_percent": 2.083333,
+        "disposition": "below the 5 percent gate"
+      },
+      {
+        "T": 128,
+        "inverse_lower_bound_units": 1024,
+        "saved_units": 8,
+        "inverse_only_maximum_percent": 0.78125,
+        "disposition": "below the 5 percent gate and no later GF8 message block exists"
+      }
+    ]
+  },
+  "experiments": {
+    "t8_whole_callback": {
+      "artifact": "experiments/leopard2/gf8_high_encode/results/t8_direct_input_negative_20260721.json",
+      "artifact_sha256": "a968016d507de97d67337b835bc261b77827bc545525579669b5df5f7b907a4d",
+      "decision": "rejected",
+      "result": "K=64,R=8 regressed 14.616 percent at 4 KiB and 3.454 percent at 64 KiB; K=240,R=8 also regressed 1.227 percent at 64 KiB."
+    },
+    "t16_ragged_leaf": {
+      "same_source_artifact": "/tmp/leopard-gf8-ragged-radix4-t16-targets-gated-r7-1784707357/summary.json",
+      "same_source_artifact_sha256": "b5e433e1a8546a9754a8236a19063ecf1b25f473d813228b2854ef2e617e1004",
+      "exact_main_artifact": "/tmp/leopard-gf8-ragged-radix4-exact-main-02d2327-r5-1784708023/summary.json",
+      "exact_main_artifact_sha256": "df97529a8e211dc4ab2f534ad51f40af0cb0a7b29b12158b2ae63c03dd2daf0f",
+      "decision": "retained in 152e4075402b95f5535e930fe48e1d19a83310d2",
+      "target": {
+        "K": 15,
+        "R": 16,
+        "bytes": 65536,
+        "control_time_over_candidate_time": 1.0531014463,
+        "ci95": [1.0496953477, 1.0565185972]
+      },
+      "neighbors": "The 2 KiB and 4 KiB K=15 cells and all K=17 cells were neutral or slower, so the production selector is limited to the measured 64 KiB boundary."
+    },
+    "one_block_register_callback": {
+      "artifact": "/tmp/leopard-avx2-oneblock-scope-results.json",
+      "artifact_sha256": "6d2999567f9f4d2153d56107ec64e32cdada21aac73e52ee16e4425b06efa9f6",
+      "decision": "rejected",
+      "code_growth": {
+        "text_bytes": 4960,
+        "percent": 8.89
+      },
+      "best_64k_shortened_cells": [
+        {"T": 16, "K": 15, "R": 16, "speedup": 1.04417, "ci95": [1.03610, 1.05230]},
+        {"T": 32, "K": 31, "R": 32, "speedup": 1.02017, "ci95": [1.00978, 1.03066]},
+        {"T": 64, "K": 63, "R": 64, "speedup": 1.00494, "ci95": [0.99445, 1.01555]}
+      ],
+      "reason": "No cell cleared the 5 percent promotion gate and balanced neighbors were neutral or slower."
+    },
+    "fused_three_layer_generated_kernel": {
+      "artifact": "/tmp/leopard-gf8-fused3-screen-1784710404/summary.json",
+      "artifact_sha256": "03543e4e5609dcf3db5388d2f63a36b8c07cce5df49c0ba837583894876ae3c6",
+      "decision": "rejected",
+      "generated_text_bytes": 12224,
+      "assembly": "The out-of-place function used a 0x1a0-byte stack frame and explicit YMM spills.",
+      "representative_encode_speedups": [
+        {"T": 16, "bytes": 2048, "speedup": 0.933001, "ci95": [0.928336, 0.939052]},
+        {"T": 16, "bytes": 4096, "speedup": 0.762873, "ci95": [0.760686, 0.764789]},
+        {"T": 16, "bytes": 65536, "speedup": 0.842536, "ci95": [0.801090, 0.884591]},
+        {"T": 32, "bytes": 2048, "speedup": 1.069865, "ci95": [1.058764, 1.079419]},
+        {"T": 32, "bytes": 4096, "speedup": 0.983608, "ci95": [0.979729, 0.987119]},
+        {"T": 32, "bytes": 65536, "speedup": 1.048468, "ci95": [1.022083, 1.094551]},
+        {"T": 64, "bytes": 65536, "speedup": 1.022865, "ci95": [1.002166, 1.057948]}
+      ],
+      "reason": "The isolated T=32,2 KiB gain did not survive its immediate 4 KiB neighbor, T=16 regressed heavily, and the large generated body spilled registers."
+    },
+    "inverse_prefix_zero_schedule": {
+      "artifact": "experiments/leopard2/non_power_of_two/c1/results/inverse_prefix_pinned_amd_9950x3d.json",
+      "artifact_sha256": "004c10e8dd19fa225e75a3011dd68c65f3dddfa688f96c9b839ff6f9dd61673b",
+      "decision": "rejected",
+      "result": "At K=33,R=32,64 KiB the high GF8 AVX2 candidate regressed 8.57 percent; the related low cell regressed 7.45 percent."
+    },
+    "small_tail_generator_bypass": {
+      "status": "L=2 promotion selected for final safety qualification; L>=3 rejected",
+      "proposed_production_selector": "Pure AVX2 only, T=32,K=34,R=32,all 32 parity outputs requested,current execution pass at least 16384 bytes. The existing L=1 path remains unchanged for T=8,16,32,64.",
+      "l2_first_screen": {
+        "artifact": "/tmp/leopard-gf8-residual-tail2-fused-abba-dc3d09e-1784712600/summary.json",
+        "artifact_sha256": "2a96d738273c37f3596c0842c5e29c7c92fcf0278a05d0af0da7c483b7b46fff",
+        "candidate_binary_sha256": "64478556ba62be0b21946c5619c7be7e1a51409688d788c99dde52176e62685a",
+        "control_binary_sha256": "9c262e64a98c64f395e756154c32a292befc898b579d03b6a89e78dad1a623bf",
+        "target": {"T": 32, "K": 34, "R": 32, "bytes": 65536, "speedup": 1.1336924845, "ci95": [1.1138206749, 1.1652730843]},
+        "candidate_text_growth_bytes": 746,
+        "evex_instruction_count": 0,
+        "correctness": "All original, parity, and recovered-output digests matched."
+      },
+      "l2_t32_threshold_sweep": {
+        "artifact": "/tmp/leopard-gf8-residual-tail2-fused-sweep-dc3d09e-1784712900/summary.json",
+        "artifact_sha256": "945fb01df23fb41fef7fe087583494a4a5212afd0baade363ebd5eac776ab87d",
+        "cells": [
+          {"bytes": 16384, "speedup": 1.0745131283, "ci95": [1.0530478570, 1.0910668790]},
+          {"bytes": 32768, "speedup": 1.1208734854, "ci95": [1.1162268816, 1.1259614443]},
+          {"bytes": 49152, "speedup": 1.1227802445, "ci95": [1.1169320235, 1.1324548745]},
+          {"bytes": 65536, "speedup": 1.1256304729, "ci95": [1.1172945147, 1.1370882650]},
+          {"bytes": 131072, "speedup": 1.1634897563, "ci95": [1.0991961957, 1.2125986742]}
+        ]
+      },
+      "l2_two_output_source_reuse": {
+        "artifact": "/tmp/leopard-gf8-residual-tail2-fused2out-v-fused1-dc3d09e-1784713300/summary.json",
+        "artifact_sha256": "7d8e955a2a5eec36427c1fb32b9819e9271d27457cdf5e7a8f0d348298580034",
+        "candidate_binary_sha256": "d3e3c6b4f035775417de32fdbd591a23ab88d5f17e658772cd10e8f33c89ce4f",
+        "control_binary_sha256": "64478556ba62be0b21946c5619c7be7e1a51409688d788c99dde52176e62685a",
+        "comparison": "The candidate reuses two loaded sources across two parity outputs and reduces the direct tail pass from four to three shard stream units per output. Ratios below are incremental over the already-faster one-output L=2 candidate.",
+        "cells": [
+          {"bytes": 16384, "speedup": 1.0533338223, "ci95": [1.0275564339, 1.0803978400]},
+          {"bytes": 32768, "speedup": 1.0609234685, "ci95": [1.0456281388, 1.0875496029]},
+          {"bytes": 49152, "speedup": 1.0553079778, "ci95": [1.0467292476, 1.0697320595]},
+          {"bytes": 65536, "speedup": 1.0504551637, "ci95": [1.0371774507, 1.0692008253]},
+          {"bytes": 131072, "speedup": 1.0447659426, "ci95": [0.9998290727, 1.0892807652]}
+        ]
+      },
+      "l3_screen": {
+        "artifact": "/tmp/leopard-gf8-residual-tail3-fused-abba-dc3d09e-1784714000/summary.json",
+        "artifact_sha256": "ddce1687a8c7b6272dd1942cf3ead1538ed5ff854b9e516e71f3e540f55aebaa",
+        "candidate_binary_sha256": "ab41474af103b1b03ddaee5cc52df911e86a623536615097ab4e4ff739596aea",
+        "control_binary_sha256": "9c262e64a98c64f395e756154c32a292befc898b579d03b6a89e78dad1a623bf",
+        "decision": "rejected and reverted",
+        "cells": [
+          {"T": 16, "K": 19, "R": 16, "bytes": 4096, "speedup": 0.8951812910, "ci95": [0.8820097761, 0.9091483320]},
+          {"T": 16, "K": 19, "R": 16, "bytes": 16384, "speedup": 0.8572525946, "ci95": [0.8498762956, 0.8647501090]},
+          {"T": 16, "K": 19, "R": 16, "bytes": 65536, "speedup": 0.9229960815, "ci95": [0.9035974068, 0.9409712197]},
+          {"T": 32, "K": 35, "R": 32, "bytes": 4096, "speedup": 0.9260810803, "ci95": [0.9178331592, 0.9367186484]},
+          {"T": 32, "K": 35, "R": 32, "bytes": 16384, "speedup": 0.9558001092, "ci95": [0.9422493538, 0.9664983552]},
+          {"T": 32, "K": 35, "R": 32, "bytes": 65536, "speedup": 1.0086846073, "ci95": [0.9990257615, 1.0248215805]}
+        ]
+      },
+      "l4_and_wider_cutoff": "A fused L=4 direct parity update already moves six shard stream units per output, equal to the mature T=32/T=64 partial inverse-and-accumulate boundary rather than improving it. L>4 moves more data. Since the lower-complexity L=3 form measured slower despite fitting AVX2 registers, L>=4 fails the static traffic and measured-family screen and was not added."
+    }
+  },
+  "verification": {
+    "allowed_logical_cpus": 30,
+    "allowed_affinity": "0-14,16-30",
+    "parallelism_note": "The release build used every allowed logical CPU. Authoritative ABBA timings deliberately pinned one physical core and kept its SMT sibling idle for cache-sensitive validity.",
+    "build": "flock /tmp/leopard-gf8-authoritative.lock cmake -S . -B build-avx2-boundary -DCMAKE_BUILD_TYPE=Release -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=OFF -DLEO2_ENABLE_CUDA=OFF && flock /tmp/leopard-gf8-authoritative.lock cmake --build build-avx2-boundary -j 30",
+    "tests": "flock /tmp/leopard-gf8-authoritative.lock ctest --test-dir build-avx2-boundary -R '^(leopard2_backend_ops|leopard2_context_backends|leopard2_auto_encode_backend|leopard2_direct_encode|leopard2_encode_concurrency|leopard2_legacy_golden)$' -j 6 --output-on-failure",
+    "result": "6/6 passed in 64.98 seconds",
+    "avx2_object_sha256": "96daa8b257b1c5892c4ec34b35bb808529e2f601c1321d40da8d32ac3d34ac29",
+    "archive_sha256": "c1c8d7f92ebab7cb0149e1579ac3e861d4631950d36e2b17361f53f47a7f0015",
+    "compile_flags": "-mavx2 -mno-avx512f -falign-functions=64",
+    "evex_audit": "objdump -d -M intel build-avx2-boundary/CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2.cpp.o | rg -c 'zmm|\\{k[0-7]\\}|vpermb|vpternlog|vgf2p8|vpmultishift|vpopcnt|vpconflict' || true",
+    "evex_instruction_count": 0
+  },
+  "decision": {
+    "status": "boundary_experiments_exhausted_with_l2_qualification_handoff",
+    "production_boundaries_complete": true,
+    "promote": "The T=32,K=34,R=32 two-source direct generator-column update from 16 KiB. Final KAT, API-tail, sanitizer, exact-main, code-size, and EVEX qualification remains with the isolated implementation worker before integration.",
+    "reject": "Wider ragged leaves, whole-transform callbacks, generated three-layer kernels, inverse-prefix pruning, direct L=3 updates, and direct L>=4 updates.",
+    "reason": "Complete input and final XOR boundaries are already fused for every applicable transform size. Every remaining family is now bounded by static traffic or measured rejection except one narrow two-source cell with repeatable gains and a deterministic proposed selector; that implementation has been handed off for final safety qualification rather than broadening this experiment further."
+  }
+}
