@@ -42,6 +42,7 @@ from typing import Any, Sequence
 SCHEMA = "leopard2-small-direct-abba/v1"
 MATRIX_SCHEMA = "leopard2-small-direct-matrix/v1"
 LARGE_MATRIX_SCHEMA = "leopard2-small-direct-full-matrix/v1"
+TINY_MATRIX_SCHEMA = "leopard2-small-direct-tiny-matrix/v1"
 CELL_SCHEMA = "leopard2-small-direct-cell/v1"
 ENVELOPE_SCHEMA = "leopard2-small-direct-envelope/v1"
 TILE_SPEC_SCHEMA = "leopard2-direct-tile-lab-spec/v2"
@@ -849,11 +850,71 @@ def make_large_matrix() -> dict[str, Any]:
     return result
 
 
+def make_tiny_matrix() -> dict[str, Any]:
+    """Cover every public byte-tail boundary below the 64-byte screen.
+
+    Source-major direct repair transposes fixed multipliers into a stack-local
+    table on each execution.  That setup is amortized at ordinary shard sizes,
+    but cannot be assumed free for tiny shards.  Keep this matrix separate so
+    retained 64-byte-and-larger evidence remains stable.
+    """
+    cells = []
+    index = 0
+    shapes = (
+        (5, 5, 4), (5, 5, 5),
+        (8, 8, 4), (8, 8, 5), (8, 8, 8),
+        (16, 8, 4), (16, 8, 5), (16, 8, 8),
+    )
+    for original_count, recovery_count, loss_count in shapes:
+        for byte_count in (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63):
+            identifier = "tiny-k%d-r%d-b%d-l%d" % (
+                original_count, recovery_count, byte_count, loss_count)
+            iterations, warmup = iteration_policy(byte_count)
+            cells.append({
+                "index": index,
+                "id": identifier,
+                "K": original_count,
+                "R": recovery_count,
+                "bytes": byte_count,
+                "loss": loss_count,
+                "batch": 1,
+                "reuse": 8,
+                "iterations": iterations,
+                "warmup": warmup,
+                "seed": stable_seed(identifier, TINY_MATRIX_SCHEMA),
+                "estimated_peak_bytes": 6 *
+                    (original_count + recovery_count) * byte_count +
+                    (64 << 20),
+                "role": "loss4_neighbor" if loss_count == 4
+                    else "loss5_to_8_target",
+                "exact_main_required": False,
+            })
+            index += 1
+    result = {
+        "schema": TINY_MATRIX_SCHEMA,
+        "cell_count": len(cells),
+        "cells": cells,
+        "same_source_promotion": {
+            "target": "whole decode_execution",
+            "candidate_ci95_low_at_least": 1.05,
+            "neighbor_ci95_high_at_least": 0.98,
+            "orientation": "baseline_time_over_candidate_time",
+        },
+        "coverage": (
+            "All required positive byte-tail boundaries below 64 bytes for "
+            "representative K=5,8,16 and loss=4,5,8 shapes."),
+    }
+    result["matrix_sha256"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
 def matrix_for_preset(preset: str) -> dict[str, Any]:
     if preset == "core":
         return make_matrix()
     if preset == "large":
         return make_large_matrix()
+    if preset == "tiny":
+        return make_tiny_matrix()
     raise EvidenceError("unknown matrix preset")
 
 
@@ -3802,7 +3863,8 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     matrix = commands.add_parser("matrix", help="write a frozen matrix")
     matrix.add_argument("--output", type=Path, default=Path("-"))
-    matrix.add_argument("--preset", choices=("core", "large"), default="core")
+    matrix.add_argument(
+        "--preset", choices=("core", "large", "tiny"), default="core")
     matrix.set_defaults(function=write_matrix)
     run = commands.add_parser(
         "run", help="run a fresh, complete same-source campaign")
@@ -3826,7 +3888,8 @@ def parser() -> argparse.ArgumentParser:
         "--candidate-mode", required=True,
         choices=tuple(MODE_COMPILE_DEFINITIONS))
     run.add_argument("--output", required=True, type=Path)
-    run.add_argument("--preset", choices=("core", "large"), default="core")
+    run.add_argument(
+        "--preset", choices=("core", "large", "tiny"), default="core")
     run.add_argument("--cpu", required=True, type=int)
     run.add_argument("--reserved-sibling", required=True, type=int)
     run.add_argument("--reservation-file", required=True, type=Path)

@@ -90,6 +90,34 @@ class IsolationTests(unittest.TestCase):
             for cell in full["cells"]
         }, expected)
 
+        tiny = RUNNER.make_tiny_matrix()
+        self.assertEqual(tiny["schema"], RUNNER.TINY_MATRIX_SCHEMA)
+        self.assertEqual(tiny["cell_count"], 96)
+        self.assertEqual(
+            tiny["matrix_sha256"],
+            RUNNER.make_tiny_matrix()["matrix_sha256"])
+        self.assertEqual(
+            [cell["index"] for cell in tiny["cells"]],
+            list(range(tiny["cell_count"])))
+        self.assertEqual(
+            len({cell["id"] for cell in tiny["cells"]}),
+            tiny["cell_count"])
+        expected_tiny = {
+            (k, r, loss, byte_count)
+            for k, r, loss in (
+                (5, 5, 4), (5, 5, 5),
+                (8, 8, 4), (8, 8, 5), (8, 8, 8),
+                (16, 8, 4), (16, 8, 5), (16, 8, 8))
+            for byte_count in
+                (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63)
+        }
+        self.assertEqual({
+            (cell["K"], cell["R"], cell["loss"], cell["bytes"])
+            for cell in tiny["cells"]
+        }, expected_tiny)
+        self.assertFalse(any(
+            cell["exact_main_required"] for cell in tiny["cells"]))
+
     def test_small_direct_modes_are_explicit_and_directional(self) -> None:
         self.assertEqual(
             RUNNER.comparison_modes("transform", "output"),
