@@ -218,6 +218,7 @@ struct leo2_decode_plan
     std::vector<leo2_direct_repair_term> direct_terms;
     uint32_t generic_input_count;
     uint32_t direct_copy_recovery;
+    uint32_t direct_xor_original;
     uint32_t missing_original_count;
     bool no_op;
     bool direct_xor;
@@ -231,6 +232,39 @@ struct leo2_decode_plan
     */
     bool translated_low;
 };
+
+static bool PlanHasCompactDirectXor(const leo2_decode_plan* plan)
+{
+    return plan->direct_xor && plan->direct_xor_original !=
+        std::numeric_limits<uint32_t>::max();
+}
+
+/*
+    Compact R=1 plans avoid all pattern-owned vectors, but the mature vector
+    representation still produces slightly better large-shard execution for
+    the very smallest codes.  Keep the compact representation in the measured
+    winning region; the one-shot API has its independent allocation-free path
+    for every K.
+*/
+static const uint32_t kCompactDirectXorMinOriginalCount = 8;
+
+static bool PlanOriginalPresent(
+    const leo2_decode_plan* plan,
+    uint32_t original)
+{
+    if (PlanHasCompactDirectXor(plan))
+        return original != plan->direct_xor_original;
+    return plan->original_present[original] != 0;
+}
+
+static bool PlanRecoveryPresent(
+    const leo2_decode_plan* plan,
+    uint32_t recovery)
+{
+    if (PlanHasCompactDirectXor(plan))
+        return recovery == 0;
+    return plan->recovery_present[recovery] != 0;
+}
 
 namespace leopard {
 int InitializeLibrary(
@@ -3412,6 +3446,127 @@ static void ExecuteSingleSideEncode(
         leopard::xor_mem(ops, output, original[i], shard_bytes);
 }
 
+static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
+    const leo2_codec* codec,
+    uint32_t missing,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (UseCoarseR1Xor(codec, shard_bytes))
+    {
+        ops.xor_memory_sources(restored_original[missing], recovery[0],
+            original, codec->original_count, shard_bytes);
+        return;
+    }
+    uint8_t* output =
+        static_cast<uint8_t*>(restored_original[missing]);
+    memcpy(output, recovery[0], shard_bytes);
+    const void* waiting = NULL;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        if (!original[i])
+            continue;
+        if (!waiting)
+            waiting = original[i];
+        else
+        {
+            leopard::xor_mem_2to1(
+                ops, output, waiting, original[i], shard_bytes);
+            waiting = NULL;
+        }
+    }
+    if (waiting)
+        leopard::xor_mem(ops, output, waiting, shard_bytes);
+}
+
+static leo2_result DecodeDirectXorValidated(
+    const leo2_codec* codec,
+    uint32_t missing,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    size_t protected_count,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    if (shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+    ScratchLayout layout;
+    size_t rounded_bytes = 0;
+    leo2_result result = DirectDecodeLayout(
+        codec, shard_bytes, layout, rounded_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    AddressRange scratch_range = { 0, 0 };
+    result = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!original || !recovery || !restored ||
+        missing >= codec->original_count)
+        return LEO2_INVALID_ARGUMENT;
+
+    if (protected_count > 2 || (protected_count != 0 && !protected_ranges))
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange metadata_ranges[5];
+    if (!MakeArrayRange(original, codec->original_count,
+            sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, codec->recovery_count,
+            sizeof(*recovery), metadata_ranges[1]) ||
+        !MakeArrayRange(restored, codec->original_count,
+            sizeof(*restored), metadata_ranges[2]))
+        return LEO2_INVALID_ARGUMENT;
+    for (size_t i = 0; i < protected_count; ++i)
+        metadata_ranges[3 + i] = protected_ranges[i];
+    const size_t metadata_count = 3 + protected_count;
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, metadata_count))
+        return LEO2_OVERLAP;
+
+    AddressRange output_range;
+    if (!restored[missing] ||
+        !MakeRange(restored[missing], shard_bytes, output_range))
+        return LEO2_INVALID_ARGUMENT;
+    if (RangesOverlap(output_range, scratch_range) ||
+        RangeOverlapsAny(output_range, metadata_ranges, metadata_count))
+        return LEO2_OVERLAP;
+
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        const bool expected = i != missing;
+        if ((original[i] != NULL) != expected)
+            return LEO2_INVALID_ARGUMENT;
+        if (!expected)
+            continue;
+        AddressRange input_range;
+        if (!MakeRange(original[i], shard_bytes, input_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(input_range, scratch_range) ||
+            RangesOverlap(input_range, output_range))
+            return LEO2_OVERLAP;
+        if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+            return LEO2_INVALID_ARGUMENT;
+    }
+
+    if (!recovery[0])
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange recovery_range;
+    if (!MakeRange(recovery[0], shard_bytes, recovery_range))
+        return LEO2_INVALID_ARGUMENT;
+    if (RangesOverlap(recovery_range, scratch_range) ||
+        RangesOverlap(recovery_range, output_range))
+        return LEO2_OVERLAP;
+
+    ExecuteDirectXorDecode(codec, missing, static_cast<size_t>(shard_bytes),
+        original, recovery, restored);
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateDecodeBuffers(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
@@ -3962,8 +4117,8 @@ static leo2_result DecodeBatchPreflightScratchBytes(
         return LEO2_SUCCESS;
 
     size_t recovery_input_count = 0;
-    for (size_t i = 0; i < plan->recovery_present.size(); ++i)
-        recovery_input_count += plan->recovery_present[i] != 0;
+    for (uint32_t i = 0; i < plan->codec->recovery_count; ++i)
+        recovery_input_count += PlanRecoveryPresent(plan, i);
     size_t ranges_per_item = 0;
     if (!CheckedAdd(plan->codec->original_count,
             recovery_input_count, ranges_per_item) ||
@@ -4072,7 +4227,7 @@ static leo2_result ValidateDecodeBatchItemAddressability(
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         if ((item.original[i] != NULL) !=
-            (plan->original_present[i] != 0))
+            PlanOriginalPresent(plan, i))
             return LEO2_INVALID_ARGUMENT;
         AddressRange range;
         if (item.original[i])
@@ -4091,7 +4246,7 @@ static leo2_result ValidateDecodeBatchItemAddressability(
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
         if ((item.recovery[i] != NULL) !=
-            (plan->recovery_present[i] != 0))
+            PlanRecoveryPresent(plan, i))
             return LEO2_INVALID_ARGUMENT;
         if (item.recovery[i])
         {
@@ -4198,10 +4353,10 @@ static size_t PrepareEncodeBatchRanges(
 static size_t DecodeBatchInputCount(const leo2_decode_plan* plan)
 {
     size_t input_count = 0;
-    for (size_t i = 0; i < plan->original_present.size(); ++i)
-        input_count += plan->original_present[i] != 0;
-    for (size_t i = 0; i < plan->recovery_present.size(); ++i)
-        input_count += plan->recovery_present[i] != 0;
+    for (uint32_t i = 0; i < plan->codec->original_count; ++i)
+        input_count += PlanOriginalPresent(plan, i);
+    for (uint32_t i = 0; i < plan->codec->recovery_count; ++i)
+        input_count += PlanRecoveryPresent(plan, i);
     return input_count;
 }
 
@@ -6118,6 +6273,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         return LEO2_INVALID_ARGUMENT;
     uint32_t present_count = 0;
     uint32_t missing_original_count = 0;
+    uint32_t single_missing_original = std::numeric_limits<uint32_t>::max();
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         if (original_present[i] > 1)
@@ -6125,7 +6281,10 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         if (original_present[i])
             ++present_count;
         else
+        {
             ++missing_original_count;
+            single_missing_original = i;
+        }
     }
     for (uint32_t i = 0; i < codec->recovery_count; ++i)
     {
@@ -6152,11 +6311,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             return LEO2_INTERNAL_ERROR;
         }
 #endif
-        plan->original_present.assign(original_present, original_present + codec->original_count);
-        plan->recovery_present.assign(recovery_present, recovery_present + codec->recovery_count);
-        plan->coordinate_erased = codec->permanent_erased;
         plan->generic_input_count = 0;
         plan->direct_copy_recovery = std::numeric_limits<uint32_t>::max();
+        plan->direct_xor_original = std::numeric_limits<uint32_t>::max();
         plan->missing_original_count = missing_original_count;
         plan->no_op = missing_original_count == 0;
         plan->direct_xor = codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -6164,6 +6321,25 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_repair = false;
+
+        if (plan->direct_xor &&
+            codec->original_count >= kCompactDirectXorMinOriginalCount)
+        {
+            if (single_missing_original >= codec->original_count)
+            {
+                delete plan;
+                return LEO2_INTERNAL_ERROR;
+            }
+            plan->direct_xor_original = single_missing_original;
+            *plan_out = plan;
+            return LEO2_SUCCESS;
+        }
+
+        plan->original_present.assign(
+            original_present, original_present + codec->original_count);
+        plan->recovery_present.assign(
+            recovery_present, recovery_present + codec->recovery_count);
+        plan->coordinate_erased = codec->permanent_erased;
 
         for (uint32_t i = 0; i < codec->original_count; ++i)
         {
@@ -6406,6 +6582,35 @@ static leo2_result DecodePlanExecuteInternal(
         return LEO2_SUCCESS;
     if (shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
+    if (PlanHasCompactDirectXor(plan))
+    {
+        if (!prevalidated)
+        {
+            if (protected_metadata_count > 2 ||
+                (protected_metadata_count != 0 && !protected_metadata))
+                return LEO2_INVALID_ARGUMENT;
+            AddressRange protected_ranges[2];
+            for (size_t i = 0; i < protected_metadata_count; ++i)
+            {
+                if (!protected_metadata[i].data ||
+                    protected_metadata[i].bytes == 0 ||
+                    !MakeRange(protected_metadata[i].data,
+                        static_cast<uint64_t>(protected_metadata[i].bytes),
+                        protected_ranges[i]))
+                    return LEO2_INVALID_ARGUMENT;
+            }
+            return DecodeDirectXorValidated(plan->codec,
+                plan->direct_xor_original, shard_bytes, protected_ranges,
+                protected_metadata_count, original, recovery,
+                restored_original, scratch, scratch_bytes);
+        }
+        if (!recovery || !recovery[0])
+            return LEO2_INTERNAL_ERROR;
+        ExecuteDirectXorDecode(plan->codec, plan->direct_xor_original,
+            static_cast<size_t>(shard_bytes), original, recovery,
+            restored_original);
+        return LEO2_SUCCESS;
+    }
 
     ScratchLayout direct_layout;
     size_t direct_rounded = 0;
@@ -6437,7 +6642,6 @@ static leo2_result DecodePlanExecuteInternal(
     }
 
     const leo2_codec* codec = plan->codec;
-    const leopard::backend::Ops& ops = *codec->context->ops;
     if (plan->direct_copy)
     {
         const uint32_t recovery_index = plan->direct_copy_recovery;
@@ -6452,32 +6656,9 @@ static leo2_result DecodePlanExecuteInternal(
         const uint32_t missing = plan->missing_originals[0];
         if (missing >= codec->original_count || !recovery[0])
             return LEO2_INTERNAL_ERROR;
-        if (UseCoarseR1Xor(codec, static_cast<size_t>(shard_bytes)))
-        {
-            ops.xor_memory_sources(restored_original[missing], recovery[0],
-                original, codec->original_count, shard_bytes);
-            return LEO2_SUCCESS;
-        }
-        uint8_t* output =
-            static_cast<uint8_t*>(restored_original[missing]);
-        memcpy(output, recovery[0], static_cast<size_t>(shard_bytes));
-        const void* waiting = NULL;
-        for (uint32_t i = 0; i < codec->original_count; ++i)
-        {
-            if (!original[i])
-                continue;
-            if (!waiting)
-                waiting = original[i];
-            else
-            {
-                leopard::xor_mem_2to1(ops, output, waiting, original[i],
-                    static_cast<size_t>(shard_bytes));
-                waiting = NULL;
-            }
-        }
-        if (waiting)
-            XorArbitraryBytes(ops, output, waiting,
-                static_cast<size_t>(shard_bytes));
+        ExecuteDirectXorDecode(codec, missing,
+            static_cast<size_t>(shard_bytes), original, recovery,
+            restored_original);
         return LEO2_SUCCESS;
     }
     if (plan->direct_repair)
@@ -6772,6 +6953,57 @@ LEO2_EXPORT leo2_result leo2_decode(
     void* scratch,
     size_t scratch_bytes)
 {
+    /*
+        In a legacy-high R=1 codeword, exactly one missing original implies
+        that the parity and every other original are present.  Validate and
+        execute that terminal operation directly in the one-shot API instead
+        of allocating and immediately destroying a plan.  Unsafe or
+        non-terminal presence metadata falls through to the canonical
+        constructor so established error and no-op semantics remain there.
+    */
+    AddressRange original_presence_range = { 0, 0 };
+    AddressRange recovery_presence_range = { 0, 0 };
+    bool direct_xor_one_shot = codec &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->padded_side == 1 && original_present && recovery_present &&
+        MakeArrayRange(original_present, codec->original_count,
+            sizeof(*original_present), original_presence_range) &&
+        MakeArrayRange(recovery_present, codec->recovery_count,
+            sizeof(*recovery_present), recovery_presence_range) &&
+        recovery_present[0] == 1;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    direct_xor_one_shot = direct_xor_one_shot &&
+        codec->test_decode_mode == LEO2_TEST_DECODE_AUTO;
+#endif
+    if (direct_xor_one_shot)
+    {
+        uint32_t missing = std::numeric_limits<uint32_t>::max();
+        uint32_t missing_count = 0;
+        bool valid = true;
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+        {
+            if (original_present[i] > 1)
+            {
+                valid = false;
+                break;
+            }
+            if (!original_present[i])
+            {
+                missing = i;
+                ++missing_count;
+            }
+        }
+        if (valid && missing_count == 1)
+        {
+            const AddressRange protected_ranges[2] = {
+                original_presence_range, recovery_presence_range
+            };
+            return DecodeDirectXorValidated(codec, missing, shard_bytes,
+                protected_ranges, 2, original, recovery, restored_original,
+                scratch, scratch_bytes);
+        }
+    }
+
     leo2_decode_plan* plan = NULL;
     leo2_result result = leo2_decode_plan_create(
         codec, original_present, recovery_present, &plan);

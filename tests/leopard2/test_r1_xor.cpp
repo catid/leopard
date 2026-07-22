@@ -446,6 +446,24 @@ void execute_and_check_decode(const R1Fixture& fixture)
     for (size_t i = 5 + fixture.bytes; i < restored_storage.size(); ++i)
         require(restored_storage[i] == 0x5a,
             "R=1 single-item batch changed a suffix guard");
+
+    std::fill(restored_storage.begin(), restored_storage.end(), 0x3c);
+    std::vector<uint8_t> original_present(fixture.k, 1);
+    original_present[fixture.missing] = 0;
+    const uint8_t recovery_present[1] = { 1 };
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        &original_present[0], recovery_present, &received[0],
+        fixture.recovery, &restored[0], scratch.data(), scratch_bytes),
+        LEO2_SUCCESS, "R=1 one-shot decode execute");
+    require(std::memcmp(restored[fixture.missing],
+                fixture.original[fixture.missing], fixture.bytes) == 0,
+        "R=1 one-shot decode restored the wrong original");
+    for (size_t i = 0; i < 5; ++i)
+        require(restored_storage[i] == 0x3c,
+            "R=1 one-shot decode changed a prefix guard");
+    for (size_t i = 5 + fixture.bytes; i < restored_storage.size(); ++i)
+        require(restored_storage[i] == 0x3c,
+            "R=1 one-shot decode changed a suffix guard");
 }
 
 void test_public_r1_overlap_rejection(leo2_backend backend)
@@ -486,6 +504,52 @@ void test_public_r1_overlap_rejection(leo2_backend backend)
         &received[0], fixture.recovery, &restored[0], decode_scratch.data(),
         decode_scratch_bytes), LEO2_OVERLAP,
         "R=1 decode recovery/output overlap");
+
+    std::vector<uint8_t> original_present(fixture.k, 1);
+    original_present[0] = 0;
+    const uint8_t recovery_present[1] = { 1 };
+    restored[0] = const_cast<void*>(received[3]);
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        &original_present[0], recovery_present, &received[0],
+        fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 one-shot input/output overlap");
+
+    restored[0] = const_cast<void*>(fixture.recovery[0]);
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        &original_present[0], recovery_present, &received[0],
+        fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 one-shot recovery/output overlap");
+
+    Bytes ordinary_output(fixture.bytes, 0x7d);
+    restored[0] = &ordinary_output[0];
+    uint8_t* const original_presence_in_scratch =
+        static_cast<uint8_t*>(decode_scratch.data());
+    std::memcpy(original_presence_in_scratch, &original_present[0],
+        original_present.size());
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        original_presence_in_scratch, recovery_present, &received[0],
+        fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 one-shot scratch/original-presence overlap");
+
+    Bytes original_presence_output(fixture.bytes, 1);
+    original_presence_output[0] = 0;
+    restored[0] = &original_presence_output[0];
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        &original_presence_output[0], recovery_present, &received[0],
+        fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 one-shot output/original-presence overlap");
+
+    Bytes recovery_presence_output(fixture.bytes, 1);
+    restored[0] = &recovery_presence_output[0];
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        &original_present[0], &recovery_presence_output[0], &received[0],
+        fixture.recovery, &restored[0], decode_scratch.data(),
+        decode_scratch_bytes), LEO2_OVERLAP,
+        "R=1 one-shot output/recovery-presence overlap");
 }
 
 void test_public_r1(leo2_backend backend)
