@@ -570,6 +570,14 @@ class ProductionBuildClosureTests(unittest.TestCase):
             self.fixture.build, self.fixture.source,
             self.fixture.executable, "bench_leopard2")
 
+    def test_benchmark_target_source_contract_is_exact(self) -> None:
+        self.assertEqual(runner.BENCHMARK_SOURCE_BY_TARGET, {
+            "bench_leopard2": "bench/leopard2/benchmark.cpp",
+            "bench_leopard2_allk": "bench/leopard2/benchmark.cpp",
+            "bench_leopard2_no_loss_setup":
+                "bench/leopard2/benchmark_no_loss_setup.cpp",
+        })
+
     def test_exact_release_pure_avx2_closure_is_accepted(self) -> None:
         result = self.provenance()
         self.assertEqual(result["schema"],

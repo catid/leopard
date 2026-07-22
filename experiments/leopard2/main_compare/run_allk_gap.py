@@ -33,6 +33,7 @@ TOOLS_DIRECTORY = Path(__file__).resolve().parents[3] / "tools"
 if str(TOOLS_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIRECTORY))
 from leopard2_build_provenance import (
+    BENCHMARK_SOURCE_BY_TARGET,
     CORE_LIBRARY_SOURCES,
     candidate_build_provenance,
     compare_reproducible_builds,

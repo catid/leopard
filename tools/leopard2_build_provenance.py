@@ -35,6 +35,13 @@ CORE_LIBRARY_SOURCES = {
     "LeopardCommon.cpp",
 }
 
+BENCHMARK_SOURCE_BY_TARGET = {
+    "bench_leopard2": "bench/leopard2/benchmark.cpp",
+    "bench_leopard2_allk": "bench/leopard2/benchmark.cpp",
+    "bench_leopard2_no_loss_setup":
+        "bench/leopard2/benchmark_no_loss_setup.cpp",
+}
+
 GIT_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -325,10 +332,11 @@ def candidate_build_provenance(
     source = Path(source_root).resolve(strict=True)
     require(build.is_dir(), "candidate build root is not a directory")
     require(source.is_dir(), "candidate source root is not a directory")
-    require(executable_target in {
-                "bench_leopard2", "bench_leopard2_allk",
-                "bench_leopard2_no_loss_setup"},
+    require(executable_target in BENCHMARK_SOURCE_BY_TARGET,
             "unsupported candidate benchmark target")
+    expected_benchmark_source = (
+        source / BENCHMARK_SOURCE_BY_TARGET[executable_target]
+    ).resolve(strict=True)
 
     expected_executable = (build / executable_target).resolve(strict=True)
     requested_executable = Path(executable).resolve(strict=True)
@@ -472,9 +480,7 @@ def candidate_build_provenance(
             if role == "archive":
                 archive_sources.add(source_operand)
             else:
-                require(source_operand ==
-                        (source / "bench/leopard2/benchmark.cpp").resolve(
-                            strict=True),
+                require(source_operand == expected_benchmark_source,
                         "candidate executable was not compiled from the exact "
                         "Leopard2 benchmark source")
             closure_records.append({
