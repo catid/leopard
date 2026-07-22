@@ -1392,11 +1392,26 @@ static void IFFT_DIT_Encoder(
     {
         // The encoder block transform consumes caller data exactly once. Complete
         // four-shard groups feed the first two inverse layers directly and
-        // are stored to work only after both butterflies.  Only the ragged
-        // final group needs the compatibility copy into its zero-padded
-        // workspace.  The suffix still must be initialized because later
-        // stages combine it with the active prefix.
-        for (unsigned i = m_truncated; i < m; ++i)
+        // are stored to work only after both butterflies.  Qualified AVX2
+        // ragged groups similarly consume their live prefix directly; other
+        // backends retain the compatibility copy into zero-padded work.  Any
+        // complete suffix groups still must be initialized because later
+        // stages combine them with the active prefix.
+        // Whole-codec ABBA measurements promote the mask-specialized path
+        // only where eliminating the four-row staging pass clears the 5%
+        // gate.  At wider sides those four rows are too small a fraction of
+        // the transform; keep the mature schedule there.
+        const bool measured_ragged_shape =
+            (m == 8 && (bytes >= 4U * 1024U || m_truncated == 1)) ||
+            (m == 16 && bytes >= 64U * 1024U);
+        const bool direct_ragged_group = measured_ragged_shape &&
+            ops.kind == LEO2_BACKEND_AVX2 &&
+            ops.ff8_weighted_ifft_butterfly4 != NULL &&
+            (m_truncated & 3U) != 0;
+        const unsigned initialized_prefix = direct_ragged_group
+            ? (m_truncated + 3U) & ~3U
+            : m_truncated;
+        for (unsigned i = initialized_prefix; i < m; ++i)
             memset(work[i], 0, bytes);
 
         unsigned r = 0;
@@ -1414,15 +1429,32 @@ static void IFFT_DIT_Encoder(
         }
         if (r < m_truncated)
         {
+            const unsigned remaining = m_truncated - r;
+            if (direct_ragged_group)
+            {
+                const void* inputs[4] = { NULL, NULL, NULL, NULL };
+                for (unsigned lane = 0; lane < remaining; ++lane)
+                    inputs[lane] = data[r + lane];
+                ops.ff8_weighted_ifft_butterfly4(
+                    inputs[0], inputs[1], inputs[2], inputs[3],
+                    work[r], work[r + 1], work[r + 2], work[r + 3],
+                    0, 0, 0, 0,
+                    static_cast<uint8_t>((1U << remaining) - 1U),
+                    skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2],
+                    bytes);
+            }
+            else
+            {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
-            TestHighInputCopyShards.fetch_add(
-                m_truncated - r, std::memory_order_relaxed);
+                TestHighInputCopyShards.fetch_add(
+                    remaining, std::memory_order_relaxed);
 #endif
-            for (unsigned i = r; i < m_truncated; ++i)
-                memcpy(work[i], data[i], bytes);
-            IFFT_DIT4_Range(
-                ops, bytes, work + r, 1,
-                skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
+                for (unsigned i = r; i < m_truncated; ++i)
+                    memcpy(work[i], data[i], bytes);
+                IFFT_DIT4_Range(
+                    ops, bytes, work + r, 1,
+                    skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
+            }
         }
         dist = 4;
         dist4 = 16;

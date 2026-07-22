@@ -356,6 +356,17 @@ void compare_avx2_fused_high_with_legacy(TestCounts* counts)
             leo2_context_backend(context) == LEO2_BACKEND_AVX2,
         "explicit AVX2 compatibility context selected the wrong backend");
 
+    // Mask-specialized inverse input boundaries: three live rows in the
+    // shortened first T=8 block, one live row in the second block, and the
+    // promoted large-shard T=16 boundary.  The +1 byte cases prove that the
+    // aligned prefix and arbitrary public tail both retain legacy parity.
+    compare_high_with_legacy(
+        context, 7, 7, std::vector<size_t>{4096, 4097, 65536}, counts);
+    compare_high_with_legacy(
+        context, 9, 8, std::vector<size_t>{2048, 2049, 4097}, counts);
+    compare_high_with_legacy(
+        context, 15, 15, std::vector<size_t>{65536, 65537}, counts);
+
     // Exercise the lower and upper recovery-count edges of the promoted T
     // bins.  Ragged lengths cover the aligned fused pass followed by an
     // independently padded tail.  The T=64 high-rate case also covers a

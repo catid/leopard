@@ -509,6 +509,7 @@ static bool TestFF8WeightedIFFTButterfly4(
     const Ops& ops, FF8MultiplyLog reference)
 {
     static const uint16_t weight_sets[][4] = {
+        { 0, 0, 0, 0 },
         { 0, 255, 17, 129 },
         { 254, 1, 255, 0 }
     };

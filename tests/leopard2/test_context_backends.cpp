@@ -709,8 +709,9 @@ void require_four_way_callsites(
     {
         const leopard::ff8::TestOnlyTransformCallsiteCounts callsites =
             leopard::ff8::TestOnlyGetTransformCallsiteCounts();
-        require(allow_pruned_schedule_calls || callsites.ifft_dit4 != 0,
-            operation + " did not exercise GF8 IFFT_DIT4");
+        require(allow_pruned_schedule_calls || callsites.ifft_dit4 != 0 ||
+                trace.ff8_weighted_ifft_four_calls() != 0,
+            operation + " did not exercise a GF8 inverse radix-four input");
         if (expect_ff8_accumulating_ifft)
             require(callsites.ifft_dit4_xor != 0,
                 operation + " did not exercise GF8 IFFT_DIT4_xor");

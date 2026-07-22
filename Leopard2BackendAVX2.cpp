@@ -1571,7 +1571,7 @@ static void AVX2FF8FFTButterfly4(
         AVX2FF8Butterfly2<false>(value2, value3, log23, byte_count);
 }
 
-template<bool Inverse, bool Input3Zero = false>
+template<bool Inverse, uint8_t LiveMask = 15>
 static void AVX2FF8Butterfly4Out(
     const void* input0_pointer, const void* input1_pointer,
     const void* input2_pointer, const void* input3_pointer,
@@ -1612,16 +1612,18 @@ static void AVX2FF8Butterfly4Out(
     }
     while (byte_count >= 32)
     {
-        __m256i x0 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input0));
-        __m256i x1 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input1));
-        __m256i x2 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input2));
-        __m256i x3 = Input3Zero
-            ? _mm256_setzero_si256()
-            : _mm256_loadu_si256(
-                reinterpret_cast<const __m256i*>(input3));
+        __m256i x0 = (LiveMask & 1U) != 0
+            ? _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input0))
+            : _mm256_setzero_si256();
+        __m256i x1 = (LiveMask & 2U) != 0
+            ? _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input1))
+            : _mm256_setzero_si256();
+        __m256i x2 = (LiveMask & 4U) != 0
+            ? _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input2))
+            : _mm256_setzero_si256();
+        __m256i x3 = (LiveMask & 8U) != 0
+            ? _mm256_loadu_si256(reinterpret_cast<const __m256i*>(input3))
+            : _mm256_setzero_si256();
         if (Inverse)
         {
             x1 = _mm256_xor_si256(x1, x0);
@@ -1666,10 +1668,13 @@ static void AVX2FF8Butterfly4Out(
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output1), x1);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output2), x2);
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(output3), x3);
-        input0 += 32;
-        input1 += 32;
-        input2 += 32;
-        if (!Input3Zero)
+        if ((LiveMask & 1U) != 0)
+            input0 += 32;
+        if ((LiveMask & 2U) != 0)
+            input1 += 32;
+        if ((LiveMask & 4U) != 0)
+            input2 += 32;
+        if ((LiveMask & 8U) != 0)
             input3 += 32;
         output0 += 32;
         output1 += 32;
@@ -1679,10 +1684,10 @@ static void AVX2FF8Butterfly4Out(
     }
     while (byte_count-- != 0)
     {
-        uint8_t x0 = *input0++;
-        uint8_t x1 = *input1++;
-        uint8_t x2 = *input2++;
-        uint8_t x3 = Input3Zero ? 0 : *input3++;
+        uint8_t x0 = (LiveMask & 1U) != 0 ? *input0++ : 0;
+        uint8_t x1 = (LiveMask & 2U) != 0 ? *input1++ : 0;
+        uint8_t x2 = (LiveMask & 4U) != 0 ? *input2++ : 0;
+        uint8_t x3 = (LiveMask & 8U) != 0 ? *input3++ : 0;
         if (Inverse)
         {
             x1 ^= x0;
@@ -1751,7 +1756,7 @@ static LEO2_AVX2_NOINLINE void AVX2FF8IFFTButterfly4OutLastZero(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count)
 {
-    AVX2FF8Butterfly4Out<true, true>(
+    AVX2FF8Butterfly4Out<true, 7>(
         input0, input1, input2, NULL,
         output0, output1, output2, output3,
         log01, log23, log02, byte_count);
@@ -1773,6 +1778,46 @@ static void AVX2FF8WeightedIFFTButterfly4(
     uint64_t byte_count)
 {
     static const uint16_t kModulus = 255;
+#if !defined(LEO2_AVX512_VARIANT)
+    const bool identity_weights =
+        (weight_log0 == 0 || weight_log0 == kModulus) &&
+        (weight_log1 == 0 || weight_log1 == kModulus) &&
+        (weight_log2 == 0 || weight_log2 == kModulus) &&
+        (weight_log3 == 0 || weight_log3 == kModulus);
+    if (identity_weights)
+    {
+        // Encoder ragged groups are live prefixes.  Dispatch once outside the
+        // byte loop so their absent sources become compile-time zero vectors;
+        // the general weighted/masked implementation remains authoritative
+        // for every other locator pattern.
+        switch (live_mask)
+        {
+        case 1:
+            AVX2FF8Butterfly4Out<true, 1>(
+                input0_pointer, NULL, NULL, NULL,
+                output0_pointer, output1_pointer,
+                output2_pointer, output3_pointer,
+                log01, log23, log02, byte_count);
+            return;
+        case 3:
+            AVX2FF8Butterfly4Out<true, 3>(
+                input0_pointer, input1_pointer, NULL, NULL,
+                output0_pointer, output1_pointer,
+                output2_pointer, output3_pointer,
+                log01, log23, log02, byte_count);
+            return;
+        case 7:
+            AVX2FF8Butterfly4Out<true, 7>(
+                input0_pointer, input1_pointer, input2_pointer, NULL,
+                output0_pointer, output1_pointer,
+                output2_pointer, output3_pointer,
+                log01, log23, log02, byte_count);
+            return;
+        default:
+            break;
+        }
+    }
+#endif
     const uint8_t* inputs[4] = {
         static_cast<const uint8_t*>(input0_pointer),
         static_cast<const uint8_t*>(input1_pointer),
@@ -2426,7 +2471,7 @@ static void AVX2FF8HighEncodeSmall(
     else
     {
         LEO_DEBUG_ASSERT(side == 4 && original_count == 3);
-        AVX2FF8Butterfly4Out<true, true>(
+        AVX2FF8Butterfly4Out<true, 7>(
             data[0], data[1], data[2], NULL,
             work[0], work[1], work[2], work[3],
             inverse_skew[1], inverse_skew[3], inverse_skew[2],
