@@ -1,0 +1,54 @@
+{
+  "schema": "leopard2-gf8-fused3-negative/v1",
+  "decision": "rejected",
+  "base_commit": "7d203ffa32c189ac08649b7bf875b53e7931c4c6",
+  "method": {
+    "backend": "avx2",
+    "cpu": 12,
+    "idle_smt_sibling": 28,
+    "rounds": 3,
+    "iterations_per_invocation": 7,
+    "reuse": 4,
+    "ratio_orientation": "control_time_over_candidate_time"
+  },
+  "correctness": {
+    "all_workload_digests_matched": true,
+    "all_round_trips_matched": true,
+    "leopard2_api": "passed",
+    "leopard2_direct_encode": "passed",
+    "sanitizers": "not run after performance kill; prototype fully reverted"
+  },
+  "isa_and_code": {
+    "evex_instruction_count": 0,
+    "control_avx2_object_text_bytes": 95541,
+    "candidate_avx2_object_text_bytes": 107861,
+    "text_growth_bytes": 12320,
+    "text_growth_percent": 12.9,
+    "in_place_kernel_bytes": 6973,
+    "out_of_place_kernel_bytes": 5196,
+    "in_place_ymm_spill_reload": true,
+    "out_of_place_vector_stack_operands": 29,
+    "out_of_place_explicit_ymm_stack_stores": 10
+  },
+  "kill_reason": "T16 regressed severely. T32 cleared 5 percent only at 2 KiB, regressed at 4 KiB, missed the threshold at 64 KiB, and decode never improved credibly. The isolated win does not justify 12.9 percent object growth, spills, or a new backend surface.",
+  "source_artifacts": {
+    "full_summary_sha256": "03543e4e5609dcf3db5388d2f63a36b8c07cce5df49c0ba837583894876ae3c6",
+    "negative_report_sha256": "b2bf3cf1f88d6a5ef9fde498e312375ea54fc35ea9fb5c5ac41cd5cce5dcea6f",
+    "in_place_assembly_sha256": "2813effe82180a38b65ef5a9a3065bd6e55cb573d4e338310c5a3cb90986cf5f",
+    "out_of_place_assembly_sha256": "1b8d9bf1608799b099172f619278439c4bdb6d7061b9d159c74cdfcca70465ad"
+  },
+  "cells": [
+    {"T":8,"bytes":2048,"encode":{"ratio":0.9999025389598525,"ci95":[0.9887873941726028,1.0117568409844695]},"decode":{"ratio":0.9934838442384551,"ci95":[0.9864161788107099,1.002583128471015]}},
+    {"T":8,"bytes":4096,"encode":{"ratio":1.004214081805932,"ci95":[0.9914475140726912,1.0195586603875078]},"decode":{"ratio":0.9899841456062972,"ci95":[0.986206427162043,0.9923680811524609]}},
+    {"T":8,"bytes":65536,"encode":{"ratio":0.9963151154771568,"ci95":[0.9799180168032668,1.01770246169588]},"decode":{"ratio":0.9975775703286298,"ci95":[0.9904517641872174,1.0053598595754871]}},
+    {"T":16,"bytes":2048,"encode":{"ratio":0.9330010374773741,"ci95":[0.9283363248931259,0.9390521695991728]},"decode":{"ratio":0.9986972096302872,"ci95":[0.9962324903252406,1.001511027783565]}},
+    {"T":16,"bytes":4096,"encode":{"ratio":0.7628725492199269,"ci95":[0.7606859067156067,0.7647890159769293]},"decode":{"ratio":0.9934042442492107,"ci95":[0.9889494354929952,0.9976454553285447]}},
+    {"T":16,"bytes":65536,"encode":{"ratio":0.8425356957705884,"ci95":[0.8010904259064833,0.8845913371346255]},"decode":{"ratio":1.0049680802103136,"ci95":[0.9912482351741906,1.0192751043092896]}},
+    {"T":32,"bytes":2048,"encode":{"ratio":1.0698647945171944,"ci95":[1.0587640961793678,1.079418766239244]},"decode":{"ratio":1.0011528173627322,"ci95":[0.9851765828192007,1.0166461843875032]}},
+    {"T":32,"bytes":4096,"encode":{"ratio":0.9836081834075623,"ci95":[0.9797285744500667,0.9871189946358071]},"decode":{"ratio":0.9991130509476005,"ci95":[0.9912267125016,1.0065823403200975]}},
+    {"T":32,"bytes":65536,"encode":{"ratio":1.0484682797939147,"ci95":[1.02208300073089,1.0945509051079296]},"decode":{"ratio":1.0106419832169762,"ci95":[0.9908667509000105,1.0447407845547154]}},
+    {"T":64,"bytes":2048,"encode":{"ratio":1.0039872662436262,"ci95":[0.9964600454855371,1.0117786080507087]},"decode":{"ratio":1.0043051345775658,"ci95":[0.9931736507593885,1.016383628481513]}},
+    {"T":64,"bytes":4096,"encode":{"ratio":0.9996514150397741,"ci95":[0.9975202196490627,1.002398069448271]},"decode":{"ratio":0.9951707694764962,"ci95":[0.9894348467506889,1.001075227099686]}},
+    {"T":64,"bytes":65536,"encode":{"ratio":1.0228649843708777,"ci95":[1.002166153329244,1.0579478032556904]},"decode":{"ratio":1.0132100528161976,"ci95":[0.99929711199054,1.040184649485101]}}
+  ]
+}
