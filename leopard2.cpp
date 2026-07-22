@@ -190,6 +190,15 @@ struct leo2_direct_repair_term
     uint16_t multiplier_log;
 };
 
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+struct leo2_direct_source_row
+{
+    uint32_t tagged_source;
+    // Direct repair is bounded to eight missing originals.
+    uint16_t multiplier_logs[8];
+};
+#endif
+
 struct leo2_decode_plan
 {
     const leo2_codec* codec;
@@ -222,6 +231,17 @@ struct leo2_decode_plan
         high_pruned_output_plans;
     std::vector<size_t> direct_term_offsets;
     std::vector<leo2_direct_repair_term> direct_terms;
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+    /*
+        Optional source-major view of direct_terms.  The output-major rows
+        remain the canonical plan representation and initialize each restored
+        shard.  These rows contain every subsequent term exactly once per
+        source row, with UINT16_MAX denoting an inactive output.  Preparing
+        the transpose with the immutable erasure plan avoids rebuilding the
+        same K-by-L schedule on every reused AVX2 execution.
+    */
+    std::vector<leo2_direct_source_row> direct_source_rows;
+#endif
     uint32_t generic_input_count;
     uint32_t direct_copy_recovery;
     uint32_t direct_xor_original;
@@ -1489,6 +1509,104 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
         return 1;
     return 4;
 }
+
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN) && defined(LEO_HAS_FF8)
+static bool PrepareGF8SourceMajorDirectSchedule(leo2_decode_plan* plan)
+{
+    if (!plan || !plan->codec)
+        return false;
+    const leo2_codec* codec = plan->codec;
+    const uint32_t output_count = plan->missing_original_count;
+    plan->direct_source_rows.clear();
+    if (codec->field != LEO2_FIELD_GF8 || !codec->context ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_multiply_add_outputs ||
+        !IsExpandedDirectRepairCodec(codec) ||
+        output_count < 2 || output_count > kDirectMaxRepairLosses ||
+        codec->original_count > kDirectMaxParentDimension ||
+        codec->recovery_count > kDirectMaxParentDimension ||
+        plan->direct_term_offsets.size() !=
+            static_cast<size_t>(output_count) + 1U ||
+        plan->direct_term_offsets.front() != 0 ||
+        plan->direct_term_offsets.back() != plan->direct_terms.size())
+        return true;
+
+    uint16_t original_source_rows[kDirectMaxParentDimension];
+    uint16_t recovery_source_rows[kDirectMaxParentDimension];
+    std::fill(original_source_rows,
+        original_source_rows + codec->original_count, UINT16_MAX);
+    std::fill(recovery_source_rows,
+        recovery_source_rows + codec->recovery_count, UINT16_MAX);
+
+    std::vector<leo2_direct_source_row> source_rows;
+    try
+    {
+        source_rows.reserve(codec->original_count);
+    }
+    catch (const std::bad_alloc&)
+    {
+        // The canonical output-major plan remains fully executable.
+        return true;
+    }
+
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const size_t end = plan->direct_term_offsets[output_index + 1];
+        if (begin >= end || end > plan->direct_terms.size())
+            return false;
+        for (size_t term_index = begin + 1;
+             term_index < end; ++term_index)
+        {
+            const leo2_direct_repair_term& term =
+                plan->direct_terms[term_index];
+            const bool parity =
+                (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                term.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
+                return false;
+            uint16_t* const source_row = parity
+                ? &recovery_source_rows[source_index]
+                : &original_source_rows[source_index];
+            if (*source_row == UINT16_MAX)
+            {
+                if (source_rows.size() >= codec->original_count)
+                    return false;
+                *source_row = static_cast<uint16_t>(source_rows.size());
+                leo2_direct_source_row row = {};
+                row.tagged_source = term.tagged_source;
+                std::fill(row.multiplier_logs,
+                    row.multiplier_logs + kDirectMaxRepairLosses,
+                    UINT16_MAX);
+                try
+                {
+                    source_rows.push_back(row);
+                }
+                catch (const std::bad_alloc&)
+                {
+                    // The canonical output-major plan remains fully
+                    // executable if this optional cache cannot be allocated.
+                    return true;
+                }
+            }
+            if (*source_row >= source_rows.size() ||
+                source_rows[*source_row].multiplier_logs[output_index] !=
+                    UINT16_MAX)
+                return false;
+            source_rows[*source_row].multiplier_logs[output_index] =
+                term.multiplier_log;
+        }
+    }
+    if (source_rows.empty())
+        return false;
+    plan->direct_source_rows.swap(source_rows);
+    return true;
+}
+#endif
 
 template<class Field>
 static bool PrepareDirectBarycentricWeights(
@@ -4585,6 +4703,85 @@ static leo2_result ExecuteDirectEncode(
 #define LEO2_SOURCE_MAJOR_NOINLINE
 #endif
 
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
+ExecuteGF8PreformattedSourceMajorDirectRepair(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const uint32_t output_count = plan->missing_original_count;
+    if (output_count < 2 || output_count > kDirectMaxRepairLosses ||
+        plan->missing_originals.size() != output_count ||
+        plan->direct_term_offsets.size() !=
+            static_cast<size_t>(output_count) + 1U ||
+        plan->direct_term_offsets.front() != 0 ||
+        plan->direct_term_offsets.back() != plan->direct_terms.size() ||
+        plan->direct_source_rows.empty() ||
+        plan->direct_source_rows.size() > codec->original_count)
+        return LEO2_INTERNAL_ERROR;
+
+    void* outputs[kDirectMaxRepairLosses] = {};
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        const uint32_t missing_original =
+            plan->missing_originals[output_index];
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const size_t end = plan->direct_term_offsets[output_index + 1];
+        if (missing_original >= codec->original_count || begin >= end ||
+            end > plan->direct_terms.size())
+            return LEO2_INTERNAL_ERROR;
+        outputs[output_index] = restored_original[missing_original];
+        if (!outputs[output_index])
+            return LEO2_INTERNAL_ERROR;
+        const leo2_direct_repair_term& initial = plan->direct_terms[begin];
+        const bool parity =
+            (initial.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            initial.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* const source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        if (initial.multiplier_log == 0)
+            memcpy(outputs[output_index], source, shard_bytes);
+        else
+            leopard::ff8::MultiplyBytes(ops, outputs[output_index], source,
+                static_cast<leopard::ff8::ffe_t>(initial.multiplier_log),
+                shard_bytes);
+    }
+
+    for (size_t source_row = 0;
+         source_row < plan->direct_source_rows.size(); ++source_row)
+    {
+        const leo2_direct_source_row& row =
+            plan->direct_source_rows[source_row];
+        const bool parity =
+            (row.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            row.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* const source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        ops.ff8_multiply_add_outputs(outputs, source,
+            row.multiplier_logs, output_count, shard_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+#endif
+
 static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
 ExecuteGF8SourceMajorDirectRepair(
     const leo2_decode_plan* plan,
@@ -4735,8 +4932,18 @@ static leo2_result ExecuteDirectRepair(
         ops.ff8_multiply_add_outputs &&
         codec->original_count <= kDirectMaxParentDimension &&
         codec->recovery_count <= kDirectMaxParentDimension)
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+    {
+        if (!plan->direct_source_rows.empty())
+            return ExecuteGF8PreformattedSourceMajorDirectRepair(plan,
+                shard_bytes, original, recovery, restored_original);
         return ExecuteGF8SourceMajorDirectRepair(plan, shard_bytes,
             original, recovery, restored_original);
+    }
+#else
+        return ExecuteGF8SourceMajorDirectRepair(plan, shard_bytes,
+            original, recovery, restored_original);
+#endif
 #endif
 #ifdef LEO_HAS_FF8
     const bool tiled_gf8_tail =
@@ -6878,6 +7085,17 @@ LEO2_EXPORT int leo2_test_decode_plan_uses_translated_low(
     return PlanUsesTranslatedLowDecode(plan) ? 1 : 0;
 }
 
+LEO2_EXPORT size_t leo2_test_decode_plan_direct_source_rows(
+    const leo2_decode_plan* plan)
+{
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+    return plan ? plan->direct_source_rows.size() : 0;
+#else
+    (void)plan;
+    return 0;
+#endif
+}
+
 LEO2_EXPORT int leo2_test_codec_direct_encode_capable(
     const leo2_codec* codec)
 {
@@ -7585,6 +7803,16 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             {
                 plan->direct_repair = PrepareDirectRepairTerms<DirectField16>(
                     plan, codec->direct_barycentric16, NULL);
+            }
+#endif
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN) && defined(LEO_HAS_FF8)
+            if (plan->direct_repair &&
+                !PrepareGF8SourceMajorDirectSchedule(plan))
+            {
+                // A malformed optional view must never make the canonical
+                // output-major direct plan unsafe.  Leave the cache empty so
+                // execution takes the established checked transpose.
+                plan->direct_source_rows.clear();
             }
 #endif
         }
