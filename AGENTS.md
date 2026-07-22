@@ -56,6 +56,19 @@ interchange copy; `bd bootstrap` is the preferred history-preserving restore.
   authentication, pricing, model, and effort constraints, and do not retry a
   non-timeout failure unless the user explicitly requests it.
 
+## Benchmark coordination policy
+
+- Serialize builds, correctness tests, and authoritative timings through the
+  campaign's canonical lock.  A timing lease alone is insufficient if another
+  worker could have replaced one of its binaries before the lease began.
+- Before an authoritative run, copy each executable into a lane-owned immutable
+  artifact directory, record its SHA-256 and source identity, and verify both
+  again after the run.  Never benchmark an executable in another worker's
+  mutable build directory.
+- Treat any run with changed, ambiguous, or cross-lane binary provenance as
+  invalid.  Stop it when practical, retain no performance conclusion from it,
+  and restart from frozen binaries.
+
 ## Quick Reference
 
 ```bash
