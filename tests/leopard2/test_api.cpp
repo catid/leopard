@@ -1205,6 +1205,87 @@ void test_overlap_rejection(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
+void test_decode_late_scratch_alias_failure_atomicity(leo2_context* context)
+{
+    const unsigned k = 8;
+    const unsigned r = 4;
+    const size_t bytes = 64;
+    leo2_codec_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+    leo2_codec* codec = NULL;
+    require_result(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options, &codec),
+        "late-alias codec create");
+    const Shards original = make_originals(k, bytes, 0x1a7ea11a5ULL);
+    const Shards recovery = encode_new(codec, original, bytes);
+
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    original_present[0] = 0;
+    original_present[k - 1] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "late-alias plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(plan, bytes, &scratch_bytes),
+        "late-alias scratch query");
+    require(scratch_bytes >= bytes,
+        "late-alias fixture scratch is smaller than one shard");
+    AlignedBuffer scratch(scratch_bytes);
+    Shards restored(k, std::vector<uint8_t>(bytes, 0x5a));
+    std::vector<const void*> original_ptrs = const_pointers(original);
+    std::vector<const void*> recovery_ptrs = const_pointers(recovery);
+    std::vector<void*> restored_ptrs(k, NULL);
+    original_ptrs[0] = NULL;
+    original_ptrs[k - 1] = NULL;
+    restored_ptrs[0] = &restored[0][0];
+    restored_ptrs[k - 1] = &restored[k - 1][0];
+
+    const std::vector<const void*> valid_original_ptrs = original_ptrs;
+    const std::vector<const void*> valid_recovery_ptrs = recovery_ptrs;
+    const std::vector<void*> valid_restored_ptrs = restored_ptrs;
+
+    require_result(leo2_decode_plan_execute(plan, bytes, &original_ptrs[0],
+        &recovery_ptrs[0], &restored_ptrs[0], scratch.data, scratch.bytes),
+        "late-alias valid control execute");
+    require(restored[0] == original[0] && restored[k - 1] == original[k - 1],
+        "late-alias valid control recovered incorrect data");
+    std::fill(restored[0].begin(), restored[0].end(), 0x5a);
+    std::fill(restored[k - 1].begin(), restored[k - 1].end(), 0x5a);
+    const Shards original_before = original;
+    const Shards recovery_before = recovery;
+    const Shards restored_before = restored;
+    const auto require_atomic_overlap = [&](const char* label) {
+        memset(scratch.data, 0xa5, scratch.bytes);
+        std::vector<uint8_t> scratch_before(scratch.bytes);
+        memcpy(&scratch_before[0], scratch.data, scratch.bytes);
+        require(leo2_decode_plan_execute(plan, bytes, &original_ptrs[0],
+            &recovery_ptrs[0], &restored_ptrs[0], scratch.data,
+            scratch.bytes) == LEO2_OVERLAP, label);
+        require(memcmp(scratch.data, &scratch_before[0], scratch.bytes) == 0,
+            std::string(label) + " changed scratch before rejecting overlap");
+        require(original == original_before && recovery == recovery_before,
+            std::string(label) + " changed an input before rejecting overlap");
+        require(restored == restored_before,
+            std::string(label) + " changed an output before rejecting overlap");
+        original_ptrs = valid_original_ptrs;
+        recovery_ptrs = valid_recovery_ptrs;
+        restored_ptrs = valid_restored_ptrs;
+    };
+
+    original_ptrs[k - 2] = scratch.data;
+    require_atomic_overlap("late original/scratch overlap was not rejected");
+    recovery_ptrs[r - 1] = scratch.data;
+    require_atomic_overlap("late recovery/scratch overlap was not rejected");
+    restored_ptrs[k - 1] = scratch.data;
+    require_atomic_overlap("late output/scratch overlap was not rejected");
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
 void test_gf16_byte_granularity(leo2_context* context)
 {
     leo2_codec* codec = make_codec(
@@ -2579,6 +2660,7 @@ int main()
         test_expanded_direct_repair_execution(&counts);
         test_direct_repair_field_helpers();
         test_overlap_rejection(context);
+        test_decode_late_scratch_alias_failure_atomicity(context);
         test_gf16_byte_granularity(context);
         leo2_context_destroy(context);
 

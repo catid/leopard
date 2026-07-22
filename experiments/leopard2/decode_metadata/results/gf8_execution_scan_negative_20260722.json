@@ -1,0 +1,132 @@
+{
+  "schema": "leopard2-gf8-decode-metadata-audit/v1",
+  "date_utc": "2026-07-22",
+  "status": "negative_no_production_change",
+  "bead": "leopard-79h.18.20.1.47",
+  "source_commit": "123e533015ff62881d3980d5c24092af4510c90c",
+  "hypothesis": "Leopard2 GF8 Algorithm 4/5 execution may redundantly reconstruct erasure metadata that can be removed from the byte-heavy execution path.",
+  "source_audit": {
+    "result": "The hypothesized production duplicate does not exist.",
+    "plan_owned_metadata": {
+      "fields": "leopard2.cpp:193-224",
+      "coordinate_and_request_construction": "leopard2.cpp:7073-7146",
+      "dependency_and_schedule_construction": "leopard2.cpp:1057-1289, called once at leopard2.cpp:7206",
+      "locator_construction": "leopard2.cpp:7216-7253"
+    },
+    "execution": {
+      "dispatcher": "leopard2.cpp:3074-3204",
+      "generic_gf8": "LeopardFF8.cpp:3173-3220",
+      "algorithm4_gf8": "LeopardFF8.cpp:3802-4188",
+      "algorithm5_gf8": "LeopardFF8.cpp:4382-4836",
+      "finding": "All planned kernels consume immutable requested-coordinate, dependency, block-schedule, locator, and fixed-factor views. None rebuilds an ErrorBitfield, locator, or requested mask."
+    },
+    "legacy_only_prepares": [
+      "LeopardFF8.cpp:3107-3155 ReedSolomonDecodePrepared compatibility helper",
+      "LeopardFF8.cpp:3714-3732 ReedSolomonDecodeLowPrepared compatibility helper",
+      "LeopardFF8.cpp:4863-4898 Leopard1 ReedSolomonDecode"
+    ],
+    "actual_per_execution_fixed_work": "Buffer/range validation and coordinate-pointer population at leopard2.cpp:4062-4232 and 7375-7605. This work validates caller memory, not erasure algebra."
+  },
+  "candidate_experiments": [
+    {
+      "name": "merge validation and scratch-range population",
+      "status": "rejected_unsafe_and_fully_reverted",
+      "source_file_sha256": "8f161ec88871f3adb83d61b3fd61a63a7ba55a88325ce86d115e57c9296b4f40",
+      "benchmark_summary_sha256": "1485a35391c9032c3577b56b6f86422f37af488a1e92b8c6bc303636bea15a09",
+      "benchmark": {
+        "method": "Pinned CPU 14, reserved SMT sibling 30, OMP=1, ABBA, 5 rounds, 11 samples per process, 20 GF8 cells over 64/256/1024/4096-byte shards.",
+        "speedup_range": [
+          0.9990284313962868,
+          1.0553041818781443
+        ],
+        "cells_at_or_above_1_05": [
+          {
+            "id": "high-t16-64",
+            "speedup": 1.0533959820756642
+          },
+          {
+            "id": "low-p32-64",
+            "speedup": 1.0553041818781443
+          }
+        ]
+      },
+      "kill_reason": "The one-pass version wrote range metadata into caller scratch before all input/output ranges had been validated. A late input/output alias with scratch therefore modified caller memory before returning LEO2_OVERLAP, violating failure atomicity. A pointer cast or reordered late check cannot make this safe."
+    },
+    {
+      "name": "precompute compact present-source descriptors in the plan",
+      "status": "rejected_below_threshold_and_fully_reverted",
+      "source_file_sha256": "b4b0a5bb0ed752e0a9ec30c1514f655267ab02200de1999cb6a4197b0e330fff",
+      "benchmark_summary_sha256": "d34a4abe071cc33592fbd7e5b065c4d0cf87afcd59754d3ef8fb3bb2018b2dc4",
+      "benchmark": {
+        "method": "Same pinned ABBA matrix as the unsafe prototype; 400 retained process records and identical workload digests.",
+        "speedup_min": 0.9913482941853579,
+        "speedup_max": 1.0144212385926825,
+        "cells_above_1_02": 0,
+        "cells_at_or_above_1_05": 0
+      },
+      "cost": "Adds two 32-bit words per present shard to every decode plan plus a second descriptor/pointer population path.",
+      "kill_reason": "No cell approached the 5 percent promotion threshold; the extra permanent plan memory and code were not justified."
+    }
+  ],
+  "retained_change": {
+    "file": "tests/leopard2/test_api.cpp",
+    "test": "test_decode_late_scratch_alias_failure_atomicity",
+    "coverage": "Runs a valid forced-specialized GF8 Algorithm 5 control, then injects late original, late recovery, and late restored-output aliases with scratch. Each failure must return LEO2_OVERLAP without modifying scratch, input payloads, or restored outputs."
+  },
+  "exact_main_comparison": {
+    "summary_sha256": "1bde4340a4710bc654fc94171761643e71fdf317673af568212502e2da312cd3",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_binary_sha256": "6f78065bab47340c64a1be7eca9d693131173f2c35dcb3bb3afbd418afdbb6ad",
+    "method": "Pinned CPU 14 with sibling 30 reserved, pure AVX2, OMP=1, forced Leopard2 specialized decoder, ABBA, 3 rounds, 15 samples per process, 16 cells over 64/256/1024/4096-byte shards. Ratios are exact-main Leopard1 time divided by Leopard2 time.",
+    "correctness": "All 192 accepted process invocations had identical source, parity, recovered-output digests and loss sets; zero invocations were rejected for sibling contamination.",
+    "first_use_ratio_range": [
+      0.20355412281013865,
+      2.311577218200453
+    ],
+    "reused_plan_ratio_range": [
+      0.7742000325355862,
+      2.705515596695452
+    ],
+    "reused_plan_cells_faster_than_main": 13,
+    "reused_plan_cell_count": 16,
+    "cells": [
+      ["high-t16-64", 0.32773030718766155, 1.4634480987975724, "tiled"],
+      ["high-t16-256", 0.6747639989642934, 2.040110887426793, "tiled"],
+      ["high-t16-1024", 1.4825953328056278, 2.318456508749196, "tiled"],
+      ["high-t16-4096", 2.311577218200453, 2.705515596695452, "tiled"],
+      ["high-t64-64", 0.20355412281013865, 0.8082287359154622, "tiled"],
+      ["high-t64-256", 0.39704309056697507, 1.0971917603040058, "tiled"],
+      ["high-t64-1024", 0.7529609915586991, 1.1829305673970112, "tiled"],
+      ["high-t64-4096", 1.2222297909263962, 1.4205565048550162, "tiled"],
+      ["balanced-64", 0.21767314589380013, 0.7742000325355862, "materialized"],
+      ["balanced-256", 0.4169092383556151, 1.0377161949691092, "materialized"],
+      ["balanced-1024", 0.8060325788651674, 1.2633840642871321, "materialized"],
+      ["balanced-4096", 1.184704483094315, 1.3526930080748478, "materialized"],
+      ["padding-64", 0.24000814770762968, 0.9712406603114804, "tiled"],
+      ["padding-256", 0.4624719477617481, 1.258237374111616, "tiled"],
+      ["padding-1024", 0.9094921713738426, 1.476183203445327, "tiled"],
+      ["padding-4096", 1.4236040677630122, 1.6571702972985882, "tiled"]
+    ],
+    "interpretation": "Plan setup dominates first use for tiny shards, while the byte-heavy planned execution usually wins after reuse. This does not support adding unsafe per-call mutations or extra permanent plan descriptors."
+  },
+  "pure_avx2_audit": {
+    "candidate_archive_sha256": "4e5061617b5c03af2f19cfa949d9c2198d15ef2abf1a3446753505534b2a7a23",
+    "avx512_archive_member_present": false,
+    "evex_disassembly_rows": 0,
+    "zmm_or_mask_register_rows": 0,
+    "flags": [
+      "-mavx2",
+      "-mno-avx512f",
+      "-mtune=generic"
+    ]
+  },
+  "validation": {
+    "release_decode_matrix": "11/11",
+    "clang18_asan_ubsan_lsan_focused": "4/4",
+    "release_api_after_final_test": "1/1",
+    "git_diff_check": "clean",
+    "production_prototypes_remaining": false
+  },
+  "conclusion": "Close this AVX2 avenue as exhausted. Leopard2 already moves erasure algebra into immutable plan setup. The only measurable residual scan fusion was unsafe, and the safe descriptor alternative was noise-level. Preserve the new failure-atomicity regression and spend optimization effort on byte-heavy transform/memory work instead."
+}
