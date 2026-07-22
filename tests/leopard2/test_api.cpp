@@ -1851,6 +1851,12 @@ void run_low_reveal_fusion_case(
     // one-loss case covers the C1-pruned final-output schedule.
     const unsigned k = 32;
     const unsigned r = 33;
+#if defined(LEO2_EXPERIMENTAL_GF8_AVX2_GENERAL_DIRECT_L1)
+    // The default-off general direct-L1 experiment deliberately promotes this
+    // LOW R>K one-loss shape.  This test is about Algorithm 4 reveal fusion,
+    // so retain that subject explicitly in experimental builds.
+    codec_flags |= LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+#endif
     leo2_codec* codec = make_flagged_codec(context, k, r,
         LEO2_PROFILE_LOW_V1, field, codec_flags);
     const Shards source = make_originals(k, bytes,
