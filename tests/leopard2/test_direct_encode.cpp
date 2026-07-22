@@ -1458,6 +1458,189 @@ void test_gf8_high_tail_generator_column(
     leo2_context_destroy(context);
 }
 
+void test_high_gf8_byte_tiling(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options avx2_options = {};
+    avx2_options.struct_size = sizeof(avx2_options);
+    avx2_options.backend = LEO2_BACKEND_AVX2;
+    avx2_options.thread_count = 1;
+    leo2_context* avx2_context = NULL;
+    const leo2_result avx2_result = leo2_context_create(
+        &avx2_options, &avx2_context);
+    if (avx2_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(avx2_result, "GF8 byte-tile AVX2 context create");
+
+    leo2_context_options scalar_options = {};
+    scalar_options.struct_size = sizeof(scalar_options);
+    scalar_options.backend = LEO2_BACKEND_SCALAR;
+    scalar_options.thread_count = 1;
+    leo2_context* scalar_context = NULL;
+    require_result(leo2_context_create(&scalar_options, &scalar_context),
+        "GF8 byte-tile scalar context create");
+
+    const unsigned k = 65;
+    const unsigned r = 64;
+    const size_t threshold_bytes = 256U * 1024U;
+    const size_t below_bytes = threshold_bytes - 64U;
+    const size_t tail_bytes = threshold_bytes + 17U;
+    CodecOwner* target = make_codec(avx2_context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    CodecOwner* scalar = make_codec(scalar_context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+
+    size_t target_below_scratch = 0;
+    size_t scalar_below_scratch = 0;
+    size_t target_scratch = 0;
+    size_t scalar_scratch = 0;
+    size_t target_tail_scratch = 0;
+    size_t scalar_tail_scratch = 0;
+    require_result(leo2_encode_scratch_size(
+        target->codec, below_bytes, &target_below_scratch),
+        "GF8 byte-tile below scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, below_bytes, &scalar_below_scratch),
+        "GF8 byte-tile scalar below scratch query");
+    require_result(leo2_encode_scratch_size(
+        target->codec, threshold_bytes, &target_scratch),
+        "GF8 byte-tile threshold scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, threshold_bytes, &scalar_scratch),
+        "GF8 byte-tile scalar threshold scratch query");
+    require_result(leo2_encode_scratch_size(
+        target->codec, tail_bytes, &target_tail_scratch),
+        "GF8 byte-tile tail scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, tail_bytes, &scalar_tail_scratch),
+        "GF8 byte-tile scalar tail scratch query");
+    require(target_below_scratch == scalar_below_scratch,
+        "GF8 byte tiling crossed its measured lower boundary");
+    require(target_scratch < scalar_scratch &&
+            target_tail_scratch < scalar_tail_scratch,
+        "GF8 byte tiling did not reduce transform scratch");
+
+    // A one-block transform has a higher measured crossover.  Lock both sides
+    // of the K>T policy boundary without allocating either large scratch area.
+    CodecOwner* one_block = make_codec(avx2_context, 64, 64,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    CodecOwner* one_block_scalar = make_codec(scalar_context, 64, 64,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    size_t one_block_small = 0;
+    size_t one_block_small_scalar = 0;
+    size_t one_block_large = 0;
+    size_t one_block_large_scalar = 0;
+    require_result(leo2_encode_scratch_size(one_block->codec,
+        threshold_bytes, &one_block_small),
+        "GF8 byte-tile one-block small query");
+    require_result(leo2_encode_scratch_size(one_block_scalar->codec,
+        threshold_bytes, &one_block_small_scalar),
+        "GF8 byte-tile scalar one-block small query");
+    require_result(leo2_encode_scratch_size(one_block->codec,
+        1024U * 1024U, &one_block_large),
+        "GF8 byte-tile one-block large query");
+    require_result(leo2_encode_scratch_size(one_block_scalar->codec,
+        1024U * 1024U, &one_block_large_scalar),
+        "GF8 byte-tile scalar one-block large query");
+    require(one_block_small == one_block_small_scalar &&
+            one_block_large < one_block_large_scalar,
+        "GF8 byte-tile one-block crossover mismatch");
+    delete one_block;
+    delete one_block_scalar;
+
+    // T=8 is a measured negative region even for large shards.
+    CodecOwner* tiny_side = make_codec(avx2_context, 8, 8,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    CodecOwner* tiny_side_scalar = make_codec(scalar_context, 8, 8,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    size_t tiny_side_scratch = 0;
+    size_t tiny_side_scalar_scratch = 0;
+    require_result(leo2_encode_scratch_size(tiny_side->codec,
+        1024U * 1024U, &tiny_side_scratch),
+        "GF8 byte-tile T8 query");
+    require_result(leo2_encode_scratch_size(tiny_side_scalar->codec,
+        1024U * 1024U, &tiny_side_scalar_scratch),
+        "GF8 byte-tile scalar T8 query");
+    require(tiny_side_scratch == tiny_side_scalar_scratch,
+        "GF8 byte tiling entered the losing T8 region");
+    delete tiny_side;
+    delete tiny_side_scalar;
+
+    const Shards original = random_shards(
+        k, tail_bytes, UINT64_C(0x474638425954494c));
+    const Shards original_before = original;
+    std::vector<uint8_t> dense_requested(r, 1);
+    const EncodeResult reference = encode(scalar->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, dense_requested);
+    require_result(reference.result, "GF8 byte-tile scalar reference");
+    const EncodeResult actual = encode(target->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, dense_requested);
+    require_result(actual.result, "GF8 byte-tile tail encode");
+    compare_requested(actual.recovery, reference.recovery,
+        dense_requested, 0xa5, "GF8 byte-tile/scalar", counts);
+    require(original == original_before,
+        "GF8 byte tiling modified a caller source shard");
+
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, r);
+    const Matrix generator =
+        leopard2_test::direct_systematic_generator(gf8, layout);
+    Shards first_byte(k, Bytes(1, 0));
+    for (unsigned i = 0; i < k; ++i)
+        first_byte[i][0] = original[i][0];
+    const Shards direct = oracle_parity(
+        gf8, generator, first_byte, r, LEO2_FIELD_GF8);
+    for (unsigned parity = 0; parity < r; ++parity)
+    {
+        require(actual.recovery[parity][0] == direct[parity][0],
+            "GF8 byte-tile output differs from direct algebra");
+        ++counts->parity_symbols;
+    }
+
+    std::vector<uint8_t> sparse_requested(r, 0);
+    sparse_requested[0] = 1;
+    sparse_requested[r / 2] = 1;
+    sparse_requested[r - 1] = 1;
+    const EncodeResult sparse_reference = encode(scalar->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse_requested);
+    const EncodeResult sparse_actual = encode(target->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse_requested);
+    require_result(sparse_reference.result,
+        "GF8 byte-tile sparse scalar encode");
+    require_result(sparse_actual.result, "GF8 byte-tile sparse encode");
+    compare_requested(sparse_actual.recovery, sparse_reference.recovery,
+        sparse_requested, 0xa5, "GF8 byte-tile sparse/scalar", counts);
+
+    const std::vector<const void*> input = const_pointers(original);
+    Shards audited_output(r, Bytes(tail_bytes, 0));
+    std::vector<void*> audited_recovery(r, NULL);
+    for (unsigned i = 0; i < r; ++i)
+        audited_recovery[i] = &audited_output[i][0];
+    AlignedBuffer audited_scratch(target_tail_scratch);
+    begin_allocation_audit();
+    const leo2_result audited_result = leo2_encode(target->codec, tail_bytes,
+        &input[0], &audited_recovery[0], audited_scratch.data(),
+        audited_scratch.size());
+    const uint64_t hot_allocations = end_allocation_audit();
+    require_result(audited_result, "allocation-trapped GF8 byte tiling");
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    require(hot_allocations == 0,
+        "GF8 byte tiling allocated C++ storage");
+    ++counts->allocation_checks;
+#else
+    (void)hot_allocations;
+#endif
+    require(audited_output == actual.recovery,
+        "allocation-trapped GF8 byte tiling changed parity");
+
+    ++counts->high_byte_tiling_checks;
+    delete target;
+    delete scalar;
+    leo2_context_destroy(avx2_context);
+    leo2_context_destroy(scalar_context);
+}
+
 void test_gf8_high_coarse_direct_oracle(
     const BinaryField& gf8,
     Counts* counts)
@@ -2524,6 +2707,7 @@ int main()
         test_high_small_coarse_kernel(context, gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
         test_gf8_high_tail_generator_column(gf8, &counts);
+        test_high_gf8_byte_tiling(gf8, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);

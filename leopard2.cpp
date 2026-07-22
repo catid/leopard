@@ -2591,6 +2591,58 @@ static leo2_result EncodeLayout(
             return LEO2_INVALID_COUNTS;
         geometry.execution_tile_bytes = rounded_tile_bytes;
     }
+
+    // Keep the complete GF8 transform schedule unchanged while bounding the
+    // live byte slice of all work shards so large calls remain cache-resident.
+    // The side-specific crossover policy is generated offline from pinned
+    // exact-backend measurements; smaller transforms retain one full pass.
+    size_t high_gf8_tile_bytes = 0;
+    size_t high_gf8_min_shard_bytes = 0;
+    const bool high_gf8_multiple_message_blocks =
+        codec->original_count > codec->padded_side;
+    switch (codec->padded_side)
+    {
+    case 16:
+        high_gf8_tile_bytes = 128U * 1024U;
+        high_gf8_min_shard_bytes = high_gf8_multiple_message_blocks
+            ? 1024U * 1024U : 4U * 1024U * 1024U;
+        break;
+    case 32:
+        high_gf8_tile_bytes = 64U * 1024U;
+        high_gf8_min_shard_bytes = high_gf8_multiple_message_blocks
+            ? 512U * 1024U : 2U * 1024U * 1024U;
+        break;
+    case 64:
+        high_gf8_tile_bytes = 32U * 1024U;
+        high_gf8_min_shard_bytes = high_gf8_multiple_message_blocks
+            ? 256U * 1024U : 1024U * 1024U;
+        break;
+    case 128:
+        high_gf8_tile_bytes = 64U * 1024U;
+        high_gf8_min_shard_bytes = 512U * 1024U;
+        break;
+    default:
+        break;
+    }
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->context &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        high_gf8_tile_bytes != 0 &&
+        geometry.aligned_prefix_bytes >= high_gf8_min_shard_bytes)
+    {
+        geometry.execution_tile_count = 1U +
+            (geometry.aligned_prefix_bytes - 1U) /
+                high_gf8_tile_bytes;
+        size_t rounded_tile_bytes = 0;
+        if (!AlignUp(
+                geometry.aligned_prefix_bytes /
+                    geometry.execution_tile_count,
+                kScratchAlignment, rounded_tile_bytes))
+            return LEO2_INVALID_COUNTS;
+        geometry.execution_tile_bytes = rounded_tile_bytes;
+    }
     geometry.work_slot_bytes = std::max(
         geometry.execution_tile_bytes,
         geometry.tail_bytes == 0 ? size_t(0) : kScratchAlignment);
