@@ -39,11 +39,15 @@ rejected K=T+3 region.
 
 Freeze and build the candidate first.  Substitute its full 40-character SHA,
 source path, build path, and benchmark path below.  The runner uses every
-allowed physical core pair by default and reserves each SMT sibling.  The
-exclusive lock prevents every external build, test, diagnostic, or timing
-phase using the canonical lock from overlapping the screen.  Only the runner's
-own child jobs parallelize inside its lease.  Ratios from this stage remain
-diagnostic only.
+allowed physical core by default and records activity on each SMT sibling.  It
+does not reject sibling activity in this deliberately non-authoritative
+saturation screen: the Python coordinator also needs CPU time, and requiring
+all siblings to remain idle while using every physical core is not a coherent
+isolation contract.  The exclusive lock prevents every external build, test,
+diagnostic, or timing phase using the canonical lock from overlapping the
+screen.  Only the runner's own child jobs parallelize inside its lease.  Ratios
+from this stage remain diagnostic only; every near or slower result is repeated
+by the isolated ABBA stage below.
 
     python3 tools/leopard2_gf8_expanded_final_map.py diagnostic \
       --matrix /tmp/leopard-gf8-expanded-map/matrix.json \
@@ -67,7 +71,8 @@ The second stage selects every diagnostic near/slower cell (any primary ratio
 at or below 1.10) plus all loss, reuse, batch, large-tiling, and
 selector-isolation cells.  It holds the lock exclusively and runs three
 baseline/candidate/candidate/baseline rounds on one physical core while
-reserving its SMT sibling.  Explicit CPU numbers are recommended after
+requiring its SMT sibling to remain idle; contaminated attempts are discarded
+and retried.  Explicit CPU numbers are recommended after
 inspecting the dry-run CPU-pair list.
 
     python3 tools/leopard2_gf8_expanded_final_map.py abba \

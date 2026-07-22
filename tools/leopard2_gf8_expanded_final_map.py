@@ -608,7 +608,8 @@ def benchmark_environment():
 
 
 def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
-                     warmup, maximum_attempts, candidate_commit):
+                     warmup, maximum_attempts, candidate_commit,
+                     require_idle_sibling):
     common = [
         "--k", str(cell["K"]), "--r", str(cell["R"]),
         "--bytes", str(cell["bytes"]), "--loss", str(cell["loss"]),
@@ -652,7 +653,7 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
                 "stderr": process.stderr.decode(errors="replace"),
             }
             raise InvocationError("benchmark child failed", details)
-        if sibling_work:
+        if sibling_work and require_idle_sibling:
             rejected.append({
                 "attempt": attempt,
                 "reason": "reserved sibling performed non-idle work",
@@ -730,6 +731,7 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
             "started_ns": started_ns, "ended_ns": ended_ns,
             "cpu_nonidle_jiffies": nonidle_delta(cpu_before, cpu_after),
             "sibling_nonidle_jiffies": sibling_work,
+            "idle_sibling_required": require_idle_sibling,
             "stdout_sha256": hashlib.sha256(process.stdout).hexdigest(),
             "stderr_sha256": hashlib.sha256(process.stderr).hexdigest(),
             "rejected_attempts": rejected,
@@ -970,7 +972,7 @@ def diagnostic_cell(cell, pair, args, identity_digest, run_dir, memory_gate):
                     kind, executable, cpu, sibling, cell,
                     cell["diagnostic_iterations"],
                     cell["diagnostic_warmup"], args.maximum_attempts,
-                    args.candidate_commit))
+                    args.candidate_commit, False))
         identity = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "diagnostic",
@@ -996,6 +998,9 @@ def diagnostic_summary(run_dir, identity, identity_digest, matrix, results,
         "matrix_sha256": identity["provenance"]["matrix"]["sha256"],
         "cell_count": len(rows), "resumed_cell_count": resumed_count,
         "accepted_child_invocations": 2 * len(rows),
+        "accepted_calls_with_sibling_activity": sum(
+            int(call["sibling_nonidle_jiffies"] != 0)
+            for row in results for call in row["calls"]),
         "elapsed_seconds": elapsed_seconds,
         "candidate_binary_sha256": identity["provenance"]["candidate"]["sha256"],
         "baseline_binary_sha256": identity["provenance"]["baseline"]["sha256"],
@@ -1029,6 +1034,7 @@ def run_diagnostic(args):
             "maximum_attempts": args.maximum_attempts,
             "memory_budget_bytes": budget,
             "mode": "exclusive_parallel_non_authoritative_screen",
+            "idle_sibling_required": False,
         }
         identity = stage_identity("diagnostic", provenance, options)
         run_dir, identity_digest = prepare_run_directory(args.run_dir, identity)
@@ -1155,7 +1161,7 @@ def abba_cell(cell, pair, args, identity_digest, run_dir):
                 calls.append(invoke_benchmark(
                     kind, executable, cpu, sibling, cell,
                     cell["abba_iterations"], cell["abba_warmup"],
-                    args.maximum_attempts, args.candidate_commit))
+                    args.maximum_attempts, args.candidate_commit, True))
         exact = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "abba",
@@ -1197,6 +1203,7 @@ def run_abba(args):
             "cpu_pair": list(pair), "topology": topology,
             "rounds": args.rounds, "order_per_round": list(ABBA_ORDER),
             "maximum_attempts": args.maximum_attempts,
+            "idle_sibling_required": True,
             "near_ratio": args.near_ratio,
             "diagnostic_summary": os.path.realpath(args.diagnostic_summary),
             "diagnostic_summary_sha256": sha256_file(args.diagnostic_summary),
