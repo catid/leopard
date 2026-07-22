@@ -1,0 +1,218 @@
+{
+  "schema": "leopard2-r1-avx2-large-pair-selector/v1",
+  "created_utc": "2026-07-22T14:45:00Z",
+  "decision": {
+    "status": "promoted",
+    "summary": "Use the mature pairwise AVX2 reduction instead of the coarse grouped reduction in four measured large-GF8 regions.",
+    "wire_format_changed": false,
+    "backend_scope": "explicit/effective AVX2, GF8, legacy-high R=1 only",
+    "online_autotuning": false,
+    "policy": [
+      { "minimum_k": 51, "minimum_shard_bytes": 1048576 },
+      { "minimum_k": 31, "minimum_shard_bytes": 2097152 },
+      { "minimum_k": 10, "minimum_shard_bytes": 4194304 },
+      { "minimum_k": 8, "minimum_shard_bytes": 8388608 }
+    ]
+  },
+  "identity": {
+    "candidate_source_commit": "39fc6d42bd10658285b3d394f0b022de34af412b",
+    "selector_control_source_commit": "2f10d03a28173a290b17387512e0b0e06f5b000a",
+    "exact_leopard_main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_executable_sha256": "55500d931e1ad964d9668ba3612a75a7e760821e16d0adc972ef539c0e945980",
+    "selector_control_executable_sha256": "cafcf724e2057446c67173f39f633efca9d397e7e8d4434106b889896947a543",
+    "exact_leopard_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+  },
+  "machine": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "allowed_cpu_set": "0-14,16-30",
+    "cores_per_socket": 16,
+    "threads_per_core": 2,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic",
+    "compiler": "GCC 13.3.0",
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "scaling_governor": "powersave",
+    "energy_performance_preference": "performance",
+    "parallelism_note": "Builds and tests used all 30 CPUs allowed to this process. Authoritative cache- and bandwidth-sensitive ABBA measurements intentionally used one pinned physical core with its SMT sibling idle."
+  },
+  "method": {
+    "comparison_order_per_round": [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    "selector_rounds": 5,
+    "exact_main_rounds": 3,
+    "statistics": "one mean log contrast per independent ABBA round; geometric ratio; both paired-round bootstrap and two-sided Student-t 95 percent intervals retained for the selector gate",
+    "ratio_orientation_selector": "control_time_over_candidate_time",
+    "ratio_orientation_exact_main": "exact_leopard_main_time_over_leopard2_time",
+    "isolation_acceptance": "reserved SMT sibling accumulated exactly zero non-idle /proc/stat jiffies for every accepted child",
+    "iterations": {
+      "through_64_kib": 51,
+      "through_1_mib": 5,
+      "above_1_mib": 3
+    },
+    "warmups": {
+      "through_64_kib": 5,
+      "through_1_mib": 1,
+      "above_1_mib": 1
+    },
+    "reuse": {
+      "through_64_kib": 8,
+      "through_1_mib": 2,
+      "above_1_mib": 1
+    }
+  },
+  "selector_results_percent": {
+    "columns": [
+      "k",
+      "shard_bytes",
+      "route",
+      "metric",
+      "geometric_gain",
+      "paired_bootstrap95_low",
+      "paired_bootstrap95_high",
+      "student_t95_low",
+      "student_t95_high"
+    ],
+    "rows": [
+      [7, 1024, "unchanged", "encode", -0.47, -2.08, 0.69, -2.63, 1.74],
+      [7, 1024, "unchanged", "decode", -1.63, -2.82, -0.62, -3.49, 0.27],
+      [7, 65536, "unchanged", "encode", 1.93, -0.20, 5.68, -3.03, 7.14],
+      [7, 65536, "unchanged", "decode", -1.35, -2.52, -0.20, -3.19, 0.52],
+      [7, 8388608, "unchanged", "encode", 0.92, -0.52, 2.49, -1.46, 3.36],
+      [7, 8388608, "unchanged", "decode", -0.18, -1.92, 1.75, -2.96, 2.68],
+      [8, 8388608, "pairwise", "encode", 8.82, 4.42, 13.75, 1.83, 16.28],
+      [8, 8388608, "pairwise", "decode", 5.83, 4.19, 7.75, 3.02, 8.71],
+      [10, 4194304, "pairwise", "encode", 7.27, 6.76, 7.72, 6.50, 8.04],
+      [10, 4194304, "pairwise", "decode", 5.26, 3.86, 6.29, 3.29, 7.26],
+      [30, 2097152, "unchanged", "encode", -0.77, -8.53, 5.84, -11.28, 11.00],
+      [30, 2097152, "unchanged", "decode", 1.73, -0.06, 4.80, -2.31, 5.93],
+      [31, 2097152, "pairwise", "encode", 12.98, 11.50, 14.30, 10.80, 15.21],
+      [31, 2097152, "pairwise", "decode", 14.08, 13.30, 14.73, 12.98, 15.20],
+      [50, 1048576, "unchanged", "encode", 0.69, -0.26, 1.91, -0.99, 2.41],
+      [50, 1048576, "unchanged", "decode", 0.08, -0.66, 1.06, -1.33, 1.52],
+      [51, 1048576, "pairwise", "encode", 11.43, 8.37, 16.20, 5.23, 17.99],
+      [51, 1048576, "pairwise", "decode", 11.23, 9.29, 13.99, 7.48, 15.11]
+    ]
+  },
+  "exact_main_results": {
+    "note": "Ratios are rounded here; the retained raw artifact contains full precision. Values above one favor Leopard2.",
+    "columns": [
+      "k",
+      "shard_bytes",
+      "encode_ratio",
+      "decode_execution_ratio",
+      "decode_first_use_ratio"
+    ],
+    "rows": [
+      [8, 8388608, 0.9954, 0.9739, 0.9738],
+      [10, 4194304, 0.9899, 0.9709, 0.9708],
+      [31, 2097152, 0.9445, 0.9715, 0.9714],
+      [51, 1048576, 0.9996, 0.9917, 0.9917],
+      [129, 1048576, 0.9880, 0.9967, 0.9967],
+      [255, 1048576, 1.0197, 1.0129, 1.0129]
+    ]
+  },
+  "correctness_and_static_gates": {
+    "gcc_release_targeted_ctest": "6/6 passed",
+    "clang18_release_targeted_ctest": "6/6 passed",
+    "clang18_asan_ubsan_targeted_ctest": "6/6 passed",
+    "targeted_tests": [
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_r1_xor",
+      "leopard2_public_api_contract",
+      "leopard2_legacy_golden",
+      "leopard2_r1_xor_crossover_self_test"
+    ],
+    "route_tests": "K and byte below/exact/+17 boundaries for K=8,10,31,51; GF16 and non-AVX2 exclusions",
+    "wire_and_round_trip_digests_match": true,
+    "gcc_policy_helper_section_bytes": 87,
+    "avx2_backend_modified": false,
+    "unexpected_evex_in_avx2_path": false
+  },
+  "rejected_experiments": [
+    {
+      "candidate": "fully fused 256-byte outer loop",
+      "reason": "32 to 45 percent slower"
+    },
+    {
+      "candidate": "fresh four-source group plus pairs",
+      "reason": "at most 3.3 percent faster with regressions"
+    },
+    {
+      "candidate": "128/256/512/1024 KiB tiled pair reductions",
+      "reason": "mostly 2 to 8 percent slower; best cell 2.55 percent"
+    },
+    {
+      "candidate": "balanced four-offset eight-source group",
+      "reason": "17.5 to 19.8 percent slower at K=129/255, 8 MiB"
+    },
+    {
+      "candidate": "128-byte xor_memory unroll",
+      "reason": "mixed encode gains and decode/control regressions"
+    },
+    {
+      "candidate": "codec-field precomputed threshold gate",
+      "reason": "changed code/object layout and caused a credible K=7, 64 KiB regression; replaced by an isolated policy helper"
+    }
+  ],
+  "retained_raw_artifacts": [
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/production-noalloc-noinline-2f-5.json",
+      "sha256": "fde5de8173df39130c0f6b23e35861a19a8deb4f28eec281dfad44388d3b9c2e"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/production-exact-main-final-3.json",
+      "sha256": "ebfc7b0a08d011d24cb50998de56ce7e61b681fa35304724f209860c457bd925"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/pair-crossover-screen.json",
+      "sha256": "5d3eb6e7cb912e7a90b303b342266fbb616c758b8ab64c7c5c411bdb9466e81c"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/pair-remainder-crossover-screen.json",
+      "sha256": "8d92b411f9a83410b40779be0d7453fbf41adfc815fb1630545b6a5fba09549a"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/pair-selector-boundary-screen.json",
+      "sha256": "22d64c5a00f2542d92525892c3d985460f9d64442c991c92419314298d153d35"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/pair-selector-refine-screen.json",
+      "sha256": "18a6edbd689e383e7cf26245ebd80165392b8b04d4a853edf2d4a7592db0d335"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/pair-selector-one-mib-screen.json",
+      "sha256": "a834b5f0d487fa3b00eeaf4e869e8719c79b463eaf290bcd36788451865c8223"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/hybrid-vs-pair-screen.json",
+      "sha256": "033b3ffb474439e01a3fc9791809442e4cd23466a46e06412d044323b381062d"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/tiledpair-size-screen.json",
+      "sha256": "de0362897429c03d2602fe65f4a1e974208966feab32fd323eaa426cbe47b947"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/bal4-vs-pair-screen.json",
+      "sha256": "c6bec1e543e7d5f5888fa87ef920f2c742071eeafca3d7efa537ae3fc40f22b5"
+    },
+    {
+      "path": "/tmp/leopard-gf8-r1-tile-artifacts/xor128-vs-pair-screen.json",
+      "sha256": "fcc865201d309d2fd6e676cb9b01b546cb31853c5bdd3f526ddf71b50b238040"
+    }
+  ],
+  "reproduction": {
+    "configure": "cmake -S . -B build/production-gcc-avx2 -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BACKEND_VARIANT=avx2",
+    "build": "cmake --build build/production-gcc-avx2 -j30",
+    "test": "ctest --test-dir build/production-gcc-avx2 -R 'leopard2_(context_backends|r1_xor|backend_ops|public_api_contract|legacy_golden)' -j30 --output-on-failure",
+    "one_cell": "taskset -c 14 build/production-gcc-avx2/bench_leopard2 --k 31 --r 1 --bytes 2097152 --loss 1 --batch 1 --reuse 1 --iterations 3 --warmup 1 --threads 1 --seed 633197152 --profile high --field gf8 --backend avx2 --skip-legacy --retain-samples --report-decode-path --json -",
+    "authoritative_note": "Run control/candidate/candidate/control for each independent round and reject a child if CPU 30 accumulates any non-idle /proc/stat jiffies."
+  }
+}
