@@ -1,0 +1,106 @@
+{
+  "schema": "leopard2-gf8-avx2-decode-payload-tiling-evidence/v1",
+  "implementation": {
+    "base_commit": "a4c93a6a8d47cf6f9af294dd3842e7721f7cffbd",
+    "commit": "c652c25e02d89ec8d0919e2aa9d75794b73839a4",
+    "candidate_binary_sha256": "a477759cfc2062b79d0cac121d666a946285ec8a16835b7a9b3f5f2e720ebb08",
+    "control_binary_sha256": "9c262e64a98c64f395e756154c32a292befc898b579d03b6a89e78dad1a623bf",
+    "summary": "Balance complete 64-byte payload tiles across cache-sized GF8 AVX2 transform-decode passes; retain the existing wire profile and coordinate schedule.",
+    "scratch_safety": "A shared overflow-checked geometry helper computes the exact maximum balanced pass. Encode and decode use overflow-free quotient-plus-remainder ceiling division and assert every pass fits the queried work-row stride.",
+    "measured_scope": "Legacy-high GF8 with the AVX2 backend: native Algorithm 5 tiled traversal or legacy-high translated Algorithm 4. Other fields, backends, low profile, generic decode, and forced regular materialized-high decode retain the prior layout."
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "measurement_cpu": 14,
+    "idle_smt_sibling": 30,
+    "pure_avx2_audit": true
+  },
+  "same_source_thresholds": {
+    "orientation": "control decode time / candidate decode time",
+    "rounds": 3,
+    "abba_observations_per_cell": 6,
+    "iterations_per_invocation": 5,
+    "reuse": 2,
+    "all_digests_matched": true,
+    "cells": [
+      {"T": 16, "K": 240, "R": 16, "loss": 8, "threshold_bytes": 786432, "below_median": 1.0028213949, "threshold_median": 1.1952162799, "tail17_median": 1.1831021073, "threshold_scratch_reduction": 5.9901926146},
+      {"T": 32, "K": 224, "R": 32, "loss": 16, "threshold_bytes": 393216, "below_median": 0.9989391823, "threshold_median": 1.1203906985, "tail17_median": 1.1219005701, "threshold_scratch_reduction": 5.9901318194},
+      {"T": 64, "K": 192, "R": 64, "loss": 32, "threshold_bytes": 196608, "below_median": 1.0026740916, "threshold_median": 1.1007930845, "tail17_median": 1.0986261278, "threshold_scratch_reduction": 5.9900102334},
+      {"T": 128, "K": 128, "R": 128, "loss": 64, "threshold_bytes": 131072, "below_median": 0.9987241581, "threshold_median": 1.3186976460, "tail17_median": 1.3062761774, "threshold_scratch_reduction": 3.9963423555}
+    ],
+    "raw": {
+      "path": "/tmp/leopard-gf8-decode-tiling-final-boundaries-c652c25/summary.json",
+      "sha256": "7ef5fa653f205f0faae1aa55c7819a79b9b636831ce3506b8950e4fbef869d87"
+    }
+  },
+  "same_source_neighbors": {
+    "orientation": "control decode time / candidate decode time",
+    "all_digests_matched": true,
+    "weakest_cell_min_observation": 1.0530280355,
+    "median_speedup_range": [1.0904436132, 1.4637857331],
+    "scratch_reduction_range": [3.9963423555, 5.9984135894],
+    "cells": [
+      {"K": 17, "R": 16, "loss": 8, "median": 1.2342944426},
+      {"K": 240, "R": 16, "loss": 1, "median": 1.2183714524},
+      {"K": 240, "R": 16, "loss": 16, "median": 1.1843154153},
+      {"K": 32, "R": 32, "loss": 16, "median": 1.2706577457},
+      {"K": 224, "R": 31, "loss": 16, "median": 1.1193711907},
+      {"K": 224, "R": 32, "loss": 1, "median": 1.0904436132},
+      {"K": 224, "R": 32, "loss": 32, "median": 1.1060991555},
+      {"K": 64, "R": 64, "loss": 32, "median": 1.2196447094},
+      {"K": 192, "R": 63, "loss": 32, "median": 1.1154730573},
+      {"K": 192, "R": 64, "loss": 1, "median": 1.1842826250},
+      {"K": 192, "R": 64, "loss": 64, "median": 1.1496686693},
+      {"K": 127, "R": 128, "loss": 64, "median": 1.3104637153},
+      {"K": 128, "R": 127, "loss": 64, "median": 1.3093923601},
+      {"K": 128, "R": 128, "loss": 2, "median": 1.3626432834},
+      {"K": 128, "R": 128, "loss": 128, "median": 1.4637857331}
+    ],
+    "raw": {
+      "path": "/tmp/leopard-gf8-decode-tiling-final-neighbors-c652c25/summary.json",
+      "sha256": "45d9aad6522e7604411ea66ca04af1d76f5187f6a9afd516f9977455d5ef8d65"
+    }
+  },
+  "leopard1_main": {
+    "orientation": "frozen Leopard1 decode-including-setup time / Leopard2 time",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "measured_candidate_commit": "704bfc2714e17c0062ab48618c1ad1fe639fd383",
+    "provenance_note": "The final c652c25 descendant differs from measured 704bfc2 only by overflow-free equivalent balanced-pass arithmetic, its exhaustive reference test, and the matching operation-count source guard. Final c652c25 same-source threshold and neighbor results are recorded above.",
+    "all_digests_matched": true,
+    "execution_speedups": {
+      "boundary_T16_T32_T64_T128": [6.4099623842, 4.4678618800, 2.7857016288, 1.9609489002],
+      "one_MiB_T16_T32_T64_T128": [6.6237046277, 4.4304937261, 4.1236691258, 3.8326463972],
+      "four_MiB_T16_T32_T64_T128": [6.9704421529, 5.2375866140, 4.7271435324, 4.4334904299]
+    },
+    "setup_amortized_ratios_were_effectively_identical": true,
+    "raw": {
+      "path": "/tmp/leopard-gf8-decode-tiling-final-exact-main-704bfc2/summary.json",
+      "sha256": "7bebc4e02e4d4ca0df92ab5a3c46beb1b83dca60682487f11354311f1b68d131"
+    }
+  },
+  "validation": {
+    "release": {
+      "result": "96/96 passed",
+      "partition": "95/95 parallel in 177.09 seconds plus intentionally isolated leopard2_lab_self_test 1/1",
+      "focused_result": "7/7 passed, including direct_encode and transform_differential",
+      "raw_log_path": "/tmp/leopard-gf8-decode-tiling-current-a4c93a6-1784711452/build/pure-avx2/Testing/Temporary/LastTest.log",
+      "raw_log_sha256": "438ee3ddd9a0f30a81b47b49905526e23fe323ceeddbfb153c533bb28fb460b1"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "result": "6/6 passed in 110.31 seconds",
+      "tests": ["auto_encode_backend", "direct_encode", "decode_high_acceptance", "high_low_duality", "arbitrary_counts_acceptance", "transform_differential"],
+      "options": "ASAN detect_leaks/halt/abort/strict_string_checks; UBSAN halt with no recovery; LSAN object reporting",
+      "raw_log_path": "/tmp/leopard-gf8-decode-tiling-current-a4c93a6-1784711452/build/asan-ubsan/Testing/Temporary/LastTest.log",
+      "raw_log_sha256": "62a1f25ebaa0525756b0a1d223260e648096c9d9b77e4a50d69d0b3529f0b31a"
+    },
+    "special_cases": [
+      "T=16 native Algorithm 5 tiled decode with threshold+17 byte tail",
+      "T=128 translated Algorithm 4 materialized decode with threshold+17 byte tail",
+      "exact balanced-pass arithmetic across 1,2,63,64,65,129,513 passes and every final-pass remainder",
+      "16 MiB plus 64-byte 513-pass counterexample geometry",
+      "input/output immutability, unrequested outputs, guards, scratch reduction, and deterministic digests"
+    ]
+  }
+}
