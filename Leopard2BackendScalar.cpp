@@ -1389,6 +1389,7 @@ static const Ops ScalarOps = {
 #endif
     , NULL
     , NULL
+    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

@@ -898,6 +898,52 @@ static void AVX2XorMemorySourceGroup(
     }
 }
 
+template<unsigned SourceCount>
+static void AVX2XorMemoryDenseGroup(
+    void* destination,
+    const void* const* sources,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* inputs[SourceCount];
+    for (unsigned lane = 0; lane < SourceCount; ++lane)
+        inputs[lane] = static_cast<const uint8_t*>(sources[lane]);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 128)
+    {
+        for (unsigned block = 0; block < 128; block += 32)
+        {
+            __m256i result = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(inputs[0] + offset + block));
+            for (unsigned lane = 1; lane < SourceCount; ++lane)
+                result = _mm256_xor_si256(result, _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(
+                        inputs[lane] + offset + block)));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output + offset + block), result);
+        }
+        offset += 128;
+    }
+    while (byte_count - offset >= 32)
+    {
+        __m256i result = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(inputs[0] + offset));
+        for (unsigned lane = 1; lane < SourceCount; ++lane)
+            result = _mm256_xor_si256(result, _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(inputs[lane] + offset)));
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + offset), result);
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        uint8_t result = inputs[0][offset];
+        for (unsigned lane = 1; lane < SourceCount; ++lane)
+            result ^= inputs[lane][offset];
+        output[offset++] = result;
+    }
+}
+
 static void AVX2XorMemorySources(
     void* destination,
     const void* initial_source,
@@ -1002,6 +1048,29 @@ static void AVX2XorMemorySources(
     }
     if (waiting_count != 0)
         AVX2XorMemory(destination, waiting[0], byte_count);
+}
+#endif
+
+#if !defined(LEO2_AVX512_VARIANT)
+static void AVX2XorMemoryDense(
+    void* destination,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    if (source_count == 2)
+    {
+        AVX2XorMemoryDenseGroup<2>(
+            destination, sources, byte_count);
+        return;
+    }
+    if (source_count == 4)
+    {
+        AVX2XorMemoryDenseGroup<4>(
+            destination, sources, byte_count);
+        return;
+    }
+    LEO_DEBUG_ASSERT(false);
 }
 #endif
 
@@ -3513,6 +3582,11 @@ static const Ops AVX2Ops = {
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8HighEncodeSmall
+#else
+    , NULL
+#endif
+#if !defined(LEO2_AVX512_VARIANT)
+    , AVX2XorMemoryDense
 #else
     , NULL
 #endif

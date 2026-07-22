@@ -79,6 +79,16 @@ typedef void (*XorMemorySources)(
     uint32_t source_count,
     uint64_t byte_count);
 
+// XOR a small dense array of read-only inputs into a fresh destination.  The
+// destination is disjoint from every source; sources may alias one another.
+// This optional operation is used only when the selected backend has a
+// qualified one-pass implementation for the exact source count.
+typedef void (*XorMemoryDense)(
+    void* destination,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count);
+
 // Four independent in-place XOR pairs.  Destination ranges must be pairwise
 // disjoint and disjoint from all source ranges.  Read-only source ranges may
 // alias one another, matching the public API's allowed input-input aliasing.
@@ -330,6 +340,7 @@ struct Ops
     Butterfly4Range ff16_fft_butterfly4_range;
     FF8HighEncodeOneBlock ff8_high_encode_one_block;
     FF8HighEncodeSmall ff8_high_encode_small;
+    XorMemoryDense xor_memory_dense;
 };
 
 struct X86Features

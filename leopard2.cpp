@@ -3724,6 +3724,22 @@ static bool UseCoarseR1Xor(
     return codec->original_count >= minimum_originals;
 }
 
+static LEO_FORCE_INLINE bool UseDenseR1Xor(
+    const leo2_codec* codec,
+    size_t shard_bytes)
+{
+    const bool eligible =
+        (codec->original_count == 2 && shard_bytes >= 4096) ||
+        (codec->original_count == 4 && shard_bytes >= 2048);
+#if defined(__GNUC__) || defined(__clang__)
+    if (__builtin_expect(!eligible, 1))
+#else
+    if (!eligible)
+#endif
+        return false;
+    return codec->context->ops->xor_memory_dense != NULL;
+}
+
 static void ExecuteSingleSideEncode(
     const leo2_codec* codec,
     size_t shard_bytes,
@@ -3750,6 +3766,12 @@ static void ExecuteSingleSideEncode(
             codec->original_count - 1, shard_bytes);
         return;
     }
+    if (UseDenseR1Xor(codec, shard_bytes))
+    {
+        ops.xor_memory_dense(recovery[0], original,
+            codec->original_count, shard_bytes);
+        return;
+    }
     uint8_t* const output = static_cast<uint8_t*>(recovery[0]);
     memcpy(output, original[0], shard_bytes);
     uint32_t i = 1;
@@ -3773,6 +3795,19 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
     {
         ops.xor_memory_sources(restored_original[missing], recovery[0],
             original, codec->original_count, shard_bytes);
+        return;
+    }
+    if (UseDenseR1Xor(codec, shard_bytes))
+    {
+        const void* sources[4];
+        uint32_t source_count = 0;
+        sources[source_count++] = recovery[0];
+        for (uint32_t i = 0; i < codec->original_count; ++i)
+            if (original[i])
+                sources[source_count++] = original[i];
+        LEO_DEBUG_ASSERT(source_count == codec->original_count);
+        ops.xor_memory_dense(restored_original[missing], sources,
+            source_count, shard_bytes);
         return;
     }
     uint8_t* output =

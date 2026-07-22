@@ -1658,6 +1658,33 @@ static bool TestXor(const Ops& ops)
         if (std::memcmp(output, expected, sizeof(output)) != 0)
             return false;
 
+        if (ops.xor_memory_dense)
+        {
+            const void* dense_sources[4] = {
+                source + 1, sources4[0] + 1,
+                sources4[1] + 1, sources4[0] + 1
+            };
+            std::memset(output, 0xa5, sizeof(output));
+            std::memset(expected, 0xa5, sizeof(expected));
+            for (uint64_t i = 0; i < bytes; ++i)
+                expected[i + 1] = static_cast<uint8_t>(
+                    source[i + 1] ^ sources4[0][i + 1]);
+            ops.xor_memory_dense(
+                output + 1, dense_sources, 2, bytes);
+            if (std::memcmp(output, expected, sizeof(output)) != 0)
+                return false;
+
+            std::memset(output, 0x3c, sizeof(output));
+            std::memset(expected, 0x3c, sizeof(expected));
+            for (uint64_t i = 0; i < bytes; ++i)
+                expected[i + 1] = static_cast<uint8_t>(
+                    source[i + 1] ^ sources4[1][i + 1]);
+            ops.xor_memory_dense(
+                output + 1, dense_sources, 4, bytes);
+            if (std::memcmp(output, expected, sizeof(output)) != 0)
+                return false;
+        }
+
         for (size_t i = 0; i < sizeof(output); ++i)
             output[i] = expected[i] =
                 static_cast<uint8_t>((i * 43U + count_i * 3U) & 255U);
@@ -1763,6 +1790,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
         !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
+        return false;
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.xor_memory_dense != NULL))
         return false;
 #ifdef LEO_HAS_FF8
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||

@@ -585,7 +585,7 @@ void test_public_r1(leo2_backend backend)
     /* K=8 has seven live originals during one-loss repair and exercises the
        fused initial-plus-seven AVX2 reduction; K=9 exercises the full group
        of eight live sources. */
-    static const uint32_t counts[] = { 3, 8, 9, 10, 31 };
+    static const uint32_t counts[] = { 2, 3, 4, 8, 9, 10, 31 };
     static const size_t sizes[] = {
         1, 2, 3, 17, 31, 32, 33, 64, 65, 1025, 65537, 1048579
     };
