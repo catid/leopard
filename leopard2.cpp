@@ -659,6 +659,8 @@ struct DecodeScratchGeometry
     size_t rounded_bytes;
     size_t aligned_prefix_bytes;
     size_t tail_bytes;
+    size_t execution_tile_count;
+    size_t execution_tile_bytes;
     size_t work_slot_count;
     size_t work_slot_bytes;
     size_t work_data_offset;
@@ -705,6 +707,34 @@ static bool AlignUp(size_t value, size_t alignment, size_t& result)
         return false;
     result = sum & ~mask;
     return true;
+}
+
+static bool ComputeBalancedExecutionTiles(
+    size_t aligned_bytes,
+    size_t requested_tile_bytes,
+    size_t& execution_tile_count,
+    size_t& maximum_pass_bytes)
+{
+    execution_tile_count = aligned_bytes == 0 ? 0 : 1;
+    maximum_pass_bytes = aligned_bytes;
+    if (aligned_bytes == 0)
+        return true;
+    if (requested_tile_bytes == 0 ||
+        (aligned_bytes & (kScratchAlignment - 1U)) != 0 ||
+        (requested_tile_bytes & (kScratchAlignment - 1U)) != 0)
+        return false;
+    if (requested_tile_bytes >= aligned_bytes)
+        return true;
+
+    execution_tile_count = 1U +
+        (aligned_bytes - 1U) / requested_tile_bytes;
+    const size_t total_tiles = aligned_bytes / kScratchAlignment;
+    const size_t maximum_pass_tiles =
+        total_tiles / execution_tile_count +
+        (total_tiles % execution_tile_count != 0);
+    return maximum_pass_tiles != 0 &&
+        CheckedMultiply(maximum_pass_tiles, kScratchAlignment,
+            maximum_pass_bytes);
 }
 
 static leo2_result ComputeBatchPreflightScratchBytes(
@@ -2580,16 +2610,12 @@ static leo2_result EncodeLayout(
         geometry.tail_bytes == 0 &&
         geometry.aligned_prefix_bytes == kHighGF16EncodeCellBytes)
     {
-        geometry.execution_tile_count = 1U +
-            (geometry.aligned_prefix_bytes - 1U) /
-                kHighGF16EncodeTileBytes;
-        size_t rounded_tile_bytes = 0;
-        if (!AlignUp(
-                geometry.aligned_prefix_bytes /
-                    geometry.execution_tile_count,
-                kScratchAlignment, rounded_tile_bytes))
+        if (!ComputeBalancedExecutionTiles(
+                geometry.aligned_prefix_bytes,
+                kHighGF16EncodeTileBytes,
+                geometry.execution_tile_count,
+                geometry.execution_tile_bytes))
             return LEO2_INVALID_COUNTS;
-        geometry.execution_tile_bytes = rounded_tile_bytes;
     }
 
     // Keep the complete GF8 transform schedule unchanged while bounding the
@@ -2632,16 +2658,12 @@ static leo2_result EncodeLayout(
         high_gf8_tile_bytes != 0 &&
         geometry.aligned_prefix_bytes >= high_gf8_min_shard_bytes)
     {
-        geometry.execution_tile_count = 1U +
-            (geometry.aligned_prefix_bytes - 1U) /
-                high_gf8_tile_bytes;
-        size_t rounded_tile_bytes = 0;
-        if (!AlignUp(
-                geometry.aligned_prefix_bytes /
-                    geometry.execution_tile_count,
-                kScratchAlignment, rounded_tile_bytes))
+        if (!ComputeBalancedExecutionTiles(
+                geometry.aligned_prefix_bytes,
+                high_gf8_tile_bytes,
+                geometry.execution_tile_count,
+                geometry.execution_tile_bytes))
             return LEO2_INVALID_COUNTS;
-        geometry.execution_tile_bytes = rounded_tile_bytes;
     }
     geometry.work_slot_bytes = std::max(
         geometry.execution_tile_bytes,
@@ -2803,6 +2825,60 @@ static bool SelectTransformDecodePath(
     return leopard2_internal::SelectDecodePath(input, selection);
 }
 
+static size_t GF8AVX2DecodeExecutionTileBytes(
+    const leo2_codec* codec,
+    const leopard2_internal::DecodePathInfo& selection,
+    size_t aligned_prefix_bytes)
+{
+#ifdef LEO_HAS_FF8
+    /*
+        Every transform stage is pointwise over the shard payload, so complete
+        64-byte payload ranges may execute independently without changing the
+        field arithmetic or coordinate schedule.  Bound the live transform
+        rows to roughly one cache-resident working set on the measured AVX2
+        host.  Counterbalanced, single-core whole-decode measurements promote
+        only the legacy-high AVX2 traversal and the four side/byte regions
+        below.  At each boundary, shortened, punctured, balanced,
+        one-above-side, and high-rate counts were checked with small, half,
+        and maximum loss patterns.  The weakest promoted observation was
+        still 1.065x, while the immediately lower T=16 and T=64 cells were
+        neutral or slower.  A translated Algorithm 4 plan retains the
+        legacy-high wire identity and is included; unmeasured low-profile and
+        forced regular materialized/generic traversals retain the full-payload
+        layout.
+    */
+    if (!codec || !codec->context ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        aligned_prefix_bytes < 128U * 1024U ||
+        selection.path == leopard2_internal::kDecodePathNoOp ||
+        selection.path == leopard2_internal::kDecodePathDirect ||
+        (selection.path != leopard2_internal::kDecodePathTiled &&
+         selection.rule != leopard2_internal::kDecodeRuleTranslatedLow))
+        return aligned_prefix_bytes;
+
+    switch (codec->padded_side)
+    {
+    case 16:
+        return aligned_prefix_bytes >= 768U * 1024U
+            ? 128U * 1024U : aligned_prefix_bytes;
+    case 32:
+        return aligned_prefix_bytes >= 384U * 1024U
+            ? 64U * 1024U : aligned_prefix_bytes;
+    case 64:
+        return aligned_prefix_bytes >= 192U * 1024U
+            ? 32U * 1024U : aligned_prefix_bytes;
+    case 128: return 32U * 1024U;
+    default: return aligned_prefix_bytes;
+    }
+#else
+    (void)codec;
+    (void)selection;
+    return aligned_prefix_bytes;
+#endif
+}
+
 static leo2_result DecodeLayout(
     const leo2_codec* codec,
     const leo2_decode_plan* plan,
@@ -2819,13 +2895,28 @@ static leo2_result DecodeLayout(
         (kScratchAlignment - 1);
     geometry.aligned_prefix_bytes =
         static_cast<size_t>(shard_bytes) - geometry.tail_bytes;
-    geometry.work_slot_bytes = geometry.tail_bytes == 0
-        ? static_cast<size_t>(shard_bytes)
-        : std::max(geometry.aligned_prefix_bytes, kScratchAlignment);
+    geometry.execution_tile_count =
+        geometry.aligned_prefix_bytes == 0 ? 0 : 1;
+    geometry.execution_tile_bytes = geometry.aligned_prefix_bytes;
     const size_t range_count = static_cast<size_t>(codec->original_count) * 2 + codec->recovery_count;
     if (!SelectTransformDecodePath(codec, plan, shard_bytes,
             multi_item_batch, geometry, geometry.selection))
         return LEO2_INTERNAL_ERROR;
+    const size_t requested_tile_bytes = GF8AVX2DecodeExecutionTileBytes(
+        codec, geometry.selection, geometry.aligned_prefix_bytes);
+    if (geometry.aligned_prefix_bytes != 0 &&
+        requested_tile_bytes != 0 &&
+        requested_tile_bytes < geometry.aligned_prefix_bytes)
+    {
+        if (!ComputeBalancedExecutionTiles(
+                geometry.aligned_prefix_bytes, requested_tile_bytes,
+                geometry.execution_tile_count,
+                geometry.execution_tile_bytes))
+            return LEO2_INVALID_COUNTS;
+    }
+    geometry.work_slot_bytes = std::max(
+        geometry.execution_tile_bytes,
+        geometry.tail_bytes == 0 ? size_t(0) : kScratchAlignment);
     geometry.work_slot_count = geometry.selection.required_work_slots;
     size_t pointer_count = 0;
     if (!CheckedAdd(
@@ -5780,6 +5871,28 @@ LEO2_EXPORT uint32_t leo2_context_thread_count(const leo2_context* context)
 }
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
+LEO2_EXPORT leo2_result leo2_test_balanced_execution_tiles(
+    uint64_t aligned_bytes,
+    uint64_t requested_tile_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out)
+{
+    if (!execution_tile_count_out || !maximum_pass_bytes_out ||
+        aligned_bytes > std::numeric_limits<size_t>::max() ||
+        requested_tile_bytes > std::numeric_limits<size_t>::max())
+        return LEO2_INVALID_ARGUMENT;
+    size_t execution_tile_count = 0;
+    size_t maximum_pass_bytes = 0;
+    if (!ComputeBalancedExecutionTiles(
+            static_cast<size_t>(aligned_bytes),
+            static_cast<size_t>(requested_tile_bytes),
+            execution_tile_count, maximum_pass_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    *execution_tile_count_out = execution_tile_count;
+    *maximum_pass_bytes_out = maximum_pass_bytes;
+    return LEO2_SUCCESS;
+}
+
 LEO2_EXPORT uint32_t leo2_test_context_worker_count(
     const leo2_context* context)
 {
@@ -6654,8 +6767,10 @@ static leo2_result EncodeInternal(
                     geometry.execution_tile_count - pass_index;
                 const size_t tiles_left = total_tiles - first_tile;
                 const size_t pass_tiles =
-                    (tiles_left + passes_left - 1U) / passes_left;
+                    tiles_left / passes_left +
+                    (tiles_left % passes_left != 0);
                 const size_t pass_bytes = pass_tiles * kScratchAlignment;
+                LEO_DEBUG_ASSERT(pass_bytes <= geometry.work_slot_bytes);
                 const size_t source_offset = first_tile * kScratchAlignment;
                 PopulateEncodeInputs(
                     codec, original, source_offset, pass_bytes, NULL, pointers);
@@ -7314,7 +7429,6 @@ static leo2_result DecodePlanExecuteInternal(
     uint8_t* const work_storage = base + geometry.work_data_offset;
     for (size_t i = 0; i < geometry.work_slot_count; ++i)
         work[i] = work_storage + i * geometry.work_slot_bytes;
-
     /*
         At this balanced full-recovery point the generic schedule has lower
         aggregate work despite Algorithm 5's smaller transform side: the
@@ -7353,12 +7467,12 @@ static leo2_result DecodePlanExecuteInternal(
                 validation has proved that every restored output is disjoint
                 from all received shards, scratch, metadata, and other
                 outputs.  Tiled Algorithm 5 accepts compact requested-output
-                pointers; materialized Algorithm 5 indexes the public
-                systematic array by coordinate-T.  In both cases the fixed
-                reveal multiply writes the final destination instead of a
-                scratch shard that GatherTransformDecodePass would copy.
+                pointers.  A single materialized Algorithm 5 pass indexes the
+                public systematic array by coordinate-T.  In both cases the
+                fixed reveal multiply writes the final destination instead of
+                a scratch shard that GatherTransformDecodePass would copy.
             */
-            if (use_tiled)
+            if (use_tiled && geometry.execution_tile_count == 1)
             {
                 for (size_t i = 0; i < plan->missing_originals.size(); ++i)
                 {
@@ -7377,23 +7491,87 @@ static leo2_result DecodePlanExecuteInternal(
                     std::memory_order_relaxed);
 #endif
         }
-        if (!coordinates_prepopulated)
+        if (geometry.execution_tile_count == 1)
         {
-            PopulateDecodeCoordinates(
-                plan, original, recovery, 0, geometry.aligned_prefix_bytes,
-                NULL, coordinate_data);
+            if (!coordinates_prepopulated)
+            {
+                PopulateDecodeCoordinates(
+                    plan, original, recovery, 0,
+                    geometry.aligned_prefix_bytes, NULL, coordinate_data);
+            }
+            const void* const* const coordinate_input =
+                const_cast<const void* const*>(coordinate_data);
+            ExecuteTransformDecodePass(
+                plan, geometry.aligned_prefix_bytes, coordinate_input, work,
+                use_generic, use_tiled, reveal_aligned_outputs_in_place,
+                fuse_high_reveal_scatter && !use_tiled
+                    ? restored_original : NULL);
+            if (!fuse_high_reveal_scatter)
+                GatherTransformDecodePass(
+                    plan, restored_original, 0,
+                    geometry.aligned_prefix_bytes, work, use_generic,
+                    use_tiled, reveal_aligned_outputs_in_place);
         }
-        const void* const* const coordinate_input =
-            const_cast<const void* const*>(coordinate_data);
-        ExecuteTransformDecodePass(
-            plan, geometry.aligned_prefix_bytes, coordinate_input, work,
-            use_generic, use_tiled, reveal_aligned_outputs_in_place,
-            fuse_high_reveal_scatter && !use_tiled
-                ? restored_original : NULL);
-        if (!fuse_high_reveal_scatter)
-            GatherTransformDecodePass(
-                plan, restored_original, 0, geometry.aligned_prefix_bytes,
-                work, use_generic, use_tiled, reveal_aligned_outputs_in_place);
+        else
+        {
+            /*
+                GF8AVX2DecodeExecutionTileBytes admits a multi-pass native
+                high decoder only when dispatch selected Algorithm 5's tiled
+                traversal.  The only admitted non-tiled rule is TranslatedLow,
+                for which fuse_high_reveal_scatter is false.  Keep this
+                invariant explicit so payload tiling never needs a second K
+                pointer array for a hypothetical materialized-high path.
+            */
+            LEO_DEBUG_ASSERT(!fuse_high_reveal_scatter || use_tiled);
+            const size_t total_tiles =
+                geometry.aligned_prefix_bytes / kScratchAlignment;
+            size_t first_tile = 0;
+            for (size_t pass_index = 0;
+                pass_index < geometry.execution_tile_count; ++pass_index)
+            {
+                const size_t passes_left =
+                    geometry.execution_tile_count - pass_index;
+                const size_t tiles_left = total_tiles - first_tile;
+                const size_t pass_tiles =
+                    tiles_left / passes_left +
+                    (tiles_left % passes_left != 0);
+                const size_t pass_bytes =
+                    pass_tiles * kScratchAlignment;
+                LEO_DEBUG_ASSERT(pass_bytes <= geometry.work_slot_bytes);
+                const size_t source_offset =
+                    first_tile * kScratchAlignment;
+
+                PopulateDecodeCoordinates(
+                    plan, original, recovery, source_offset, pass_bytes,
+                    NULL, coordinate_data);
+                if (fuse_high_reveal_scatter)
+                {
+                    for (size_t i = 0;
+                        i < plan->missing_originals.size(); ++i)
+                    {
+                        const uint32_t original_index =
+                            plan->missing_originals[i];
+                        high_requested_output[i] =
+                            static_cast<uint8_t*>(
+                                restored_original[original_index]) +
+                            source_offset;
+                    }
+                }
+                const void* const* const coordinate_input =
+                    const_cast<const void* const*>(coordinate_data);
+                ExecuteTransformDecodePass(
+                    plan, pass_bytes, coordinate_input, work,
+                    use_generic, use_tiled, reveal_aligned_outputs_in_place,
+                    NULL);
+                if (!fuse_high_reveal_scatter)
+                    GatherTransformDecodePass(
+                        plan, restored_original, source_offset, pass_bytes,
+                        work, use_generic, use_tiled,
+                        reveal_aligned_outputs_in_place);
+                first_tile += pass_tiles;
+            }
+            LEO_DEBUG_ASSERT(first_tile == total_tiles);
+        }
     }
 
     if (geometry.tail_bytes != 0)

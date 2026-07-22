@@ -512,7 +512,8 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
 
     Runtime cross-checks compare public query bytes.  This scoped source guard
     additionally makes the intended distinctions reviewable: N coordinate
-    pointers are metadata, ragged K+R input slots are fixed 64-byte staging,
+    pointers are metadata, large GF8 AVX2 payloads may size work rows to the
+    largest balanced pass, ragged K+R input slots are fixed 64-byte staging,
     and direct execution retains range metadata without shard-data slots.
     """
     compact = re.sub(r"\s+", "", source)
@@ -548,9 +549,15 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
             )
         )
     required_layout = (
-        "geometry.work_slot_bytes=geometry.tail_bytes==0?"
-        "static_cast<size_t>(shard_bytes):"
-        "std::max(geometry.aligned_prefix_bytes,kScratchAlignment);",
+        "geometry.execution_tile_count=geometry.aligned_prefix_bytes==0?0:1;",
+        "geometry.execution_tile_bytes=geometry.aligned_prefix_bytes;",
+        "constsize_trequested_tile_bytes=GF8AVX2DecodeExecutionTileBytes("
+        "codec,geometry.selection,geometry.aligned_prefix_bytes);",
+        "ComputeBalancedExecutionTiles(geometry.aligned_prefix_bytes,"
+        "requested_tile_bytes,geometry.execution_tile_count,"
+        "geometry.execution_tile_bytes)",
+        "geometry.work_slot_bytes=std::max(geometry.execution_tile_bytes,"
+        "geometry.tail_bytes==0?size_t(0):kScratchAlignment);",
         "constsize_trange_count=static_cast<size_t>(codec->original_count)*2+"
         "codec->recovery_count;",
         "static_cast<size_t>(codec->parent_count),"

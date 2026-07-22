@@ -32,6 +32,7 @@
 #include "leopard.h"
 #include "leopard2.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -67,6 +68,75 @@ void require_result(
     if (actual != expected)
         throw std::runtime_error(std::string(message) + ": " +
             leo2_result_string(actual));
+}
+
+void test_balanced_execution_tile_geometry()
+{
+    static const size_t requested_tile_bytes = 32U * 1024U;
+    static const size_t requested_tile_count =
+        requested_tile_bytes / leo2_scratch_alignment();
+    static const size_t pass_counts[] = { 1, 2, 63, 64, 65, 129, 513 };
+    for (size_t count_i = 0;
+         count_i < sizeof(pass_counts) / sizeof(pass_counts[0]); ++count_i)
+    {
+        const size_t expected_count = pass_counts[count_i];
+        for (size_t final_pass_tiles = 1;
+             final_pass_tiles <= requested_tile_count;
+             ++final_pass_tiles)
+        {
+            const size_t total_tiles =
+                (expected_count - 1U) * requested_tile_count +
+                final_pass_tiles;
+            const size_t aligned_bytes =
+                total_tiles * leo2_scratch_alignment();
+            size_t execution_tile_count = 0;
+            size_t maximum_pass_bytes = 0;
+            require_result(leo2_test_balanced_execution_tiles(
+                    aligned_bytes, requested_tile_bytes,
+                    &execution_tile_count, &maximum_pass_bytes),
+                LEO2_SUCCESS, "balanced execution-tile geometry");
+            require(execution_tile_count == expected_count,
+                "balanced execution-tile count differs from ceiling division");
+
+            size_t remaining_tiles = total_tiles;
+            size_t reference_maximum_tiles = 0;
+            for (size_t pass = 0; pass < expected_count; ++pass)
+            {
+                const size_t passes_left = expected_count - pass;
+                const size_t pass_tiles =
+                    remaining_tiles / passes_left +
+                    (remaining_tiles % passes_left != 0);
+                reference_maximum_tiles = std::max(
+                    reference_maximum_tiles, pass_tiles);
+                remaining_tiles -= pass_tiles;
+            }
+            require(remaining_tiles == 0,
+                "balanced execution reference did not consume every tile");
+            require(maximum_pass_bytes ==
+                    reference_maximum_tiles * leo2_scratch_alignment(),
+                "balanced execution scratch is smaller than a distributed pass");
+        }
+    }
+
+    size_t count = 99;
+    size_t bytes = 99;
+    require_result(leo2_test_balanced_execution_tiles(
+            0, 0, &count, &bytes),
+        LEO2_SUCCESS, "empty balanced execution geometry");
+    require(count == 0 && bytes == 0,
+        "empty balanced execution geometry is not empty");
+    require_result(leo2_test_balanced_execution_tiles(
+            64, 0, &count, &bytes),
+        LEO2_INVALID_ARGUMENT, "zero requested execution tile");
+    require_result(leo2_test_balanced_execution_tiles(
+            65, 64, &count, &bytes),
+        LEO2_INVALID_ARGUMENT, "unaligned execution byte count");
+    require_result(leo2_test_balanced_execution_tiles(
+            128, 65, &count, &bytes),
+        LEO2_INVALID_ARGUMENT, "unaligned requested execution tile");
+    require_result(leo2_test_balanced_execution_tiles(
+            128, 64, NULL, &bytes),
+        LEO2_INVALID_ARGUMENT, "null execution tile-count output");
 }
 
 class Context
@@ -1007,6 +1077,7 @@ int main()
         require_explicit_backend(ssse3, LEO2_BACKEND_SSSE3);
         require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
         require_explicit_backend(avx512, LEO2_BACKEND_AVX512);
+        test_balanced_execution_tile_geometry();
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);
 

@@ -781,6 +781,122 @@ void test_concurrent_reuse(leo2_context* context, Counts* counts)
     leo2_codec_destroy(codec);
 }
 
+void run_gf8_payload_tiling_case(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    unsigned loss_count,
+    size_t threshold_bytes,
+    Counts* counts)
+{
+    require(loss_count != 0 && loss_count <= k && loss_count <= r,
+        "invalid payload-tiling loss count");
+    leo2_codec* codec = create_codec(
+        context, k, r, LEO2_FIELD_GF8, 0);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (unsigned i = 0; i < loss_count; ++i)
+        original_present[(static_cast<uint64_t>(i) * k) / loss_count] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_success(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "payload-tiling plan create");
+
+    size_t below_scratch = 0;
+    size_t threshold_scratch = 0;
+    size_t tail_scratch = 0;
+    require_success(leo2_decode_plan_scratch_size(
+        plan, threshold_bytes - 64, &below_scratch),
+        "payload-tiling below-threshold scratch query");
+    require_success(leo2_decode_plan_scratch_size(
+        plan, threshold_bytes, &threshold_scratch),
+        "payload-tiling threshold scratch query");
+    require_success(leo2_decode_plan_scratch_size(
+        plan, threshold_bytes + 17, &tail_scratch),
+        "payload-tiling tail scratch query");
+    require(threshold_scratch * 2 < below_scratch,
+        "payload tiling did not materially reduce transform scratch");
+    require(tail_scratch == threshold_scratch +
+            static_cast<size_t>(k + r) * leo2_scratch_alignment(),
+        "payload-tiling tail did not reserve exactly one public staging tile");
+
+    const size_t bytes = threshold_bytes + 17;
+    Shards original(k, bytes, 11u + k);
+    Shards recovery(r, bytes, 23u + r);
+    Shards restored(k, bytes, 37u + loss_count);
+    fill_originals(original,
+        UINT64_C(0x3c6ef372fe94f82b) + k * 257u + r);
+    encode(codec, original, recovery);
+    const std::vector<Bytes> original_before = snapshot_shards(original);
+    const std::vector<Bytes> recovery_before = snapshot_shards(recovery);
+
+    std::vector<const void*> original_input = original.const_pointers();
+    std::vector<const void*> recovery_input = recovery.const_pointers();
+    std::vector<void*> output(k, NULL);
+    restored.fill(0x6d);
+    for (unsigned i = 0; i < k; ++i)
+    {
+        if (!original_present[i])
+        {
+            original_input[i] = NULL;
+            output[i] = restored[i].data();
+        }
+    }
+    AlignedBuffer scratch(tail_scratch);
+    require_success(leo2_decode_plan_execute(plan, bytes,
+        &original_input[0], &recovery_input[0], &output[0],
+        scratch.data(), scratch.bytes()), "payload-tiling tail execute");
+    for (unsigned i = 0; i < k; ++i)
+    {
+        if (original_present[i])
+            require(restored[i].payload_is(0x6d),
+                "payload tiling touched an unrequested output");
+        else
+        {
+            require(restored[i].payload_equals(original[i]),
+                "payload tiling restored the wrong arbitrary tail");
+            ++counts->restored_shards;
+        }
+    }
+    require_snapshots(original, original_before,
+        "payload tiling modified an original input");
+    require_snapshots(recovery, recovery_before,
+        "payload tiling modified a recovery input");
+    require(original.guards_intact() && recovery.guards_intact() &&
+            restored.guards_intact(),
+        "payload tiling modified a guard region");
+    counts->guard_checks += static_cast<uint64_t>(k) * 2u + r;
+    ++counts->specialized_executions;
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_gf8_payload_tiling(Counts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    if (result == LEO2_UNSUPPORTED)
+        return;
+    require_success(result, "payload-tiling AVX2 context create");
+    require(context != NULL &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+        "payload-tiling context did not select AVX2");
+
+    // T=16 exercises the side-sized Algorithm 5 workspace.  T=128 exercises
+    // the legacy-high translated Algorithm 4/materialized workspace.  Both
+    // calls include a non-vector tail after an exact promoted boundary.
+    run_gf8_payload_tiling_case(
+        context, 17, 16, 8, 768U * 1024U, counts);
+    run_gf8_payload_tiling_case(
+        context, 128, 128, 64, 128U * 1024U, counts);
+    leo2_context_destroy(context);
+}
+
 void verify_expected_backend(const leo2_context* context)
 {
     const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
@@ -845,6 +961,7 @@ int main()
             run_scenario(context, scenarios[i], gf8, gf16,
                 static_cast<unsigned>(i), &counts);
         test_concurrent_reuse(context, &counts);
+        test_gf8_payload_tiling(&counts);
         leo2_context_destroy(context);
 
         std::cout << "high decoder acceptance passed: profiles=" << counts.profiles

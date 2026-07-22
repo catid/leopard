@@ -58,6 +58,15 @@ typedef enum leo2_test_decode_mode {
     LEO2_TEST_DECODE_FORCE_NATIVE_HIGH = 2
 } leo2_test_decode_mode;
 
+/* Exact balanced byte-pass geometry shared by encode and decode scratch.
+   Zero aligned bytes is the empty schedule; every nonzero input and requested
+   pass size must be a complete 64-byte kernel tile. */
+LEO2_EXPORT leo2_result leo2_test_balanced_execution_tiles(
+    uint64_t aligned_bytes,
+    uint64_t requested_tile_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out);
+
 /* Integer inputs keep deliberately invalid diagnostic probes defined under
    C++ enum sanitizers; valid leo2_test_* enum constants convert implicitly. */
 LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
