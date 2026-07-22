@@ -1,0 +1,67 @@
+{
+  "schema": "leopard2-avx2-direct-common-initializer/v1",
+  "created_utc": "2026-07-22",
+  "disposition": "rejected",
+  "scope": "pure AVX2 GF8 K=65 source-major direct repair",
+  "bead": "leopard-79h.38.5.10.37",
+  "hypothesis": "Transpose every immutable direct-repair term, find one source row with a nonzero coefficient for every missing output, initialize all outputs in grouped non-RMW AVX2 passes, and omit that row from the later multiply-add accumulation.",
+  "measured_mechanism": "The mature executor already overwrote each output from its first term.  The candidate therefore removes separate per-output source passes and up to L sparse accumulation entries; it does not eliminate an existing destination read-modify-write initializer.",
+  "source": {
+    "commit": "ef0a69c42619805a33b2c1458da289f1e811602a",
+    "tree": "8465f5c1199c79ef58d7213b65e157f797c37f28",
+    "status_short": [],
+    "experiment_commit": "be82befd72734c2e090301b6d66738c8d5a0502e",
+    "runner_commit": "ef0a69c42619805a33b2c1458da289f1e811602a"
+  },
+  "correctness": {
+    "control_focused_ctest": "9/9 passed; log SHA-256 19d5987934d71781d5a218f2840b1ffe2fb4ddf0049a014b40f2d7eaf0fbc27e",
+    "candidate_focused_ctest": "9/9 passed; log SHA-256 c4dea9965503ed35c1b7aa1d0c145c1eeef54b90abac9d59893a4f5dd7e0d16a",
+    "forced_fallback_focused_ctest": "9/9 passed; log SHA-256 4c36d6ca6f1e5427c10ac3475c342a8f80e8855c19c276e2505aa946f6e1a9d9",
+    "runner_self_test_normal": "23/23 passed",
+    "runner_self_test_python_optimized": "23/23 passed",
+    "matrix_cell_count": 36,
+    "direct_oracle_and_digest_identity": true
+  },
+  "assembly": {
+    "group2_instruction_lines": 119,
+    "group2_sha256": "ada45e59f1c6e7f4c4fa002655b086ec5a5af6382358572eba82250c8f750ce2",
+    "group4_instruction_lines": 140,
+    "group4_sha256": "dcc827f2da6f9fde2742af78db4a0bf5d63f1524e9c86a7587cf25af31a96e6e",
+    "ymm_rsp_spill_traffic": false,
+    "note": "An initial empty awk extraction was rejected immediately.  The inspection was rerun with full demangled namespace matching and nonempty-file assertions."
+  },
+  "invalid_directional_screen": {
+    "path": "/tmp/leopard-direct-common-evidence-ef0a69c/abba",
+    "invalid_record_sha256": "360b5235ceb38319d532ec35959de16a6cd43108817cad2122df1e672ac5e349",
+    "status": "invalid_no_performance_conclusion",
+    "reason": "The fail-closed cleanup observed externally broadened affinities that again included the reserved CPU pair; no manifest was produced.",
+    "observed_ratio_range_for_triage_only": [0.9871, 1.0257]
+  },
+  "authoritative_confirmation": {
+    "path": "/tmp/leopard-direct-common-evidence-ef0a69c/confirm4",
+    "manifest_sha256": "46b9b5bbcdc491a9ad75e98247d48b0c04a3e271cbad9ec69902b1bb1bf855e9",
+    "request_sha256": "ed9949f144bafddedfd6a74707155b80bceae25e72426ba5d6b588641e4375c7",
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds": 3,
+    "verified_uncontaminated_cells": 4,
+    "orientation": "control_execution_time_over_candidate_execution_time",
+    "baseline_executable_sha256": "96b4f938fdc63ec8129c2f254c430a207f58452582fda3eaee101affaee51ad1",
+    "candidate_executable_sha256": "1e9fdff8dc03822060889d9253180a94ff5bf56af4cda07d6e65a6efea0c663f",
+    "baseline_archive_sha256": "d2d38cea20eed9bb47177465363fbdf40567edbafd58588665f5e289d0d353ce",
+    "candidate_archive_sha256": "af9d0c753ada5531bb71a1debee9a0a8ba853d40ce4f528ab3ab9ca717b45725",
+    "cells": [
+      ["k65-r65-b65536-l3", 1.003516693, 0.997072392, 1.010002644],
+      ["k65-r65-b4096-l6", 1.000775885, 0.963219321, 1.039796804],
+      ["k65-r65-b65536-l6", 1.010360937, 1.004618737, 1.016135958],
+      ["k65-r65-b65536-l7", 1.008051080, 0.999450202, 1.016725975]
+    ],
+    "cell_columns": ["id", "geometric_mean_ratio", "ci95_low", "ci95_high"],
+    "all_upper_confidence_bounds_below_promotion_threshold": true
+  },
+  "promotion_rule": {
+    "minimum_credible_target_gain": 1.05,
+    "maximum_unexplained_neighbor_regression": 0.02
+  },
+  "conclusion": "Rejected.  Even the best apparent cells remain below a two-percent upper confidence bound in the authoritative confirmation, so the grouped common initializer cannot meet the five-percent production threshold.  Broadening to losses 2/4/8, one MiB, reuse, and selector neighbors is unnecessary after this kill gate.  No candidate code is retained in production."
+}
