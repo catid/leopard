@@ -90,6 +90,25 @@ class IsolationTests(unittest.TestCase):
             for cell in full["cells"]
         }, expected)
 
+        dense = RUNNER.make_dense_initializer_matrix()
+        self.assertEqual(dense["schema"], RUNNER.DENSE_MATRIX_SCHEMA)
+        self.assertEqual(dense["cell_count"], 105)
+        self.assertEqual(
+            dense["matrix_sha256"],
+            RUNNER.make_dense_initializer_matrix()["matrix_sha256"])
+        self.assertEqual(
+            [cell["index"] for cell in dense["cells"]],
+            list(range(dense["cell_count"])))
+        self.assertEqual(
+            len({cell["id"] for cell in dense["cells"]}),
+            dense["cell_count"])
+        self.assertEqual(
+            {cell["bytes"] for cell in dense["cells"]},
+            {64, 65, 2048, 2049, 65536})
+        self.assertTrue(all(
+            cell["loss"] <= min(cell["K"], cell["R"])
+            for cell in dense["cells"]))
+
     def test_small_direct_modes_are_explicit_and_directional(self) -> None:
         self.assertEqual(
             RUNNER.comparison_modes("transform", "output"),
@@ -97,6 +116,9 @@ class IsolationTests(unittest.TestCase):
         self.assertEqual(
             RUNNER.comparison_modes("transform", "source"),
             {"baseline": "transform", "candidate": "source"})
+        self.assertEqual(
+            RUNNER.comparison_modes("dense_control", "dense_candidate"),
+            {"baseline": "dense_control", "candidate": "dense_candidate"})
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "distinct and known"):
             RUNNER.comparison_modes("source", "source")
@@ -104,8 +126,10 @@ class IsolationTests(unittest.TestCase):
                 RUNNER.EvidenceError, "distinct and known"):
             RUNNER.comparison_modes("unknown", "source")
 
-        loss4 = {"loss": 4}
-        loss5 = {"loss": 5}
+        loss4 = {"K": 8, "R": 8, "bytes": 64, "loss": 4}
+        loss5 = {"K": 8, "R": 8, "bytes": 2048, "loss": 5}
+        k65_short = {"K": 65, "R": 65, "bytes": 65, "loss": 3}
+        k65_large = {"K": 65, "R": 65, "bytes": 2048, "loss": 3}
         self.assertEqual(
             RUNNER.expected_direct_executor("transform", loss4),
             "output_major")
@@ -114,6 +138,21 @@ class IsolationTests(unittest.TestCase):
             "output_major")
         self.assertEqual(
             RUNNER.expected_direct_executor("source", loss5),
+            "source_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("dense_control", loss5),
+            "source_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("dense_candidate", loss5),
+            "source_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("dense_candidate", loss4),
+            "output_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("dense_candidate", k65_short),
+            "output_major")
+        self.assertEqual(
+            RUNNER.expected_direct_executor("dense_candidate", k65_large),
             "source_major")
         self.assertEqual(
             RUNNER.expected_direct_executor("transform", loss5), "none")

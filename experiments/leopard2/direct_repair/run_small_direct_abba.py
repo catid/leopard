@@ -3,8 +3,9 @@
 
 This runner compares two already-built Leopard2 benchmark executables whose
 only semantic difference is an explicitly selected small-code direct-repair
-mode: transform, output-major, or source-major.  It is not for comparison to
-the historical Leopard executable (use ../main_compare/run_abba.py for that).
+mode: transform, output-major, source-major, or the source-major dense-
+initializer control/candidate switch.  It is not for comparison to the
+historical Leopard executable (use ../main_compare/run_abba.py for that).
 It owns the canonical GF8 and physical-pair leases for the complete campaign,
 moves all same-user threads off the held pair, pins every child to one logical
 CPU, requires its SMT sibling to remain idle, retains raw output, and verifies
@@ -42,6 +43,7 @@ from typing import Any, Sequence
 SCHEMA = "leopard2-small-direct-abba/v1"
 MATRIX_SCHEMA = "leopard2-small-direct-matrix/v1"
 LARGE_MATRIX_SCHEMA = "leopard2-small-direct-full-matrix/v1"
+DENSE_MATRIX_SCHEMA = "leopard2-direct-dense-initializer-matrix/v1"
 CELL_SCHEMA = "leopard2-small-direct-cell/v1"
 ENVELOPE_SCHEMA = "leopard2-small-direct-envelope/v1"
 TILE_SPEC_SCHEMA = "leopard2-direct-tile-lab-spec/v2"
@@ -116,6 +118,8 @@ MODE_COMPILE_DEFINITIONS = {
     "transform": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
     "output": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1",
     "source": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
+    "dense_control": "-DLEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER=0",
+    "dense_candidate": "-DLEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER=1",
 }
 PRODUCTION_TARGETS = {
     source: target for unused_member, source, target in ARCHIVE_MEMBER_SPECS
@@ -722,11 +726,21 @@ def ceil_power_of_two(value: int) -> int:
 
 def expected_direct_executor(mode: str, cell: dict[str, Any]) -> str:
     mode_compile_definition(mode)
+    if mode in ("dense_control", "dense_candidate"):
+        if (cell["K"] == 65 and cell["bytes"] >= 2048 and
+                2 <= cell["loss"] <= 8):
+            return "source_major"
+        if (5 <= cell["K"] <= 16 and 5 <= cell["R"] <= 8 and
+                5 <= cell["loss"] <= 8):
+            return "source_major"
+        return "output_major"
     if cell["loss"] <= 4:
         return "output_major"
     if mode == "transform":
         return "none"
-    return mode + "_major"
+    if mode == "output":
+        return "output_major"
+    return "source_major"
 
 
 def make_matrix() -> dict[str, Any]:
@@ -849,11 +863,67 @@ def make_large_matrix() -> dict[str, Any]:
     return result
 
 
+def make_dense_initializer_matrix() -> dict[str, Any]:
+    cells = []
+    shapes = [
+        (5, 5, 4), (5, 5, 5),
+        (8, 8, 4), (8, 8, 5), (8, 8, 8),
+        (16, 8, 4), (16, 8, 5), (16, 8, 8),
+    ]
+    shapes.extend((65, 65, loss) for loss in range(2, 9))
+    shapes.extend((65, recovery, loss)
+                  for recovery in (96, 128) for loss in (3, 5, 8))
+    for original_count, recovery_count, loss_count in shapes:
+        for byte_count in (64, 65, 2048, 2049, 65536):
+            identifier = "dense-k%d-r%d-b%d-l%d" % (
+                original_count, recovery_count, byte_count, loss_count)
+            iterations, warmup = iteration_policy(byte_count)
+            cells.append({
+                "index": len(cells),
+                "id": identifier,
+                "K": original_count,
+                "R": recovery_count,
+                "bytes": byte_count,
+                "loss": loss_count,
+                "batch": 1,
+                "reuse": 8,
+                "iterations": iterations,
+                "warmup": warmup,
+                "seed": stable_seed(identifier, DENSE_MATRIX_SCHEMA),
+                "estimated_peak_bytes": 6 *
+                    (original_count + recovery_count) * byte_count +
+                    (64 << 20),
+                "role": ("output_major_neighbor" if
+                         (loss_count <= 4 and original_count != 65) or
+                         (original_count == 65 and byte_count < 2048)
+                         else "dense_initializer_target"),
+                "exact_main_required": False,
+            })
+    result = {
+        "schema": DENSE_MATRIX_SCHEMA,
+        "cell_count": len(cells),
+        "cells": cells,
+        "same_source_promotion": {
+            "target": "whole decode_execution",
+            "candidate_ci95_low_at_least": 1.05,
+            "neighbor_ci95_high_at_least": 0.98,
+            "orientation": "baseline_time_over_candidate_time",
+        },
+        "coverage": (
+            "Dense source-major initialization targets for K=5/8/16 and "
+            "K=65, plus output-major byte/loss neighbors."),
+    }
+    result["matrix_sha256"] = sha256_bytes(canonical_bytes(result))
+    return result
+
+
 def matrix_for_preset(preset: str) -> dict[str, Any]:
     if preset == "core":
         return make_matrix()
     if preset == "large":
         return make_large_matrix()
+    if preset == "dense":
+        return make_dense_initializer_matrix()
     raise EvidenceError("unknown matrix preset")
 
 
@@ -3802,7 +3872,8 @@ def parser() -> argparse.ArgumentParser:
     commands = result.add_subparsers(dest="command", required=True)
     matrix = commands.add_parser("matrix", help="write a frozen matrix")
     matrix.add_argument("--output", type=Path, default=Path("-"))
-    matrix.add_argument("--preset", choices=("core", "large"), default="core")
+    matrix.add_argument(
+        "--preset", choices=("core", "large", "dense"), default="core")
     matrix.set_defaults(function=write_matrix)
     run = commands.add_parser(
         "run", help="run a fresh, complete same-source campaign")
@@ -3826,7 +3897,8 @@ def parser() -> argparse.ArgumentParser:
         "--candidate-mode", required=True,
         choices=tuple(MODE_COMPILE_DEFINITIONS))
     run.add_argument("--output", required=True, type=Path)
-    run.add_argument("--preset", choices=("core", "large"), default="core")
+    run.add_argument(
+        "--preset", choices=("core", "large", "dense"), default="core")
     run.add_argument("--cpu", required=True, type=int)
     run.add_argument("--reserved-sibling", required=True, type=int)
     run.add_argument("--reservation-file", required=True, type=Path)
