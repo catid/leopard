@@ -102,6 +102,17 @@ typedef void (*FF8MultiplyAddOutputs)(
     uint32_t output_count,
     uint64_t byte_count);
 
+// Write one GF8 source, independently scaled, to two through eight fresh
+// outputs.  Unlike FF8MultiplyAddOutputs this operation must not read the
+// destination ranges.  Every multiplier is active; callers must not pass
+// UINT16_MAX.  Outputs are pairwise disjoint and disjoint from source.
+typedef void (*FF8MultiplyOutputs)(
+    void* const* destinations,
+    const void* source,
+    const uint16_t* multiplier_logs,
+    uint32_t output_count,
+    uint64_t byte_count);
+
 // Accumulate two independently scaled GF8 sources into two destinations in a
 // single pass.  Destination ranges must be pairwise disjoint and disjoint
 // from both sources.  The two read-only source ranges may alias each other.
@@ -370,6 +381,8 @@ struct Ops
     // Optional remainder-specific source groups selected only by measured R=1
     // GF8 policies.  Keeping them separate preserves mature coarse codegen.
     XorMemorySources xor_memory_sources_fused_final;
+    // Optional dense direct-repair initializer supplied by AVX2.
+    FF8MultiplyOutputs ff8_multiply_outputs;
 };
 
 struct X86Features

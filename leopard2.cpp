@@ -76,6 +76,17 @@
 #error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
 #endif
 
+// Default-off AVX2 experiment: include each direct-repair coefficient in the
+// source-major schedule, initialize all outputs from one fully dense source
+// row without destination reads, then accumulate the remaining rows.
+#ifndef LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER
+#define LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER 0
+#endif
+#if LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER < 0 || \
+    LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER > 1
+#error "LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -4669,10 +4680,16 @@ ExecuteGF8SourceMajorDirectRepair(
         if (begin >= end || end > plan->direct_terms.size())
             return LEO2_INTERNAL_ERROR;
 
-        // The output-major plan places a unit coefficient first when one
-        // exists.  Preserve that efficient copy/multiply initializer and
-        // transpose only the remaining accumulation.
-        for (size_t term_index = begin + 1;
+        // The control keeps the output-major first term as a separate
+        // initializer.  The dense-initializer experiment transposes it too,
+        // so any common dense source row can initialize all outputs at once.
+        const size_t transpose_begin = begin +
+#if LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER
+            0U;
+#else
+            1U;
+#endif
+        for (size_t term_index = transpose_begin;
              term_index < end; ++term_index)
         {
             const leo2_direct_repair_term& term =
@@ -4713,30 +4730,96 @@ ExecuteGF8SourceMajorDirectRepair(
         outputs[output_index] = restored_original[missing_original];
         if (!outputs[output_index])
             return LEO2_INTERNAL_ERROR;
-        const size_t begin = plan->direct_term_offsets[output_index];
-        const leo2_direct_repair_term& initial = plan->direct_terms[begin];
-        const bool parity =
-            (initial.tagged_source & kDirectRecoveryTag) != 0;
+    }
+
+    size_t dense_initializer_row = source_count;
+#if LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER
+    if (ops.ff8_multiply_outputs)
+    {
+        for (size_t source_row = 0;
+             source_row < source_count; ++source_row)
+        {
+            bool dense = true;
+            for (uint32_t output_index = 0;
+                 output_index < output_count; ++output_index)
+            {
+                if (source_logs[source_row * output_count + output_index] ==
+                    UINT16_MAX)
+                {
+                    dense = false;
+                    break;
+                }
+            }
+            if (dense)
+            {
+                dense_initializer_row = source_row;
+                break;
+            }
+        }
+    }
+#endif
+
+    if (dense_initializer_row < source_count)
+    {
+        const uint32_t tagged_source = sources[dense_initializer_row];
+        const bool parity = (tagged_source & kDirectRecoveryTag) != 0;
         const uint32_t source_index =
-            initial.tagged_source & ~kDirectRecoveryTag;
-        if ((parity && source_index >= codec->recovery_count) ||
-            (!parity && source_index >= codec->original_count))
-            return LEO2_INTERNAL_ERROR;
+            tagged_source & ~kDirectRecoveryTag;
         const void* source = parity
             ? recovery[source_index] : original[source_index];
         if (!source)
             return LEO2_INTERNAL_ERROR;
-        if (initial.multiplier_log == 0)
-            memcpy(outputs[output_index], source, shard_bytes);
-        else
-            leopard::ff8::MultiplyBytes(ops, outputs[output_index], source,
-                static_cast<leopard::ff8::ffe_t>(initial.multiplier_log),
-                shard_bytes);
+        ops.ff8_multiply_outputs(outputs, source,
+            source_logs + dense_initializer_row * output_count,
+            output_count, shard_bytes);
+    }
+    else
+    {
+        // Safe fallback for a sparse repair matrix or a backend without the
+        // overwrite primitive: retain the established per-output first term
+        // and suppress that same coefficient from the transposed schedule.
+        for (uint32_t output_index = 0;
+             output_index < output_count; ++output_index)
+        {
+            const size_t begin = plan->direct_term_offsets[output_index];
+            const leo2_direct_repair_term& initial =
+                plan->direct_terms[begin];
+            const bool parity =
+                (initial.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                initial.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
+                return LEO2_INTERNAL_ERROR;
+            const void* source = parity
+                ? recovery[source_index] : original[source_index];
+            if (!source)
+                return LEO2_INTERNAL_ERROR;
+            if (initial.multiplier_log == 0)
+                memcpy(outputs[output_index], source, shard_bytes);
+            else
+                leopard::ff8::MultiplyBytes(ops, outputs[output_index], source,
+                    static_cast<leopard::ff8::ffe_t>(
+                        initial.multiplier_log),
+                    shard_bytes);
+#if LEO2_EXPERIMENT_DIRECT_DENSE_INITIALIZER
+            const uint16_t source_row = parity
+                ? recovery_source_rows[source_index]
+                : original_source_rows[source_index];
+            if (source_row == UINT16_MAX || source_row >= source_count)
+                return LEO2_INTERNAL_ERROR;
+            source_logs[
+                static_cast<size_t>(source_row) * output_count +
+                    output_index] = UINT16_MAX;
+#endif
+        }
     }
 
     for (size_t source_row = 0;
          source_row < source_count; ++source_row)
     {
+        if (source_row == dense_initializer_row)
+            continue;
         const uint32_t tagged_source = sources[source_row];
         const bool parity = (tagged_source & kDirectRecoveryTag) != 0;
         const uint32_t source_index = tagged_source & ~kDirectRecoveryTag;

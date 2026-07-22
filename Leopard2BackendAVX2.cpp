@@ -4025,6 +4025,171 @@ static void AVX2FF8MultiplyAddOutputs(
     }
 }
 
+static LEO2_AVX2_DIRECT_NOINLINE void
+AVX2FF8MultiplyOutputPair(
+    void* destination0_pointer,
+    void* destination1_pointer,
+    const void* source_pointer,
+    uint16_t log0,
+    uint16_t log1,
+    uint64_t byte_count)
+{
+    uint8_t* const destination0 =
+        static_cast<uint8_t*>(destination0_pointer);
+    uint8_t* const destination1 =
+        static_cast<uint8_t*>(destination1_pointer);
+    const uint8_t* const source =
+        static_cast<const uint8_t*>(source_pointer);
+    const FF8NibbleTable& table0 = FF8Tables[log0];
+    const FF8NibbleTable& table1 = FF8Tables[log1];
+    const __m256i low0 = BroadcastTable(table0.low);
+    const __m256i high0 = BroadcastTable(table0.high);
+    const __m256i low1 = BroadcastTable(table1.low);
+    const __m256i high1 = BroadcastTable(table1.high);
+    const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        const __m256i data = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + offset));
+        const __m256i low_indices = _mm256_and_si256(data, nibble_mask);
+        const __m256i high_indices = _mm256_and_si256(
+            _mm256_srli_epi64(data, 4), nibble_mask);
+        const __m256i product0 = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low0, low_indices),
+            _mm256_shuffle_epi8(high0, high_indices));
+        const __m256i product1 = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low1, low_indices),
+            _mm256_shuffle_epi8(high1, high_indices));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination0 + offset), product0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination1 + offset), product1);
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        const uint8_t value = source[offset];
+        destination0[offset] = FF8Product(log0, value);
+        destination1[offset] = FF8Product(log1, value);
+        ++offset;
+    }
+}
+
+static LEO2_AVX2_DIRECT_NOINLINE void
+AVX2FF8MultiplyOutputGroup4(
+    void* const* destination_pointers,
+    const void* source_pointer,
+    const uint16_t* multiplier_logs,
+    uint64_t byte_count)
+{
+    uint8_t* const destination0 =
+        static_cast<uint8_t*>(destination_pointers[0]);
+    uint8_t* const destination1 =
+        static_cast<uint8_t*>(destination_pointers[1]);
+    uint8_t* const destination2 =
+        static_cast<uint8_t*>(destination_pointers[2]);
+    uint8_t* const destination3 =
+        static_cast<uint8_t*>(destination_pointers[3]);
+    const uint8_t* const source =
+        static_cast<const uint8_t*>(source_pointer);
+    const uint16_t log0 = multiplier_logs[0];
+    const uint16_t log1 = multiplier_logs[1];
+    const uint16_t log2 = multiplier_logs[2];
+    const uint16_t log3 = multiplier_logs[3];
+    const FF8NibbleTable& table0 = FF8Tables[log0];
+    const FF8NibbleTable& table1 = FF8Tables[log1];
+    const FF8NibbleTable& table2 = FF8Tables[log2];
+    const FF8NibbleTable& table3 = FF8Tables[log3];
+    const __m256i low0 = BroadcastTable(table0.low);
+    const __m256i high0 = BroadcastTable(table0.high);
+    const __m256i low1 = BroadcastTable(table1.low);
+    const __m256i high1 = BroadcastTable(table1.high);
+    const __m256i low2 = BroadcastTable(table2.low);
+    const __m256i high2 = BroadcastTable(table2.high);
+    const __m256i low3 = BroadcastTable(table3.low);
+    const __m256i high3 = BroadcastTable(table3.high);
+    const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        const __m256i data = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + offset));
+        const __m256i low_indices = _mm256_and_si256(data, nibble_mask);
+        const __m256i high_indices = _mm256_and_si256(
+            _mm256_srli_epi64(data, 4), nibble_mask);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination0 + offset), _mm256_xor_si256(
+                _mm256_shuffle_epi8(low0, low_indices),
+                _mm256_shuffle_epi8(high0, high_indices)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination1 + offset), _mm256_xor_si256(
+                _mm256_shuffle_epi8(low1, low_indices),
+                _mm256_shuffle_epi8(high1, high_indices)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination2 + offset), _mm256_xor_si256(
+                _mm256_shuffle_epi8(low2, low_indices),
+                _mm256_shuffle_epi8(high2, high_indices)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination3 + offset), _mm256_xor_si256(
+                _mm256_shuffle_epi8(low3, low_indices),
+                _mm256_shuffle_epi8(high3, high_indices)));
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        const uint8_t value = source[offset];
+        destination0[offset] = FF8Product(log0, value);
+        destination1[offset] = FF8Product(log1, value);
+        destination2[offset] = FF8Product(log2, value);
+        destination3[offset] = FF8Product(log3, value);
+        ++offset;
+    }
+}
+
+static void AVX2FF8MultiplyOutputs(
+    void* const* destinations,
+    const void* source,
+    const uint16_t* multiplier_logs,
+    uint32_t output_count,
+    uint64_t byte_count)
+{
+    if (output_count < 2 || output_count > 8)
+        return;
+    for (uint32_t output = 0; output < output_count; ++output)
+        if (multiplier_logs[output] == UINT16_MAX)
+            return;
+
+    if (output_count >= 4)
+    {
+        AVX2FF8MultiplyOutputGroup4(
+            destinations, source, multiplier_logs, byte_count);
+        destinations += 4;
+        multiplier_logs += 4;
+        output_count -= 4;
+    }
+    if (output_count == 4)
+    {
+        AVX2FF8MultiplyOutputGroup4(
+            destinations, source, multiplier_logs, byte_count);
+        return;
+    }
+    if (output_count >= 2)
+    {
+        AVX2FF8MultiplyOutputPair(
+            destinations[0], destinations[1], source,
+            multiplier_logs[0], multiplier_logs[1], byte_count);
+        destinations += 2;
+        multiplier_logs += 2;
+        output_count -= 2;
+    }
+    if (output_count == 1)
+    {
+        AVX2FF8Multiply(destinations[0], source,
+            multiplier_logs[0], byte_count);
+    }
+}
+
 static void AVX2FF8MultiplyAdd2Sources2Outputs(
     void* const* destination_pointers,
     const void* source0_pointer,
@@ -4182,6 +4347,11 @@ static const Ops AVX2Ops = {
 #endif
 #if !defined(LEO2_AVX512_VARIANT) && defined(LEO_HAS_FF8)
     , AVX2XorMemorySourcesFusedFinal
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
+    , AVX2FF8MultiplyOutputs
 #else
     , NULL
 #endif

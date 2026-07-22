@@ -230,6 +230,58 @@ static bool TestFF8MultiplyAddOutputs(
     return true;
 }
 
+static bool TestFF8MultiplyOutputs(
+    const Ops& ops,
+    FF8MultiplyLog reference)
+{
+    if (!ops.ff8_multiply_outputs)
+        return true;
+    static const uint64_t byte_counts[] = {
+        0, 1, 7, 31, 32, 33, 63, 64, 65, 257
+    };
+    static const uint16_t logs[8] = {
+        0, 1, 17, 29, 63, 127, 254, 193
+    };
+    uint8_t source[260];
+    uint8_t original_source[260];
+    uint8_t outputs[8][260];
+    uint8_t expected[8][260];
+    void* output_pointers[8];
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        const uint64_t bytes = byte_counts[count_i];
+        for (size_t i = 0; i < sizeof(source); ++i)
+            source[i] = original_source[i] = static_cast<uint8_t>(
+                i * 73U + count_i * 19U + 11U);
+        for (unsigned output_count = 2;
+             output_count <= 8; ++output_count)
+        {
+            for (unsigned output = 0; output < 8; ++output)
+            {
+                output_pointers[output] = outputs[output] + 1;
+                for (size_t i = 0; i < sizeof(outputs[output]); ++i)
+                {
+                    outputs[output][i] = expected[output][i] =
+                        static_cast<uint8_t>(
+                            i * (29U + output * 6U) + count_i +
+                            output * 13U + output_count);
+                }
+                if (output < output_count)
+                    for (uint64_t i = 0; i < bytes; ++i)
+                        expected[output][i + 1] = reference(
+                            source[i + 1], static_cast<uint8_t>(logs[output]));
+            }
+            ops.ff8_multiply_outputs(
+                output_pointers, source + 1, logs, output_count, bytes);
+            if (std::memcmp(outputs, expected, sizeof(outputs)) != 0 ||
+                std::memcmp(source, original_source, sizeof(source)) != 0)
+                return false;
+        }
+    }
+    return true;
+}
+
 static bool TestFF8MultiplyAdd2Sources2Outputs(
     const Ops& ops,
     FF8MultiplyLog reference)
@@ -2012,6 +2064,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         (ops.ff8_multiply_add_outputs != NULL))
         return false;
     if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.ff8_multiply_outputs != NULL))
+        return false;
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
         (ops.ff8_multiply_add_2_sources_2_outputs != NULL))
         return false;
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||
@@ -2025,6 +2080,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !ops.ff8_ifft_butterfly4_xor_range ||
         !TestFF8(ops, args.ff8_multiply_log) ||
         !TestFF8MultiplyAddOutputs(ops, args.ff8_multiply_log) ||
+        !TestFF8MultiplyOutputs(ops, args.ff8_multiply_log) ||
         !TestFF8MultiplyAdd2Sources2Outputs(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies(ops, args.ff8_multiply_log) ||
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
@@ -2056,7 +2112,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_high_encode_one_block ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
-        ops.ff8_multiply_add_2_sources_2_outputs)
+        ops.ff8_multiply_add_2_sources_2_outputs ||
+        ops.ff8_multiply_outputs)
         return false;
 #endif
 #ifdef LEO_HAS_FF16
