@@ -351,18 +351,28 @@ void test_small_high_encode(
         { 2, 2, 2048 },
         { 3, 2, 2049 },
         { 254, 2, 2048 },
-        // T=4 uses the evidence-derived K/byte staircase.  Register-fused
-        // one-, two-, and three-block specializations cover K=3..7 and
-        // K=9..11; K=8 and K>=12 retain the mature coarse callback.
+        // T=4 uses the evidence-derived K/byte staircase.  The new lower cells
+        // fuse only the final forward butterfly; the existing thresholds keep
+        // their register-fused or mature coarse implementations.
+        { 3, 4, 2048 },
+        { 3, 3, 2049 },
+        { 3, 4, 4095 },
         { 3, 4, 4096 },
         { 3, 3, 4097 },
+        { 4, 4, 2048 },
+        { 4, 3, 4097 },
+        { 4, 4, 8191 },
         { 4, 4, 8192 },
         { 4, 3, 8193 },
         { 5, 4, 2048 },
         { 6, 3, 2049 },
+        { 7, 4, 2048 },
+        { 7, 4, 4095 },
         { 7, 4, 4096 },
         { 16, 4, 2048 },
         { 16, 3, 2049 },
+        { 8, 4, 2048 },
+        { 8, 4, 4095 },
         { 8, 4, 4096 },
         { 8, 3, 4097 },
         { 9, 4, 2048 },
@@ -396,10 +406,17 @@ void test_small_high_encode(
         const uint64_t expected_passes = 1;
         const uint32_t side = test_case.r == 2 ? 2U : 4U;
         const bool fused_t4 = side == 4 &&
+            (((test_case.k == 5 || test_case.k == 6 ||
+                test_case.k >= 9) && test_case.bytes >= 2U * 1024U) ||
+             ((test_case.k == 3 || test_case.k == 7) &&
+                test_case.bytes >= 4U * 1024U) ||
+             (test_case.k == 4 && test_case.bytes >= 8U * 1024U)) &&
             ((test_case.k >= 3 && test_case.k <= 7) ||
              (test_case.k >= 9 && test_case.k <= 11));
         const uint64_t expected_input_copies =
-            (fused_t4 ? 0U : test_case.k % side) * expected_passes +
+            (fused_t4 || test_case.k <= side ||
+                    (side == 4 && test_case.k % side == 3)
+                ? 0U : test_case.k % side) * expected_passes +
             ((test_case.bytes & 63U) != 0 ? test_case.k : 0U);
         require(route.small_transform_calls == expected_passes,
             "dense T=2/T=4 AVX2 encode missed the coarse kernel");
@@ -469,12 +486,12 @@ void test_small_high_encode(
     const TestCase controls[] = {
         { 1, 2, 65536 },
         { 2, 2, 2047 },
-        { 3, 4, 4095 },
-        { 4, 4, 8191 },
+        { 3, 4, 2047 },
+        { 4, 4, 2047 },
         { 5, 4, 2047 },
         { 6, 3, 2047 },
-        { 7, 4, 4095 },
-        { 8, 4, 4095 },
+        { 7, 4, 2047 },
+        { 8, 4, 2047 },
         { 9, 4, 2047 },
         { 11, 4, 2047 },
         { 12, 4, 2047 },

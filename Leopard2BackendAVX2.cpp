@@ -1244,7 +1244,7 @@ static void AVX2FF8IFFTButterfly4Kernel(
 // transformed values in registers and accumulate them directly, matching the
 // legacy encoder's single memory pass instead of storing work and rereading it
 // through AVX2XorMemory4.
-template<bool AllNonzero>
+template<bool AllNonzero, bool Input3Zero = false>
 static void AVX2FF8IFFTButterfly4XorKernel(
     const void* value0_pointer, const void* value1_pointer,
     const void* value2_pointer, const void* value3_pointer,
@@ -1293,8 +1293,10 @@ static void AVX2FF8IFFTButterfly4XorKernel(
             reinterpret_cast<const __m256i*>(value1));
         __m256i x2 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(value2));
-        __m256i x3 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(value3));
+        __m256i x3 = Input3Zero
+            ? _mm256_setzero_si256()
+            : _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(value3));
         x1 = _mm256_xor_si256(x1, x0);
         if (AllNonzero || log01 != kZeroSkew)
             x0 = _mm256_xor_si256(x0,
@@ -1327,7 +1329,8 @@ static void AVX2FF8IFFTButterfly4XorKernel(
         value0 += 32;
         value1 += 32;
         value2 += 32;
-        value3 += 32;
+        if (!Input3Zero)
+            value3 += 32;
         output0 += 32;
         output1 += 32;
         output2 += 32;
@@ -1339,7 +1342,7 @@ static void AVX2FF8IFFTButterfly4XorKernel(
         uint8_t x0 = *value0++;
         uint8_t x1 = *value1++;
         uint8_t x2 = *value2++;
-        uint8_t x3 = *value3++;
+        uint8_t x3 = Input3Zero ? 0 : *value3++;
         x1 ^= x0;
         if (AllNonzero || log01 != kZeroSkew)
             x0 ^= FF8Product(log01, x1);
@@ -2135,9 +2138,24 @@ static void AVX2FF8HighEncodeSmall(
 {
     static const uint16_t kZeroSkew = 255;
 
-    const bool fused_t4_count =
+    // Below the established whole-transform thresholds, retaining the mature
+    // inverse accumulation but fusing only the final forward T=4 butterfly
+    // removes two extra full-shard memory passes without the register pressure
+    // of the combined multi-block templates.
+    const bool existing_fused_t4_threshold =
+        // The backend qualification harness calls the callback directly with
+        // sub-2-KiB buffers.  Production dispatch begins at 2 KiB, so retain
+        // the register-fused implementation below that boundary to keep every
+        // generated specialization covered by the startup known-answer test.
+        byte_count < 2U * 1024U ||
+        ((original_count == 5 || original_count == 6 ||
+            original_count >= 9) && byte_count >= 2U * 1024U) ||
+        ((original_count == 3 || original_count == 7) &&
+            byte_count >= 4U * 1024U) ||
+        (original_count == 4 && byte_count >= 8U * 1024U);
+    const bool fused_t4_count = existing_fused_t4_threshold && (
         (original_count >= 3 && original_count <= 7) ||
-        (original_count >= 9 && original_count <= 11);
+        (original_count >= 9 && original_count <= 11));
     if (side == 4 && fused_t4_count && (byte_count & 31U) == 0)
     {
         switch (original_count)
@@ -2193,9 +2211,10 @@ static void AVX2FF8HighEncodeSmall(
         const uint32_t remaining = std::min(
             side, original_count - base);
         const void* source[4] = { NULL, NULL, NULL, NULL };
-        if (remaining == side)
+        const bool direct_last_zero = side == 4 && remaining == 3;
+        if (remaining == side || direct_last_zero)
         {
-            for (uint32_t lane = 0; lane < side; ++lane)
+            for (uint32_t lane = 0; lane < remaining; ++lane)
                 source[lane] = data[base + lane];
         }
         else
@@ -2236,8 +2255,22 @@ static void AVX2FF8HighEncodeSmall(
             const uint16_t log01 = inverse_skew[base + 1U];
             const uint16_t log23 = inverse_skew[base + 3U];
             const uint16_t log02 = inverse_skew[base + 2U];
-            if (log01 != kZeroSkew && log23 != kZeroSkew &&
-                log02 != kZeroSkew)
+            const bool all_nonzero = log01 != kZeroSkew &&
+                log23 != kZeroSkew && log02 != kZeroSkew;
+            if (direct_last_zero)
+            {
+                if (all_nonzero)
+                    AVX2FF8IFFTButterfly4XorKernel<true, true>(
+                        source[0], source[1], source[2], NULL,
+                        work[0], work[1], work[2], work[3],
+                        log01, log23, log02, byte_count);
+                else
+                    AVX2FF8IFFTButterfly4XorKernel<false, true>(
+                        source[0], source[1], source[2], NULL,
+                        work[0], work[1], work[2], work[3],
+                        log01, log23, log02, byte_count);
+            }
+            else if (all_nonzero)
             {
                 AVX2FF8IFFTButterfly4XorKernel<true>(
                     source[0], source[1], source[2], source[3],
@@ -2245,12 +2278,10 @@ static void AVX2FF8HighEncodeSmall(
                     log01, log23, log02, byte_count);
             }
             else
-            {
                 AVX2FF8IFFTButterfly4XorKernel<false>(
                     source[0], source[1], source[2], source[3],
                     work[0], work[1], work[2], work[3],
                     log01, log23, log02, byte_count);
-            }
         }
     }
 
@@ -2264,10 +2295,24 @@ static void AVX2FF8HighEncodeSmall(
     }
     else
     {
-        AVX2FF8FFTButterfly4(
-            work[0], work[1], work[2], work[3],
-            forward_skew[1], forward_skew[3], forward_skew[2],
-            byte_count);
+        const bool final_only_fused_t4 =
+            ((original_count == 3 || original_count == 7 ||
+                original_count == 8) && byte_count < 4U * 1024U) ||
+            (original_count == 4 && byte_count < 8U * 1024U);
+        if (final_only_fused_t4)
+        {
+            AVX2FF8FFTButterfly4Fused(
+                work[0], work[1], work[2], work[3],
+                forward_skew[1], forward_skew[3], forward_skew[2],
+                byte_count);
+        }
+        else
+        {
+            AVX2FF8FFTButterfly4(
+                work[0], work[1], work[2], work[3],
+                forward_skew[1], forward_skew[3], forward_skew[2],
+                byte_count);
+        }
     }
 }
 #endif
