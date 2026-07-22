@@ -1997,6 +1997,152 @@ static void AVX2FF8IFFTButterfly4XorRange(
 }
 
 #if !defined(LEO2_AVX512_VARIANT)
+struct AVX2FF8LinearTable
+{
+    __m256i low;
+    __m256i high;
+};
+
+static LEO2_AVX2_FORCE_INLINE AVX2FF8LinearTable
+AVX2FF8PrepareLinearTable(uint16_t first_log, uint16_t second_log)
+{
+    static const uint16_t kZeroSkew = 255;
+    AVX2FF8LinearTable result;
+    result.low = result.high = _mm256_setzero_si256();
+    if (first_log != kZeroSkew)
+    {
+        result.low = BroadcastTable(FF8Tables[first_log].low);
+        result.high = BroadcastTable(FF8Tables[first_log].high);
+    }
+    if (second_log != kZeroSkew)
+    {
+        result.low = _mm256_xor_si256(
+            result.low, BroadcastTable(FF8Tables[second_log].low));
+        result.high = _mm256_xor_si256(
+            result.high, BroadcastTable(FF8Tables[second_log].high));
+    }
+    return result;
+}
+
+template<uint32_t OriginalCount>
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8HighEncodeT2Vector(
+    const uint8_t* const* input,
+    uint8_t* output0,
+    uint8_t* output1,
+    uint64_t offset,
+    const AVX2FF8LinearTable& first,
+    const AVX2FF8LinearTable& second)
+{
+    static_assert(OriginalCount == 2 || OriginalCount == 3,
+        "T=2 direct encoder instantiated outside its generated K set");
+    // Let a,b be the first message block, c the optional shortened-tail
+    // source, u/v the two block-IFFT factors, and f the final FFT factor.
+    // Expanding the two radix-two transforms over characteristic two gives:
+    //
+    //   q = (u + f) (a + b) + (v + f) c
+    //   parity[0] = a + c + q, parity[1] = b + q.
+    //
+    // Addition of fixed field maps is XOR of their nibble tables, so this
+    // executes the exact legacy transform in one pass with one product for
+    // K=2 and two independent products for K=3.  The mature path otherwise
+    // writes and rereads both accumulator shards for the final FFT, and K=3
+    // also materializes a zero-padded second source block.
+    const __m256i x0 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(input[0] + offset));
+    const __m256i x1 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(input[1] + offset));
+    const __m256i difference = _mm256_xor_si256(x0, x1);
+    __m256i common = AVX2FF8ProductVector(
+        difference, first.low, first.high);
+    __m256i parity0 = x0;
+    if (OriginalCount == 3)
+    {
+        const __m256i x2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[2] + offset));
+        common = _mm256_xor_si256(common,
+            AVX2FF8ProductVector(x2, second.low, second.high));
+        parity0 = _mm256_xor_si256(parity0, x2);
+    }
+    parity0 = _mm256_xor_si256(parity0, common);
+    const __m256i parity1 = _mm256_xor_si256(x1, common);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output0 + offset), parity0);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output1 + offset), parity1);
+}
+
+template<uint32_t OriginalCount>
+#if defined(_MSC_VER)
+# define LEO2_AVX2_T2_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+# define LEO2_AVX2_T2_NOINLINE __attribute__((noinline))
+#else
+# define LEO2_AVX2_T2_NOINLINE
+#endif
+static LEO2_AVX2_T2_NOINLINE void AVX2FF8HighEncodeT2Direct(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    static_assert(OriginalCount == 2 || OriginalCount == 3,
+        "T=2 direct encoder instantiated outside its generated K set");
+    const AVX2FF8LinearTable first = AVX2FF8PrepareLinearTable(
+        inverse_skew[1], forward_skew[1]);
+    AVX2FF8LinearTable second;
+    second.low = second.high = _mm256_setzero_si256();
+    if (OriginalCount == 3)
+    {
+        second = AVX2FF8PrepareLinearTable(
+            inverse_skew[3], forward_skew[1]);
+    }
+
+    const uint8_t* input[OriginalCount];
+    for (uint32_t i = 0; i < OriginalCount; ++i)
+        input[i] = static_cast<const uint8_t*>(data[i]);
+    uint8_t* output0 = static_cast<uint8_t*>(work[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(work[1]);
+
+    uint64_t offset = 0;
+    for (; byte_count - offset >= 64U; offset += 64U)
+    {
+        AVX2FF8HighEncodeT2Vector<OriginalCount>(
+            input, output0, output1, offset, first, second);
+        AVX2FF8HighEncodeT2Vector<OriginalCount>(
+            input, output0, output1, offset + 32U, first, second);
+    }
+    for (; byte_count - offset >= 32U; offset += 32U)
+    {
+        AVX2FF8HighEncodeT2Vector<OriginalCount>(
+            input, output0, output1, offset, first, second);
+    }
+    for (; offset < byte_count; ++offset)
+    {
+        const uint8_t difference = static_cast<uint8_t>(
+            input[0][offset] ^ input[1][offset]);
+        uint8_t common = 0;
+        if (inverse_skew[1] != kZeroSkew)
+            common ^= FF8Product(inverse_skew[1], difference);
+        if (forward_skew[1] != kZeroSkew)
+            common ^= FF8Product(forward_skew[1], difference);
+        uint8_t parity0 = input[0][offset];
+        if (OriginalCount == 3)
+        {
+            const uint8_t x2 = input[2][offset];
+            if (inverse_skew[3] != kZeroSkew)
+                common ^= FF8Product(inverse_skew[3], x2);
+            if (forward_skew[1] != kZeroSkew)
+                common ^= FF8Product(forward_skew[1], x2);
+            parity0 ^= x2;
+        }
+        output0[offset] = static_cast<uint8_t>(parity0 ^ common);
+        output1[offset] = static_cast<uint8_t>(input[1][offset] ^ common);
+    }
+}
+#undef LEO2_AVX2_T2_NOINLINE
+
 struct AVX2FF8T4Tables
 {
     __m256i low01;
@@ -2253,6 +2399,18 @@ static void AVX2FF8HighEncodeSmall(
     // redundant zero-valued accumulator load in the first XOR transform.
     if (side == 2)
     {
+        if (original_count == 2)
+        {
+            AVX2FF8HighEncodeT2Direct<2>(
+                data, work, inverse_skew, forward_skew, byte_count);
+            return;
+        }
+        if (original_count == 3)
+        {
+            AVX2FF8HighEncodeT2Direct<3>(
+                data, work, inverse_skew, forward_skew, byte_count);
+            return;
+        }
         AVX2FF8IFFTButterfly2Out(
             data[0], data[1], work[0], work[1],
             inverse_skew[1], byte_count);

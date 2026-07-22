@@ -889,6 +889,8 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
     };
     static const TestCase kCases[] = {
         // Preserve arbitrary-tail coverage for both supported transform sizes.
+        { 2, 2, 65 },
+        { 2, 3, 65 },
         { 2, 9, 65 },
         { 4, 11, 65 },
         // Exercise every register-fused T=4 specialization during backend
