@@ -360,6 +360,10 @@ def candidate_build_provenance(
     if executable_target == "bench_leopard2_allk":
         require(cache.get("LEO2_BUILD_ALLK_DIAGNOSTIC") == "ON",
                 "all-K candidate target was not explicitly enabled")
+    one_shot_no_loss = cache.get(
+        "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT")
+    require(one_shot_no_loss in {"OFF", "ON"},
+            "one-shot no-loss experiment cache value is not exact OFF or ON")
     variant = cache.get("LEO2_BACKEND_VARIANT")
     require(variant in {"auto", "avx2"},
             "candidate backend variant is not production auto or AVX2")
@@ -561,6 +565,8 @@ def candidate_build_provenance(
             **required_exact,
             "LEO2_BUILD_ALLK_DIAGNOSTIC": cache.get(
                 "LEO2_BUILD_ALLK_DIAGNOSTIC"),
+            "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT":
+                one_shot_no_loss,
             "LEO2_BUILD_TESTS": cache.get("LEO2_BUILD_TESTS"),
             "ENABLE_OPENMP": cache.get("ENABLE_OPENMP"),
             "LEO2_BACKEND_VARIANT": variant,
@@ -713,6 +719,8 @@ def verify_reproducible_candidate_build(
             "LEO2_BACKEND_VARIANT": cache.get("LEO2_BACKEND_VARIANT"),
             "LEO2_BUILD_ALLK_DIAGNOSTIC": cache.get(
                 "LEO2_BUILD_ALLK_DIAGNOSTIC"),
+            "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT": cache.get(
+                "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT"),
             "LEO2_BUILD_BENCHMARKS": "ON",
             "LEO2_BUILD_FUZZERS": "OFF",
             "LEO2_BUILD_TESTS": cache.get("LEO2_BUILD_TESTS"),

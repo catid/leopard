@@ -631,6 +631,10 @@ if(LEO2_BUILD_TESTS)
         ${LIB_SOURCE_FILES})
     target_compile_definitions(leopard_test_hooks PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=1)
+    endif()
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -1207,6 +1211,49 @@ if(LEO2_BUILD_TESTS)
     target_link_libraries(leopard2_public_api_contract_test leopard_test_hooks)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)
+
+    # Build the one-shot no-loss contract against both archives.  The
+    # production executable observes the real public-library allocation path;
+    # the hook executable additionally proves that forced diagnostic decoder
+    # modes retain canonical plan construction.
+    add_executable(leopard2_one_shot_no_loss_test
+        tests/leopard2/test_one_shot_no_loss.cpp)
+    target_link_libraries(leopard2_one_shot_no_loss_test leopard)
+    add_executable(leopard2_one_shot_no_loss_hooks_test
+        tests/leopard2/test_one_shot_no_loss.cpp)
+    target_compile_definitions(leopard2_one_shot_no_loss_hooks_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1
+        LEO2_TEST_ONE_SHOT_NO_LOSS_HOOK_BUILD=1)
+    target_link_libraries(leopard2_one_shot_no_loss_hooks_test
+        leopard_test_hooks)
+    if(LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT)
+        target_compile_definitions(leopard2_one_shot_no_loss_test PRIVATE
+            LEO2_TEST_EXPECT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=1)
+        target_compile_definitions(
+            leopard2_one_shot_no_loss_hooks_test PRIVATE
+            LEO2_TEST_EXPECT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=1)
+    endif()
+    if(LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_one_shot_no_loss_test PRIVATE
+            LEO2_TEST_EXPECT_GF8=1)
+        target_compile_definitions(
+            leopard2_one_shot_no_loss_hooks_test PRIVATE
+            LEO2_TEST_EXPECT_GF8=1)
+    endif()
+    if(LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_one_shot_no_loss_test PRIVATE
+            LEO2_TEST_EXPECT_GF16=1)
+        target_compile_definitions(
+            leopard2_one_shot_no_loss_hooks_test PRIVATE
+            LEO2_TEST_EXPECT_GF16=1)
+    endif()
+    add_test(NAME leopard2_one_shot_no_loss
+        COMMAND leopard2_one_shot_no_loss_test)
+    add_test(NAME leopard2_one_shot_no_loss_hooks
+        COMMAND leopard2_one_shot_no_loss_hooks_test)
+    set_tests_properties(
+        leopard2_one_shot_no_loss leopard2_one_shot_no_loss_hooks PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
     add_executable(leopard2_batch_aliasing_test
         tests/leopard2/test_batch_aliasing.cpp)

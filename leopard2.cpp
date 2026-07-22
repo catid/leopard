@@ -6160,6 +6160,8 @@ leo2_result GetDecodeCodecScratchPathInfo(
     the canonical plan constructor, which preserves validation after that
     point and its exact error ordering.  Diagnostic forced-decoder modes also
     fall through so their plan-construction constraints remain centralized.
+    A valid no-loss one-shot call no longer has an allocation-failure outcome:
+    this is the intended semantic improvement of removing its unused plan.
 */
 static leo2_result TryOneShotNoLoss(
     const leo2_codec* codec,
