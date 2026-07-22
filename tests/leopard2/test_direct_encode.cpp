@@ -770,6 +770,7 @@ void test_high_transform_source_staging(
         uint64_t expected_copied_input_shards;
     };
     const Case cases[] = {
+        { LEO2_FIELD_GF8, 17, 4, 0 },
         { LEO2_FIELD_GF8, 32, 8, 0 },
         { LEO2_FIELD_GF8, 33, 8, 1 },
         { LEO2_FIELD_GF16, 32, 8, 0 },

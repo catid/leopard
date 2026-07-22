@@ -223,6 +223,7 @@ static void FWHT(ffe_t* data, const unsigned m, const unsigned m_truncated)
 
 static ffe_t LogLUT[kOrder];
 static ffe_t ExpLUT[kOrder];
+static ffe_t HighK17T16TailGeneratorLogs[16];
 
 
 // Returns a * Log(b)
@@ -555,6 +556,53 @@ ffe_t ElementLog(ffe_t value)
 ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
 {
     return MultiplyLog(value, multiplier_log);
+}
+
+
+static bool InitializeHighK17T16TailGeneratorLogs()
+{
+    // Legacy-high K=17,R=16 uses parent [64,48], with systematic coordinates
+    // 16..63 and the seventeenth public source at x=32.  Compute that source's
+    // systematic Lagrange column at parity coordinates 0..15:
+    //
+    //   L_x(y) = Z(y) / ((y + x) Z'(x)),
+    //   Z(t) = product_{s=16}^{63} (t + s).
+    //
+    // Setup is byte-independent and runs once after the legacy GF8 logarithm
+    // tables exist.  Keeping the derivation here avoids embedding a generated
+    // field-specific constant list in the execution path.
+    static const ffe_t kSourceCoordinate = 32;
+    ffe_t derivative = 1;
+    for (unsigned coordinate = 16; coordinate < 64; ++coordinate)
+    {
+        if (coordinate != kSourceCoordinate)
+        {
+            derivative = MultiplyElements(derivative,
+                static_cast<ffe_t>(coordinate ^ kSourceCoordinate));
+        }
+    }
+    if (derivative == 0)
+        return false;
+
+    for (unsigned parity = 0; parity < 16; ++parity)
+    {
+        ffe_t vanishing = 1;
+        for (unsigned coordinate = 16; coordinate < 64; ++coordinate)
+        {
+            vanishing = MultiplyElements(vanishing,
+                static_cast<ffe_t>(parity ^ coordinate));
+        }
+        const ffe_t denominator = MultiplyElements(derivative,
+            static_cast<ffe_t>(parity ^ kSourceCoordinate));
+        if (vanishing == 0 || denominator == 0)
+            return false;
+        const ffe_t coefficient = MultiplyElements(
+            vanishing, InverseElement(denominator));
+        if (coefficient == 0)
+            return false;
+        HighK17T16TailGeneratorLogs[parity] = ElementLog(coefficient);
+    }
+    return true;
 }
 
 
@@ -2308,6 +2356,23 @@ void ReedSolomonEncode(
         ops.ff8_high_encode_small(
             data, original_count, work, m, FFTSkewStorage + m,
             FFTSkewStorage, buffer_bytes);
+        return;
+    }
+    if (ops.kind == LEO2_BACKEND_AVX2 && m == 16 &&
+        original_count == 17 && recovery_count == 16 &&
+        requested_output_count == 16)
+    {
+        // Encode the complete first message block through the mature
+        // transform, then add the precomputed systematic generator column for
+        // message coordinate 32 directly in parity-coordinate space.
+        ReedSolomonEncode(
+            ops, buffer_bytes, 16, 16, 16, 16,
+            data, work, NULL);
+        for (unsigned output = 0; output < 16; ++output)
+        {
+            MultiplyAddBytes(ops, work[output], data[16],
+                HighK17T16TailGeneratorLogs[output], buffer_bytes);
+        }
         return;
     }
     if (ops.kind == LEO2_BACKEND_AVX512 &&
@@ -4841,6 +4906,8 @@ bool Initialize()
         return true;
 
     InitializeLogarithmTables();
+    if (!InitializeHighK17T16TailGeneratorLogs())
+        return false;
     if (!InitializeMultiplyTables())
         return false;
     FFTInitialize();
