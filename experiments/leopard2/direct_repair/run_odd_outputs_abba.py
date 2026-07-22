@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Run a bounded, fail-closed ABBA screen for GF8 direct-repair outputs.
+"""Run a bounded, fail-closed ABBA screen for small GF8 direct repair.
 
-This runner compares two already-built Leopard2 benchmark executables.  It is
-intended for source-major direct-repair kernel variants, not for comparison to
+This runner compares two already-built Leopard2 benchmark executables whose
+only semantic difference is an explicitly selected small-code direct-repair
+mode: transform, output-major, or source-major.  It is not for comparison to
 the historical Leopard executable (use ../main_compare/run_abba.py for that).
 It owns the canonical GF8 and physical-pair leases for the complete campaign,
 moves all same-user threads off the held pair, pins every child to one logical
@@ -38,11 +39,11 @@ from pathlib import Path
 from typing import Any, Sequence
 
 
-SCHEMA = "leopard2-direct-odd-abba/v6"
-MATRIX_SCHEMA = "leopard2-direct-odd-matrix/v1"
-LARGE_MATRIX_SCHEMA = "leopard2-direct-payload-tile-matrix/v1"
-CELL_SCHEMA = "leopard2-direct-odd-cell/v5"
-ENVELOPE_SCHEMA = "leopard2-direct-odd-envelope/v4"
+SCHEMA = "leopard2-small-direct-abba/v1"
+MATRIX_SCHEMA = "leopard2-small-direct-matrix/v1"
+LARGE_MATRIX_SCHEMA = "leopard2-small-direct-full-matrix/v1"
+CELL_SCHEMA = "leopard2-small-direct-cell/v1"
+ENVELOPE_SCHEMA = "leopard2-small-direct-envelope/v1"
 TILE_SPEC_SCHEMA = "leopard2-direct-tile-lab-spec/v2"
 TILE_SCREEN_SCHEMA = "leopard2-direct-tile-screen/v2"
 LAB_RESULT_SCHEMA = "leopard2-lab-result/v2"
@@ -111,8 +112,11 @@ ARCHIVE_MEMBER_SPECS = (
      "leopard2_backend_avx512.dir"),
 )
 EXPECTED_ARCHIVE_MEMBERS = tuple(item[0] for item in ARCHIVE_MEMBER_SPECS)
-CONTROL_COMPILE_DEFINITION = \
-    "-DLEO2_EXPERIMENT_GF8_DIRECT_POWER_OF_TWO_ONLY=1"
+MODE_COMPILE_DEFINITIONS = {
+    "transform": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
+    "output": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1",
+    "source": "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
+}
 PRODUCTION_TARGETS = {
     source: target for unused_member, source, target in ARCHIVE_MEMBER_SPECS
 }
@@ -126,6 +130,34 @@ class EvidenceError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def mode_compile_definition(mode: str) -> str:
+    require(mode in MODE_COMPILE_DEFINITIONS,
+            "unknown small-direct comparison mode")
+    return MODE_COMPILE_DEFINITIONS[mode]
+
+
+def comparison_modes(baseline: str, candidate: str) -> dict[str, str]:
+    require(baseline in MODE_COMPILE_DEFINITIONS and
+            candidate in MODE_COMPILE_DEFINITIONS and
+            baseline != candidate,
+            "baseline and candidate modes must be distinct and known")
+    return {"baseline": baseline, "candidate": candidate}
+
+
+def strip_mode_definition(arguments: list[str], mode: str,
+                          label: str) -> list[str]:
+    definition = mode_compile_definition(mode)
+    result = list(arguments)
+    require(result.count(definition) == 1,
+            "%s must contain its exact mode definition once" % label)
+    result.remove(definition)
+    for other_mode, other_definition in MODE_COMPILE_DEFINITIONS.items():
+        if other_mode != mode:
+            require(other_definition not in result,
+                    "%s contains another mode definition" % label)
+    return result
 
 
 def isolation_policy() -> dict[str, Any]:
@@ -682,19 +714,41 @@ def iteration_policy(byte_count: int) -> tuple[int, int]:
     return 9, 3
 
 
+def ceil_power_of_two(value: int) -> int:
+    require(type(value) is int and value > 0,
+            "power-of-two input must be positive")
+    return 1 << (value - 1).bit_length()
+
+
+def expected_direct_executor(mode: str, cell: dict[str, Any]) -> str:
+    mode_compile_definition(mode)
+    if cell["loss"] <= 4:
+        return "output_major"
+    if mode == "transform":
+        return "none"
+    return mode + "_major"
+
+
 def make_matrix() -> dict[str, Any]:
     cells = []
     index = 0
-    for recovery_count in (65, 96, 128):
-        for loss_count in range(1, 9):
-            for byte_count in (2048, 2049, 4096, 65536):
-                identifier = "k65-r%d-b%d-l%d" % (
-                    recovery_count, byte_count, loss_count)
+    for original_count in (5, 8, 9, 12, 16):
+        shapes = [(5, 4), (8, 4), (5, 5), (8, 5)]
+        if original_count >= 6:
+            shapes.extend(((6, 6), (8, 6)))
+        if original_count >= 7:
+            shapes.extend(((7, 7), (8, 7)))
+        if original_count >= 8:
+            shapes.append((8, 8))
+        for recovery_count, loss_count in shapes:
+            for byte_count in (64, 2048, 4096, 65536):
+                identifier = "k%d-r%d-b%d-l%d" % (
+                    original_count, recovery_count, byte_count, loss_count)
                 iterations, warmup = iteration_policy(byte_count)
                 cells.append({
                     "index": index,
                     "id": identifier,
-                    "K": 65,
+                    "K": original_count,
                     "R": recovery_count,
                     "bytes": byte_count,
                     "loss": loss_count,
@@ -703,13 +757,13 @@ def make_matrix() -> dict[str, Any]:
                     "iterations": iterations,
                     "warmup": warmup,
                     "seed": stable_seed(identifier),
-                    "estimated_peak_bytes":
-                        6 * (65 + recovery_count) * byte_count + (64 << 20),
-                    "role": (
-                        "unchanged_control" if loss_count in (1, 2, 4, 8)
-                        else "odd_or_composed_candidate"),
+                    "estimated_peak_bytes": 6 *
+                        (original_count + recovery_count) * byte_count +
+                        (64 << 20),
+                    "role": "loss4_neighbor" if loss_count == 4
+                        else "loss5_to_8_target",
                     "exact_main_required": (
-                        recovery_count == 65 and loss_count in (3, 5, 6, 7)
+                        recovery_count <= original_count and loss_count >= 5
                         and byte_count in (2048, 4096, 65536)),
                 })
                 index += 1
@@ -717,17 +771,26 @@ def make_matrix() -> dict[str, Any]:
         "schema": MATRIX_SCHEMA,
         "cell_count": len(cells),
         "cells": cells,
+        "directional_scope": {
+            "baseline_candidate_pairs": [
+                ["transform", "output"],
+                ["transform", "source"]
+            ],
+            "direct_head_to_head": (
+                "Run output versus source only for overlapping winners; do "
+                "not infer it by dividing separate noisy ratios."),
+        },
         "same_source_promotion": {
             "target": "whole decode_execution",
             "candidate_ci95_low_at_least": 1.05,
-            "unchanged_control_ci95_high_at_least": 0.98,
+            "neighbor_ci95_high_at_least": 0.98,
             "orientation": "baseline_time_over_candidate_time",
         },
         "exact_main_note": (
             "Run the cells marked exact_main_required with "
             "experiments/leopard2/main_compare/run_abba.py against exact "
             "Leopard main commit 6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198. "
-            "R=96 and R=128 are outside Leopard1's R<=K API contract."),
+            "Cells with R>K are outside Leopard1's R<=K API contract."),
     }
     result["matrix_sha256"] = sha256_bytes(canonical_bytes(result))
     return result
@@ -736,56 +799,51 @@ def make_matrix() -> dict[str, Any]:
 def make_large_matrix() -> dict[str, Any]:
     cells = []
     index = 0
-    for recovery_count in (65, 96, 128):
-        for loss_count in range(1, 9):
-            for byte_count in (
-                    256 * 1024, 1024 * 1024, 2 * 1024 * 1024,
-                    4 * 1024 * 1024, 8 * 1024 * 1024,
-                    16 * 1024 * 1024):
-                identifier = "large-k65-r%d-b%d-l%d" % (
-                    recovery_count, byte_count, loss_count)
-                iterations, warmup = (
-                    (5, 2) if byte_count <= 256 * 1024 else
-                    (3, 1) if byte_count <= 1024 * 1024 else (1, 1))
-                cells.append({
-                    "index": index,
-                    "id": identifier,
-                    "K": 65,
-                    "R": recovery_count,
-                    "bytes": byte_count,
-                    "loss": loss_count,
-                    "batch": 1,
-                    "reuse": 8,
-                    "iterations": iterations,
-                    "warmup": warmup,
-                    "seed": stable_seed(identifier, LARGE_MATRIX_SCHEMA),
-                    "estimated_peak_bytes":
-                        6 * (65 + recovery_count) * byte_count + (64 << 20),
-                    "role": (
-                        "unchanged_control" if loss_count == 1
-                        else "payload_tile_candidate"),
-                    "requested_tile_screen_loss":
-                        loss_count in (3, 5, 6, 7, 8),
-                    "exact_main_required": (
-                        recovery_count == 65 and
-                        loss_count in (3, 5, 6, 7, 8)),
-                })
-                index += 1
+    for original_count in range(5, 17):
+        for recovery_count in range(5, 9):
+            for loss_count in range(4, min(original_count, recovery_count) + 1):
+                for byte_count in (
+                        64, 65, 256, 1024, 2048, 2049, 4096, 65536):
+                    identifier = "full-k%d-r%d-b%d-l%d" % (
+                        original_count, recovery_count, byte_count, loss_count)
+                    iterations, warmup = iteration_policy(byte_count)
+                    cells.append({
+                        "index": index,
+                        "id": identifier,
+                        "K": original_count,
+                        "R": recovery_count,
+                        "bytes": byte_count,
+                        "loss": loss_count,
+                        "batch": 1,
+                        "reuse": 8,
+                        "iterations": iterations,
+                        "warmup": warmup,
+                        "seed": stable_seed(identifier, LARGE_MATRIX_SCHEMA),
+                        "estimated_peak_bytes": 6 *
+                            (original_count + recovery_count) * byte_count +
+                            (64 << 20),
+                        "role": "loss4_neighbor" if loss_count == 4
+                            else "loss5_to_8_target",
+                        "requested_tile_screen_loss": False,
+                        "exact_main_required": (
+                            recovery_count <= original_count and
+                            loss_count >= 5 and
+                            byte_count in (2048, 4096, 65536)),
+                    })
+                    index += 1
     result = {
         "schema": LARGE_MATRIX_SCHEMA,
         "cell_count": len(cells),
         "cells": cells,
-        "tile_sizes_to_screen_bytes": [
-            4 * 1024, 8 * 1024, 16 * 1024, 32 * 1024, 64 * 1024],
         "same_source_promotion": {
             "target": "whole decode_execution",
             "candidate_ci95_low_at_least": 1.05,
             "neighbor_ci95_high_at_least": 0.98,
-            "orientation": "full_shard_time_over_payload_tiled_time",
-            "note": (
-                "Use a directional screen to choose tile sizes, then retain "
-                "ABBA only for the winning region and adjacent L=1/2/4 controls."),
+            "orientation": "baseline_time_over_candidate_time",
         },
+        "coverage": (
+            "Every K=5..16, R=5..8, L=4..min(K,R), and requested "
+            "64-byte through 64-KiB execution/tail boundary."),
     }
     result["matrix_sha256"] = sha256_bytes(canonical_bytes(result))
     return result
@@ -1225,7 +1283,7 @@ def global_lock_identity(stream: Any, path: Path) -> dict[str, Any]:
     }
 
 
-def validate_result(result: Any, cell: dict[str, Any]) -> dict[str, Any]:
+def validate_result(result: Any, cell: dict[str, Any], mode: str) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
     require(result.get("schema") == "leopard2-benchmark-v3",
             "benchmark did not emit the path-attested v3 schema")
@@ -1263,13 +1321,23 @@ def validate_result(result: Any, cell: dict[str, Any]) -> dict[str, Any]:
             "benchmark did not resolve the AVX2 backend")
     require(resolved.get("thread_count") == 1,
             "benchmark did not resolve one execution thread")
-    require(resolved.get("parent_count") == 256 and
-            resolved.get("padded_side") == 128,
+    padded_side = ceil_power_of_two(cell["R"])
+    parent_count = ceil_power_of_two(cell["K"] + padded_side)
+    require(resolved.get("parent_count") == parent_count and
+            resolved.get("padded_side") == padded_side,
             "benchmark resolved the wrong direct-repair parent geometry")
-    require(resolved.get("selected_decode_path") == "direct",
-            "benchmark did not select direct repair")
-    require(resolved.get("selected_decode_rule") == "direct",
-            "benchmark did not report the direct dispatch rule")
+    expected_executor = expected_direct_executor(mode, cell)
+    selected_path = resolved.get("selected_decode_path")
+    selected_rule = resolved.get("selected_decode_rule")
+    require(resolved.get("direct_repair_executor") == expected_executor,
+            "benchmark selected the wrong direct-repair executor")
+    if expected_executor == "none":
+        require(selected_path in ("generic", "materialized", "tiled") and
+                selected_rule not in ("no_op", "direct", "unsupported_profile"),
+                "benchmark did not select transform repair")
+    else:
+        require(selected_path == "direct" and selected_rule == "direct",
+                "benchmark did not select direct repair")
     require(correctness.get("leopard2_round_trip") is True,
             "benchmark round trip failed")
     require(digests.get("algorithm") == "fnv1a64",
@@ -1308,7 +1376,9 @@ def validate_result(result: Any, cell: dict[str, Any]) -> dict[str, Any]:
         "plan_setup_us": float(setup_median),
         "digests": digests,
         "missing_original_indices": missing,
-        "decode_rule": resolved.get("selected_decode_rule"),
+        "decode_path": selected_path,
+        "decode_rule": selected_rule,
+        "direct_executor": expected_executor,
     }
 
 
@@ -1706,6 +1776,7 @@ def run_gated_benchmark(
 
 
 def run_invocation(binary: Path, implementation: str, cell: dict[str, Any],
+                   mode: str,
                    cpu: int, sibling: int, timeout: float,
                    raw_directory: Path, round_index: int,
                    slot_index: int, max_retries: int,
@@ -1778,7 +1849,7 @@ def run_invocation(binary: Path, implementation: str, cell: dict[str, Any],
         if gated["return_code"] == 0 and isolation_accepted:
             try:
                 parsed = json.loads(stdout)
-                normalized = validate_result(parsed, cell)
+                normalized = validate_result(parsed, cell, mode)
                 envelope["result"] = parsed
                 envelope["normalized"] = normalized
                 envelope["accepted"] = True
@@ -1829,9 +1900,20 @@ def summarize_cell(cell: dict[str, Any], invocations: list[dict[str, Any]],
         "metric_ratios": ratios,
         "digests": reference["digests"],
         "missing_original_indices": reference["missing_original_indices"],
-        "all_selected_direct": all(
-            item["normalized"]["decode_rule"] == "direct"
-            for item in invocations),
+        "selected_paths": {
+            implementation: {
+                "decode_path": next(
+                    item["normalized"]["decode_path"] for item in invocations
+                    if item["implementation"] == implementation),
+                "decode_rule": next(
+                    item["normalized"]["decode_rule"] for item in invocations
+                    if item["implementation"] == implementation),
+                "direct_executor": next(
+                    item["normalized"]["direct_executor"]
+                    for item in invocations
+                    if item["implementation"] == implementation),
+            } for implementation in ("baseline", "candidate")
+        },
         "invocations": [
             {
                 "implementation": item["implementation"],
@@ -1907,6 +1989,7 @@ def run_campaign_locked(
             "--max-retries must be between 0 and 99")
     require(options.timeout > 0 and options.lock_timeout >= 0,
             "benchmark timeout must be positive and lock timeout nonnegative")
+    modes = comparison_modes(options.baseline_mode, options.candidate_mode)
     execution_nonce = secrets.token_hex(16)
     topology_identity = require_smt_pair(
         options.cpu, options.reserved_sibling)
@@ -1931,6 +2014,7 @@ def run_campaign_locked(
         candidate, options.candidate_archive,
         options.candidate_compile_commands, source_root)
     binary_identity = {
+        "comparison_modes": modes,
         "runner": file_identity(Path(__file__)),
         "baseline_executable": file_identity(baseline),
         "baseline_archive": file_identity(options.baseline_archive),
@@ -2050,12 +2134,13 @@ def run_campaign_locked(
     baseline_cache = baseline_provenance["cache_values"]
     candidate_cache = candidate_provenance["cache_values"]
     require(shlex.split(baseline_cache["CMAKE_CXX_FLAGS"]) ==
-                [CONTROL_COMPILE_DEFINITION] and
-            shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) == [] and
+                [mode_compile_definition(modes["baseline"])] and
+            shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) ==
+                [mode_compile_definition(modes["candidate"])] and
             baseline_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 candidate_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 "-O3 -DNDEBUG",
-            "diagnostic build flags differ by more than the exact control definition")
+            "diagnostic build flags do not bind the requested modes")
     for key in baseline_cache:
         if key != "CMAKE_CXX_FLAGS":
             require(baseline_cache[key] == candidate_cache[key],
@@ -2067,12 +2152,12 @@ def run_campaign_locked(
         baseline_provenance["link_recipes"]["executable"]["text"])
     candidate_link = shlex.split(
         candidate_provenance["link_recipes"]["executable"]["text"])
-    require(baseline_link.count(CONTROL_COMPILE_DEFINITION) == 1 and
-            candidate_link.count(CONTROL_COMPILE_DEFINITION) == 0,
-            "diagnostic executable-link definition occurrence is invalid")
-    baseline_link.remove(CONTROL_COMPILE_DEFINITION)
+    baseline_link = strip_mode_definition(
+        baseline_link, modes["baseline"], "baseline executable link")
+    candidate_link = strip_mode_definition(
+        candidate_link, modes["candidate"], "candidate executable link")
     require(baseline_link == candidate_link,
-            "diagnostic executable link recipe differs beyond the control")
+            "diagnostic executable link recipe differs beyond the modes")
     for tool in ("archive_tool", "ranlib_tool", "compiler"):
         require(baseline_provenance["link_recipes"][tool]["sha256"] ==
                     candidate_provenance["link_recipes"][tool]["sha256"],
@@ -2082,23 +2167,27 @@ def run_campaign_locked(
             baseline_members[member]["compile"]["arguments"])
         candidate_arguments = list(
             candidate_members[member]["compile"]["arguments"])
-        require(baseline_arguments.count(CONTROL_COMPILE_DEFINITION) == 1 and
-                candidate_arguments.count(CONTROL_COMPILE_DEFINITION) == 0,
-                "diagnostic compile definition occurrence is invalid")
-        baseline_arguments.remove(CONTROL_COMPILE_DEFINITION)
+        baseline_arguments = strip_mode_definition(
+            baseline_arguments, modes["baseline"],
+            "baseline compile %s" % member)
+        candidate_arguments = strip_mode_definition(
+            candidate_arguments, modes["candidate"],
+            "candidate compile %s" % member)
         require(baseline_arguments == candidate_arguments,
-                "production compile commands differ beyond the diagnostic: %s" %
+                "production compile commands differ beyond the modes: %s" %
                     member)
     baseline_benchmark_arguments = list(
         baseline_provenance["object_closure"]["benchmark"]["arguments"])
     candidate_benchmark_arguments = list(
         candidate_provenance["object_closure"]["benchmark"]["arguments"])
-    require(baseline_benchmark_arguments.count(CONTROL_COMPILE_DEFINITION) == 1 and
-            candidate_benchmark_arguments.count(CONTROL_COMPILE_DEFINITION) == 0,
-            "benchmark diagnostic compile definition occurrence is invalid")
-    baseline_benchmark_arguments.remove(CONTROL_COMPILE_DEFINITION)
+    baseline_benchmark_arguments = strip_mode_definition(
+        baseline_benchmark_arguments, modes["baseline"],
+        "baseline benchmark compile")
+    candidate_benchmark_arguments = strip_mode_definition(
+        candidate_benchmark_arguments, modes["candidate"],
+        "candidate benchmark compile")
     require(baseline_benchmark_arguments == candidate_benchmark_arguments,
-            "benchmark compile commands differ beyond the diagnostic")
+            "benchmark compile commands differ beyond the modes")
     # Replay the complete retained structure before launching the first timed
     # child.  Offline verification repeats this check from manifest bytes, but
     # an invalid build must fail before consuming an isolation lease or
@@ -2182,7 +2271,8 @@ def run_campaign_locked(
                     require(pair_guard.revalidate() == pair_lease_identity,
                             "canonical CPU-pair lease changed before invocation")
                     invocations.append(run_invocation(
-                        binary, implementation, cell, options.cpu,
+                        binary, implementation, cell, modes[implementation],
+                        options.cpu,
                         options.reserved_sibling, options.timeout, raw_directory,
                         round_index, slot_index, options.max_retries,
                         options.reservation_file, reservation,
@@ -2665,7 +2755,8 @@ def validate_envelope(
         raise EvidenceError("retained stdout is not JSON") from error
     require(parsed == value["result"],
             "retained stdout and embedded result differ")
-    normalized = validate_result(parsed, cell)
+    mode = request["binary_identity"]["comparison_modes"][implementation]
+    normalized = validate_result(parsed, cell, mode)
     require(normalized == value["normalized"],
             "retained normalized result was forged")
 
@@ -2998,6 +3089,7 @@ def validate_build_provenance_structure(
 
 def validate_binary_identity_structure(value: Any) -> None:
     expected_keys = set(BINARY_FILE_IDENTITY_KEYS) | {
+        "comparison_modes",
         "baseline_avx2_compile_entry", "baseline_avx2_xor_compile_entry",
         "baseline_core_compile_entry",
         "baseline_avx512_compile_entry", "baseline_build_id",
@@ -3008,6 +3100,11 @@ def validate_binary_identity_structure(value: Any) -> None:
         "baseline_build_provenance", "candidate_build_provenance",
     }
     require_exact_keys(value, expected_keys, "binary identity")
+    modes = value.get("comparison_modes")
+    require(isinstance(modes, dict) and
+            set(modes) == {"baseline", "candidate"},
+            "binary identity comparison modes are invalid")
+    comparison_modes(modes["baseline"], modes["candidate"])
     require(isinstance(value.get("source"), dict) and
             isinstance(value["source"].get("root"), str),
             "binary identity source is invalid")
@@ -3085,8 +3182,9 @@ def validate_binary_identity_structure(value: Any) -> None:
     baseline_cache = value["baseline_build_provenance"]["cache_values"]
     candidate_cache = value["candidate_build_provenance"]["cache_values"]
     require(shlex.split(baseline_cache["CMAKE_CXX_FLAGS"]) ==
-                [CONTROL_COMPILE_DEFINITION] and
-            shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) == [] and
+                [mode_compile_definition(modes["baseline"])] and
+            shlex.split(candidate_cache["CMAKE_CXX_FLAGS"]) ==
+                [mode_compile_definition(modes["candidate"])] and
             baseline_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 candidate_cache["CMAKE_CXX_FLAGS_RELEASE"] ==
                 "-O3 -DNDEBUG",
@@ -3106,12 +3204,12 @@ def validate_binary_identity_structure(value: Any) -> None:
     candidate_link = shlex.split(
         value["candidate_build_provenance"]["link_recipes"]["executable"]
             ["text"])
-    require(baseline_link.count(CONTROL_COMPILE_DEFINITION) == 1 and
-            candidate_link.count(CONTROL_COMPILE_DEFINITION) == 0,
-            "retained executable-link definition occurrence is invalid")
-    baseline_link.remove(CONTROL_COMPILE_DEFINITION)
+    baseline_link = strip_mode_definition(
+        baseline_link, modes["baseline"], "retained baseline link")
+    candidate_link = strip_mode_definition(
+        candidate_link, modes["candidate"], "retained candidate link")
     require(baseline_link == candidate_link,
-            "retained executable link differs beyond the control")
+            "retained executable link differs beyond the modes")
     for tool in ("archive_tool", "ranlib_tool", "compiler"):
         require(value["baseline_build_provenance"]["link_recipes"][tool]
                     ["sha256"] ==
@@ -3123,23 +3221,27 @@ def validate_binary_identity_structure(value: Any) -> None:
             baseline_closure["members"][member]["compile"]["arguments"])
         candidate_arguments = list(
             candidate_closure["members"][member]["compile"]["arguments"])
-        require(baseline_arguments.count(CONTROL_COMPILE_DEFINITION) == 1 and
-                candidate_arguments.count(CONTROL_COMPILE_DEFINITION) == 0,
-                "retained diagnostic definition occurrence is invalid")
-        baseline_arguments.remove(CONTROL_COMPILE_DEFINITION)
+        baseline_arguments = strip_mode_definition(
+            baseline_arguments, modes["baseline"],
+            "retained baseline compile %s" % member)
+        candidate_arguments = strip_mode_definition(
+            candidate_arguments, modes["candidate"],
+            "retained candidate compile %s" % member)
         require(baseline_arguments == candidate_arguments,
-                "retained compile commands differ beyond diagnostic: %s" %
+                "retained compile commands differ beyond modes: %s" %
                     member)
     baseline_arguments = list(
         baseline_closure["benchmark"]["arguments"])
     candidate_arguments = list(
         candidate_closure["benchmark"]["arguments"])
-    require(baseline_arguments.count(CONTROL_COMPILE_DEFINITION) == 1 and
-            candidate_arguments.count(CONTROL_COMPILE_DEFINITION) == 0,
-            "retained benchmark diagnostic occurrence is invalid")
-    baseline_arguments.remove(CONTROL_COMPILE_DEFINITION)
+    baseline_arguments = strip_mode_definition(
+        baseline_arguments, modes["baseline"],
+        "retained baseline benchmark compile")
+    candidate_arguments = strip_mode_definition(
+        candidate_arguments, modes["candidate"],
+        "retained candidate benchmark compile")
     require(baseline_arguments == candidate_arguments,
-            "retained benchmark commands differ beyond diagnostic")
+            "retained benchmark commands differ beyond modes")
     source = value["source"]
     require_exact_keys(source, {
         "root", "head", "head_tree", "status_short", "files",
@@ -3478,6 +3580,11 @@ def write_tile_screen_spec(options: argparse.Namespace) -> int:
         for variant_index, label in enumerate(variant_order):
             benchmark_cell = dict(cell)
             benchmark_cell["variant"] = label
+            # The retained tile-screen utility predates this experiment and
+            # is not part of its promotion evidence.  If it is used for an
+            # exploratory source-major build, retain the execution-mode
+            # identity in each job so result validation is still explicit.
+            benchmark_cell["mode"] = "source"
             benchmark_cell["directional_order_index"] = variant_index
             jobs.append({
                 "id": "tile.%s.v%02d-%s" % (
@@ -3600,7 +3707,8 @@ def analyze_tile_screen(options: argparse.Namespace) -> int:
         except json.JSONDecodeError as error:
             raise EvidenceError(
                 "lab job %s emitted invalid JSON: %s" % (job["id"], error))
-        normalized = validate_result(parsed, benchmark_cell)
+        normalized = validate_result(
+            parsed, benchmark_cell, benchmark_cell["mode"])
         key = (benchmark_cell["K"], benchmark_cell["R"],
                benchmark_cell["bytes"], benchmark_cell["loss"])
         cell = by_cell.setdefault(key, {
@@ -3709,6 +3817,12 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--source-root", required=True, type=Path)
     run.add_argument("--baseline-build-id", required=True)
     run.add_argument("--candidate-build-id", required=True)
+    run.add_argument(
+        "--baseline-mode", required=True,
+        choices=tuple(MODE_COMPILE_DEFINITIONS))
+    run.add_argument(
+        "--candidate-mode", required=True,
+        choices=tuple(MODE_COMPILE_DEFINITIONS))
     run.add_argument("--output", required=True, type=Path)
     run.add_argument("--preset", choices=("core", "large"), default="core")
     run.add_argument("--cpu", required=True, type=int)

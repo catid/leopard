@@ -62,6 +62,20 @@
 #include <omp.h>
 #endif
 
+/*
+    Experimental, build-time-only selector used by the bounded AVX2
+    loss-5-through-8 screen.  Zero preserves the production dispatch;
+    one enables the existing output-major executor; two enables the
+    source-major executor.  It is deliberately absent from the public ABI.
+*/
+#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE < 0 || \
+    LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE > 2
+#error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -1468,6 +1482,25 @@ static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
         codec->original_count == 65 && codec->padded_side == 128;
 }
 
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+static bool IsExperimentalSmallDirectRepairCodec(const leo2_codec* codec)
+{
+    /*
+        Keep this diagnostic exactly inside the frozen experiment matrix.
+        A winning region is promoted later as an evidence-backed production
+        rule rather than broadening dispatch merely because the bounded
+        solver can represent more losses.
+    */
+    return codec && codec->context &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->original_count >= 5 &&
+        codec->original_count <= kDirectLegacyMaxRepairOriginals &&
+        codec->recovery_count >= 5 && codec->recovery_count <= 8;
+}
+#endif
+
 static bool CanPrepareDirectRepair(const leo2_codec* codec)
 {
     return (codec->flags & (LEO2_CODEC_FORCE_GENERIC_DECODE |
@@ -1485,6 +1518,10 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
 {
     if (IsExpandedDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+    if (IsExperimentalSmallDirectRepairCodec(codec))
+        return kDirectMaxRepairLosses;
+#endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
         return 1;
     return 4;
@@ -4717,6 +4754,42 @@ ExecuteGF8SourceMajorDirectRepair(
 #undef LEO2_SOURCE_MAJOR_NOINLINE
 #endif
 
+static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes)
+{
+    if (!plan || !plan->direct_repair || !plan->codec)
+        return leopard2_internal::kDirectRepairExecutorNone;
+
+#ifdef LEO_HAS_FF8
+    const leo2_codec* codec = plan->codec;
+    const uint32_t output_count = plan->missing_original_count;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const bool representable =
+        output_count >= 2 && output_count <= kDirectMaxRepairLosses &&
+        codec->field == LEO2_FIELD_GF8 &&
+        ops.ff8_multiply_add_outputs &&
+        codec->original_count <= kDirectMaxParentDimension &&
+        codec->recovery_count <= kDirectMaxParentDimension;
+    if (representable)
+    {
+        const bool expanded_k65 = shard_bytes >= 2048 &&
+            IsExpandedDirectRepairCodec(codec);
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+        const bool experimental_small = output_count >= 5 &&
+            IsExperimentalSmallDirectRepairCodec(codec);
+#else
+        const bool experimental_small = false;
+#endif
+        if (expanded_k65 || experimental_small)
+            return leopard2_internal::kDirectRepairExecutorSourceMajor;
+    }
+#else
+    (void)shard_bytes;
+#endif
+    return leopard2_internal::kDirectRepairExecutorOutputMajor;
+}
+
 static leo2_result ExecuteDirectRepair(
     const leo2_decode_plan* plan,
     size_t shard_bytes,
@@ -4727,14 +4800,8 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
-    const uint32_t source_major_outputs = plan->missing_original_count;
-    if (shard_bytes >= 2048 &&
-        source_major_outputs >= 2 && source_major_outputs <= 8 &&
-        codec->field == LEO2_FIELD_GF8 &&
-        IsExpandedDirectRepairCodec(codec) &&
-        ops.ff8_multiply_add_outputs &&
-        codec->original_count <= kDirectMaxParentDimension &&
-        codec->recovery_count <= kDirectMaxParentDimension)
+    if (SelectDirectRepairExecutor(plan, shard_bytes) ==
+            leopard2_internal::kDirectRepairExecutorSourceMajor)
         return ExecuteGF8SourceMajorDirectRepair(plan, shard_bytes,
             original, recovery, restored_original);
 #endif
@@ -6064,6 +6131,7 @@ static void FillTerminalDecodePathInfo(
 {
     info.path = path;
     info.rule = rule;
+    info.direct_executor = leopard2_internal::kDirectRepairExecutorNone;
     info.matching_auto_rules = 0;
     info.required_work_slots = 0;
     info.aligned_prefix_bytes = 0;
@@ -6110,6 +6178,10 @@ leo2_result GetDecodePlanPathInfo(
             return result;
         FillTerminalDecodePathInfo(kDecodePathDirect, kDecodeRuleDirect,
             shard_bytes, multi_item_batch, *info_out);
+        if (plan->direct_repair)
+            info_out->direct_executor =
+                SelectDirectRepairExecutor(
+                    plan, static_cast<size_t>(shard_bytes));
         return LEO2_SUCCESS;
     }
     DecodeScratchGeometry geometry;
