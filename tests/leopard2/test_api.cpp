@@ -795,6 +795,19 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         const bool expect_direct = test.expect_direct &&
             (!test.avx2_only ||
              leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+        const bool expect_source_rows = expect_direct && test.k == 65 &&
+            test.losses >= 2 && test.losses <= 8 &&
+            test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            test.field == LEO2_FIELD_GF8 &&
+            leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+        require((leo2_test_decode_plan_direct_source_rows(plan) != 0) ==
+                expect_source_rows,
+            "direct-repair source-plan formatting boundary mismatch");
+#else
+        require(leo2_test_decode_plan_direct_source_rows(plan) == 0,
+            "default build unexpectedly retained a source-major plan");
+#endif
         require(expect_direct
                 ? scratch_bytes < reference_scratch_bytes
                 : scratch_bytes == reference_scratch_bytes,

@@ -83,6 +83,11 @@ LEO2_EXPORT int leo2_test_codec_translated_low_capable(
 LEO2_EXPORT int leo2_test_decode_plan_uses_translated_low(
     const leo2_decode_plan* plan);
 
+/* Number of immutable source-major coefficient rows prepared for this plan.
+   Zero is the production/default-OFF representation. */
+LEO2_EXPORT size_t leo2_test_decode_plan_direct_source_rows(
+    const leo2_decode_plan* plan);
+
 LEO2_EXPORT int leo2_test_codec_direct_encode_capable(
     const leo2_codec* codec);
 
