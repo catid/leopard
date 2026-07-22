@@ -1,0 +1,131 @@
+{
+  "schema": "leopard2-gf16-high-residual-gap-followup/v1",
+  "date_utc": "2026-07-22",
+  "status": "directional_negative_no_candidate_retained",
+  "task_context": "leopard-79h.38.5.4",
+  "source_identity": {
+    "base_commit": "a9faba2b454a9bf9efdba7eeb8693abfc455c8d6",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "branch": "agent/gf16-high-encoder-a9faba2",
+    "control_executable_sha256": "a4e3ae4c401e2b28a3d8af2820988edc9cd7bdc54e23992731cd366bffe9be0c",
+    "ephemeral_result_set_sha256": "f58efcf5d022961e1a423b3d95ce0c43f54ffa8a3de3bd8dc6496ef2d2d532c6",
+    "source_change_retained": false
+  },
+  "scope": {
+    "target": {
+      "K": 1000,
+      "R": 200,
+      "T": 256,
+      "profile": "legacy_high_v1",
+      "field": "gf16",
+      "shard_bytes": 65536,
+      "requested_backend": "auto",
+      "execution_backend": "avx512",
+      "execution_tiles": 2,
+      "execution_tile_bytes": 32768
+    },
+    "non_regression_neighbor": {
+      "K": 4096,
+      "R": 512,
+      "shard_bytes": 4096
+    },
+    "authoritative_timing": false,
+    "reason": "This was a discovery pass while independent project workers were active. Byte-heavy measurements were pinned to one physical CPU, but no exclusive sibling or machine-wide reservation was claimed."
+  },
+  "prior_exact_main_gate": {
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_time",
+    "geometric_ratio": 0.976778479,
+    "ci95": [0.973490995, 0.980077065],
+    "interpretation": "The exact main encoder remained about 2.32 percent faster after the accepted two-tile change.",
+    "source": "byte_tiling_positive_20260721.json"
+  },
+  "attribution": {
+    "public_api": {
+      "one_shot_median_us": 7577.178,
+      "batch_one_median_us": 7576.624,
+      "interpretation": "Batch-one routing and public wrapper setup are indistinguishable at this resolution; the residual is not a batch wrapper problem."
+    },
+    "operation_model": {
+      "transform_invocations": 5,
+      "message_block_count": 4,
+      "transform_butterfly_equivalents": 4976,
+      "radix2_layers_entered": 40,
+      "logical_copy_shards": 1000,
+      "logical_zero_fill_shards": 24,
+      "fused_accumulation_xor_shards": 768,
+      "estimated_workspace_passes_lower": 47.328125,
+      "estimated_workspace_passes_upper": 66.765625,
+      "note": "The structural model reports total public shard bytes; execution tiling preserves that byte work while doubling transform-control traversals."
+    },
+    "assembly_and_schedule": {
+      "exact_main": "One 65536-byte pass executes 1244 logical fused radix-four calls in the native field translation unit.",
+      "leopard2": "Two 32768-byte passes execute 2488 logical radix-four calls. The selected AVX-512VL range callback uses the split two-way schedule for large tiles and repeatedly expands fixed nibble tables.",
+      "eliminated_explanations": [
+        "ISA mismatch: both paths use 256-bit EVEX vector operations on this host.",
+        "Single-thread OpenMP overhead: the earlier isolated diagnostic found only about 0.1 percent.",
+        "Generic whole-transform dispatch/table setup: the earlier exact-shape executor was 1.92 percent slower.",
+        "Broad fused radix-four payloads: the earlier candidate was 8.36 percent slower."
+      ]
+    }
+  },
+  "screens": {
+    "tile_count": {
+      "method": "Three counter-ordered process rounds on CPU 14; seven retained samples per process, reuse four, exact matching workload digests.",
+      "geometric_median_us": {
+        "two_tiles_32768": 8231.830115,
+        "three_tiles_about_21845": 8528.095784,
+        "four_tiles_16384": 8663.422977,
+        "eight_tiles_8192": 8784.700793
+      },
+      "control_over_candidate": {
+        "three_tiles": 0.965260044,
+        "four_tiles": 0.950182178,
+        "eight_tiles": 0.937064370
+      },
+      "decision": "Reject every smaller tile. The accepted two-tile layout is the clear local optimum among screened tile counts."
+    },
+    "direct_source_staging_inside_32768_tile": {
+      "method": "Three ABBA-style counter-ordered rounds, six process medians per implementation, matching workload digests.",
+      "control_geometric_median_us": 8304.057933,
+      "candidate_geometric_median_us": 8314.040353,
+      "control_over_candidate": 0.998799330,
+      "decision": "Reject as neutral/slightly slower. Retain the established copy-first source policy."
+    },
+    "already_sorted_overlap_ranges": {
+      "candidate": "Detect already address-sorted input/output ranges before std::sort while preserving the public overlap contract and fallback sort.",
+      "method": "Three counter-ordered ABBA process rounds per cell, six process medians per implementation, matching workload digests.",
+      "target_control_over_candidate": 1.002468390,
+      "neighbor_control_over_candidate": 1.000803952,
+      "decision": "Reject and revert. A 0.25 percent directional target improvement is far below the 5 percent promotion threshold and cannot close the exact-main gap."
+    }
+  },
+  "correctness": {
+    "timed_digest_sets": 1,
+    "all_screen_original_parity_and_recovery_digests_matched": true,
+    "focused_release": {
+      "passed": 8,
+      "failed": 0,
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode",
+        "leopard2_gf16_tails",
+        "leopard2_gf16_padded_odd",
+        "leopard2_gf16_legacy_encoder_matrix",
+        "leopard2_legacy_golden",
+        "leopard2_transform_differential"
+      ]
+    },
+    "sanitizers": "Not rerun because every prototype was rejected and fully reverted; no executable source change remains.",
+    "fuzzing": "Not run by request. This pass prioritized exact parity/recovery digests, boundary suites, direct-algebra differential tests, and optimization attribution."
+  },
+  "decision": {
+    "promotion": "none",
+    "source_candidate_retained": false,
+    "conclusion": "No clean local change screened in this pass closes the residual exact-main gap. The accepted two-tile AVX-512VL implementation remains the best measured production schedule.",
+    "next_materially_distinct_hypotheses": [
+      "A separately qualified AVX-512VBMI packed-table or GFNI/tower-field multiplication kernel that reduces GF16 table pressure rather than merely rearranging the same nibble-table passes.",
+      "A new transform executor with a demonstrably different byte-traffic strategy; do not repeat the rejected pre-expanded range executor, broad fusion, terminal fusion, smaller tiling, or source-staging variants."
+    ]
+  }
+}
