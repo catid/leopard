@@ -301,6 +301,43 @@ The evidence verifier reproduces each seeded loss set, recomputes retained
 timing summaries, enforces the exact ABBA round/slot sequence, and binds host,
 CPU-reservation, lease, and source/object/archive/link/executable provenance.
 
+The completed exact-main checkpoint at `d3a97f9` adds six accepted isolated
+cells spanning GF8 and GF16, tiled and materialized workspaces, one loss, full
+GF8 redundancy loss, and an eight-loss large-GF16 neighbor.  Every cell matched
+the original-data, transmitted-parity, and recovered-original digests from the
+detached Leopard main commit `6e5725e`.  Ratios below are exact-main time over
+Leopard2 time; setup is included in the first-use column and amortized over
+eight executions in the reuse column:
+
+| Field and workload | Workspace | First use | Reuse 8 |
+| --- | --- | ---: | ---: |
+| GF8 K=240, R=16, 64 KiB, one loss | tiled | 2.759 [2.744, 2.775] | 2.769 [2.753, 2.785] |
+| GF8 K=224, R=32, 4 KiB, full loss | tiled | 1.200 [1.189, 1.212] | 1.319 [1.308, 1.329] |
+| GF16 K=1000, R=200, 4 KiB, one loss | tiled | 2.149 [2.143, 2.155] | 2.288 [2.282, 2.294] |
+| GF16 K=4096, R=512, 4 KiB, eight losses | tiled | 2.201 [2.179, 2.223] | 2.388 [2.364, 2.412] |
+| GF8 K=224, R=32, 4 KiB, full loss | materialized | 1.160 [1.154, 1.167] | 1.271 [1.263, 1.278] |
+| GF16 K=4096, R=512, 4 KiB, eight losses | materialized | 2.242 [2.212, 2.274] | 2.431 [2.397, 2.466] |
+
+Each cell used three independent ABBA rounds, nine retained samples per
+launch, two warmups, one thread, and a reserved idle SMT sibling.  Plan setup
+was 0.4% of first use in the 64-KiB one-loss cell and 7.0--10.2% in the 4-KiB
+cells, which explains the larger reuse ratios without treating setup as free.
+The operation model attributes the remaining transform work explicitly to
+syndrome construction and only those message cosets containing requested
+originals; the immutable evaluator removes one read and one write of every
+`T`-shard coefficient block per requested output coset.  The compact evidence,
+including exact artifact hashes, stage counts, and rejected contaminated runs,
+is in
+`experiments/leopard2/high_decode_copy/results/algorithm5_exact_main_d3a97f9.json`.
+
+A same-source directional screen found the copy-free path neutral for the
+single GF8 output block and 1.6--5.6% faster in the other sampled modes.  It is
+not treated as isolated promotion evidence; the earlier exact-parent campaigns
+remain the evidence for the individual copy-elimination changes.  Since all
+six authoritative exact-main cells clear the no-regression gate, this audit did
+not add a speculative policy or kernel solely to improve a noisy one-block
+micro-result.
+
 The source-boundary candidate at `a09d705` was compared with its immediate
 control `3a00fd8` using three independent ABBA rounds on one pinned physical
 core while reserving its SMT sibling.  Each sample retained source, binary,

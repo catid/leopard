@@ -389,9 +389,9 @@ class OperationCountTests(unittest.TestCase):
                 self.assertEqual(
                     balanced["selection"],
                     {
-                        "path": "generic",
-                        "rule": "balanced_generic",
-                        "matching_auto_rules": 1,
+                        "path": "materialized",
+                        "rule": "translated_low",
+                        "matching_auto_rules": 0,
                         "required_work_slots": 256,
                     },
                 )
@@ -401,18 +401,18 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             (below_balanced["selection"]["path"],
              below_balanced["selection"]["rule"]),
-            ("materialized", "workspace_materialized"),
+            ("materialized", "translated_low"),
         )
         ragged_balanced = build_decode_report(
             k=128, r=128, loss_count=128, shard_bytes=193,
         )
         self.assertEqual(ragged_balanced["selection"]["rule"],
-                         "balanced_generic")
+                         "translated_low")
         above_balanced = build_decode_report(
             k=128, r=128, loss_count=128, shard_bytes=1024 * 1024 + 1,
         )
         self.assertEqual(above_balanced["selection"]["rule"],
-                         "workspace_materialized")
+                         "translated_low")
         forced_specialized = build_decode_report(
             k=128, r=128, loss_count=128, shard_bytes=256,
             decode_selection="specialized",
@@ -420,10 +420,23 @@ class OperationCountTests(unittest.TestCase):
         self.assertEqual(
             (forced_specialized["selection"]["path"],
              forced_specialized["selection"]["rule"]),
-            ("materialized", "workspace_materialized"),
+            ("materialized", "translated_low"),
         )
         self.assertEqual(
-            forced_specialized["selection"]["matching_auto_rules"], 1
+            forced_specialized["selection"]["matching_auto_rules"], 0
+        )
+        forced_generic = build_decode_report(
+            k=128, r=128, loss_count=128, shard_bytes=256,
+            decode_selection="generic",
+        )
+        self.assertEqual(
+            forced_generic["selection"],
+            {
+                "path": "generic",
+                "rule": "forced_generic",
+                "matching_auto_rules": 1,
+                "required_work_slots": 256,
+            },
         )
 
         materialized = build_decode_report(

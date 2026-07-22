@@ -1,0 +1,337 @@
+{
+  "schema": "leopard2-algorithm5-exact-main-checkpoint/v1",
+  "created_utc": "2026-07-21T23:55:00Z",
+  "status": "accepted_exact_main_algorithm5_evidence_no_additional_kernel_promoted",
+  "scope": "Legacy-high-v1 original-only Algorithm 5 decode on AVX2, compared with exact Leopard main; plan setup and byte execution are reported separately.",
+  "source_identity": {
+    "baseline": {
+      "repository": "https://github.com/catid/leopard",
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+      "source_state": "detached_clean",
+      "executable_sha256": "297b1420d3391d2758a3ce913971d2349fba3e2bbce228bca42df362902ed317",
+      "archive_sha256": "68fbfc4e19c4502194aeee819b7adbfc60c885c6054cc1676d0d760e54743b1c"
+    },
+    "candidate": {
+      "commit": "d3a97f93a35c2d56898db75f960e29c03bb5c481",
+      "tree": "ae25d82cd4628d1eab1cf49508f22563cf413bd6",
+      "source_state": "topic_branch_clean",
+      "executable_sha256": "a4e3ae4c401e2b28a3d8af2820988edc9cd7bdc54e23992731cd366bffe9be0c",
+      "archive_sha256": "10e0e5e8a10358394a556588aa6f002cfcaf51f9136b61f8dec4fb5cae77818a"
+    },
+    "runner_sha256": "25c2b576d97281a12a70445cea713461c7a56b9ca26fdb953574b6c3e909897d"
+  },
+  "method": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "compiler": "GCC 13.3",
+    "candidate_backend": "AVX2",
+    "threads": 1,
+    "batch": 1,
+    "rounds": 3,
+    "order": "ABBA",
+    "retained_samples_per_launch": 9,
+    "warmups_per_launch": 2,
+    "plan_reuse": 8,
+    "ratio_definition": "exact_main_time / leopard2_time",
+    "interval": "round-level two-sided 95% Student-t interval with 2 degrees of freedom",
+    "isolation": "one pinned physical core, paired SMT sibling reserved and required to record zero non-idle jiffies",
+    "accepted_invocations": 72,
+    "maximum_reserved_sibling_nonidle_jiffies": 0,
+    "correctness_gate": "original-data, transmitted-parity, and recovered-original digests must match across implementations; candidate must attest the requested specialized workspace"
+  },
+  "accepted_results": [
+    {
+      "cell": "gf8-tiled-target-one",
+      "field": "gf8",
+      "workspace": "tiled",
+      "K": 240,
+      "R": 16,
+      "shard_bytes": 65536,
+      "loss_count": 1,
+      "missing_originals": [37],
+      "seed": 1721,
+      "cpu": 5,
+      "reserved_sibling": 21,
+      "decode_first_use_speedup": 2.7591036751175233,
+      "decode_first_use_ci95": [2.7435986186934986, 2.7746963561572895],
+      "decode_reuse8_speedup": 2.7690892743243913,
+      "decode_reuse8_ci95": [2.7533309220663655, 2.784937817581217],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 1865.7696875,
+        "leopard2_execution": 672.213,
+        "leopard2_plan_setup": 2.795,
+        "leopard2_codec_setup": 0.35,
+        "plan_share_of_first_use_percent": 0.414
+      },
+      "manifest_path": "/tmp/alg5-exact-main-tiled-gf8-one-d3a97f9-v1/manifest.json",
+      "manifest_sha256": "8c256506f611bfd9c09f6cf9a0030008e43e60c42c43ea884ca7b9f70100c981",
+      "raw_sha256": "3eb84ede147c6c79cf45e5e536e28ab2205bd1e780d4f7cd0af4f21e76c73b43",
+      "manifest_content_digest": "bc4b8981df78c053d2fa56d5a4f3fc646e2ae24bbcc4fd60488eef2637f05086"
+    },
+    {
+      "cell": "gf8-tiled-neighbor-full",
+      "field": "gf8",
+      "workspace": "tiled",
+      "K": 224,
+      "R": 32,
+      "shard_bytes": 4096,
+      "loss_count": 32,
+      "missing_originals": [0, 1, 2, 8, 15, 23, 34, 35, 39, 43, 45, 48, 60, 61, 66, 76, 80, 95, 110, 121, 126, 159, 168, 172, 178, 185, 188, 194, 198, 203, 204, 208],
+      "seed": 1723,
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "decode_first_use_speedup": 1.200155340040879,
+      "decode_first_use_ci95": [1.1887512597156504, 1.2116688234451805],
+      "decode_reuse8_speedup": 1.3186899378606163,
+      "decode_reuse8_ci95": [1.3083829687202013, 1.3290781015865627],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 167.715125,
+        "leopard2_execution": 125.32825,
+        "leopard2_plan_setup": 14.305,
+        "leopard2_codec_setup": 0.37,
+        "plan_share_of_first_use_percent": 10.245
+      },
+      "manifest_path": "/tmp/alg5-exact-main-tiled-gf8-full-d3a97f9-v2/manifest.json",
+      "manifest_sha256": "e7d0fd58345a6448db8830ab4593c5230e69715ace15b7b1c3b94edae9ea0ebf",
+      "raw_sha256": "4a5d62b206313a29409d14cc0a90c287888eb2c7c8629531caa541b556cbb28d",
+      "manifest_content_digest": "2bc4a3d3f60074ce6442966663f2f36f4cc53861882f0a7999a0379dd2bafa39"
+    },
+    {
+      "cell": "gf16-tiled-target-one",
+      "field": "gf16",
+      "workspace": "tiled",
+      "K": 1000,
+      "R": 200,
+      "shard_bytes": 4096,
+      "loss_count": 1,
+      "missing_originals": [11],
+      "seed": 1759,
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "decode_first_use_speedup": 2.148728280316693,
+      "decode_first_use_ci95": [2.1428955973510946, 2.15457683908633],
+      "decode_reuse8_speedup": 2.2879318768526473,
+      "decode_reuse8_ci95": [2.2815764721852663, 2.294304984704199],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 1554.603375,
+        "leopard2_execution": 672.731125,
+        "leopard2_plan_setup": 50.305,
+        "leopard2_codec_setup": 3.22,
+        "plan_share_of_first_use_percent": 6.957
+      },
+      "manifest_path": "/tmp/alg5-exact-main-tiled-gf16-one-d3a97f9-v1/manifest.json",
+      "manifest_sha256": "05f5fdafe0a06f64dbb564c4910ba99f3496ffe2ed2c11d10711d74f65054462",
+      "raw_sha256": "afa23c4e3804e110e4b84765b4a726823668e0effc2f2fa153a0c382f4f82ec6",
+      "manifest_content_digest": "aea9a85db40bce3d6a1f2edf75feada37a60e59ad3ebf8019f80ca588890678f"
+    },
+    {
+      "cell": "gf16-tiled-neighbor-eight",
+      "field": "gf16",
+      "workspace": "tiled",
+      "K": 4096,
+      "R": 512,
+      "shard_bytes": 4096,
+      "loss_count": 8,
+      "missing_originals": [219, 385, 1444, 1702, 3051, 3079, 3394, 3445],
+      "seed": 1777,
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "decode_first_use_speedup": 2.20122565586181,
+      "decode_first_use_ci95": [2.179243345469893, 2.2234297046709495],
+      "decode_reuse8_speedup": 2.387986439938935,
+      "decode_reuse8_ci95": [2.3638604975659887, 2.4123586155798686],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 6898.5325,
+        "leopard2_execution": 2863.924625,
+        "leopard2_plan_setup": 281.1235,
+        "leopard2_codec_setup": 13.01,
+        "plan_share_of_first_use_percent": 8.939
+      },
+      "manifest_path": "/tmp/alg5-exact-main-tiled-gf16-eight-d3a97f9-v1/manifest.json",
+      "manifest_sha256": "c51f86be8009e3eb0cd83b816ff4a633b9fc74b470f3fae7fa03daa8ac9e06bf",
+      "raw_sha256": "44b988dbc777224bd0f4abde3337de20007234d9c468adf1906b33bdc8396df3",
+      "manifest_content_digest": "efccaac0d3cb5dc4a8d76f326fa291b7dce2d7049c47500b139eaf98f5d13036"
+    },
+    {
+      "cell": "gf8-materialized-neighbor-full",
+      "field": "gf8",
+      "workspace": "materialized",
+      "K": 224,
+      "R": 32,
+      "shard_bytes": 4096,
+      "loss_count": 32,
+      "missing_originals": [0, 6, 7, 13, 22, 30, 31, 40, 46, 61, 74, 79, 97, 108, 130, 132, 137, 139, 143, 149, 150, 158, 167, 181, 188, 192, 193, 201, 205, 208, 218, 223],
+      "seed": 1703,
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "decode_first_use_speedup": 1.1602592242961483,
+      "decode_first_use_ci95": [1.1536560568301715, 1.1669001862332984],
+      "decode_reuse8_speedup": 1.2707719698653202,
+      "decode_reuse8_ci95": [1.2632561423403572, 1.2783325133124872],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 166.907625,
+        "leopard2_execution": 129.509625,
+        "leopard2_plan_setup": 14.2705,
+        "leopard2_codec_setup": 0.37,
+        "plan_share_of_first_use_percent": 9.925
+      },
+      "manifest_path": "/tmp/alg5-exact-main-materialized-gf8-full-d3a97f9-v1/manifest.json",
+      "manifest_sha256": "00d44cdad10228698d47d80597726dcff88bffdfad19b4d7cc0013e5da824d26",
+      "raw_sha256": "091514ca0a005487819e91aec879f7f7c0947b47c437dfd6ccf27d8f412b6c25",
+      "manifest_content_digest": "e01e85462bf8ddde8f0977da630ef85cb735de1e3e9fc3dac04e96f3535452b1"
+    },
+    {
+      "cell": "gf16-materialized-neighbor-eight",
+      "field": "gf16",
+      "workspace": "materialized",
+      "K": 4096,
+      "R": 512,
+      "shard_bytes": 4096,
+      "loss_count": 8,
+      "missing_originals": [465, 1575, 1756, 1799, 2952, 3092, 3199, 3687],
+      "seed": 1747,
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "decode_first_use_speedup": 2.2424830630459,
+      "decode_first_use_ci95": [2.2117108241091676, 2.273683445969114],
+      "decode_reuse8_speedup": 2.4310527694244226,
+      "decode_reuse8_ci95": [2.396794838061762, 2.4658003571575873],
+      "representative_absolute_us": {
+        "exact_main_decode_with_setup": 7060.4773125,
+        "leopard2_execution": 2867.208375,
+        "leopard2_plan_setup": 278.933,
+        "leopard2_codec_setup": 12.99,
+        "plan_share_of_first_use_percent": 8.866
+      },
+      "manifest_path": "/tmp/alg5-exact-main-materialized-gf16-eight-d3a97f9-v1/manifest.json",
+      "manifest_sha256": "865cfd3fbb67320bd8a2cd4d78f95e9c644c8d348751b5c2b0f22f4536d45392",
+      "raw_sha256": "3a07b5ddabe349ed4ccf28cf02b7a5388e3b29af8d30bd3f6e674e3f94e415ff",
+      "manifest_content_digest": "d2b4ef295f885b3c4027883d72ad497af826d4d44508353d7a784c5a8c057823"
+    }
+  ],
+  "stage_attribution": [
+    {
+      "cell": "gf8-tiled-target-one",
+      "T": 16,
+      "syndrome_butterflies": 544,
+      "requested_output_butterflies": 24,
+      "total_butterflies": 568,
+      "requested_output_blocks": 1,
+      "eliminated_evaluator_copy_vectors": 16,
+      "eliminated_evaluator_copy_traffic_bytes": 2097152,
+      "execution_working_shard_slots": 33,
+      "plan_scratch_bytes": 2172992
+    },
+    {
+      "cell": "gf8-tiled-neighbor-full",
+      "T": 32,
+      "syndrome_butterflies": 720,
+      "requested_output_butterflies": 531,
+      "total_butterflies": 1251,
+      "requested_output_blocks": 7,
+      "eliminated_evaluator_copy_vectors": 224,
+      "eliminated_evaluator_copy_traffic_bytes": 1835008,
+      "execution_working_shard_slots": 96,
+      "plan_scratch_bytes": 403712
+    },
+    {
+      "cell": "gf16-tiled-target-one",
+      "T": 256,
+      "syndrome_butterflies": 6104,
+      "requested_output_butterflies": 348,
+      "total_butterflies": 6452,
+      "requested_output_blocks": 1,
+      "eliminated_evaluator_copy_vectors": 256,
+      "eliminated_evaluator_copy_traffic_bytes": 2097152,
+      "execution_working_shard_slots": 513,
+      "plan_scratch_bytes": 2156992
+    },
+    {
+      "cell": "gf16-tiled-neighbor-eight",
+      "T": 512,
+      "syndrome_butterflies": 23040,
+      "requested_output_butterflies": 9465,
+      "total_butterflies": 32505,
+      "requested_output_blocks": 5,
+      "eliminated_evaluator_copy_vectors": 2560,
+      "eliminated_evaluator_copy_traffic_bytes": 20971520,
+      "execution_working_shard_slots": 1032,
+      "plan_scratch_bytes": 4440128
+    },
+    {
+      "cell": "gf8-materialized-neighbor-full",
+      "T": 32,
+      "syndrome_butterflies": 720,
+      "requested_output_butterflies": 509,
+      "total_butterflies": 1229,
+      "requested_output_blocks": 7,
+      "eliminated_evaluator_copy_vectors": 224,
+      "eliminated_evaluator_copy_traffic_bytes": 1835008,
+      "execution_working_shard_slots": 256,
+      "plan_scratch_bytes": 1060352
+    },
+    {
+      "cell": "gf16-materialized-neighbor-eight",
+      "T": 512,
+      "syndrome_butterflies": 23040,
+      "requested_output_butterflies": 7710,
+      "total_butterflies": 30750,
+      "requested_output_blocks": 5,
+      "eliminated_evaluator_copy_vectors": 2560,
+      "eliminated_evaluator_copy_traffic_bytes": 20971520,
+      "execution_working_shard_slots": 8192,
+      "plan_scratch_bytes": 33824768
+    }
+  ],
+  "same_source_copy_control_directional_screen": {
+    "authority": "non_authoritative_directional_only",
+    "reason": "The screen was intentionally concurrent with non-timing work; it is used only to identify whether another isolated campaign is warranted.",
+    "ratio_definition": "forced_copy_time / no_copy_time",
+    "all_workload_digests_matched": true,
+    "copy_fallback_count": 0,
+    "results": [
+      {"field": "gf8", "K": 240, "R": 16, "loss_count": 1, "materialized_ratio": 0.990, "tiled_ratio": 0.997},
+      {"field": "gf8", "K": 224, "R": 32, "loss_count": 32, "materialized_ratio": 1.054, "tiled_ratio": 1.056},
+      {"field": "gf16", "K": 1000, "R": 200, "loss_count": 1, "materialized_ratio": 1.034, "tiled_ratio": 1.016},
+      {"field": "gf16", "K": 4096, "R": 512, "loss_count": 8, "materialized_ratio": 1.042, "tiled_ratio": 1.041}
+    ],
+    "interpretation": "One-output-block cells are neutral to small; multi-output-block cells are directionally 4-6% faster. Existing isolated immediate-parent evidence remains the promotion basis for the copy-elimination kernels."
+  },
+  "rejected_attempts": [
+    {
+      "path": "/tmp/alg5-exact-main-tiled-affinity-d3a97f9-v1.json",
+      "sha256": "e0c1d52299acd19184559f7dbfa5124abcc8f7de75924f2a304104e6d3bad6ae",
+      "reason": "Supervisor affinity mutation cannot exclude an in-flight clone with finite procfs scans; inner timings were not accepted."
+    },
+    {
+      "path": "/tmp/alg5-exact-main-tiled-d3a97f9-direct-v2/failure.json",
+      "sha256": "46c3c4f6f4466f60d1a7412d7aa085a1ed928d8985a0d2510c3a3fa73ca85b0d",
+      "reason": "Reserved SMT sibling 19 recorded three non-idle jiffies (two user, one system); the failure artifact verifies cleanly."
+    },
+    {
+      "path": "/tmp/alg5-exact-main-tiled-gf8-full-d3a97f9-v1/failure.json",
+      "sha256": "c6588fe65a675ec40a2ce7557dea81d5e3304083d0c44d9353a5479a920f33bc",
+      "reason": "Reserved SMT sibling 21 recorded one user jiffy; the failure artifact verifies cleanly and the cell was rerun successfully on pair 4/20."
+    }
+  ],
+  "validation": {
+    "release_focused": "12/12 passed",
+    "clang18_asan_ubsan_focused": "10/10 passed",
+    "operation_count_integration": "20/20 passed",
+    "operation_count_self_test": "390 checks passed",
+    "oracles": [
+      "independent direct polynomial/interpolation oracle",
+      "generic full-transform decoder",
+      "legacy golden vectors",
+      "materialized versus tiled differential execution",
+      "GF8/GF16 scalar and available SIMD backend tracing",
+      "copy/no-copy contract with zero compatibility fallback"
+    ],
+    "fuzzing_scope": "No broad fuzz campaign was run for this checkpoint; deterministic differential, sanitizer, and benchmark tests were prioritized."
+  },
+  "conclusion": {
+    "result": "Every accepted GF8/GF16 tiled/materialized Algorithm 5 cell is faster than exact Leopard main on first use and with plan reuse; lower confidence bounds range from 1.154x to 2.744x for first use.",
+    "optimization_decision": "No additional speculative kernel was promoted. The current no-copy/message-only path has no residual exact-main regression in the measured target cells, and the one-output-block same-source delta is too small/noisy to justify a new policy branch.",
+    "remaining_gap": "Materialized Algorithm 5 retains N shard-data slots while tiled execution uses 2T plus one slot per missing original; further scratch reduction is a separate architectural task, not evidence that Algorithm 5 arithmetic is missing."
+  }
+}
