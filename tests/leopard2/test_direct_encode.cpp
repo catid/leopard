@@ -152,6 +152,7 @@ struct Counts
     uint64_t high_byte_tiling_checks;
     uint64_t gf8_coarse_oracle_checks;
     uint64_t high_small_transform_checks;
+    uint64_t sparse_auto_promotion_checks;
 
     Counts()
         : profiles(0), basis_messages(0), random_messages(0), parity_symbols(0)
@@ -161,6 +162,7 @@ struct Counts
         , high_source_staging_checks(0), high_byte_tiling_checks(0)
         , gf8_coarse_oracle_checks(0)
         , high_small_transform_checks(0)
+        , sparse_auto_promotion_checks(0)
     {}
 };
 
@@ -1883,6 +1885,417 @@ void test_auto_encode_batch(leo2_context* context, Counts* counts)
     delete owner;
 }
 
+void test_sparse_low_gf16_auto_promotion(
+    const BinaryField& gf16,
+    Counts* counts)
+{
+    const unsigned k = 128;
+    const unsigned r = 896;
+    const size_t bytes = 1024;
+    const size_t tail_bytes = 1026;
+    static const unsigned edge_indices[] = {
+        0, 127, 128, 383, 895
+    };
+    static const unsigned scattered_indices[] = {
+        7, 63, 135, 255, 519, 895
+    };
+
+    std::vector<uint8_t> edge(r, 0);
+    std::vector<uint8_t> scattered(r, 0);
+    for (size_t i = 0;
+         i < sizeof(edge_indices) / sizeof(edge_indices[0]); ++i)
+        edge[edge_indices[i]] = 1;
+    for (size_t i = 0;
+         i < sizeof(scattered_indices) / sizeof(scattered_indices[0]); ++i)
+        scattered[scattered_indices[i]] = 1;
+
+    // Request AVX2 explicitly so an AVX-512 AUTO policy cannot accidentally
+    // turn this into a skipped or misclassified test.  Unsupported hosts still
+    // cover exact schedules through FORCE_TRANSFORM in the generic matrix.
+    leo2_context_options target_options = {};
+    target_options.struct_size = sizeof(target_options);
+    target_options.backend = LEO2_BACKEND_AVX2;
+    target_options.thread_count = 1;
+    leo2_context* target_context = NULL;
+    const leo2_result target_context_result = leo2_context_create(
+        &target_options, &target_context);
+    if (target_context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(target_context_result,
+        "sparse AUTO AVX2 context create");
+
+    leo2_context_options scalar_options = {};
+    scalar_options.struct_size = sizeof(scalar_options);
+    scalar_options.backend = LEO2_BACKEND_SCALAR;
+    scalar_options.thread_count = 1;
+    leo2_context* scalar_context = NULL;
+    require_result(leo2_context_create(&scalar_options, &scalar_context),
+        "sparse AUTO scalar context create");
+    CodecOwner* target = make_codec(target_context, k, r,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16);
+    CodecOwner* scalar = make_codec(scalar_context, k, r,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16);
+
+    require_result(leo2_test_codec_set_encode_mode(
+        target->codec, LEO2_TEST_ENCODE_AUTO), "sparse AUTO target mode");
+    require_result(leo2_test_codec_set_encode_mode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO), "sparse AUTO scalar mode");
+    size_t target_scratch_bytes = 0;
+    size_t scalar_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        target->codec, bytes, &target_scratch_bytes),
+        "sparse AUTO target scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, bytes, &scalar_scratch_bytes),
+        "sparse AUTO scalar scratch query");
+    require(target_scratch_bytes == scalar_scratch_bytes,
+        "hook-build sparse scratch upper bound changed across backends");
+    size_t target_small_scratch = 0;
+    size_t scalar_small_scratch = 0;
+    require_result(leo2_encode_scratch_size(
+        target->codec, 64, &target_small_scratch),
+        "sparse AUTO 64-byte target scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, 64, &scalar_small_scratch),
+        "sparse AUTO 64-byte scalar scratch query");
+    require(target_small_scratch == scalar_small_scratch,
+        "64-byte negative cell reserved an exact schedule");
+
+    const Shards original = random_shards(
+        k, tail_bytes, UINT64_C(0x5350415253454155));
+    Shards aligned_original(k, Bytes(bytes, 0));
+    Shards small_original(k, Bytes(64, 0));
+    for (unsigned i = 0; i < k; ++i)
+    {
+        std::copy(original[i].begin(), original[i].begin() + bytes,
+            aligned_original[i].begin());
+        std::copy(original[i].begin(), original[i].begin() + 64,
+            small_original[i].begin());
+    }
+
+    const EncodeResult edge_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, edge);
+    const EncodeResult scattered_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, scattered);
+    require_result(edge_reference.result, "sparse AUTO edge scalar encode");
+    require_result(scattered_reference.result,
+        "sparse AUTO scattered scalar encode");
+
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult edge_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, edge);
+    require_result(edge_actual.result, "sparse AUTO edge encode");
+    compare_requested(edge_actual.recovery, edge_reference.recovery, edge,
+        0xa5, "sparse AUTO edge/scalar", counts);
+    leopard::ff16::TestOnlySparseEncodeCounts route =
+        leopard::ff16::TestOnlyGetSparseEncodeCounts();
+    require(route.exact_blocks == 4 &&
+            route.retained_butterflies < route.prefix_butterflies &&
+            route.requested_output_copies == 5,
+        "edge mask did not select the exact sparse schedule");
+
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult scattered_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, scattered);
+    require_result(scattered_actual.result, "sparse AUTO scattered encode");
+    compare_requested(scattered_actual.recovery,
+        scattered_reference.recovery, scattered, 0xa5,
+        "sparse AUTO scattered/scalar", counts);
+    route = leopard::ff16::TestOnlyGetSparseEncodeCounts();
+    require(route.exact_blocks == 4 &&
+            route.retained_butterflies < route.prefix_butterflies &&
+            route.requested_output_copies == 6,
+        "scattered mask did not select the exact sparse schedule");
+
+    // Independently evaluate one native GF16 symbol at every requested edge
+    // coordinate.  This checks the promoted path against direct algebra rather
+    // than only against another transform implementation.
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLow, k, r);
+    std::vector<Element> points(layout.parent_dimension, 0);
+    std::vector<Element> values(layout.parent_dimension, 0);
+    for (unsigned i = 0; i < layout.parent_dimension; ++i)
+    {
+        points[i] = static_cast<Element>(layout.systematic_coordinates[i]);
+        values[i] = static_cast<Element>(aligned_original[i][0] |
+            (static_cast<unsigned>(aligned_original[i][32]) << 8));
+    }
+    for (size_t i = 0;
+         i < sizeof(edge_indices) / sizeof(edge_indices[0]); ++i)
+    {
+        const unsigned parity = edge_indices[i];
+        const Element expected = leopard2_test::lagrange_evaluate(
+            gf16, points, values,
+            static_cast<Element>(layout.parity_coordinates[parity]));
+        const Element actual = static_cast<Element>(
+            edge_actual.recovery[parity][0] |
+            (static_cast<unsigned>(edge_actual.recovery[parity][32]) << 8));
+        require(actual == expected,
+            "sparse AUTO edge output differs from direct GF16 algebra");
+        ++counts->parity_symbols;
+    }
+
+    // 64-byte and near-mask controls must retain the mature prefix evaluator.
+    const EncodeResult small_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, small_original, edge);
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult small_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, small_original, edge);
+    require_result(small_actual.result, "sparse AUTO 64-byte fallback encode");
+    compare_requested(small_actual.recovery, small_reference.recovery, edge,
+        0xa5, "sparse AUTO 64-byte fallback/scalar", counts);
+    require(leopard::ff16::TestOnlyGetSparseEncodeCounts().exact_blocks == 0,
+        "64-byte negative cell selected the exact sparse schedule");
+
+    std::vector<uint8_t> near_edge = edge;
+    near_edge[1] = 1;
+    const EncodeResult near_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, near_edge);
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult near_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, near_edge);
+    require_result(near_actual.result, "sparse AUTO near-mask fallback encode");
+    compare_requested(near_actual.recovery, near_reference.recovery, near_edge,
+        0xa5, "sparse AUTO near-mask fallback/scalar", counts);
+    require(leopard::ff16::TestOnlyGetSparseEncodeCounts().exact_blocks == 0,
+        "unmeasured near-mask selected the exact sparse schedule");
+
+    std::vector<uint8_t> dense_prefix(r, 0);
+    std::fill(dense_prefix.begin(), dense_prefix.begin() + 128, 1);
+    const EncodeResult dense_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, dense_prefix);
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult dense_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, aligned_original, dense_prefix);
+    require_result(dense_actual.result, "sparse AUTO dense fallback encode");
+    compare_requested(dense_actual.recovery, dense_reference.recovery,
+        dense_prefix, 0xa5, "sparse AUTO dense fallback/scalar", counts);
+    require(leopard::ff16::TestOnlyGetSparseEncodeCounts().exact_blocks == 0,
+        "dense-prefix control selected the exact sparse schedule");
+
+    // A compact GF16 tail reuses the schedule compiled before either pass.
+    const EncodeResult tail_reference = encode(
+        scalar->codec, LEO2_TEST_ENCODE_AUTO, original, edge);
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    const EncodeResult tail_actual = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, original, edge);
+    require_result(tail_actual.result, "sparse AUTO tail encode");
+    compare_requested(tail_actual.recovery, tail_reference.recovery, edge,
+        0xa5, "sparse AUTO tail/scalar", counts);
+    route = leopard::ff16::TestOnlyGetSparseEncodeCounts();
+    require(route.exact_blocks == 8 && route.requested_output_copies == 10,
+        "GF16 compact tail did not execute the compiled schedule twice");
+    for (unsigned i = 0; i < k; ++i)
+        values[i] = static_cast<Element>(original[i][1024] |
+            (static_cast<unsigned>(original[i][1025]) << 8));
+    for (size_t i = 0;
+         i < sizeof(edge_indices) / sizeof(edge_indices[0]); ++i)
+    {
+        const unsigned parity = edge_indices[i];
+        const Element expected = leopard2_test::lagrange_evaluate(
+            gf16, points, values,
+            static_cast<Element>(layout.parity_coordinates[parity]));
+        const Element actual = static_cast<Element>(
+            tail_actual.recovery[parity][1024] |
+            (static_cast<unsigned>(tail_actual.recovery[parity][1025]) << 8));
+        require(actual == expected,
+            "sparse AUTO compact tail differs from direct GF16 algebra");
+        ++counts->parity_symbols;
+    }
+
+    // Prepare the complete invocation before enabling the allocation trap.
+    const std::vector<const void*> input = const_pointers(original);
+    Shards audited_output(r, Bytes(tail_bytes, 0xa5));
+    std::vector<void*> audited_recovery(r, NULL);
+    for (unsigned i = 0; i < r; ++i)
+        if (edge[i])
+            audited_recovery[i] = &audited_output[i][0];
+    size_t tail_scratch_bytes = 0;
+    size_t scalar_tail_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        target->codec, tail_bytes, &tail_scratch_bytes),
+        "sparse AUTO tail scratch query");
+    require_result(leo2_encode_scratch_size(
+        scalar->codec, tail_bytes, &scalar_tail_scratch_bytes),
+        "sparse AUTO scalar tail scratch query");
+    require(tail_scratch_bytes == scalar_tail_scratch_bytes,
+        "hook-build tail scratch upper bound changed across backends");
+    AlignedBuffer tail_scratch(tail_scratch_bytes);
+    begin_allocation_audit();
+    const leo2_result audited_result = leo2_encode(target->codec, tail_bytes,
+        &input[0], &audited_recovery[0], tail_scratch.data(),
+        tail_scratch.size());
+    const uint64_t hot_allocations = end_allocation_audit();
+    require_result(audited_result, "allocation-trapped sparse AUTO encode");
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    require(hot_allocations == 0,
+        "sparse AUTO encode allocated C++ storage");
+    ++counts->allocation_checks;
+#else
+    (void)hot_allocations;
+#endif
+    compare_requested(audited_output, tail_reference.recovery, edge, 0xa5,
+        "allocation-trapped sparse AUTO/scalar", counts);
+
+    // Validation and scratch failures occur before schedule compilation or any
+    // output write.  The UINT64_MAX query also locks overflow behavior.
+    Shards rejected_output(r, Bytes(tail_bytes, 0x6d));
+    const Shards rejected_before = rejected_output;
+    std::vector<void*> rejected_recovery(r, NULL);
+    for (unsigned i = 0; i < r; ++i)
+        if (edge[i])
+            rejected_recovery[i] = &rejected_output[i][0];
+    leopard::ff16::TestOnlyResetSparseEncodeCounts();
+    require(leo2_encode(target->codec, tail_bytes, &input[0],
+                &rejected_recovery[0], tail_scratch.data(),
+                tail_scratch.size() - 1) == LEO2_SCRATCH_TOO_SMALL,
+        "sparse AUTO accepted one-byte-short scratch");
+    require(rejected_output == rejected_before &&
+            leopard::ff16::TestOnlyGetSparseEncodeCounts().exact_blocks == 0,
+        "short scratch compiled or partially wrote sparse AUTO output");
+    rejected_recovery[edge_indices[0]] = const_cast<void*>(input[0]);
+    const uint64_t input_hash = hash_shards(original);
+    require(leo2_encode(target->codec, tail_bytes, &input[0],
+                &rejected_recovery[0], tail_scratch.data(),
+                tail_scratch.size()) == LEO2_OVERLAP,
+        "sparse AUTO accepted output/input aliasing");
+    require(hash_shards(original) == input_hash &&
+            rejected_output == rejected_before &&
+            leopard::ff16::TestOnlyGetSparseEncodeCounts().exact_blocks == 0,
+        "alias rejection compiled or modified sparse AUTO buffers");
+    size_t invalid_scratch = 123;
+    require(leo2_encode_scratch_size(target->codec, UINT64_MAX,
+                &invalid_scratch) == LEO2_INVALID_ARGUMENT &&
+            invalid_scratch == 0,
+        "sparse AUTO scratch overflow was not rejected atomically");
+    invalid_scratch = 123;
+    require(leo2_encode_scratch_size(target->codec, 1025,
+                &invalid_scratch) == LEO2_UNSUPPORTED &&
+            invalid_scratch == 0,
+        "sparse AUTO accepted an odd native GF16 shard length");
+    counts->contract_checks += 4;
+
+    // Recover one missing original from the sparse parity set, then re-encode
+    // the repaired message and require exact parity reproduction.
+    const unsigned missing = 37;
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present = edge;
+    original_present[missing] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(target->codec,
+        &original_present[0], &recovery_present[0], &plan),
+        "sparse AUTO decode plan create");
+    std::vector<const void*> decode_original = input;
+    decode_original[missing] = NULL;
+    std::vector<const void*> decode_recovery(r, NULL);
+    for (unsigned i = 0; i < r; ++i)
+        if (edge[i])
+            decode_recovery[i] = &tail_actual.recovery[i][0];
+    Shards restored(k, Bytes(tail_bytes, 0));
+    std::vector<void*> restored_output(k, NULL);
+    restored_output[missing] = &restored[missing][0];
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, tail_bytes, &decode_scratch_bytes),
+        "sparse AUTO decode scratch query");
+    AlignedBuffer decode_scratch(decode_scratch_bytes);
+    require_result(leo2_decode_plan_execute(plan, tail_bytes,
+        &decode_original[0], &decode_recovery[0], &restored_output[0],
+        decode_scratch.data(), decode_scratch.size()),
+        "sparse AUTO decode execute");
+    require(restored[missing] == original[missing],
+        "sparse AUTO parity did not recover the missing original");
+    Shards repaired = original;
+    repaired[missing] = restored[missing];
+    const EncodeResult rebuilt = encode(
+        target->codec, LEO2_TEST_ENCODE_AUTO, repaired, edge);
+    require_result(rebuilt.result, "sparse AUTO parity rebuild");
+    compare_requested(rebuilt.recovery, tail_actual.recovery, edge, 0xa5,
+        "sparse AUTO rebuilt parity", counts);
+    leo2_decode_plan_destroy(plan);
+
+    // Batch and concurrent callers share only immutable codec state; each
+    // execution owns its schedule scratch and outputs.
+    struct Invocation
+    {
+        Invocation(unsigned output_count, size_t shard_bytes,
+            size_t scratch_bytes)
+            : output(output_count, Bytes(shard_bytes, 0xa5))
+            , pointers(output_count, NULL), scratch(scratch_bytes)
+        {}
+        Shards output;
+        std::vector<void*> pointers;
+        AlignedBuffer scratch;
+    };
+    Invocation edge_batch(r, bytes, target_scratch_bytes);
+    Invocation scattered_batch(r, bytes, target_scratch_bytes);
+    for (unsigned i = 0; i < r; ++i)
+    {
+        if (edge[i])
+            edge_batch.pointers[i] = &edge_batch.output[i][0];
+        if (scattered[i])
+            scattered_batch.pointers[i] = &scattered_batch.output[i][0];
+    }
+    const std::vector<const void*> aligned_input =
+        const_pointers(aligned_original);
+    leo2_encode_batch_item batch_items[2] = {
+        { bytes, &aligned_input[0], &edge_batch.pointers[0],
+            edge_batch.scratch.data(), edge_batch.scratch.size() },
+        { bytes, &aligned_input[0], &scattered_batch.pointers[0],
+            scattered_batch.scratch.data(), scattered_batch.scratch.size() }
+    };
+    require_result(leo2_encode_batch(target->codec, batch_items, 2),
+        "sparse AUTO batch encode");
+    compare_requested(edge_batch.output, edge_reference.recovery, edge, 0xa5,
+        "sparse AUTO edge batch/scalar", counts);
+    compare_requested(scattered_batch.output, scattered_reference.recovery,
+        scattered, 0xa5, "sparse AUTO scattered batch/scalar", counts);
+    counts->batch_executions += 2;
+
+    std::atomic<unsigned> failures(0);
+    std::vector<std::thread> threads;
+    for (unsigned worker = 0; worker < 2; ++worker)
+    {
+        threads.push_back(std::thread([&]() {
+            try
+            {
+                Invocation call(r, bytes, target_scratch_bytes);
+                for (unsigned i = 0; i < r; ++i)
+                    if (edge[i])
+                        call.pointers[i] = &call.output[i][0];
+                if (leo2_encode(target->codec, bytes, &aligned_input[0],
+                        &call.pointers[0], call.scratch.data(),
+                        call.scratch.size()) != LEO2_SUCCESS)
+                {
+                    failures.fetch_add(1, std::memory_order_relaxed);
+                    return;
+                }
+                for (unsigned i = 0; i < r; ++i)
+                    if (call.output[i] != edge_reference.recovery[i])
+                    {
+                        failures.fetch_add(1, std::memory_order_relaxed);
+                        return;
+                    }
+            }
+            catch (...)
+            {
+                failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    for (size_t i = 0; i < threads.size(); ++i)
+        threads[i].join();
+    require(failures.load(std::memory_order_relaxed) == 0,
+        "concurrent sparse AUTO encoding was nondeterministic");
+    counts->concurrent_executions += 2;
+    counts->sparse_auto_promotion_checks += 18;
+
+    delete scalar;
+    delete target;
+    leo2_context_destroy(scalar_context);
+    leo2_context_destroy(target_context);
+}
+
 void test_concurrent_codec(leo2_context* context, Counts* counts)
 {
     const unsigned k = 9;
@@ -1979,6 +2392,7 @@ int main()
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
         test_unaligned_guarded_buffers(context, gf8, gf16, &counts);
         test_auto_encode_batch(context, &counts);
+        test_sparse_low_gf16_auto_promotion(gf16, &counts);
         test_concurrent_codec(context, &counts);
         leo2_context_destroy(context);
 
@@ -2003,6 +2417,8 @@ int main()
                   << counts.gf8_coarse_oracle_checks
                   << " high_small_transform_checks="
                   << counts.high_small_transform_checks
+                  << " sparse_auto_promotion_checks="
+                  << counts.sparse_auto_promotion_checks
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
                   << " allocation_audit=enabled"
 #else

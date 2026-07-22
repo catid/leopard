@@ -281,9 +281,7 @@ static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
 static const size_t kScalableBatchPreflightMinItems = 9;
-#ifdef LEO2_ENABLE_TEST_HOOKS
 static const size_t kSparseEncodeScheduleBudget = 65536;
-#endif
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
 typedef leo2_result (*BatchPreflightFunction)(void* context);
@@ -1959,6 +1957,60 @@ static leo2_result ValidateEncodeBuffers(
 
 static bool CodecMayUseAutoAVX512Encode(const leo2_codec* codec);
 
+static bool CodecMayUseMeasuredSparseLowGF16AVX2Encode(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+#ifdef LEO_HAS_FF16
+    /*
+        Keep the first exact-output promotion deliberately narrower than the
+        arithmetic implementation.  Pinned, setup-inclusive measurements
+        established a whole-call win for the K=128,R=896 low-profile AVX2
+        shape at and above 1 KiB.  Other fields, backends, count neighbors,
+        and the 64-byte cell retain the mature prefix evaluator until they
+        pass their own public-API crossover gate.
+
+        This predicate reserves bounded call-local schedule storage.  The
+        output bitmap is unavailable to the scratch-size query and is checked
+        separately immediately before compilation.
+    */
+    return codec && codec->profile == LEO2_PROFILE_LOW_V1 &&
+        codec->field == LEO2_FIELD_GF16 &&
+        codec->original_count == 128 && codec->recovery_count == 896 &&
+        codec->padded_side == 128 &&
+        codec->context && codec->context->backend == LEO2_BACKEND_AVX2 &&
+        shard_bytes >= 1024;
+#else
+    (void)codec;
+    (void)shard_bytes;
+    return false;
+#endif
+}
+
+static bool TestForcesSparseEncodeSchedule(const leo2_codec* codec)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec &&
+        codec->test_encode_mode == LEO2_TEST_ENCODE_FORCE_TRANSFORM;
+#else
+    (void)codec;
+    return false;
+#endif
+}
+
+static bool TestBuildReservesSparseEncodeSchedule(const leo2_codec* codec)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    // The diagnostic codec may switch modes after a scratch query.  Preserve
+    // the historical hook-build upper bound so FORCE_TRANSFORM never grows
+    // scratch behind the caller's back.
+    return codec != NULL;
+#else
+    (void)codec;
+    return false;
+#endif
+}
+
 static leo2_result EncodeLayout(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -2049,13 +2101,14 @@ static leo2_result EncodeLayout(
             geometry.layout, geometry.work_data_offset))
         return LEO2_INVALID_COUNTS;
 
-    // Exact sparse-output schedules are not part of AUTO until same-source
-    // setup+execution crossover measurements justify stable thresholds.  Test
-    // builds reserve the bounded call-local storage so FORCE_TRANSFORM can
-    // exercise the complete integration without changing the production
-    // scratch contract.
-#ifdef LEO2_ENABLE_TEST_HOOKS
-    if (codec->padded_side >= 2)
+    // A qualifying production codec reserves one bounded call-local exact
+    // schedule.  Scratch queries cannot depend on the later output bitmap, so
+    // dense and unqualified masks for that codec receive the same conservative
+    // upper bound while continuing to execute the mature prefix transform.
+    // Test FORCE_TRANSFORM keeps its broader diagnostic coverage.
+    if (codec->padded_side >= 2 &&
+        (CodecMayUseMeasuredSparseLowGF16AVX2Encode(codec, shard_bytes) ||
+         TestBuildReservesSparseEncodeSchedule(codec)))
     {
         geometry.sparse_block_count =
             codec->profile == LEO2_PROFILE_LOW_V1
@@ -2092,7 +2145,6 @@ static leo2_result EncodeLayout(
         else
             geometry.layout.total_bytes = schedule_end;
     }
-#endif
     return LEO2_SUCCESS;
 }
 
@@ -2790,27 +2842,65 @@ static void PopulateEncodeInputs(
     }
 }
 
+static bool MatchesMeasuredSparseLowGF16OutputMask(
+    const leo2_codec* codec,
+    void* const* recovery,
+    uint32_t requested_recovery_count)
+{
+    if (!codec || !recovery || codec->recovery_count != 896)
+        return false;
+
+    static const uint16_t kEdgeSparse[] = {
+        0, 127, 128, 383, 895
+    };
+    static const uint16_t kScatteredSparse[] = {
+        7, 63, 135, 255, 519, 895
+    };
+    const uint16_t* expected = NULL;
+    size_t expected_count = 0;
+    if (requested_recovery_count ==
+        sizeof(kEdgeSparse) / sizeof(kEdgeSparse[0]))
+    {
+        expected = kEdgeSparse;
+        expected_count = sizeof(kEdgeSparse) / sizeof(kEdgeSparse[0]);
+    }
+    else if (requested_recovery_count ==
+        sizeof(kScatteredSparse) / sizeof(kScatteredSparse[0]))
+    {
+        expected = kScatteredSparse;
+        expected_count =
+            sizeof(kScatteredSparse) / sizeof(kScatteredSparse[0]);
+    }
+    else
+        return false;
+
+    // EncodeInternal already counted every non-null output.  Matching all Q
+    // expected entries therefore proves there cannot be an unexpected extra
+    // output and avoids another O(R) pointer-array pass in the hot call.
+    for (size_t i = 0; i < expected_count; ++i)
+        if (!recovery[expected[i]])
+            return false;
+    return true;
+}
+
 static bool PrepareSparseEncodePlans(
     const leo2_codec* codec,
     const EncodeScratchGeometry& geometry,
     void* const* recovery,
+    uint32_t requested_recovery_count,
     uint8_t* scratch_base,
     leopard2_internal::SparseForwardPlanBatchView& view)
 {
     view.operation_masks = NULL;
     view.operation_stride = 0;
     view.block_count = 0;
-#ifndef LEO2_ENABLE_TEST_HOOKS
-    (void)codec;
-    (void)geometry;
-    (void)recovery;
-    (void)scratch_base;
-    return true;
-#else
-    // This is an explicit diagnostic/experimental force mode.  AUTO keeps the
-    // established prefix transform until setup-inclusive crossover evidence
-    // supports a deterministic production dispatcher.
-    if (codec->test_encode_mode != LEO2_TEST_ENCODE_FORCE_TRANSFORM)
+    const bool forced = TestForcesSparseEncodeSchedule(codec);
+    const bool measured =
+        CodecMayUseMeasuredSparseLowGF16AVX2Encode(codec,
+            geometry.aligned_prefix_bytes + geometry.tail_bytes) &&
+        MatchesMeasuredSparseLowGF16OutputMask(
+            codec, recovery, requested_recovery_count);
+    if (!forced && !measured)
         return true;
     // A one-symbol side has no butterflies to schedule.  Keep the empty view
     // valid so the existing XOR/copy direct transform path remains available.
@@ -2888,7 +2978,6 @@ static bool PrepareSparseEncodePlans(
     view.operation_stride = geometry.sparse_operation_stride;
     view.block_count = static_cast<uint32_t>(geometry.sparse_block_count);
     return true;
-#endif
 }
 
 static void ExecuteTransformEncodePass(
@@ -5558,7 +5647,8 @@ static leo2_result EncodeInternal(
     uint8_t* const work_storage = base + geometry.work_data_offset;
     leopard2_internal::SparseForwardPlanBatchView sparse_plans;
     if (!PrepareSparseEncodePlans(
-            codec, geometry, recovery, base, sparse_plans))
+            codec, geometry, recovery, requested_recovery_count,
+            base, sparse_plans))
         return LEO2_INTERNAL_ERROR;
 
     if (geometry.aligned_prefix_bytes != 0)

@@ -62,6 +62,7 @@ namespace {
 enum EncodeMode
 {
     MODE_UNSPECIFIED,
+    MODE_AUTO,
     MODE_DIRECT,
     MODE_TRANSFORM
 };
@@ -235,7 +236,8 @@ static void SelectMode(Options& options, EncodeMode mode, const char* option)
 static void Usage(std::ostream& output, const char* program)
 {
     output
-        << "Usage: " << program << " --force-direct|--force-transform [options]\n"
+        << "Usage: " << program
+        << " --auto|--force-direct|--force-transform [options]\n"
         << "  --k N                       Original shard count (default 8)\n"
         << "  --r N                       Recovery shard count (default 8)\n"
         << "  --profile NAME              auto, high, low (default auto)\n"
@@ -251,9 +253,10 @@ static void Usage(std::ostream& output, const char* program)
         << "  --warmups N                 Untimed calls/setups (default 4)\n"
         << "  --threads N                 Context thread count (default 1)\n"
         << "  --seed N                    Deterministic data seed (default 1)\n"
+        << "  --auto                      Time ordinary production AUTO dispatch\n"
         << "  --force-direct              Time the bounded direct encoder\n"
         << "  --force-transform           Time the transform encoder\n"
-        << "  --mode direct|transform     Equivalent explicit mode spelling\n"
+        << "  --mode auto|direct|transform  Equivalent explicit mode spelling\n"
         << "  --json PATH                 JSON output path, or - (default -)\n"
         << "  --help                      Show this message\n";
 }
@@ -304,6 +307,8 @@ static Options ParseOptions(int argc, char** argv)
             options.threads = ParseUint32(NeedValue(argc, argv, i), "--threads");
         else if (argument == "--seed")
             options.seed = ParseUnsigned(NeedValue(argc, argv, i), "--seed");
+        else if (argument == "--auto")
+            SelectMode(options, MODE_AUTO, "--auto");
         else if (argument == "--force-direct")
             SelectMode(options, MODE_DIRECT, "--force-direct");
         else if (argument == "--force-transform")
@@ -311,7 +316,9 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
-            if (mode == "direct")
+            if (mode == "auto")
+                SelectMode(options, MODE_AUTO, "--mode auto");
+            else if (mode == "direct")
                 SelectMode(options, MODE_DIRECT, "--mode direct");
             else if (mode == "transform")
                 SelectMode(options, MODE_TRANSFORM, "--mode transform");
@@ -332,7 +339,7 @@ static Options ParseOptions(int argc, char** argv)
         options.threads == 0)
         Fail("--batch, --reuse, --iterations, and --threads must be positive");
     if (options.mode == MODE_UNSPECIFIED)
-        Fail("select exactly one of --force-direct or --force-transform");
+        Fail("select exactly one encode mode");
     return options;
 }
 
@@ -562,14 +569,36 @@ static void InitializeStripe(
 
 static leo2_test_encode_mode TestMode(EncodeMode mode)
 {
-    return mode == MODE_DIRECT
-        ? LEO2_TEST_ENCODE_FORCE_DIRECT
-        : LEO2_TEST_ENCODE_FORCE_TRANSFORM;
+    if (mode == MODE_AUTO)
+        return LEO2_TEST_ENCODE_AUTO;
+    if (mode == MODE_DIRECT)
+        return LEO2_TEST_ENCODE_FORCE_DIRECT;
+    return LEO2_TEST_ENCODE_FORCE_TRANSFORM;
 }
 
 static const char* ModeName(EncodeMode mode)
 {
+    if (mode == MODE_AUTO)
+        return "auto";
     return mode == MODE_DIRECT ? "force_direct" : "force_transform";
+}
+
+static bool ExpectedAutoDirectPath(
+    const Options& options,
+    const leo2_codec* codec,
+    const leo2_context* context,
+    bool direct_capable)
+{
+    if (!direct_capable || leo2_codec_profile(codec) != LEO2_PROFILE_LOW_V1 ||
+        options.k < 2 || options.q != 1 || options.bytes < 1024 ||
+        (options.bytes & 63U) != 0)
+        return false;
+    const leo2_backend backend = leo2_context_backend(context);
+    if (backend == LEO2_BACKEND_SCALAR)
+        return options.k >= 3;
+    return backend == LEO2_BACKEND_SSSE3 ||
+        backend == LEO2_BACKEND_AVX2 ||
+        backend == LEO2_BACKEND_AVX512;
 }
 
 static const char* ProfileName(leo2_profile profile)
@@ -773,7 +802,7 @@ static void VerifyParity(
                 if (memcmp(direct, transform, bytes) != 0)
                 {
                     std::ostringstream stream;
-                    stream << "direct and transform parity differ at stripe "
+                    stream << "selected and transform-reference parity differ at stripe "
                            << stripe_index << ", recovery " << recovery;
                     Fail(stream.str());
                 }
@@ -910,13 +939,25 @@ static int Run(Options options)
     try
     {
         codec = CreateCodec(context, options, options.mode);
-        if (!leo2_test_codec_direct_encode_capable(codec))
+        const bool direct_capable =
+            leo2_test_codec_direct_encode_capable(codec) != 0;
+        if (options.mode == MODE_DIRECT && !direct_capable)
             Fail("the exact cell is outside the bounded direct encoder domain");
         const std::vector<uint8_t> requested = ParseRequestedMask(options);
 
         size_t scratch_bytes = 0;
         RequireLeo2(leo2_encode_scratch_size(
             codec, options.bytes, &scratch_bytes), "encode scratch query");
+        RequireLeo2(leo2_test_codec_set_encode_mode(
+            codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+            "select reference transform for scratch query");
+        size_t reference_scratch_bytes = 0;
+        RequireLeo2(leo2_encode_scratch_size(codec, options.bytes,
+            &reference_scratch_bytes), "reference transform scratch query");
+        RequireLeo2(leo2_test_codec_set_encode_mode(codec,
+            TestMode(options.mode)), "restore selected encode mode");
+        const size_t allocated_scratch_bytes =
+            std::max(scratch_bytes, reference_scratch_bytes);
 
         std::vector<std::unique_ptr<Stripe> > stripes;
         stripes.reserve(options.batch);
@@ -926,7 +967,8 @@ static int Run(Options options)
         {
             stripes.push_back(std::unique_ptr<Stripe>(new Stripe));
             InitializeStripe(
-                *stripes.back(), options, requested, scratch_bytes, i);
+                *stripes.back(), options, requested,
+                allocated_scratch_bytes, i);
 
             leo2_encode_batch_item& direct = direct_items[i];
             direct.shard_bytes = options.bytes;
@@ -943,18 +985,12 @@ static int Run(Options options)
             transform.scratch_bytes = stripes.back()->scratch.size();
         }
 
+        // Keep a mature transform reference in direct_storage.  The selected
+        // path writes transform_storage, so AUTO can be timed for arbitrary
+        // K/R while retaining parity and unrequested-output checks.  For a
+        // forced-direct cell this is the same direct-versus-transform oracle
+        // as before, with the two storage labels merely reversed.
         int selected_direct = -1;
-        RequireLeo2(leo2_test_codec_set_encode_mode(
-            codec, LEO2_TEST_ENCODE_FORCE_DIRECT), "force direct validation");
-        RequireLeo2(leo2_test_codec_encode_path(
-            codec, options.bytes, options.q, &selected_direct),
-            "query forced direct path");
-        if (selected_direct != 1)
-            Fail("forced direct path introspection did not select direct");
-        RequireLeo2(leo2_encode_batch(
-            codec, &direct_items[0], direct_items.size()),
-            "direct correctness encode");
-
         RequireLeo2(leo2_test_codec_set_encode_mode(
             codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
             "force transform validation");
@@ -964,23 +1000,27 @@ static int Run(Options options)
         if (selected_direct != 0)
             Fail("forced transform path introspection selected direct");
         RequireLeo2(leo2_encode_batch(
-            codec, &transform_items[0], transform_items.size()),
-            "transform correctness encode");
-        VerifyParity(stripes, options, requested);
+            codec, &direct_items[0], direct_items.size()),
+            "reference transform correctness encode");
 
         RequireLeo2(leo2_test_codec_set_encode_mode(codec,
             TestMode(options.mode)), "select timed encode path");
         RequireLeo2(leo2_test_codec_encode_path(
             codec, options.bytes, options.q, &selected_direct),
             "query timed encode path");
-        const int expected_direct = options.mode == MODE_DIRECT ? 1 : 0;
+        const int expected_direct = options.mode == MODE_DIRECT ? 1 :
+            (options.mode == MODE_TRANSFORM ? 0 :
+             (ExpectedAutoDirectPath(
+                  options, codec, context, direct_capable) ? 1 : 0));
         if (selected_direct != expected_direct)
-            Fail("timed encode path introspection disagrees with forced mode");
+            Fail("timed encode path introspection disagrees with selected mode");
+        RequireLeo2(leo2_encode_batch(
+            codec, &transform_items[0], transform_items.size()),
+            "selected-path correctness encode");
+        VerifyParity(stripes, options, requested);
 
         const Summary setup = MeasureCodecSetup(context, options);
-        const std::vector<leo2_encode_batch_item>& timed_items =
-            options.mode == MODE_DIRECT ? direct_items : transform_items;
-        const Summary encode = MeasureEncode(codec, timed_items, options);
+        const Summary encode = MeasureEncode(codec, transform_items, options);
 
         // Re-check after timed execution so the reported checksum and
         // correctness statement cover the exact final buffers used by timing.
@@ -1074,12 +1114,15 @@ static int Run(Options options)
              << leo2_codec_parent_count(codec) << ",\n"
              << "    \"padded_side\": "
              << leo2_codec_padded_side(codec) << ",\n"
-             << "    \"direct_capable\": true,\n"
+             << "    \"direct_capable\": "
+             << (direct_capable ? "true" : "false") << ",\n"
              << "    \"timed_path_is_direct\": "
              << (selected_direct ? "true" : "false") << "\n"
              << "  },\n"
              << "  \"correctness\": {\n"
-             << "    \"direct_transform_parity_match\": true,\n"
+             << "    \"selected_transform_reference_parity_match\": true,\n"
+             << "    \"direct_transform_parity_match\": "
+             << (direct_capable ? "true" : "null") << ",\n"
              << "    \"unrequested_outputs_untouched\": true,\n"
              << "    \"parity_checksum_fnv1a64\": \"0x"
              << std::hex << std::setw(16) << std::setfill('0') << checksum
@@ -1090,8 +1133,16 @@ static int Run(Options options)
              << leo2_scratch_alignment() << ",\n"
              << "    \"encode_scratch_bytes_per_stripe\": "
              << scratch_bytes << ",\n"
+             << "    \"reference_scratch_bytes_per_stripe\": "
+             << reference_scratch_bytes << ",\n"
+             << "    \"benchmark_allocated_scratch_bytes_per_stripe\": "
+             << allocated_scratch_bytes << ",\n"
              << "    \"encode_scratch_bytes_batch\": "
              << CheckedProduct(scratch_bytes, batch, "batch scratch bytes")
+             << ",\n"
+             << "    \"benchmark_allocated_scratch_bytes_batch\": "
+             << CheckedProduct(allocated_scratch_bytes, batch,
+                    "benchmark allocated batch scratch bytes")
              << "\n"
              << "  },\n"
              << "  \"operation_model\": {\n"
@@ -1113,6 +1164,8 @@ static int Run(Options options)
              << direct_output_write_bytes << ",\n"
              << "    \"model_scope\": \"direct streaming kernels before "
              << "cache effects; unit coefficients specialize to copy/XOR\",\n"
+             << "    \"direct_model_applies_to_timed_path\": "
+             << (options.mode == MODE_DIRECT ? "true" : "false") << ",\n"
              << "    \"transform_operation_counts\": null,\n"
              << "    \"hardware_counters\": null\n"
              << "  },\n"
@@ -1134,7 +1187,7 @@ static int Run(Options options)
              << "  },\n"
              << "  \"methodology\": {\n"
              << "    \"codec_setup_scope\": "
-             << "\"codec_create + forced-mode selection + codec_destroy; "
+             << "\"codec_create + encode-mode selection + codec_destroy; "
              << "context reused\",\n"
              << "    \"timed_encode_allocations\": "
              << "\"all benchmark-owned storage and sample vectors are "

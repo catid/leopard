@@ -1121,6 +1121,20 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_auto_encode_backend PROPERTIES
         ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+    if(LEOPARD_ENABLE_GF16)
+        # This target deliberately links the ordinary production archive, not
+        # leopard_test_hooks.  Sparse AUTO scratch and dispatch must therefore
+        # remain correct when diagnostic hook builds do not conservatively
+        # reserve schedules for every codec/backend.
+        add_executable(leopard2_sparse_encode_production_test
+            tests/leopard2/test_sparse_encode_production.cpp)
+        target_link_libraries(leopard2_sparse_encode_production_test leopard)
+        add_test(NAME leopard2_sparse_encode_production
+            COMMAND leopard2_sparse_encode_production_test)
+        set_tests_properties(leopard2_sparse_encode_production PROPERTIES
+            ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
     add_executable(leopard2_r1_xor_test
         tests/leopard2/test_r1_xor.cpp)
     target_link_libraries(leopard2_r1_xor_test leopard)
