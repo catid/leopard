@@ -1,0 +1,143 @@
+{
+  "schema": "leopard2-gf8-avx2-t4-table-spills/v1",
+  "created_utc": "2026-07-22T11:32:22Z",
+  "disposition": "reject",
+  "source_base": "d39769dea60092a8264d13bef125eb81e3df3bd5",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "transform_size": 4,
+    "specialized_k": [3, 4, 5, 6, 7, 9, 10, 11],
+    "untouched_neighbors": [8, 12]
+  },
+  "hypothesis": "Replacing GCC's long-lived broadcast nibble tables with phase-local loads, while simplifying one- and two-source tail transforms, will remove hot YMM table spills and improve complete transform encoding by at least five percent.",
+  "variants": [
+    {
+      "name": "phase_local_reload",
+      "implementation": [
+        "A production-skew-only noinline T=4 kernel reloaded each nibble-table pair from the immutable FF8 table at the phase that consumed it.",
+        "K=3 and K=4 retained prepared tables in registers; K>=5 used phase-local broadcasts.",
+        "One-source tails used [((1+a)(1+c))*x, (1+c)*x, (1+a)*x, x].",
+        "Two-source tails formed d=x1+x0 and f=x0+a*d, then used [(1+c)*f, (1+c)*d, f, d].",
+        "Production skew detection preserved the general synthetic-skew KAT fallback."
+      ],
+      "binary_sha256": "9df01f95cf7fdd03888a2f2c630f06f36d48e5e21904de87773261df51503d1a",
+      "raw_summary_sha256": "9a0b5471eec738813e8733e32b874c495c7fd2f7f1591a104def125c95ea8fb9",
+      "static": {
+        "gcc_13_legacy_function_bytes_by_k": {
+          "3": 388,
+          "4": 391,
+          "5": 657,
+          "6": 670,
+          "7": 779,
+          "9": 1107,
+          "10": 1103,
+          "11": 1205
+        },
+        "gcc_13_vector_stack_references_by_k": {
+          "3": 0,
+          "4": 0,
+          "5": 5,
+          "6": 3,
+          "7": 6,
+          "9": 22,
+          "10": 20,
+          "11": 23
+        },
+        "classification": "No coefficient-table vector was spilled. Remaining references were input-pointer prologue stores, transformed-data spills, or cold stack-check bookkeeping.",
+        "object_text_bytes": 105133,
+        "evex_instructions": 0,
+        "hardware_fences": 0,
+        "hot_calls": 0
+      },
+      "benchmark_columns": ["K", "R", "shard_bytes", "control_time_over_candidate_time", "ci95_low", "ci95_high"],
+      "benchmark_cells": [
+        [3, 4, 4096, 0.9968875527375777, 0.963015288423894, 1.0319512106911422],
+        [3, 4, 65536, 1.014702245893784, 0.9500772068502769, 1.0837231336549131],
+        [4, 4, 4096, 1.011817191726497, 0.9994752306956775, 1.0243115567363332],
+        [4, 4, 65536, 1.010731176545093, 0.9564688613053797, 1.0680718971300212],
+        [5, 4, 4096, 1.0032359301813958, 0.9879961391943085, 1.018710794181541],
+        [5, 4, 65536, 1.0060646384909697, 0.9736246669839899, 1.0395854697861815],
+        [6, 4, 4096, 1.0005424359151922, 0.9971883860690889, 1.0039077671305203],
+        [6, 4, 65536, 1.0055962764287447, 0.9921338490316927, 1.019241377717629],
+        [7, 4, 4096, 0.9968210868171156, 0.9742231653148362, 1.0199431860174875],
+        [7, 4, 65536, 0.9972605913535284, 0.9567659292028117, 1.039469170788138],
+        [8, 4, 4096, 1.001401983184201, 0.9681408964386167, 1.0358057753929746],
+        [8, 4, 65536, 0.9951428693093526, 0.9719079589429319, 1.0189332448870292],
+        [9, 4, 4096, 1.0033537802560233, 0.9953880476521139, 1.011383259753485],
+        [9, 4, 65536, 1.0095166076610642, 0.9971926699868721, 1.0219928523511106],
+        [10, 4, 4096, 1.0022214839111094, 0.9949484253518787, 1.0095477084229245],
+        [10, 4, 65536, 1.0025609943279787, 0.9696703099947238, 1.0365673126089368],
+        [11, 4, 4096, 1.0006362069451549, 0.9889574128216817, 1.012452918263454],
+        [11, 4, 65536, 0.9936343324064529, 0.9854614525173496, 1.00187499370447],
+        [12, 4, 4096, 1.0101896491952311, 0.9972103202531201, 1.0233379123895916],
+        [12, 4, 65536, 1.0002230626205615, 0.9862648461063108, 1.0143788242557072],
+        [5, 3, 4096, 1.0027706035365196, 0.9923723118574962, 1.0132778507643327],
+        [5, 3, 65536, 1.015212207122772, 0.9627451097938542, 1.0705386244047268],
+        [9, 3, 4096, 1.000395927898433, 0.9941500806826579, 1.0066810152734162],
+        [9, 3, 65536, 1.0029525015241774, 1.0011840370502407, 1.0047240897660523]
+      ]
+    },
+    {
+      "name": "per_product_compiler_barrier",
+      "implementation": "Compiler-only atomic signal fences bounded every fixed multiplication so broadcasts could not migrate across products; outer phase barriers were removed.",
+      "binary_sha256": "13077031f9ca6b6ca65430ce82904e943073a0ebe11d91dd836c73e956cb4c85",
+      "raw_summary_sha256": "330678c5f9b850f766d756775c41bb541690c680dbe7bcbfc88d54ef19af1fcb",
+      "static": {
+        "gcc_13_vector_stack_references_by_k": {
+          "3": 0,
+          "4": 0,
+          "5": 5,
+          "6": 3,
+          "7": 6,
+          "9": 22,
+          "10": 20,
+          "11": 23
+        },
+        "object_text_bytes": 105261,
+        "evex_instructions": 0,
+        "hardware_fences": 0,
+        "conclusion": "The extra compiler barriers did not remove a single remaining vector stack reference and slightly enlarged every K>=5 kernel. Across specialized R=4 cells the measured ratios ranged from 0.9806x to 1.0311x, with no confidence interval meeting the 1.05 promotion threshold."
+      }
+    },
+    {
+      "name": "packed_lane_tables",
+      "disposition": "killed_by_static_cost_bound",
+      "reason": "AVX2 VPSHUFB is lane-local. Packing low and high nibble tables into opposite 128-bit lanes still requires two shuffles per 256-bit data vector plus cross-lane duplication and recombination. Packing two coefficients has the same lane-extraction cost because transform consumers differ. It saves table-register liveness but adds permutation pressure on the same transform hot path. Since the zero-table-spill implementation changed full encode by only about one percent, the extra permutations cannot plausibly clear the five-percent whole-codec gate on this Zen 5 host."
+    }
+  ],
+  "control": {
+    "binary_sha256": "b7e599cdb3a790f69ba118b26d410d8c26e3cb2665f21c060384b1fa7c40ba79",
+    "gcc_13_function_bytes_by_k": {
+      "3": 1293,
+      "4": 1423,
+      "5": 2312,
+      "6": 2407,
+      "7": 2533,
+      "9": 3431,
+      "10": 3479,
+      "11": 3622
+    },
+    "gcc_13_vector_stack_references_by_k": {
+      "3": 9,
+      "4": 11,
+      "5": 36,
+      "6": 39,
+      "7": 46,
+      "9": 74,
+      "10": 74,
+      "11": 81
+    },
+    "object_text_bytes": 96165
+  },
+  "method": {
+    "host": "AMD Ryzen 9 9950X3D, 16 physical cores, SMT2",
+    "compiler": "GCC 13.3.0; Clang 18.1.3 compile/assembly cross-check",
+    "build": "Release, AVX2 enabled, AVX-512 disabled",
+    "benchmark": "Three independent ABBA rounds; 15 retained benchmark iterations; reuse 256; one thread; CPU 10 pinned; SMT sibling 26 reserved; Student-t 95% confidence intervals over round log contrasts.",
+    "isolation": "Both campaigns recorded zero sibling non-idle jiffies, zero contaminated invocation rejections, and no affinity restore errors.",
+    "correctness": "leopard2_backend_ops, leopard2_auto_encode_backend, and the independent leopard2_direct_encode oracle passed. The direct suite covers every specialized K, R=3/4, aligned and ragged vector tails, and unaligned buffers. Every benchmark invocation independently checked direct-versus-transform parity."
+  },
+  "conclusion": "GCC table spills are visually severe but are not a five-percent whole-encode bottleneck for this T=4 AVX2 kernel. Removing them reduced function bodies by roughly 3-4x yet produced only noise-level runtime changes while adding about 9 KiB of backend text and substantial production-only specialization. No implementation was retained."
+}
