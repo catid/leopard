@@ -298,6 +298,14 @@ void test_no_loss_shape(
     require_control_or_shortcut_allocations(observation,
         "surplus-parity one-shot no-loss decode");
 
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_present[i] = static_cast<uint8_t>(i & 1u);
+    observation = observe_decode(codec, odd_or_zero_bytes,
+        original_present.data(), recovery_present.data(), NULL, NULL, NULL,
+        NULL, 0);
+    require_control_or_shortcut_allocations(observation,
+        "mixed-parity one-shot no-loss decode");
+
     /* No-loss execution is a true no-op after presence validation.  Supply
        caller-owned data that would fail every ordinary alias/scratch check and
        prove that neither the shard metadata nor the payload is inspected. */
