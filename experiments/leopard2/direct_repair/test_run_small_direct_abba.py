@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed scheduler-isolation tests for run_odd_outputs_abba.py."""
+"""Fail-closed scheduler-isolation tests for run_small_direct_abba.py."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from pathlib import Path
 from unittest import mock
 
 
-RUNNER_PATH = Path(__file__).with_name("run_odd_outputs_abba.py")
+RUNNER_PATH = Path(__file__).with_name("run_small_direct_abba.py")
 SPEC = importlib.util.spec_from_file_location(
     "leopard2_test_direct_odd_runner", RUNNER_PATH)
 if SPEC is None or SPEC.loader is None:
