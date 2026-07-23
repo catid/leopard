@@ -640,6 +640,118 @@ void run_decode_case(
     leo2_codec_destroy(codec);
 }
 
+void test_concurrent_preformatted_source_major_plan(
+    leo2_context* context,
+    TestCounts* counts)
+{
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+    static const unsigned k = 65;
+    static const unsigned r = 65;
+    static const size_t bytes = 2049;
+    static const unsigned worker_count = 4;
+    static const unsigned repetitions = 4;
+    const std::vector<unsigned> missing_originals = {
+        0, 1, 7, 16, 32, 48, 63, 64
+    };
+    const std::vector<unsigned> missing_recovery = { 0, 3, 64 };
+    const Shards source = make_originals(k, bytes, 0x5a17c0deULL);
+    leo2_codec* codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards parity = encode_new(codec, source, bytes);
+
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < missing_originals.size(); ++i)
+        original_present[missing_originals[i]] = 0;
+    for (size_t i = 0; i < missing_recovery.size(); ++i)
+        recovery_present[missing_recovery[i]] = 0;
+
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan),
+        "concurrent source-major plan create");
+    require(leo2_test_decode_plan_direct_source_rows(plan) != 0,
+        "concurrent source-major plan was not preformatted");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes),
+        "concurrent source-major scratch query");
+
+    std::atomic<unsigned> ready(0);
+    std::atomic<bool> go(false);
+    std::atomic<unsigned> failures(0);
+    std::vector<std::thread> workers;
+    workers.reserve(worker_count);
+    for (unsigned worker = 0; worker < worker_count; ++worker)
+    {
+        workers.push_back(std::thread([&]() {
+            try
+            {
+                AlignedBuffer scratch(scratch_bytes);
+                Shards restored(k, std::vector<uint8_t>(bytes, 0));
+                std::vector<const void*> original_ptrs(k, NULL);
+                std::vector<const void*> recovery_ptrs(r, NULL);
+                std::vector<void*> restored_ptrs(k, NULL);
+                for (unsigned original = 0; original < k; ++original)
+                {
+                    if (original_present[original])
+                        original_ptrs[original] = &source[original][0];
+                    else
+                        restored_ptrs[original] = &restored[original][0];
+                }
+                for (unsigned recovery_index = 0;
+                     recovery_index < r; ++recovery_index)
+                {
+                    if (recovery_present[recovery_index])
+                    {
+                        recovery_ptrs[recovery_index] =
+                            &parity[recovery_index][0];
+                    }
+                }
+
+                ready.fetch_add(1, std::memory_order_release);
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (unsigned repeat = 0; repeat < repetitions; ++repeat)
+                {
+                    require_result(leo2_decode_plan_execute(plan, bytes,
+                        &original_ptrs[0], &recovery_ptrs[0],
+                        &restored_ptrs[0], scratch.data, scratch.bytes),
+                        "concurrent source-major plan execute");
+                    for (size_t missing = 0;
+                         missing < missing_originals.size(); ++missing)
+                    {
+                        const unsigned index = missing_originals[missing];
+                        if (restored[index] != source[index])
+                            throw std::runtime_error(
+                                "concurrent source-major recovery mismatch");
+                    }
+                }
+            }
+            catch (...)
+            {
+                failures.fetch_add(1, std::memory_order_relaxed);
+            }
+        }));
+    }
+    while (ready.load(std::memory_order_acquire) != worker_count)
+        std::this_thread::yield();
+    go.store(true, std::memory_order_release);
+    for (size_t worker = 0; worker < workers.size(); ++worker)
+        workers[worker].join();
+    require(failures.load(std::memory_order_relaxed) == 0,
+        "concurrent immutable source-major plan execution failed");
+    counts->plan_executions += worker_count * repetitions;
+    counts->recovered_shards += worker_count * repetitions *
+        missing_originals.size();
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+#else
+    (void)context;
+    (void)counts;
+#endif
+}
+
 void test_no_loss_no_op(leo2_context* context)
 {
     leo2_codec* codec = make_codec(
@@ -1082,6 +1194,7 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
                 counts);
         }
     }
+    test_concurrent_preformatted_source_major_plan(context, counts);
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
