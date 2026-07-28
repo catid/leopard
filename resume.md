@@ -31,8 +31,12 @@ baseline child output retained under the evidence dir) — and was SIGTERMed by
 the affinity supervisor: an interactive Claude session's own tool/monitor
 process churn under the same UID trips the fail-closed containment ("new
 process has an already restricted mask but no safe uniform creator
-provenance"). **The campaign must be run from a bare terminal with no Claude
-session active on this host**: delete `/tmp/leopard2-vs-main-evidence-2942f35`
+provenance"). **PROVEN REQUIREMENT (two controlled attempts): the campaign runs ONLY from a
+bare terminal with no Claude session alive on this host.** Attempt A (session
+with monitors) passed all identity checks and executed the first baseline cell
+before SIGTERM on unattributable-process containment; attempt B (session fully
+silent, zero tool calls in flight) failed at t+4s before any cell — harness
+idle churn alone trips the fail-closed supervisor. Procedure: delete `/tmp/leopard2-vs-main-evidence-2942f35`
 and `/tmp/campaign-2942f35.status`, refresh the report-dir suffix inside
 `/tmp/launch-campaign-2942f35.sh` (the sed line pattern is in the script
 history), run it, wait for `/tmp/campaign-2942f35.status`, then
