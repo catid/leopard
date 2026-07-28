@@ -103,10 +103,11 @@ CANDIDATE_LIBRARY_SOURCES = (
     "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp", "Leopard2Plan.cpp",
     "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
     "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
-    "Leopard2BackendAVX512.cpp",
+    "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX512.cpp", "Leopard2BackendGFNI.cpp",
 )
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
-CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 20
+CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 22
 COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"

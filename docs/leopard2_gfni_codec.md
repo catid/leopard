@@ -365,7 +365,7 @@ rather than papered over.
 
 ## Production integration requirements
 
-Requirement 1 is now satisfied; requirements 2-6 remain open.
+Requirements 1 and 2 are now satisfied; requirements 3-6 remain open.
 
 1. **Own qualified member — SATISFIED.**  `Leopard2BackendGFNI.cpp` re-includes
    the AVX2 source with `LEO2_GFNI_MEMBER` + `LEO2_GFNI_VARIANT`, compiled
@@ -390,9 +390,15 @@ Requirement 1 is now satisfied; requirements 2-6 remain open.
    sites — so the member inherits the calibrated AVX2 policies it was
    measured under; the AUTO-AVX512 encode exception and the AVX512-only
    `ff8_high_encode_one_block` gate deliberately remain AVX2/AVX512-scoped.
-2. **Table ownership.**  The evaluation reuses the nibble-table storage shape,
-   which costs 8 MiB for GF16 to hold 2 MiB of matrices.  A production member
-   should pack the four GF16 blocks into 32 bytes per logarithm.
+2. **Table ownership — SATISFIED.**  The GFNI variant now stores
+   `FF16AffineTable { uint64_t block[4]; }`, 32 bytes per logarithm (2 MiB);
+   vector kernels broadcast each matrix with `vpbroadcastq`, which is
+   register-identical to the former duplicated-row broadcast.  Performance is
+   unchanged within noise across the measured cells and wire output is
+   byte-identical (see
+   `experiments/leopard2/optimization_log/24-gf16-affine-table-packing.md`).
+   GF8 keeps its 32-byte rows deliberately: 8 KB total, and the radix-eight
+   kernels load the duplicated form directly.
 3. **Selector policy.**  Whether `AUTO` may select GFNI, and on which processor
    families, needs the same treatment the AVX-512VL encode callback received:
    a same-binary screen across the parent/redundancy/shard-size space before any

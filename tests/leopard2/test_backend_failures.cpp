@@ -116,6 +116,16 @@ void check_table_accounting(
         require(state.ff16_bytes == 8388608U,
             "scalar GF16 table byte accounting changed");
     }
+    else if (backend == LEO2_BACKEND_GFNI)
+    {
+        // The GFNI member packs the four 8x8 affine blocks into 32 bytes per
+        // GF16 logarithm (2 MiB) instead of the nibble shape's 128 bytes;
+        // its GF8 table keeps the 32-byte duplicated-row shape.
+        require(state.ff8_bytes == 8192U,
+            "GFNI GF8 table byte accounting changed");
+        require(state.ff16_bytes == 2097152U,
+            "GFNI packed GF16 table byte accounting changed");
+    }
     else
     {
         require(state.ff8_bytes == 8192U,

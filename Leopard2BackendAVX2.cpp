@@ -91,6 +91,28 @@ static LEO_FORCE_INLINE uint8_t GFNIApplyMatrix(
                 << output_bit));
     return result;
 }
+
+// Packed-form twins for the GF16 affine tables, which store one 8-byte matrix
+// per block instead of a duplicated 16-byte row.  Byte b of the integer is
+// row byte b of the stored form above, so `set1_epi64x` fills the four 64-bit
+// lanes exactly as the 16-byte broadcast did and VGF2P8AFFINEQB sees
+// identical operands.
+static LEO_FORCE_INLINE uint8_t GFNIApplyMatrix64(
+    uint64_t matrix, uint8_t value)
+{
+    uint8_t result = 0;
+    for (unsigned output_bit = 0; output_bit < 8; ++output_bit)
+        result = static_cast<uint8_t>(result |
+            (GFNIParity(static_cast<uint8_t>(
+                static_cast<uint8_t>(matrix >> (8 * (7 - output_bit))) &
+                value)) << output_bit));
+    return result;
+}
+
+static LEO_FORCE_INLINE __m256i BroadcastAffine(uint64_t matrix)
+{
+    return _mm256_set1_epi64x(static_cast<long long>(matrix));
+}
 #endif
 
 #ifdef LEO_HAS_FF8
@@ -103,12 +125,28 @@ static const FF8NibbleTable* FF8Tables = NULL;
 #endif
 
 #ifdef LEO_HAS_FF16
+#if defined(LEO2_GFNI_VARIANT)
+// Packed affine storage: the four 8x8 GF(2) matrix blocks of one fixed GF16
+// multiplication, 32 bytes per logarithm (2 MiB total) instead of the nibble
+// shape's 128 bytes (8 MiB).  Vector kernels broadcast each 64-bit matrix
+// with vpbroadcastq, which fills the four 64-bit lanes exactly as the former
+// 16-byte duplicated-row broadcast did, so VGF2P8AFFINEQB sees identical
+// operands.  GFNI doc production requirement 2.
+struct FF16AffineTable
+{
+    uint64_t block[4];
+};
+static const FF16AffineTable* FF16Tables = NULL;
+typedef FF16AffineTable FF16Table;
+#else
 struct FF16NibbleTable
 {
     uint8_t low[4][16];
     uint8_t high[4][16];
 };
 static const FF16NibbleTable* FF16Tables = NULL;
+typedef FF16NibbleTable FF16Table;
+#endif
 #endif
 
 #ifdef LEO_HAS_FF8
@@ -539,16 +577,16 @@ static void AVX2FF8IFFTButterfly2Xor(
 #ifdef LEO_HAS_FF16
 static uint16_t FF16Product(uint16_t log, uint16_t value)
 {
-    const FF16NibbleTable& table = FF16Tables[log];
+    const FF16Table& table = FF16Tables[log];
 #if defined(LEO2_GFNI_VARIANT)
     const uint8_t input_low = static_cast<uint8_t>(value);
     const uint8_t input_high = static_cast<uint8_t>(value >> 8);
     const uint8_t product_low = static_cast<uint8_t>(
-        GFNIApplyMatrix(table.low[0], input_low) ^
-        GFNIApplyMatrix(table.low[1], input_high));
+        GFNIApplyMatrix64(table.block[0], input_low) ^
+        GFNIApplyMatrix64(table.block[1], input_high));
     const uint8_t product_high = static_cast<uint8_t>(
-        GFNIApplyMatrix(table.low[2], input_low) ^
-        GFNIApplyMatrix(table.low[3], input_high));
+        GFNIApplyMatrix64(table.block[2], input_low) ^
+        GFNIApplyMatrix64(table.block[3], input_high));
     return static_cast<uint16_t>(
         product_low | (static_cast<unsigned>(product_high) << 8));
 #else
@@ -614,11 +652,18 @@ static void AVX2FF16Operation(
 {
     uint8_t* output = static_cast<uint8_t*>(destination);
     const uint8_t* input = static_cast<const uint8_t*>(source);
-    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const FF16Table& table = FF16Tables[multiplier_log];
+#if defined(LEO2_GFNI_VARIANT)
+    const __m256i low_tables[4] = {
+        BroadcastAffine(table.block[0]), BroadcastAffine(table.block[1]),
+        BroadcastAffine(table.block[2]), BroadcastAffine(table.block[3])
+    };
+#else
     const __m256i low_tables[4] = {
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
     };
+#endif
 #if !defined(LEO2_GFNI_VARIANT)
     const __m256i high_tables[4] = {
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
@@ -784,7 +829,15 @@ static void AVX2FF16Butterfly2(
     uint16_t multiplier_log,
     uint64_t byte_count)
 {
-    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const FF16Table& table = FF16Tables[multiplier_log];
+#if defined(LEO2_GFNI_VARIANT)
+    const __m256i low_tables[4] = {
+        BroadcastAffine(table.block[0]), BroadcastAffine(table.block[1]),
+        BroadcastAffine(table.block[2]), BroadcastAffine(table.block[3])
+    };
+    // ProductVectors ignores its high_tables operand in this variant.
+    const __m256i* const high_tables = low_tables;
+#else
     const __m256i low_tables[4] = {
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
@@ -793,6 +846,7 @@ static void AVX2FF16Butterfly2(
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
         BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
     };
+#endif
     AVX2FF16Butterfly2Prepared<Inverse>(
         x_pointer, y_pointer, multiplier_log,
         low_tables, high_tables, byte_count);
@@ -827,11 +881,16 @@ static void AVX2FF16FFTButterfly2Out(
     __m256i high_tables[4];
     if (multiplier_log != kZeroSkew)
     {
-        const FF16NibbleTable& table = FF16Tables[multiplier_log];
+        const FF16Table& table = FF16Tables[multiplier_log];
         for (unsigned i = 0; i < 4; ++i)
         {
+#if defined(LEO2_GFNI_VARIANT)
+            low_tables[i] = BroadcastAffine(table.block[i]);
+            high_tables[i] = low_tables[i];
+#else
             low_tables[i] = BroadcastTable(table.low[i]);
             high_tables[i] = BroadcastTable(table.high[i]);
+#endif
         }
     }
     uint64_t offset = 0;
@@ -895,7 +954,15 @@ static void AVX2FF16IFFTButterfly2Xor(
     const uint8_t* y_input = static_cast<const uint8_t*>(y_input_pointer);
     uint8_t* x_output = static_cast<uint8_t*>(x_output_pointer);
     uint8_t* y_output = static_cast<uint8_t*>(y_output_pointer);
-    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const FF16Table& table = FF16Tables[multiplier_log];
+#if defined(LEO2_GFNI_VARIANT)
+    const __m256i low_tables[4] = {
+        BroadcastAffine(table.block[0]), BroadcastAffine(table.block[1]),
+        BroadcastAffine(table.block[2]), BroadcastAffine(table.block[3])
+    };
+    // ProductVectors ignores its high_tables operand in this variant.
+    const __m256i* const high_tables = low_tables;
+#else
     const __m256i low_tables[4] = {
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
@@ -904,6 +971,7 @@ static void AVX2FF16IFFTButterfly2Xor(
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
         BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
     };
+#endif
     uint64_t offset = 0;
     while (byte_count - offset >= 64)
     {
@@ -3389,8 +3457,16 @@ static LEO2_AVX2_FORCE_INLINE void AVX2FF16MultiplyAddPair(
     __m256i& destination_high,
     __m256i source_low,
     __m256i source_high,
-    const FF16NibbleTable& table)
+    const FF16Table& table)
 {
+#if defined(LEO2_GFNI_VARIANT)
+    const __m256i low_tables[4] = {
+        BroadcastAffine(table.block[0]), BroadcastAffine(table.block[1]),
+        BroadcastAffine(table.block[2]), BroadcastAffine(table.block[3])
+    };
+    // ProductVectors ignores its high_tables operand in this variant.
+    const __m256i* const high_tables = low_tables;
+#else
     const __m256i low_tables[4] = {
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
@@ -3399,6 +3475,7 @@ static LEO2_AVX2_FORCE_INLINE void AVX2FF16MultiplyAddPair(
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
         BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
     };
+#endif
     __m256i product_low;
     __m256i product_high;
     AVX2FF16ProductVectors(source_low, source_high,
@@ -3785,7 +3862,15 @@ static void AVX2FF16Butterfly2RangePrepared(
             AVX2XorMemory(work[y_base + i], work[x_base + i], byte_count);
         return;
     }
-    const FF16NibbleTable& table = FF16Tables[multiplier_log];
+    const FF16Table& table = FF16Tables[multiplier_log];
+#if defined(LEO2_GFNI_VARIANT)
+    const __m256i low_tables[4] = {
+        BroadcastAffine(table.block[0]), BroadcastAffine(table.block[1]),
+        BroadcastAffine(table.block[2]), BroadcastAffine(table.block[3])
+    };
+    // ProductVectors ignores its high_tables operand in this variant.
+    const __m256i* const high_tables = low_tables;
+#else
     const __m256i low_tables[4] = {
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
@@ -3794,6 +3879,7 @@ static void AVX2FF16Butterfly2RangePrepared(
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
         BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
     };
+#endif
     for (unsigned i = 0; i < distance; ++i)
     {
         AVX2FF16Butterfly2Prepared<Inverse>(
@@ -4639,8 +4725,8 @@ static const Ops* GFNIPublishTables(const InitializeArgs& args)
     if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, true))
         return NULL;
 #  endif
-    std::unique_ptr<FF16NibbleTable[]> ff16(
-        new (std::nothrow) FF16NibbleTable[65536]);
+    std::unique_ptr<FF16AffineTable[]> ff16(
+        new (std::nothrow) FF16AffineTable[65536]);
     if (!ff16)
         return NULL;
     for (unsigned log = 0; log < 65536; ++log)
@@ -4670,10 +4756,7 @@ static const Ops* GFNIPublishTables(const InitializeArgs& args)
             }
         }
         for (unsigned index = 0; index < 4; ++index)
-        {
-            GFNIStoreMatrix(ff16[log].low[index], block[index]);
-            GFNIStoreMatrix(ff16[log].high[index], block[index]);
-        }
+            ff16[log].block[index] = block[index];
     }
 # endif
 # ifdef LEO_HAS_FF8
@@ -4751,7 +4834,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
     if (!ff8)
         return NULL;
 #endif
-#ifdef LEO_HAS_FF16
+#if defined(LEO_HAS_FF16) && !defined(LEO2_GFNI_VARIANT)
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, true))
         return NULL;
@@ -4775,7 +4858,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
     }
 #endif
 
-#ifdef LEO_HAS_FF16
+#if defined(LEO_HAS_FF16) && !defined(LEO2_GFNI_VARIANT)
     for (int log = 0; log < 65536; ++log)
     {
         for (unsigned nibble = 0; nibble < 4; ++nibble)
@@ -4796,7 +4879,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
 #ifdef LEO_HAS_FF8
     FF8Tables = ff8.release();
 #endif
-#ifdef LEO_HAS_FF16
+#if defined(LEO_HAS_FF16) && !defined(LEO2_GFNI_VARIANT)
     FF16Tables = ff16.release();
 #endif
     return &AVX2Ops;
@@ -4835,7 +4918,7 @@ void LEO2_AVX_TABLE_STATE(TestBackendState* state)
 #endif
 #ifdef LEO_HAS_FF16
     state->ff16_published = FF16Tables != NULL;
-    state->ff16_bytes = 65536U * sizeof(FF16NibbleTable);
+    state->ff16_bytes = 65536U * sizeof(FF16Table);
 #else
     state->ff16_published = false;
     state->ff16_bytes = 0;
