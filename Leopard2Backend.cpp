@@ -1306,7 +1306,10 @@ static void ReferenceFF16Butterfly2(
     uint64_t byte_count,
     FF16MultiplyLog reference)
 {
-    uint8_t product[194];
+    // ReferenceFF16 operates on complete 16-bit symbols.  Keep the byte tail
+    // deterministic as well so this test helper remains defined if an
+    // adversarial or future caller probes an odd byte count.
+    uint8_t product[194] = {};
     if (Inverse)
         for (uint64_t i = 0; i < byte_count; ++i)
             y[i] ^= x[i];
