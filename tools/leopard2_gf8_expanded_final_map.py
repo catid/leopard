@@ -9,6 +9,7 @@ cells.  Both stages are resumable at one JSON document per cell.
 """
 
 import argparse
+import ast
 import concurrent.futures
 import contextlib
 import ctypes
@@ -43,7 +44,9 @@ CANONICAL_MATRIX_CELL_COUNT = 341
 CANONICAL_MATRIX_SHA256 = (
     "3d5d423fe35760727ac1e9751036d9e208be1e69886e27a18c95009204d85d6e")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
+SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
+RATIO_METRICS = ("encode", "decode_first", "decode_reuse")
 LINUX_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
 LINUX_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
 LINUX_F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
@@ -965,9 +968,11 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
                 "decode_first": execution + setup,
                 "decode_reuse": execution + setup / cell["reuse"],
             }
-        if any(not isinstance(value, (int, float)) or value <= 0
+        if any(isinstance(value, bool) or
+               not isinstance(value, (int, float)) or
+               not math.isfinite(value) or value <= 0
                for value in times.values()):
-            raise RuntimeError("non-positive benchmark timing")
+            raise RuntimeError("benchmark timing is not positive and finite")
         recorded_command = list(command)
         recorded_command[3] = "<sealed-%s-snapshot>" % kind
         return {
@@ -1030,11 +1035,31 @@ def validate_call_identity(calls, cell):
 
 
 def point_ratios(calls):
-    baseline = next(call for call in calls if call["kind"] == "baseline")
-    candidate = next(call for call in calls if call["kind"] == "candidate")
+    by_kind = {}
+    for call in calls:
+        kind = call.get("kind")
+        if kind not in ("baseline", "candidate") or kind in by_kind:
+            raise RuntimeError(
+                "point ratios require one baseline and one candidate call")
+        by_kind[kind] = call
+    if set(by_kind) != {"baseline", "candidate"}:
+        raise RuntimeError(
+            "point ratios require one baseline and one candidate call")
+    baseline = by_kind["baseline"]
+    candidate = by_kind["candidate"]
+    for kind, call in by_kind.items():
+        times = call.get("times_us")
+        if not isinstance(times, dict) or set(times) != set(RATIO_METRICS):
+            raise RuntimeError(kind + " point timings have wrong metrics")
+        if any(isinstance(value, bool) or
+               not isinstance(value, (int, float)) or
+               not math.isfinite(value) or value <= 0
+               for value in times.values()):
+            raise RuntimeError(
+                kind + " point timings are not positive and finite")
     return {
         metric: baseline["times_us"][metric] / candidate["times_us"][metric]
-        for metric in ("encode", "decode_first", "decode_reuse")
+        for metric in RATIO_METRICS
     }
 
 
@@ -1042,6 +1067,10 @@ def confidence(log_values):
     count = len(log_values)
     if count < 2:
         raise RuntimeError("confidence interval needs at least two rounds")
+    if any(isinstance(value, bool) or
+           not isinstance(value, (int, float)) or
+           not math.isfinite(value) for value in log_values):
+        raise RuntimeError("confidence inputs must be finite real numbers")
     critical_table = {2: 12.706204736, 3: 4.302652730, 4: 3.182446305,
                       5: 2.776445105, 6: 2.570581836, 7: 2.446911851,
                       8: 2.364624252, 9: 2.306004135, 10: 2.262157163}
@@ -1060,7 +1089,7 @@ def abba_metrics(calls, rounds):
     if len(calls) != rounds * len(ABBA_ORDER):
         raise RuntimeError("ABBA call count mismatch")
     result = {}
-    for metric in ("encode", "decode_first", "decode_reuse"):
+    for metric in RATIO_METRICS:
         contrasts = []
         for round_index in range(rounds):
             group = calls[round_index * 4:(round_index + 1) * 4]
@@ -1408,17 +1437,46 @@ def run_diagnostic(args):
             close_runtime_snapshots(runtime)
 
 
+def validate_ratio_map(ratios, label):
+    if not isinstance(ratios, dict) or set(ratios) != set(RATIO_METRICS):
+        raise RuntimeError(label + " has the wrong ratio metrics")
+    if any(isinstance(value, bool) or
+           not isinstance(value, (int, float)) or
+           not math.isfinite(value) or value <= 0
+           for value in ratios.values()):
+        raise RuntimeError(label + " ratios are not positive and finite")
+
+
 def validate_diagnostic_summary(summary, matrix):
     if (summary.get("schema") != SCHEMA or
             summary.get("stage") != "diagnostic" or
-            summary.get("status") != "complete"):
+            summary.get("status") != "complete" or
+            summary.get("authoritative") is not False):
         raise RuntimeError("invalid diagnostic summary")
     if summary.get("matrix_sha256") != matrix_digest(matrix):
         raise RuntimeError("diagnostic summary matrix mismatch")
-    ids = {row["id"] for row in summary["rows"]}
-    expected = {cell["id"] for cell in matrix["cells"]}
-    if ids != expected or len(summary["rows"]) != len(expected):
+    rows = summary.get("rows")
+    if not isinstance(rows, list):
+        raise RuntimeError("diagnostic summary rows are missing")
+    expected = {cell["id"]: cell for cell in matrix["cells"]}
+    if summary.get("cell_count") != len(rows):
+        raise RuntimeError("diagnostic summary row count mismatch")
+    ids = [row.get("id") for row in rows if isinstance(row, dict)]
+    if (len(ids) != len(rows) or len(ids) != len(expected) or
+            set(ids) != set(expected)):
         raise RuntimeError("diagnostic summary is incomplete")
+    for row in rows:
+        identifier = row["id"]
+        if row.get("cell") != expected[identifier]:
+            raise RuntimeError(
+                "diagnostic summary cell identity mismatch: " + identifier)
+        validate_ratio_map(
+            row.get("ratios"), "diagnostic summary row " + identifier)
+    for field in ("baseline_binary_sha256", "candidate_binary_sha256"):
+        if not isinstance(summary.get(field), str) or \
+                not SHA256_PATTERN.fullmatch(summary[field]):
+            raise RuntimeError(
+                "diagnostic summary has invalid " + field)
     return summary
 
 
@@ -1663,15 +1721,40 @@ def run_merge(args):
 
 
 def self_test():
+    check_count = 0
+
+    def check(condition, label):
+        nonlocal check_count
+        check_count += 1
+        if not condition:
+            raise RuntimeError("expanded final-map self-test failed: " + label)
+
+    def expect_runtime_error(action, message, label):
+        try:
+            action()
+        except RuntimeError as error:
+            check(message in str(error), label + " error contract")
+        else:
+            check(False, label + " rejection")
+
+    def assert_line_numbers(source):
+        return tuple(
+            node.lineno for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Assert)
+        )
+
     matrix = make_matrix()
     validate_matrix(matrix)
-    assert parse_cpu_list("0-2,5,8-9") == {0, 1, 2, 5, 8, 9}
+    check(
+        parse_cpu_list("0-2,5,8-9") == {0, 1, 2, 5, 8, 9},
+        "CPU-list parsing",
+    )
     selectors = {cell["id"] for cell in matrix["cells"]
                  if "selector_isolation" in cell["tags"]}
     expected_selectors = {
         cell_key(k, 32, size, 32, 8, 1)
         for k in (33, 34, 35) for size in (16384, 65536)}
-    assert selectors == expected_selectors
+    check(selectors == expected_selectors, "selector-isolation grid")
     r1_boundaries = {
         (cell["K"], cell["bytes"], tuple(cell["tags"]))
         for cell in matrix["cells"]
@@ -1684,17 +1767,47 @@ def self_test():
             (lower_k, byte_count, ("r1_selector_fallback",)))
         expected_r1_boundaries.add(
             (promoted_k, byte_count, ("r1_selector_promoted",)))
-    assert r1_boundaries == expected_r1_boundaries
+    check(
+        r1_boundaries == expected_r1_boundaries,
+        "R=1 selector-boundary grid",
+    )
     direct_odd = {
         (cell["K"], cell["R"], cell["bytes"], cell["loss"])
         for cell in matrix["cells"]
         if "direct_odd_arity" in cell["tags"]
     }
-    assert direct_odd == {
-        (65, 65, byte_count, loss)
-        for byte_count in (2048, 65536, 1048576)
-        for loss in DIRECT_ODD_LOSSES
-    }
+    check(
+        direct_odd == {
+            (65, 65, byte_count, loss)
+            for byte_count in (2048, 65536, 1048576)
+            for loss in DIRECT_ODD_LOSSES
+        },
+        "direct odd-arity grid",
+    )
+    encoded = canonical_bytes(matrix)
+    check(json.loads(encoded) == matrix, "canonical matrix round trip")
+    check(
+        matrix_digest(matrix) == hashlib.sha256(encoded).hexdigest(),
+        "canonical matrix digest",
+    )
+    selector_mutation = json.loads(encoded)
+    selector_cell = next(
+        cell for cell in selector_mutation["cells"]
+        if "selector_isolation" in cell["tags"])
+    selector_cell["tags"].remove("selector_isolation")
+    expect_runtime_error(
+        lambda: validate_matrix(selector_mutation),
+        "deterministic built-in matrix",
+        "selector-grid mutation",
+    )
+    source_mutation = json.loads(encoded)
+    source_mutation["baseline_commit"] = "0" * 40
+    expect_runtime_error(
+        lambda: validate_matrix(source_mutation),
+        "deterministic built-in matrix",
+        "matrix provenance mutation",
+    )
+
     calls = []
     for kind, value in zip(ABBA_ORDER * 3,
                            (10, 5, 5, 10) * 3):
@@ -1702,11 +1815,166 @@ def self_test():
             "encode": value, "decode_first": value,
             "decode_reuse": value}})
     metrics = abba_metrics(calls, 3)
-    for value in metrics.values():
-        assert abs(value["ratio"] - 2.0) < 1e-12
-    encoded = canonical_bytes(matrix)
-    assert json.loads(encoded) == matrix
-    assert matrix_digest(matrix) == hashlib.sha256(encoded).hexdigest()
+    for metric, value in sorted(metrics.items()):
+        check(
+            abs(value["ratio"] - 2.0) < 1e-12,
+            metric + " ABBA ratio",
+        )
+        check(
+            value["ci95_low"] <= value["ratio"] <= value["ci95_high"],
+            metric + " ABBA confidence interval",
+        )
+    point_calls = [
+        {"kind": "baseline", "times_us": {
+            "encode": 12.0, "decode_first": 18.0, "decode_reuse": 24.0}},
+        {"kind": "candidate", "times_us": {
+            "encode": 6.0, "decode_first": 9.0, "decode_reuse": 12.0}},
+    ]
+    check(
+        point_ratios(point_calls) == {
+            "encode": 2.0, "decode_first": 2.0, "decode_reuse": 2.0},
+        "diagnostic point ratios",
+    )
+    mutated_calls = json.loads(json.dumps(calls))
+    mutated_calls[0]["times_us"]["encode"] = 20
+    check(
+        abba_metrics(mutated_calls, 3)["encode"]["ratio"] !=
+        metrics["encode"]["ratio"],
+        "ratio mutation changes evidence",
+    )
+    expect_runtime_error(
+        lambda: abba_metrics(calls[:-1], 3),
+        "ABBA call count mismatch",
+        "truncated ABBA evidence",
+    )
+    expect_runtime_error(
+        lambda: point_ratios(point_calls + [point_calls[0]]),
+        "one baseline and one candidate",
+        "duplicate point-ratio call",
+    )
+    nonfinite_point_calls = json.loads(json.dumps(point_calls))
+    nonfinite_point_calls[1]["times_us"]["encode"] = float("nan")
+    expect_runtime_error(
+        lambda: point_ratios(nonfinite_point_calls),
+        "positive and finite",
+        "non-finite point-ratio timing",
+    )
+    expect_runtime_error(
+        lambda: confidence([0.0, float("nan")]),
+        "finite real numbers",
+        "non-finite confidence input",
+    )
+
+    diagnostic_fixture = {
+        "schema": SCHEMA,
+        "stage": "diagnostic",
+        "status": "complete",
+        "authoritative": False,
+        "matrix_sha256": matrix_digest(matrix),
+        "cell_count": len(matrix["cells"]),
+        "baseline_binary_sha256": "1" * 64,
+        "candidate_binary_sha256": "2" * 64,
+        "rows": [
+            {
+                "id": cell["id"],
+                "cell": cell,
+                "ratios": {
+                    "encode": 2.0,
+                    "decode_first": 2.0,
+                    "decode_reuse": 2.0,
+                },
+            }
+            for cell in matrix["cells"]
+        ],
+    }
+    check(
+        validate_diagnostic_summary(diagnostic_fixture, matrix) is
+        diagnostic_fixture,
+        "complete diagnostic summary",
+    )
+    target_cell = next(
+        cell for cell in matrix["cells"] if set(cell["tags"]) == {"core"})
+    selected_before = selected_abba_cells(
+        matrix, diagnostic_fixture, 1.10, [], [])
+    check(
+        target_cell["id"] not in {
+            cell["id"] for cell in selected_before},
+        "fast core-only ratio stays out of ABBA confirmation",
+    )
+    ratio_selection_fixture = json.loads(json.dumps(diagnostic_fixture))
+    ratio_selection_row = next(
+        row for row in ratio_selection_fixture["rows"]
+        if row["id"] == target_cell["id"])
+    ratio_selection_row["ratios"]["encode"] = 1.05
+    validate_diagnostic_summary(ratio_selection_fixture, matrix)
+    selected_after = selected_abba_cells(
+        matrix, ratio_selection_fixture, 1.10, [], [])
+    check(
+        target_cell["id"] in {cell["id"] for cell in selected_after},
+        "near diagnostic ratio enters ABBA confirmation",
+    )
+    ratio_mutation = json.loads(json.dumps(diagnostic_fixture))
+    ratio_mutation["rows"][0]["ratios"]["encode"] = float("nan")
+    expect_runtime_error(
+        lambda: validate_diagnostic_summary(ratio_mutation, matrix),
+        "positive and finite",
+        "non-finite diagnostic ratio",
+    )
+    ratio_shape_mutation = json.loads(json.dumps(diagnostic_fixture))
+    del ratio_shape_mutation["rows"][0]["ratios"]["decode_reuse"]
+    expect_runtime_error(
+        lambda: validate_diagnostic_summary(ratio_shape_mutation, matrix),
+        "wrong ratio metrics",
+        "missing diagnostic ratio",
+    )
+    diagnostic_cell_mutation = json.loads(json.dumps(diagnostic_fixture))
+    diagnostic_cell_mutation["rows"][0]["cell"]["K"] += 1
+    expect_runtime_error(
+        lambda: validate_diagnostic_summary(
+            diagnostic_cell_mutation, matrix),
+        "cell identity mismatch",
+        "diagnostic selector-grid mutation",
+    )
+    diagnostic_provenance_mutation = json.loads(
+        json.dumps(diagnostic_fixture))
+    diagnostic_provenance_mutation["candidate_binary_sha256"] = "invalid"
+    expect_runtime_error(
+        lambda: validate_diagnostic_summary(
+            diagnostic_provenance_mutation, matrix),
+        "invalid candidate_binary_sha256",
+        "diagnostic binary provenance mutation",
+    )
+
+    synthetic_provenance = {
+        "candidate": {"sha256": "a" * 64},
+        "baseline": {"sha256": "b" * 64},
+        "candidate_source": {"head": "c" * 40, "tree": "d" * 40},
+    }
+    identity = stage_identity(
+        "diagnostic", synthetic_provenance, {"maximum_attempts": 3})
+    identity_digest = sha256_bytes(canonical_bytes(identity))
+    provenance_mutation = json.loads(json.dumps(identity))
+    provenance_mutation["provenance"]["candidate"]["sha256"] = "e" * 64
+    check(
+        sha256_bytes(canonical_bytes(provenance_mutation)) != identity_digest,
+        "stage identity binds candidate provenance",
+    )
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-expanded-identity-") as directory:
+        run_dir, observed_digest = prepare_run_directory(directory, identity)
+        check(observed_digest == identity_digest, "run identity digest")
+        resumed_dir, resumed_digest = prepare_run_directory(
+            directory, identity)
+        check(
+            resumed_dir == run_dir and resumed_digest == identity_digest,
+            "identical run identity resumes",
+        )
+        expect_runtime_error(
+            lambda: prepare_run_directory(directory, provenance_mutation),
+            "run directory identity differs",
+            "provenance mutation",
+        )
+
     with tempfile.TemporaryDirectory(prefix="leopard2-expanded-snapshot-") \
             as directory:
         executable = Path(directory) / "fixture"
@@ -1715,45 +1983,85 @@ def self_test():
         source_identity, descriptor, snapshot_identity = snapshot_executable(
             executable, "self-test fixture")
         try:
-            assert source_identity["sha256"] == snapshot_identity["sha256"]
+            check(
+                source_identity["sha256"] == snapshot_identity["sha256"],
+                "snapshot content identity",
+            )
             executable.chmod(0o700)
             executable.write_bytes(b"replaced after immutable snapshot\n")
             executable.chmod(0o500)
-            assert file_identity(
-                executable, "mutated self-test fixture") != source_identity
+            check(
+                file_identity(
+                    executable, "mutated self-test fixture") !=
+                source_identity,
+                "source artifact replacement changes identity",
+            )
             completed = subprocess.run(
                 [snapshot_path(descriptor)], stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 pass_fds=(descriptor,), timeout=5, check=False)
-            assert completed.returncode == 0
+            check(
+                completed.returncode == 0,
+                "sealed snapshot survives source replacement",
+            )
             try:
                 os.pwrite(descriptor, b"X", 0)
-                raise AssertionError("sealed snapshot accepted a write")
             except OSError:
-                pass
-            assert sealed_snapshot_identity(
-                descriptor, "self-test fixture") == snapshot_identity
+                sealed_write_rejected = True
+            else:
+                sealed_write_rejected = False
+            check(sealed_write_rejected, "sealed snapshot rejects writes")
+            check(
+                sealed_snapshot_identity(
+                    descriptor, "self-test fixture") == snapshot_identity,
+                "sealed snapshot identity remains stable",
+            )
         finally:
             os.close(descriptor)
+        expect_runtime_error(
+            lambda: snapshot_executable(
+                executable, "wrong-hash fixture", "0" * 64),
+            "SHA-256 mismatch",
+            "artifact hash mutation",
+        )
+        unsealed_descriptor = linux_memfd_create(
+            "leopard2-expanded-unsealed-self-test")
+        try:
+            os.write(unsealed_descriptor, Path("/bin/true").read_bytes())
+            expect_runtime_error(
+                lambda: sealed_snapshot_identity(
+                    unsealed_descriptor, "unsealed self-test fixture"),
+                "not immutably sealed",
+                "unsealed artifact",
+            )
+        finally:
+            os.close(unsealed_descriptor)
+
     with tempfile.TemporaryDirectory(prefix="leopard2-expanded-json-") \
             as directory:
         summary_path = Path(directory) / "summary.json"
         summary_path.write_text('{"selected":"old"}\n', encoding="utf-8")
         document, identity = read_json_snapshot(
             summary_path, "self-test diagnostic summary")
-        assert document == {"selected": "old"}
-        assert identity["sha256"] == sha256_bytes(
-            b'{"selected":"old"}\n')
+        check(document == {"selected": "old"}, "snapshot JSON document")
+        check(
+            identity["sha256"] == sha256_bytes(b'{"selected":"old"}\n'),
+            "snapshot JSON byte identity",
+        )
         replacement = Path(directory) / "replacement.json"
         replacement.write_text('{"selected":"new"}\n', encoding="utf-8")
         os.replace(replacement, summary_path)
-        assert document == {"selected": "old"}
-        try:
-            require_json_snapshot_unchanged(
-                identity, "self-test diagnostic summary")
-            raise AssertionError("replaced diagnostic summary was accepted")
-        except RuntimeError as error:
-            assert "changed after" in str(error)
+        check(
+            document == {"selected": "old"},
+            "parsed JSON is isolated from pathname replacement",
+        )
+        expect_runtime_error(
+            lambda: require_json_snapshot_unchanged(
+                identity, "self-test diagnostic summary"),
+            "changed after",
+            "diagnostic pathname replacement",
+        )
+
     with tempfile.TemporaryDirectory(prefix="leopard2-expanded-source-") \
             as directory:
         root = Path(directory)
@@ -1766,26 +2074,56 @@ def self_test():
             "user.email=leopard2-self-test.invalid", "commit", "-qm",
             "fixture"], cwd=root)
         commit = checked_output(["git", "rev-parse", "HEAD"], cwd=root)
-        assert source_provenance(root, commit)["status"] == "clean"
+        clean_provenance = source_provenance(root, commit)
+        check(clean_provenance["status"] == "clean", "clean source status")
+        check(clean_provenance["head"] == commit, "clean source commit")
+        check(
+            clean_provenance["tree"] ==
+            checked_output(["/usr/bin/git", "rev-parse", "HEAD^{tree}"],
+                           cwd=root),
+            "clean source tree",
+        )
         rogue = root / "untracked.txt"
         rogue.write_text("untracked\n", encoding="utf-8")
-        try:
-            source_provenance(root, commit)
-            raise AssertionError("untracked source file was accepted")
-        except RuntimeError as error:
-            assert "tracked changes" in str(error)
+        expect_runtime_error(
+            lambda: source_provenance(root, commit),
+            "tracked changes",
+            "untracked source mutation",
+        )
         rogue.unlink()
+
+        tracked.write_text("dirty\n", encoding="utf-8")
+        expect_runtime_error(
+            lambda: source_provenance(root, commit),
+            "tracked changes",
+            "tracked source mutation",
+        )
+        checked_output(
+            ["/usr/bin/git", "checkout", "--", "tracked.txt"], cwd=root)
+
         checked_output(
             ["git", "update-index", "--assume-unchanged", "tracked.txt"],
             cwd=root)
-        try:
-            source_provenance(root, commit)
-            raise AssertionError("non-default index flag was accepted")
-        except RuntimeError as error:
-            assert "non-default flag" in str(error)
+        expect_runtime_error(
+            lambda: source_provenance(root, commit),
+            "non-default flag",
+            "assume-unchanged index flag",
+        )
         checked_output(
             ["git", "update-index", "--no-assume-unchanged", "tracked.txt"],
             cwd=root)
+        checked_output(
+            ["git", "update-index", "--skip-worktree", "tracked.txt"],
+            cwd=root)
+        expect_runtime_error(
+            lambda: source_provenance(root, commit),
+            "non-default flag",
+            "skip-worktree index flag",
+        )
+        checked_output(
+            ["git", "update-index", "--no-skip-worktree", "tracked.txt"],
+            cwd=root)
+
         with tempfile.TemporaryDirectory(
                 prefix="leopard2-expanded-fake-git-") as fake_directory:
             fake_bin = Path(fake_directory)
@@ -1795,7 +2133,10 @@ def self_test():
             saved_path = os.environ.get("PATH")
             os.environ["PATH"] = str(fake_bin)
             try:
-                assert source_provenance(root, commit)["head"] == commit
+                check(
+                    source_provenance(root, commit)["head"] == commit,
+                    "source provenance uses absolute Git",
+                )
             finally:
                 if saved_path is None:
                     del os.environ["PATH"]
@@ -1810,14 +2151,33 @@ def self_test():
         second = checked_output(
             ["/usr/bin/git", "rev-parse", "HEAD"], cwd=root)
         checked_output(
-            ["/usr/bin/git", "replace", commit, second], cwd=root)
-        checked_output(
             ["/usr/bin/git", "reset", "--hard", "-q", commit], cwd=root)
-        try:
-            source_provenance(root, commit)
-            raise AssertionError("Git replace ref was accepted")
-        except RuntimeError as error:
-            assert "replace refs" in str(error)
+        expect_runtime_error(
+            lambda: source_provenance(root, second),
+            "does not exactly match expected commit",
+            "wrong expected source commit",
+        )
+        checked_output(
+            ["/usr/bin/git", "replace", commit, second], cwd=root)
+        expect_runtime_error(
+            lambda: source_provenance(root, commit),
+            "replace refs",
+            "Git replacement ref",
+        )
+
+    check(
+        assert_line_numbers("value = 1\n") == (),
+        "assert scanner accepts assert-free source",
+    )
+    check(
+        assert_line_numbers("value = 1\nassert value\n") == (2,),
+        "assert scanner detects optimized-away checks",
+    )
+    check(
+        assert_line_numbers(Path(__file__).read_text(encoding="utf-8")) == (),
+        "expanded final-map runner contains no Python assert statements",
+    )
+    check(check_count > 1, "self-test executed a nontrivial check set")
     print(json.dumps({
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
         "matrix_sha256": matrix_digest(matrix),
@@ -1828,6 +2188,7 @@ def self_test():
         "diagnostic_byte_identity": "passed",
         "absolute_git_and_replace_ref_gate": "passed",
         "clean_source_identity": "passed",
+        "checks": check_count,
     }, sort_keys=True))
 
 
