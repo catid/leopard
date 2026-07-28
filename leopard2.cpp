@@ -1574,14 +1574,12 @@ static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
 {
 #if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
     /*
-        Experiment, REFUTED 2026-07-28 -- default-off and kept only as the
-        record.  The 2026-07-16 checkpoint's excluded_high_profile region
-        measured median +541%, but that was against the pre-GFNI, pre-radix-8,
-        pre-fusion transform.  Re-screened on the current tree at Q=1 across
-        nine K,R <= 16 high cells: force-direct versus force-transform on the
-        same build is 0.875x-1.017x -- the transform improvements consumed the
-        entire direct margin -- and AUTO admission measured 0.89x-0.97x.  Do
-        not enable without first re-establishing a force-direct ceiling win.
+        Default-off experiment.  A 2026-07-28 re-screen that appeared to refute
+        the older direct-path win was invalid: it extracted codec-setup medians
+        instead of encode-execution medians and lacked authoritative frozen-
+        binary ABBA evidence.  Do not enable until an explicit-AVX2 campaign
+        re-establishes the current force-direct execution ceiling with exact
+        metric paths, non-vacuous parity identity, and neighboring cells.
     */
     const bool profile_ok =
         codec && (codec->profile == LEO2_PROFILE_LOW_V1 ||

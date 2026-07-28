@@ -109,7 +109,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 17 | Thread-scaled live-set target | refuted, not shipped | no effect; saved a knob |
 | 18 | Two different leopard1 baselines | methodology correction | ~50% encode gap explained |
 | 19 | GFNI production backend member | **landed** | vs leopard1: enc 1.10->1.71, dec 3.42->5.00 median |
-| 20 | High-profile AUTO direct encode | refuted on current tree | transform work ate the +541% margin |
+| 20 | High-profile AUTO direct encode | **invalid screen; rerun open** | setup median was mislabeled as encode execution |
 | 21 | AUTO-GFNI calibrated-host candidate | mechanism shipped, default-off | 44-cell screen: 0 regressions |
 | 22 | Dead block-0 pruned schedule (finding 1) | **landed** | plan setup 1.06-1.15x |
 | 23 | Writable-partitioned batch preflight | **landed** | 1.01-1.06x batch; model gap recorded |
@@ -167,12 +167,11 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
   Report 18: the in-process leopard1 runs on Leopard2's kernels, so `-mgfni`
   sped the *baseline* up 1.3x-1.7x and moved a headline by 50%. Unnoticed, it
   would have read as a large encode regression.
-- **Stored evidence ages: a measured advantage over a component lasts only as
-  long as that component stagnates.** Report 20's +541% checkpoint number was
-  real when taken — against the 2026-07-16 transform. GFNI, radix-eight,
-  fusion and tiling then made the transform 1.5-2x faster on those very
-  shapes, and the re-screen's force-direct ceiling came back 0.875x-1.017x.
-  Before acting on archived evidence, re-screen the margin it depends on.
+- **Extract benchmark fields by an exact, versioned schema path.** Report 20's
+  recursive “first median” lookup selected codec setup instead of encode
+  execution, producing a plausible near-1.0 table and a false refutation.
+  Require exact metric paths, nonempty digest identities, immutable binary
+  provenance, and adversarial parser tests before interpreting a re-screen.
 - **A mechanism that predicts an effect is not evidence the effect exists.**
   Report 17's thread-scaled tile target had a clean mechanical story (T threads
   share L3, so the aggregate live set is T * target), a knob the context could

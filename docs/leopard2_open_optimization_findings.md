@@ -136,15 +136,14 @@ path exists and is validated for the high profile —
 `leopard2.cpp:337-338` and `:1428-1452` cap the table at `K,R <= 16` and
 `CanAutoDirectEncodeCodec` restricts AUTO to `LEO2_PROFILE_LOW_V1`.
 
-**2026-07-28 caveat (report 20):** the bounded K,R <= 16 form of the high-
-profile unlock was re-screened on the current tree and REFUTED — GFNI,
-radix-eight, fusion and tiling made the transform 1.5-2x faster on those
-shapes, and the force-direct ceiling now measures 0.875x-1.017x.  The +541%
-number is stale for the small-table region.  The at-scale variant above (heap-
-backed generator rows for K in the hundreds-plus, ~10x modelled traffic
-reduction) is a different regime and remains unmeasured rather than refuted,
-but any attempt must start by re-establishing a force-direct ceiling win
-against the *current* transform.
+**2026-07-28 correction (report 20):** the bounded K,R <= 16 re-screen is
+invalid.  Its extractor reported codec-setup medians as encode-execution
+medians, omitted the historical 17.88x cell, lacked frozen-binary ABBA
+provenance, and made a vacuous outer digest comparison.  The reported
+0.875x-1.017x “ceiling” therefore neither confirms nor refutes the small-table
+opportunity.  The bounded and at-scale variants both remain unmeasured on the
+current tree; `leopard-79h.42.1` tracks a corrected explicit-AVX2 execution
+campaign.
 
 ## 6. GF16 decode keeps a full-prefix workspace — RESOLVED
 

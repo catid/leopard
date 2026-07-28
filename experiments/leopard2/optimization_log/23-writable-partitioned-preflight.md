@@ -46,9 +46,8 @@ instructive:
    production batch path around it (encode work, per-item bookkeeping, the
    thread-pool run) is evidently much larger than the model's 9.6 us/item
    total, so even a 3x sort-level win moves the end-to-end number by percent,
-   not halves.  This is the same lesson as report 20 in component form:
-   **a component-level measurement is not an end-to-end claim until the
-   component's share is re-measured in place.**
+   not halves.  **A component-level measurement is not an end-to-end claim
+   until the component's share is re-measured in place.**
 
 Kept because the change is strictly-less-work with a measured gain everywhere
 and a negative nowhere, plus a real simplification.  Findings 2 and 3 should
