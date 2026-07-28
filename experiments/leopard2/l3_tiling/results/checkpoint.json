@@ -1,0 +1,221 @@
+{
+  "schema": "leopard2-l3-tiling-checkpoint/v1",
+  "created_utc": "2026-07-28T21:00:28Z",
+  "ratio_semantics": "left time divided by right time; above one means right is faster",
+  "runner": {
+    "path": "experiments/leopard2/l3_tiling/run_abba.py",
+    "sha256": "ede3deeae6c3e435a774e38fa107eebf705546dbdfdcaccf8367645d2eaf89df",
+    "policy": "explicit GF16 AVX2, one thread, three ABBA rounds, nine retained samples, frozen binaries, physical-pair isolation, digest and source attestation"
+  },
+  "lanes": {
+    "F": {
+      "description": "fixed pre-L3 policy",
+      "commit": "ec927d8ae13c0ad2ddf236c98d21165dcb876744",
+      "tree": "ec7c1f034ae9f10bcf04c337de8b145af8acf87a",
+      "artifact_sha256": "719251328428e219c262abe0d382489fe9b1b1142f71faeb56c4b822151f73b2"
+    },
+    "D": {
+      "description": "proportional affinity-derived policy",
+      "commit": "767161c9c17f70f4c685bd0fb58da798f8672a0d",
+      "tree": "95f3783720560b5460bbd976f9ec8bb66b3dead7",
+      "artifact_sha256": "ecabb7c66634212bad8f703c236e256dbdcd15bbd2d15cea679908c28a835373"
+    },
+    "H": {
+      "description": "promoted hybrid policy",
+      "commit": "cb2ef79cc180166326acd80a3d798392ce5157fe",
+      "tree": "9d48810b25b227db8a27e3081be6ccd48e3276a6",
+      "artifact_sha256": "536e06555f60de490a1dfe74295aa7610d27d3c6987cfa3596370758c1748a86"
+    },
+    "S": {
+      "description": "measured LOW side-256 candidate",
+      "commit": "69adc1f9f72ba9556a629ad7a111beb86f0d5582",
+      "tree": "5ce79a178138b860814b178963a19d0a83dc4e20",
+      "artifact_sha256": "bb7e95da3cb440da7c828be4e8ba9cd159c3091a3e90cf2f1393abcf88039883"
+    }
+  },
+  "campaigns": [
+    {
+      "id": "F-to-D-cpu4",
+      "source_directory": "/tmp/leopard-l3-evidence-FD-cpu4-20260728T2012Z",
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "cache_domain_mib": 96,
+      "comparison": {
+        "left": "F",
+        "right": "D"
+      },
+      "cell_count": 9,
+      "status": "right_lane_regression_detected",
+      "all_digests_matched": true,
+      "all_rounds_zero_sibling_nonidle": true,
+      "sha256": {
+        "manifest": "bfce47c632c82789738385675e1bd1d6ec7ee35fcdefb103ef17b9796e2f5b96",
+        "raw": "d42df4def3d6c4876323d1ad2486f0576dc09a16441a872410eaff312d25dfa3",
+        "summary": "313e237964e0f9717c22b6360dcbdcfd927e126a30bd6edc89a1932e2513b080"
+      },
+      "decisive_results": [
+        {
+          "cell": "high-live-96m",
+          "operation": "encode",
+          "ratio": 0.7927919078984053,
+          "ci95": [
+            0.7720686941955707,
+            0.8140713565443246
+          ]
+        },
+        {
+          "cell": "high-live-96m",
+          "operation": "decode",
+          "ratio": 0.8285465322138489,
+          "ci95": [
+            0.8069853986648947,
+            0.8506837387384542
+          ]
+        },
+        {
+          "cell": "high-live-256m",
+          "operation": "encode",
+          "ratio": 0.9444298038380737,
+          "ci95": [
+            0.9229228759949525,
+            0.9664379089271816
+          ]
+        }
+      ],
+      "conclusion": "reject proportional target scaling and its widened generic pass"
+    },
+    {
+      "id": "F-to-H-cpu4",
+      "source_directory": "/tmp/leopard-l3-evidence-FH-cpu4-20260728T2140Z",
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "cache_domain_mib": 96,
+      "comparison": {
+        "left": "F",
+        "right": "H"
+      },
+      "cell_count": 8,
+      "status": "accepted",
+      "all_digests_matched": true,
+      "all_rounds_zero_sibling_nonidle": true,
+      "sha256": {
+        "manifest": "209d0da6b47b14894ba4fb7e917be3bbe4ffb15c6f6ce46d44180e7159c8157e",
+        "raw": "b27daafae943a2ea9ff6c29741a373280fc763e3623a941ef1ff2be412813a89",
+        "summary": "c17b5ff2fd2e71abc0c939e32c1d9a7324f9f24a012f4cf65cc3814a0e97832f"
+      },
+      "results": [
+        {
+          "cell": "high-live-96m",
+          "encode_ratio": 0.999651219385818,
+          "decode_ratio": 1.0015572999770446
+        },
+        {
+          "cell": "high-live-256m",
+          "encode_ratio": 1.0027373639934167,
+          "decode_ratio": 0.9991496660472905
+        },
+        {
+          "cell": "low-live-128m",
+          "encode_ratio": 0.9970285081542163,
+          "decode_ratio": 0.9993959091232554
+        },
+        {
+          "cell": "low-live-256m",
+          "encode_ratio": 0.9959473700088496,
+          "decode_ratio": 0.998277872789059
+        },
+        {
+          "cell": "high-side-256-64k",
+          "encode_ratio": 1.0284934478293288,
+          "decode_ratio": 1.0245325305752748
+        },
+        {
+          "cell": "high-side-512-64k",
+          "encode_ratio": 1.1066292481084503,
+          "decode_ratio": 1.0222099364188764
+        },
+        {
+          "cell": "high-side-512-128k",
+          "encode_ratio": 1.0052057999340975,
+          "decode_ratio": 1.0425015225554901
+        },
+        {
+          "cell": "high-side-512-maxloss",
+          "encode_ratio": 1.094615192794309,
+          "decode_ratio": 1.0312152106348296
+        }
+      ],
+      "conclusion": "promote fixed 16 MiB target with max(effective L3, 64 MiB) crossover and cache-gated scaled side overrides"
+    },
+    {
+      "id": "D-to-S-cpu14",
+      "source_directory": "/tmp/leopard-l3-evidence-SD-cpu14-20260728T2008Z",
+      "cpu": 14,
+      "reserved_sibling": 30,
+      "cache_domain_mib": 32,
+      "comparison": {
+        "left": "D",
+        "right": "S"
+      },
+      "cell_count": 1,
+      "status": "diagnostic_positive_not_promoted",
+      "all_digests_matched": true,
+      "all_rounds_zero_sibling_nonidle": true,
+      "sha256": {
+        "manifest": "5300444d8bf77612e1700f18db4b27e17cb457854879298b4a66320b8ab4465a",
+        "raw": "4792609b4b54e402e8a052c0b038319d954741bcfb50dc9b46862ecc84ed3304",
+        "summary": "afb005a42c5b33f341a7612e0e09850295b77cb9c343813ef2c5c8839938bcc8"
+      },
+      "result": {
+        "cell": "low-side-256-loss9",
+        "K": 200,
+        "R": 800,
+        "loss_count": 9,
+        "missing_originals": [
+          1,
+          9,
+          22,
+          31,
+          62,
+          112,
+          125,
+          130,
+          148
+        ],
+        "shard_bytes": 65536,
+        "encode_ratio": 1.0089009099460111,
+        "encode_ci95": [
+          0.99131727072831,
+          1.0267964416095192
+        ],
+        "decode_ratio": 1.1854545184577605,
+        "decode_ci95": [
+          1.145475693321327,
+          1.2268286647420874
+        ]
+      },
+      "production_scope": "none; one erasure mask does not qualify the other nine-loss pruned schedules"
+    }
+  ],
+  "failed_runs": [
+    {
+      "id": "F-to-H-bootstrap-output-limit",
+      "source_file": "/tmp/leopard-l3-evidence-FH-cpu4-20260728T2130Z/failure.json",
+      "failure_sha256": "f748f0bce124ff9a590a066a085396398feb80ab6fcdf203d41cadb4f444464f",
+      "error": "subprocess output limits are invalid",
+      "disposition": "runner limit reduced to the shared 8 MiB ceiling; no timing result was emitted"
+    }
+  ],
+  "production_conclusion": {
+    "gf16_explicit_avx2_policy": {
+      "effective_l3_mib": {
+        "minimum": 32,
+        "maximum": 96
+      },
+      "live_set_target_mib": 16,
+      "generic_tile_threshold": "max(effective L3, 64 MiB)"
+    },
+    "low_side256_override": "not promoted; multi-pattern qualification remains",
+    "wire_format_changed": false
+  }
+}

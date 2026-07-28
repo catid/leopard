@@ -4101,6 +4101,7 @@ class CMakeGraphMutationTest(unittest.TestCase):
         authenticated_replay_contracts = {
             "experiments/leopard2/backend_butterfly/run_abba.py",
             "experiments/leopard2/low_encode_copy/run_abba.py",
+            "experiments/leopard2/l3_tiling/run_abba.py",
             "experiments/leopard2/main_compare/run_abba.py",
             "experiments/leopard2/main_compare/test_run_abba.py",
             "experiments/leopard2/non_power_of_two/c7/run_authoritative.py",
