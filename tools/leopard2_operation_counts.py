@@ -13,6 +13,7 @@ metrics apply the production backend's decode-fusion predicates.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import io
 import json
@@ -126,6 +127,30 @@ def _is_forced_high_decode_test_copy(
 
 class ModelError(ValueError):
     """Invalid or unsupported model input."""
+
+
+def verify_python_assert_free_source(source: str, label: str) -> None:
+    """Reject Python ``assert`` statements in evidence-bearing code.
+
+    Python removes assert statements under ``python -O``.  This tool's
+    self-test and report validation are evidence gates, so every invariant
+    must instead use an explicit, fail-closed check.
+    """
+    try:
+        tree = ast.parse(source, filename=label)
+    except SyntaxError as error:
+        raise ModelError(
+            "{} is not valid Python: {}".format(label, error)
+        ) from error
+    assertions = [
+        node.lineno for node in ast.walk(tree) if isinstance(node, ast.Assert)
+    ]
+    if assertions:
+        raise ModelError(
+            "{} contains Python assert statement(s) on line(s): {}".format(
+                label, ", ".join(str(line) for line in sorted(assertions))
+            )
+        )
 
 
 def verify_low_encode_no_copy_source(source: str, label: str) -> None:
@@ -1090,7 +1115,9 @@ def balanced_execution_tiles(
         1 if total_units % count else 0
     )
     if maximum_units == 0:
-        raise AssertionError("balanced execution produced an empty pass")
+        raise ModelError(
+            "internal balanced execution produced an empty pass"
+        )
     return ExecutionTiles(count, maximum_units * SCRATCH_ALIGNMENT)
 
 
@@ -1437,7 +1464,7 @@ def decode_scratch_accounting(
         range_count, checked_size_multiply(2, pointer_bytes, maximum), maximum
     )
     if codec_range_bytes != expected_range_bytes:
-        raise AssertionError("codec range accounting mismatch")
+        raise ModelError("internal codec range accounting mismatch")
 
     tail_payload_bytes = checked_size_multiply(
         tail_selected_staged_slots, tail, maximum
@@ -1615,7 +1642,7 @@ def ifft_prefix_butterflies(size: int, active_prefix: int) -> int:
         count += size // 2
     expected_full = size * layers // 2
     if active_prefix == size and count != expected_full:
-        raise AssertionError("internal IFFT full-schedule mismatch")
+        raise ModelError("internal IFFT full-schedule mismatch")
     return count
 
 
@@ -1637,7 +1664,7 @@ def fft_prefix_butterflies(size: int, requested_prefix: int) -> int:
         count += ceil_div(requested_prefix, 2)
     expected_full = size * layers // 2
     if requested_prefix == size and count != expected_full:
-        raise AssertionError("internal FFT full-schedule mismatch")
+        raise ModelError("internal FFT full-schedule mismatch")
     return count
 
 
@@ -1660,7 +1687,7 @@ def fft_mask_butterflies(size: int, requested: Set[int]) -> int:
         count += len({index // 2 for index in requested})
     expected_full = size * layers // 2
     if len(requested) == size and count != expected_full:
-        raise AssertionError("internal masked FFT full-schedule mismatch")
+        raise ModelError("internal masked FFT full-schedule mismatch")
     return count
 
 
@@ -1707,7 +1734,9 @@ def deterministic_decode_coordinates(
         for parity in selected_parities
     )
     if len(data) != k:
-        raise AssertionError("deterministic received subset is not K coordinates")
+        raise ModelError(
+            "internal deterministic received subset is not K coordinates"
+        )
     return data, selected_parities
 
 
@@ -2927,7 +2956,10 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
     elif path == "low_encode":
         schedule = model_low_encode(args.k, args.r, padded, args.shard_bytes, requested)
     elif path in ("legacy_high_decode", "low_decode", "generic_decode"):
-        assert selection is not None
+        if selection is None:
+            raise ModelError(
+                "internal decode selection is missing for {}".format(path)
+            )
         if selection.path == "no_op":
             schedule = Schedule(details={
                 "no_op": True, "missing_originals": "none"
@@ -2972,8 +3004,14 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
         raise ModelError("unsupported path: {}".format(path))
 
     if path in decode_paths:
-        assert selection is not None
-        assert scratch_selection is not None
+        if selection is None:
+            raise ModelError(
+                "internal decode selection is missing for {}".format(path)
+            )
+        if scratch_selection is None:
+            raise ModelError(
+                "internal scratch selection is missing for {}".format(path)
+            )
         apply_decode_backend_accounting(
             schedule, args.k, args.r, profile, args.field, args.backend,
             geometry, args.shard_bytes, losses, selection,
@@ -3074,12 +3112,15 @@ def write_json(report: Dict[str, object], output: TextIO) -> None:
 
 
 def write_csv(report: Dict[str, object], output: TextIO) -> None:
-    inputs = report["inputs"]
-    geometry = report["geometry"]
-    assert isinstance(inputs, dict)
-    assert isinstance(geometry, dict)
-    metrics = report["metrics"]
-    assert isinstance(metrics, dict)
+    inputs = report.get("inputs")
+    geometry = report.get("geometry")
+    metrics = report.get("metrics")
+    if not isinstance(inputs, dict):
+        raise ModelError("CSV report inputs must be an object")
+    if not isinstance(geometry, dict):
+        raise ModelError("CSV report geometry must be an object")
+    if not isinstance(metrics, dict):
+        raise ModelError("CSV report metrics must be an object")
     columns = [
         "schema_version", "path", "K", "R", "profile", "field",
         "backend", "shard_bytes", "pointer_bytes", "decode_workspace",
@@ -3094,7 +3135,10 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
     writer.writeheader()
     for name in sorted(metrics):
         metric = metrics[name]
-        assert isinstance(metric, dict)
+        if not isinstance(metric, dict):
+            raise ModelError(
+                "CSV metric {!r} must be an object".format(name)
+            )
         writer.writerow({
             "schema_version": report["schema_version"],
             "path": report["path"],
@@ -3145,79 +3189,183 @@ def _brute_full_butterflies(size: int) -> int:
     return count
 
 
+class _SelfTestChecks:
+    """Count explicit self-test gates that cannot be removed by ``-O``."""
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def require(self, condition: bool, message: str) -> None:
+        self.count += 1
+        if not condition:
+            raise ModelError("self-test failed: {}".format(message))
+
+    def accepts(self, action: object, message: str) -> None:
+        self.count += 1
+        if not callable(action):
+            raise ModelError(
+                "self-test failed: {} action is not callable".format(message)
+            )
+        try:
+            action()
+        except Exception as error:
+            raise ModelError(
+                "self-test failed: {}: {}".format(message, error)
+            ) from error
+
+    def rejects_model_error(self, action: object, message: str) -> None:
+        self.count += 1
+        if not callable(action):
+            raise ModelError(
+                "self-test failed: {} action is not callable".format(message)
+            )
+        try:
+            action()
+        except ModelError:
+            return
+        except Exception as error:
+            raise ModelError(
+                "self-test failed: {} raised {} instead of ModelError".format(
+                    message, type(error).__name__
+                )
+            ) from error
+        raise ModelError(
+            "self-test failed: {} did not raise ModelError".format(message)
+        )
+
+
 def run_self_test(verbose: bool = True) -> None:
-    checks = 0
+    checks = _SelfTestChecks()
     for exponent in range(0, 17):
         size = 1 << exponent
         expected = _brute_full_butterflies(size)
-        assert ifft_prefix_butterflies(size, size) == expected
-        assert fft_prefix_butterflies(size, size) == expected
-        assert fft_mask_butterflies(size, set(range(size))) == expected
-        checks += 3
-    assert parent_geometry(240, 16, "high") == {
-        "padded_side": 16,
-        "parent_count": 256,
-        "parent_dimension": 240,
-        "shortened_count": 0,
-        "punctured_count": 0,
-    }
-    assert parent_geometry(8, 248, "low")["parent_count"] == 256
-    checks += 2
+        checks.require(
+            ifft_prefix_butterflies(size, size) == expected,
+            "full inverse prefix butterfly count for size {}".format(size),
+        )
+        checks.require(
+            fft_prefix_butterflies(size, size) == expected,
+            "full forward prefix butterfly count for size {}".format(size),
+        )
+        checks.require(
+            fft_mask_butterflies(size, set(range(size))) == expected,
+            "full forward mask butterfly count for size {}".format(size),
+        )
+    checks.require(
+        parent_geometry(240, 16, "high") == {
+            "padded_side": 16,
+            "parent_count": 256,
+            "parent_dimension": 240,
+            "shortened_count": 0,
+            "punctured_count": 0,
+        },
+        "legacy high parent geometry",
+    )
+    checks.require(
+        parent_geometry(8, 248, "low")["parent_count"] == 256,
+        "low parent geometry",
+    )
 
     high = model_high_encode(240, 16, 16, 1024, set(range(16)))
-    assert high.butterflies == 512
-    assert high.nontransform_xor_vectors == 224
-    assert high.execution_slots == 32
-    checks += 3
+    checks.require(high.butterflies == 512, "high encode butterfly count")
+    checks.require(
+        high.nontransform_xor_vectors == 224,
+        "high encode non-transform XOR count",
+    )
+    checks.require(high.execution_slots == 32, "high encode execution slots")
 
     high_decode = model_high_decode(240, 16, 256, 16, 1024, {0})
-    assert high_decode.decode_coordinate_pointer_mappings == 240
-    assert high_decode.copies == 239
-    assert high_decode.details["block_zero_ifft_elided"]
-    assert not high_decode.details["syndrome_forward_transform_elided"]
-    assert high_decode.details["block_zero_raw_xor_vectors"] == 1
-    assert high_decode.decode_output_gather_payload_bytes == 1024
-    assert high_decode.details["locator_weighted_live_scan_scope"] == (
-        "statically qualified GF8 AVX2/AVX512/GFNI passes scan receive "
-        "pointers until ceil(T/2) live rows are found; sparse fallback "
-        "scans all T"
+    checks.require(
+        high_decode.decode_coordinate_pointer_mappings == 240,
+        "high decode coordinate-pointer mapping count",
+    )
+    checks.require(high_decode.copies == 239, "high decode copy count")
+    checks.require(
+        bool(high_decode.details["block_zero_ifft_elided"]),
+        "high decode block-zero inverse transform elision",
+    )
+    checks.require(
+        not high_decode.details["syndrome_forward_transform_elided"],
+        "high decode nonempty syndrome forward transform",
+    )
+    checks.require(
+        high_decode.details["block_zero_raw_xor_vectors"] == 1,
+        "high decode block-zero raw XOR count",
+    )
+    checks.require(
+        high_decode.decode_output_gather_payload_bytes == 1024,
+        "high decode output-gather payload",
+    )
+    checks.require(
+        high_decode.details["locator_weighted_live_scan_scope"] == (
+            "statically qualified GF8 AVX2/AVX512/GFNI passes scan receive "
+            "pointers until ceil(T/2) live rows are found; sparse fallback "
+            "scans all T"
+        ),
+        "high decode weighted locator live-scan scope",
     )
     balanced_high_decode = model_high_decode(
         128, 128, 256, 128, 1024, set(range(128))
     )
-    assert balanced_high_decode.details["active_later_syndrome_blocks"] == 0
-    assert balanced_high_decode.details["block_zero_ifft_elided"]
-    assert balanced_high_decode.details["syndrome_forward_transform_elided"]
-    assert balanced_high_decode.details["block_zero_raw_xor_vectors"] == 0
+    checks.require(
+        balanced_high_decode.details["active_later_syndrome_blocks"] == 0,
+        "balanced high decode active later syndrome blocks",
+    )
+    checks.require(
+        bool(balanced_high_decode.details["block_zero_ifft_elided"]),
+        "balanced high decode block-zero inverse transform elision",
+    )
+    checks.require(
+        bool(balanced_high_decode.details["syndrome_forward_transform_elided"]),
+        "balanced high decode syndrome forward transform elision",
+    )
+    checks.require(
+        balanced_high_decode.details["block_zero_raw_xor_vectors"] == 0,
+        "balanced high decode block-zero raw XOR count",
+    )
     low_decode_ragged = model_low_decode(8, 248, 256, 8, 65, {0, 1})
-    assert low_decode_ragged.decode_coordinate_pointer_mappings == 8
-    assert low_decode_ragged.copies == 0
-    assert low_decode_ragged.decode_output_gather_payload_bytes == 2
+    checks.require(
+        low_decode_ragged.decode_coordinate_pointer_mappings == 8,
+        "ragged low decode coordinate-pointer mapping count",
+    )
+    checks.require(low_decode_ragged.copies == 0, "ragged low decode copies")
+    checks.require(
+        low_decode_ragged.decode_output_gather_payload_bytes == 2,
+        "ragged low decode output-gather payload",
+    )
     scratch = decode_scratch_accounting(
         240, 16, 256, 16, "high", 65, 1, "tiled", 8,
         codec_workspace="tiled",
     )
-    assert scratch.plan_total_bytes == 28800
-    assert scratch.codec_total_bytes == 29824
-    checks += 16
+    checks.require(
+        scratch.plan_total_bytes == 28800, "tiled plan scratch total"
+    )
+    checks.require(
+        scratch.codec_total_bytes == 29824, "tiled codec scratch total"
+    )
 
     for pointer_bytes in (4, 8):
         maximum = size_t_max(pointer_bytes)
         largest_roundable = maximum - (SCRATCH_ALIGNMENT - 1)
-        assert round_shard_bytes(largest_roundable, pointer_bytes) == \
-            largest_roundable
-        try:
-            round_shard_bytes(maximum, pointer_bytes)
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("SIZE_MAX shard escaped round-up rejection")
-        try:
-            round_shard_bytes(UINT64_MAX, pointer_bytes)
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("UINT64_MAX shard escaped round-up rejection")
+        checks.require(
+            round_shard_bytes(largest_roundable, pointer_bytes) ==
+            largest_roundable,
+            "{}-byte pointer largest roundable shard".format(pointer_bytes),
+        )
+        checks.rejects_model_error(
+            lambda maximum=maximum, pointer_bytes=pointer_bytes:
+                round_shard_bytes(maximum, pointer_bytes),
+            "{}-byte pointer SIZE_MAX round-up rejection".format(
+                pointer_bytes
+            ),
+        )
+        checks.rejects_model_error(
+            lambda pointer_bytes=pointer_bytes:
+                round_shard_bytes(UINT64_MAX, pointer_bytes),
+            "{}-byte pointer UINT64_MAX round-up rejection".format(
+                pointer_bytes
+            ),
+        )
 
         control = decode_scratch_accounting(
             1, 1, 2, 1, "low", 64, 1, "specialized", pointer_bytes,
@@ -3230,52 +3378,67 @@ def run_self_test(verbose: bool = True) -> None:
             1, 1, 2, 1, "low", largest_layout_shard, 1, "specialized",
             pointer_bytes, codec_workspace="specialized", direct=True,
         )
-        assert boundary.codec_total_bytes <= maximum
-        try:
-            decode_scratch_accounting(
+        checks.require(
+            boundary.codec_total_bytes <= maximum,
+            "{}-byte pointer boundary scratch layout".format(pointer_bytes),
+        )
+        checks.rejects_model_error(
+            lambda largest_layout_shard=largest_layout_shard,
+                   pointer_bytes=pointer_bytes: decode_scratch_accounting(
                 1, 1, 2, 1, "low",
                 largest_layout_shard + SCRATCH_ALIGNMENT, 1, "specialized",
                 pointer_bytes, codec_workspace="specialized", direct=True,
-            )
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("decode scratch overflow neighbor was accepted")
-        checks += 5
-    try:
-        round_shard_bytes(UINT64_MAX + 1, 8)
-    except ModelError:
-        pass
-    else:
-        raise AssertionError("shard length above uint64_t was accepted")
-    checks += 1
+            ),
+            "{}-byte pointer scratch overflow neighbor rejection".format(
+                pointer_bytes
+            ),
+        )
+    checks.rejects_model_error(
+        lambda: round_shard_bytes(UINT64_MAX + 1, 8),
+        "shard length above uint64_t rejection",
+    )
 
     k1_scratch = decode_scratch_accounting(
         1, 1, 2, 1, "high", 17, 1, "direct", direct=True
     )
-    assert k1_scratch.plan_total_bytes == 0
-    assert k1_scratch.codec_total_bytes == 0
-    assert k1_scratch.range_count == 0
-    assert k1_scratch.codec_range_count == 0
-    assert k1_scratch.plan_work_slots == 0
-    assert k1_scratch.codec_work_slots == 0
+    checks.require(k1_scratch.plan_total_bytes == 0, "K=1 plan scratch")
+    checks.require(k1_scratch.codec_total_bytes == 0, "K=1 codec scratch")
+    checks.require(k1_scratch.range_count == 0, "K=1 plan range count")
+    checks.require(
+        k1_scratch.codec_range_count == 0, "K=1 codec range count"
+    )
+    checks.require(k1_scratch.plan_work_slots == 0, "K=1 plan work slots")
+    checks.require(k1_scratch.codec_work_slots == 0, "K=1 codec work slots")
     k1_selection = select_codec_transform_execution(
         1, 1, "high", "gf8", "avx2",
         parent_geometry(1, 1, "high"), 17
     )
-    assert k1_selection == DecodeSelection("direct", "direct", 0, 0)
-    checks += 7
+    checks.require(
+        k1_selection == DecodeSelection("direct", "direct", 0, 0),
+        "K=1 codec decode selection",
+    )
 
     low = model_low_encode(8, 248, 8, 1024, set(range(248)))
-    assert low.butterflies == 384
-    assert low.details["active_parity_blocks"] == 31
-    assert low.details["direct_output_blocks"] == 31
-    assert low.copies == 8
-    checks += 4
+    checks.require(low.butterflies == 384, "low encode butterfly count")
+    checks.require(
+        low.details["active_parity_blocks"] == 31,
+        "low encode active parity blocks",
+    )
+    checks.require(
+        low.details["direct_output_blocks"] == 31,
+        "low encode direct output blocks",
+    )
+    checks.require(low.copies == 8, "low encode copy count")
 
     low_decode = model_low_decode(8, 248, 256, 8, 1024, {0, 1})
-    assert low_decode.fused_multiply_add_vectors == 248
-    assert low_decode.details["fused_weighted_multiply_add_vectors"] == 248
+    checks.require(
+        low_decode.fused_multiply_add_vectors == 248,
+        "low decode fused multiply-add vectors",
+    )
+    checks.require(
+        low_decode.details["fused_weighted_multiply_add_vectors"] == 248,
+        "low decode weighted fused multiply-add vectors",
+    )
     low_decode_metrics = schedule_metrics(low_decode, "gf8", 1024)
     unfused_reads = (
         2 * low_decode.butterflies
@@ -3283,32 +3446,57 @@ def run_self_test(verbose: bool = True) -> None:
         + low_decode.fixed_multiply_vectors
         + low_decode.copies
     ) * 1024
-    assert (low_decode_metrics["estimated_bytes_read_lower"].value ==
-            unfused_reads - 248 * 1024)
-    checks += 3
+    checks.require(
+        low_decode_metrics["estimated_bytes_read_lower"].value ==
+        unfused_reads - 248 * 1024,
+        "low decode fused read accounting",
+    )
 
     root = pathlib.Path(__file__).resolve().parent.parent
+    tool_source = pathlib.Path(__file__).read_text(encoding="utf-8")
+    checks.accepts(
+        lambda: verify_python_assert_free_source(
+            tool_source, "tools/leopard2_operation_counts.py"
+        ),
+        "operation-count source is free of Python assert statements",
+    )
+    checks.rejects_model_error(
+        lambda: verify_python_assert_free_source(
+            tool_source + "\nassert True\n",
+            "tools/leopard2_operation_counts.py assert mutation",
+        ),
+        "Python assert AST mutation detection",
+    )
     cmake_source = (root / "CMakeLists.txt").read_text(encoding="utf-8")
-    verify_high_pruned_hook_registration(cmake_source, "CMakeLists.txt")
-    checks += 1
+    checks.accepts(
+        lambda: verify_high_pruned_hook_registration(
+            cmake_source, "CMakeLists.txt"
+        ),
+        "high-pruned hook registration source guard",
+    )
     core_source = (root / "leopard2.cpp").read_text(encoding="utf-8")
-    verify_decode_scratch_source(core_source, "leopard2.cpp")
-    try:
-        verify_decode_scratch_source(
+    checks.accepts(
+        lambda: verify_decode_scratch_source(core_source, "leopard2.cpp"),
+        "decode scratch source guard",
+    )
+    checks.rejects_model_error(
+        lambda: verify_decode_scratch_source(
             core_source.replace(
                 "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
                 "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
                 1,
             ),
             "leopard2.cpp direct-pointer mutation",
-        )
-    except ModelError:
-        pass
-    else:
-        raise AssertionError("direct decode scratch mutation escaped source guard")
-    checks += 2
+        ),
+        "direct decode scratch source mutation detection",
+    )
     policy_source = (root / "Leopard2Dispatch.h").read_text(encoding="utf-8")
-    verify_decode_policy_source(policy_source, "Leopard2Dispatch.h")
+    checks.accepts(
+        lambda: verify_decode_policy_source(
+            policy_source, "Leopard2Dispatch.h"
+        ),
+        "decode policy source guard",
+    )
     policy_mutations = (
         (
             "backend == LEO2_BACKEND_AVX2 ||\n"
@@ -3323,20 +3511,23 @@ def run_self_test(verbose: bool = True) -> None:
     )
     for old, new in policy_mutations:
         mutated = policy_source.replace(old, new, 1)
-        if mutated == policy_source:
-            raise AssertionError("decode policy mutation did not apply")
-        try:
-            verify_decode_policy_source(
+        checks.require(
+            mutated != policy_source, "decode policy mutation applied"
+        )
+        checks.rejects_model_error(
+            lambda mutated=mutated: verify_decode_policy_source(
                 mutated, "Leopard2Dispatch.h backend mutation"
-            )
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("decode policy mutation escaped source guard")
-    checks += 1 + len(policy_mutations)
+            ),
+            "decode policy source mutation detection",
+        )
     ff8_source = (root / "LeopardFF8.cpp").read_text(encoding="utf-8")
     ff16_source = (root / "LeopardFF16.cpp").read_text(encoding="utf-8")
-    verify_decode_fusion_sources(core_source, ff8_source, ff16_source)
+    checks.accepts(
+        lambda: verify_decode_fusion_sources(
+            core_source, ff8_source, ff16_source
+        ),
+        "decode fusion source guards",
+    )
     fusion_mutations = (
         (
             core_source.replace(
@@ -3421,18 +3612,22 @@ def run_self_test(verbose: bool = True) -> None:
         ),
     )
     for mutated_core, mutated_ff8, mutated_ff16 in fusion_mutations:
-        if (mutated_core == core_source and mutated_ff8 == ff8_source and
-                mutated_ff16 == ff16_source):
-            raise AssertionError("decode fusion mutation did not apply")
-        try:
-            verify_decode_fusion_sources(
+        checks.require(
+            not (
+                mutated_core == core_source and
+                mutated_ff8 == ff8_source and
+                mutated_ff16 == ff16_source
+            ),
+            "decode fusion mutation applied",
+        )
+        checks.rejects_model_error(
+            lambda mutated_core=mutated_core,
+                   mutated_ff8=mutated_ff8,
+                   mutated_ff16=mutated_ff16: verify_decode_fusion_sources(
                 mutated_core, mutated_ff8, mutated_ff16
-            )
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("decode fusion mutation escaped source guard")
-    checks += 1 + len(fusion_mutations)
+            ),
+            "decode fusion source mutation detection",
+        )
 
     low_call_fixture = """
         FFT_DIT_FromCoefficients(
@@ -3451,8 +3646,12 @@ def run_self_test(verbose: bool = True) -> None:
         }
         #endif
     """
-    verify_low_encode_no_copy_source(
-        nested_hook_fixture, "nested test-hook fixture")
+    checks.accepts(
+        lambda: verify_low_encode_no_copy_source(
+            nested_hook_fixture, "nested test-hook fixture"
+        ),
+        "nested test-hook copy exemption",
+    )
     escaped_hook_fixtures = (
         low_call_fixture + """
             #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -3472,65 +3671,110 @@ def run_self_test(verbose: bool = True) -> None:
         """,
     )
     for fixture in escaped_hook_fixtures:
-        try:
-            verify_low_encode_no_copy_source(fixture, "escaped hook fixture")
-        except ModelError:
-            pass
-        else:
-            raise AssertionError(
-                "copy outside the canonical positive hook branch escaped")
-    checks += 3
+        checks.rejects_model_error(
+            lambda fixture=fixture: verify_low_encode_no_copy_source(
+                fixture, "escaped hook fixture"
+            ),
+            "copy outside canonical positive hook branch detection",
+        )
 
     for filename in ("LeopardFF8.cpp", "LeopardFF16.cpp"):
         source = ff8_source if filename == "LeopardFF8.cpp" else ff16_source
-        verify_low_encode_no_copy_source(source, filename)
-        verify_high_decode_no_copy_source(source, filename)
-        verify_high_decode_zero_shift_cancellation_source(source, filename)
+        checks.accepts(
+            lambda source=source, filename=filename:
+                verify_low_encode_no_copy_source(source, filename),
+            "{} low-encode no-copy source guard".format(filename),
+        )
+        checks.accepts(
+            lambda source=source, filename=filename:
+                verify_high_decode_no_copy_source(source, filename),
+            "{} high-decode no-copy source guard".format(filename),
+        )
+        checks.accepts(
+            lambda source=source, filename=filename:
+                verify_high_decode_zero_shift_cancellation_source(
+                    source, filename
+                ),
+            "{} high-decode zero-shift source guard".format(filename),
+        )
         if filename == "LeopardFF8.cpp":
-            verify_high_decode_receive_fusion_source(source, filename)
-            verify_high_decode_weighted_locator_source(source, filename)
+            checks.accepts(
+                lambda source=source, filename=filename:
+                    verify_high_decode_receive_fusion_source(source, filename),
+                "{} receive-fusion source guard".format(filename),
+            )
+            checks.accepts(
+                lambda source=source, filename=filename:
+                    verify_high_decode_weighted_locator_source(
+                        source, filename
+                    ),
+                "{} weighted-locator source guard".format(filename),
+            )
         else:
-            verify_high_decode_gf16_copy_first_source(source, filename)
-        verify_low_decode_weighted_fusion_source(source, filename)
-        try:
-            verify_low_encode_no_copy_source(
+            checks.accepts(
+                lambda source=source, filename=filename:
+                    verify_high_decode_gf16_copy_first_source(
+                        source, filename
+                    ),
+                "{} GF16 copy-first source guard".format(filename),
+            )
+        checks.accepts(
+            lambda source=source, filename=filename:
+                verify_low_decode_weighted_fusion_source(source, filename),
+            "{} low-decode weighted-fusion source guard".format(filename),
+        )
+        checks.rejects_model_error(
+            lambda source=source, filename=filename:
+                verify_low_encode_no_copy_source(
                 source +
                 "\nfor (unsigned i = 0; i < p; ++i) "
                 "memcpy(work[p + i], work[i], buffer_bytes);\n",
                 filename + " mutation",
-            )
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("whole-P copy mutation escaped source guard")
-        try:
-            verify_high_decode_no_copy_source(
+            ),
+            "{} whole-P copy mutation detection".format(filename),
+        )
+        checks.rejects_model_error(
+            lambda source=source, filename=filename:
+                verify_high_decode_no_copy_source(
                 source + "\nfor (unsigned i = 0; i < t; ++i) "
                 "memcpy(tile[i], accumulator[i], buffer_bytes);\n",
                 filename + " high mutation",
-            )
-        except ModelError:
-            pass
-        else:
-            raise AssertionError("whole-T copy mutation escaped source guard")
-        checks += 7 if filename == "LeopardFF8.cpp" else 6
+            ),
+            "{} whole-T copy mutation detection".format(filename),
+        )
 
     direct = model_direct_repair(16, 8, 16, 16, "low", set(range(4)))
-    assert direct.nontransform_xor_vectors == 60
-    assert direct.fixed_multiply_vectors == 64
-    assert direct.api_scratch_slots == 0
-    checks += 3
+    checks.require(
+        direct.nontransform_xor_vectors == 60,
+        "direct repair non-transform XOR count",
+    )
+    checks.require(
+        direct.fixed_multiply_vectors == 64,
+        "direct repair fixed-multiply count",
+    )
+    checks.require(direct.api_scratch_slots == 0, "direct repair API scratch")
 
     for size in (2, 4, 8, 16, 32, 64):
         previous = -1
         for prefix in range(size + 1):
             value = fft_prefix_butterflies(size, prefix)
-            assert value >= previous
+            checks.require(
+                value >= previous,
+                "prefix butterfly monotonicity for size {} prefix {}".format(
+                    size, prefix
+                ),
+            )
             previous = value
-            assert value == fft_mask_butterflies(size, set(range(prefix)))
-            checks += 2
-    assert mask_to_ranges(parse_mask("0-3,7,9-10", 16, False)) == "0-3,7,9-10"
-    checks += 1
+            checks.require(
+                value == fft_mask_butterflies(size, set(range(prefix))),
+                "prefix/mask butterfly equivalence for size {} prefix {}".
+                format(size, prefix),
+            )
+    checks.require(
+        mask_to_ranges(parse_mask("0-3,7,9-10", 16, False)) ==
+        "0-3,7,9-10",
+        "mask parse/render round trip",
+    )
 
     namespace = argparse.Namespace(
         path="legacy_high_encode", k=9, r=7, profile=None, field="gf8",
@@ -3542,12 +3786,42 @@ def run_self_test(verbose: bool = True) -> None:
         multi_item_batch=False, context_auto_requested=False,
         gf16_detected_l3_bytes=0,
     )
-    first = json.dumps(build_report(namespace), sort_keys=True)
+    deterministic_report = build_report(namespace)
+    first = json.dumps(deterministic_report, sort_keys=True)
     second = json.dumps(build_report(namespace), sort_keys=True)
-    assert first == second
-    checks += 1
+    checks.require(first == second, "deterministic report serialization")
+    checks.accepts(
+        lambda: write_csv(deterministic_report, io.StringIO()),
+        "valid CSV report serialization",
+    )
+    invalid_inputs = dict(deterministic_report)
+    invalid_inputs["inputs"] = []
+    checks.rejects_model_error(
+        lambda: write_csv(invalid_inputs, io.StringIO()),
+        "non-object CSV inputs rejection",
+    )
+    invalid_geometry = dict(deterministic_report)
+    invalid_geometry["geometry"] = []
+    checks.rejects_model_error(
+        lambda: write_csv(invalid_geometry, io.StringIO()),
+        "non-object CSV geometry rejection",
+    )
+    invalid_metrics = dict(deterministic_report)
+    invalid_metrics["metrics"] = []
+    checks.rejects_model_error(
+        lambda: write_csv(invalid_metrics, io.StringIO()),
+        "non-object CSV metrics rejection",
+    )
+    invalid_metric = dict(deterministic_report)
+    invalid_metric["metrics"] = {"invalid": []}
+    checks.rejects_model_error(
+        lambda: write_csv(invalid_metric, io.StringIO()),
+        "non-object CSV metric rejection",
+    )
     if verbose:
-        print("operation-count self-test passed: {} checks".format(checks))
+        print(
+            "operation-count self-test passed: {} checks".format(checks.count)
+        )
 
 
 def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
