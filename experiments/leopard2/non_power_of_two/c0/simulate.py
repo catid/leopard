@@ -21,6 +21,7 @@ gzip-compressed CSV.  No timestamps or host-specific paths enter the output.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import gzip
 import hashlib
@@ -1012,20 +1013,49 @@ def brute_dependency_counts(length: int, active: int, requested: int) -> tuple[i
 
 
 def self_test() -> None:
-    assert ceil_pow2(1) == 1
-    assert ceil_pow2(255) == 256
-    assert ceil_pow2(257) == 512
-    assert chunks(10, 4) == (4, 4, 2)
-    assert binary_parts(13) == (8, 4, 1)
+    check_count = 0
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal check_count
+        check_count += 1
+        if not condition:
+            raise RuntimeError("C0 simulator self-test failed: " + label)
+
+    def assert_line_numbers(source: str) -> tuple[int, ...]:
+        return tuple(
+            node.lineno for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Assert)
+        )
+
+    check(ceil_pow2(1) == 1, "ceil_pow2 one")
+    check(ceil_pow2(255) == 256, "ceil_pow2 rounds upward")
+    check(ceil_pow2(257) == 512, "ceil_pow2 crosses GF8 boundary")
+    check(chunks(10, 4) == (4, 4, 2), "chunk decomposition")
+    check(binary_parts(13) == (8, 4, 1), "binary decomposition")
 
     high = make_geometry(240, 16, "legacy_high_v1")
-    assert (high.transform_side, high.parent_size) == (16, 256)
-    assert (high.shortened_coordinates, high.punctured_coordinates) == (0, 0)
+    check(
+        (high.transform_side, high.parent_size) == (16, 256),
+        "legacy-high geometry",
+    )
+    check(
+        (high.shortened_coordinates, high.punctured_coordinates) == (0, 0),
+        "legacy-high exact public geometry",
+    )
     low = make_geometry(16, 240, "low_v1")
-    assert (low.transform_side, low.parent_size) == (16, 256)
-    assert (low.shortened_coordinates, low.punctured_coordinates) == (0, 0)
+    check(
+        (low.transform_side, low.parent_size) == (16, 256),
+        "low geometry",
+    )
+    check(
+        (low.shortened_coordinates, low.punctured_coordinates) == (0, 0),
+        "low exact public geometry",
+    )
     rescue = make_geometry(129, 100, "legacy_high_v1")
-    assert rescue.parent_size == 512 and rescue.padding_forces_gf16
+    check(
+        rescue.parent_size == 512 and rescue.padding_forces_gf16,
+        "GF8 field-boundary rescue geometry",
+    )
 
     # Exhaust every structural prefix pair through length 32 against a second
     # graph representation, and check monotonic/bounded invariants to 256.
@@ -1039,10 +1069,25 @@ def self_test() -> None:
                 brute_prefix, brute_dependency = brute_dependency_counts(
                     length, active, requested
                 )
-                assert (prefix, dependency) == (brute_prefix, brute_dependency)
-                assert 0 <= dependency <= prefix <= full
-                assert dependency >= previous
-                assert 0 <= passes <= ceil_log2(length)
+                label = "length={} active={} requested={}".format(
+                    length, active, requested)
+                check(
+                    (prefix, dependency) ==
+                    (brute_prefix, brute_dependency),
+                    "independent dependency trace " + label,
+                )
+                check(
+                    0 <= dependency <= prefix <= full,
+                    "dependency bounds " + label,
+                )
+                check(
+                    dependency >= previous,
+                    "dependency monotonicity " + label,
+                )
+                check(
+                    0 <= passes <= ceil_log2(length),
+                    "dependency pass bounds " + label,
+                )
                 previous = dependency
                 checked_networks += 1
     for length in (64, 128, 256):
@@ -1051,8 +1096,16 @@ def self_test() -> None:
             previous = -1
             for requested in (1, 3, length // 2, length - 1, length):
                 prefix, dependency, _ = dependency_counts(length, active, requested)
-                assert 0 <= dependency <= prefix <= full
-                assert dependency >= previous
+                label = "length={} active={} requested={}".format(
+                    length, active, requested)
+                check(
+                    0 <= dependency <= prefix <= full,
+                    "large dependency bounds " + label,
+                )
+                check(
+                    dependency >= previous,
+                    "large dependency monotonicity " + label,
+                )
                 previous = dependency
                 checked_networks += 1
 
@@ -1069,25 +1122,65 @@ def self_test() -> None:
                 prefix = profile_metrics["prefix_pruned_parent"]
                 dependency = profile_metrics["dependency_pruned_parent"]
                 recursive = profile_metrics["recursive_truncated_parent"]
-                assert dependency.butterfly_equivalents <= prefix.butterfly_equivalents
-                assert prefix.butterfly_equivalents <= padded.butterfly_equivalents
-                assert recursive.butterfly_equivalents == dependency.butterfly_equivalents
-                assert recursive.temporary_shard_slots <= 2 * make_geometry(
-                    k, r, profile
-                ).transform_side
+                label = f"profile={profile} K={k} R={r}"
+                check(
+                    dependency.butterfly_equivalents <=
+                    prefix.butterfly_equivalents,
+                    "dependency versus prefix butterflies " + label,
+                )
+                check(
+                    prefix.butterfly_equivalents <=
+                    padded.butterfly_equivalents,
+                    "prefix versus padded butterflies " + label,
+                )
+                check(
+                    recursive.butterfly_equivalents ==
+                    dependency.butterfly_equivalents,
+                    "recursive dependency butterflies " + label,
+                )
+                check(
+                    recursive.temporary_shard_slots <=
+                    2 * make_geometry(k, r, profile).transform_side,
+                    "recursive scratch bound " + label,
+                )
             for row in rows_for(k, r):
-                assert row.k == k and row.r == r
-                assert row.method in METHODS and row.profile in PROFILES
-                assert row.symbolic_score >= 0
-                assert row.parent_size >= row.transmitted_size
-                assert row.padded_coordinates == row.parent_size - row.transmitted_size
+                label = (
+                    f"profile={row.profile} method={row.method} K={k} R={r}")
+                check(
+                    row.k == k and row.r == r,
+                    "row public geometry " + label,
+                )
+                check(
+                    row.method in METHODS and row.profile in PROFILES,
+                    "row method/profile identity " + label,
+                )
+                check(row.symbolic_score >= 0, "row score " + label)
+                check(
+                    row.parent_size >= row.transmitted_size,
+                    "row parent bound " + label,
+                )
+                check(
+                    row.padded_coordinates ==
+                    row.parent_size - row.transmitted_size,
+                    "row padding identity " + label,
+                )
                 for name in fields(Metrics):
-                    value = getattr(metrics_by_profile[row.profile][row.method], name.name)
-                    assert value >= 0
+                    value = getattr(
+                        metrics_by_profile[row.profile][row.method], name.name)
+                    check(
+                        value >= 0,
+                        "row metric {} {}".format(name.name, label),
+                    )
                 if row.method == "padded_dyadic_parent" and row.symbolic_score:
-                    assert row.gain_vs_padded == 1.0
+                    check(
+                        row.gain_vs_padded == 1.0,
+                        "padded baseline gain " + label,
+                    )
                 if row.wire_scope == "parent_preserving":
-                    assert row.candidate_size == row.parent_size
+                    check(
+                        row.candidate_size == row.parent_size,
+                        "parent-preserving size " + label,
+                    )
                 checked_rows += 1
 
     exact_side_row = next(
@@ -1095,37 +1188,74 @@ def self_test() -> None:
         for row in rows_for(129, 100)
         if row.profile == "legacy_high_v1" and row.method == "direct_matrix_exact"
     )
-    assert exact_side_row.transform_side == 128
-    assert exact_side_row.candidate_transform_side == 100
-    assert exact_side_row.parent_field == "gf16"
-    assert exact_side_row.candidate_field == "gf8"
-    assert exact_side_row.gf8_boundary_rescue_candidate
+    check(exact_side_row.transform_side == 128, "exact rescue padded side")
+    check(
+        exact_side_row.candidate_transform_side == 100,
+        "exact rescue candidate side",
+    )
+    check(exact_side_row.parent_field == "gf16", "exact rescue parent field")
+    check(
+        exact_side_row.candidate_field == "gf8",
+        "exact rescue candidate field",
+    )
+    check(
+        exact_side_row.gf8_boundary_rescue_candidate,
+        "exact rescue classification",
+    )
 
     # Dense systematic generator work is monotonic in K and R.
     for k in range(1, 32):
         for r in range(1, 32):
             here = direct_matrix_metrics(make_geometry(k, r, "low_v1"))
-            assert direct_matrix_metrics(make_geometry(k + 1, r, "low_v1")).fixed_multiplications >= here.fixed_multiplications
-            assert direct_matrix_metrics(make_geometry(k, r + 1, "low_v1")).fixed_multiplications >= here.fixed_multiplications
+            check(
+                direct_matrix_metrics(
+                    make_geometry(k + 1, r, "low_v1")).
+                fixed_multiplications >= here.fixed_multiplications,
+                f"direct K monotonicity K={k} R={r}",
+            )
+            check(
+                direct_matrix_metrics(
+                    make_geometry(k, r + 1, "low_v1")).
+                fixed_multiplications >= here.fixed_multiplications,
+                f"direct R monotonicity K={k} R={r}",
+            )
 
     # Stable serialization and deterministic parallel worker payload.
     first = [row_dict(row) for row in rows_for(7, 9)]
     second = [row_dict(row) for row in rows_for(7, 9)]
-    assert first == second
+    check(first == second, "stable row serialization")
     batch_first = analyze_k((3, 9, True))
     batch_second = analyze_k((3, 9, True))
-    assert batch_first == batch_second
+    check(batch_first == batch_second, "stable worker payload")
     merged = merge_analysis([analyze_k((k, 3, False)) for k in range(1, 4)])
-    assert merged["input_pair_count"] == 9
-    assert merged["profile_cell_count"] == 18
-    assert merged["method_row_count"] == 144
-    assert sum(item["cells"] for item in merged["winner_counts"] if item["profile"] == "low_v1") == 9
-    assert checked_networks == 1440
-    assert checked_rows == 4896
+    check(merged["input_pair_count"] == 9, "merged input-pair count")
+    check(merged["profile_cell_count"] == 18, "merged profile-cell count")
+    check(merged["method_row_count"] == 144, "merged method-row count")
+    check(
+        sum(item["cells"] for item in merged["winner_counts"]
+            if item["profile"] == "low_v1") == 9,
+        "merged low-profile winner count",
+    )
+    check(checked_networks == 1440, "dependency network coverage count")
+    check(checked_rows == 4896, "cost-row coverage count")
+    check(
+        assert_line_numbers("value = 1\n") == (),
+        "assert scanner accepts assert-free source",
+    )
+    check(
+        assert_line_numbers("value = 1\nassert value\n") == (2,),
+        "assert scanner detects optimized-away checks",
+    )
+    check(
+        assert_line_numbers(Path(__file__).read_text(encoding="utf-8")) == (),
+        "C0 simulator contains no Python assert statements",
+    )
+    check(check_count > 1, "self-test executed a nontrivial check set")
     print(json.dumps({
         "status": "PASS",
         "checked_dependency_networks": checked_networks,
         "checked_cost_rows": checked_rows,
+        "checks": check_count,
         "schema_version": SCHEMA_VERSION,
     }, sort_keys=True))
 
