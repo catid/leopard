@@ -498,8 +498,9 @@ void verify_internal_cancellation_pattern(
         block_zero_live_rows = 2;
     }
     // Block one is empty.  The first later contribution is sparse and owns
-    // an exact input plan; the next block is dense and must accumulate into
-    // the first.  Both are subsequently reused as output destinations.
+    // an exact input plan; the next block is dense and must contribute into
+    // the first, either through a fused vector sink or a materialized scalar
+    // inverse followed by XOR.  Both are subsequently reused as outputs.
     const unsigned sparse_offset = side * 2;
     inputs[sparse_offset] = sources.data() +
         static_cast<size_t>(sparse_offset) * bytes;
@@ -582,8 +583,9 @@ void verify_internal_cancellation_pattern(
             "synthetic block-zero source XOR count mismatch");
         require(counts.syndrome_materialized_blocks != 0,
             "synthetic first exact-pruned contribution was not materialized");
-        require(counts.syndrome_accumulated_blocks != 0,
-            "synthetic second dense contribution was not accumulated");
+        require(counts.syndrome_materialized_blocks +
+                    counts.syndrome_accumulated_blocks == 2,
+            "synthetic later contribution count mismatch");
         std::cout << "COUNTERS " << label
                   << " block0_ifft_elided="
                   << counts.syndrome_block_zero_ifft_elisions

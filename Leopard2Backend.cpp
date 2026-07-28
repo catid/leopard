@@ -1940,6 +1940,7 @@ static bool TestXor(const Ops& ops)
     return true;
 }
 
+#ifdef LEO_HAS_FF8
 static bool TestWeightedIFFTAliasingContract()
 {
     uint8_t storage[8][32] = {};
@@ -2000,7 +2001,6 @@ static bool TestWeightedIFFTAliasingContract()
 }
 
 
-#ifdef LEO_HAS_FF8
 // Reference for the fused three-layer radix-eight butterflies: composed from
 // the audited two-point reference so the fused kernels are checked against the
 // same source of truth as every other butterfly, not against themselves.

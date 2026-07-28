@@ -1519,6 +1519,124 @@ void test_tiled_decode_workspace_slopes(
     }
 }
 
+void test_gf16_live_set_scratch_boundaries(
+    leo2_context* context,
+    Counts* counts)
+{
+#if SIZE_MAX > UINT32_MAX
+    const leo2_backend backend = leo2_context_backend(context);
+    if ((backend != LEO2_BACKEND_AVX2 && backend != LEO2_BACKEND_GFNI) ||
+        (leo2_context_field_mask(context) & LEO2_FIELD_MASK_GF16) == 0)
+        return;
+
+    /*
+        LOW_V1 K=64,R=193 has P=64 and therefore retains 2P=128 work
+        rows.  Its GF16 live set reaches the 64-MiB tiling threshold at an
+        exact 512-KiB shard.  Pin the immediately adjacent 64-byte sizes so
+        making the threshold comparison overflow-safe cannot move the normal
+        crossover or change balanced-pass sizing.
+    */
+    CodecOwner codec;
+    require_result(leo2_codec_create(context, 64, 193,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, NULL, &codec.codec),
+        LEO2_SUCCESS, "GF16 live-set boundary codec create");
+
+    const size_t work_rows = 128;
+    const size_t small_bytes = 64;
+    const size_t threshold_bytes = 512U * 1024U;
+    const size_t below_bytes = threshold_bytes - 64U;
+    const size_t above_bytes = threshold_bytes + 64U;
+    const size_t threshold_tile_bytes = 128U * 1024U;
+    const size_t above_tile_count =
+        1U + (above_bytes - 1U) / threshold_tile_bytes;
+    const size_t above_tile_bytes =
+        ((above_bytes / 64U + above_tile_count - 1U) /
+            above_tile_count) * 64U;
+
+    size_t encode_small = 0;
+    size_t encode_below = 0;
+    size_t encode_threshold = 0;
+    size_t encode_above = 0;
+    size_t decode_small = 0;
+    size_t decode_below = 0;
+    size_t decode_threshold = 0;
+    size_t decode_above = 0;
+    require_result(leo2_encode_scratch_size(
+        codec.codec, small_bytes, &encode_small), LEO2_SUCCESS,
+        "GF16 live-set small encode scratch query");
+    require_result(leo2_encode_scratch_size(
+        codec.codec, below_bytes, &encode_below), LEO2_SUCCESS,
+        "GF16 live-set below-threshold encode scratch query");
+    require_result(leo2_encode_scratch_size(
+        codec.codec, threshold_bytes, &encode_threshold), LEO2_SUCCESS,
+        "GF16 live-set threshold encode scratch query");
+    require_result(leo2_encode_scratch_size(
+        codec.codec, above_bytes, &encode_above), LEO2_SUCCESS,
+        "GF16 live-set above-threshold encode scratch query");
+    require_result(leo2_decode_scratch_size(
+        codec.codec, small_bytes, &decode_small), LEO2_SUCCESS,
+        "GF16 live-set small decode scratch query");
+    require_result(leo2_decode_scratch_size(
+        codec.codec, below_bytes, &decode_below), LEO2_SUCCESS,
+        "GF16 live-set below-threshold decode scratch query");
+    require_result(leo2_decode_scratch_size(
+        codec.codec, threshold_bytes, &decode_threshold), LEO2_SUCCESS,
+        "GF16 live-set threshold decode scratch query");
+    require_result(leo2_decode_scratch_size(
+        codec.codec, above_bytes, &decode_above), LEO2_SUCCESS,
+        "GF16 live-set above-threshold decode scratch query");
+
+    require(encode_below > encode_small &&
+            encode_below - encode_small ==
+                work_rows * (below_bytes - small_bytes),
+        "GF16 encode live-set tiling moved below its threshold");
+    require(encode_threshold > encode_small &&
+            encode_threshold - encode_small ==
+                work_rows * (threshold_tile_bytes - small_bytes),
+        "GF16 encode live-set threshold tile changed");
+    require(encode_above > encode_small &&
+            encode_above - encode_small ==
+                work_rows * (above_tile_bytes - small_bytes),
+        "GF16 encode balanced tile changed above the threshold");
+    require(decode_below > decode_small &&
+            decode_below - decode_small ==
+                work_rows * (below_bytes - small_bytes),
+        "GF16 decode live-set tiling moved below its threshold");
+    require(decode_threshold > decode_small &&
+            decode_threshold - decode_small ==
+                work_rows * (threshold_tile_bytes - small_bytes),
+        "GF16 decode live-set threshold tile changed");
+    require(decode_above > decode_small &&
+            decode_above - decode_small ==
+                work_rows * (above_tile_bytes - small_bytes),
+        "GF16 decode balanced tile changed above the threshold");
+
+    /*
+        128 * 2^57 is exactly 2^64.  The former unchecked multiplication
+        wrapped to zero, skipped tiling, and made the later checked scratch
+        layout fail with INVALID_COUNTS.  No payload allocation is needed to
+        prove that both public queries now retain bounded workspaces.
+    */
+    const uint64_t overflow_shard_bytes = UINT64_C(1) << 57;
+    size_t encode_extreme = 0;
+    size_t decode_extreme = 0;
+    require_result(leo2_encode_scratch_size(
+        codec.codec, overflow_shard_bytes, &encode_extreme), LEO2_SUCCESS,
+        "GF16 overflow-edge encode scratch query");
+    require_result(leo2_decode_scratch_size(
+        codec.codec, overflow_shard_bytes, &decode_extreme), LEO2_SUCCESS,
+        "GF16 overflow-edge decode scratch query");
+    require(encode_extreme < 32U * 1024U * 1024U,
+        "GF16 overflow-edge encode scratch was not bounded by tiling");
+    require(decode_extreme < 32U * 1024U * 1024U,
+        "GF16 overflow-edge decode scratch was not bounded by tiling");
+    counts->scratch_checks += 10;
+#else
+    (void)context;
+    (void)counts;
+#endif
+}
+
 void test_ragged_decode_tail_staging_slopes(
     leo2_context* context,
     Counts* counts)
@@ -2441,6 +2559,7 @@ int main()
         test_one_shot_presence_alias_contracts(context.context, &counts);
         test_aligned_decode_input_staging_elision(context.context, &counts);
         test_tiled_decode_workspace_slopes(context.context, &counts);
+        test_gf16_live_set_scratch_boundaries(context.context, &counts);
         test_ragged_decode_tail_staging_slopes(context.context, &counts);
         test_ragged_encode_tail_staging_slopes(context.context, &counts);
         test_concurrent_shared_context_batches(context.context, &counts);

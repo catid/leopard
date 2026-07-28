@@ -21,6 +21,33 @@ void require(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
+void test_next_power_of_two()
+{
+    // Keep the historical failure input runtime-visible so UBSan observes any
+    // regression to calling LastNonzeroBit32(0), even in optimized builds.
+    volatile unsigned one = 1;
+    require(leopard::NextPow2(0) == 0,
+        "NextPow2 zero sentinel");
+    require(leopard::NextPow2(one) == 1,
+        "NextPow2 one");
+    require(leopard::NextPow2(2) == 2,
+        "NextPow2 two");
+    require(leopard::NextPow2(3) == 4,
+        "NextPow2 rounds three");
+    require(leopard::NextPow2(4) == 4,
+        "NextPow2 four");
+    require(leopard::NextPow2(5) == 8,
+        "NextPow2 rounds five");
+    require(leopard::NextPow2(0x7fffffffU) == 0x80000000U,
+        "NextPow2 rounds to the largest representable power");
+    require(leopard::NextPow2(0x80000000U) == 0x80000000U,
+        "NextPow2 largest representable power");
+    require(leopard::NextPow2(0x80000001U) == 0,
+        "NextPow2 overflow sentinel");
+    require(leopard::NextPow2(~0U) == 0,
+        "NextPow2 maximum-input overflow sentinel");
+}
+
 void test_feature_classifier()
 {
     using leopard::backend::ClassifyX86Features;
@@ -472,6 +499,7 @@ int main()
 {
     try
     {
+        test_next_power_of_two();
         test_feature_classifier();
         test_processor_classifier();
         require(leo_init() == Leopard_Success, "Leopard initialization");

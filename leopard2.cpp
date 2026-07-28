@@ -720,6 +720,15 @@ static bool CheckedMultiply(size_t a, size_t b, size_t& result)
     return true;
 }
 
+static bool ProductAtLeast(size_t a, size_t b, size_t threshold)
+{
+    size_t product = 0;
+    // An overflowing size_t product is necessarily larger than every
+    // representable threshold.  Treat it as crossing the policy boundary
+    // rather than allowing the wrapped value to suppress bounded tiling.
+    return !CheckedMultiply(a, b, product) || product >= threshold;
+}
+
 static bool AlignUp(size_t value, size_t alignment, size_t& result)
 {
     const size_t mask = alignment - 1;
@@ -2953,10 +2962,9 @@ static leo2_result EncodeLayout(
     if (high_gf16_tile_bytes == 0)
     {
         const size_t work_rows = static_cast<size_t>(codec->padded_side) * 2U;
-        const size_t live_set_bytes =
-            work_rows * geometry.aligned_prefix_bytes;
         if (work_rows != 0 &&
-            live_set_bytes >= kHighGF16LiveSetTileThreshold)
+            ProductAtLeast(work_rows, geometry.aligned_prefix_bytes,
+                kHighGF16LiveSetTileThreshold))
         {
             size_t candidate = kHighGF16LiveSetTarget / work_rows;
             candidate &= ~static_cast<size_t>(kScratchAlignment - 1U);
@@ -3317,9 +3325,9 @@ static size_t AVX2DecodeExecutionTileBytes(
     if (codec->field == LEO2_FIELD_GF16)
     {
         const size_t work_rows = static_cast<size_t>(codec->padded_side) * 2U;
-        const size_t live_set_bytes = work_rows * aligned_prefix_bytes;
         if (work_rows != 0 &&
-            live_set_bytes >= kHighGF16LiveSetTileThreshold)
+            ProductAtLeast(work_rows, aligned_prefix_bytes,
+                kHighGF16LiveSetTileThreshold))
         {
             size_t candidate = kHighGF16LiveSetTarget / work_rows;
             candidate &= ~static_cast<size_t>(kScratchAlignment - 1U);
@@ -4174,6 +4182,12 @@ static void ExecuteTransformEncodePass(
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
 {
+#ifndef LEO_HAS_FF16
+    // Source-policy sizing is a GF16-only input.  Keep the shared execution
+    // signature warning-clean when the supported GF8-only build removes every
+    // consumer at preprocessing time.
+    (void)policy_buffer_bytes;
+#endif
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
         if (codec->padded_side == 1)

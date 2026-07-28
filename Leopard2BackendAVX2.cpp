@@ -60,6 +60,7 @@ static LEO_FORCE_INLINE uint64_t GFNIAffineMatrixBit(
     return static_cast<uint64_t>(1) << (8 * (7 - output_bit) + input_bit);
 }
 
+#ifdef LEO_HAS_FF8
 static void GFNIStoreMatrix(uint8_t row[16], uint64_t matrix)
 {
     for (unsigned byte = 0; byte < 8; ++byte)
@@ -69,6 +70,7 @@ static void GFNIStoreMatrix(uint8_t row[16], uint64_t matrix)
         row[byte + 8] = value;
     }
 }
+#endif
 
 static LEO_FORCE_INLINE uint8_t GFNIParity(uint8_t value)
 {
@@ -162,11 +164,13 @@ static uint8_t FF8Product(uint16_t log, uint8_t value)
 }
 #endif
 
+#if defined(LEO_HAS_FF8) || !defined(LEO2_GFNI_VARIANT)
 static __m256i BroadcastTable(const uint8_t table[16])
 {
     return _mm256_broadcastsi128_si256(_mm_loadu_si128(
         reinterpret_cast<const __m128i*>(table)));
 }
+#endif
 
 #ifdef LEO_HAS_FF8
 #if defined(LEO2_AVX512_VARIANT)

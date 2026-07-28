@@ -435,10 +435,17 @@ LEO_FORCE_INLINE unsigned LastNonzeroBit32(unsigned x)
 #endif
 }
 
-// Returns next power of two at or above given value
+// Returns the next power of two at or above the given value.
+// The supported nonzero range is [1, 2^31].  Returns zero when n is zero or
+// when the rounded result would not fit in a 32-bit unsigned integer.
 LEO_FORCE_INLINE unsigned NextPow2(unsigned n)
 {
-    return 2UL << LastNonzeroBit32(n - 1);
+    static_assert(sizeof(unsigned) == 4, "NextPow2 requires 32 bit unsigneds");
+    if (n <= 1)
+        return n;
+    if (n > 0x80000000U)
+        return 0;
+    return 1U << (LastNonzeroBit32(n - 1) + 1);
 }
 
 

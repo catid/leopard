@@ -65,8 +65,8 @@ struct LegacyGeometry
 
 static unsigned LegacyNextPow2(unsigned value)
 {
-    // All callers bound value to [2, 65536], avoiding NextPow2's zero-input
-    // precondition and any overflowing intermediate shift.
+    // All callers bound value to [2, 65536].  Keep this legacy helper local so
+    // its historical geometry remains explicit and independently bounded.
     unsigned result = 1;
     while (result < value)
         result <<= 1;
