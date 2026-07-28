@@ -1632,6 +1632,7 @@ def expected_compile_argv(
             "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX512_BACKEND=1",
+            "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
         includes = [f"-I{candidate_root}"]
