@@ -44,6 +44,9 @@ option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
 option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
     "Preformat AVX2 direct-repair source schedules in decode plans" OFF)
+option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
+    "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
+    OFF)
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
@@ -253,6 +256,10 @@ add_library(libleopard ALIAS leopard)
 if(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
     target_compile_definitions(leopard PRIVATE
         LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1)
+endif()
+if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
 endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
@@ -664,6 +671,10 @@ if(LEO2_BUILD_TESTS)
     if(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1)
+    endif()
+    if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
     endif()
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
@@ -1077,6 +1088,33 @@ if(LEO2_BUILD_TESTS)
         endif()
     endif()
 
+    if(LEOPARD_ENABLE_GF8)
+        # This target deliberately links the ordinary production archive, not
+        # leopard_test_hooks.  It proves that the default-off historical
+        # candidate controls real table preparation and AUTO dispatch in the
+        # shipped graph, while both selector states retain oracle parity.
+        add_executable(leopard2_high_direct_production_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_high_direct_production.cpp)
+        target_include_directories(leopard2_high_direct_production_test PRIVATE
+            tests/leopard2)
+        if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_DIRECT_PRODUCTION=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_DIRECT_PRODUCTION=0)
+        endif()
+        target_link_libraries(leopard2_high_direct_production_test leopard)
+        add_test(NAME leopard2_high_direct_production
+            COMMAND leopard2_high_direct_production_test)
+        set_tests_properties(leopard2_high_direct_production PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
     # The exhaustive internal suite intentionally cross-checks both concrete
     # field implementations in the same process.  Reduced archives instead
     # build the focused public/legacy contract test above; the default dual
@@ -1087,8 +1125,15 @@ if(LEO2_BUILD_TESTS)
         add_executable(bench_leopard2_direct_encode
             bench/leopard2/direct_encode_benchmark.cpp)
         target_compile_definitions(bench_leopard2_direct_encode PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_BENCHMARK_BUILD_VARIANT="${LEO2_BACKEND_VARIANT}")
+        if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+            target_compile_definitions(bench_leopard2_direct_encode PRIVATE
+                LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+        endif()
         target_link_libraries(bench_leopard2_direct_encode leopard_test_hooks)
+        leopard2_enable_benchmark_source_attestation(
+            bench_leopard2_direct_encode)
 
         # This diagnostic benchmark is built only with the test hooks that
         # expose the full padded LCH oracle; it is never installed.  Production
@@ -1256,6 +1301,15 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_direct_encode.cpp)
     target_compile_definitions(leopard2_direct_encode_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        target_compile_definitions(leopard2_direct_encode_test PRIVATE
+            LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+    endif()
+    if(LEO2_BACKEND_VARIANT STREQUAL "auto" AND
+       LEO2_HAVE_AVX512_BACKEND)
+        target_compile_definitions(leopard2_direct_encode_test PRIVATE
+            LEO2_TEST_AUTO_MAY_USE_AVX512_ENCODE=1)
+    endif()
     target_include_directories(leopard2_direct_encode_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_direct_encode_test leopard_test_hooks)
     add_test(NAME leopard2_direct_encode COMMAND leopard2_direct_encode_test)

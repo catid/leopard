@@ -26,7 +26,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "282b3b71c8b665107c135e2b694159a78887a4fa67441199bca41fb37d3a9e76"
+    "6be998bb781c3c765144e96a99c1577bab08d3bcc46b39e462bbef5f9d61a9f8"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -535,7 +535,8 @@ class CMakeProductionGraph(object):
         r"LEOPARD_ENABLE_GF(?:8|16)|"
         r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
         r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
-        r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT)|"
+        r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT|"
+        r"EXPERIMENT_(?:DIRECT_SOURCE_PLAN|HIGH_DIRECT_ENCODE))|"
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
     _approved_production_mutations = {
@@ -560,6 +561,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "NO_LEO_HAS_FF16=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
@@ -723,6 +726,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
             "Preformat AVX2 direct-repair source schedules in decode plans",
             "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+            "Enable default-off candidate legacy-high GF8/AVX2 direct "
+            "diagnostics", "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -798,6 +805,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
             "Preformat AVX2 direct-repair source schedules in decode plans",
             "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+            "Enable default-off candidate legacy-high GF8/AVX2 direct "
+            "diagnostics", "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
@@ -838,6 +849,8 @@ class CMakeProductionGraph(object):
             "libleopard", "ALIAS", "leopard"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
@@ -926,6 +939,9 @@ class CMakeProductionGraph(object):
             "set_property", _sparse_sidecar_link_depends)),
         ("sparse-sidecar", (
             "add_custom_command", _sparse_sidecar_post_build)),
+        ("guarded", (
+            "leopard2_enable_benchmark_source_attestation",
+            ("bench_leopard2_direct_encode",))),
     )
     _dangerous_build_properties = {
         "COMPILE_DEFINITIONS", "COMPILE_FEATURES", "COMPILE_FLAGS",
@@ -1231,6 +1247,8 @@ class CMakeProductionGraph(object):
         option_scoped_definitions = {
             ("PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1"):
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+            ("PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"):
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
         }
         if specification in option_scoped_definitions:
             return bool_atom(
@@ -1942,6 +1960,12 @@ class CMakeProductionGraph(object):
                     expected_guard = bool_and(
                         benchmark_guard,
                         bool_atom("option:LEO2_BUILD_ALLK_DIAGNOSTIC"))
+                elif tokens == ["bench_leopard2_direct_encode"]:
+                    expected_guard = bool_and(
+                        benchmark_guard,
+                        bool_atom("option:LEO2_BUILD_TESTS"),
+                        bool_atom("option:LEOPARD_ENABLE_GF8"),
+                        bool_atom("option:LEOPARD_ENABLE_GF16"))
                 else:
                     raise ContractError(
                         "unapproved benchmark attestation target")

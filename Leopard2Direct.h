@@ -156,6 +156,24 @@ bool GetCodecDecodeMetadataInfo(
     CodecDecodeMetadataInfo* info_out);
 
 /*
+    Production encode-table and AUTO-route accounting.  This internal query is
+    deliberately available without test hooks so an executable linked against
+    the ordinary archive can prove whether a candidate selector merely exists
+    in a hook build or is actually prepared and selected in production.
+*/
+struct CodecEncodePathInfo
+{
+    size_t direct_generator_rows;
+    bool auto_direct_selected;
+};
+
+bool GetCodecEncodePathInfo(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count,
+    CodecEncodePathInfo* info_out);
+
+/*
     Pattern-dependent structural accounting for an immutable decode plan.
     Empty high-output entries select the mature full transform and are not
     counted as compiled pruned schedules.

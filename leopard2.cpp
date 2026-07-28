@@ -1572,29 +1572,33 @@ static bool IsDirectEncodeShape(const leo2_codec* codec)
 
 static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
 {
+    if (!IsDirectEncodeShape(codec) || !codec->context ||
+        codec->original_count < 2)
+        return false;
+    const leo2_backend backend = codec->context->backend;
+
 #if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
     /*
-        Default-off experiment.  A 2026-07-28 re-screen that appeared to refute
-        the older direct-path win was invalid: it extracted codec-setup medians
-        instead of encode-execution medians and lacked authoritative frozen-
-        binary ABBA evidence.  Do not enable until an explicit-AVX2 campaign
-        re-establishes the current force-direct execution ceiling with exact
-        metric paths, non-vacuous parity identity, and neighboring cells.
+        This default-off diagnostic eligibility boundary is deliberately
+        confined to legacy-high GF8 on an explicit AVX2 context with more than
+        one recovery shard.  The historical campaign only revalidates a prior
+        ceiling; production promotion remains blocked pending a full bounded
+        map or a separately measured narrow predicate and upper bound.
+        Defining the experiment must not silently admit GF16, SSSE3, AVX-512,
+        GFNI, scalar, or the existing R=1 single-side encoder.
     */
-    const bool profile_ok =
-        codec && (codec->profile == LEO2_PROFILE_LOW_V1 ||
-                  (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-                   codec->context &&
-                   codec->context->backend != LEO2_BACKEND_SCALAR));
-    if (!IsDirectEncodeShape(codec) || !codec->context ||
-        !profile_ok || codec->original_count < 2)
+    const bool measured_high =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        backend == LEO2_BACKEND_AVX2 &&
+        codec->recovery_count > 1;
+    if (codec->profile != LEO2_PROFILE_LOW_V1 && !measured_high)
         return false;
 #else
-    if (!IsDirectEncodeShape(codec) || !codec->context ||
-        codec->profile != LEO2_PROFILE_LOW_V1 || codec->original_count < 2)
+    if (codec->profile != LEO2_PROFILE_LOW_V1)
         return false;
 #endif
-    const leo2_backend backend = codec->context->backend;
+
     if (backend == LEO2_BACKEND_SCALAR)
         return codec->original_count >= 3;
     return backend == LEO2_BACKEND_SSSE3 ||
@@ -7739,6 +7743,13 @@ LEO2_EXPORT leo2_result leo2_test_codec_encode_path(
     *direct_out = 0;
     if (!codec || requested_recovery_count > codec->recovery_count)
         return LEO2_INVALID_ARGUMENT;
+    if (UseSingleSideEncodeLayout(codec))
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        return DirectEncodeLayout(
+            codec, shard_bytes, layout, rounded_bytes);
+    }
     EncodeScratchGeometry geometry;
     const leo2_result result = EncodeLayout(
         codec, shard_bytes, geometry);
@@ -7891,6 +7902,42 @@ bool GetCodecDecodeMetadataInfo(
         codec->translated_low_permanent_locator16.size() * sizeof(uint16_t);
     info.translated_factor_bytes = codec->translated_low_factors8.size() +
         codec->translated_low_factors16.size() * sizeof(uint16_t);
+    *info_out = info;
+    return true;
+}
+
+bool GetCodecEncodePathInfo(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    uint32_t requested_recovery_count,
+    CodecEncodePathInfo* info_out)
+{
+    if (!codec || !info_out ||
+        requested_recovery_count > codec->recovery_count)
+        return false;
+
+    if (UseSingleSideEncodeLayout(codec))
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        if (DirectEncodeLayout(
+                codec, shard_bytes, layout, rounded_bytes) != LEO2_SUCCESS)
+            return false;
+    }
+    else
+    {
+        EncodeScratchGeometry geometry;
+        if (EncodeLayout(codec, shard_bytes, geometry) != LEO2_SUCCESS)
+            return false;
+    }
+
+    CodecEncodePathInfo info;
+    info.direct_generator_rows =
+        HasDirectGeneratorRows(codec) ? codec->recovery_count : 0;
+    info.auto_direct_selected =
+        !UseSingleSideEncodeLayout(codec) &&
+        AutoDirectEncodePreferred(
+            codec, shard_bytes, requested_recovery_count);
     *info_out = info;
     return true;
 }

@@ -31,6 +31,19 @@
 #ifndef LEO2_ENABLE_TEST_HOOKS
 #error "direct_encode_benchmark requires LEO2_ENABLE_TEST_HOOKS"
 #endif
+#if !defined(LEO2_BENCHMARK_SOURCE_ATTESTATION) || \
+    !defined(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER)
+#error "direct_encode_benchmark requires generated source attestation"
+#endif
+#include LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER
+#if !defined(LEO2_BENCHMARK_SOURCE_COMMIT) || \
+    !defined(LEO2_BENCHMARK_SOURCE_TREE) || \
+    !defined(LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY) || \
+    !defined(LEO2_BENCHMARK_BUILD_VARIANT) || \
+    !defined(LEO2_BENCHMARK_BUILD_TYPE) || \
+    !defined(LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256)
+#error "direct benchmark requires source and build-variant attestation"
+#endif
 
 #include <algorithm>
 #include <cerrno>
@@ -590,18 +603,22 @@ static bool ExpectedAutoDirectPath(
     bool direct_capable)
 {
     const leo2_profile profile = leo2_codec_profile(codec);
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
-    const bool profile_ok = profile == LEO2_PROFILE_LOW_V1 ||
-        (profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-         leo2_context_backend(context) != LEO2_BACKEND_SCALAR);
-#else
-    const bool profile_ok = profile == LEO2_PROFILE_LOW_V1;
-#endif
-    if (!direct_capable || !profile_ok ||
-        options.k < 2 || options.q != 1 || options.bytes < 1024 ||
+    if (!direct_capable || options.k < 2 ||
+        options.q != 1 || options.bytes < 1024 ||
         (options.bytes & 63U) != 0)
         return false;
     const leo2_backend backend = leo2_context_backend(context);
+    if (profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    {
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        return leo2_codec_field(codec) == LEO2_FIELD_GF8 &&
+            backend == LEO2_BACKEND_AVX2 && options.r > 1;
+#else
+        return false;
+#endif
+    }
+    if (profile != LEO2_PROFILE_LOW_V1)
+        return false;
     if (backend == LEO2_BACKEND_SCALAR)
         return options.k >= 3;
     return backend == LEO2_BACKEND_SSSE3 ||
@@ -1074,13 +1091,26 @@ static int Run(Options options)
         json.imbue(std::locale::classic());
         json << std::fixed << std::setprecision(6);
         json << "{\n"
-             << "  \"schema\": \"leopard2-direct-encode-benchmark-v1\",\n"
+             << "  \"schema\": \"leopard2-direct-encode-benchmark-v2\",\n"
              << "  \"build\": {\n"
              << "    \"compiler\": \"" << CompilerName() << "\",\n"
              << "    \"compiler_version\": \""
              << JsonEscape(CompilerVersion()) << "\",\n"
              << "    \"cplusplus\": " << __cplusplus << ",\n"
-             << "    \"test_hooks\": true\n"
+             << "    \"backend_variant\": \""
+             << JsonEscape(LEO2_BENCHMARK_BUILD_VARIANT) << "\",\n"
+             << "    \"build_type\": \""
+             << JsonEscape(LEO2_BENCHMARK_BUILD_TYPE) << "\",\n"
+             << "    \"build_configuration_sha256\": \""
+             << LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256 << "\",\n"
+             << "    \"test_hooks\": true,\n"
+             << "    \"source_commit\": \""
+             << LEO2_BENCHMARK_SOURCE_COMMIT << "\",\n"
+             << "    \"source_tree\": \""
+             << LEO2_BENCHMARK_SOURCE_TREE << "\",\n"
+             << "    \"source_tracked_dirty\": "
+             << (LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY ? "true" : "false")
+             << "\n"
              << "  },\n"
              << "  \"parameters\": {\n"
              << "    \"K\": " << options.k << ",\n"
@@ -1132,7 +1162,7 @@ static int Run(Options options)
              << "  \"correctness\": {\n"
              << "    \"selected_transform_reference_parity_match\": true,\n"
              << "    \"direct_transform_parity_match\": "
-             << (direct_capable ? "true" : "null") << ",\n"
+             << (selected_direct ? "true" : "null") << ",\n"
              << "    \"unrequested_outputs_untouched\": true,\n"
              << "    \"parity_checksum_fnv1a64\": \"0x"
              << std::hex << std::setw(16) << std::setfill('0') << checksum
@@ -1175,7 +1205,7 @@ static int Run(Options options)
              << "    \"model_scope\": \"direct streaming kernels before "
              << "cache effects; unit coefficients specialize to copy/XOR\",\n"
              << "    \"direct_model_applies_to_timed_path\": "
-             << (options.mode == MODE_DIRECT ? "true" : "false") << ",\n"
+             << (selected_direct ? "true" : "false") << ",\n"
              << "    \"transform_operation_counts\": null,\n"
              << "    \"hardware_counters\": null\n"
              << "  },\n"

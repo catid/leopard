@@ -1205,9 +1205,21 @@ void test_high_gf16_byte_tiling(
         require_result(leo2_test_codec_transform_encode_backend(
             owner->codec, bytes, r - 1U, r, &partial_backend),
             "GF16 byte-tile partial backend query");
-        require(dense_backend == LEO2_BACKEND_AVX512 &&
-                partial_backend == LEO2_BACKEND_AVX2,
-            "GF16 byte-tile/backend dispatch boundary mismatch");
+        const leo2_backend context_backend = leo2_context_backend(context);
+        leo2_backend expected_dense_backend = context_backend;
+#if defined(LEO2_TEST_AUTO_MAY_USE_AVX512_ENCODE)
+        if (context_backend == LEO2_BACKEND_AVX2 &&
+            leopard::backend::IsCalibratedAutoAVX512EncodeHost())
+            expected_dense_backend = LEO2_BACKEND_AVX512;
+#endif
+        require(dense_backend == expected_dense_backend &&
+                partial_backend == context_backend,
+            "GF16 byte-tile/backend dispatch boundary mismatch: dense=" +
+                std::to_string(static_cast<unsigned>(dense_backend)) +
+                " expected_dense=" + std::to_string(
+                    static_cast<unsigned>(expected_dense_backend)) +
+                " partial=" +
+                std::to_string(static_cast<unsigned>(partial_backend)));
     }
     else
     {
@@ -1943,7 +1955,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     const leo2_backend backend = leo2_context_backend(context);
     const bool qualified_simd = backend == LEO2_BACKEND_SSSE3 ||
         backend == LEO2_BACKEND_AVX2 ||
-        backend == LEO2_BACKEND_AVX512;
+        backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_GFNI;
     const bool qualified_k7 = qualified_simd || backend == LEO2_BACKEND_SCALAR;
 
     CodecOwner* low = make_codec(context, 7, 7,
@@ -2013,9 +2026,169 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require_result(leo2_test_codec_encode_path(high->codec, 1024, 1, &direct),
         "AUTO high-profile path query");
-    require(direct == 0, "AUTO selected the unpromoted high profile");
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    const bool measured_high_backend = backend == LEO2_BACKEND_AVX2;
+#else
+    const bool measured_high_backend = false;
+#endif
+    require(direct == (measured_high_backend ? 1 : 0),
+        "AUTO high-profile selection escaped its measured AVX2 region");
     ++counts->dispatch_checks;
     delete high;
+
+    CodecOwner* historical = make_codec(context, 2, 16,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    require_result(leo2_test_codec_encode_path(
+        historical->codec, 4096, 1, &direct),
+        "historical high-profile path query");
+    require(direct == (measured_high_backend ? 1 : 0),
+        "historical high-profile path escaped its default-off AVX2 gate");
+    ++counts->dispatch_checks;
+    const Shards historical_original = random_shards(
+        2, 4096, UINT64_C(0x484947484b325231));
+    for (unsigned recovery_index = 0; recovery_index < 16;
+         recovery_index += 15)
+    {
+        std::vector<uint8_t> requested(16, 0);
+        requested[recovery_index] = 1;
+        const EncodeResult automatic = encode(historical->codec,
+            LEO2_TEST_ENCODE_AUTO, historical_original, requested);
+        const EncodeResult forced_direct = encode(historical->codec,
+            LEO2_TEST_ENCODE_FORCE_DIRECT, historical_original, requested);
+        const EncodeResult forced_transform = encode(historical->codec,
+            LEO2_TEST_ENCODE_FORCE_TRANSFORM, historical_original, requested);
+        require_result(automatic.result, "historical high AUTO encode");
+        require_result(forced_direct.result,
+            "historical high force-direct encode");
+        require_result(forced_transform.result,
+            "historical high force-transform encode");
+        require(automatic.recovery == forced_direct.recovery &&
+                automatic.recovery == forced_transform.recovery,
+            "historical high AUTO/direct/transform parity mismatch");
+        ++counts->dispatch_checks;
+    }
+    delete historical;
+
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    leo2_context_options avx2_options = {};
+    avx2_options.struct_size = sizeof(avx2_options);
+    avx2_options.backend = LEO2_BACKEND_AVX2;
+    avx2_options.thread_count = 1;
+    leo2_context* avx2_context = NULL;
+    const leo2_result avx2_created =
+        leo2_context_create(&avx2_options, &avx2_context);
+    if (avx2_created != LEO2_UNSUPPORTED)
+    {
+        require_result(avx2_created,
+            "high-selector bounded AVX2 context create");
+        for (unsigned k = 2; k <= 16; ++k)
+            for (unsigned r = 2; r <= 16; ++r)
+            {
+                CodecOwner* bounded = make_codec(avx2_context, k, r,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+                require_result(leo2_test_codec_encode_path(
+                    bounded->codec, 4096, 1, &direct),
+                    "high-selector bounded path query");
+                require(direct == 1,
+                    "high-selector rejected a bounded diagnostic AVX2 shape");
+                ++counts->dispatch_checks;
+                delete bounded;
+            }
+        leo2_context_destroy(avx2_context);
+    }
+#endif
+
+    CodecOwner* single_side = make_codec(context, 2, 1,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    require_result(leo2_test_codec_encode_path(
+        single_side->codec, 4096, 1, &direct),
+        "AUTO high-profile R=1 path query");
+    require(direct == 0,
+        "AUTO path query bypassed the existing single-side encoder");
+    ++counts->dispatch_checks;
+    direct = -1;
+    require(leo2_test_codec_encode_path(
+            single_side->codec, 0, 1, &direct) == LEO2_INVALID_ARGUMENT &&
+            direct == 0,
+        "AUTO high-profile R=1 path query accepted zero shard bytes");
+    ++counts->dispatch_checks;
+    direct = -1;
+    require(leo2_test_codec_encode_path(
+            single_side->codec, UINT64_MAX, 1, &direct) ==
+                LEO2_INVALID_ARGUMENT &&
+            direct == 0,
+        "AUTO high-profile R=1 path query accepted overflowing shard bytes");
+    ++counts->dispatch_checks;
+    require_result(leo2_test_codec_set_encode_mode(
+        single_side->codec, LEO2_TEST_ENCODE_FORCE_DIRECT),
+        "force direct for high-profile R=1 control");
+    require_result(leo2_test_codec_encode_path(
+        single_side->codec, 4096, 1, &direct),
+        "forced high-profile R=1 path query");
+    require(direct == 1,
+        "forced high-profile R=1 control did not select generator-row direct");
+    ++counts->dispatch_checks;
+    delete single_side;
+
+    CodecOwner* single_side_gf16 = make_codec(context, 2, 1,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
+    direct = -1;
+    require(leo2_test_codec_encode_path(
+            single_side_gf16->codec, 1, 1, &direct) == LEO2_UNSUPPORTED &&
+            direct == 0,
+        "AUTO high-profile GF16 R=1 path query accepted an odd shard");
+    ++counts->dispatch_checks;
+    delete single_side_gf16;
+
+    CodecOwner* high_gf16 = make_codec(context, 7, 7,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
+    require_result(leo2_test_codec_encode_path(
+        high_gf16->codec, 1024, 1, &direct),
+        "AUTO high-profile GF16 path query");
+    require(direct == 0,
+        "experimental high selector admitted unmeasured GF16");
+    ++counts->dispatch_checks;
+    delete high_gf16;
+
+    const leo2_backend high_control_backends[] = {
+        LEO2_BACKEND_SCALAR,
+        LEO2_BACKEND_SSSE3,
+        LEO2_BACKEND_AVX2,
+        LEO2_BACKEND_AVX512,
+        LEO2_BACKEND_GFNI,
+        LEO2_BACKEND_NEON
+    };
+    for (size_t i = 0;
+         i < sizeof(high_control_backends) /
+             sizeof(high_control_backends[0]); ++i)
+    {
+        leo2_context_options fixed_options = {};
+        fixed_options.struct_size = sizeof(fixed_options);
+        fixed_options.backend = high_control_backends[i];
+        fixed_options.thread_count = 1;
+        leo2_context* fixed_context = NULL;
+        const leo2_result created =
+            leo2_context_create(&fixed_options, &fixed_context);
+        if (created == LEO2_UNSUPPORTED)
+            continue;
+        require_result(created, "high-selector control context create");
+        CodecOwner* control = make_codec(fixed_context, 7, 7,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        require_result(leo2_test_codec_encode_path(
+            control->codec, 1024, 1, &direct),
+            "high-selector backend control path query");
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        const bool expected_high =
+            high_control_backends[i] == LEO2_BACKEND_AVX2;
+#else
+        const bool expected_high = false;
+#endif
+        require(direct == (expected_high ? 1 : 0),
+            "experimental high selector admitted an unmeasured backend");
+        ++counts->dispatch_checks;
+        delete control;
+        leo2_context_destroy(fixed_context);
+    }
 
     CodecOwner* identity = make_codec(context, 1, 7,
         LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
