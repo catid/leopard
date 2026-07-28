@@ -177,7 +177,8 @@ CANDIDATE_LIBRARY_SOURCES = (
     "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp", "Leopard2Plan.cpp",
     "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
     "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
-    "Leopard2BackendAVX512.cpp",
+    "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX512.cpp", "Leopard2BackendGFNI.cpp",
 )
 CANDIDATE_NON_LIBRARY_COMPILE_TARGETS = {
     "tests/benchmark.cpp": "bench_leopard.dir",
@@ -1529,7 +1530,9 @@ def expected_compile_output(
     backend_targets = {
         "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
         "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
+        "Leopard2BackendAVX2Xor.cpp": "leopard2_backend_avx2.dir",
         "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
+        "Leopard2BackendGFNI.cpp": "leopard2_backend_gfni.dir",
     }
     if relative in CANDIDATE_LIBRARY_SOURCES:
         target = backend_targets.get(relative, "leopard.dir")
@@ -1568,9 +1571,13 @@ def expected_compile_argv(
         "Leopard2BackendSSSE3.cpp": ["-mssse3", "-mno-avx"],
         "Leopard2BackendAVX2.cpp": [
             "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX2Xor.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
         "Leopard2BackendAVX512.cpp": [
             "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
             "-mprefer-vector-width=256", "-falign-functions=64"],
+        "Leopard2BackendGFNI.cpp": [
+            "-mavx2", "-mgfni", "-mno-avx512f", "-falign-functions=64"],
     }
     if relative == "bench/leopard2/locator_benchmark.cpp":
         candidate_commit = specification.get("candidate_commit")
@@ -1608,6 +1615,11 @@ def expected_compile_argv(
         propagated_openmp = []
     elif relative == "Leopard2BackendAVX512.cpp":
         definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative == "Leopard2BackendGFNI.cpp":
+        definitions = [
+            "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_GFNI_BACKEND=1"]
         includes = [f"-I{candidate_root}"]
         propagated_openmp = []
     elif relative in isolated_flags:

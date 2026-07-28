@@ -22,8 +22,14 @@ randomized differential shapes with zero mismatches.
 
 ## In-flight: the authoritative exact-main campaign (leopard-79h.43, P1)
 
-The isolated `run_abba.py` campaign was assembled and launched but is
-**blocked by evidence-model drift**, found and diagnosed, not yet fixed:
+UPDATE (same session, after the stopping-point instruction): the closure-model
+fix below was applied to `run_abba.py`, verified byte-for-byte against the
+actual compile_commands entries for both new TUs, and the campaign was
+**relaunched and is running unattended**. On resume: check
+`/tmp/campaign-2942f35.status` (written on exit) and `/tmp/campaign-2942f35.log`;
+if complete, `run_abba.py verify` the bundle at
+`/tmp/leopard2-vs-main-evidence-2942f35`, then proceed to `.44`/`.48`.
+The drift record below is retained for context:
 
 - Error: `candidate compile-command entry closure differs`.
 - Cause (verified against `/tmp/leopard2-production/compile_commands.json`,
