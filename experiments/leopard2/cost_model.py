@@ -27,6 +27,7 @@ atomically.  A full 1<=K,R<=256 sweep streams its rows and uses bounded memory.
 from __future__ import annotations
 
 import argparse
+import ast
 import csv
 import hashlib
 import heapq
@@ -685,6 +686,8 @@ class AtomicTextFile:
         self.stream: TextIO | None = None
 
     def __enter__(self) -> TextIO:
+        if self.stream is not None or self.temp_path is not None:
+            raise RuntimeError("atomic text file is already active")
         self.destination.parent.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(
             dir=self.destination.parent,
@@ -697,13 +700,17 @@ class AtomicTextFile:
         return self.stream
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
-        assert self.stream is not None
-        assert self.temp_path is not None
-        self.stream.close()
+        if self.stream is None or self.temp_path is None:
+            raise RuntimeError("atomic text file is not active")
+        stream = self.stream
+        temp_path = self.temp_path
+        self.stream = None
+        self.temp_path = None
+        stream.close()
         if exc_type is None:
-            os.replace(self.temp_path, self.destination)
+            os.replace(temp_path, self.destination)
         else:
-            self.temp_path.unlink(missing_ok=True)
+            temp_path.unlink(missing_ok=True)
 
 
 def file_sha256(path: Path) -> str:
@@ -923,62 +930,126 @@ def write_matrix(
     return result
 
 
-def self_test() -> None:
-    assert ceil_pow2(1) == 1
-    assert ceil_pow2(3) == 4
-    assert ceil_pow2(256) == 256
-    assert chunks(10, 4) == (4, 4, 2)
-    assert binary_parts(13) == (8, 4, 1)
+def self_test() -> int:
+    check_count = 0
+
+    def check(condition: bool, label: str) -> None:
+        nonlocal check_count
+        check_count += 1
+        if not condition:
+            raise RuntimeError("cost-model self-test failed: " + label)
+
+    def expect_runtime_error(action, message: str, label: str) -> None:
+        try:
+            action()
+        except RuntimeError as error:
+            check(message in str(error), label + " error contract")
+        else:
+            check(False, label + " rejection")
+
+    def assert_line_numbers(source: str) -> tuple[int, ...]:
+        return tuple(
+            node.lineno for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Assert)
+        )
+
+    check(ceil_pow2(1) == 1, "ceil_pow2 one")
+    check(ceil_pow2(3) == 4, "ceil_pow2 rounds upward")
+    check(ceil_pow2(256) == 256, "ceil_pow2 exact power")
+    check(chunks(10, 4) == (4, 4, 2), "chunk decomposition")
+    check(binary_parts(13) == (8, 4, 1), "binary decomposition")
 
     high = geometry(240, 16, "legacy_high_v1")
-    assert (high.transform_side, high.parent_size) == (16, 256)
+    check(
+        (high.transform_side, high.parent_size) == (16, 256),
+        "legacy-high geometry",
+    )
     low = geometry(16, 240, "low_v1")
-    assert (low.transform_side, low.parent_size) == (16, 256)
+    check(
+        (low.transform_side, low.parent_size) == (16, 256),
+        "low geometry",
+    )
     rescue = geometry(129, 100, "legacy_high_v1")
-    assert rescue.parent_size == 512
-    assert rescue.transmitted_length == 229
-    assert rescue.field_boundary_rescue_possible
+    check(rescue.parent_size == 512, "field-rescue parent size")
+    check(rescue.transmitted_length == 229, "field-rescue public length")
+    check(
+        rescue.field_boundary_rescue_possible,
+        "field-rescue opportunity",
+    )
 
     for length in (1, 2, 4, 8, 16, 256):
         prefix, dependency, passes = network_counts(length, length, length)
         expected = full_transform_metrics(length).butterfly_equivalents
-        assert prefix == expected
-        assert dependency == expected
-        assert passes == ceil_log2(length)
+        check(prefix == expected, f"full prefix count length={length}")
+        check(
+            dependency == expected,
+            f"full dependency count length={length}",
+        )
+        check(passes == ceil_log2(length), f"full passes length={length}")
 
     for length in (2, 4, 8, 16, 32):
         padded = full_transform_metrics(length).butterfly_equivalents
         for active in range(1, length + 1):
             previous = -1
             for requested in range(1, length + 1):
-                prefix, dependency, _ = network_counts(length, active, requested)
-                assert 0 <= dependency <= prefix <= padded
-                assert dependency >= previous
+                prefix, dependency, _ = network_counts(
+                    length, active, requested)
+                check(
+                    0 <= dependency <= prefix <= padded,
+                    "network bounds length={} active={} requested={}".format(
+                        length, active, requested),
+                )
+                check(
+                    dependency >= previous,
+                    "network monotonicity length={} active={} requested={}".
+                    format(length, active, requested),
+                )
                 previous = dependency
 
     for profile in PROFILE_ORDER:
         for k, r in ((1, 1), (3, 5), (16, 16), (129, 100), (255, 1)):
             g = geometry(k, r, profile)
             metrics = all_method_metrics(g)
-            assert tuple(metrics) == METHOD_ORDER
+            check(
+                tuple(metrics) == METHOD_ORDER,
+                f"method order profile={profile} K={k} R={r}",
+            )
             padded = metrics["padded_dyadic"].weighted_cost
-            assert padded >= 0
+            check(
+                padded >= 0,
+                f"padded cost profile={profile} K={k} R={r}",
+            )
             for method, cost in metrics.items():
-                assert cost.weighted_cost >= 0, method
+                check(
+                    cost.weighted_cost >= 0,
+                    "weighted cost profile={} K={} R={} method={}".format(
+                        profile, k, r, method),
+                )
                 for field in fields(Metrics):
-                    assert getattr(cost, field.name) >= 0
-            padded_row = row_for(g, "padded_dyadic", metrics["padded_dyadic"], padded)
+                    check(
+                        getattr(cost, field.name) >= 0,
+                        "metric profile={} K={} R={} method={} field={}".
+                        format(profile, k, r, method, field.name),
+                    )
+            padded_row = row_for(
+                g, "padded_dyadic", metrics["padded_dyadic"], padded)
             if padded:
-                assert padded_row.gain_vs_padded == 1.0
+                check(
+                    padded_row.gain_vs_padded == 1.0,
+                    f"padded gain profile={profile} K={k} R={r}",
+                )
 
     # Dense generator work is monotone in either public dimension.
     for k in range(1, 16):
         for r in range(1, 16):
-            here = direct_matrix_metrics(geometry(k, r, "low_v1")).fixed_multiplications
-            next_k = direct_matrix_metrics(geometry(k + 1, r, "low_v1")).fixed_multiplications
-            next_r = direct_matrix_metrics(geometry(k, r + 1, "low_v1")).fixed_multiplications
-            assert next_k >= here
-            assert next_r >= here
+            here = direct_matrix_metrics(
+                geometry(k, r, "low_v1")).fixed_multiplications
+            next_k = direct_matrix_metrics(
+                geometry(k + 1, r, "low_v1")).fixed_multiplications
+            next_r = direct_matrix_metrics(
+                geometry(k, r + 1, "low_v1")).fixed_multiplications
+            check(next_k >= here, f"direct K monotonicity K={k} R={r}")
+            check(next_r >= here, f"direct R monotonicity K={k} R={r}")
 
     parent_row = next(
         row for row in rows_for_pair(129, 100, ("legacy_high_v1",))
@@ -988,36 +1059,105 @@ def self_test() -> None:
         row for row in rows_for_pair(129, 100, ("legacy_high_v1",))
         if row.method == "direct_matrix_exact"
     )
-    assert parent_row.candidate_field == "gf16"
-    assert not parent_row.field_boundary_rescue_candidate
-    assert exact_row.candidate_field == "gf8"
-    assert exact_row.field_boundary_rescue_candidate
+    check(parent_row.candidate_field == "gf16", "parent candidate field")
+    check(
+        not parent_row.field_boundary_rescue_candidate,
+        "parent does not rescue field boundary",
+    )
+    check(exact_row.candidate_field == "gf8", "exact candidate field")
+    check(
+        exact_row.field_boundary_rescue_candidate,
+        "exact candidate rescues field boundary",
+    )
 
     # Stable construction: identical inputs yield identical rows and key order.
     first = [asdict(row) for row in rows_for_pair(7, 9, PROFILE_ORDER)]
     second = [asdict(row) for row in rows_for_pair(7, 9, PROFILE_ORDER)]
-    assert first == second
-    assert list(first[0]) == [field.name for field in fields(CostRow)]
+    check(first == second, "deterministic model rows")
+    check(
+        list(first[0]) == [field.name for field in fields(CostRow)],
+        "stable model column order",
+    )
+
+    # Exercise AtomicTextFile state checks in addition to its normal use below.
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-atomic-text-self-test-") as directory:
+        root = Path(directory)
+        destination = root / "atomic.txt"
+        atomic = AtomicTextFile(destination)
+        expect_runtime_error(
+            lambda: atomic.__exit__(None, None, None),
+            "not active",
+            "inactive atomic exit",
+        )
+        stream = atomic.__enter__()
+        stream.write("committed\n")
+        expect_runtime_error(
+            atomic.__enter__,
+            "already active",
+            "duplicate atomic enter",
+        )
+        atomic.__exit__(None, None, None)
+        check(
+            destination.read_text(encoding="utf-8") == "committed\n",
+            "atomic commit",
+        )
+        check(
+            atomic.stream is None and atomic.temp_path is None,
+            "atomic commit clears active state",
+        )
+        expect_runtime_error(
+            lambda: atomic.__exit__(None, None, None),
+            "not active",
+            "duplicate atomic exit",
+        )
+        destination.write_text("preserved\n", encoding="utf-8")
+        failed_atomic = AtomicTextFile(destination)
+        failed_stream = failed_atomic.__enter__()
+        failed_stream.write("discarded\n")
+        failed_temp = failed_atomic.temp_path
+        failed_atomic.__exit__(RuntimeError, RuntimeError("fixture"), None)
+        check(
+            destination.read_text(encoding="utf-8") == "preserved\n",
+            "failed atomic write preserves destination",
+        )
+        check(
+            failed_temp is not None and not failed_temp.exists(),
+            "failed atomic write removes temporary",
+        )
+        check(
+            failed_atomic.stream is None and failed_atomic.temp_path is None,
+            "failed atomic write clears active state",
+        )
 
     # Exercise the streaming/atomic output path, not only the pure model.
-    with tempfile.TemporaryDirectory(prefix="leopard2-cost-self-test-") as directory:
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-cost-self-test-") as directory:
         output_dir = Path(directory)
         pairs = ((3, 5), (7, 9))
         expected_rows = len(pairs) * len(PROFILE_ORDER) * len(METHOD_ORDER)
         result = write_matrix(
             output_dir, pairs, PROFILE_ORDER, ("csv", "jsonl"), top_count=4
         )
-        assert result["row_count"] == expected_rows
-        assert result["profile_pair_count"] == len(pairs) * len(PROFILE_ORDER)
-        assert len((output_dir / "cost_matrix.csv").read_text(
-            encoding="utf-8"
-        ).splitlines()) == expected_rows + 1
+        check(result["row_count"] == expected_rows, "streamed row count")
+        check(
+            result["profile_pair_count"] ==
+            len(pairs) * len(PROFILE_ORDER),
+            "streamed profile-pair count",
+        )
+        check(
+            len((output_dir / "cost_matrix.csv").read_text(
+                encoding="utf-8").splitlines()) == expected_rows + 1,
+            "streamed CSV row count",
+        )
         json_lines = (output_dir / "cost_matrix.jsonl").read_text(
-            encoding="utf-8"
-        ).splitlines()
-        assert len(json_lines) == expected_rows
-        assert all(json.loads(line)["schema_version"] == SCHEMA_VERSION
-                   for line in json_lines)
+            encoding="utf-8").splitlines()
+        check(len(json_lines) == expected_rows, "streamed JSONL row count")
+        check(
+            all(json.loads(line)["schema_version"] == SCHEMA_VERSION
+                for line in json_lines),
+            "streamed JSONL schema",
+        )
         first_hashes = {
             path.name: file_sha256(path)
             for path in (
@@ -1037,9 +1177,27 @@ def self_test() -> None:
                 output_dir / "summary.json",
             )
         }
-        assert first_hashes == second_hashes
+        check(first_hashes == second_hashes, "deterministic output hashes")
         write_matrix(output_dir, pairs, PROFILE_ORDER, ("csv",), top_count=4)
-        assert not (output_dir / "cost_matrix.jsonl").exists()
+        check(
+            not (output_dir / "cost_matrix.jsonl").exists(),
+            "stale unrequested output removed",
+        )
+
+    check(
+        assert_line_numbers("value = 1\n") == (),
+        "assert scanner accepts assert-free source",
+    )
+    check(
+        assert_line_numbers("value = 1\nassert value\n") == (2,),
+        "assert scanner detects optimized-away checks",
+    )
+    check(
+        assert_line_numbers(Path(__file__).read_text(encoding="utf-8")) == (),
+        "cost model contains no Python assert statements",
+    )
+    check(check_count > 1, "self-test executed a nontrivial check set")
+    return check_count
 
 
 def command_generate(args: argparse.Namespace) -> int:
@@ -1099,8 +1257,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     if args.command == "self-test":
-        self_test()
-        print("cost_model self-test: PASS")
+        check_count = self_test()
+        print(f"cost_model self-test: PASS ({check_count} checks)")
         return 0
     if args.top_count <= 0:
         parser.error("--top-count must be positive")
