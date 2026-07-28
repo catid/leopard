@@ -9,6 +9,7 @@ library only so that backend verification adds no runtime dependency.
 from __future__ import print_function
 
 import argparse
+import ast
 import collections
 import concurrent.futures
 import hashlib
@@ -1268,13 +1269,19 @@ def matrix_run(arguments):
 
 
 def self_test():
+    check_count = 0
+
     def check(condition, label):
-        # Keep schema-contract regressions live under ``python -O``.  This
-        # runner predates optimized-Python evidence replay and much of its
-        # unrelated smoke coverage still uses assertions; new producer
-        # versioning must not inherit that fail-open behavior.
+        nonlocal check_count
+        check_count += 1
         if not condition:
             raise MatrixError("self-test failed: " + label)
+
+    def assert_line_numbers(source):
+        return tuple(
+            node.lineno for node in ast.walk(ast.parse(source))
+            if isinstance(node, ast.Assert)
+        )
 
     def failure_output_for(names):
         return b"".join(
@@ -1284,8 +1291,11 @@ def self_test():
             for index, name in enumerate(names, 1)
         )
 
-    assert compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9"
-    assert compact_cpu_list([]) == ""
+    check(
+        compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9",
+        "compact CPU ranges",
+    )
+    check(compact_cpu_list([]) == "", "empty CPU range")
     current_contract = evidence_contract()
     historical_contract = evidence_contract(PRE_GFNI_SCHEMA)
     check(current_contract["schema"] == SCHEMA,
@@ -1310,49 +1320,91 @@ def self_test():
     try:
         evidence_contract("leopard2-backend-matrix/v999")
     except ValueError:
-        pass
+        unknown_schema_rejected = True
     else:
-        raise AssertionError("unknown evidence contract schema was accepted")
-    assert normalized_output(b"a\r\nb\rc\n") == b"a\nb\nc\n"
-    assert portable_ctest_executed(
-        b"1/1 Test #1: leopard2_portable_isa ... Passed\n"
+        unknown_schema_rejected = False
+    check(unknown_schema_rejected, "unknown evidence contract schema")
+    check(
+        normalized_output(b"a\r\nb\rc\n") == b"a\nb\nc\n",
+        "normalized command output",
     )
-    assert not portable_ctest_executed(b"No tests were found!!!\n")
-    assert cuda_ctest_executed(
-        b"1/1 Test #2: leopard2_cuda_optional ... Passed\n"
+    check(
+        portable_ctest_executed(
+            b"1/1 Test #1: leopard2_portable_isa ... Passed\n"
+        ),
+        "portable CTest recognized",
     )
-    assert not cuda_ctest_executed(b"No tests were found!!!\n")
+    check(
+        not portable_ctest_executed(b"No tests were found!!!\n"),
+        "missing portable CTest rejected",
+    )
+    check(
+        cuda_ctest_executed(
+            b"1/1 Test #2: leopard2_cuda_optional ... Passed\n"
+        ),
+        "optional CUDA CTest recognized",
+    )
+    check(
+        not cuda_ctest_executed(b"No tests were found!!!\n"),
+        "missing optional CUDA CTest rejected",
+    )
     failure_output = b"".join(
         "{}/{} Test #{}: {} ... Passed\n".format(
             index, len(BACKEND_FAILURE_TESTS), index, name
         ).encode("ascii")
         for index, name in enumerate(BACKEND_FAILURE_TESTS, 1)
     )
-    assert ctest_executed_test_names(failure_output) == BACKEND_FAILURE_TESTS
-    assert backend_failure_ctest_executed(failure_output)
-    assert backend_failure_ctest_executed(
-        failure_output_for(BASE_BACKEND_FAILURE_TESTS),
-        expected=BASE_BACKEND_FAILURE_TESTS,
+    check(
+        ctest_executed_test_names(failure_output) == BACKEND_FAILURE_TESTS,
+        "backend failure CTest names",
     )
-    assert not backend_failure_ctest_executed(
-        failure_output_for(BASE_BACKEND_FAILURE_TESTS),
+    check(
+        backend_failure_ctest_executed(failure_output),
+        "complete backend failure CTest set",
     )
-    assert backend_failure_tests_for_build({"compile_commands": []}) == (
-        BASE_BACKEND_FAILURE_TESTS
+    check(
+        backend_failure_ctest_executed(
+            failure_output_for(BASE_BACKEND_FAILURE_TESTS),
+            expected=BASE_BACKEND_FAILURE_TESTS,
+        ),
+        "base backend failure CTest set",
     )
-    assert backend_failure_tests_for_build({"compile_commands": [
-        {"file": "Leopard2BackendAVX512.cpp"},
-    ]}) == BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
-    assert backend_failure_tests_for_build({"compile_commands": [
-        {"file": "Leopard2BackendGFNI.cpp"},
-    ]}) == BASE_BACKEND_FAILURE_TESTS + GFNI_BACKEND_FAILURE_TESTS
-    assert backend_failure_tests_for_build({"compile_commands": [
-        {"file": "Leopard2BackendAVX512.cpp"},
-        {"file": "Leopard2BackendGFNI.cpp"},
-    ]}) == BACKEND_FAILURE_TESTS
+    check(
+        not backend_failure_ctest_executed(
+            failure_output_for(BASE_BACKEND_FAILURE_TESTS),
+        ),
+        "incomplete current backend failure CTest set rejected",
+    )
+    check(
+        backend_failure_tests_for_build({"compile_commands": []}) ==
+        BASE_BACKEND_FAILURE_TESTS,
+        "base backend failure tests selected",
+    )
+    check(
+        backend_failure_tests_for_build({"compile_commands": [
+            {"file": "Leopard2BackendAVX512.cpp"},
+        ]}) == BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS,
+        "AVX-512 backend failure tests selected",
+    )
+    check(
+        backend_failure_tests_for_build({"compile_commands": [
+            {"file": "Leopard2BackendGFNI.cpp"},
+        ]}) == BASE_BACKEND_FAILURE_TESTS + GFNI_BACKEND_FAILURE_TESTS,
+        "GFNI backend failure tests selected",
+    )
+    check(
+        backend_failure_tests_for_build({"compile_commands": [
+            {"file": "Leopard2BackendAVX512.cpp"},
+            {"file": "Leopard2BackendGFNI.cpp"},
+        ]}) == BACKEND_FAILURE_TESTS,
+        "all backend failure tests selected",
+    )
 
-    assert backend_failure_ctest_executed(
-        failure_output_for(tuple(reversed(BACKEND_FAILURE_TESTS)))
+    check(
+        backend_failure_ctest_executed(
+            failure_output_for(tuple(reversed(BACKEND_FAILURE_TESTS)))
+        ),
+        "backend failure CTest order independence",
     )
     mutations = (
         BACKEND_FAILURE_TESTS[:-1],
@@ -1366,60 +1418,96 @@ def self_test():
         BACKEND_FAILURE_TESTS[:-1] + (BACKEND_FAILURE_TESTS[0],),
         (BACKEND_FAILURE_TESTS[0],),
     )
-    for mutation in mutations:
-        assert not backend_failure_ctest_executed(
-            failure_output_for(mutation)
+    for index, mutation in enumerate(mutations):
+        check(
+            not backend_failure_ctest_executed(failure_output_for(mutation)),
+            "backend failure CTest mutation {}".format(index),
         )
-    assert pinned_command(["ctest", "--test-dir", "build"], None, 7) == [
-        "ctest", "--test-dir", "build",
-    ]
-    assert pinned_command(
-        ["ctest", "--test-dir", "build"], "/usr/bin/taskset", 23
-    ) == [
-        "/usr/bin/taskset", "-c", "23", "ctest", "--test-dir", "build",
-    ]
-    assert digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2})
-    assert variant_flags("scalar") == []
-    assert variant_flags("ssse3") == ["-mssse3", "-mno-avx"]
-    assert variant_flags("avx2") == ["-mavx2", "-mno-avx512f"]
-    assert variant_flags("avx512") == [
-        "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
-        "-mprefer-vector-width=256",
-    ]
-    assert availability(
-        "scalar",
-        {"architecture": "x86_64", "cpu_flags": []},
-        {"executable": "not-needed-for-empty-flags"},
-    ) == (True, "")
-    assert availability(
-        "avx512",
-        {"architecture": "x86_64", "cpu_flags": ["avx2"]},
-        {"executable": "not-reached-when-host-flags-are-missing"},
-    ) == (
-        False,
-        "host CPU does not advertise avx512f,avx512bw,avx512vl",
+    check(
+        pinned_command(["ctest", "--test-dir", "build"], None, 7) == [
+            "ctest", "--test-dir", "build",
+        ],
+        "unpinned command",
+    )
+    check(
+        pinned_command(
+            ["ctest", "--test-dir", "build"], "/usr/bin/taskset", 23
+        ) == [
+            "/usr/bin/taskset", "-c", "23", "ctest", "--test-dir", "build",
+        ],
+        "pinned command",
+    )
+    check(
+        digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2}),
+        "canonical mapping digest",
+    )
+    check(variant_flags("scalar") == [], "scalar variant flags")
+    check(
+        variant_flags("ssse3") == ["-mssse3", "-mno-avx"],
+        "SSSE3 variant flags",
+    )
+    check(
+        variant_flags("avx2") == ["-mavx2", "-mno-avx512f"],
+        "AVX2 variant flags",
+    )
+    check(
+        variant_flags("avx512") == [
+            "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
+            "-mprefer-vector-width=256",
+        ],
+        "AVX-512 variant flags",
+    )
+    check(
+        availability(
+            "scalar",
+            {"architecture": "x86_64", "cpu_flags": []},
+            {"executable": "not-needed-for-empty-flags"},
+        ) == (True, ""),
+        "scalar availability",
+    )
+    check(
+        availability(
+            "avx512",
+            {"architecture": "x86_64", "cpu_flags": ["avx2"]},
+            {"executable": "not-reached-when-host-flags-are-missing"},
+        ) == (
+            False,
+            "host CPU does not advertise avx512f,avx512bw,avx512vl",
+        ),
+        "AVX-512 missing-host-feature rejection",
     )
     require_compile_source_counts(
         EXPECTED_COMPILE_SOURCE_COUNTS,
         EXPECTED_COMPILE_SOURCE_COUNTS,
     )
+    check(True, "unchanged compile-source contract")
     no_isa = expected_compile_source_counts({})
-    assert "Leopard2BackendSSSE3.cpp" not in no_isa
-    assert "Leopard2BackendAVX2.cpp" not in no_isa
-    assert "Leopard2BackendAVX2Xor.cpp" not in no_isa
-    assert "Leopard2BackendAVX512.cpp" not in no_isa
-    assert "Leopard2BackendGFNI.cpp" not in no_isa
+    check("Leopard2BackendSSSE3.cpp" not in no_isa,
+          "SSSE3 object excluded without compiler probe")
+    check("Leopard2BackendAVX2.cpp" not in no_isa,
+          "AVX2 object excluded without compiler probe")
+    check("Leopard2BackendAVX2Xor.cpp" not in no_isa,
+          "AVX2 XOR object excluded without compiler probe")
+    check("Leopard2BackendAVX512.cpp" not in no_isa,
+          "AVX-512 object excluded without compiler probe")
+    check("Leopard2BackendGFNI.cpp" not in no_isa,
+          "GFNI object excluded without compiler probe")
     avx2_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
         "LEO2_FLAG_MAVX2": "1",
         "LEO2_FLAG_MNO_AVX512F": "1",
     })
-    assert avx2_only["Leopard2BackendSSSE3.cpp"] == 2
-    assert avx2_only["Leopard2BackendAVX2.cpp"] == 2
-    assert avx2_only["Leopard2BackendAVX2Xor.cpp"] == 2
-    assert "Leopard2BackendAVX512.cpp" not in avx2_only
-    assert "Leopard2BackendGFNI.cpp" not in avx2_only
+    check(avx2_only.get("Leopard2BackendSSSE3.cpp") == 2,
+          "SSSE3 compile-source count")
+    check(avx2_only.get("Leopard2BackendAVX2.cpp") == 2,
+          "AVX2 compile-source count")
+    check(avx2_only.get("Leopard2BackendAVX2Xor.cpp") == 2,
+          "AVX2 XOR compile-source count")
+    check("Leopard2BackendAVX512.cpp" not in avx2_only,
+          "AVX-512 object excluded from AVX2-only probes")
+    check("Leopard2BackendGFNI.cpp" not in avx2_only,
+          "GFNI object excluded from AVX2-only probes")
     gfni_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1427,8 +1515,10 @@ def self_test():
         "LEO2_FLAG_MNO_AVX512F": "1",
         "LEO2_FLAG_MGFNI": "1",
     })
-    assert gfni_only["Leopard2BackendGFNI.cpp"] == 2
-    assert "Leopard2BackendAVX512.cpp" not in gfni_only
+    check(gfni_only.get("Leopard2BackendGFNI.cpp") == 2,
+          "GFNI compile-source count")
+    check("Leopard2BackendAVX512.cpp" not in gfni_only,
+          "AVX-512 object excluded from GFNI-only probes")
     gf16_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1437,8 +1527,10 @@ def self_test():
         "LEOPARD_ENABLE_GF8": "OFF",
         "LEOPARD_ENABLE_GF16": "ON",
     })
-    assert "Leopard2BackendAVX2Xor.cpp" not in gf16_only
-    assert gf16_only["Leopard2BackendAVX2.cpp"] == 2
+    check("Leopard2BackendAVX2Xor.cpp" not in gf16_only,
+          "GF8-only AVX2 XOR object excluded from GF16 build")
+    check(gf16_only.get("Leopard2BackendAVX2.cpp") == 2,
+          "AVX2 object retained in GF16 build")
     all_isa = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1450,7 +1542,8 @@ def self_test():
         "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256": "1",
         "LEO2_FLAG_MGFNI": "1",
     })
-    assert all_isa == EXPECTED_COMPILE_SOURCE_COUNTS
+    check(all_isa == EXPECTED_COMPILE_SOURCE_COUNTS,
+          "all-ISA compile-source closure")
     contract_mutations = []
     missing = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
     missing.pop("tests/leopard2/test_batch_aliasing.cpp")
@@ -1461,39 +1554,127 @@ def self_test():
     unexpected = dict(EXPECTED_COMPILE_SOURCE_COUNTS)
     unexpected["tests/leopard2/untracked_backend_test.cpp"] = 1
     contract_mutations.append(unexpected)
-    for mutation in contract_mutations:
+    for index, mutation in enumerate(contract_mutations):
         try:
             require_compile_source_counts(
                 mutation,
                 EXPECTED_COMPILE_SOURCE_COUNTS,
             )
         except MatrixError as error:
-            assert str(error) == "compile-command source multiset mismatch"
+            rejected = str(error) == \
+                "compile-command source multiset mismatch"
         else:
-            raise AssertionError("mutated compile-source contract was accepted")
+            rejected = False
+        check(
+            rejected,
+            "compile-source contract mutation {}".format(index),
+        )
     with tempfile.TemporaryDirectory(prefix="leo2-backend-self-test-") as directory:
         path = Path(directory) / "result.json"
         value = {"z": [3, 2, 1], "a": "stable"}
         atomic_write_json(path, value)
-        assert json.loads(path.read_text(encoding="utf-8")) == value
+        check(
+            json.loads(path.read_text(encoding="utf-8")) == value,
+            "atomic JSON write",
+        )
         stale = Path(directory) / "stale-build"
         stale.mkdir()
         (stale / "copied-object.o").write_bytes(b"stale")
-        assert prepare_fresh_directory(stale)
-        assert list(stale.iterdir()) == []
+        check(prepare_fresh_directory(stale), "fresh build directory prepared")
+        check(list(stale.iterdir()) == [], "stale build artifact removed")
+
+        source = Path(directory) / "source"
+        for relative in SOURCE_FILES:
+            source_path = source / relative
+            source_path.parent.mkdir(parents=True, exist_ok=True)
+            source_path.write_bytes((relative + "\n").encode("utf-8"))
+        source_before = source_fingerprint(source)
+        check(
+            source_fingerprint(source) == source_before,
+            "stable source fingerprint",
+        )
+        changed_source = source / SOURCE_FILES[0]
+        changed_source.write_bytes(changed_source.read_bytes() + b"mutated\n")
+        source_after = source_fingerprint(source)
+        check(
+            source_after["digest"] != source_before["digest"],
+            "source-content mutation changes fingerprint",
+        )
+        check(
+            source_after["files"][SOURCE_FILES[0]] !=
+            source_before["files"][SOURCE_FILES[0]],
+            "mutated source file hash changes",
+        )
+        changed_source.unlink()
+        try:
+            source_fingerprint(source)
+        except MatrixError as error:
+            missing_source_rejected = \
+                str(error).startswith("required matrix input is missing:")
+        else:
+            missing_source_rejected = False
+        check(missing_source_rejected, "missing source input rejected")
+
+        artifact = Path(directory) / "fixture-compiler"
+        artifact.write_text(
+            "#!/bin/sh\nprintf 'fixture compiler 1.0\\n'\n",
+            encoding="utf-8",
+        )
+        artifact.chmod(0o755)
+        artifact_before = compiler_identity(str(artifact))
+        artifact.write_text(
+            "#!/bin/sh\nprintf 'fixture compiler 1.0\\n'\n# mutation\n",
+            encoding="utf-8",
+        )
+        artifact_after = compiler_identity(str(artifact))
+        check(
+            artifact_before["binary_sha256"] !=
+            artifact_after["binary_sha256"],
+            "compiler artifact mutation changes identity",
+        )
+        check(
+            artifact_before["version_sha256"] ==
+            artifact_after["version_sha256"],
+            "artifact hash is independent of version text",
+        )
+
         driver_link = Path(directory) / "python-driver"
         driver_link.symlink_to(sys.executable)
         driver_identity = compiler_identity(str(driver_link))
-        assert driver_identity["executable"] == str(driver_link.absolute())
-        assert Path(driver_identity["executable"]).resolve() == Path(
-            sys.executable).resolve()
+        check(
+            driver_identity["executable"] == str(driver_link.absolute()),
+            "compiler driver spelling retained",
+        )
+        check(
+            Path(driver_identity["executable"]).resolve() ==
+            Path(sys.executable).resolve(),
+            "compiler driver symlink target",
+        )
         timeout_record = run_command(
             "timeout", [sys.executable, "-c", "import time; time.sleep(1)"],
             directory, Path(directory), 0.01
         )
-        assert timeout_record["returncode"] == 124
-        assert timeout_record["timed_out"] is True
-    print("leopard2 backend matrix self-test passed")
+        check(timeout_record["returncode"] == 124, "timeout return code")
+        check(timeout_record["timed_out"] is True, "timeout flag")
+
+    check(
+        assert_line_numbers("value = 1\n") == (),
+        "assert scanner accepts assert-free source",
+    )
+    check(
+        assert_line_numbers("value = 1\nassert value\n") == (2,),
+        "assert scanner detects optimized-away check",
+    )
+    check(
+        assert_line_numbers(Path(__file__).read_text(encoding="utf-8")) == (),
+        "backend matrix contains no Python assert statements",
+    )
+    check(check_count > 1, "self-test executed a nontrivial check set")
+    print(
+        "leopard2 backend matrix self-test passed ({} checks)".format(
+            check_count
+        )
+    )
     return 0
 
 
