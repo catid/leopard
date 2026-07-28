@@ -18,7 +18,7 @@ import stat
 import subprocess
 import sys
 import tempfile
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 
 import balanced_evidence_common as common
 
@@ -108,7 +108,8 @@ CANDIDATE_LIBRARY_SOURCES = (
 )
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 22
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
+COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v3"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE = \
@@ -580,6 +581,105 @@ def _validate_scope_text(value: object, label: str) -> dict[str, Any]:
     return value
 
 
+def _benchmark_attestation_text(commit: str, tree: str) -> str:
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None and
+            re.fullmatch(r"[0-9a-f]{40}", tree) is not None,
+            "normalized benchmark attestation source identity is invalid")
+    return (
+        "#ifndef LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "#define LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "\n"
+        "#undef LEO2_BENCHMARK_SOURCE_COMMIT\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TREE\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY\n"
+        f"#define LEO2_BENCHMARK_SOURCE_COMMIT \"{commit}\"\n"
+        f"#define LEO2_BENCHMARK_SOURCE_TREE \"{tree}\"\n"
+        "#define LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY 0\n"
+        "\n"
+        "#endif\n")
+
+
+def _validate_normalized_benchmark_attestation(
+    semantics: Mapping[str, Any], commit: str, tree: str,
+    build_root: str, source_root: str,
+) -> dict[str, Any]:
+    attestation = semantics.get("generated_attestation_header")
+    require(isinstance(attestation, dict) and set(attestation) == {
+                "artifact", "content", "source_commit", "source_tree",
+                "source_tracked_dirty"} and
+            attestation.get("source_commit") == commit and
+            attestation.get("source_tree") == tree and
+            attestation.get("source_tracked_dirty") is False,
+            "candidate normalized generated-attestation source identity differs")
+    artifact = _validate_scope_artifact(
+        attestation.get("artifact"),
+        "candidate normalized generated attestation",
+        "generated_compile_input")
+    expected_path = (
+        f"{build_root}/generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h")
+    require(artifact["path"] == expected_path,
+            "candidate normalized generated-attestation path differs")
+    content = _validate_scope_text(
+        attestation.get("content"),
+        "candidate normalized generated attestation")
+    expected_text = _benchmark_attestation_text(commit, tree)
+    require(content["text"] == expected_text and
+            content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"],
+            "candidate normalized generated-attestation bytes differ")
+
+    entries = semantics.get("required_entries")
+    require(isinstance(entries, list),
+            "candidate normalized generated-attestation compiler entry is absent")
+    benchmark_entries = [
+        entry for entry in entries
+        if isinstance(entry, Mapping) and
+           entry.get("file") == f"{source_root}/bench/leopard2/benchmark.cpp"]
+    require(len(benchmark_entries) == 1 and
+            isinstance(benchmark_entries[0].get("arguments"), list),
+            "candidate normalized generated-attestation compiler entry differs")
+    arguments = benchmark_entries[0]["arguments"]
+    enable_definition_name = "LEO2_BENCHMARK_SOURCE_ATTESTATION"
+    exact_enable_definition = f"-D{enable_definition_name}=1"
+    enable_definitions = [
+        token for token in arguments
+        if isinstance(token, str) and
+           (token == f"-D{enable_definition_name}" or
+            token.startswith(f"-D{enable_definition_name}="))]
+    header_definition_name = "LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER"
+    header_definition_prefix = f"-D{header_definition_name}="
+    exact_header_definition = (
+        f'{header_definition_prefix}"{expected_path}"')
+    header_definitions = [
+        token for token in arguments
+        if isinstance(token, str) and
+           (token == f"-D{header_definition_name}" or
+            token.startswith(header_definition_prefix))]
+    forbidden_identity_prefixes = (
+        "-DLEO2_BENCHMARK_SOURCE_COMMIT=",
+        "-DLEO2_BENCHMARK_SOURCE_TREE=",
+        "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=",
+    )
+    require(enable_definitions == [exact_enable_definition] and
+            not any(isinstance(token, str) and
+                    (token == f"-U{enable_definition_name}" or
+                     token.startswith(f"-U{enable_definition_name}="))
+                    for token in arguments) and
+            header_definitions == [exact_header_definition] and
+            not any(isinstance(token, str) and
+                    (token == f"-U{header_definition_name}" or
+                     token.startswith(f"-U{header_definition_name}="))
+                    for token in arguments) and
+            not any(isinstance(token, str) and
+                    token.startswith(forbidden_identity_prefixes)
+                    for token in arguments) and
+            f"-I{build_root}/generated/leopard2-benchmark-attestation"
+                not in arguments,
+            "candidate normalized generated-attestation compile input differs")
+    return attestation
+
+
 def _validate_scope_numeric_directory_inventory(
     value: object, prefix: str, label: str,
 ) -> list[str]:
@@ -682,14 +782,22 @@ def _normalized_compile_output(role: str, source: str) -> str:
     backend_targets = {
         "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
         "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
+        "Leopard2BackendAVX2Xor.cpp": "leopard2_backend_avx2.dir",
         "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
+        "Leopard2BackendGFNI.cpp": "leopard2_backend_gfni.dir",
     }
     return f"CMakeFiles/{backend_targets.get(relative, 'leopard.dir')}/{relative}.o"
 
 
 def _normalized_compile_argv(
     role: str, source: str, compiler_invocation: str,
+    compile_schema: str = COMPILE_COMMANDS_SCHEMA,
+    candidate_commit: str | None = None,
+    candidate_tree: str | None = None,
 ) -> list[str]:
+    require(compile_schema in {
+                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA},
+            "normalized compile argv schema differs")
     output = _normalized_compile_output(role, source)
     if role == "baseline":
         adapter = ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
@@ -709,13 +817,40 @@ def _normalized_compile_argv(
         "Leopard2BackendSSSE3.cpp": ["-mssse3", "-mno-avx"],
         "Leopard2BackendAVX2.cpp": [
             "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX2Xor.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
         "Leopard2BackendAVX512.cpp": [
             "-mavx2", "-mavx512f", "-mavx512bw", "-mavx512vl",
             "-mprefer-vector-width=256", "-falign-functions=64"],
+        "Leopard2BackendGFNI.cpp": [
+            "-mavx2", "-mgfni", "-mno-avx512f", "-falign-functions=64"],
     }
     if relative == "Leopard2BackendAVX512.cpp":
         definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
-    elif relative in isolated_flags or relative == "bench/leopard2/benchmark.cpp":
+    elif relative == "Leopard2BackendGFNI.cpp":
+        definitions = [
+            "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_GFNI_BACKEND=1"]
+    elif relative == "bench/leopard2/benchmark.cpp":
+        if compile_schema == COMPILE_COMMANDS_SCHEMA_V2:
+            require(isinstance(candidate_commit, str) and
+                    re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None and
+                    isinstance(candidate_tree, str) and
+                    re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None,
+                    "historical normalized benchmark source identity differs")
+            definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                f'-DLEO2_BENCHMARK_SOURCE_COMMIT="{candidate_commit}"',
+                "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
+                f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
+            ]
+        else:
+            definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+                '"$CANDIDATE_BUILD/generated/leopard2-benchmark-attestation/'
+                'leopard2_benchmark_source_attestation.h"',
+            ]
+    elif relative in isolated_flags:
         definitions = []
     else:
         definitions = [
@@ -723,10 +858,12 @@ def _normalized_compile_argv(
             "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX512_BACKEND=1",
+            "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
+    includes = ["-I$CANDIDATE_SOURCE"]
     return [
-        compiler_invocation, *definitions, "-I$CANDIDATE_SOURCE",
+        compiler_invocation, *definitions, *includes,
         "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
         "-std=gnu++11", *isolated_flags.get(relative, []),
         *([] if relative in isolated_flags else ["-fopenmp"]),
@@ -734,7 +871,9 @@ def _normalized_compile_argv(
     ]
 
 
-def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
+def _validate_scope_build(
+    build: object, role: str, source_identity: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     require(role in {"baseline", "candidate"} and isinstance(build, dict) and
             set(build) == {
                 "build_dir", "cmake_cache", "compile_commands",
@@ -830,13 +969,21 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
             compiler_invocation.get("resolved_path") == compiler["path"],
             f"{role} normalized compiler invocation differs")
     semantics = build.get("validated_compile_commands")
-    require(isinstance(semantics, dict) and set(semantics) == {
+    require(isinstance(semantics, dict),
+            f"{role} normalized compile-command identity is absent")
+    compile_schema = semantics.get("schema")
+    require(compile_schema in {
+                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA},
+            f"{role} normalized compile-command schema differs")
+    expected_semantics_keys = {
                 "entry_count", "required_sources", "validated_optimization",
                 "validated_openmp", "required_source_object_pairs", "isa_policy",
-                "schema", "implementation", "profile", "required_entries"} and
+                "schema", "implementation", "profile", "required_entries"}
+    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+        expected_semantics_keys.add("generated_attestation_header")
+    require(set(semantics) == expected_semantics_keys and
             type(semantics.get("entry_count")) is int and
             semantics["entry_count"] == expected_entry_count and
-            semantics.get("schema") == COMPILE_COMMANDS_SCHEMA and
             semantics.get("implementation") == role and
             semantics.get("profile") == expected_compile_profile and
             semantics.get("validated_optimization") == "-O3" and
@@ -883,7 +1030,13 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
                     "output": expected_output,
                     "arguments": _normalized_compile_argv(
                         role, source["path"],
-                        compiler_invocation["invocation"]),
+                        compiler_invocation["invocation"], compile_schema,
+                        (source_identity.get("head")
+                         if role == "candidate" and
+                         isinstance(source_identity, Mapping) else None),
+                        (source_identity.get("tree")
+                         if role == "candidate" and
+                         isinstance(source_identity, Mapping) else None)),
                 } and
                 obj["path"] == f"{expected_root}/{expected_output}",
                 f"{role} normalized compiler argv/output {index} differs")
@@ -912,6 +1065,17 @@ def _validate_scope_build(build: object, role: str) -> dict[str, Any]:
     require(len(benchmark_pairs) == 1 and
             all(path.startswith(expected_root + "/") for path in objects),
             f"{role} normalized benchmark/build object closure differs")
+    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+        if baseline:
+            require(semantics.get("generated_attestation_header") is None,
+                    "baseline normalized build unexpectedly has an attestation")
+        else:
+            require(isinstance(source_identity, Mapping),
+                    "candidate normalized source identity is absent")
+            _validate_normalized_benchmark_attestation(
+                semantics, source_identity.get("head"),
+                source_identity.get("tree"),
+                "$CANDIDATE_BUILD", "$CANDIDATE_SOURCE")
     archive_pairs = [pair for pair in semantics["required_source_object_pairs"]
                      if pair not in benchmark_pairs]
     require(archive_pairs and
@@ -1408,8 +1572,21 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             "gate evidence role-specific source/build scope differs")
     _validate_scope_source(sources["baseline"], "baseline")
     _validate_scope_source(sources["candidate"], "candidate")
-    _validate_scope_build(builds["baseline"], "baseline")
-    _validate_scope_build(builds["candidate"], "candidate")
+    _validate_scope_build(
+        builds["baseline"], "baseline", sources["baseline"])
+    _validate_scope_build(
+        builds["candidate"], "candidate", sources["candidate"])
+    baseline_compile = builds["baseline"]["validated_compile_commands"]
+    candidate_compile = builds["candidate"]["validated_compile_commands"]
+    require(baseline_compile["schema"] == candidate_compile["schema"],
+            "gate evidence compile-command schema differs between roles")
+    if candidate_compile["schema"] == COMPILE_COMMANDS_SCHEMA:
+        attestation = candidate_compile["generated_attestation_header"]
+        require(attestation["source_commit"] == sources["candidate"]["head"] and
+                attestation["source_tree"] == sources["candidate"]["tree"] and
+                attestation["source_tracked_dirty"] is False and
+                sources["candidate"]["tracked_status"] == "clean",
+                "gate evidence generated attestation differs from source identity")
     require(builds["baseline"]["compiler"] == builds["candidate"]["compiler"] and
             builds["baseline"]["compiler_version_stdout"] ==
                 builds["candidate"]["compiler_version_stdout"],
@@ -2426,6 +2603,9 @@ def derive_attestation_result(
             isinstance(canonical["provenance"].get(
                 "archive_link_recipe_content"), dict),
             "attestation benchmark build identity shape differs")
+    _validate_normalized_benchmark_attestation(
+        canonical["provenance"]["validated_compile_commands"],
+        source["head"], source["tree"], "$BUILD", "$SOURCE")
     for label, identity in [
         ("CMake cache", artifacts["cache"]),
         ("build graph", artifacts["graph"]),
@@ -2898,6 +3078,27 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         "committer Fixture <fixture@example.com> 1 +0000\n\nfixture\n"
     ).encode("utf-8")
     candidate_head, candidate_commit_object = fixture_commit_object(candidate_raw)
+    baseline_build["validated_compile_commands"][
+        "generated_attestation_header"] = None
+    attestation_text = _benchmark_attestation_text(
+        candidate_head, candidate_tree)
+    attestation_content = fixture_text(attestation_text)
+    attestation_artifact = fixture_artifact(
+        "$CANDIDATE_BUILD/generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h",
+        "generated_compile_input", "f")
+    attestation_artifact.update({
+        "size": attestation_content["size"],
+        "sha256": attestation_content["sha256"],
+    })
+    candidate_build["validated_compile_commands"][
+        "generated_attestation_header"] = {
+            "artifact": attestation_artifact,
+            "content": attestation_content,
+            "source_commit": candidate_head,
+            "source_tree": candidate_tree,
+            "source_tracked_dirty": False,
+        }
     return {
         "schema": "leopard2-balanced-evidence-scope/v3",
         "host": {
@@ -4064,6 +4265,37 @@ def self_test() -> None:
             "objects": {key: identity for key in ("benchmark", "decoder")},
             "archive": identity, "binary": identity,
         }
+        canonical_header_path = (
+            "$BUILD/generated/leopard2-benchmark-attestation/"
+            "leopard2_benchmark_source_attestation.h")
+        canonical_header_text = _benchmark_attestation_text(
+            source["head"], source["tree"])
+        canonical_header_bytes = canonical_header_text.encode("utf-8")
+        canonical_header_content = {
+            "encoding": "utf-8",
+            "size": len(canonical_header_bytes),
+            "sha256": hashlib.sha256(canonical_header_bytes).hexdigest(),
+            "text": canonical_header_text,
+        }
+        canonical_header_artifact = {
+            "path": canonical_header_path,
+            "kind": "generated_compile_input",
+            "size": canonical_header_content["size"],
+            "mode": 0o644,
+            "sha256": canonical_header_content["sha256"],
+        }
+        canonical_benchmark_arguments = [
+            "/usr/bin/compiler",
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+            f'"{canonical_header_path}"',
+            "-I$SOURCE",
+            "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
+            "-std=gnu++11", "-fopenmp",
+            "-o",
+            "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o",
+            "-c", "$SOURCE/bench/leopard2/benchmark.cpp",
+        ]
         canonical_provenance = {
             "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
             "validated_compile_commands": {
@@ -4072,7 +4304,21 @@ def self_test() -> None:
                 "profile": CANDIDATE_COMPILE_PROFILE,
                 "validated_optimization": "-O3",
                 "validated_openmp": True,
-                "required_entries": [{"fixture": True}],
+                "required_entries": [{
+                    "directory": "$BUILD",
+                    "file": "$SOURCE/bench/leopard2/benchmark.cpp",
+                    "output":
+                        "CMakeFiles/bench_leopard2.dir/"
+                        "bench/leopard2/benchmark.cpp.o",
+                    "arguments": canonical_benchmark_arguments,
+                }],
+                "generated_attestation_header": {
+                    "artifact": canonical_header_artifact,
+                    "content": canonical_header_content,
+                    "source_commit": source["head"],
+                    "source_tree": source["tree"],
+                    "source_tracked_dirty": False,
+                },
             },
             "archive_link_recipe_content": {"sha256": "6" * 64},
         }
@@ -4107,6 +4353,111 @@ def self_test() -> None:
             }
         result = derive_attestation_result(
             stage_root, source, build, collector, raw_documents, raw_artifacts)
+        header_mutations = {}
+
+        missing_header = json.loads(json.dumps(build))
+        missing_header["canonical_production"]["provenance"][
+            "validated_compile_commands"].pop(
+                "generated_attestation_header")
+        header_mutations["missing"] = missing_header
+
+        for label, field, replacement in (
+            ("commit", "source_commit", "a" * 40),
+            ("tree", "source_tree", "b" * 40),
+            ("dirty", "source_tracked_dirty", True),
+        ):
+            mutated = json.loads(json.dumps(build))
+            mutated["canonical_production"]["provenance"][
+                "validated_compile_commands"][
+                    "generated_attestation_header"][field] = replacement
+            header_mutations[label] = mutated
+
+        content_drift = json.loads(json.dumps(build))
+        content_record = content_drift["canonical_production"]["provenance"][
+            "validated_compile_commands"]["generated_attestation_header"]
+        drifted_text = content_record["content"]["text"].replace(
+            "#endif\n", "#define LEO2_UNTRUSTED_SHADOW 1\n#endif\n")
+        drifted_bytes = drifted_text.encode("utf-8")
+        content_record["content"].update({
+            "text": drifted_text,
+            "size": len(drifted_bytes),
+            "sha256": hashlib.sha256(drifted_bytes).hexdigest(),
+        })
+        content_record["artifact"].update({
+            "size": len(drifted_bytes),
+            "sha256": hashlib.sha256(drifted_bytes).hexdigest(),
+        })
+        header_mutations["content"] = content_drift
+
+        hash_drift = json.loads(json.dumps(build))
+        hash_drift["canonical_production"]["provenance"][
+            "validated_compile_commands"]["generated_attestation_header"][
+                "artifact"]["sha256"] = "0" * 64
+        header_mutations["hash"] = hash_drift
+
+        shadow_input = json.loads(json.dumps(build))
+        shadow_arguments = shadow_input["canonical_production"]["provenance"][
+            "validated_compile_commands"]["required_entries"][0]["arguments"]
+        shadow_arguments[:] = [
+            token.replace(
+                canonical_header_path,
+                "$SOURCE/bench/leopard2/"
+                "leopard2_benchmark_source_attestation.h")
+            for token in shadow_arguments]
+        header_mutations["source-local-compile-input"] = shadow_input
+
+        duplicate_override = json.loads(json.dumps(build))
+        duplicate_arguments = duplicate_override["canonical_production"][
+            "provenance"]["validated_compile_commands"][
+                "required_entries"][0]["arguments"]
+        duplicate_arguments.insert(
+            duplicate_arguments.index("-I$SOURCE"),
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+            '"$SOURCE/bench/leopard2/'
+            'leopard2_benchmark_source_attestation.h"')
+        header_mutations["duplicate-compile-input-override"] = \
+            duplicate_override
+
+        missing_enable = json.loads(json.dumps(build))
+        missing_enable_arguments = missing_enable["canonical_production"][
+            "provenance"]["validated_compile_commands"][
+                "required_entries"][0]["arguments"]
+        missing_enable_arguments.remove(
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1")
+        header_mutations["missing-enable-definition"] = missing_enable
+
+        undef_override = json.loads(json.dumps(build))
+        undef_arguments = undef_override["canonical_production"][
+            "provenance"]["validated_compile_commands"][
+                "required_entries"][0]["arguments"]
+        undef_arguments.insert(
+            undef_arguments.index("-I$SOURCE"),
+            "-ULEO2_BENCHMARK_SOURCE_ATTESTATION")
+        header_mutations["undef-enable-override"] = undef_override
+
+        undef_header = json.loads(json.dumps(build))
+        undef_header_arguments = undef_header["canonical_production"][
+            "provenance"]["validated_compile_commands"][
+                "required_entries"][0]["arguments"]
+        undef_header_arguments.insert(
+            undef_header_arguments.index("-I$SOURCE"),
+            "-ULEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER")
+        header_mutations["undef-header-override"] = undef_header
+
+        for label, mutated in header_mutations.items():
+            provenance = mutated["canonical_production"]["provenance"]
+            mutated["canonical_production"]["provenance_sha256"] = \
+                canonical_sha256(provenance)
+            try:
+                derive_attestation_result(
+                    stage_root, source, mutated, collector,
+                    raw_documents, raw_artifacts)
+            except PlanError:
+                pass
+            else:
+                raise PlanError(
+                    "attestation accepted generated-header " + label + " drift")
+
         noncanonical_build = json.loads(json.dumps(build))
         provenance = noncanonical_build["canonical_production"]["provenance"]
         provenance["validated_cache"]["LEO2_BACKEND_VARIANT"] = "scalar"

@@ -426,7 +426,9 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
     return path, specification, compiler
 
 
-def complete_build_fixture(role: str) -> dict:
+def complete_build_fixture(
+    role: str, raw_schema: str = runner.RAW_SCHEMA,
+) -> dict:
     baseline = role == "baseline"
     build_dir = SPECIFICATION[f"{role}_build_dir"]
     source_root = SPECIFICATION[f"{role}_source_root"]
@@ -469,7 +471,7 @@ def complete_build_fixture(role: str) -> dict:
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
         library_names = runner.CANDIDATE_LIBRARY_SOURCES
-        entry_count = 20
+        entry_count = runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
     library_pairs = []
     archive_objects = []
     for index, name in enumerate(library_names):
@@ -522,6 +524,48 @@ def complete_build_fixture(role: str) -> dict:
         executable_path, "executable", "0" if baseline else "1")
     validated_executable["mtime_ns"] = 1 + max(
         record["artifact"]["mtime_ns"] for record in external_link_inputs)
+    compile_identity = {
+        "schema": runner.compile_commands_schema_for_raw_schema(raw_schema),
+        "implementation": role,
+        "profile": runner.compile_profile_for_implementation(role),
+        "entry_count": entry_count,
+        "required_sources": sorted(pair["source"]["path"] for pair in pairs),
+        "validated_optimization": "-O3",
+        "validated_openmp": True,
+        "required_source_object_pairs": pairs,
+        "required_entries": sorted([{
+            "directory": build_dir,
+            "file": pair["source"]["path"],
+            "output": runner.expected_compile_output(
+                role, Path(pair["source"]["path"]), SPECIFICATION),
+            "arguments": runner.expected_compile_argv(
+                role, Path(pair["source"]["path"]), SPECIFICATION,
+                "/usr/bin/compiler", raw_schema,
+                CANDIDATE_TREE if role == "candidate" else None),
+        } for pair in pairs], key=lambda entry: entry["file"]),
+        "isa_policy": isa_policy,
+    }
+    if raw_schema == runner.RAW_SCHEMA:
+        if baseline:
+            compile_identity["generated_attestation_header"] = None
+        else:
+            header_bytes = runner.benchmark_attestation_header_bytes(
+                CANDIDATE_COMMIT, CANDIDATE_TREE, False)
+            header_text = header_bytes.decode("ascii")
+            header_path = (
+                build_dir +
+                "/generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h")
+            compile_identity["generated_attestation_header"] = {
+                "artifact": complete_artifact(
+                    header_path, "generated_compile_input", "4",
+                    content=header_text),
+                "content": runner.exact_text_content(
+                    header_text, "fixture generated attestation"),
+                "source_commit": CANDIDATE_COMMIT,
+                "source_tree": CANDIDATE_TREE,
+                "source_tracked_dirty": False,
+            }
     return {
         "build_dir": build_dir,
         "cmake_cache": complete_artifact(
@@ -551,26 +595,7 @@ def complete_build_fixture(role: str) -> dict:
         "validated_archive": complete_artifact(
             archive_path, "archive", "2" if baseline else "3"),
         "validated_cache": cache,
-        "validated_compile_commands": {
-            "schema": runner.COMPILE_COMMANDS_SCHEMA,
-            "implementation": role,
-            "profile": runner.compile_profile_for_implementation(role),
-            "entry_count": entry_count,
-            "required_sources": sorted(pair["source"]["path"] for pair in pairs),
-            "validated_optimization": "-O3",
-            "validated_openmp": True,
-            "required_source_object_pairs": pairs,
-            "required_entries": sorted([{
-                "directory": build_dir,
-                "file": pair["source"]["path"],
-                "output": runner.expected_compile_output(
-                    role, Path(pair["source"]["path"]), SPECIFICATION),
-                "arguments": runner.expected_compile_argv(
-                    role, Path(pair["source"]["path"]), SPECIFICATION,
-                    "/usr/bin/compiler"),
-            } for pair in pairs], key=lambda entry: entry["file"]),
-            "isa_policy": isa_policy,
-        },
+        "validated_compile_commands": compile_identity,
         "archive_link_recipe_content": archive_recipe_content,
         "executable_link_recipe_content": executable_recipe_content,
         "archive_link_tool_invocations": {
@@ -666,8 +691,8 @@ def complete_source_fixture(role: str) -> dict:
 
 def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
     if raw_schema in runner.COMPLETE_EVIDENCE_SCHEMAS:
-        baseline_build = complete_build_fixture("baseline")
-        candidate_build = complete_build_fixture("candidate")
+        baseline_build = complete_build_fixture("baseline", raw_schema)
+        candidate_build = complete_build_fixture("candidate", raw_schema)
         baseline_executable = baseline_build["validated_executable"]
         candidate_executable = candidate_build["validated_executable"]
         baseline_archive = baseline_build["validated_archive"]
@@ -1434,6 +1459,24 @@ class MainCompareRunnerTests(unittest.TestCase):
     def test_legacy_v5_raw_and_manifest_fixtures_remain_replayable(self) -> None:
         plan = load_plan_runner()
         value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V5)
+        entries = value["identities_initial"]["candidate_build"][
+            "validated_compile_commands"]["required_entries"]
+        benchmark_entry = next(
+            entry for entry in entries
+            if entry["file"].endswith("/bench/leopard2/benchmark.cpp"))
+        self.assertIn(
+            f'-DLEO2_BENCHMARK_SOURCE_COMMIT="{CANDIDATE_COMMIT}"',
+            benchmark_entry["arguments"])
+        self.assertIn(
+            f'-DLEO2_BENCHMARK_SOURCE_TREE="{CANDIDATE_TREE}"',
+            benchmark_entry["arguments"])
+        self.assertIn(
+            "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
+            benchmark_entry["arguments"])
+        self.assertFalse(any(
+            "LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER" in token or
+            "generated/leopard2-benchmark-attestation" in token
+            for token in benchmark_entry["arguments"]))
         runner.validate_raw(
             value, None, check_files=False, check_current_inputs=False)
         with tempfile.TemporaryDirectory() as directory:
@@ -1725,6 +1768,86 @@ class MainCompareRunnerTests(unittest.TestCase):
                 value["identities_initial"])
             invocation["identity_after"] = copy.deepcopy(
                 value["identities_initial"])
+        self.assert_rejected(value)
+
+    def test_generated_attestation_header_is_a_canonical_compile_input(
+        self,
+    ) -> None:
+        def retained(value: dict) -> dict:
+            return value["identities_initial"]["candidate_build"][
+                "validated_compile_commands"]["generated_attestation_header"]
+
+        def benchmark_entry(value: dict) -> dict:
+            entries = value["identities_initial"]["candidate_build"][
+                "validated_compile_commands"]["required_entries"]
+            return next(
+                entry for entry in entries
+                if entry["file"].endswith("/bench/leopard2/benchmark.cpp"))
+
+        value = synthetic_raw()
+        record = retained(value)
+        injected = record["content"]["text"].replace(
+            "#endif\n", '#include "stale_or_hostile.cpp"\n#endif\n')
+        record["content"] = runner.exact_text_content(
+            injected, "mutated generated attestation")
+        record["artifact"]["size"] = record["content"]["size"]
+        record["artifact"]["sha256"] = record["content"]["sha256"]
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        retained(value)["artifact"]["path"] = (
+            SPECIFICATION["candidate_build_dir"] +
+            "/foreign/leopard2_benchmark_source_attestation.h")
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        entry = benchmark_entry(value)
+        expected_path = (
+            SPECIFICATION["candidate_build_dir"] +
+            "/generated/leopard2-benchmark-attestation/"
+            "leopard2_benchmark_source_attestation.h")
+        source_local_path = (
+            SPECIFICATION["candidate_source_root"] +
+            "/bench/leopard2/leopard2_benchmark_source_attestation.h")
+        original = list(entry["arguments"])
+        entry["arguments"] = [
+            token.replace(expected_path, source_local_path)
+            for token in entry["arguments"]]
+        self.assertNotEqual(entry["arguments"], original)
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        record = retained(value)
+        benchmark_pair = next(
+            pair for pair in value["identities_initial"]["candidate_build"][
+                "validated_compile_commands"]["required_source_object_pairs"]
+            if pair["source"]["path"].endswith(
+                "/bench/leopard2/benchmark.cpp"))
+        record["artifact"]["mtime_ns"] = \
+            benchmark_pair["object"]["mtime_ns"] + 1
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        record = retained(value)
+        alternate_tree = "a" * 40
+        header = runner.benchmark_attestation_header_bytes(
+            CANDIDATE_COMMIT, alternate_tree, False).decode("ascii")
+        record["source_tree"] = alternate_tree
+        record["content"] = runner.exact_text_content(
+            header, "coherently relabeled generated attestation")
+        record["artifact"]["size"] = record["content"]["size"]
+        record["artifact"]["sha256"] = record["content"]["sha256"]
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        value["identities_initial"]["candidate_build"][
+            "validated_compile_commands"].pop("generated_attestation_header")
+        synchronize_identity(value)
         self.assert_rejected(value)
 
     def test_recipe_command_semantic_mutations_are_rejected(self) -> None:

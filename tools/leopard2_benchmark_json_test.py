@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -225,9 +226,26 @@ def main() -> int:
             "standard source-attested parameter structure changed")
     require(standard_attested["parameters"]["attest_source"] is True,
             "standard benchmark did not record source-attestation opt-in")
+    expected_header = os.environ.get(
+        "LEO2_EXPECTED_SOURCE_ATTESTATION_HEADER")
     expected_commit = os.environ.get("LEO2_EXPECTED_SOURCE_COMMIT")
     expected_tree = os.environ.get("LEO2_EXPECTED_SOURCE_TREE")
     expected_dirty = os.environ.get("LEO2_EXPECTED_SOURCE_DIRTY")
+    if expected_header is not None:
+        header = Path(expected_header).read_text(encoding="utf-8")
+
+        def macro(name: str) -> str:
+            match = re.search(
+                rf"^#define {re.escape(name)} (.+)$", header, re.MULTILINE)
+            require(match is not None,
+                    f"generated source attestation omits {name}")
+            return match.group(1)
+
+        expected_commit = macro(
+            "LEO2_BENCHMARK_SOURCE_COMMIT").strip('"')
+        expected_tree = macro("LEO2_BENCHMARK_SOURCE_TREE").strip('"')
+        expected_dirty = macro(
+            "LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY")
     if expected_commit is not None:
         require(standard_attested["build"]["source_commit"] == expected_commit,
                 "standard benchmark source commit differs from CMake identity")

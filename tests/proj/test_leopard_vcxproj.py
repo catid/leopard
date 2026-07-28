@@ -8,6 +8,7 @@ MSBuild configurations, ISA isolation, or optional-CUDA contract drifts.
 
 from collections import Counter
 import copy
+import hashlib
 from pathlib import Path, PurePosixPath
 import re
 import sys
@@ -20,6 +21,14 @@ SOLUTION = ROOT / "proj" / "Leopard.sln"
 PROJECT = ROOT / "proj" / "Leopard.vcxproj"
 FILTERS = ROOT / "proj" / "Leopard.vcxproj.filters"
 CMAKE = ROOT / "CMakeLists.txt"
+BENCHMARK_ATTESTATION_MODULE = \
+    ROOT / "cmake" / "Leopard2BenchmarkAttestation.cmake"
+BENCHMARK_ATTESTATION_GENERATOR = \
+    ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
+BENCHMARK_ATTESTATION_MODULE_SHA256 = \
+    "282b3b71c8b665107c135e2b694159a78887a4fa67441199bca41fb37d3a9e76"
+BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
+    "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
 EXPECTED_TOOLS_VERSION = "14.0"
 LEGACY_PROJECTS = (
@@ -516,6 +525,7 @@ class CMakeProductionGraph(object):
     _safe_root_command_names = {
         "add_executable", "add_test", "else", "elseif", "enable_testing",
         "endif", "find_program", "if", "install", "message",
+        "leopard2_enable_benchmark_source_attestation",
         "set_tests_properties",
         "function", "endfunction", "macro", "endmacro", "foreach",
         "endforeach", "while", "endwhile", "block", "endblock",
@@ -684,6 +694,7 @@ class CMakeProductionGraph(object):
         ("include", ("CheckCXXCompilerFlag",)): 1,
         ("include", ("CMakePackageConfigHelpers",)): 1,
         ("include", ("GNUInstallDirs",)): 1,
+        ("include", ("cmake/Leopard2BenchmarkAttestation.cmake",)): 1,
         ("find_package", ("OpenMP",)): 1,
         ("find_package", ("Threads", "REQUIRED")): 1,
         ("option", (
@@ -755,6 +766,8 @@ class CMakeProductionGraph(object):
         ("trusted", ("include", ("CheckCXXCompilerFlag",))),
         ("trusted", ("include", ("CMakePackageConfigHelpers",))),
         ("trusted", ("include", ("GNUInstallDirs",))),
+        ("trusted", ("include", (
+            "cmake/Leopard2BenchmarkAttestation.cmake",))),
         ("protected", (
             "CMAKE_CONFIGURATION_TYPES", "Debug;Release", "CACHE",
             "STRING", "", "FORCE")),
@@ -896,6 +909,9 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX2=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_BACKEND_FORCE_AVX512=1"))),
+        ("guarded", (
+            "leopard2_enable_benchmark_source_attestation",
+            ("bench_leopard2",))),
         ("locator-provenance", ("find_program", _locator_git_find)),
         ("locator-provenance", (
             "execute_process", _locator_git_revision)),
@@ -903,6 +919,9 @@ class CMakeProductionGraph(object):
             "execute_process", _locator_git_tree)),
         ("locator-provenance", (
             "execute_process", _locator_git_status)),
+        ("guarded", (
+            "leopard2_enable_benchmark_source_attestation",
+            ("bench_leopard2_allk",))),
         ("sparse-sidecar", (
             "set_property", _sparse_sidecar_link_depends)),
         ("sparse-sidecar", (
@@ -958,6 +977,22 @@ class CMakeProductionGraph(object):
 
     def __init__(self, text, processor="AMD64", pointer_size="8",
                  platform_name="x64", require_mutation_contract=False):
+        if require_mutation_contract:
+            for path, expected in (
+                    (BENCHMARK_ATTESTATION_MODULE,
+                     BENCHMARK_ATTESTATION_MODULE_SHA256),
+                    (BENCHMARK_ATTESTATION_GENERATOR,
+                     BENCHMARK_ATTESTATION_GENERATOR_SHA256)):
+                try:
+                    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                except OSError as error:
+                    raise ContractError(
+                        "benchmark attestation build module is unavailable: " +
+                        str(path)) from error
+                if actual != expected:
+                    raise ContractError(
+                        "benchmark attestation build module identity differs: " +
+                        str(path))
         self.raw_commands = cmake_commands(text)
         self.commands = [(name, cmake_tokens(body))
                          for name, body in self.raw_commands]
@@ -1584,7 +1619,8 @@ class CMakeProductionGraph(object):
         conditional_depth = 0
         approved_includes = {
             "CMakeDependentOption", "CheckCXXCompilerFlag",
-            "CMakePackageConfigHelpers", "GNUInstallDirs"}
+            "CMakePackageConfigHelpers", "GNUInstallDirs",
+            "cmake/Leopard2BenchmarkAttestation.cmake"}
         approved_packages = {
             ("OpenMP",),
             ("Threads", "REQUIRED"),
@@ -1897,6 +1933,24 @@ class CMakeProductionGraph(object):
                 if bool_satisfiable(guard):
                     self._record_trusted_command(
                         command, tokens, guard, reasons)
+                continue
+            if command == "leopard2_enable_benchmark_source_attestation":
+                benchmark_guard = bool_atom("option:LEO2_BUILD_BENCHMARKS")
+                if tokens == ["bench_leopard2"]:
+                    expected_guard = benchmark_guard
+                elif tokens == ["bench_leopard2_allk"]:
+                    expected_guard = bool_and(
+                        benchmark_guard,
+                        bool_atom("option:LEO2_BUILD_ALLK_DIAGNOSTIC"))
+                else:
+                    raise ContractError(
+                        "unapproved benchmark attestation target")
+                if reasons or not self._formula_equivalent(
+                        guard, expected_guard):
+                    raise ContractError(
+                        "benchmark attestation target guard drift")
+                self.contract_events.append(
+                    ("guarded", (command, tuple(tokens))))
                 continue
             if command == "find_package":
                 if tuple(tokens) not in approved_packages:
@@ -4692,7 +4746,9 @@ target_compile_options(alias_backend PRIVATE /arch:AVX2)
             "    add_executable(bench_leopard ${BENCH_SOURCE_FILES})", 1)
         self.assertNotEqual(moved_find, self.cmake)
         with self.assertRaisesRegex(
-                ContractError, "locator provenance command guard drift"):
+                ContractError,
+                "locator provenance command guard drift|"
+                "benchmark attestation target guard drift"):
             self.resolve_text(moved_find, require_mutation_contract=True)
 
         inverted_probe = self.cmake.replace(
@@ -5211,6 +5267,7 @@ endif()'''
                         ContractError,
                         "missing or duplicate trusted CMake command|"
                         "locator provenance command guard drift|"
+                        "benchmark attestation target guard drift|"
                         "unsupported conditional CMake source graph|"
                         "reachable CMake language enablement|"
                         "CMake bootstrap must begin"):

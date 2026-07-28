@@ -34,6 +34,10 @@
 #include "Leopard2Direct.h"
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+#if !defined(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER)
+#error "source-attested benchmark requires its exact generated header path"
+#endif
+#include LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER
 #if !defined(LEO2_BENCHMARK_SOURCE_COMMIT) || \
     !defined(LEO2_BENCHMARK_SOURCE_TREE) || \
     !defined(LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY)

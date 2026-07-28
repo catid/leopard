@@ -5,6 +5,7 @@ include(CMakeDependentOption)
 include(CheckCXXCompilerFlag)
 include(CMakePackageConfigHelpers)
 include(GNUInstallDirs)
+include(cmake/Leopard2BenchmarkAttestation.cmake)
 
 set(CMAKE_CONFIGURATION_TYPES "Debug;Release" CACHE STRING "" FORCE)
 
@@ -519,6 +520,7 @@ if(LEO2_BUILD_BENCHMARKS)
 
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
     target_link_libraries(bench_leopard2 leopard)
+    leopard2_enable_benchmark_source_attestation(bench_leopard2)
 
     if(LEOPARD_ENABLE_GF8)
         add_executable(bench_leopard2_batch_preflight
@@ -573,25 +575,16 @@ if(LEO2_BUILD_BENCHMARKS)
         endif()
     endif()
     # The standard benchmark supports an untimed schema-v5 identity preflight
-    # as well as its ordinary timed schemas.  Keeping both modes in the same
-    # executable binds performance evidence to the exact committed source.
-    target_compile_definitions(bench_leopard2 PRIVATE
-        LEO2_BENCHMARK_SOURCE_ATTESTATION=1
-        LEO2_BENCHMARK_SOURCE_COMMIT="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
-        LEO2_BENCHMARK_SOURCE_TREE="${LEO2_LOCATOR_SOURCE_GIT_TREE}"
-        LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
+    # as well as its ordinary timed schemas.  Its generated header is refreshed
+    # at build time, rather than freezing configure-time Git state.
     target_compile_definitions(bench_leopard2_locator PRIVATE
         LEO2_LOCATOR_SOURCE_GIT_SHA="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
         LEO2_LOCATOR_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
 
     if(LEO2_BUILD_ALLK_DIAGNOSTIC)
         add_executable(bench_leopard2_allk bench/leopard2/benchmark.cpp)
-        target_compile_definitions(bench_leopard2_allk PRIVATE
-            LEO2_BENCHMARK_SOURCE_ATTESTATION=1
-            LEO2_BENCHMARK_SOURCE_COMMIT="${LEO2_LOCATOR_SOURCE_GIT_SHA}"
-            LEO2_BENCHMARK_SOURCE_TREE="${LEO2_LOCATOR_SOURCE_GIT_TREE}"
-            LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY})
         target_link_libraries(bench_leopard2_allk leopard)
+        leopard2_enable_benchmark_source_attestation(bench_leopard2_allk)
     endif()
 
     # The timed paths use ordinary internal transform entry points; untimed
@@ -1604,6 +1597,17 @@ if(LEO2_BUILD_TESTS)
 
     if(LEO2_BUILD_BENCHMARKS)
         add_test(
+            NAME leopard2_benchmark_attestation_refresh
+            COMMAND ${CMAKE_COMMAND}
+                -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/benchmark-attestation-refresh
+                -DLEO2_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+                -DLEO2_GENERATOR=${CMAKE_GENERATOR}
+                -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
+                -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
+                -DLEO2_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_benchmark_attestation_refresh.cmake)
+        add_test(
             NAME leopard2_sparse_encode_benchmark_registration
             COMMAND ${CMAKE_COMMAND}
                 -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
@@ -1653,7 +1657,7 @@ if(LEO2_BUILD_TESTS)
             endif()
             set_tests_properties(leopard2_benchmark_json_regression PROPERTIES
                 ENVIRONMENT
-                    "LEO2_EXPECTED_SOURCE_COMMIT=${LEO2_LOCATOR_SOURCE_GIT_SHA};LEO2_EXPECTED_SOURCE_TREE=${LEO2_LOCATOR_SOURCE_GIT_TREE};LEO2_EXPECTED_SOURCE_DIRTY=${LEO2_LOCATOR_SOURCE_DIRTY};OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
+                    "LEO2_EXPECTED_SOURCE_ATTESTATION_HEADER=${LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER};OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")
             add_test(
                 NAME leopard2_pruned_transform_benchmark_smoke
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}

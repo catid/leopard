@@ -165,6 +165,7 @@ MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
 MAX_LINK_RECIPE_BYTES = 1024 * 1024
+MAX_GENERATED_ATTESTATION_HEADER_BYTES = 64 * 1024
 MAX_GIT_COMMIT_BYTES = 1024 * 1024
 MAX_CAMPAIGN_COUNT = 1_000_000
 MAX_CAMPAIGN_CELLS = 4096
@@ -199,7 +200,8 @@ CANDIDATE_CONFIGURED_SOURCES = (
 )
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = len(CANDIDATE_CONFIGURED_SOURCES)
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v2"
+COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v3"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE = \
@@ -1299,6 +1301,100 @@ def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+def compile_commands_schema_for_raw_schema(raw_schema: str) -> str:
+    require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
+            "compile-command identity uses an unsupported evidence schema")
+    return (COMPILE_COMMANDS_SCHEMA_V2 if raw_schema == RAW_SCHEMA_V5 else
+            COMPILE_COMMANDS_SCHEMA)
+
+
+def benchmark_attestation_header_bytes(
+    commit: str, tree: str, tracked_dirty: bool,
+) -> bytes:
+    require(re.fullmatch(r"[0-9a-f]{40}", commit) is not None and
+            re.fullmatch(r"[0-9a-f]{40}", tree) is not None and
+            type(tracked_dirty) is bool,
+            "benchmark attestation source identity is invalid")
+    dirty = 1 if tracked_dirty else 0
+    return (
+        "#ifndef LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "#define LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "\n"
+        "#undef LEO2_BENCHMARK_SOURCE_COMMIT\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TREE\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY\n"
+        f"#define LEO2_BENCHMARK_SOURCE_COMMIT \"{commit}\"\n"
+        f"#define LEO2_BENCHMARK_SOURCE_TREE \"{tree}\"\n"
+        f"#define LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY {dirty}\n"
+        "\n"
+        "#endif\n").encode("ascii")
+
+
+def capture_candidate_benchmark_attestation(
+    specification: Mapping[str, Any], benchmark_object: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Bind the exact generated header consumed by benchmark.cpp.
+
+    The generated include directory is part of the exact compiler argv, but a
+    directory operand alone does not authenticate the header bytes selected by
+    the preprocessor.  Capture one inode-bound byte snapshot and require the
+    canonical clean-source form before accepting benchmark evidence.
+    """
+    source_root = Path(specification["candidate_source_root"]).resolve(strict=True)
+    build_dir = Path(specification["candidate_build_dir"]).resolve(strict=True)
+    git = Path("/usr/bin/git").resolve(strict=True)
+    commit = run_checked((
+        str(git), "-C", str(source_root), "rev-parse", "--verify", "HEAD"
+    )).decode("ascii", errors="strict").strip()
+    tree = run_checked((
+        str(git), "-C", str(source_root), "rev-parse", "--verify", "HEAD^{tree}"
+    )).decode("ascii", errors="strict").strip()
+    status = run_checked((
+        str(git), "-C", str(source_root), "status", "--porcelain=v1",
+        "--untracked-files=normal", "--ignore-submodules=none",
+    )).decode("utf-8", errors="strict")
+    require(commit == specification["candidate_commit"] and status == "",
+            "candidate benchmark attestation source is not the declared clean commit")
+    expected = benchmark_attestation_header_bytes(commit, tree, False)
+    header = (
+        build_dir / "generated" / "leopard2-benchmark-attestation" /
+        "leopard2_benchmark_source_attestation.h").resolve(strict=True)
+    metadata, retained = bounded_file_contents_snapshot(
+        header, MAX_GENERATED_ATTESTATION_HEADER_BYTES)
+    require(retained == expected,
+            "candidate benchmark attestation header is not canonical for "
+            "the declared clean source")
+    try:
+        text = retained.decode("ascii", errors="strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(
+            "candidate benchmark attestation header is not ASCII") from error
+    artifact = {
+        "path": str(header),
+        "kind": "generated_compile_input",
+        "size": metadata.st_size,
+        "mode": metadata.st_mode & 0o7777,
+        "mtime_ns": metadata.st_mtime_ns,
+        "sha256": sha256_bytes(retained),
+    }
+    content = exact_text_content(text, "candidate benchmark attestation header")
+    require(content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"],
+            "candidate benchmark attestation byte identity differs")
+    require(isinstance(benchmark_object, Mapping) and
+            benchmark_object.get("kind") == "object_file" and
+            type(benchmark_object.get("mtime_ns")) is int and
+            benchmark_object["mtime_ns"] >= artifact["mtime_ns"],
+            "candidate benchmark object predates its generated attestation header")
+    return {
+        "artifact": artifact,
+        "content": content,
+        "source_commit": commit,
+        "source_tree": tree,
+        "source_tracked_dirty": False,
+    }
+
+
 def parse_cmake_cache(path: Path) -> dict[str, str]:
     values: dict[str, str] = {}
     for line in path.read_text(encoding="utf-8").splitlines():
@@ -1545,9 +1641,12 @@ def expected_compile_output(
 
 def expected_compile_argv(
     implementation: str, source: Path, specification: Mapping[str, Any],
-    compiler_invocation: str,
+    compiler_invocation: str, raw_schema: str = RAW_SCHEMA,
+    candidate_tree: str | None = None,
 ) -> list[str]:
     """Construct the complete ordered argv for one configured translation unit."""
+    require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
+            "exact compile argv uses an unsupported evidence schema")
     output = expected_compile_output(implementation, source, specification)
     baseline_root = Path(specification["baseline_source_root"])
     candidate_root = Path(specification["candidate_source_root"])
@@ -1618,22 +1717,36 @@ def expected_compile_argv(
         includes = [f"-I{candidate_root}"]
         propagated_openmp = []
     elif relative == "bench/leopard2/benchmark.cpp":
-        candidate_commit = specification.get("candidate_commit")
-        require(isinstance(candidate_commit, str) and
-                re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
-                "candidate compile profile lacks its exact source commit")
-        git = Path("/usr/bin/git").resolve(strict=True)
-        candidate_tree = run_checked((
-            str(git), "-C", str(candidate_root),
-            "rev-parse", f"{candidate_commit}^{{tree}}")).decode().strip()
-        require(re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None,
-                "candidate compile profile lacks its exact source tree")
-        definitions = [
-            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
-            f'-DLEO2_BENCHMARK_SOURCE_COMMIT="{candidate_commit}"',
-            "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
-            f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
-        ]
+        if raw_schema == RAW_SCHEMA_V5:
+            candidate_commit = specification.get("candidate_commit")
+            require(isinstance(candidate_commit, str) and
+                    re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
+                    "historical candidate compile profile lacks its source commit")
+            if candidate_tree is None:
+                git = Path("/usr/bin/git").resolve(strict=True)
+                candidate_tree = run_checked((
+                    str(git), "-C", str(candidate_root),
+                    "rev-parse", f"{candidate_commit}^{{tree}}",
+                )).decode("ascii", errors="strict").strip()
+            require(isinstance(candidate_tree, str) and
+                    re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None,
+                    "historical candidate compile profile lacks its source tree")
+            definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                f'-DLEO2_BENCHMARK_SOURCE_COMMIT="{candidate_commit}"',
+                "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
+                f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
+            ]
+        else:
+            attestation_header = (
+                Path(specification["candidate_build_dir"]) / "generated" /
+                "leopard2-benchmark-attestation" /
+                "leopard2_benchmark_source_attestation.h")
+            definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+                f'"{attestation_header}"',
+            ]
         includes = [f"-I{candidate_root}"]
         propagated_openmp = ["-fopenmp"]
     elif relative == "Leopard2BackendGFNI.cpp":
@@ -1778,7 +1891,8 @@ def validate_compile_commands(
         for source in configured:
             tokens, entry, _ = by_source[source]
             expected_tokens = expected_compile_argv(
-                implementation, source, specification, compiler_invocation)
+                implementation, source, specification, compiler_invocation,
+                raw_schema)
             require(tokens == expected_tokens and
                     entry["output"] == expected_compile_output(
                         implementation, source, specification),
@@ -1831,7 +1945,7 @@ def validate_compile_commands(
     }
     if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         result.update({
-            "schema": COMPILE_COMMANDS_SCHEMA,
+            "schema": compile_commands_schema_for_raw_schema(raw_schema),
             "implementation": implementation,
             "profile": compile_profile_for_implementation(implementation),
             "required_entries": sorted(
@@ -2056,6 +2170,11 @@ def build_provenance(
     require(len(benchmark_records) == 1,
             f"{implementation} has no unique benchmark object")
     archive_records = [record for record in records if record not in benchmark_records]
+    if raw_schema == RAW_SCHEMA:
+        semantics["generated_attestation_header"] = (
+            capture_candidate_benchmark_attestation(
+                specification, benchmark_records[0]["object"])
+            if implementation == "candidate" else None)
 
     def linked_objects(recipe: str) -> list[Path]:
         result: list[Path] = []
@@ -2551,8 +2670,45 @@ def validate_complete_executable_recipe(
         external_link_inputs=external_link_inputs, label=label)
 
 
+def validate_complete_benchmark_attestation(
+    value: object, build_dir: str, benchmark_object: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "artifact", "content", "source_commit", "source_tree",
+                "source_tracked_dirty"},
+            "candidate generated-attestation identity shape differs")
+    commit = value.get("source_commit")
+    tree = value.get("source_tree")
+    require(isinstance(commit, str) and
+            re.fullmatch(r"[0-9a-f]{40}", commit) is not None and
+            isinstance(tree, str) and
+            re.fullmatch(r"[0-9a-f]{40}", tree) is not None and
+            value.get("source_tracked_dirty") is False,
+            "candidate generated-attestation source identity differs")
+    artifact = validate_complete_artifact_identity(
+        value.get("artifact"), "candidate generated attestation",
+        "generated_compile_input")
+    expected_path = str(
+        Path(build_dir) / "generated" / "leopard2-benchmark-attestation" /
+        "leopard2_benchmark_source_attestation.h")
+    require(artifact["path"] == expected_path,
+            "candidate generated-attestation path differs")
+    content = validate_complete_text_identity(
+        value.get("content"), "candidate generated attestation")
+    expected = benchmark_attestation_header_bytes(commit, tree, False)
+    require(content["text"].encode("utf-8") == expected and
+            content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"],
+            "candidate generated-attestation canonical bytes differ")
+    require(type(benchmark_object.get("mtime_ns")) is int and
+            benchmark_object["mtime_ns"] >= artifact["mtime_ns"],
+            "candidate benchmark object predates its generated attestation")
+    return value
+
+
 def validate_complete_build_identity(
     build: object, implementation: str, specification: Mapping[str, Any],
+    raw_schema: str, candidate_tree: str | None = None,
 ) -> dict[str, Any]:
     require(implementation in {"baseline", "candidate"} and
             isinstance(build, dict),
@@ -2683,17 +2839,22 @@ def validate_complete_build_identity(
             f"{implementation} compiler invocation identity differs")
 
     compile_record = build.get("validated_compile_commands")
-    require(isinstance(compile_record, dict) and set(compile_record) == {
+    expected_compile_keys = {
                 "entry_count", "required_sources", "validated_optimization",
                 "validated_openmp", "required_source_object_pairs", "isa_policy",
-                "schema", "implementation", "profile", "required_entries"},
+                "schema", "implementation", "profile", "required_entries"}
+    if raw_schema == RAW_SCHEMA:
+        expected_compile_keys.add("generated_attestation_header")
+    require(isinstance(compile_record, dict) and
+            set(compile_record) == expected_compile_keys,
             f"{implementation} compile-command identity shape differs")
     pairs = compile_record.get("required_source_object_pairs")
     sources = compile_record.get("required_sources")
     retained_entries = compile_record.get("required_entries")
     require(type(compile_record.get("entry_count")) is int and
             compile_record["entry_count"] == expected_entry_count and
-            compile_record.get("schema") == COMPILE_COMMANDS_SCHEMA and
+            compile_record.get("schema") ==
+                compile_commands_schema_for_raw_schema(raw_schema) and
             compile_record.get("implementation") == implementation and
             compile_record.get("profile") == compile_profile and
             compile_record.get("validated_optimization") == "-O3" and
@@ -2736,7 +2897,7 @@ def validate_complete_build_identity(
             implementation, Path(source["path"]), specification)
         expected_arguments = expected_compile_argv(
             implementation, Path(source["path"]), specification,
-            cache["CMAKE_CXX_COMPILER"])
+            cache["CMAKE_CXX_COMPILER"], raw_schema, candidate_tree)
         require(retained_entry == {
                     "directory": build_dir,
                     "file": source["path"],
@@ -2763,6 +2924,17 @@ def validate_complete_build_identity(
                        if pair["source"]["path"].endswith(benchmark_suffix)]
     require(len(benchmark_pairs) == 1,
             f"{implementation} benchmark object is not unique")
+    if raw_schema == RAW_SCHEMA:
+        if implementation == "candidate":
+            attestation = validate_complete_benchmark_attestation(
+                compile_record.get("generated_attestation_header"), build_dir,
+                benchmark_pairs[0]["object"])
+            require(attestation["source_commit"] ==
+                        specification["candidate_commit"],
+                    "candidate generated attestation names a different commit")
+        else:
+            require(compile_record.get("generated_attestation_header") is None,
+                    "baseline build unexpectedly retains a generated attestation")
     archive_pairs = [pair for pair in pairs if pair not in benchmark_pairs]
     require(archive_pairs,
             f"{implementation} archive compile closure is empty")
@@ -2844,6 +3016,9 @@ def validate_complete_input_snapshot(
             snapshot.get(name), name, kind)
         require(record["path"] == specification[name],
                 f"{name} identity differs from the input specification")
+    candidate_source = snapshot.get("candidate_source")
+    candidate_tree = (candidate_source.get("tree")
+                      if isinstance(candidate_source, Mapping) else None)
     for role in ("baseline", "candidate"):
         executable = validate_complete_artifact_identity(
             snapshot.get(f"{role}_executable"), f"{role} executable", "executable")
@@ -2853,7 +3028,8 @@ def validate_complete_input_snapshot(
                 archive["path"] == specification[f"{role}_archive"],
                 f"{role} output identity differs from the input specification")
         build = validate_complete_build_identity(
-            snapshot.get(f"{role}_build"), role, specification)
+            snapshot.get(f"{role}_build"), role, specification, raw_schema,
+            candidate_tree if role == "candidate" else None)
         require(executable == build["validated_executable"] and
                 archive == build["validated_archive"],
                 f"{role} top-level/build output identity differs")
@@ -2868,6 +3044,16 @@ def validate_complete_input_snapshot(
         snapshot.get("candidate_source"), "candidate",
         specification["candidate_source_root"], specification["candidate_commit"],
         require_detached=False)
+    if raw_schema == RAW_SCHEMA:
+        attestation = snapshot["candidate_build"][
+            "validated_compile_commands"]["generated_attestation_header"]
+        require(attestation["source_commit"] ==
+                    snapshot["candidate_source"]["head"] and
+                attestation["source_tree"] ==
+                    snapshot["candidate_source"]["tree"] and
+                attestation["source_tracked_dirty"] is False and
+                snapshot["candidate_source"]["tracked_status"] == "clean",
+                "candidate generated attestation differs from source provenance")
     require(snapshot["baseline_build"]["compiler"] ==
                 snapshot["candidate_build"]["compiler"] and
             snapshot["baseline_build"]["compiler_version_stdout"] ==
