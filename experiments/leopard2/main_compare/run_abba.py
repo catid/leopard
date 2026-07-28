@@ -1617,6 +1617,25 @@ def expected_compile_argv(
         definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
         includes = [f"-I{candidate_root}"]
         propagated_openmp = []
+    elif relative == "bench/leopard2/benchmark.cpp":
+        candidate_commit = specification.get("candidate_commit")
+        require(isinstance(candidate_commit, str) and
+                re.fullmatch(r"[0-9a-f]{40}", candidate_commit) is not None,
+                "candidate compile profile lacks its exact source commit")
+        git = Path("/usr/bin/git").resolve(strict=True)
+        candidate_tree = run_checked((
+            str(git), "-C", str(candidate_root),
+            "rev-parse", f"{candidate_commit}^{{tree}}")).decode().strip()
+        require(re.fullmatch(r"[0-9a-f]{40}", candidate_tree) is not None,
+                "candidate compile profile lacks its exact source tree")
+        definitions = [
+            "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+            f'-DLEO2_BENCHMARK_SOURCE_COMMIT="{candidate_commit}"',
+            "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
+            f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
+        ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = ["-fopenmp"]
     elif relative == "Leopard2BackendGFNI.cpp":
         definitions = [
             "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_GFNI_BACKEND=1"]
