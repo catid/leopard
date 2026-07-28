@@ -33,10 +33,10 @@ from leopard2_perf_evidence import (  # noqa: E402
 
 SCHEMA = "leopard2-benchmark-matrix/v3"
 SPEC_SCHEMA = "leopard2-benchmark-spec/v3"
-LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v4"
-LAB_RESULT_SCHEMA = "leopard2-lab-result/v2"
+LAB_MANIFEST_SCHEMA = "leopard2-lab-manifest/v5"
+LAB_RESULT_SCHEMA = "leopard2-lab-result/v3"
 LAB_THREAD_POLICY_SCHEMA = "leopard2-lab-thread-policy/v1"
-LAB_THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v1"
+LAB_THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v2"
 MODE_AUTOMATIC = "automatic"
 MODE_FORCED_SPECIALIZED = "forced-specialized"
 MODE_FORCED_GENERIC = "forced-generic"
@@ -847,7 +847,9 @@ def _validate_lab_thread_evidence(job: dict, result: dict) -> dict:
         raise MatrixError(
             f"job {job['id']} lacks observed launched-runtime evidence")
     if (outcome == "success" and
-            (observation["oversubscribed"] or
+            (observation["affinity_sample_count"] !=
+                 observation["sample_count"] or
+             observation["oversubscribed"] or
              observation["rss_exceeded"] or
              observation["outside_cpu_set"])):
         raise MatrixError(

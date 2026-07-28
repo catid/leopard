@@ -45,15 +45,15 @@ except ImportError:  # pragma: no cover - Unix/Linux is the production target.
     resource = None
 
 
-MANIFEST_SCHEMA = "leopard2-lab-manifest/v4"
-RESULT_SCHEMA = "leopard2-lab-result/v2"
-MERGE_SCHEMA = "leopard2-lab-merged/v2"
+MANIFEST_SCHEMA = "leopard2-lab-manifest/v5"
+RESULT_SCHEMA = "leopard2-lab-result/v3"
+MERGE_SCHEMA = "leopard2-lab-merged/v3"
 JOB_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 TOKEN_REPLACEMENTS = ("seed", "job_id", "cpu_set")
 PERF_PROVIDER = "linux-perf-stat"
 PERF_EVENT_RE = re.compile(r"^[A-Za-z0-9_.:/=-]+$")
 THREAD_POLICY_SCHEMA = "leopard2-lab-thread-policy/v1"
-THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v1"
+THREAD_OBSERVATION_SCHEMA = "leopard2-lab-thread-observation/v2"
 
 # These variables cover OpenMP and the common nested native thread pools that
 # can otherwise multiply a one-process-per-CPU fuzz campaign into hundreds of
@@ -147,6 +147,26 @@ def format_cpu_list(cpus):
         start = previous = value
     ranges.append(str(start) if start == previous else "{}-{}".format(start, previous))
     return ",".join(ranges)
+
+
+def _validate_canonical_cpu_set(value, label, allowed=None):
+    """Require a non-empty, sorted, duplicate-free list of CPU identifiers."""
+    if (not isinstance(value, list) or not value or
+            any(isinstance(cpu, bool) or not isinstance(cpu, int) or cpu < 0
+                for cpu in value)):
+        raise LabError(
+            "{} must be a non-empty list of non-negative CPU integers".format(
+                label))
+    if value != sorted(set(value)):
+        raise LabError(
+            "{} must be sorted and contain no duplicate CPUs".format(label))
+    if allowed is not None:
+        unavailable = set(value) - set(allowed)
+        if unavailable:
+            raise LabError(
+                "{} contains unavailable CPUs {}".format(
+                    label, format_cpu_list(unavailable)))
+    return value
 
 
 def _allowed_cpus():
@@ -888,6 +908,35 @@ def validate_manifest(manifest):
             "controlled_environment": list(THREAD_ENV_KEYS),
             "runtime_observation": THREAD_OBSERVATION_SCHEMA}:
         raise LabError("manifest thread-safety policy is invalid")
+    topology = manifest.get("topology")
+    if not isinstance(topology, dict):
+        raise LabError("manifest topology is missing")
+    allowed_cpus = _validate_canonical_cpu_set(
+        topology.get("allowed_cpus"), "manifest topology allowed_cpus")
+    logical_cpus = topology.get("logical_cpus")
+    cpu_entries = topology.get("cpus")
+    if (topology.get("allowed_cpu_list") != format_cpu_list(allowed_cpus) or
+            isinstance(logical_cpus, bool) or
+            not isinstance(logical_cpus, int) or
+            logical_cpus != len(allowed_cpus) or
+            not isinstance(cpu_entries, list) or
+            len(cpu_entries) != len(allowed_cpus)):
+        raise LabError("manifest topology CPU identity is not canonical")
+    entry_cpus = []
+    for entry in cpu_entries:
+        if (not isinstance(entry, dict) or
+                any(isinstance(entry.get(name), bool) or
+                    not isinstance(entry.get(name), int) or
+                    entry[name] < 0
+                    for name in ("cpu", "socket", "core")) or
+                ("numa_node" in entry and (
+                    isinstance(entry["numa_node"], bool) or
+                    not isinstance(entry["numa_node"], int) or
+                    entry["numa_node"] < 0))):
+            raise LabError("manifest topology contains an invalid CPU entry")
+        entry_cpus.append(entry["cpu"])
+    if entry_cpus != allowed_cpus:
+        raise LabError("manifest topology CPU entries do not match allowed_cpus")
     source_spec = manifest.get("source_spec")
     if (not isinstance(source_spec, dict) or
             not isinstance(source_spec.get("digest"), str) or
@@ -908,8 +957,9 @@ def validate_manifest(manifest):
             raise LabError("job {} digest does not match its contents".format(job["id"]))
         if not isinstance(job.get("command"), list) or not job["command"]:
             raise LabError("job {} has no command".format(job["id"]))
-        if not isinstance(job.get("cpu_set"), list) or not job["cpu_set"]:
-            raise LabError("job {} has no CPU set".format(job["id"]))
+        _validate_canonical_cpu_set(
+            job.get("cpu_set"), "job {} CPU set".format(job["id"]),
+            allowed_cpus)
         _validate_thread_policy(
             job.get("thread_runtime"), job["cpu_set"],
             "job {}".format(job["id"]))
@@ -1090,15 +1140,8 @@ def _validate_thread_runtime_evidence(result, job):
         raise LabError(
             "terminal RSS observation is inconsistent for job {}".format(
                 job["id"]))
-    if result.get("outcome") == "success" and (
-            observation["status"] != "observed" or
-            observation["sample_count"] < 1 or
-            observation["affinity_sample_count"] < 1 or
-            observation["peak_process_count"] < 1 or
-            observation["peak_thread_count"] < 1 or
-            observation["oversubscribed"] or
-            observation["rss_exceeded"] or
-            observation["outside_cpu_set"]):
+    if (result.get("outcome") == "success" and
+            not _thread_observation_supports_success(observation)):
         raise LabError(
             "successful job {} lacks valid thread-allocation evidence".format(
                 job["id"]))
@@ -1382,13 +1425,15 @@ def _performance_result(job, probe, output_path=None):
     return result
 
 
-def _expanded_environment(job):
+def _expanded_environment(job, containment_token=None):
     environment = os.environ.copy()
     environment.update({key: _replace_tokens(value, job) for key, value in job["env"].items()})
     environment.update(job["thread_runtime"]["effective_env"])
     environment["LEO2_LAB_SEED"] = str(job["seed"])
     environment["LEO2_LAB_JOB_ID"] = job["id"]
     environment["LEO2_LAB_CPUSET"] = format_cpu_list(job["cpu_set"])
+    if containment_token is not None:
+        environment["LEO2_LAB_CONTAINMENT_TOKEN"] = containment_token
     return environment
 
 
@@ -1413,25 +1458,106 @@ def _new_thread_observation(job, status="pending", detail=None):
     return observation
 
 
+def _thread_observation_supports_success(observation):
+    """Use one predicate when classifying and later replaying a success."""
+    return (
+        observation.get("status") == "observed" and
+        observation.get("sample_count", 0) >= 1 and
+        observation.get("affinity_sample_count", 0) ==
+            observation.get("sample_count", 0) and
+        observation.get("peak_process_count", 0) >= 1 and
+        observation.get("peak_thread_count", 0) >= 1 and
+        not observation.get("oversubscribed", False) and
+        not observation.get("rss_exceeded", False) and
+        not observation.get("outside_cpu_set", []))
+
+
 def _parse_linux_proc_stat(text):
-    """Return (pid, session) from Linux /proc/PID/stat, or None."""
+    """Return stable Linux process identity fields, or None.
+
+    Splitting after the final right parenthesis handles spaces and parentheses
+    in ``comm``.  ``starttime_ticks`` prevents a cleanup scan from signalling a
+    different process that reused a departed child's PID.
+    """
     try:
         open_paren = text.index("(")
         close_paren = text.rindex(")")
         pid = int(text[:open_paren].strip())
         fields = text[close_paren + 1:].split()
-        # Fields after comm begin with state, ppid, pgrp, session.
-        if len(fields) < 4:
+        # Fields after comm begin with state, ppid, pgrp, session ... starttime.
+        if len(fields) < 20:
             return None
-        return pid, int(fields[3])
+        return {
+            "pid": pid,
+            "state": fields[0],
+            "ppid": int(fields[1]),
+            "pgrp": int(fields[2]),
+            "session": int(fields[3]),
+            "starttime_ticks": int(fields[19]),
+        }
     except (ValueError, IndexError):
         return None
 
 
-def _linux_session_snapshot(proc_root="/proc"):
-    """Collect one process/thread/affinity snapshot keyed by session id."""
+def _status_cpu_set(path):
+    text = _read_text(path)
+    if not text:
+        return []
+    for line in text.splitlines():
+        if line.startswith("Cpus_allowed_list:"):
+            try:
+                return parse_cpu_list(line.split(":", 1)[1].strip())
+            except LabError:
+                return []
+    return []
+
+
+def _process_containment_token(entry):
+    try:
+        environment = (entry / "environ").read_bytes().split(b"\0")
+    except OSError:
+        return None
+    prefix = b"LEO2_LAB_CONTAINMENT_TOKEN="
+    for value in environment:
+        if not value.startswith(prefix):
+            continue
+        try:
+            token = value[len(prefix):].decode("ascii")
+        except UnicodeDecodeError:
+            return None
+        return token if re.match(r"^[0-9a-f]{64}$", token) else None
+    return None
+
+
+def _stable_thread_record(task):
+    """Read one TID affinity while proving its identity did not change."""
+    before = _parse_linux_proc_stat(_read_text(task / "stat") or "")
+    if before is None or before["state"] == "Z":
+        return None
+    cpu_set = _status_cpu_set(task / "status")
+    after = _parse_linux_proc_stat(_read_text(task / "stat") or "")
+    if (after is None or after["pid"] != before["pid"] or
+            after["starttime_ticks"] != before["starttime_ticks"]):
+        return None
+    return {
+        "tid": before["pid"],
+        "starttime_ticks": before["starttime_ticks"],
+        "cpu_set": cpu_set,
+    }
+
+
+def _linux_session_snapshot(proc_root="/proc", session_tokens=None):
+    """Collect process/TID evidence keyed by each job's original session.
+
+    ``session_tokens`` maps an original session ID to the unique environment
+    token injected into that job.  Token matching keeps detached ``setsid``
+    descendants inside the same runtime observation.
+    """
     root = Path(proc_root)
     sessions = {}
+    session_tokens = session_tokens or {}
+    token_sessions = {
+        token: session for session, token in session_tokens.items()}
     try:
         entries = list(root.iterdir())
     except OSError:
@@ -1441,36 +1567,47 @@ def _linux_session_snapshot(proc_root="/proc"):
             continue
         stat_text = _read_text(entry / "stat")
         parsed = _parse_linux_proc_stat(stat_text or "")
-        if parsed is None:
+        if parsed is None or parsed["state"] == "Z":
             continue
-        pid, session = parsed
+        target_session = parsed["session"]
+        if session_tokens and target_session not in session_tokens:
+            target_session = token_sessions.get(
+                _process_containment_token(entry))
+            if target_session is None:
+                continue
         try:
-            thread_count = sum(
-                1 for task in (entry / "task").iterdir()
-                if task.name.isdigit())
+            tasks = [
+                task for task in (entry / "task").iterdir()
+                if task.name.isdigit()]
         except OSError:
             continue
-        affinity = []
+        threads = [
+            record for record in (
+                _stable_thread_record(task) for task in tasks)
+            if record is not None]
         rss_bytes = 0
         status_text = _read_text(entry / "status")
         if status_text:
             for line in status_text.splitlines():
-                if line.startswith("Cpus_allowed_list:"):
-                    try:
-                        affinity = parse_cpu_list(line.split(":", 1)[1].strip())
-                    except LabError:
-                        affinity = []
-                elif line.startswith("VmRSS:"):
+                if line.startswith("VmRSS:"):
                     fields = line.split()
                     if len(fields) >= 2:
                         try:
                             rss_bytes = int(fields[1]) * 1024
                         except ValueError:
                             rss_bytes = 0
-        sessions.setdefault(session, []).append({
-            "pid": pid,
-            "thread_count": thread_count,
-            "cpu_set": affinity,
+        after = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
+        if (after is None or after["pid"] != parsed["pid"] or
+                after["starttime_ticks"] != parsed["starttime_ticks"]):
+            continue
+        sessions.setdefault(target_session, []).append({
+            "pid": parsed["pid"],
+            "starttime_ticks": parsed["starttime_ticks"],
+            # Preserve every enumerated task in demand evidence.  A TID that
+            # exits or becomes unreadable during the scan may lack an affinity
+            # record, but it must not disappear from the observed team size.
+            "thread_count": len(tasks),
+            "threads": threads,
             "rss_bytes": rss_bytes,
         })
     return sessions
@@ -1480,7 +1617,10 @@ def _sample_thread_runtime(active_jobs, proc_root="/proc"):
     """Update all active jobs from one global /proc scan."""
     if not active_jobs:
         return
-    sessions = _linux_session_snapshot(proc_root)
+    session_tokens = {
+        active["process"].pid: active["containment_token"]
+        for active in active_jobs}
+    sessions = _linux_session_snapshot(proc_root, session_tokens)
     for active in active_jobs:
         observation = active["thread_observation"]
         if sessions is None:
@@ -1502,13 +1642,17 @@ def _sample_thread_runtime(active_jobs, proc_root="/proc"):
         requested = set(active["job"]["cpu_set"])
         outside = set(observation["outside_cpu_set"])
         for process in processes:
-            outside.update(set(process["cpu_set"]) - requested)
+            for thread in process["threads"]:
+                outside.update(set(thread["cpu_set"]) - requested)
         observation.update(
             status="observed",
             sample_count=observation["sample_count"] + 1,
             affinity_sample_count=(
                 observation["affinity_sample_count"] +
-                (1 if all(process["cpu_set"] for process in processes) else 0)),
+                (1 if all(
+                    len(process["threads"]) == process["thread_count"] and
+                    all(thread["cpu_set"] for thread in process["threads"])
+                    for process in processes) else 0)),
             peak_process_count=max(
                 observation["peak_process_count"], process_count),
             peak_thread_count=max(
@@ -1587,6 +1731,19 @@ def _write_terminal_result(job_dir, result):
     return result
 
 
+def _rewrite_evidence_invalid(job, output_dir, result, detail):
+    """Invalidate an already written result without changing captured streams."""
+    rewritten = _json_copy(result)
+    rewritten["outcome"] = "evidence_invalid"
+    existing_detail = rewritten.get("detail")
+    if not existing_detail:
+        rewritten["detail"] = detail
+    elif detail not in existing_detail:
+        rewritten["detail"] = existing_detail + "; " + detail
+    return _write_terminal_result(
+        _job_directory(output_dir, job["id"]), rewritten)
+
+
 def _job_executable_matches(job):
     current = _file_identity(job["executable"]["path"])
     expected = job["executable"]
@@ -1620,6 +1777,8 @@ def _launch_job(
     if not cwd.is_absolute():
         cwd = Path(manifest_root) / cwd
     started = time.monotonic()
+    containment_token = hashlib.sha256(
+        (run_epoch + "\0" + job["job_digest"]).encode("utf-8")).hexdigest()
     try:
         if not _job_executable_matches(job):
             raise LabError("executable changed before launch: {}".format(
@@ -1630,7 +1789,7 @@ def _launch_job(
         process = subprocess.Popen(
             process_command,
             cwd=str(cwd),
-            env=_expanded_environment(job),
+            env=_expanded_environment(job, containment_token),
             stdin=subprocess.DEVNULL,
             stdout=stdout_handle,
             stderr=stderr_handle,
@@ -1650,14 +1809,6 @@ def _launch_job(
             result["performance_counters"] = performance
         _write_terminal_result(job_dir, result)
         return None, result
-    thread_observation = _new_thread_observation(job)
-    # Popen returning proves the post-affinity execution chain reached exec.
-    # Seed the declared workload's one-process/one-thread floor so even a
-    # sub-millisecond command has evidence; periodic /proc sampling records any
-    # larger team.  A perf wrapper is excluded from later workload counts.
-    thread_observation.update(
-        status="observed", sample_count=1, affinity_sample_count=1,
-        peak_process_count=1, peak_thread_count=1)
     active = {
         "job": job,
         "command": command,
@@ -1674,8 +1825,12 @@ def _launch_job(
         "performance_probe": performance_probe,
         "counter_output_path": counter_output_path if counter_active else None,
         "counter_active": counter_active,
-        "thread_observation": thread_observation,
+        "thread_observation": _new_thread_observation(job),
+        "containment_token": containment_token,
     }
+    # This is a real /proc observation, not a synthetic one.  Very short jobs
+    # that depart before either this scan or the run-loop scan fail closed.
+    _sample_thread_runtime([active])
     return active, None
 
 
@@ -1691,6 +1846,82 @@ def _signal_group(process, sig):
             pass
 
 
+def _process_has_containment_token(entry, token):
+    """Return whether a process retained this run/job's opaque environment tag."""
+    return _process_containment_token(entry) == token
+
+
+def _contained_processes(active, proc_root="/proc"):
+    """Find live descendants by original session or inherited opaque token."""
+    root = Path(proc_root)
+    matches = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return matches
+    original_session = active["process"].pid
+    token = active["containment_token"]
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        parsed = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
+        if (parsed is None or parsed["pid"] == os.getpid() or
+                parsed["state"] == "Z"):
+            continue
+        if (parsed["session"] == original_session or
+                _process_has_containment_token(entry, token)):
+            matches.append(parsed)
+    return matches
+
+
+def _signal_process_identity(record, sig, proc_root="/proc"):
+    """Signal only if PID and kernel start time still identify one process."""
+    entry = Path(proc_root) / str(record["pid"])
+    current = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
+    if (current is None or
+            current["starttime_ticks"] != record["starttime_ticks"]):
+        return
+    try:
+        os.kill(record["pid"], sig)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def _cleanup_active_descendants(active, proc_root="/proc"):
+    """Terminate descendants that outlive their signed job leader.
+
+    A normal session scan covers ordinary children.  The opaque inherited token
+    also covers children that call ``setsid()``.  Repeated PID/start-time scans
+    close the common fork-during-cleanup race without signalling a reused PID.
+    This is fail-closed evidence hygiene for trusted benchmark workloads, not a
+    security sandbox for a hostile child that deliberately scrubs its
+    environment and daemonizes.
+    """
+    initial = _contained_processes(active, proc_root)
+    if not initial:
+        return {"detected": [], "remaining": []}
+
+    deadline = time.monotonic() + 0.5
+    current = initial
+    while current and time.monotonic() < deadline:
+        for record in current:
+            _signal_process_identity(record, signal.SIGTERM, proc_root)
+        time.sleep(0.02)
+        current = _contained_processes(active, proc_root)
+
+    deadline = time.monotonic() + 0.75
+    while current and time.monotonic() < deadline:
+        for record in current:
+            _signal_process_identity(record, signal.SIGKILL, proc_root)
+        time.sleep(0.02)
+        current = _contained_processes(active, proc_root)
+
+    return {
+        "detected": sorted(record["pid"] for record in initial),
+        "remaining": sorted(record["pid"] for record in current),
+    }
+
+
 def _finish_active(active, output_dir, forced_outcome=None, detail=None):
     process = active["process"]
     try:
@@ -1698,6 +1929,9 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
     except subprocess.TimeoutExpired:
         _signal_group(process, signal.SIGKILL)
         exit_code = process.wait()
+    containment = _cleanup_active_descendants(active)
+    active["containment_detected"] = list(containment["detected"])
+    active["containment_remaining"] = list(containment["remaining"])
     active["stdout_handle"].close()
     active["stderr_handle"].close()
     executable_detail = None
@@ -1721,6 +1955,18 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
     if executable_detail:
         outcome = "evidence_invalid"
         detail = executable_detail if detail is None else detail + "; " + executable_detail
+    if containment["detected"]:
+        containment_detail = (
+            "job leader exited with residual descendants {}; cleanup "
+            "remaining {}".format(
+                ",".join(str(pid) for pid in containment["detected"]),
+                ",".join(str(pid) for pid in containment["remaining"]) or
+                "none"))
+        if forced_outcome is None and outcome in ("success", "failed"):
+            outcome = "evidence_invalid"
+        detail = (
+            containment_detail if detail is None
+            else detail + "; " + containment_detail)
     observation = active["thread_observation"]
     if (observation["oversubscribed"] or
             observation["outside_cpu_set"]):
@@ -1736,9 +1982,12 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         if outcome == "success":
             outcome = "memory_limit"
         detail = runtime_detail if detail is None else detail + "; " + runtime_detail
-    elif outcome == "success" and observation["sample_count"] == 0:
+    elif (outcome == "success" and
+            not _thread_observation_supports_success(observation)):
         outcome = "evidence_invalid"
-        runtime_detail = "successful workload had no runtime thread observation"
+        runtime_detail = (
+            "successful workload lacked a complete real runtime thread and "
+            "affinity observation")
         detail = runtime_detail if detail is None else detail + "; " + runtime_detail
     result = _base_result(
         active["job"], active["command"], time.monotonic() - active["started"],
@@ -1968,9 +2217,13 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     pending = runnable
 
     active = []
+    launched_job_ids = set()
+    jobs_by_id = {job["id"]: job for job in manifest["jobs"]}
     total = len(manifest["jobs"])
     last_progress = 0.0
     interrupted = False
+    containment_unavailable = 0
+    containment_failure = None
     try:
         while pending or active:
             launched_any = True
@@ -1986,6 +2239,7 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                         performance_probes.get(job["id"]))
                     if launched is not None:
                         active.append(launched)
+                        launched_job_ids.add(job["id"])
                     else:
                         results[job["id"]] = launch_result
                     launched_any = True
@@ -1997,9 +2251,17 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                 process = current["process"]
                 exit_code = process.poll()
                 elapsed = now - current["started"]
+                if current["thread_observation"]["outside_cpu_set"]:
+                    containment_failure = (
+                        "runner quarantine: job {} escaped its signed CPU set "
+                        "onto {}".format(
+                            current["job"]["id"],
+                            format_cpu_list(
+                                current["thread_observation"][
+                                    "outside_cpu_set"])))
+                    break
                 if (exit_code is None and
-                        (current["thread_observation"]["oversubscribed"] or
-                         current["thread_observation"]["outside_cpu_set"]) and
+                        current["thread_observation"]["oversubscribed"] and
                         not current["thread_limited"]):
                     current["thread_limited"] = True
                     current["terminate_started"] = now
@@ -2026,6 +2288,47 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                     result = _finish_active(current, output_dir)
                     results[current["job"]["id"]] = result
                     active.remove(current)
+                    if current.get("containment_detected"):
+                        containment_failure = (
+                            "runner quarantine: job {} left residual "
+                            "descendants {} (remaining {})".format(
+                                current["job"]["id"],
+                                ",".join(
+                                    str(pid) for pid in
+                                    current["containment_detected"]),
+                                ",".join(
+                                    str(pid) for pid in
+                                    current["containment_remaining"]) or
+                                "none"))
+                        break
+
+            if containment_failure is not None:
+                # No later job may become accepted evidence while a known
+                # contaminant remains.  Stop concurrent jobs, invalidate every
+                # result launched by this invocation, and terminally quarantine
+                # work that had not started.
+                for current in active:
+                    _signal_group(current["process"], signal.SIGTERM)
+                for current in list(active):
+                    result = _finish_active(
+                        current, output_dir,
+                        forced_outcome="evidence_invalid",
+                        detail=containment_failure)
+                    results[current["job"]["id"]] = result
+                    active.remove(current)
+                for job_id in sorted(launched_job_ids):
+                    if job_id not in results:
+                        continue
+                    results[job_id] = _rewrite_evidence_invalid(
+                        jobs_by_id[job_id], output_dir, results[job_id],
+                        containment_failure)
+                for job in pending:
+                    results[job["id"]] = _record_unavailable(
+                        job, output_dir, containment_failure, run_epoch,
+                        performance_probes.get(job["id"]))
+                    containment_unavailable += 1
+                pending = []
+                break
 
             if not quiet and (time.monotonic() - last_progress >= progress_seconds or not pending and not active):
                 counts = Counter(result["outcome"] for result in results.values())
@@ -2064,8 +2367,11 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     summary = {
         "total": total,
         "resumed": resumed,
-        "executed": total - resumed - preflight_unavailable - len(pending),
+        "executed": (
+            total - resumed - preflight_unavailable -
+            containment_unavailable - len(pending)),
         "preflight_unavailable": preflight_unavailable,
+        "containment_unavailable": containment_unavailable,
         "pending": len(pending),
         "elapsed_seconds": round(time.monotonic() - run_started, 6),
         "outcomes": merged["summary"],
@@ -2116,11 +2422,19 @@ def _demo_spec(root):
         "jobs": [
             {
                 "id": "demo.hello",
-                "command": [python, "-c", "import os; print(os.environ['LEO2_LAB_JOB_ID'], os.environ['LEO2_LAB_SEED'])"],
+                "command": [
+                    python, "-c",
+                    "import os,time; "
+                    "print(os.environ['LEO2_LAB_JOB_ID'],"
+                    "os.environ['LEO2_LAB_SEED']); time.sleep(0.08)"],
             },
             {
                 "id": "demo.affinity",
-                "command": [python, "-c", "import os; print(sorted(os.sched_getaffinity(0)))"],
+                "command": [
+                    python, "-c",
+                    "import os,time; "
+                    "print(sorted(os.sched_getaffinity(0))); "
+                    "time.sleep(0.08)"],
             },
         ],
     }
@@ -2178,13 +2492,20 @@ def self_test():
             "jobs": [
                 {
                     "id": "success",
-                    "command": [python, "-c", "import os; print(os.environ['LEO2_LAB_SEED']); print(sorted(os.sched_getaffinity(0)))"],
+                    "command": [
+                        python, "-c",
+                        "import os,time; "
+                        "print(os.environ['LEO2_LAB_SEED']); "
+                        "print(sorted(os.sched_getaffinity(0))); "
+                        "time.sleep(0.08)"],
                 },
                 {
                     "id": "memory-limit",
                     "command": [
                         python, "-c",
-                        "try:\n bytearray(256 * 1024 * 1024)\nexcept MemoryError:\n print('limited')\nelse:\n raise SystemExit(9)",
+                        "import time\ntry:\n bytearray(256 * 1024 * 1024)\n"
+                        "except MemoryError:\n print('limited'); time.sleep(0.08)\n"
+                        "else:\n raise SystemExit(9)",
                     ],
                     "memory_mb": 96,
                 },
@@ -2220,6 +2541,73 @@ def self_test():
         })
         if grouped_manifest["jobs"][0]["cpu_set"] != grouped_manifest["jobs"][1]["cpu_set"]:
             raise LabError("self-test: CPU assignment group did not preserve pair affinity")
+
+        def resign_manifest(candidate):
+            for candidate_job in candidate["jobs"]:
+                unsigned_job = dict(candidate_job)
+                unsigned_job.pop("job_digest", None)
+                candidate_job["job_digest"] = _digest(unsigned_job)
+            unsigned_manifest = dict(candidate)
+            unsigned_manifest.pop("manifest_digest", None)
+            candidate["manifest_digest"] = _digest(unsigned_manifest)
+            return candidate
+
+        def expect_bad_resigned_manifest(label, mutation):
+            candidate = _json_copy(first_manifest)
+            mutation(candidate)
+            resign_manifest(candidate)
+            try:
+                validate_manifest(candidate)
+            except LabError:
+                return
+            raise LabError(
+                "self-test: re-signed manifest accepted {}".format(label))
+
+        first_cpu = first_manifest["topology"]["allowed_cpus"][0]
+        expect_bad_resigned_manifest(
+            "a duplicate CPU allocation",
+            lambda candidate: candidate["jobs"][0].update(
+                cpu_set=[first_cpu, first_cpu]))
+        expect_bad_resigned_manifest(
+            "a boolean CPU identifier",
+            lambda candidate: candidate["jobs"][0].update(cpu_set=[True]))
+        expect_bad_resigned_manifest(
+            "a negative CPU identifier",
+            lambda candidate: candidate["jobs"][0].update(cpu_set=[-1]))
+        unavailable_cpu = max(
+            first_manifest["topology"]["allowed_cpus"]) + 1000000
+        expect_bad_resigned_manifest(
+            "an unavailable CPU identifier",
+            lambda candidate: candidate["jobs"][0].update(
+                cpu_set=[unavailable_cpu]))
+        if len(first_manifest["topology"]["allowed_cpus"]) >= 2:
+            first_two = first_manifest["topology"]["allowed_cpus"][:2]
+            expect_bad_resigned_manifest(
+                "an unsorted CPU allocation",
+                lambda candidate: candidate["jobs"][0].update(
+                    cpu_set=list(reversed(first_two))))
+        expect_bad_resigned_manifest(
+            "a noncanonical topology CPU list",
+            lambda candidate: candidate["topology"].update(
+                allowed_cpus=[first_cpu, first_cpu]))
+        expect_bad_resigned_manifest(
+            "a boolean topology CPU count",
+            lambda candidate: candidate["topology"].update(logical_cpus=True))
+        expect_bad_resigned_manifest(
+            "topology CPU entries outside allowed_cpus",
+            lambda candidate: candidate["topology"].update(
+                cpus=candidate["topology"]["cpus"] + [{
+                    "cpu": unavailable_cpu, "socket": 0,
+                    "core": unavailable_cpu}])),
+
+        stat_fields = ["S"] + [str(value) for value in range(1, 20)]
+        parsed_stat = _parse_linux_proc_stat(
+            "123 (command ) with spaces) " + " ".join(stat_fields))
+        if parsed_stat != {
+                "pid": 123, "state": "S", "ppid": 1, "pgrp": 2,
+                "session": 3, "starttime_ticks": 19}:
+            raise LabError(
+                "self-test: /proc stat identity parser lost a field")
 
         def expect_bad_thread_spec(fragment, label):
             candidate = {
@@ -2298,6 +2686,96 @@ def self_test():
             raise LabError(
                 "self-test: effective nested-runtime environment was not recorded")
 
+        evidence_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "missing-real-observation",
+                "command": [
+                    python, "-c",
+                    "import threading,time; "
+                    "threads=[threading.Thread(target=lambda:time.sleep(0.08)) "
+                    "for _ in range(3)]; "
+                    "[thread.start() for thread in threads]; "
+                    "[thread.join() for thread in threads]"],
+            }],
+        })
+        original_snapshot = globals()["_linux_session_snapshot"]
+        try:
+            globals()["_linux_session_snapshot"] = (
+                lambda *_args, **_kwargs: {})
+            evidence_output = root / "missing-observation-results"
+            evidence_summary = run_manifest(
+                evidence_manifest, evidence_output, quiet=True)
+        finally:
+            globals()["_linux_session_snapshot"] = original_snapshot
+        evidence_result = _load_json(
+            _job_directory(
+                evidence_output, "missing-real-observation") / "result.json")
+        if (evidence_summary["outcomes"] != {
+                "evidence_invalid": 1, "missing": 0} or
+                evidence_result["thread_runtime"]["observation"][
+                    "sample_count"] != 0):
+            raise LabError(
+                "self-test: an unsampled success received fabricated evidence")
+
+        original_status_cpu_set = globals()["_status_cpu_set"]
+        try:
+            globals()["_status_cpu_set"] = lambda _path: []
+            incomplete_output = root / "incomplete-affinity-results"
+            incomplete_summary = run_manifest(
+                evidence_manifest, incomplete_output, quiet=True)
+        finally:
+            globals()["_status_cpu_set"] = original_status_cpu_set
+        incomplete_result = _load_json(
+            _job_directory(
+                incomplete_output, "missing-real-observation") /
+            "result.json")
+        incomplete_observation = incomplete_result[
+            "thread_runtime"]["observation"]
+        if (incomplete_summary["outcomes"] != {
+                "evidence_invalid": 1, "missing": 0} or
+                incomplete_observation["sample_count"] < 1 or
+                incomplete_observation["affinity_sample_count"] != 0):
+            raise LabError(
+                "self-test: incomplete real affinity evidence poisoned merge")
+
+        unstable_tid_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "unstable-tid-observation",
+                "command": [
+                    python, "-c",
+                    "import threading,time; "
+                    "threads=[threading.Thread(target=lambda:time.sleep(0.3)) "
+                    "for _ in range(3)]; "
+                    "[thread.start() for thread in threads]; "
+                    "time.sleep(0.2); "
+                    "[thread.join() for thread in threads]"],
+            }],
+        })
+        original_stable_thread_record = globals()["_stable_thread_record"]
+        try:
+            globals()["_stable_thread_record"] = lambda _task: None
+            unstable_tid_output = root / "unstable-tid-results"
+            unstable_tid_summary = run_manifest(
+                unstable_tid_manifest, unstable_tid_output, quiet=True)
+        finally:
+            globals()["_stable_thread_record"] = original_stable_thread_record
+        unstable_tid_result = _load_json(
+            _job_directory(
+                unstable_tid_output, "unstable-tid-observation") /
+            "result.json")
+        unstable_tid_observation = unstable_tid_result[
+            "thread_runtime"]["observation"]
+        if (unstable_tid_summary["outcomes"] != {
+                "evidence_invalid": 1, "missing": 0} or
+                unstable_tid_observation["peak_thread_count"] < 4 or
+                unstable_tid_observation["affinity_sample_count"] != 0):
+            raise LabError(
+                "self-test: unreadable TIDs disappeared from demand evidence")
+
         oversubscribe_code = (
             "import threading,time; "
             "gate=threading.Event(); "
@@ -2332,6 +2810,168 @@ def self_test():
                     "peak_thread_count"] < 4):
             raise LabError(
                 "self-test: oversubscription evidence did not record the team")
+
+        def residual_command(marker, detached):
+            child = (
+                "import pathlib,time; time.sleep(0.45); "
+                "pathlib.Path({!r}).write_text('escaped',encoding='utf-8')"
+            ).format(str(marker))
+            return (
+                "import subprocess,sys; "
+                "subprocess.Popen([sys.executable,'-c',{!r}],"
+                "start_new_session={!r})"
+            ).format(child, detached)
+
+        for label, detached in (
+                ("same-session", False), ("detached-session", True)):
+            marker = root / ("residual-" + label + ".txt")
+            residual_manifest = build_manifest({
+                "root": str(root), "workers": 1,
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [{
+                    "id": "residual-" + label,
+                    "command": [
+                        python, "-c", residual_command(marker, detached)],
+                }],
+            })
+            residual_output = root / ("residual-" + label + "-results")
+            residual_summary = run_manifest(
+                residual_manifest, residual_output, quiet=True)
+            residual_result = _load_json(
+                _job_directory(
+                    residual_output, "residual-" + label) / "result.json")
+            time.sleep(0.5)
+            if (residual_summary["outcomes"] != {
+                    "evidence_invalid": 1, "missing": 0} or
+                    "residual descendants" not in
+                    residual_result.get("detail", "") or marker.exists()):
+                raise LabError(
+                    "self-test: {} residual process escaped cleanup: {}".format(
+                        label, residual_summary["outcomes"]))
+
+        quarantine_pid = root / "quarantine-child.pid"
+        quarantine_later = root / "quarantine-later-ran.txt"
+        quarantine_child = (
+            "import os,pathlib,time; "
+            "pathlib.Path({!r}).write_text(str(os.getpid()),"
+            "encoding='utf-8'); time.sleep(5)"
+        ).format(str(quarantine_pid))
+        quarantine_parent = (
+            "import subprocess,sys; "
+            "subprocess.Popen([sys.executable,'-c',{!r}],"
+            "start_new_session=True)"
+        ).format(quarantine_child)
+        quarantine_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [
+                {
+                    "id": "quarantine-a-contaminant",
+                    "command": [python, "-c", quarantine_parent],
+                },
+                {
+                    "id": "quarantine-b-must-not-run",
+                    "command": [
+                        python, "-c",
+                        "import pathlib; pathlib.Path({!r}).write_text("
+                        "'ran',encoding='utf-8')".format(
+                            str(quarantine_later))],
+                },
+            ],
+        })
+        original_signal_identity = globals()["_signal_process_identity"]
+        try:
+            globals()["_signal_process_identity"] = (
+                lambda _record, _sig, _proc_root="/proc": None)
+            quarantine_output = root / "quarantine-results"
+            quarantine_summary = run_manifest(
+                quarantine_manifest, quarantine_output, quiet=True)
+        finally:
+            globals()["_signal_process_identity"] = original_signal_identity
+            if quarantine_pid.is_file():
+                try:
+                    escaped_pid = int(
+                        quarantine_pid.read_text(encoding="utf-8"))
+                    os.kill(escaped_pid, signal.SIGKILL)
+                except (OSError, ValueError):
+                    pass
+        if (quarantine_summary["outcomes"] != {
+                "evidence_invalid": 1, "missing": 0, "unavailable": 1} or
+                quarantine_summary["containment_unavailable"] != 1 or
+                quarantine_summary["executed"] != 1 or
+                quarantine_later.exists()):
+            raise LabError(
+                "self-test: residual containment failure did not quarantine "
+                "later work")
+
+        if len(_allowed_cpus()[0]) >= 3:
+            available = _allowed_cpus()[0]
+            escape_cpu = available[2]
+            detached_peer_marker = root / "detached-peer-finished.txt"
+            detached_pending_marker = root / "detached-pending-ran.txt"
+            detached_child = (
+                "import os,time; "
+                "os.sched_setaffinity(0,{{{}}}); time.sleep(0.4)"
+            ).format(escape_cpu)
+            detached_waiter = (
+                "import subprocess,sys; "
+                "child=subprocess.Popen([sys.executable,'-c',{!r}],"
+                "start_new_session=True); child.wait()"
+            ).format(detached_child)
+            detached_manifest = build_manifest({
+                "root": str(root), "workers": 2,
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [
+                    {
+                        "id": "detached-a-runtime-affinity-escape",
+                        "command": [python, "-c", detached_waiter],
+                        "cpu_set": available[:2],
+                        "thread_runtime": {
+                            "max_threads": 2,
+                            "allow_internal_team": True,
+                        },
+                    },
+                    {
+                        "id": "detached-b-active-peer",
+                        "command": [
+                            python, "-c",
+                            "import pathlib,time; time.sleep(1); "
+                            "pathlib.Path({!r}).write_text("
+                            "'finished',encoding='utf-8')".format(
+                                str(detached_peer_marker))],
+                        "cpu_set": [escape_cpu],
+                    },
+                    {
+                        "id": "detached-c-pending",
+                        "command": [
+                            python, "-c",
+                            "import pathlib; pathlib.Path({!r}).write_text("
+                            "'ran',encoding='utf-8')".format(
+                                str(detached_pending_marker))],
+                        "cpu_set": [available[0]],
+                    },
+                ],
+            })
+            detached_output = root / "detached-runtime-results"
+            detached_summary = run_manifest(
+                detached_manifest, detached_output, quiet=True)
+            detached_result = _load_json(
+                _job_directory(
+                    detached_output,
+                    "detached-a-runtime-affinity-escape") /
+                "result.json")
+            if (detached_summary["outcomes"] != {
+                    "evidence_invalid": 2, "missing": 0,
+                    "unavailable": 1} or
+                    detached_summary["containment_unavailable"] != 1 or
+                    escape_cpu not in
+                    detached_result["thread_runtime"]["observation"][
+                        "outside_cpu_set"] or
+                    detached_peer_marker.exists() or
+                    detached_pending_marker.exists()):
+                raise LabError(
+                    "self-test: detached affinity escape did not quarantine "
+                    "active and pending peers")
 
         rss_manifest = build_manifest({
             "root": str(root), "workers": 1,
@@ -2388,6 +3028,51 @@ def self_test():
                 raise LabError(
                     "self-test: explicit internal thread team was not honored")
 
+        if len(_allowed_cpus()[0]) >= 3:
+            available = _allowed_cpus()[0]
+            escape_cpu = available[2]
+            affinity_escape_code = (
+                "import os,threading,time\n"
+                "ready=threading.Event()\n"
+                "def worker():\n"
+                " os.sched_setaffinity(threading.get_native_id(),{{{}}})\n"
+                " ready.set()\n"
+                " time.sleep(0.4)\n"
+                "thread=threading.Thread(target=worker)\n"
+                "thread.start()\n"
+                "ready.wait()\n"
+                "time.sleep(0.3)\n"
+                "thread.join()\n"
+            ).format(escape_cpu)
+            affinity_escape_manifest = build_manifest({
+                "root": str(root), "workers": 1,
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [{
+                    "id": "per-thread-affinity-escape",
+                    "command": [python, "-c", affinity_escape_code],
+                    "cpu_set": available[:2],
+                    "thread_runtime": {
+                        "max_threads": 2,
+                        "allow_internal_team": True,
+                    },
+                }],
+            })
+            affinity_escape_output = root / "affinity-escape-results"
+            affinity_escape_summary = run_manifest(
+                affinity_escape_manifest, affinity_escape_output, quiet=True)
+            affinity_escape_result = _load_json(
+                _job_directory(
+                    affinity_escape_output, "per-thread-affinity-escape") /
+                "result.json")
+            if (affinity_escape_summary["outcomes"] != {
+                    "evidence_invalid": 1, "missing": 0} or
+                    escape_cpu not in
+                    affinity_escape_result["thread_runtime"]["observation"][
+                        "outside_cpu_set"]):
+                raise LabError(
+                    "self-test: a non-leader thread affinity escape was "
+                    "accepted")
+
         fake_perf = root / "fake-perf.py"
         fake_perf.write_text(
             "#!/usr/bin/env python3\n"
@@ -2423,7 +3108,9 @@ def self_test():
             },
             "jobs": [{
                 "id": "counter-success",
-                "command": [python, "-c", "print('counter child')"],
+                "command": [
+                    python, "-c",
+                    "import time; print('counter child'); time.sleep(0.08)"],
             }],
         })
         counter_job = counter_manifest["jobs"][0]
@@ -2531,7 +3218,10 @@ def self_test():
                 "jobs": [{
                     "id": "counter-denied-{}".format(
                         "optional" if optional else "required"),
-                    "command": [python, "-c", "print('ran without counters')"],
+                    "command": [
+                        python, "-c",
+                        "import time; print('ran without counters'); "
+                        "time.sleep(0.08)"],
                 }],
             })
 
@@ -2634,9 +3324,13 @@ def self_test():
             "workers": 1,
             "defaults": {"memory_mb": 0, "cpu_count": 1},
             "jobs": [
-                {"id": "atomic-a", "command": [python, "-c", "print('a')"],
+                {"id": "atomic-a", "command": [
+                    python, "-c",
+                    "import time; print('a'); time.sleep(0.08)"],
                  "cpu_group": "atomic", "resume_group": "atomic"},
-                {"id": "atomic-b", "command": [python, "-c", "print('b')"],
+                {"id": "atomic-b", "command": [
+                    python, "-c",
+                    "import time; print('b'); time.sleep(0.08)"],
                  "cpu_group": "atomic", "resume_group": "atomic"},
             ],
         })
@@ -2712,8 +3406,12 @@ def self_test():
             "workers": 1,
             "defaults": {"memory_mb": 0, "cpu_count": 1},
             "jobs": [
-                {"id": "granular-a", "command": [python, "-c", "print('a')"]},
-                {"id": "granular-b", "command": [python, "-c", "print('b')"]},
+                {"id": "granular-a", "command": [
+                    python, "-c",
+                    "import time; print('a'); time.sleep(0.08)"]},
+                {"id": "granular-b", "command": [
+                    python, "-c",
+                    "import time; print('b'); time.sleep(0.08)"]},
             ],
         })
         granular_output = root / "granular-results"
@@ -2803,7 +3501,9 @@ def self_test():
         queued_target = root / "queued-target.py"
         queued_target.write_text("#!/usr/bin/env python3\nprint('original')\n", encoding="utf-8")
         queued_target.chmod(0o700)
-        mutate_code = "from pathlib import Path; Path({!r}).write_text({!r})".format(
+        mutate_code = (
+            "import time; from pathlib import Path; "
+            "Path({!r}).write_text({!r}); time.sleep(0.08)").format(
             str(queued_target), "#!/usr/bin/env python3\nprint('changed')\n")
         queued_manifest = build_manifest({
             "root": str(root), "workers": 1,
@@ -2871,9 +3571,11 @@ def self_test():
                 "workers": 2,
                 "defaults": {"memory_mb": 0, "cpu_count": 1},
                 "jobs": [
-                    {"id": "aggregate-a", "command": [python, "-c", "pass"],
+                    {"id": "aggregate-a", "command": [
+                        python, "-c", "import time; time.sleep(0.08)"],
                      "minimum_memory_mb": per_job_mb},
-                    {"id": "aggregate-b", "command": [python, "-c", "pass"],
+                    {"id": "aggregate-b", "command": [
+                        python, "-c", "import time; time.sleep(0.08)"],
                      "minimum_memory_mb": per_job_mb},
                 ],
             })

@@ -227,12 +227,37 @@ and require the recorded measurements, status, and detail to equal that
 raw-derived result; coordinated JSON/digest edits cannot substitute a different
 value while leaving the retained raw bytes unchanged. The matrix self-test
 applies the same evidence invariants during collection.
-Lab manifests therefore use `leopard2-lab-manifest/v4`, and terminal results
-use `leopard2-lab-result/v2`. Each job now binds a deterministic nested-runtime
-environment and records observed process, aggregate-thread, affinity, and RSS
-evidence. Older manifests and results must be regenerated rather than being
-resumed under weaker evidence semantics. The dedicated sanitizer replay
-workflow is documented in `docs/leopard2_fuzz_campaign.md`.
+Lab manifests therefore use `leopard2-lab-manifest/v5`, and terminal results
+use `leopard2-lab-result/v3`. Each job now binds a deterministic nested-runtime
+environment and records observed process, per-TID affinity, aggregate-thread,
+and RSS evidence. PID and TID observations bind Linux start-time identities,
+and a unique per-run/job token keeps `setsid()` descendants in the observation
+set. A result is `success` only after at least one real process/thread sample
+and complete per-TID affinity data for every retained sample; `Popen` itself is
+not treated as a sample.
+Accordingly, sub-sampling-interval jobs may fail closed as `evidence_invalid`
+and should be batched into a long-enough signed job.
+
+When a job leader exits, the runner scans both its original session and the
+inherited token, terminates residual trusted-workload descendants with bounded
+TERM/KILL passes, and invalidates an otherwise successful result. This prevents
+late output mutation and ordinary or `setsid()` process leaks. It is evidence
+hygiene, not a hostile-code sandbox: a child that deliberately scrubs its
+environment and double-daemonizes requires the stricter subreaper/pidfd
+containment used by authoritative timing runners. Thread counts and affinities
+are sampled evidence rather than a kernel-enforced thread limit, so brief
+between-sample thread changes remain a stated limitation. Older manifests and
+results must be regenerated rather than being resumed under weaker evidence
+semantics. The dedicated sanitizer replay workflow is documented in
+`docs/leopard2_fuzz_campaign.md`.
+
+An observed escape outside a signed CPU set or any descendant that outlives its
+leader is run-wide contamination, not merely a failed job. The runner
+immediately stops and invalidates active peers and every result launched by
+that invocation, records not-yet-started work as unavailable, and launches
+nothing else. This quarantine applies even when descendant cleanup succeeds;
+otherwise a peer could be published after sharing a CPU or cache with the
+escaped workload.
 CTest also runs the independent operation-count model's schedule invariants;
 those counts remain modeled bounds rather than PMU observations.
 
