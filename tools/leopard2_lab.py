@@ -2911,7 +2911,11 @@ def self_test():
             detached_pending_marker = root / "detached-pending-ran.txt"
             detached_child = (
                 "import os,time; "
-                "os.sched_setaffinity(0,{{{}}}); time.sleep(0.4)"
+                # Keep the escaped process alive until the runner observes and
+                # quarantines it.  A short sleep makes this test depend on the
+                # supervisor receiving CPU time within that window, which is
+                # not guaranteed during a highly parallel ctest run.
+                "os.sched_setaffinity(0,{{{}}}); time.sleep(60)"
             ).format(escape_cpu)
             detached_waiter = (
                 "import subprocess,sys; "
@@ -2920,7 +2924,13 @@ def self_test():
             ).format(detached_child)
             detached_manifest = build_manifest({
                 "root": str(root), "workers": 2,
-                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                # The workloads below are deliberately long-lived but the
+                # self-test must still fail in bounded time if observation is
+                # broken.
+                "defaults": {
+                    "memory_mb": 0, "cpu_count": 1,
+                    "timeout_seconds": 10,
+                },
                 "jobs": [
                     {
                         "id": "detached-a-runtime-affinity-escape",
@@ -2935,7 +2945,10 @@ def self_test():
                         "id": "detached-b-active-peer",
                         "command": [
                             python, "-c",
-                            "import pathlib,time; time.sleep(1); "
+                            # This peer must remain active while the escaped
+                            # process is observable.  It writes only if the
+                            # quarantine fails to terminate it.
+                            "import pathlib,time; time.sleep(60); "
                             "pathlib.Path({!r}).write_text("
                             "'finished',encoding='utf-8')".format(
                                 str(detached_peer_marker))],
@@ -2971,7 +2984,15 @@ def self_test():
                     detached_pending_marker.exists()):
                 raise LabError(
                     "self-test: detached affinity escape did not quarantine "
-                    "active and pending peers")
+                    "active and pending peers: outcomes={!r}, "
+                    "containment_unavailable={!r}, outside_cpu_set={!r}, "
+                    "active_peer_finished={!r}, pending_ran={!r}".format(
+                        detached_summary["outcomes"],
+                        detached_summary["containment_unavailable"],
+                        detached_result["thread_runtime"]["observation"][
+                            "outside_cpu_set"],
+                        detached_peer_marker.exists(),
+                        detached_pending_marker.exists()))
 
         rss_manifest = build_manifest({
             "root": str(root), "workers": 1,
@@ -3110,7 +3131,12 @@ def self_test():
                 "id": "counter-success",
                 "command": [
                     python, "-c",
-                    "import time; print('counter child'); time.sleep(0.08)"],
+                    # The counter wrapper is instrumentation and is excluded
+                    # from workload-team accounting.  Keep its child alive
+                    # long enough for a loaded supervisor to observe the real
+                    # workload instead of making success depend on an 80-ms
+                    # scheduling window.
+                    "import time; print('counter child'); time.sleep(2)"],
             }],
         })
         counter_job = counter_manifest["jobs"][0]
@@ -3121,13 +3147,20 @@ def self_test():
         counter_output = root / "counter-results"
         counter_summary = run_manifest(
             counter_manifest, counter_output, quiet=True)
-        if counter_summary["outcomes"] != {"missing": 0, "success": 1}:
-            raise LabError(
-                "self-test: fake performance counters did not run: {}".format(
-                    counter_summary["outcomes"]))
         counter_result_path = (
             _job_directory(counter_output, counter_job["id"]) / "result.json")
         counter_result = _load_json(counter_result_path)
+        if counter_summary["outcomes"] != {"missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: fake performance counters did not run: "
+                "outcomes={!r}, outcome={!r}, detail={!r}, observation={!r}, "
+                "counters={!r}".format(
+                    counter_summary["outcomes"],
+                    counter_result.get("outcome"),
+                    counter_result.get("detail"),
+                    counter_result.get("thread_runtime", {}).get(
+                        "observation"),
+                    counter_result.get("performance_counters")))
         counter_evidence = counter_result.get("performance_counters", {})
         if (counter_evidence.get("status") != "available" or
                 [entry.get("event") for entry in
