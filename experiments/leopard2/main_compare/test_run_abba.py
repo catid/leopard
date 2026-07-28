@@ -25,7 +25,8 @@ from typing import Mapping
 
 MODULE_PATH = Path(__file__).with_name("run_abba.py")
 SPEC = importlib.util.spec_from_file_location("main_compare_run_abba", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the main-comparison evidence runner")
 runner = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
@@ -39,7 +40,8 @@ def load_plan_runner():
     if existing is not None:
         return existing
     module_spec = importlib.util.spec_from_file_location(module_name, path)
-    assert module_spec is not None and module_spec.loader is not None
+    if module_spec is None or module_spec.loader is None:
+        raise RuntimeError("cannot load the balanced-promotion planner")
     module = importlib.util.module_from_spec(module_spec)
     decoder_directory = str(path.parent)
     inserted = decoder_directory not in sys.path

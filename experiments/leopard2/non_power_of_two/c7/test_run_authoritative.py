@@ -24,7 +24,8 @@ from unittest import mock
 
 MODULE_PATH = Path(__file__).with_name("run_authoritative.py")
 SPEC = importlib.util.spec_from_file_location("c7_run_authoritative", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the C7 authoritative runner")
 runner = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = runner
 SPEC.loader.exec_module(runner)
@@ -32,7 +33,8 @@ SPEC.loader.exec_module(runner)
 
 def load_peer_module(name: str, path: Path):
     specification = importlib.util.spec_from_file_location(name, path)
-    assert specification is not None and specification.loader is not None
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load C7 peer module: {path}")
     module = importlib.util.module_from_spec(specification)
     sys.modules[specification.name] = module
     specification.loader.exec_module(module)
@@ -577,7 +579,8 @@ class AuthoritativeRunnerTests(unittest.TestCase):
         unrelated_pid = int(pid_path.read_text(encoding="utf-8"))
         unrelated_pidfd = runner._linux_pidfd_open(unrelated_pid)
         self.assertIsNotNone(unrelated_pidfd)
-        assert unrelated_pidfd is not None
+        if unrelated_pidfd is None:
+            self.fail("pidfd_open returned None after non-None assertion")
         try:
             self.assertEqual(
                 runner._raw_direct_child_pids(os.getpid()), set())

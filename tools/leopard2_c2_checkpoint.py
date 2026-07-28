@@ -465,8 +465,8 @@ def merge(
         digests.add(payload["correctness_digest_fnv1a64"])
     if len(digests) != 1:
         raise CheckpointError("backend output digests differ")
-    assert reference_parity is not None
-    assert reference_host is not None
+    if reference_parity is None or reference_host is None:
+        raise CheckpointError("backend reference evidence is missing")
     first = backend_results["auto"][1]
 
     sanitizer = load_result(sanitizer_path)

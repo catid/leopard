@@ -669,7 +669,8 @@ def _execute_node(
     if counter is not None:
         counter.boundary_nodes += 1
     half = node.length // 2
-    assert node.left is not None and node.right is not None
+    if node.left is None or node.right is None:
+        raise RuntimeError("non-leaf truncated node is missing a child")
     if node.direction == "forward":
         left_values: dict[int, int] = {}
         right_values: dict[int, int] = {}

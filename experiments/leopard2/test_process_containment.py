@@ -24,7 +24,8 @@ HERE = Path(__file__).resolve().parent
 
 def load_module(name: str, path: Path) -> Any:
     specification = importlib.util.spec_from_file_location(name, path)
-    assert specification is not None and specification.loader is not None
+    if specification is None or specification.loader is None:
+        raise RuntimeError(f"cannot load containment runner: {path}")
     module = importlib.util.module_from_spec(specification)
     sys.modules[name] = module
     specification.loader.exec_module(module)
@@ -232,10 +233,14 @@ class ProcessContainmentFaultTests(unittest.TestCase):
                 try:
                     record = module._emergency_proc_process_record(unrelated.pid)
                     self.assertIsNotNone(record)
-                    assert record is not None
+                    if record is None:
+                        self.fail(
+                            "process record is None after non-None assertion")
                     real_descriptor = module._emergency_pidfd_open(unrelated.pid)
                     self.assertIsNotNone(real_descriptor)
-                    assert real_descriptor is not None
+                    if real_descriptor is None:
+                        self.fail(
+                            "pidfd is None after non-None assertion")
                     reused = tuple(record[:3]) + (record[3] + 1,) + tuple(record[4:])
                     with mock.patch.object(
                             module, "_emergency_proc_process_record",

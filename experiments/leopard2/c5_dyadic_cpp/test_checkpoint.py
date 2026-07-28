@@ -12,7 +12,8 @@ import unittest
 
 HERE = pathlib.Path(__file__).resolve().parent
 SPEC = importlib.util.spec_from_file_location("c5_checkpoint", HERE / "checkpoint.py")
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the C5 checkpoint module")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
@@ -63,7 +64,8 @@ def full_benchmark_rows() -> list[dict]:
             rows.append(benchmark_row(q, 65536, 1, reuse))
     for q in (33, 65, 129, 257):
         rows.append(benchmark_row(q, 1024 * 1024, 1, 1))
-    assert len(rows) == 54
+    if len(rows) != 54:
+        raise RuntimeError("C5 benchmark fixture matrix must contain 54 rows")
     return rows
 
 

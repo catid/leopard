@@ -15,7 +15,8 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[3]
 SPEC = importlib.util.spec_from_file_location("c8_checkpoint", HERE / "checkpoint.py")
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the C8 checkpoint module")
 MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 

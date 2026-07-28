@@ -14,7 +14,8 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("run_abba.py")
 SPEC = importlib.util.spec_from_file_location("leopard2_l3_tiling_runner", SCRIPT)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the L3-tiling evidence runner")
 RUNNER = importlib.util.module_from_spec(SPEC)
 import sys
 sys.modules[SPEC.name] = RUNNER

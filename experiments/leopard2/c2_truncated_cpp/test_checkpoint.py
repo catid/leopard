@@ -13,7 +13,8 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[3]
 MODULE_PATH = ROOT / "tools" / "leopard2_c2_checkpoint.py"
 SPEC = importlib.util.spec_from_file_location("leopard2_c2_checkpoint", MODULE_PATH)
-assert SPEC is not None and SPEC.loader is not None
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError("cannot load the C2 checkpoint module")
 checkpoint = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(checkpoint)
 

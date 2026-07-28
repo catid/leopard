@@ -77,7 +77,8 @@ class CodeIdentity:
 
 _HEADER = struct.Struct(">4sBBHI4B4I2H")
 _TLV = struct.Struct(">HH")
-assert _HEADER.size == HEADER_BYTES
+if _HEADER.size != HEADER_BYTES:
+    raise RuntimeError("code-identity header size constant is inconsistent")
 
 
 def _ceil_pow2(value: int) -> int:
