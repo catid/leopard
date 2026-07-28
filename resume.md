@@ -22,14 +22,23 @@ randomized differential shapes with zero mismatches.
 
 ## In-flight: the authoritative exact-main campaign (leopard-79h.43, P1)
 
-UPDATE (same session, after the stopping-point instruction): the closure-model
-fix below was applied to `run_abba.py`, verified byte-for-byte against the
-actual compile_commands entries for both new TUs, and the campaign was
-**relaunched and is running unattended**. On resume: check
-`/tmp/campaign-2942f35.status` (written on exit) and `/tmp/campaign-2942f35.log`;
-if complete, `run_abba.py verify` the bundle at
-`/tmp/leopard2-vs-main-evidence-2942f35`, then proceed to `.44`/`.48`.
-The drift record below is retained for context:
+FINAL STATE: three model-drift layers were fixed and pushed (`a972a27`): the
+TU closure (AVX2Xor + GFNI), the library `LEO2_HAVE_GFNI_BACKEND` define, and
+the bench source-attestation defines (pre-existing since `a306d95`). All 22
+candidate compile entries verified byte-for-byte against the model. The
+campaign then PASSED every identity check and reached cell execution (first
+baseline child output retained under the evidence dir) — and was SIGTERMed by
+the affinity supervisor: an interactive Claude session's own tool/monitor
+process churn under the same UID trips the fail-closed containment ("new
+process has an already restricted mask but no safe uniform creator
+provenance"). **The campaign must be run from a bare terminal with no Claude
+session active on this host**: delete `/tmp/leopard2-vs-main-evidence-2942f35`
+and `/tmp/campaign-2942f35.status`, refresh the report-dir suffix inside
+`/tmp/launch-campaign-2942f35.sh` (the sed line pattern is in the script
+history), run it, wait for `/tmp/campaign-2942f35.status`, then
+`run_abba.py verify` the bundle. Candidate = production build at `a972a27`
+(rebuilt so the baked bench attestation matches `--candidate-commit`).
+The original drift diagnosis is retained below for context:
 
 - Error: `candidate compile-command entry closure differs`.
 - Cause (verified against `/tmp/leopard2-production/compile_commands.json`,
