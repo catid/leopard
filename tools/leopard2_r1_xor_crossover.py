@@ -54,6 +54,17 @@ class CrossoverError(Exception):
     pass
 
 
+class SelfTestChecks:
+    def __init__(self):
+        self.count = 0
+
+    def require(self, condition, description):
+        self.count += 1
+        if not condition:
+            raise CrossoverError(
+                "R=1 crossover self-test failed: {}".format(description))
+
+
 def canonical(value):
     return json.dumps(value, sort_keys=True, separators=(",", ":"),
                       ensure_ascii=True).encode("utf-8")
@@ -839,7 +850,7 @@ def enforce_gate(gate, reporting_only):
             "promotion gate failed (use --reporting-only to retain a negative report)")
 
 
-def self_test_resume_validation():
+def self_test_resume_validation(checks):
     with tempfile.TemporaryDirectory(prefix="leopard2-r1-xor-self-test-") as name:
         root = Path(name).resolve()
         source_job = {
@@ -914,7 +925,9 @@ def self_test_resume_validation():
             stderr_path.write_bytes(b"")
             raw_bytes = raw_path.read_bytes()
             metrics, parsed_digests = validate_benchmark(raw, job)
-            assert canonical(parsed_digests) == canonical(digests)
+            checks.require(
+                canonical(parsed_digests) == canonical(digests),
+                "validated workload digests differ from fixture")
             records.append({
                 "argv": command_for(manifest, job, variant, raw_path),
                 "benchmark_json": str(raw_path.relative_to(root)),
@@ -940,13 +953,17 @@ def self_test_resume_validation():
             "workload_digests": digests,
         }
         atomic_json(result_path, pristine_result)
-        assert valid_existing(root, manifest, source_job)
+        checks.require(
+            valid_existing(root, manifest, source_job),
+            "pristine resumable job was rejected")
 
         def rejects_job_mutation(mutator):
             mutated = json.loads(json.dumps(pristine_result))
             mutator(mutated)
             atomic_json(result_path, mutated)
-            assert not valid_existing(root, manifest, source_job)
+            checks.require(
+                not valid_existing(root, manifest, source_job),
+                "mutated resumable job was accepted")
             atomic_json(result_path, pristine_result)
 
         rejects_job_mutation(
@@ -1017,7 +1034,9 @@ def self_test_resume_validation():
             mutated_result["measurements"][0]["benchmark_json_sha256"] = \
                 digest_bytes(raw_path.read_bytes())
             atomic_json(result_path, mutated_result)
-            assert not valid_existing(root, manifest, source_job)
+            checks.require(
+                not valid_existing(root, manifest, source_job),
+                "mutated raw benchmark was accepted")
             atomic_json(raw_path, pristine_raw)
             atomic_json(result_path, pristine_result)
 
@@ -1068,44 +1087,77 @@ def command_analyze(args):
 
 
 def command_self_test(_args):
-    assert parse_backends("avx512") == ["avx512"]
+    checks = SelfTestChecks()
+    checks.require(
+        parse_backends("avx512") == ["avx512"],
+        "AVX-512 backend parser result")
     defaults = parser().parse_args([
         "run", "--baseline", "baseline", "--candidate", "candidate",
         "--result-dir", "results", "--cpu", "0",
     ])
-    assert defaults.backends == ",".join(BACKENDS)
+    checks.require(
+        defaults.backends == ",".join(BACKENDS),
+        "default backend list")
     values = compact_grid(BACKENDS)
-    assert {item["backend"] for item in values} == set(BACKENDS)
-    assert min(item["shard_bytes"] for item in values) == 1
-    assert max(item["shard_bytes"] for item in values) == 1048576
-    assert max(item["k"] for item in values) >= 240
-    assert {item["batch"] for item in values}.issuperset({1, 8, 64})
+    checks.require(
+        {item["backend"] for item in values} == set(BACKENDS),
+        "compact grid backend coverage")
+    checks.require(
+        min(item["shard_bytes"] for item in values) == 1,
+        "compact grid minimum shard bytes")
+    checks.require(
+        max(item["shard_bytes"] for item in values) == 1048576,
+        "compact grid maximum shard bytes")
+    checks.require(
+        max(item["k"] for item in values) >= 240,
+        "compact grid large-K coverage")
+    checks.require(
+        {item["batch"] for item in values}.issuperset({1, 8, 64}),
+        "compact grid batch coverage")
     confirmation = final_remainders_confirmation_grid(["avx2"])
-    assert len(confirmation) == 46
-    assert any(item["k"] == 7 and item["shard_bytes"] == 3145728
-               for item in confirmation)
-    assert any(item["k"] == 255 and item["shard_bytes"] == 1048576
-               for item in confirmation)
+    checks.require(
+        len(confirmation) == 46,
+        "final-remainders confirmation grid size")
+    checks.require(
+        any(item["k"] == 7 and item["shard_bytes"] == 3145728
+            for item in confirmation),
+        "final-remainders K=7 confirmation cell")
+    checks.require(
+        any(item["k"] == 255 and item["shard_bytes"] == 1048576
+            for item in confirmation),
+        "final-remainders K=255 confirmation cell")
     production = final_remainders_production_grid(["avx2"])
-    assert len(production) == 110
+    checks.require(
+        len(production) == 110,
+        "final-remainders production grid size")
     for k in (7, 12, 13, 14, 15, 22, 23):
         for shard_bytes in (1024, 2048):
             control = next(item for item in production
                            if item["k"] == k and
                            item["shard_bytes"] == shard_bytes)
-            assert control["region"] == "neighbor_r1"
-    assert any(item["k"] == 7 and item["shard_bytes"] == 4194305
-               for item in production)
-    assert next(item for item in production
-                if item["k"] == 7 and item["shard_bytes"] == 4194305)[
-                    "region"] == "neighbor_r1"
+            checks.require(
+                control["region"] == "neighbor_r1",
+                "small-shard K={} neighbor classification".format(k))
+    checks.require(
+        any(item["k"] == 7 and item["shard_bytes"] == 4194305
+            for item in production),
+        "K=7 upper-bound neighbor presence")
+    checks.require(
+        next(item for item in production
+             if item["k"] == 7 and item["shard_bytes"] == 4194305)[
+                 "region"] == "neighbor_r1",
+        "K=7 upper-bound neighbor classification")
     for k in (12, 13, 14, 15, 22, 23):
-        assert any(item["k"] == k and item["shard_bytes"] == 1048577
-                   for item in production)
-        assert next(item for item in production
-                    if item["k"] == k and
-                    item["shard_bytes"] == 1048577)["region"] == \
-            "neighbor_r1"
+        checks.require(
+            any(item["k"] == k and item["shard_bytes"] == 1048577
+                for item in production),
+            "K={} upper-bound neighbor presence".format(k))
+        checks.require(
+            next(item for item in production
+                 if item["k"] == k and
+                 item["shard_bytes"] == 1048577)["region"] ==
+                    "neighbor_r1",
+            "K={} upper-bound neighbor classification".format(k))
     fake = {
         "job_id": "0" * 24,
         "measurements": [],
@@ -1122,8 +1174,12 @@ def command_self_test(_args):
                 },
             })
     result = analyze_metric(fake, "encode_execution")
-    assert result["median_improvement_percent"] == 25.0
-    assert result["credible_improvement_at_least_5_percent"]
+    checks.require(
+        result["median_improvement_percent"] == 25.0,
+        "paired improvement calculation")
+    checks.require(
+        result["credible_improvement_at_least_5_percent"],
+        "paired confidence calculation")
     positive_cells = []
     for backend in BACKENDS:
         metric = {
@@ -1138,13 +1194,17 @@ def command_self_test(_args):
             "job_id": backend,
         })
     positive_gate = evaluate_gate(positive_cells, BACKENDS)
-    assert positive_gate["passed"]
+    checks.require(
+        positive_gate["passed"],
+        "positive promotion gate")
 
     zero_win_cells = json.loads(json.dumps(positive_cells))
     zero_win_cells[0]["encode"][
         "credible_improvement_at_least_5_percent"] = False
     zero_win_gate = evaluate_gate(zero_win_cells, BACKENDS)
-    assert not zero_win_gate["passed"]
+    checks.require(
+        not zero_win_gate["passed"],
+        "zero-win promotion rejection")
     try:
         enforce_gate(zero_win_gate, False)
         raise AssertionError("zero-win gate unexpectedly passed")
@@ -1156,18 +1216,23 @@ def command_self_test(_args):
     regression_cells[0]["decode"]["median_improvement_percent"] = -3.0
     regression_cells[0]["decode"]["observed_regression_over_2_percent"] = True
     regression_gate = evaluate_gate(regression_cells, BACKENDS)
-    assert not regression_gate["passed"]
+    checks.require(
+        not regression_gate["passed"],
+        "regression promotion rejection")
     try:
         enforce_gate(regression_gate, False)
         raise AssertionError("regression gate unexpectedly passed")
     except CrossoverError:
         pass
     enforce_gate(regression_gate, True)
-    self_test_resume_validation()
-    assert choose_reuse(cell("x", "scalar", 9, 1, 4096, 1),
-                        1024 * 1024, 100000) > 1
-    print("Leopard2 R=1 XOR crossover self-test passed: jobs={}".format(
-        len(values)))
+    self_test_resume_validation(checks)
+    checks.require(
+        choose_reuse(cell("x", "scalar", 9, 1, 4096, 1),
+                     1024 * 1024, 100000) > 1,
+        "reuse calculation")
+    print(
+        "Leopard2 R=1 XOR crossover self-test passed: jobs={} checks={}".format(
+            len(values), checks.count))
 
 
 def parser():
