@@ -121,7 +121,9 @@ typedef enum leo2_backend {
     LEO2_BACKEND_AVX2 = 3,
     LEO2_BACKEND_NEON = 4,
     /* Explicit AVX-512F/BW/VL acceleration. */
-    LEO2_BACKEND_AVX512 = 5
+    LEO2_BACKEND_AVX512 = 5,
+    /* Explicit AVX2 + GFNI acceleration (VEX-encoded VGF2P8AFFINEQB). */
+    LEO2_BACKEND_GFNI = 6
 } leo2_backend;
 
 /*
@@ -140,10 +142,12 @@ typedef enum leo2_backend {
     An explicit backend selects one immutable execution table for this context.
     AUTO uses the production-default startup-qualified runtime backend as its
     reported baseline.  On production
-    x86 builds, SCALAR, SSSE3, AVX2, and AVX512 may explicitly
+    x86 builds, SCALAR, SSSE3, AVX2, AVX512, and GFNI may explicitly
     select any compiled, host-qualified table.  AUTO deliberately reports AVX2
     as its baseline because AVX512 whole-codec evidence supports only bounded
-    encode regions rather than a universal default.  Within such a fixed,
+    encode regions rather than a universal default, and GFNI whole-codec
+    evidence is single-host; both remain explicit requests until a same-binary
+    selector screen promotes them.  Within such a fixed,
     offline-calibrated region on a recognized CPU model, AUTO may use another
     startup-qualified immutable table for one operation; unknown models retain
     the baseline.  This changes neither code identity nor wire bytes.

@@ -134,6 +134,8 @@ leo2_backend parse_backend(const std::string& value)
         return LEO2_BACKEND_AVX2;
     if (value == "avx512" || value == "avx512vl")
         return LEO2_BACKEND_AVX512;
+    if (value == "gfni" || value == "avx2-gfni")
+        return LEO2_BACKEND_GFNI;
     fail("invalid backend");
     return LEO2_BACKEND_AUTO;
 }
@@ -148,6 +150,7 @@ const char* backend_name(leo2_backend backend)
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
+    case LEO2_BACKEND_GFNI: return "avx2-gfni";
     default: return "unknown";
     }
 }
@@ -180,7 +183,7 @@ void usage(const char* executable)
         << "  --output-requested N      requested output prefix\n"
         << "  --input-shape prefix|holey\n"
         << "  --output-shape prefix|holey\n"
-        << "  --backend auto|scalar|ssse3|avx2|avx512\n"
+        << "  --backend auto|scalar|ssse3|avx2|avx512|gfni\n"
         << "  --iterations N            executions per timing sample\n"
         << "  --samples N               retained timing samples\n"
         << "  --warmups N\n"

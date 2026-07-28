@@ -126,7 +126,8 @@ static inline bool UseFusedButterfly4(
     return bytes == 64 ||
         (bytes == 128 &&
          (ops.kind == LEO2_BACKEND_AVX2 ||
-          ops.kind == LEO2_BACKEND_AVX512));
+          ops.kind == LEO2_BACKEND_AVX512 ||
+          ops.kind == LEO2_BACKEND_GFNI));
 }
 
 
@@ -1245,7 +1246,8 @@ static void IFFT_DIT_Encoder_Impl(
     const bool stage_sources = m > 4 && !(
         high_profile_transform &&
         (ops.kind == LEO2_BACKEND_AVX2 ||
-         ops.kind == LEO2_BACKEND_AVX512) &&
+         ops.kind == LEO2_BACKEND_AVX512 ||
+         ops.kind == LEO2_BACKEND_GFNI) &&
         m >= 256 && source_policy_bytes > 16U * 1024U);
     if (stage_sources)
     {
@@ -1398,7 +1400,8 @@ static void IFFT_DIT_Encoder(
     // require their own end-to-end qualification before opting in.
     if (ops.kind == LEO2_BACKEND_SSSE3 ||
         ops.kind == LEO2_BACKEND_AVX2 ||
-        ops.kind == LEO2_BACKEND_AVX512)
+        ops.kind == LEO2_BACKEND_AVX512 ||
+        ops.kind == LEO2_BACKEND_GFNI)
     {
         IFFT_DIT_Encoder_Impl<true>(ops, bytes, source_policy_bytes,
             data, m_truncated,
@@ -1535,7 +1538,8 @@ static bool IFFT_DIT_DecoderAccumulate(
     LEO_DEBUG_ASSERT(xor_result != NULL);
     if (ops.kind == LEO2_BACKEND_SSSE3 ||
         ops.kind == LEO2_BACKEND_AVX2 ||
-        ops.kind == LEO2_BACKEND_AVX512)
+        ops.kind == LEO2_BACKEND_AVX512 ||
+        ops.kind == LEO2_BACKEND_GFNI)
     {
         return IFFT_DIT_DecoderImpl<true>(
             ops, bytes, m_truncated, work, m, skewLUT, xor_result);
@@ -3143,8 +3147,14 @@ void PrepareHighDecode(
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
 
-    // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1;
-    // retaining this numerator is required for an active parent in GF16.
+    // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1
+    // because s_m(x) = x^(2^m) - x gives s_m' = 1 (eq. (63)).  This numerator
+    // is retained for representation independence, NOT because production
+    // needs it: for the declared Cantor bases c_j = 1 and p_i = 1 for every j
+    // in both GF8 and GF16, so the factor reduces to 1 here.  The general
+    // active-parent form is what the exhaustive GF(2^4) oracle proves, using
+    // a plain polynomial basis where c_n != 1
+    // (tests/leopard2/direct_oracle.cpp, test_direct_oracle.cpp).
     const ffe_t active_derivative_log = SubspaceDerivativeLog(n);
 
     // p_(N-T) from the normalized LCH basis.
@@ -4217,7 +4227,8 @@ static bool ShouldUsePrunedHighSyndromeSink(
     // 4.86%, below the project's default 5% complexity threshold, so it keeps
     // the mature materialized schedule.
     return (ops.kind == LEO2_BACKEND_AVX2 ||
-            ops.kind == LEO2_BACKEND_AVX512) &&
+            ops.kind == LEO2_BACKEND_AVX512 ||
+            ops.kind == LEO2_BACKEND_GFNI) &&
         buffer_bytes >= 1024;
 }
 

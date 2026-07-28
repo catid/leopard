@@ -136,7 +136,8 @@ static inline bool ShouldUseBalancedGenericDecode(
         (backend == LEO2_BACKEND_SCALAR ||
          backend == LEO2_BACKEND_SSSE3 ||
          backend == LEO2_BACKEND_AVX2 ||
-         backend == LEO2_BACKEND_AVX512);
+         backend == LEO2_BACKEND_AVX512 ||
+         backend == LEO2_BACKEND_GFNI);
 }
 
 /*
@@ -165,7 +166,8 @@ static inline bool ShouldUseMaterializedHighDecode(
         rounded_shard_bytes > 64 * 1024)
         return false;
 
-    if (backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_AVX512)
+    if (backend == LEO2_BACKEND_AVX2 || backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_GFNI)
         return rounded_shard_bytes >= 24 * 1024;
     if (backend == LEO2_BACKEND_SSSE3)
         return rounded_shard_bytes >= 32 * 1024;
@@ -311,7 +313,8 @@ static inline bool SelectDecodePath(
     {
         if (input.multi_item_batch &&
             (input.backend == LEO2_BACKEND_AVX2 ||
-             input.backend == LEO2_BACKEND_AVX512))
+             input.backend == LEO2_BACKEND_AVX512 ||
+             input.backend == LEO2_BACKEND_GFNI))
         {
             selection.path = kDecodePathTiled;
             selection.rule = kDecodeRuleMeasuredBatchTiled;

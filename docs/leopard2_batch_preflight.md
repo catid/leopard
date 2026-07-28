@@ -29,9 +29,31 @@ scratch is rejected before the workspace is written.
 After that pass, the implementation flattens all intervals into caller storage.
 Each record holds a half-open address range and one writable bit. Item and
 pointer arrays plus received shards are immutable; output shards and every
-supplied scratch span are writable. A custom in-place heapsort orders the
-records without relying on an allocator. One max-end sweep then rejects an
-overlap whenever either interval is writable. It deliberately permits
+supplied scratch span are writable. `std::sort` orders the records; introsort
+allocates nothing, so it meets the allocation-free preflight contract, and the
+same property is already relied on for the per-item `std::sort` in the
+compatibility path. The record comparator is a strict total order on
+`(begin, end, writable)`, so the sorted sequence is unique and the sweep below
+cannot observe a tie order. One max-end sweep then rejects an overlap whenever
+either interval is writable.
+
+This replaced a hand-rolled in-place heapsort on 2026-07-24. The heapsort was
+the dominant term of the scalable preflight, and because that preflight runs as
+a serial section on the calling thread it dominated whole-batch time for small
+shards. Measured on an AMD Ryzen 9 9950X3D, one pinned logical CPU, best of
+three runs of `bench_leopard2_batch_preflight`, scalable path:
+
+| Cell | Encode speedup | Decode speedup |
+| --- | ---: | ---: |
+| K=3 R=2, B=64 | 1.76x | 2.58x |
+| K=3 R=2, B=1024 | 1.73x | 1.35x |
+| K=100 R=28, B=64 | 1.36x | 1.30x |
+| K=100 R=28, B=1024 | 1.72x | 1.52x |
+
+`B=1` and `B=8` use the compatibility path and are unchanged. A three-pass LSD
+radix on `range.begin` measured faster still, but it needs a second equal-size
+buffer and therefore an additive change to
+`leo2_encode_batch_preflight_scratch_size`; that remains open work. It deliberately permits
 input/input, metadata/metadata, and input/metadata sharing. Tracking the
 furthest prior end, rather than comparing only adjacent intervals, handles a
 long immutable interval that contains another immutable interval before a

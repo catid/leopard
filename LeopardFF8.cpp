@@ -53,6 +53,7 @@ static std::atomic<uint64_t> TestIFFTDIT4XorCalls(0);
 static std::atomic<uint64_t> TestFFTDIT4Calls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
+static std::atomic<uint64_t> TestLowFFTButterfly8OutCalls(0);
 static std::atomic<uint64_t> TestLowDirectOutputBlocks(0);
 static std::atomic<uint64_t> TestLowDirectFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
@@ -1411,17 +1412,76 @@ static void IFFT_DIT_Encoder(
             (m == 8 && (bytes >= 4U * 1024U || m_truncated == 1)) ||
             (m == 16 && bytes >= 64U * 1024U);
         const bool direct_ragged_group = measured_ragged_shape &&
-            ops.kind == LEO2_BACKEND_AVX2 &&
+            (ops.kind == LEO2_BACKEND_AVX2 ||
+             ops.kind == LEO2_BACKEND_GFNI) &&
             ops.ff8_weighted_ifft_butterfly4 != NULL &&
             (m_truncated & 3U) != 0;
         const unsigned initialized_prefix = direct_ragged_group
             ? (m_truncated + 3U) & ~3U
             : m_truncated;
+        bool return_after_radix8 = false;
         for (unsigned i = initialized_prefix; i < m; ++i)
             memset(work[i], 0, bytes);
 
         unsigned r = 0;
-        for (; r + 4 <= m_truncated; r += 4)
+        /*
+            When the backend publishes an out-of-place radix-eight group, stage
+            three inverse layers per load/store round instead of two.  That
+            kernel is bound by load/store throughput rather than arithmetic, so
+            a third less traffic per transform layer is a direct win; see the
+            contract in Leopard2Backend.h.
+
+            Restricted to a whole number of eight-coordinate groups.  A ragged
+            tail cannot use it, because the distance-four layer of a short final
+            group would pair coordinates that belong to the zero-padded suffix
+            rather than to the group, and those pairings are the following
+            stage's work.
+        */
+        /*
+            The window is exactly m == 32, which is where every measured cell
+            gained: 1.084x at 1 KiB, 1.109x at 4 KiB, 1.094x at 16 KiB and
+            1.279x at 64 KiB per shard for K=224, plus 1.133x and 1.146x for
+            K=200 and K=160.
+
+            It is not wider for two separate reasons.  At m == 8 a radix-eight
+            group would consume every layer, so the accumulating final layer
+            that folds a message block into xor_result would never run and every
+            block after the first would be dropped; a randomized cross-build
+            differential caught exactly that.  At m == 16 three layers leave
+            only one, which displaces the fused dist4 == m accumulating
+            radix-four with a plain radix-two sweep plus a separate xor, and
+            that measured 0.88x to 0.94x.  At m == 128 the staging is a smaller
+            share of the call and the result is marginal, 1.05x to 1.07x with
+            one neutral cell, so it stays out until it has its own evidence.
+        */
+        if (ops.ff8_ifft_butterfly8_out != NULL && m == 32 &&
+            (m_truncated & 7U) == 0 && m_truncated >= 8)
+        {
+            for (; r + 8 <= m_truncated; r += 8)
+            {
+                const void* inputs[8];
+                void* outputs[8];
+                for (unsigned lane = 0; lane < 8; ++lane)
+                {
+                    inputs[lane] = data[r + lane];
+                    outputs[lane] = work[r + lane];
+                }
+                const uint8_t skews[7] = {
+                    static_cast<uint8_t>(skewLUT[r + 1]),
+                    static_cast<uint8_t>(skewLUT[r + 3]),
+                    static_cast<uint8_t>(skewLUT[r + 5]),
+                    static_cast<uint8_t>(skewLUT[r + 7]),
+                    static_cast<uint8_t>(skewLUT[r + 2]),
+                    static_cast<uint8_t>(skewLUT[r + 6]),
+                    static_cast<uint8_t>(skewLUT[r + 4])
+                };
+                ops.ff8_ifft_butterfly8_out(inputs, outputs, skews, bytes);
+            }
+            dist = 8;
+            dist4 = 32;
+            return_after_radix8 = true;
+        }
+        for (; !return_after_radix8 && r + 4 <= m_truncated; r += 4)
         {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
             TestHighIFFTButterfly4OutCalls.fetch_add(
@@ -1433,7 +1493,7 @@ static void IFFT_DIT_Encoder(
                 skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2],
                 bytes);
         }
-        if (r < m_truncated)
+        if (!return_after_radix8 && r < m_truncated)
         {
             const unsigned remaining = m_truncated - r;
             if (direct_ragged_group)
@@ -1462,8 +1522,11 @@ static void IFFT_DIT_Encoder(
                     skewLUT[r + 1], skewLUT[r + 3], skewLUT[r + 2]);
             }
         }
-        dist = 4;
-        dist4 = 16;
+        if (!return_after_radix8)
+        {
+            dist = 4;
+            dist4 = 16;
+        }
     }
     else
     {
@@ -1697,7 +1760,8 @@ static void IFFT_DIT_DecoderWeightedLocator(
     // small/large shard passes on the established scale-then-IFFT path.
     const bool statically_qualified =
         (ops.kind == LEO2_BACKEND_AVX2 ||
-         ops.kind == LEO2_BACKEND_AVX512) &&
+         ops.kind == LEO2_BACKEND_AVX512 ||
+         ops.kind == LEO2_BACKEND_GFNI) &&
         ops.ff8_weighted_ifft_butterfly4 != NULL &&
         m >= 64 &&
         bytes >= 16U * 1024U && bytes <= 256U * 1024U;
@@ -1813,7 +1877,8 @@ static void IFFT_DIT_DecoderFromSources(
     const bool qualified_source_backend =
         ops.kind == LEO2_BACKEND_SSSE3 ||
         ops.kind == LEO2_BACKEND_AVX2 ||
-        ops.kind == LEO2_BACKEND_AVX512;
+        ops.kind == LEO2_BACKEND_AVX512 ||
+        ops.kind == LEO2_BACKEND_GFNI;
     if (m <= 4 || !qualified_source_backend)
     {
         StageHighDecodeSources(bytes, sources, work, m);
@@ -2274,7 +2339,73 @@ static void FFT_DIT_FromCoefficients(
         return;
     }
 
-    const unsigned first_dist = m >> 2;
+    /*
+        A radix-eight first stage carries three forward layers out of place
+        instead of two.  At m == 32 that is what removes the trailing radix-two
+        sweep: five layers become one radix-eight round plus one radix-four
+        round, where the radix-four schedule needs two radix-four rounds plus a
+        radix-two.  A radix-two round costs 2.0 shard touches per shard-layer
+        against radix-eight's 0.67, and a low-rate profile at K=32 R=192 64 KiB
+        attributes 21% of encode to the in-place radix-two butterfly.
+
+        Skew for a layer at distance D inside a group is
+        skew[subgroup base + D], the same rule the radix-four stage uses, so
+        with d = m >> 3 the seven skews are skew[4d]; skew[2d], skew[6d]; and
+        skew[d], skew[3d], skew[5d], skew[7d].
+
+        m == 16 is excluded because ceil(4/2) == ceil(4/3): it would save no
+        touches while still displacing a fused radix-four.
+    */
+    /*
+        A radix-eight first stage carries three forward layers out of place
+        instead of two.  At m == 32 that removes the trailing radix-two sweep:
+        five layers become one radix-eight round plus one radix-four round,
+        where the radix-four schedule needs two radix-four rounds plus a
+        radix-two.  A radix-two round costs 2.0 shard touches per shard-layer
+        against radix-eight's 0.67, and a low-rate profile at K=32 R=192 64 KiB
+        attributes 21% of encode to the in-place radix-two butterfly.
+
+        Skew for a layer at distance D inside a group is skew[subgroup base + D],
+        the rule the radix-four stage below uses, so with d = m >> 3 the seven
+        skews are skew[4d]; skew[2d], skew[6d]; then skew[d], skew[3d],
+        skew[5d], skew[7d].
+
+        m == 16 is excluded: ceil(4/2) == ceil(4/3), so it would save no touches
+        while still displacing a fused radix-four.
+    */
+    unsigned first_dist = m >> 2;
+    if (ops.ff8_fft_butterfly8_out != NULL && m == 32)
+    {
+        const unsigned d = m >> 3;
+        const uint8_t skews[7] = {
+            static_cast<uint8_t>(skewLUT[d * 4]),
+            static_cast<uint8_t>(skewLUT[d * 2]),
+            static_cast<uint8_t>(skewLUT[d * 6]),
+            static_cast<uint8_t>(skewLUT[d]),
+            static_cast<uint8_t>(skewLUT[d * 3]),
+            static_cast<uint8_t>(skewLUT[d * 5]),
+            static_cast<uint8_t>(skewLUT[d * 7])
+        };
+        for (unsigned i = 0; i < d; ++i)
+        {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+            if (callsite == SourceEvaluationLowEncode)
+                TestLowFFTButterfly8OutCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+            const void* inputs[8];
+            void* outputs[8];
+            for (unsigned lane = 0; lane < 8; ++lane)
+            {
+                inputs[lane] = coefficients[i + lane * d];
+                outputs[lane] = evaluation_work[i + lane * d];
+            }
+            ops.ff8_fft_butterfly8_out(inputs, outputs, skews, bytes);
+        }
+        first_dist = d;
+    }
+    else
+    {
     const ffe_t log_m01 = skewLUT[first_dist];
     const ffe_t log_m02 = skewLUT[first_dist * 2];
     const ffe_t log_m23 = skewLUT[first_dist * 3];
@@ -2295,6 +2426,7 @@ static void FFT_DIT_FromCoefficients(
             output[0], output[first_dist],
             output[first_dist * 2], output[first_dist * 3],
             log_m01, log_m23, log_m02, bytes);
+    }
     }
     if (final_outputs && m == 4)
         return;
@@ -2388,7 +2520,8 @@ void ReedSolomonEncode(
     const bool small_transform_shape =
         m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
         m == 4 && original_count >= 3 && buffer_bytes >= 2U * 1024U;
-    if (ops.kind == LEO2_BACKEND_AVX2 &&
+    if ((ops.kind == LEO2_BACKEND_AVX2 ||
+         ops.kind == LEO2_BACKEND_GFNI) &&
         ops.ff8_high_encode_small && small_transform_shape &&
         requested_output_count == recovery_count &&
         dense_schedule)
@@ -2421,7 +2554,8 @@ void ReedSolomonEncode(
         direct_tail_column_size && original_count == m + 1U;
     const bool direct_two_tails =
         m == 32U && original_count == m + 2U && buffer_bytes >= 16384U;
-    if (ops.kind == LEO2_BACKEND_AVX2 &&
+    if ((ops.kind == LEO2_BACKEND_AVX2 ||
+         ops.kind == LEO2_BACKEND_GFNI) &&
         (direct_one_tail || direct_two_tails) &&
         recovery_count == m &&
         requested_output_count == m)
@@ -2578,7 +2712,8 @@ skip_body:
         const bool fused_forward_size =
             m == 8 || m == 16 || m == 32 || m == 64 || m == 128;
         const bool prefer_fused_forward =
-            ops.kind == LEO2_BACKEND_AVX2 && fused_forward_size &&
+            (ops.kind == LEO2_BACKEND_AVX2 ||
+             ops.kind == LEO2_BACKEND_GFNI) && fused_forward_size &&
             buffer_bytes > 1024;
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         if (prefer_fused_forward)
@@ -3296,8 +3431,14 @@ void PrepareHighDecode(
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
 
-    // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1;
-    // retaining this numerator is required for an active parent in GF16.
+    // c_n = product(V_n \ {0}).  R10's full-field form silently has c_m=1
+    // because s_m(x) = x^(2^m) - x gives s_m' = 1 (eq. (63)).  This numerator
+    // is retained for representation independence, NOT because production
+    // needs it: for the declared Cantor bases c_j = 1 and p_i = 1 for every j
+    // in both GF8 and GF16, so the factor reduces to 1 here.  The general
+    // active-parent form is what the exhaustive GF(2^4) oracle proves, using
+    // a plain polynomial basis where c_n != 1
+    // (tests/leopard2/direct_oracle.cpp, test_direct_oracle.cpp).
     const ffe_t active_derivative_log = SubspaceDerivativeLog(n);
 
     // p_(N-T) from the normalized LCH basis.
@@ -3415,6 +3556,7 @@ void TestOnlyResetLowEncodeCounts()
 {
     TestLowFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestLowFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
+    TestLowFFTButterfly8OutCalls.store(0, std::memory_order_relaxed);
     TestLowDirectOutputBlocks.store(0, std::memory_order_relaxed);
     TestLowDirectFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestLowDirectFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
@@ -3428,6 +3570,8 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.fft_butterfly4_out_of_place =
         TestLowFFTButterfly4OutCalls.load(std::memory_order_relaxed);
+    result.fft_butterfly8_out_of_place =
+        TestLowFFTButterfly8OutCalls.load(std::memory_order_relaxed);
     result.direct_output_blocks =
         TestLowDirectOutputBlocks.load(std::memory_order_relaxed);
     result.direct_output_butterfly2_out_of_place =
@@ -4371,7 +4515,8 @@ static bool ShouldUsePrunedHighSyndromeSink(
     // SSSE3 did not become a credible win until 64 KiB.  Keep smaller shards
     // on the materialize-then-XOR oracle instead of paying that fixed cost.
     if (ops.kind == LEO2_BACKEND_AVX2 ||
-        ops.kind == LEO2_BACKEND_AVX512)
+        ops.kind == LEO2_BACKEND_AVX512 ||
+        ops.kind == LEO2_BACKEND_GFNI)
         return buffer_bytes >= 1024;
     if (ops.kind == LEO2_BACKEND_SSSE3)
         return buffer_bytes >= 65536;

@@ -1072,11 +1072,15 @@ int main()
         Context ssse3(LEO2_BACKEND_SSSE3);
         Context avx2(LEO2_BACKEND_AVX2);
         Context avx512(LEO2_BACKEND_AVX512);
+        // Explicit-only, like AVX-512: an unqualified host returns
+        // LEO2_UNSUPPORTED and require_explicit_backend returns early.
+        Context gfni(LEO2_BACKEND_GFNI);
 
         require_explicit_backend(scalar, LEO2_BACKEND_SCALAR);
         require_explicit_backend(ssse3, LEO2_BACKEND_SSSE3);
         require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
         require_explicit_backend(avx512, LEO2_BACKEND_AVX512);
+        require_explicit_backend(gfni, LEO2_BACKEND_GFNI);
         test_balanced_execution_tile_geometry();
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);

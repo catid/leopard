@@ -1,5 +1,25 @@
 # Leopard2 AVX-512BW/VBMI codec experiment
 
+## DEFERRED AVX-512 WORK — start here
+
+Two AVX-512 items are measured, written up, and deliberately **not** being
+worked on right now.  Both are parked in favour of plain-AVX2 work because the
+AVX2 backend is the one every x86-64-v3 host runs.
+
+1. **512-bit data path.**  This translation unit deliberately keeps a 256-bit
+   external data width (`-mprefer-vector-width=256`) and uses AVX-512 only for
+   the extra architectural registers.  A kernel screen measured that widening
+   the existing nibble kernels to `zmm` is worth 1.09x-1.57x *on its own*,
+   separately from any instruction change.  Details, numbers, and the reason it
+   is a much larger edit: `docs/leopard2_open_optimization_findings.md`
+   section "Deferred AVX-512 work".
+2. **GFNI affine multiplication.**  Implemented and measured at 256 bits, wire
+   identical, but not promoted.  It is an AVX2-family instruction (VEX form
+   needs only AVX + GFNI, not AVX-512), so it is tracked with the AVX2 work:
+   `docs/leopard2_gfni_codec.md`.  The archive audit for this AVX-512VL member
+   still rejects ZMM and GFNI, and that rejection is correct until a candidate
+   gets its own qualified member.
+
 ## 2026-07 model-scoped AUTO encode candidate
 
 The current candidate adds the deterministic per-codec policy that the

@@ -548,6 +548,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
         ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF16=1")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
@@ -706,6 +708,10 @@ class CMakeProductionGraph(object):
         ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+            "Preformat AVX2 direct-repair source schedules in decode plans",
+            "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -775,6 +781,10 @@ class CMakeProductionGraph(object):
         ("trusted", ("option", (
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT",
             "Require the strict x86-64 portable-ISA release audit", "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+            "Preformat AVX2 direct-repair source schedules in decode plans",
+            "OFF"))),
         ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
@@ -813,6 +823,8 @@ class CMakeProductionGraph(object):
             "leopard", "STATIC", "${LIB_SOURCE_FILES}"))),
         ("trusted", ("add_library", (
             "libleopard", "ALIAS", "leopard"))),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
@@ -1181,6 +1193,13 @@ class CMakeProductionGraph(object):
                 guard = bool_and(
                     guard, bool_atom("probe:LEO2_FLAG_ARCH_AVX2"))
             return guard
+        option_scoped_definitions = {
+            ("PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1"):
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+        }
+        if specification in option_scoped_definitions:
+            return bool_atom(
+                "option:" + option_scoped_definitions[specification])
         forced_variants = {
             ("PRIVATE", "LEO2_BACKEND_FORCE_SCALAR=1"): "scalar",
             ("PRIVATE", "LEO2_BACKEND_FORCE_SSSE3=1"): "ssse3",
@@ -2158,13 +2177,17 @@ class CMakeProductionGraph(object):
             if (command == "target_sources" and tokens and
                     tokens[0] == "leopard" and
                     not bool_satisfiable(guard)):
-                # This backend is intentionally GNU/Clang-only: MSVC does not
-                # provide the same per-source AVX-512VL compile contract.  The
-                # exact unreachable attachment therefore does not belong in
-                # the hand-maintained Visual Studio project.
-                if tokens != [
+                # These backends are intentionally GNU/Clang-only: MSVC does
+                # not provide the same per-source AVX-512VL compile contract,
+                # and there is no /arch: switch that enables GFNI without
+                # raising the whole file to AVX-512.  The exact unreachable
+                # attachments therefore do not belong in the hand-maintained
+                # Visual Studio project.
+                if tokens not in ([
                         "leopard", "PRIVATE",
-                        "$<TARGET_OBJECTS:leopard2_backend_avx512>"]:
+                        "$<TARGET_OBJECTS:leopard2_backend_avx512>"], [
+                        "leopard", "PRIVATE",
+                        "$<TARGET_OBJECTS:leopard2_backend_gfni>"]):
                     raise ContractError(
                         "leopard TARGET_OBJECTS has no MSVC-reachable "
                         "definition or attachment configuration")

@@ -138,6 +138,7 @@ struct TraceState
     std::atomic<uint64_t> xor_four_calls;
     std::atomic<uint64_t> ff8_ifft_four_range_calls;
     std::atomic<uint64_t> ff8_fft_four_range_calls;
+    std::atomic<uint64_t> ff8_fft_eight_out_calls;
     std::atomic<uint64_t> ff8_ifft_four_xor_range_calls;
     std::atomic<uint64_t> ff16_ifft_four_range_calls;
     std::atomic<uint64_t> ff16_fft_four_range_calls;
@@ -448,6 +449,23 @@ void trace_ff8_fft4_range(
         work, distance, log01, log23, log02, bytes, prefer_fused);
 }
 
+void trace_ff8_fft8_out(
+    const void* const* inputs, void* const* outputs,
+    const uint8_t* skews, uint64_t bytes)
+{
+    /*
+        Deliberately does not touch ff8_fft_four_calls: that counter mirrors the
+        field's fft_dit4 callsites one for one, and a radix-eight group is not
+        one of them.  Inflating it would break the callsite-bypass equality that
+        exists to prove the context's table is the one being called.
+    */
+    g_trace.ff8_calls.fetch_add(8, std::memory_order_relaxed);
+    g_trace.ff8_fft_eight_out_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->ff8_fft_butterfly8_out(
+        inputs, outputs, skews, bytes);
+}
+
 void trace_ff8_ifft4_xor_range(
     void* const* work, void* const* xor_output, unsigned distance,
     uint16_t log01, uint16_t log23, uint16_t log02,
@@ -521,6 +539,8 @@ public:
         tracing_.ff8_fft_butterfly4_out = trace_ff8_fft4_out;
         tracing_.ff8_ifft_butterfly4_range = trace_ff8_ifft4_range;
         tracing_.ff8_fft_butterfly4_range = trace_ff8_fft4_range;
+        if (tracing_.ff8_fft_butterfly8_out != NULL)
+            tracing_.ff8_fft_butterfly8_out = trace_ff8_fft8_out;
         tracing_.ff8_ifft_butterfly4_xor_range =
             trace_ff8_ifft4_xor_range;
         // The complete-transform callback is an optional production coarse
@@ -580,6 +600,8 @@ public:
         g_trace.ff16_fft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_range_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.ff8_fft_eight_out_calls.store(
             0, std::memory_order_relaxed);
         g_trace.ff8_fft_four_range_calls.store(
             0, std::memory_order_relaxed);
@@ -691,6 +713,11 @@ public:
     uint64_t ff8_ifft_four_range_calls() const
     {
         return g_trace.ff8_ifft_four_range_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t ff8_fft_eight_out_calls() const
+    {
+        return g_trace.ff8_fft_eight_out_calls.load(
             std::memory_order_relaxed);
     }
     uint64_t ff8_fft_four_range_calls() const
@@ -816,11 +843,13 @@ void require_four_way_callsites(
         const bool transform_fused = transform_bytes == 64U ||
             (transform_bytes == 128U &&
              (execution_backend == LEO2_BACKEND_AVX2 ||
-              execution_backend == LEO2_BACKEND_AVX512));
+              execution_backend == LEO2_BACKEND_AVX512 ||
+              execution_backend == LEO2_BACKEND_GFNI));
         const bool prefix_fused = prefix_bytes == 64U ||
             (prefix_bytes == 128U &&
              (execution_backend == LEO2_BACKEND_AVX2 ||
-              execution_backend == LEO2_BACKEND_AVX512));
+              execution_backend == LEO2_BACKEND_AVX512 ||
+              execution_backend == LEO2_BACKEND_GFNI));
         const bool has_split_tail = split_ragged_execution &&
             (public_bytes & 63U) != 0;
         const bool mixed_split = has_split_tail && prefix_bytes != 0 &&
@@ -869,15 +898,20 @@ void require_low_encode_no_copy(
     {
         const leopard::ff8::TestOnlyLowEncodeCounts counts =
             leopard::ff8::TestOnlyGetLowEncodeCounts();
+        // The no-copy property is that the first layer is out of place,
+        // whatever its radix.  A radix-eight first stage satisfies it.
         require(counts.fft_butterfly2_out_of_place +
-                counts.fft_butterfly4_out_of_place != 0,
+                counts.fft_butterfly4_out_of_place +
+                counts.fft_butterfly8_out_of_place != 0,
             operation + " did not enter an out-of-place first layer");
         require(trace.ff8_fft_two_out_calls() ==
                     counts.fft_butterfly2_out_of_place +
                         counts.direct_output_butterfly2_out_of_place &&
                 trace.ff8_fft_four_out_calls() ==
                     counts.fft_butterfly4_out_of_place +
-                        counts.direct_output_butterfly4_out_of_place,
+                        counts.direct_output_butterfly4_out_of_place &&
+                trace.ff8_fft_eight_out_calls() ==
+                    counts.fft_butterfly8_out_of_place,
             operation + " bypassed the context out-of-place ops table");
     }
     else
@@ -900,7 +934,8 @@ void require_low_encode_no_copy(
         const bool prefix_fused = prefix_bytes == 64U ||
             (prefix_bytes == 128U &&
              (execution_backend == LEO2_BACKEND_AVX2 ||
-              execution_backend == LEO2_BACKEND_AVX512));
+              execution_backend == LEO2_BACKEND_AVX512 ||
+              execution_backend == LEO2_BACKEND_GFNI));
         // A ragged tail is a separate padded 64-byte transform and therefore
         // always uses the qualified fused first layer.  The aligned prefix
         // retains its own size/backend policy.
@@ -974,8 +1009,46 @@ void require_coarse_stage_reduction(
         require(inverse_range_calls != 0 &&
                 inverse_range_calls < inverse_leaf_calls,
             operation + " did not reduce GF8 inverse indirect dispatches");
-        require(trace.ff8_fft_four_range_calls() != 0 &&
-                trace.ff8_fft_four_range_calls() < callsites.fft_dit4,
+        /*
+            callsites.fft_dit4 counts coordinate GROUPS: the range site does
+            fetch_add(dist) just before dispatching (LeopardFF8.cpp, the
+            TestFFTDIT4Calls increment above ff8_fft_butterfly4_range).
+            trace.ff8_fft_four_range_calls() counts DISPATCHES.  So the
+            property being protected is that one indirect dispatch amortizes
+            over many coordinate groups.
+
+            Two separate requirements, because they are separate properties and
+            the original conflated them:
+
+            (a) the forward stage dispatched through the context's own table at
+                all.  This is the check that catches a context silently falling
+                back to the process-default ops; it is stated positively and
+                counts every coarse forward operation, so a backend publishing
+                a wider first stage still has to satisfy it.
+
+            (b) where range-eligible groups exist, dispatches amortize over
+                them.  Guarded on such groups existing: a schedule whose
+                remaining layers are all consumed by an out-of-place stage has
+                no range groups to amortize over, and asserting otherwise makes
+                the invariant unsatisfiable for a legitimate schedule rather
+                than catching a defect.
+        */
+        const uint64_t forward_coarse_calls =
+            trace.ff8_fft_four_range_calls() +
+            trace.ff8_fft_eight_out_calls();
+        require(forward_coarse_calls != 0,
+            operation + " did not dispatch GF8 forward through the context table");
+        /*
+            Amortization, stated over radix-four-EQUIVALENT groups so it stays
+            true when a coarser stage exists.  One radix-eight dispatch covers
+            eight coordinates, which is two radix-four groups, and it is not an
+            fft_dit4 callsite, so callsites.fft_dit4 alone undercounts the work
+            the dispatches covered.  Without a radix-eight stage this reduces
+            exactly to the original range_calls < callsites.fft_dit4.
+        */
+        const uint64_t forward_groups_covered =
+            callsites.fft_dit4 + trace.ff8_fft_eight_out_calls() * 2;
+        require(forward_coarse_calls < forward_groups_covered,
             operation + " did not reduce GF8 forward indirect dispatches");
     }
     else
@@ -1444,7 +1517,8 @@ void test_weighted_locator_boundary_dispatch(
     {
         const leo2_backend kind =
             leo2_context_backend(contexts[context_i].context);
-        if (kind == LEO2_BACKEND_AVX2 || kind == LEO2_BACKEND_AVX512)
+        if (kind == LEO2_BACKEND_AVX2 || kind == LEO2_BACKEND_AVX512 ||
+            kind == LEO2_BACKEND_GFNI)
         {
             for (size_t i = 0;
                  i < sizeof(avx2_cases) / sizeof(avx2_cases[0]); ++i)
@@ -1460,13 +1534,14 @@ void test_weighted_locator_boundary_dispatch(
 
 void test_concurrent_first_use()
 {
-    static const unsigned request_count = 4;
+    static const unsigned request_count = 5;
     static const unsigned lanes_per_request = 8;
     const leo2_backend requests[request_count] = {
         LEO2_BACKEND_SCALAR,
         LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX2,
-        LEO2_BACKEND_AVX512
+        LEO2_BACKEND_AVX512,
+        LEO2_BACKEND_GFNI
     };
     leo2_result results[request_count][lanes_per_request];
     for (unsigned request_i = 0; request_i < request_count; ++request_i)
@@ -1564,7 +1639,8 @@ std::vector<ContextEntry> create_contexts()
         LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX2,
         LEO2_BACKEND_NEON,
-        LEO2_BACKEND_AVX512
+        LEO2_BACKEND_AVX512,
+        LEO2_BACKEND_GFNI
     };
     for (size_t i = 0; i < sizeof(requests) / sizeof(requests[0]); ++i)
     {
@@ -1604,7 +1680,7 @@ std::vector<ContextEntry> create_contexts()
     leo2_context_options invalid;
     std::memset(&invalid, 0, sizeof(invalid));
     invalid.struct_size = sizeof(invalid);
-    invalid.backend = static_cast<uint32_t>(LEO2_BACKEND_AVX512) + 1U;
+    invalid.backend = static_cast<uint32_t>(LEO2_BACKEND_GFNI) + 1U;
     leo2_context* rejected = reinterpret_cast<leo2_context*>(
         static_cast<uintptr_t>(1));
     require_result(leo2_context_create(&invalid, &rejected),
@@ -1715,14 +1791,9 @@ const ContextEntry* find_effective_context(
     return NULL;
 }
 
-void test_avx2_gf8_large_r1_xor_dispatch(
-    const std::vector<ContextEntry>& contexts)
+void execute_avx2_tier_gf8_large_r1_xor_dispatch(
+    const ContextEntry* const avx2)
 {
-    const ContextEntry* const avx2 = find_effective_context(
-        contexts, LEO2_BACKEND_AVX2);
-    if (!avx2)
-        return;
-
     TraceOpsGuard trace(*avx2);
     struct DispatchCase
     {
@@ -1823,6 +1894,29 @@ void test_avx2_gf8_large_r1_xor_dispatch(
             gf16_cases[i].expect_coarse, LEO2_FIELD_GF16);
 }
 
+void test_avx2_gf8_large_r1_xor_dispatch(
+    const std::vector<ContextEntry>& contexts)
+{
+    /*
+        GFNI executes the same AVX2-tier reduction policy: UseCoarseR1Xor
+        gives it the AVX2 minimum-K arm and IsFusedFinalR1XorEligible accepts
+        it, so the whole measured staircase, including the fused-final K
+        groups, must reproduce exactly on both members.
+    */
+    static const leo2_backend tier_backends[] = {
+        LEO2_BACKEND_AVX2, LEO2_BACKEND_GFNI
+    };
+    for (size_t tier_i = 0;
+         tier_i < sizeof(tier_backends) / sizeof(tier_backends[0]); ++tier_i)
+    {
+        const ContextEntry* const entry = find_effective_context(
+            contexts, tier_backends[tier_i]);
+        if (!entry)
+            continue;
+        execute_avx2_tier_gf8_large_r1_xor_dispatch(entry);
+    }
+}
+
 void test_avx2_r1_absent_parity_noop(
     const std::vector<ContextEntry>& contexts)
 {
@@ -1898,6 +1992,14 @@ void test_avx2_r1_absent_parity_noop(
 void test_non_avx2_large_r1_xor_exclusion(
     const std::vector<ContextEntry>& contexts)
 {
+    /*
+        Only members outside the AVX2 measured R=1 policy belong here.  GFNI
+        is deliberately absent: UseCoarseR1Xor gives it the AVX2 arm and
+        IsFusedFinalR1XorEligible accepts it, so it keeps the promoted
+        staircase and is covered by test_avx2_gf8_large_r1_xor_dispatch
+        instead.  Adding it here would assert the opposite of the shipped
+        policy.
+    */
     static const leo2_backend backends[] = {
         LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3, LEO2_BACKEND_AVX512
     };
@@ -1940,6 +2042,9 @@ void test_r1_xor_dispatch_boundaries(
         promoted_originals = 5;
         break;
     case LEO2_BACKEND_AVX2:
+    case LEO2_BACKEND_GFNI:
+        /* GFNI shares the AVX2 minimum-K arm in UseCoarseR1Xor, so its
+           promotion boundary is the same pair of adjacent counts. */
         fallback_originals = 6;
         promoted_originals = 7;
         break;
@@ -1974,7 +2079,7 @@ void test_process_default_immutable(
     require(&leopard::backend::GetOps() == process_default,
         "legacy accessor differs from process default");
     for (unsigned raw = static_cast<unsigned>(LEO2_BACKEND_SCALAR);
-         raw <= static_cast<unsigned>(LEO2_BACKEND_AVX512); ++raw)
+         raw <= static_cast<unsigned>(LEO2_BACKEND_GFNI); ++raw)
     {
         (void)leopard::backend::GetQualifiedOps(
             static_cast<leo2_backend>(raw));
@@ -2403,7 +2508,8 @@ void test_traced_context_dispatch(const std::vector<ContextEntry>& contexts)
                         side > 4 && test_case.r == side &&
                         (execution_backend == LEO2_BACKEND_SSSE3 ||
                          execution_backend == LEO2_BACKEND_AVX2 ||
-                         execution_backend == LEO2_BACKEND_AVX512),
+                         execution_backend == LEO2_BACKEND_AVX512 ||
+                         execution_backend == LEO2_BACKEND_GFNI),
                     false,
                     expect_gf16_accumulation,
                     expect_gf16_materialization,
@@ -2564,11 +2670,13 @@ void test_gf8_high_forward_fusion_policy(
             const bool promoted_side =
                 side == 8 || side == 16 || side == 32 ||
                 side == 64 || side == 128;
+            const leo2_backend forward_backend =
+                leo2_context_backend(contexts[context_i].context);
             const bool expect_fused_forward =
                 test_case.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
                 test_case.field == LEO2_FIELD_GF8 && promoted_side &&
-                leo2_context_backend(contexts[context_i].context) ==
-                    LEO2_BACKEND_AVX2 &&
+                (forward_backend == LEO2_BACKEND_AVX2 ||
+                 forward_backend == LEO2_BACKEND_GFNI) &&
                 aligned_prefix > 1024;
             require(counts.forward_fused_calls ==
                     (expect_fused_forward ? 1U : 0U),

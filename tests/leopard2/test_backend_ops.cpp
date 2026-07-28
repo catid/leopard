@@ -24,11 +24,11 @@ void require(bool condition, const char* message)
 void test_feature_classifier()
 {
     using leopard::backend::ClassifyX86Features;
-    require(!ClassifyX86Features(0, ~0U, ~0U, ~0ULL).ssse3,
+    require(!ClassifyX86Features(0, ~0U, ~0U, 0, ~0ULL).ssse3,
         "leaf-zero SSSE3 classification");
-    require(!ClassifyX86Features(0, ~0U, ~0U, ~0ULL).avx2,
+    require(!ClassifyX86Features(0, ~0U, ~0U, 0, ~0ULL).avx2,
         "leaf-zero AVX2 classification");
-    require(!ClassifyX86Features(0, ~0U, ~0U, ~0ULL).avx512,
+    require(!ClassifyX86Features(0, ~0U, ~0U, 0, ~0ULL).avx512,
         "leaf-zero AVX-512 classification");
 
     const uint32_t ssse3 = 0x00000200U;
@@ -38,40 +38,59 @@ void test_feature_classifier()
     const uint32_t avx512bw = 0x40000000U;
     const uint32_t avx512vl = 0x80000000U;
     const uint32_t avx512 = avx512f | avx512bw | avx512vl;
-    require(ClassifyX86Features(1, ssse3, 0, 0).ssse3,
+    const uint32_t gfni = 0x00000100U;
+    require(ClassifyX86Features(1, ssse3, 0, 0, 0).ssse3,
         "SSSE3 classification");
-    require(!ClassifyX86Features(7, ssse3, avx2, 6).avx2,
+    require(!ClassifyX86Features(7, ssse3, avx2, 0, 6).avx2,
         "AVX2 without AVX/OSXSAVE");
-    require(!ClassifyX86Features(7, ssse3 | osxsave_avx, avx2, 2).avx2,
+    require(!ClassifyX86Features(7, ssse3 | osxsave_avx, avx2, 0, 2).avx2,
         "AVX2 without YMM state");
-    require(!ClassifyX86Features(6, ssse3 | osxsave_avx, avx2, 6).avx2,
+    require(!ClassifyX86Features(6, ssse3 | osxsave_avx, avx2, 0, 6).avx2,
         "AVX2 without leaf seven");
     const leopard::backend::X86Features complete = ClassifyX86Features(
-        7, ssse3 | osxsave_avx, avx2, 6);
+        7, ssse3 | osxsave_avx, avx2, 0, 6);
     require(complete.ssse3 && complete.avx2,
         "complete AVX2 classification");
     require(!complete.avx512, "AVX2 misclassified as AVX-512");
+    require(!complete.gfni, "AVX2 without the GFNI bit misclassified");
     require(!ClassifyX86Features(
-            7, ssse3 | osxsave_avx, avx2 | avx512, 6).avx512,
+            7, ssse3 | osxsave_avx, avx2 | avx512, 0, 6).avx512,
         "AVX-512 without opmask/ZMM state");
     require(!ClassifyX86Features(
             7, ssse3 | osxsave_avx, avx2 | avx512bw | avx512vl,
-            0xe6).avx512,
+            0, 0xe6).avx512,
         "AVX-512 without AVX512F");
     require(!ClassifyX86Features(
             7, ssse3 | osxsave_avx, avx2 | avx512f | avx512vl,
-            0xe6).avx512,
+            0, 0xe6).avx512,
         "AVX-512 without AVX512BW");
     require(!ClassifyX86Features(
             7, ssse3 | osxsave_avx, avx2 | avx512f | avx512bw,
-            0xe6).avx512,
+            0, 0xe6).avx512,
         "AVX-512 without AVX512VL");
     const leopard::backend::X86Features complete_avx512 =
         ClassifyX86Features(
-            7, ssse3 | osxsave_avx, avx2 | avx512, 0xe6);
+            7, ssse3 | osxsave_avx, avx2 | avx512, 0, 0xe6);
     require(complete_avx512.ssse3 && complete_avx512.avx2 &&
             complete_avx512.avx512,
         "complete AVX-512 classification");
+
+    // GFNI is an AVX2-tier qualification: the affine kernels are VEX-encoded
+    // and therefore require the same YMM state the AVX2 member requires, so
+    // the leaf-seven ECX bit alone never qualifies the member.
+    const leopard::backend::X86Features complete_gfni =
+        ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2, gfni, 6);
+    require(complete_gfni.ssse3 && complete_gfni.avx2 &&
+            complete_gfni.gfni,
+        "complete GFNI classification");
+    require(!complete_gfni.avx512, "GFNI misclassified as AVX-512");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, 0, gfni, 6).gfni,
+        "GFNI without AVX2");
+    require(!ClassifyX86Features(
+            7, ssse3 | osxsave_avx, avx2, gfni, 2).gfni,
+        "GFNI without YMM state");
 }
 
 void test_processor_classifier()
@@ -410,6 +429,9 @@ void verify_expected_backend(leo2_backend backend)
     else if (std::strcmp(expected, "avx512") == 0)
         require(backend == LEO2_BACKEND_AVX512,
             "forced AVX-512 selection");
+    else if (std::strcmp(expected, "gfni") == 0 ||
+             std::strcmp(expected, "avx2-gfni") == 0)
+        require(backend == LEO2_BACKEND_GFNI, "forced GFNI selection");
     else
         throw std::runtime_error("invalid expected backend");
 }
@@ -430,6 +452,18 @@ void verify_forced_avx512_qualification_cap()
     else if (std::strcmp(expected, "avx512") == 0)
         require(avx512 != NULL,
             "forced AVX-512 variant did not qualify its selected table");
+    // GFNI is the second explicit-only member and the same lower forced
+    // variants cap it.  A forced AVX-512 variant does not cap it, and its
+    // availability there still depends on the host, so it is not asserted.
+    const leopard::backend::Ops* gfni =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_GFNI);
+    if (forced_lower)
+        require(gfni == NULL,
+            "lower forced variant exposed explicit GFNI");
+    else if (std::strcmp(expected, "gfni") == 0 ||
+             std::strcmp(expected, "avx2-gfni") == 0)
+        require(gfni != NULL,
+            "forced GFNI variant did not qualify its selected table");
 }
 
 } // namespace
@@ -450,7 +484,8 @@ int main()
             "backend selection missing");
 #ifdef LEO_HAS_FF8
         require((ops.kind == LEO2_BACKEND_AVX2 ||
-                 ops.kind == LEO2_BACKEND_AVX512) ==
+                 ops.kind == LEO2_BACKEND_AVX512 ||
+                 ops.kind == LEO2_BACKEND_GFNI) ==
                     (ops.ff8_weighted_ifft_butterfly4 != NULL),
             "weighted locator capability escaped the AVX2 GF8 backend");
         const leopard::backend::Ops* scalar_ops =
@@ -472,6 +507,11 @@ int main()
         if (avx512_ops)
             require(avx512_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "AVX-512 backend omitted its qualified weighted boundary");
+        const leopard::backend::Ops* gfni_ops =
+            leopard::backend::GetQualifiedOps(LEO2_BACKEND_GFNI);
+        if (gfni_ops)
+            require(gfni_ops->ff8_weighted_ifft_butterfly4 != NULL,
+                "GFNI backend omitted its qualified weighted boundary");
 #else
         require(!ops.ff8_weighted_ifft_butterfly4,
             "FF8-disabled build exposed a weighted boundary");

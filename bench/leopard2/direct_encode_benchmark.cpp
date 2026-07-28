@@ -589,7 +589,15 @@ static bool ExpectedAutoDirectPath(
     const leo2_context* context,
     bool direct_capable)
 {
-    if (!direct_capable || leo2_codec_profile(codec) != LEO2_PROFILE_LOW_V1 ||
+    const leo2_profile profile = leo2_codec_profile(codec);
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    const bool profile_ok = profile == LEO2_PROFILE_LOW_V1 ||
+        (profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+         leo2_context_backend(context) != LEO2_BACKEND_SCALAR);
+#else
+    const bool profile_ok = profile == LEO2_PROFILE_LOW_V1;
+#endif
+    if (!direct_capable || !profile_ok ||
         options.k < 2 || options.q != 1 || options.bytes < 1024 ||
         (options.bytes & 63U) != 0)
         return false;
@@ -598,7 +606,8 @@ static bool ExpectedAutoDirectPath(
         return options.k >= 3;
     return backend == LEO2_BACKEND_SSSE3 ||
         backend == LEO2_BACKEND_AVX2 ||
-        backend == LEO2_BACKEND_AVX512;
+        backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_GFNI;
 }
 
 static const char* ProfileName(leo2_profile profile)
@@ -634,6 +643,7 @@ static const char* BackendName(leo2_backend backend)
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
+    case LEO2_BACKEND_GFNI: return "avx2-gfni";
     }
     return "unknown";
 }

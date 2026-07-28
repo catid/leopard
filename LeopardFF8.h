@@ -315,6 +315,7 @@ struct TestOnlyLowEncodeCounts
 {
     uint64_t fft_butterfly2_out_of_place;
     uint64_t fft_butterfly4_out_of_place;
+    uint64_t fft_butterfly8_out_of_place;
     uint64_t direct_output_blocks;
     uint64_t direct_output_butterfly2_out_of_place;
     uint64_t direct_output_butterfly4_out_of_place;

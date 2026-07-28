@@ -1357,7 +1357,8 @@ int main()
             LEO2_BACKEND_SCALAR,
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2,
-            LEO2_BACKEND_AVX512
+            LEO2_BACKEND_AVX512,
+            LEO2_BACKEND_GFNI
         };
         const unsigned sizes8[] = { 2, 4, 8, 16, 64, 128, 256 };
         const unsigned sizes16[] = { 2, 4, 16, 64, 256, 1024 };

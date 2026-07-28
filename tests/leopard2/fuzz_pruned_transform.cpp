@@ -525,12 +525,13 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             LEO2_BACKEND_SCALAR,
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2,
-            LEO2_BACKEND_AVX512
+            LEO2_BACKEND_AVX512,
+            LEO2_BACKEND_GFNI
         };
         leopard::backend::QualificationStatus status =
             leopard::backend::QualificationAvailable;
         const leopard::backend::Ops* ops = leopard::backend::GetQualifiedOps(
-            requested[data[5] % 4u], &status);
+            requested[data[5] % 5u], &status);
         if (!ops)
         {
             ops = leopard::backend::GetQualifiedOps(

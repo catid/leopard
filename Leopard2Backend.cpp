@@ -60,15 +60,15 @@ bool IsWeightedIFFTButterfly4AliasingValid(
 }
 
 static const Ops* SelectedOps = NULL;
-static const Ops* QualifiedOps[LEO2_BACKEND_AVX512 + 1] = {};
+static const Ops* QualifiedOps[LEO2_BACKEND_GFNI + 1] = {};
 enum QualificationState
 {
     QualificationUnattempted,
     QualificationPassed,
     QualificationFailed
 };
-static QualificationState QualificationStates[LEO2_BACKEND_AVX512 + 1] = {};
-static QualificationStatus QualificationFailures[LEO2_BACKEND_AVX512 + 1] = {};
+static QualificationState QualificationStates[LEO2_BACKEND_GFNI + 1] = {};
+static QualificationStatus QualificationFailures[LEO2_BACKEND_GFNI + 1] = {};
 static InitializeArgs SavedInitializeArgs = { NULL, NULL };
 static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
@@ -96,6 +96,9 @@ static TestSetupFault AllocationFaultFor(
     case LEO2_BACKEND_AVX512:
         return ff16 ? TestSetupFaultAVX512FF16Allocation
                     : TestSetupFaultAVX512FF8Allocation;
+    case LEO2_BACKEND_GFNI:
+        return ff16 ? TestSetupFaultGFNIFF16Allocation
+                    : TestSetupFaultGFNIFF8Allocation;
     default:
         return TestSetupFaultNone;
     }
@@ -109,6 +112,7 @@ static TestSetupFault KATFaultFor(leo2_backend backend)
     case LEO2_BACKEND_SSSE3: return TestSetupFaultSSSE3KAT;
     case LEO2_BACKEND_AVX2: return TestSetupFaultAVX2KAT;
     case LEO2_BACKEND_AVX512: return TestSetupFaultAVX512KAT;
+    case LEO2_BACKEND_GFNI: return TestSetupFaultGFNIKAT;
     default: return TestSetupFaultNone;
     }
 }
@@ -760,12 +764,16 @@ static bool TestFF8ButterflyRanges(const Ops& ops)
     void* actual_pointers[kLaneCount];
     void* expected_pointers[kLaneCount];
     void* xor_actual_pointers[kLaneCount];
+    // prefer_fused selects materially different range schedules, so both must
+    // be known-answer tested.  The GF16 companion already loops over it.
+    for (unsigned fused = 0; fused < 2; ++fused)
     for (size_t set_i = 0;
          set_i < sizeof(log_sets) / sizeof(log_sets[0]); ++set_i)
         for (size_t count_i = 0;
              count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
              ++count_i)
         {
+            const bool prefer_fused = fused != 0;
             const uint64_t bytes = byte_counts[count_i];
             for (unsigned lane = 0; lane < kLaneCount; ++lane)
             {
@@ -791,7 +799,7 @@ static bool TestFF8ButterflyRanges(const Ops& ops)
             ops.ff8_ifft_butterfly4_range(
                 actual_pointers, kDistance,
                 log_sets[set_i][0], log_sets[set_i][1],
-                log_sets[set_i][2], bytes, true);
+                log_sets[set_i][2], bytes, prefer_fused);
             if (std::memcmp(actual, expected, sizeof(actual)) != 0)
                 return false;
 
@@ -810,7 +818,7 @@ static bool TestFF8ButterflyRanges(const Ops& ops)
             ops.ff8_fft_butterfly4_range(
                 actual_pointers, kDistance,
                 log_sets[set_i][0], log_sets[set_i][1],
-                log_sets[set_i][2], bytes, true);
+                log_sets[set_i][2], bytes, prefer_fused);
             if (std::memcmp(actual, expected, sizeof(actual)) != 0)
                 return false;
 
@@ -1991,27 +1999,153 @@ static bool TestWeightedIFFTAliasingContract()
     return IsWeightedIFFTButterfly4AliasingValid(nulls, nulls, 15, 0);
 }
 
+
+#ifdef LEO_HAS_FF8
+// Reference for the fused three-layer radix-eight butterflies: composed from
+// the audited two-point reference so the fused kernels are checked against the
+// same source of truth as every other butterfly, not against themselves.
+// Pair/skew maps mirror the kernels exactly (verified against the scalar
+// tails in Leopard2BackendAVX2.cpp): inverse consumes skews[0..3] at distance
+// one, skews[4..5] at distance two, skews[6] at distance four; forward
+// consumes skews[0] at distance four, skews[1..2] at distance two, and
+// skews[3..6] at distance one.
+template <bool Inverse>
+static void ReferenceFF8Butterfly8Out(
+    uint8_t* const lanes[8],
+    const uint8_t* skews,
+    uint64_t byte_count,
+    FF8MultiplyLog reference)
+{
+    static const unsigned inverse_pairs[12][3] = {
+        {0,1,0},{2,3,1},{4,5,2},{6,7,3},
+        {0,2,4},{1,3,4},{4,6,5},{5,7,5},
+        {0,4,6},{1,5,6},{2,6,6},{3,7,6}
+    };
+    static const unsigned forward_pairs[12][3] = {
+        {0,4,0},{1,5,0},{2,6,0},{3,7,0},
+        {0,2,1},{1,3,1},{4,6,2},{5,7,2},
+        {0,1,3},{2,3,4},{4,5,5},{6,7,6}
+    };
+    const unsigned (*pairs)[3] = Inverse ? inverse_pairs : forward_pairs;
+    for (unsigned p = 0; p < 12; ++p)
+    {
+        uint8_t* const x = lanes[pairs[p][0]];
+        uint8_t* const y = lanes[pairs[p][1]];
+        const uint8_t skew = skews[pairs[p][2]];
+        if (skew == 255)
+        {
+            /*
+                Unlike the two-point ops, whose callers branch on the sentinel
+                before dispatching, the fused radix-eight contract absorbs the
+                branch: a sentinel skew skips the multiply half, leaving only
+                the xor half, which is y ^= x in both directions.  Composing
+                the branchless two-point reference here would instead multiply
+                by one (AddMod wraps log 255 to the identity), which is not
+                what the transform semantics require.
+            */
+            for (uint64_t i = 0; i < byte_count; ++i)
+                y[i] ^= x[i];
+            continue;
+        }
+        ReferenceFF8Butterfly2<Inverse>(x, y, skew, byte_count, reference);
+    }
+}
+
+static bool TestFF8Butterfly8Out(const Ops& ops, FF8MultiplyLog reference)
+{
+    static const uint8_t skew_sets[][7] = {
+        { 255, 255, 255, 255, 255, 255, 255 },
+        { 0, 0, 0, 0, 0, 0, 0 },
+        { 1, 2, 3, 4, 5, 6, 7 },
+        { 254, 253, 252, 251, 250, 249, 248 },
+        { 255, 3, 255, 7, 255, 11, 255 },
+        { 13, 255, 17, 255, 19, 255, 23 }
+    };
+    static const uint64_t byte_counts[] = {
+        0, 1, 31, 32, 33, 63, 64, 65, 257, 521
+    };
+    uint8_t inputs[8][524];
+    uint8_t original_inputs[8][524];
+    uint8_t outputs[8][524];
+    uint8_t expected[8][524];
+    for (size_t set_i = 0;
+         set_i < sizeof(skew_sets) / sizeof(skew_sets[0]); ++set_i)
+        for (size_t count_i = 0;
+             count_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++count_i)
+        {
+            const uint64_t bytes = byte_counts[count_i];
+            for (int direction = 0; direction < 2; ++direction)
+            {
+                const void* input_pointers[8];
+                void* output_pointers[8];
+                uint8_t* expected_lanes[8];
+                for (unsigned lane = 0; lane < 8; ++lane)
+                {
+                    for (size_t i = 0; i < sizeof(inputs[lane]); ++i)
+                    {
+                        inputs[lane][i] = original_inputs[lane][i] =
+                            static_cast<uint8_t>(i * (61U + lane * 9U) +
+                                set_i * 41U + count_i * 13U +
+                                direction * 7U + lane);
+                        outputs[lane][i] = expected[lane][i] =
+                            static_cast<uint8_t>(0xc3U + lane * 11U +
+                                direction * 5U);
+                    }
+                    std::memcpy(expected[lane] + 1, inputs[lane] + 1, bytes);
+                    input_pointers[lane] = inputs[lane] + 1;
+                    output_pointers[lane] = outputs[lane] + 1;
+                    expected_lanes[lane] = expected[lane] + 1;
+                }
+                if (direction == 0)
+                {
+                    ReferenceFF8Butterfly8Out<true>(
+                        expected_lanes, skew_sets[set_i], bytes, reference);
+                    ops.ff8_ifft_butterfly8_out(
+                        input_pointers, output_pointers,
+                        skew_sets[set_i], bytes);
+                }
+                else
+                {
+                    ReferenceFF8Butterfly8Out<false>(
+                        expected_lanes, skew_sets[set_i], bytes, reference);
+                    ops.ff8_fft_butterfly8_out(
+                        input_pointers, output_pointers,
+                        skew_sets[set_i], bytes);
+                }
+                // Inputs are read-only; outputs must match the reference and
+                // the guard bytes outside [1, 1+bytes) must be untouched.
+                if (std::memcmp(inputs, original_inputs,
+                        sizeof(inputs)) != 0 ||
+                    std::memcmp(outputs, expected, sizeof(outputs)) != 0)
+                    return false;
+            }
+        }
+    return true;
+}
+#endif // LEO_HAS_FF8
+
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
         !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
         return false;
 #ifdef LEO_HAS_FF8
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+    if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.xor_memory_sources_fused_final != NULL))
         return false;
 #else
     if (ops.xor_memory_sources_fused_final)
         return false;
 #endif
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+    if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.xor_memory_dense != NULL))
         return false;
 #ifdef LEO_HAS_FF8
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+    if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.ff8_multiply_add_outputs != NULL))
         return false;
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+    if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.ff8_multiply_add_2_sources_2_outputs != NULL))
         return false;
     if (!args.ff8_multiply_log || !ops.ff8_multiply ||
@@ -2033,7 +2167,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8HighEncodeSmall(ops))
         return false;
     if (ops.kind == LEO2_BACKEND_AVX2 ||
-        ops.kind == LEO2_BACKEND_AVX512)
+        ops.kind == LEO2_BACKEND_AVX512 ||
+        ops.kind == LEO2_BACKEND_GFNI)
     {
         if (!ops.ff8_weighted_ifft_butterfly4 ||
             !TestWeightedIFFTAliasingContract() ||
@@ -2041,6 +2176,20 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
             return false;
     }
     else if (ops.ff8_weighted_ifft_butterfly4)
+        return false;
+    // Fused radix-eight staging: both directions publish together, the GFNI
+    // member requires them, scalar/SSSE3 never publish them, and any published
+    // pair must pass the composed-reference known-answer test.
+    if ((ops.ff8_ifft_butterfly8_out != NULL) !=
+        (ops.ff8_fft_butterfly8_out != NULL))
+        return false;
+    if (ops.kind == LEO2_BACKEND_GFNI && !ops.ff8_ifft_butterfly8_out)
+        return false;
+    if ((ops.kind == LEO2_BACKEND_SCALAR ||
+         ops.kind == LEO2_BACKEND_SSSE3) && ops.ff8_ifft_butterfly8_out)
+        return false;
+    if (ops.ff8_ifft_butterfly8_out &&
+        !TestFF8Butterfly8Out(ops, args.ff8_multiply_log))
         return false;
 #else
     if (ops.ff8_multiply || ops.ff8_multiply_add ||
@@ -2056,7 +2205,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_high_encode_one_block ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
-        ops.ff8_multiply_add_2_sources_2_outputs)
+        ops.ff8_multiply_add_2_sources_2_outputs ||
+        ops.ff8_ifft_butterfly8_out ||
+        ops.ff8_fft_butterfly8_out)
         return false;
 #endif
 #ifdef LEO_HAS_FF16
@@ -2150,6 +2301,20 @@ static leo2_backend SelectBackend(const X86Features& features)
     if (features.avx2)
         selected_kind = LEO2_BACKEND_AVX2;
 # endif
+# if defined(LEO2_HAVE_GFNI_BACKEND) && defined(LEO2_EXPERIMENT_AUTO_GFNI)
+    /*
+        Default-off candidate: on the calibrated Zen 5 host, select the GFNI
+        table as the process default so AUTO contexts inherit it.  The 44-cell
+        same-binary screen qualifies the candidate (zero regressions, zero
+        digest differences); flipping this on by default additionally requires
+        the isolated exact-main campaign per docs/leopard2_gfni_codec.md
+        requirements 3-4.  Unknown processor models retain the AVX2 baseline
+        even with the experiment enabled.
+    */
+    if (selected_kind == LEO2_BACKEND_AVX2 && features.gfni &&
+        IsCalibratedAutoGFNIHost())
+        selected_kind = LEO2_BACKEND_GFNI;
+# endif
 # if defined(LEO2_HAVE_SSSE3_BACKEND)
     if (selected_kind == LEO2_BACKEND_SCALAR && features.ssse3)
         selected_kind = LEO2_BACKEND_SSSE3;
@@ -2185,6 +2350,18 @@ static uint32_t QualifiableBackendMaskFor(
         mask |= 1U << LEO2_BACKEND_AVX512;
 # endif
 #endif
+#if defined(LEO2_HAVE_GFNI_BACKEND)
+    // Explicit-only, mirroring the AVX-512 policy: the GFNI table may be
+    // requested by API selection on a qualified host, and AUTO never selects
+    // it until a same-binary selector screen exists.  The same lower forced
+    // variants cap it.
+# if !defined(LEO2_BACKEND_FORCE_SCALAR) && \
+     !defined(LEO2_BACKEND_FORCE_SSSE3) && \
+     !defined(LEO2_BACKEND_FORCE_AVX2)
+    if (features.gfni)
+        mask |= 1U << LEO2_BACKEND_GFNI;
+# endif
+#endif
     return mask;
 }
 
@@ -2218,6 +2395,10 @@ bool Initialize(const InitializeArgs& args)
 #if defined(LEO2_HAVE_AVX512_BACKEND)
     if (selected_kind == LEO2_BACKEND_AVX512)
         selected_ops = InitializeAVX512(args);
+#endif
+#if defined(LEO2_HAVE_GFNI_BACKEND)
+    if (selected_kind == LEO2_BACKEND_GFNI)
+        selected_ops = InitializeGFNI(args);
 #endif
 
     if (!selected_ops)
@@ -2269,7 +2450,7 @@ const Ops* GetQualifiedOps(
     if (requested == LEO2_BACKEND_AUTO)
         return SelectedOps;
     const unsigned index = static_cast<unsigned>(requested);
-    if (index > static_cast<unsigned>(LEO2_BACKEND_AVX512))
+    if (index > static_cast<unsigned>(LEO2_BACKEND_GFNI))
     {
         if (status)
             *status = QualificationUnavailable;
@@ -2311,6 +2492,11 @@ const Ops* GetQualifiedOps(
 #if defined(LEO2_HAVE_AVX512_BACKEND)
     case LEO2_BACKEND_AVX512:
         candidate = InitializeAVX512(SavedInitializeArgs);
+        break;
+#endif
+#if defined(LEO2_HAVE_GFNI_BACKEND)
+    case LEO2_BACKEND_GFNI:
+        candidate = InitializeGFNI(SavedInitializeArgs);
         break;
 #endif
     default:
@@ -2384,7 +2570,7 @@ bool TestBackendCanQualifyForHost(leo2_backend backend)
     const X86Features features = DetectX86Features();
     const leo2_backend selected = SelectBackend(features);
     if (selected == LEO2_BACKEND_AUTO ||
-        backend <= LEO2_BACKEND_AUTO || backend > LEO2_BACKEND_AVX512)
+        backend <= LEO2_BACKEND_AUTO || backend > LEO2_BACKEND_GFNI)
         return false;
     return (QualifiableBackendMaskFor(features, selected) &
         (1U << static_cast<unsigned>(backend))) != 0;
@@ -2413,6 +2599,11 @@ bool TestGetBackendState(leo2_backend backend, TestBackendState* state)
 # if defined(LEO2_HAVE_AVX512_BACKEND)
     case LEO2_BACKEND_AVX512:
         TestGetAVX512TableState(state);
+        break;
+# endif
+# if defined(LEO2_HAVE_GFNI_BACKEND)
+    case LEO2_BACKEND_GFNI:
+        TestGetGFNITableState(state);
         break;
 # endif
     default:

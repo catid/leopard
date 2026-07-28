@@ -279,6 +279,7 @@ target_link_libraries(leopard PUBLIC Threads::Threads)
 set(LEO2_HAVE_SSSE3_BACKEND OFF)
 set(LEO2_HAVE_AVX2_BACKEND OFF)
 set(LEO2_HAVE_AVX512_BACKEND OFF)
+set(LEO2_HAVE_GFNI_BACKEND OFF)
 if(LEO2_X86_TARGET)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
@@ -343,6 +344,29 @@ if(LEO2_X86_TARGET)
             endif()
             set(LEO2_HAVE_AVX512_BACKEND ON)
         endif()
+
+        check_cxx_compiler_flag("-mgfni" LEO2_FLAG_MGFNI)
+        if(LEO2_HAVE_AVX2_BACKEND AND LEO2_FLAG_MGFNI)
+            # Compile the reviewed AVX2 algorithms a third time with the GFNI
+            # affine multiplication kernels and its own backend identity.  The
+            # data path stays VEX 256-bit; -mno-avx512f keeps the member
+            # EVEX-free so the portable-ISA audit can hold it to the AVX2
+            # operand contract plus the GF2P8 family.
+            add_library(leopard2_backend_gfni OBJECT
+                Leopard2BackendGFNI.cpp)
+            target_include_directories(leopard2_backend_gfni PRIVATE
+                ${CMAKE_CURRENT_SOURCE_DIR})
+            target_compile_definitions(leopard2_backend_gfni PRIVATE
+                LEO2_HAVE_AVX2_BACKEND=1
+                LEO2_HAVE_GFNI_BACKEND=1)
+            target_compile_options(leopard2_backend_gfni PRIVATE
+                -mavx2 -mgfni -mno-avx512f)
+            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+                target_compile_options(leopard2_backend_gfni PRIVATE
+                    -falign-functions=64)
+            endif()
+            set(LEO2_HAVE_GFNI_BACKEND ON)
+        endif()
     elseif(MSVC)
         # x64 MSVC accepts SSSE3 intrinsics without raising other translation
         # units.  AVX2 remains isolated behind /arch:AVX2.
@@ -405,6 +429,19 @@ if(LEO2_HAVE_AVX512_BACKEND)
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx512>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX512_BACKEND=1)
+endif()
+if(LEO2_HAVE_GFNI_BACKEND)
+    if(NOT LEOPARD_ENABLE_GF8)
+        target_compile_definitions(leopard2_backend_gfni PRIVATE
+            NO_LEO_HAS_FF8=1)
+    endif()
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_backend_gfni PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
+    target_sources(leopard PRIVATE
+        $<TARGET_OBJECTS:leopard2_backend_gfni>)
+    target_compile_definitions(leopard PRIVATE LEO2_HAVE_GFNI_BACKEND=1)
 endif()
 if(ENABLE_OPENMP)
     if(TARGET OpenMP::OpenMP_CXX)
@@ -748,6 +785,34 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX512_BACKEND=1)
     endif()
+    if(LEO2_HAVE_GFNI_BACKEND)
+        add_library(leopard2_backend_gfni_test_hooks OBJECT EXCLUDE_FROM_ALL
+            Leopard2BackendGFNI.cpp)
+        target_include_directories(leopard2_backend_gfni_test_hooks PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_gfni_test_hooks PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HAVE_AVX2_BACKEND=1
+            LEO2_HAVE_GFNI_BACKEND=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_gfni_test_hooks
+                PRIVATE NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_gfni_test_hooks
+                PRIVATE NO_LEO_HAS_FF16=1)
+        endif()
+        target_compile_options(leopard2_backend_gfni_test_hooks PRIVATE
+            -mavx2 -mgfni -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_gfni_test_hooks PRIVATE
+                -falign-functions=64)
+        endif()
+        target_sources(leopard_test_hooks PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_gfni_test_hooks>)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_HAVE_GFNI_BACKEND=1)
+    endif()
     if(ENABLE_OPENMP)
         if(TARGET OpenMP::OpenMP_CXX)
             target_link_libraries(leopard_test_hooks PUBLIC OpenMP::OpenMP_CXX)
@@ -978,6 +1043,9 @@ if(LEO2_BUILD_TESTS)
             if(LEO2_HAVE_AVX512_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx512)
             endif()
+            if(LEO2_HAVE_GFNI_BACKEND)
+                list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES gfni)
+            endif()
             string(REPLACE ";" "," LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG
                 "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES}")
             set(LEO2_PORTABLE_ISA_METADATA_ARGS)
@@ -1114,6 +1182,14 @@ if(LEO2_BUILD_TESTS)
             COMMAND leopard2_backend_failures_test
                 auto-avx512-kat-fallback)
     endif()
+    if(LEO2_HAVE_GFNI_BACKEND)
+        add_test(NAME leopard2_backend_failure_gfni_ff8_allocation
+            COMMAND leopard2_backend_failures_test gfni ff8-allocation)
+        add_test(NAME leopard2_backend_failure_gfni_ff16_allocation
+            COMMAND leopard2_backend_failures_test gfni ff16-allocation)
+        add_test(NAME leopard2_backend_failure_gfni_kat
+            COMMAND leopard2_backend_failures_test gfni kat)
+    endif()
     set_tests_properties(
         leopard2_backend_failure_scalar_ff8_allocation
         leopard2_backend_failure_scalar_ff16_allocation
@@ -1131,6 +1207,13 @@ if(LEO2_BUILD_TESTS)
             leopard2_backend_failure_avx512_ff16_allocation
             leopard2_backend_failure_avx512_kat
             leopard2_backend_auto_avx512_kat_fallback
+            PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
+    endif()
+    if(LEO2_HAVE_GFNI_BACKEND)
+        set_tests_properties(
+            leopard2_backend_failure_gfni_ff8_allocation
+            leopard2_backend_failure_gfni_ff16_allocation
+            leopard2_backend_failure_gfni_kat
             PROPERTIES ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
     endif()
 
@@ -1954,6 +2037,35 @@ if(LEO2_BUILD_FUZZERS)
             LEO2_HAVE_AVX512_BACKEND=1)
         target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
             LEO2_HAVE_AVX512_BACKEND=1)
+    endif()
+    if(LEO2_HAVE_GFNI_BACKEND)
+        add_library(leopard2_backend_gfni_fuzz OBJECT
+            Leopard2BackendGFNI.cpp)
+        target_include_directories(leopard2_backend_gfni_fuzz PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR})
+        target_compile_definitions(leopard2_backend_gfni_fuzz PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HAVE_AVX2_BACKEND=1
+            LEO2_HAVE_GFNI_BACKEND=1)
+        if(NOT LEOPARD_ENABLE_GF8)
+            target_compile_definitions(leopard2_backend_gfni_fuzz PRIVATE
+                NO_LEO_HAS_FF8=1)
+        endif()
+        if(NOT LEOPARD_ENABLE_GF16)
+            target_compile_definitions(leopard2_backend_gfni_fuzz PRIVATE
+                NO_LEO_HAS_FF16=1)
+        endif()
+        target_compile_options(leopard2_backend_gfni_fuzz PRIVATE
+            ${LEO2_FUZZ_SANITIZER_FLAGS}
+            -mavx2 -mgfni -mno-avx512f)
+        target_sources(leopard2_api_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_gfni_fuzz>)
+        target_sources(leopard2_pruned_plan_fuzzer PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_gfni_fuzz>)
+        target_compile_definitions(leopard2_api_fuzzer PRIVATE
+            LEO2_HAVE_GFNI_BACKEND=1)
+        target_compile_definitions(leopard2_pruned_plan_fuzzer PRIVATE
+            LEO2_HAVE_GFNI_BACKEND=1)
     endif()
     set_property(TARGET leopard2_api_fuzzer APPEND_STRING PROPERTY
         LINK_FLAGS " -fsanitize=fuzzer,address,undefined")

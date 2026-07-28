@@ -172,8 +172,16 @@ AVX512_BACKEND_FAILURE_TESTS = (
     "leopard2_backend_failure_avx512_kat",
     "leopard2_backend_auto_avx512_kat_fallback",
 )
+# GFNI has no AUTO fallback case: AUTO never selects it, so there is no
+# selected-backend qualification to fall back from.
+GFNI_BACKEND_FAILURE_TESTS = (
+    "leopard2_backend_failure_gfni_ff8_allocation",
+    "leopard2_backend_failure_gfni_ff16_allocation",
+    "leopard2_backend_failure_gfni_kat",
+)
 BACKEND_FAILURE_TESTS = (
-    BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
+    BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS +
+    GFNI_BACKEND_FAILURE_TESTS
 )
 BACKEND_FAILURE_CTEST_REGEX = \
     "^leopard2_backend_(failure_|auto_avx512_kat_fallback$)"
@@ -199,6 +207,7 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "Leopard2BackendAVX2.cpp": 2,
     "Leopard2BackendAVX2Xor.cpp": 2,
     "Leopard2BackendAVX512.cpp": 2,
+    "Leopard2BackendGFNI.cpp": 2,
     "Leopard2BackendSSSE3.cpp": 2,
     "Leopard2BackendScalar.cpp": 3,
     "Leopard2CpuFeatures.cpp": 3,
@@ -260,6 +269,7 @@ SOURCE_FILES = (
     "Leopard2BackendAVX2.cpp",
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp",
+    "Leopard2BackendGFNI.cpp",
     "Leopard2CpuFeatures.cpp",
     "LeopardFF8.cpp",
     "LeopardFF8.h",
@@ -349,6 +359,8 @@ def evidence_contract():
         "base_backend_failure_tests": tuple(BASE_BACKEND_FAILURE_TESTS),
         "avx512_backend_failure_tests": tuple(
             AVX512_BACKEND_FAILURE_TESTS),
+        "gfni_backend_failure_tests": tuple(
+            GFNI_BACKEND_FAILURE_TESTS),
         "backend_failure_ctest_regex": BACKEND_FAILURE_CTEST_REGEX,
         "portable_ctest_regex": PORTABLE_CTEST_REGEX,
         "cuda_ctest_regex": CUDA_CTEST_REGEX,
@@ -406,13 +418,17 @@ def expected_compile_source_counts(cache):
         cmake_cache_true(cache, "LEO2_FLAG_MAVX512VL") and
         cmake_cache_true(cache, "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256")
     )
+    # The GFNI member is compiled with -mavx2 -mgfni -mno-avx512f, so its
+    # probe is the AVX2 pair plus the affine flag.
+    have_gfni = have_avx2 and cmake_cache_true(cache, "LEO2_FLAG_MGFNI")
     have_gf8 = cmake_cache_true(cache, "LEOPARD_ENABLE_GF8") \
         if "LEOPARD_ENABLE_GF8" in cache else True
     for source, available in (
             ("Leopard2BackendSSSE3.cpp", have_ssse3),
             ("Leopard2BackendAVX2.cpp", have_avx2),
             ("Leopard2BackendAVX2Xor.cpp", have_avx2 and have_gf8),
-            ("Leopard2BackendAVX512.cpp", have_avx512)):
+            ("Leopard2BackendAVX512.cpp", have_avx512),
+            ("Leopard2BackendGFNI.cpp", have_gfni)):
         if not available:
             expected.pop(source)
     return expected
@@ -456,9 +472,14 @@ def backend_failure_tests_for_build(build_identity):
     sources = {
         command["file"] for command in build_identity["compile_commands"]
     }
+    tests = BASE_BACKEND_FAILURE_TESTS
+    # The two explicit-only members are independent compiler probes, so each
+    # contributes its own failure cases only when its object was compiled.
     if "Leopard2BackendAVX512.cpp" in sources:
-        return BACKEND_FAILURE_TESTS
-    return BASE_BACKEND_FAILURE_TESTS
+        tests += AVX512_BACKEND_FAILURE_TESTS
+    if "Leopard2BackendGFNI.cpp" in sources:
+        tests += GFNI_BACKEND_FAILURE_TESTS
+    return tests
 
 
 def portable_ctest_executed(stdout, stderr=b""):
@@ -1276,6 +1297,13 @@ def self_test():
     )
     assert backend_failure_tests_for_build({"compile_commands": [
         {"file": "Leopard2BackendAVX512.cpp"},
+    ]}) == BASE_BACKEND_FAILURE_TESTS + AVX512_BACKEND_FAILURE_TESTS
+    assert backend_failure_tests_for_build({"compile_commands": [
+        {"file": "Leopard2BackendGFNI.cpp"},
+    ]}) == BASE_BACKEND_FAILURE_TESTS + GFNI_BACKEND_FAILURE_TESTS
+    assert backend_failure_tests_for_build({"compile_commands": [
+        {"file": "Leopard2BackendAVX512.cpp"},
+        {"file": "Leopard2BackendGFNI.cpp"},
     ]}) == BACKEND_FAILURE_TESTS
 
     assert backend_failure_ctest_executed(
@@ -1335,6 +1363,7 @@ def self_test():
     assert "Leopard2BackendAVX2.cpp" not in no_isa
     assert "Leopard2BackendAVX2Xor.cpp" not in no_isa
     assert "Leopard2BackendAVX512.cpp" not in no_isa
+    assert "Leopard2BackendGFNI.cpp" not in no_isa
     avx2_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1345,6 +1374,16 @@ def self_test():
     assert avx2_only["Leopard2BackendAVX2.cpp"] == 2
     assert avx2_only["Leopard2BackendAVX2Xor.cpp"] == 2
     assert "Leopard2BackendAVX512.cpp" not in avx2_only
+    assert "Leopard2BackendGFNI.cpp" not in avx2_only
+    gfni_only = expected_compile_source_counts({
+        "LEO2_FLAG_MSSSE3": "1",
+        "LEO2_FLAG_MNO_AVX": "1",
+        "LEO2_FLAG_MAVX2": "1",
+        "LEO2_FLAG_MNO_AVX512F": "1",
+        "LEO2_FLAG_MGFNI": "1",
+    })
+    assert gfni_only["Leopard2BackendGFNI.cpp"] == 2
+    assert "Leopard2BackendAVX512.cpp" not in gfni_only
     gf16_only = expected_compile_source_counts({
         "LEO2_FLAG_MSSSE3": "1",
         "LEO2_FLAG_MNO_AVX": "1",
@@ -1364,6 +1403,7 @@ def self_test():
         "LEO2_FLAG_MAVX512BW": "1",
         "LEO2_FLAG_MAVX512VL": "1",
         "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256": "1",
+        "LEO2_FLAG_MGFNI": "1",
     })
     assert all_isa == EXPECTED_COMPILE_SOURCE_COUNTS
     contract_mutations = []

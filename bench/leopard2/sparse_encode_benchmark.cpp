@@ -172,7 +172,9 @@ leo2_backend parse_backend(const std::string& value)
     if (value == "avx2") return LEO2_BACKEND_AVX2;
     if (value == "avx512" || value == "avx512vl")
         return LEO2_BACKEND_AVX512;
-    fail("backend must be auto, scalar, ssse3, avx2, or avx512");
+    if (value == "gfni" || value == "avx2-gfni")
+        return LEO2_BACKEND_GFNI;
+    fail("backend must be auto, scalar, ssse3, avx2, avx512, or gfni");
     return LEO2_BACKEND_AUTO;
 }
 
@@ -186,6 +188,7 @@ const char* backend_name(leo2_backend backend)
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
+    case LEO2_BACKEND_GFNI: return "avx2-gfni";
     }
     return "unknown";
 }
@@ -283,7 +286,7 @@ void usage(const char* executable)
         << "  --k N --r N\n"
         << "  --bytes N\n"
         << "  --requested-parity MASK   comma-separated indices/ranges\n"
-        << "  --backend auto|scalar|ssse3|avx2|avx512\n"
+        << "  --backend auto|scalar|ssse3|avx2|avx512|gfni\n"
         << "  --iterations N            calls per timing sample\n"
         << "  --rounds 3                independent ABBA/BAAB/ABBA rounds\n"
         << "  --warmups N\n"

@@ -689,19 +689,34 @@ void test_low_transform_no_coefficient_copy(
         {
             const leopard::ff8::TestOnlyLowEncodeCounts actual =
                 leopard::ff8::TestOnlyGetLowEncodeCounts();
+            /*
+                The property this protects is the no-copy contract: every
+                coefficient enters the transform exactly once through an
+                out-of-place first layer, with no staging copy.  Assert that
+                directly in coefficients rather than pinning one operation's
+                call count, so a backend that publishes a wider out-of-place
+                first stage (radix-eight covers eight coefficients per call
+                instead of four) still has to satisfy it exactly.
+            */
+            const uint64_t staged_coefficients =
+                actual.fft_butterfly2_out_of_place * 2 +
+                actual.fft_butterfly4_out_of_place * 4 +
+                actual.fft_butterfly8_out_of_place * 8;
             if (p == 1)
-                require(actual.fft_butterfly2_out_of_place == 0 &&
-                        actual.fft_butterfly4_out_of_place == 0,
+                require(staged_coefficients == 0,
                     "GF8 P=1 entered a transform first layer");
-            else if (p == 2)
-                require(actual.fft_butterfly2_out_of_place == executed_blocks &&
-                        actual.fft_butterfly4_out_of_place == 0,
-                    "GF8 P=2 out-of-place call count mismatch");
             else
-                require(actual.fft_butterfly2_out_of_place == 0 &&
-                        actual.fft_butterfly4_out_of_place ==
-                            executed_blocks * (p / 4),
-                    "GF8 fused out-of-place call count mismatch");
+                require(staged_coefficients == executed_blocks * p,
+                    "GF8 out-of-place first layer did not stage every "
+                    "coefficient exactly once");
+            if (p == 2)
+                require(actual.fft_butterfly2_out_of_place == executed_blocks &&
+                        actual.fft_butterfly4_out_of_place == 0 &&
+                        actual.fft_butterfly8_out_of_place == 0,
+                    "GF8 P=2 out-of-place call count mismatch");
+            else if (p >= 4)
+                require(actual.fft_butterfly2_out_of_place == 0,
+                    "GF8 fused first layer fell back to radix two");
         }
         else
         {
@@ -1078,6 +1093,22 @@ void test_high_small_coarse_kernel(
     }
 }
 
+// Mirrors ComputeBalancedExecutionTiles in leopard2.cpp.  A qualifying aligned
+// prefix is split into ceil(prefix / requested) passes carrying equal 64-byte
+// tile counts, and the work rows are sized to the largest pass.  Keeping the
+// formula here rather than hand-computed constants lets the size assertions
+// below stay exact as the calibrated size range widens.
+static size_t balanced_pass_bytes(size_t aligned_prefix, size_t requested)
+{
+    if (requested == 0 || requested >= aligned_prefix)
+        return aligned_prefix;
+    const size_t passes = 1U + (aligned_prefix - 1U) / requested;
+    const size_t total_tiles = aligned_prefix / 64U;
+    const size_t pass_tiles =
+        total_tiles / passes + (total_tiles % passes != 0);
+    return pass_tiles * 64U;
+}
+
 void test_high_gf16_byte_tiling(
     leo2_context* context,
     const BinaryField& gf16,
@@ -1115,11 +1146,27 @@ void test_high_gf16_byte_tiling(
         "GF16 byte tiling/fallback scratch geometry mismatch");
     if (byte_tiling_active)
     {
-        require(neighboring_scratch == tiled_scratch +
-                512U * (bytes + 64U - tile_bytes),
-            "GF16 byte tiling crossed its exact measured-size boundary");
+        /*
+            Byte tiling is calibrated across shard sizes for GF16 legacy-high
+            AVX2 at padded_side 256 and 512, no longer at one exact size.  The
+            measured gain rises with the shard rather than peaking at the
+            original 64-KiB cell -- K=1000 R=200 is 1.14x at 64 KiB, 1.92x at
+            128 KiB, 2.52x at 256 KiB and 2.92x at 1 MiB, with encode scratch
+            falling 536.9 MB -> 16.8 MB at 1 MiB.  Neighboring and larger sizes
+            therefore stay tiled, each sized to its own balanced pass, and the
+            work rows never exceed the requested tile.
+        */
+        const size_t work_base = one_pass_scratch - 512U * tile_bytes;
+        require(tiled_scratch ==
+                work_base + 512U * balanced_pass_bytes(bytes, tile_bytes),
+            "GF16 byte tiling lost its balanced pass geometry");
+        require(neighboring_scratch ==
+                work_base + 512U * balanced_pass_bytes(bytes + 64U, tile_bytes),
+            "GF16 byte tiling stopped covering the neighboring size");
+        require(neighboring_scratch <= one_pass_scratch,
+            "GF16 byte tiling exceeded its requested pass bound");
         require(ragged_scratch > tiled_scratch,
-            "GF16 byte tiling crossed an uncalibrated ragged boundary");
+            "GF16 byte tiling lost its ragged staging slots");
 
         leo2_backend dense_backend = LEO2_BACKEND_AUTO;
         leo2_backend partial_backend = LEO2_BACKEND_AUTO;
@@ -1141,14 +1188,17 @@ void test_high_gf16_byte_tiling(
             "GF16 one-pass ragged scratch geometry mismatch");
     }
 
-    // Promotion is deliberately limited to the calibrated AUTO host path.
-    // Every explicit lower or wider backend retains one complete byte pass.
+    // Promotion covers the calibrated AVX2 transform path, which the AUTO host
+    // context also selects as its baseline ops, and the GFNI member that
+    // executes the same AVX2-tier schedule.  Every other explicit backend is
+    // uncalibrated and retains one complete byte pass.
     const leo2_backend fixed_backends[] = {
         LEO2_BACKEND_SCALAR,
         LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX2,
         LEO2_BACKEND_AVX512,
-        LEO2_BACKEND_NEON
+        LEO2_BACKEND_NEON,
+        LEO2_BACKEND_GFNI
     };
     for (unsigned backend_i = 0;
         backend_i < sizeof(fixed_backends) / sizeof(fixed_backends[0]);
@@ -1174,9 +1224,17 @@ void test_high_gf16_byte_tiling(
         require_result(leo2_encode_scratch_size(
             fixed_owner->codec, bytes, &fixed_large_scratch),
             "fixed-backend large scratch query");
+        const bool backend_tiles =
+            fixed_backends[backend_i] == LEO2_BACKEND_AVX2 ||
+            fixed_backends[backend_i] == LEO2_BACKEND_GFNI;
+        const size_t expected_work_bytes = backend_tiles
+            ? balanced_pass_bytes(bytes, tile_bytes) : bytes;
         require(fixed_large_scratch == fixed_small_scratch +
-                    512U * tile_bytes,
-            "explicit backend unexpectedly selected GF16 byte tiling");
+                    512U * (expected_work_bytes - tile_bytes),
+            backend_tiles
+                ? "explicit AVX2-tier backend lost the calibrated GF16 byte "
+                  "tiling"
+                : "explicit backend unexpectedly selected GF16 byte tiling");
         ++counts->dispatch_checks;
         delete fixed_owner;
         leo2_context_destroy(fixed_context);

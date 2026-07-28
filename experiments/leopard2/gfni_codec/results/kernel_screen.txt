@@ -1,0 +1,19 @@
+kernel equivalence: OK (GFNI operand order confirmed on host)
+
+GF8 IFFT-style butterfly sweep, 32 shards x 5 layers
+     bytes     avx2-256   avx512-256   avx512-512     gfni-256     gfni-512
+       256         0.61         0.62         0.22         0.30         0.18   speedup gfni512/avx2=3.39x
+      1024         1.37         1.14         0.77         1.05         0.66   speedup gfni512/avx2=2.08x
+      4096         7.25         6.19         4.61         5.41         4.11   speedup gfni512/avx2=1.76x
+     16384        27.29        22.49        17.69        18.13        14.91   speedup gfni512/avx2=1.83x
+     65536       103.06        77.80        71.44        74.62        71.38   speedup gfni512/avx2=1.44x
+    262144       364.09       345.89       278.95       290.20       276.36   speedup gfni512/avx2=1.32x
+
+GF16 multiply-add sweep (32 shard pairs)
+     bytes  avx2-nibble     gfni-256     gfni-512
+       256         0.39         0.29         0.22   speedup gfni512/avx2=1.77x
+      1024         1.48         0.93         0.60   speedup gfni512/avx2=2.47x
+      4096         5.83         3.62         3.53   speedup gfni512/avx2=1.65x
+     16384        23.06        14.01        13.47   speedup gfni512/avx2=1.71x
+     65536        94.58        72.57        70.99   speedup gfni512/avx2=1.33x
+    262144       388.23       284.41       254.28   speedup gfni512/avx2=1.53x

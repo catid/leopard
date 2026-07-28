@@ -1497,6 +1497,9 @@ void test_forced_backend(leo2_context* context)
         backend = LEO2_BACKEND_AVX2;
     else if (std::strcmp(expected, "avx512") == 0)
         backend = LEO2_BACKEND_AVX512;
+    else if (std::strcmp(expected, "gfni") == 0 ||
+             std::strcmp(expected, "avx2-gfni") == 0)
+        backend = LEO2_BACKEND_GFNI;
     else
         throw std::runtime_error("invalid LEO2_EXPECT_BACKEND test value");
     require(leo2_context_backend(context) == backend,
@@ -2507,7 +2510,8 @@ void test_unified_decode_path_selector()
     };
     const leo2_backend backends[] = {
         LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3,
-        LEO2_BACKEND_AVX2, LEO2_BACKEND_AVX512, LEO2_BACKEND_NEON
+        LEO2_BACKEND_AVX2, LEO2_BACKEND_AVX512, LEO2_BACKEND_NEON,
+        LEO2_BACKEND_GFNI
     };
     for (size_t k_i = 0; k_i < sizeof(counts) / sizeof(counts[0]); ++k_i)
     for (size_t r_i = 0; r_i < sizeof(counts) / sizeof(counts[0]); ++r_i)

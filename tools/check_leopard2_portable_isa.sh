@@ -80,6 +80,21 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # exemption would silently admit instructions whose CPUID bits are not probed.
 allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpextrq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
+# The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
+# on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI
+# bit.  It is therefore exactly the reviewed AVX2 VEX set plus the VEX-encoded
+# affine transform; derive it from that set so the two lists cannot drift.
+# VGF2P8MULB and VGF2P8AFFINEINVQB are deliberately absent: the backend sources
+# emit no such form, and admitting an unused mnemonic would widen the reviewed
+# contract without evidence.  The class stays VEX-only, so EVEX-encoded GFNI is
+# rejected below even though its mnemonic is spelled identically.
+# Beyond the reviewed AVX2 set, the GFNI translation unit alone compiles the
+# affine-multiply helpers and fused radix-eight kernels, which additionally
+# emit these plain AVX2 integer mnemonics.  All are baseline AVX2: no new ISA
+# floor beyond the member's AVX2+GFNI runtime probe.
+allowed_gfni_extra_mnemonics='^(vpaddb|vpor|vpsllw|vpsrlw)$'
+allowed_gfni_vex_mnemonics="$allowed_avx2_vex_mnemonics|$allowed_gfni_extra_mnemonics|^vgf2p8affineqb\$"
+
 # The AVX-512 candidate is separately gated on F/BW/VL and complete OS ZMM
 # state.  It deliberately retains 256-bit data width and uses EVEX only to
 # access the expanded vector register file.  Keep the allowlist exact.
@@ -161,6 +176,32 @@ scan_object()
                 return 1
             fi
             ;;
+        gfni)
+            # The named GFNI member is a strict VEX-only superset of the AVX2
+            # class: the reviewed AVX/AVX2 VEX mnemonics plus VGF2P8AFFINEQB,
+            # plus the SSSE3 family.  Every other separately probed extension
+            # still fails closed, including the remaining GFNI mnemonics.
+            grep -Ev "$allowed_gfni_vex_mnemonics|^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$" \
+                "$forbidden_file" > "$violations_file" || true
+            if ! grep -Eq '^v[[:alnum:]_.]*$' "$mnemonics_file"; then
+                echo "portable ISA check: GFNI member has no VEX instruction: $object_name" >&2
+                return 1
+            fi
+            # GFNI is also enumerated as an EVEX-encoded AVX-512 form whose
+            # mnemonic is spelled identically, and EVEX can address only
+            # XMM/YMM with no mask.  Reject on the 0x62 prefix byte so the
+            # allowlist above cannot be used to smuggle in an AVX-512 encoding.
+            if grep -Eq '^[[:space:]]*[0-9a-f]+:[[:space:]]+62([[:space:]]|$)' \
+                "$raw_disassembly_file"
+            then
+                echo "portable ISA check: GFNI member contains an EVEX instruction: $object_name" >&2
+                return 1
+            fi
+            if grep -Eq '(%zmm[0-9]+|%k[0-7]|\{1to[0-9]+\}|\{z\})' "$disassembly_file"; then
+                echo "portable ISA check: GFNI member contains AVX-512 operands: $object_name" >&2
+                return 1
+            fi
+            ;;
         avx512)
             grep -Ev "$allowed_avx2_vex_mnemonics|$allowed_avx512vl_mnemonics|^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|movsldup|fisttp[[:alnum:]]*|pabs[bdw]|palignr|phadd(d|sw|w)|phsub(d|sw|w)|pmaddubsw|pmulhrsw|pshufb|psign[bdw])$" \
                 "$forbidden_file" > "$violations_file" || true
@@ -204,6 +245,7 @@ require_expected_members()
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
+            gfni) expected_member=Leopard2BackendGFNI.cpp.o ;;
             avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
             '') continue ;;
             *)
@@ -278,6 +320,8 @@ scan_archive()
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
             Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj)
                 object_class=avx2 ;;
+            Leopard2BackendGFNI.cpp.o|Leopard2BackendGFNI.cpp.obj)
+                object_class=gfni ;;
             Leopard2BackendAVX512.cpp.o|Leopard2BackendAVX512.cpp.obj)
                 object_class=avx512 ;;
             Leopard2CpuFeatures.cpp.o|Leopard2CpuFeatures.cpp.obj)
@@ -392,7 +436,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512|GFNI)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -446,6 +490,29 @@ scan_build_metadata()
                 return 1
             fi
         done
+        if grep -q 'Leopard2BackendGFNI[.]cpp' "$compile_commands"; then
+            gfni_lines="$scratch_root/gfni-lines"
+            grep 'Leopard2BackendGFNI[.]cpp' "$compile_commands" > "$gfni_lines"
+            # The GFNI translation unit is admitted above by name, so its exact
+            # flag contract has to be re-proved here.  -mno-avx512f keeps the
+            # unit VEX-only even if a future toolchain default enables EVEX.
+            for required_flag in -mavx2 -mgfni -mno-avx512f
+            do
+                if ! grep -q -- "$required_flag" "$gfni_lines"; then
+                    echo "portable ISA check: GFNI object lacks $required_flag" >&2
+                    return 1
+                fi
+            done
+            gfni_command="$scratch_root/gfni-command"
+            # -mgfni is itself in the forbidden set, so strip exactly the
+            # reviewed flags before re-checking the remainder.  -mno-avx512f is
+            # a -mno-* spelling and is never forbidden, so it is left in place.
+            sed 's/-mavx2//g; s/-mgfni//g' "$gfni_lines" > "$gfni_command"
+            if grep -Ein -- "$forbidden_metadata" "$gfni_command"; then
+                echo "portable ISA check: GFNI object has an unrelated ISA/LTO flag" >&2
+                return 1
+            fi
+        fi
         if grep -q 'Leopard2BackendAVX512[.]cpp' "$compile_commands"; then
             avx512_lines="$scratch_root/avx512-lines"
             grep 'Leopard2BackendAVX512[.]cpp' "$compile_commands" > \
@@ -636,6 +703,26 @@ expect_missing_avx2_xor_member_rejected()
     fi
 }
 
+expect_missing_gfni_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_gfni \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-gfni-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,gfni' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing GFNI member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one gfni member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing GFNI rejection reason missing" >&2
+        return 1
+    fi
+}
+
 expect_listing_failure_rejected()
 {
     fixture_archive=$(write_assembly_archive listing_failure_archive \
@@ -793,6 +880,11 @@ run_negative_controls()
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx2_xor \
         'Leopard2BackendAVX2Xor.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    # The GFNI member carries the affine transform alongside ordinary AVX2 VEX
+    # code, so the fixture must prove both are admitted in the same object.
+    expect_classified_archive_accepted good_gfni \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0; vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx512vl \
         'Leopard2BackendAVX512.cpp.o' \
         'vpternlogq $0, %ymm0, %ymm0, %ymm0'
@@ -857,10 +949,44 @@ run_negative_controls()
     expect_classified_archive_rejected avx512vl_leaks_gfni \
         'Leopard2BackendAVX512.cpp.o' \
         'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
+    # Admitting VGF2P8AFFINEQB in the GFNI class must not relax any other
+    # class, and must not relax the GFNI class beyond VEX or beyond the one
+    # reviewed GFNI mnemonic.
+    expect_classified_archive_rejected avx2_still_rejects_gfni \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected gfni_leaks_fma \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected gfni_leaks_gf2p8mulb \
+        'Leopard2BackendGFNI.cpp.o' 'vgf2p8mulb %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected gfni_leaks_evex \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vpternlogd $0, %ymm0, %ymm0, %ymm0'
+    # The EVEX encoding of the allowed mnemonic: same spelling, YMM operands,
+    # but an AVX-512 encoding and an opmask the AVX2+GFNI probe never gates.
+    expect_classified_archive_rejected gfni_leaks_evex_affine \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0{%k1}'
+    # The hardest case, and the reason the 0x62 prefix check cannot be dropped
+    # in favour of operand spelling: an allowed mnemonic, a legitimate VEX
+    # instruction beside it, YMM-only operands and no mask, yet still an
+    # EVEX encoding that requires AVX-512F the GFNI probe never establishes.
+    expect_classified_archive_rejected gfni_leaks_evex_encoding_only \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0; {evex} vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected gfni_leaks_zmm \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vgf2p8affineqb $0, %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected gfni_leaks_probe \
+        'Leopard2BackendGFNI.cpp.o' 'xgetbv'
     expect_classified_archive_rejected lookalike_ssse3_member \
         'NotLeopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_rejected lookalike_avx2_member \
         'NotLeopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_gfni_member \
+        'NotLeopard2BackendGFNI.cpp.o' \
+        'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_probe_member \
         'NotLeopard2CpuFeatures.cpp.o' 'xgetbv'
     expect_duplicate_archive_rejected duplicate_avx2_member \
@@ -869,6 +995,7 @@ run_negative_controls()
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
     expect_missing_expected_member_rejected
     expect_missing_avx2_xor_member_rejected
+    expect_missing_gfni_member_rejected
     expect_listing_failure_rejected
 
     expect_metadata_rejected flag_make_ssse3 make '-mssse3'
@@ -895,6 +1022,32 @@ run_negative_controls()
         'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o -c /src/Leopard2BackendAVX2XorXcpp' \
         /src/Leopard2BackendAVX2XorXcpp \
         CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o
+
+    gfni_source=/src/Leopard2BackendGFNI.cpp
+    gfni_output=CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o
+    expect_fixture_metadata_accepted exact_gfni_source \
+        "c++ -mavx2 -mgfni -mno-avx512f -o $gfni_output -c $gfni_source" \
+        "$gfni_source" "$gfni_output"
+    expect_fixture_metadata_rejected gfni_missing_gfni_flag \
+        "c++ -mavx2 -mno-avx512f -o $gfni_output -c $gfni_source" \
+        "$gfni_source" "$gfni_output"
+    expect_fixture_metadata_rejected gfni_missing_avx2_flag \
+        "c++ -mgfni -mno-avx512f -o $gfni_output -c $gfni_source" \
+        "$gfni_source" "$gfni_output"
+    expect_fixture_metadata_rejected gfni_missing_no_avx512f_flag \
+        "c++ -mavx2 -mgfni -o $gfni_output -c $gfni_source" \
+        "$gfni_source" "$gfni_output"
+    expect_fixture_metadata_rejected gfni_unrelated_isa \
+        "c++ -mavx2 -mgfni -mno-avx512f -mfma -o $gfni_output -c $gfni_source" \
+        "$gfni_source" "$gfni_output"
+    expect_fixture_metadata_rejected gfni_lookalike_prefix \
+        'c++ -mavx2 -mgfni -mno-avx512f -o CMakeFiles/leopard2_backend_gfni.dir/NotLeopard2BackendGFNI.cpp.o -c /src/NotLeopard2BackendGFNI.cpp' \
+        /src/NotLeopard2BackendGFNI.cpp \
+        CMakeFiles/leopard2_backend_gfni.dir/NotLeopard2BackendGFNI.cpp.o
+    expect_fixture_metadata_rejected gfni_lookalike_suffix \
+        'c++ -mavx2 -mgfni -mno-avx512f -o CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNIXcpp.o -c /src/Leopard2BackendGFNIXcpp' \
+        /src/Leopard2BackendGFNIXcpp \
+        CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNIXcpp.o
 
     fixture_prefix='c++ -DLEO2_ENABLE_TEST_HOOKS=1 -DLEO2_PORTABLE_ISA_PRIVILEGED_FIXTURE=1 -mssse3 -mno-avx'
     expect_fixture_metadata_accepted exact_legacy_fixture \
@@ -957,4 +1110,4 @@ elif [ "$metadata_mode" = required ]; then
     exit 1
 fi
 
-echo "portable ISA check: PASS (SSE2 baseline; named SSSE3/AVX2/AVX-512VL/probe members isolated)"
+echo "portable ISA check: PASS (SSE2 baseline; named SSSE3/AVX2/GFNI/AVX-512VL/probe members isolated)"

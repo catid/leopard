@@ -37,6 +37,9 @@ leo2_backend parse_backend(const char* name)
         return LEO2_BACKEND_AVX2;
     if (std::strcmp(name, "avx512") == 0)
         return LEO2_BACKEND_AVX512;
+    if (std::strcmp(name, "gfni") == 0 ||
+        std::strcmp(name, "avx2-gfni") == 0)
+        return LEO2_BACKEND_GFNI;
     throw std::runtime_error("unknown backend argument");
 }
 
@@ -45,6 +48,12 @@ leopard::backend::TestSetupFault fault_for(
     const char* stage)
 {
     using namespace leopard::backend;
+    /*
+        Every backend is matched explicitly.  An unmatched backend must throw
+        rather than fall through to another member's fault: silently injecting
+        an AVX-512 fault for an unrelated backend would report a passing test
+        for a member that was never exercised.
+    */
     if (std::strcmp(stage, "ff8-allocation") == 0)
     {
         if (backend == LEO2_BACKEND_SCALAR)
@@ -53,7 +62,11 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultSSSE3FF8Allocation;
         if (backend == LEO2_BACKEND_AVX2)
             return TestSetupFaultAVX2FF8Allocation;
-        return TestSetupFaultAVX512FF8Allocation;
+        if (backend == LEO2_BACKEND_AVX512)
+            return TestSetupFaultAVX512FF8Allocation;
+        if (backend == LEO2_BACKEND_GFNI)
+            return TestSetupFaultGFNIFF8Allocation;
+        throw std::runtime_error("unknown failure-backend argument");
     }
     if (std::strcmp(stage, "ff16-allocation") == 0)
     {
@@ -63,7 +76,11 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultSSSE3FF16Allocation;
         if (backend == LEO2_BACKEND_AVX2)
             return TestSetupFaultAVX2FF16Allocation;
-        return TestSetupFaultAVX512FF16Allocation;
+        if (backend == LEO2_BACKEND_AVX512)
+            return TestSetupFaultAVX512FF16Allocation;
+        if (backend == LEO2_BACKEND_GFNI)
+            return TestSetupFaultGFNIFF16Allocation;
+        throw std::runtime_error("unknown failure-backend argument");
     }
     if (std::strcmp(stage, "kat") == 0)
     {
@@ -73,7 +90,11 @@ leopard::backend::TestSetupFault fault_for(
             return TestSetupFaultSSSE3KAT;
         if (backend == LEO2_BACKEND_AVX2)
             return TestSetupFaultAVX2KAT;
-        return TestSetupFaultAVX512KAT;
+        if (backend == LEO2_BACKEND_AVX512)
+            return TestSetupFaultAVX512KAT;
+        if (backend == LEO2_BACKEND_GFNI)
+            return TestSetupFaultGFNIKAT;
+        throw std::runtime_error("unknown failure-backend argument");
     }
     throw std::runtime_error("unknown failure-stage argument");
 }

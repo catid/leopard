@@ -15,15 +15,82 @@
 namespace leopard { namespace backend {
 
 #if defined(LEO2_AVX512_VARIANT)
+# if defined(LEO2_GFNI_VARIANT)
+#  define LEO2_AVX_BACKEND_NAME "avx512vl-gfni"
+# else
+#  define LEO2_AVX_BACKEND_NAME "avx512vl"
+# endif
 # define LEO2_AVX_BACKEND_KIND LEO2_BACKEND_AVX512
-# define LEO2_AVX_BACKEND_NAME "avx512vl"
 # define LEO2_AVX_INITIALIZER InitializeAVX512
 # define LEO2_AVX_TABLE_STATE TestGetAVX512TableState
+#elif defined(LEO2_GFNI_MEMBER)
+// Production GFNI member: its own backend identity, qualified by CPUID
+// GFNI+AVX2, selected only by explicit request.  LEO2_GFNI_VARIANT without
+// LEO2_GFNI_MEMBER remains the in-place evaluation configuration that reuses
+// the AVX2 identity for A/B experiments.
+# define LEO2_AVX_BACKEND_KIND LEO2_BACKEND_GFNI
+# define LEO2_AVX_BACKEND_NAME "avx2-gfni"
+# define LEO2_AVX_INITIALIZER InitializeGFNI
+# define LEO2_AVX_TABLE_STATE TestGetGFNITableState
 #else
 # define LEO2_AVX_BACKEND_KIND LEO2_BACKEND_AVX2
 # define LEO2_AVX_BACKEND_NAME "avx2"
 # define LEO2_AVX_INITIALIZER InitializeAVX2
 # define LEO2_AVX_TABLE_STATE TestGetAVX2TableState
+#endif
+
+// GFNI variant contract.
+//
+// A fixed multiplication by one field element is a GF(2)-linear map on the
+// symbol bits, so each byte-wide component is an 8-by-8 bit matrix and
+// VGF2P8AFFINEQB evaluates it in one instruction.  The measured operand order
+// on this family is operand_bit = 8 * (7 - output_bit) + input_bit, which is
+// the order the exhaustive experiment under experiments/leopard2/gfni_affine
+// validated against all 65,536 GF8 products.
+//
+// The variant deliberately reuses the nibble-table storage shape so that no
+// vector call site changes: each 16-byte row instead holds one affine matrix
+// duplicated, and a 128-bit broadcast therefore fills every 64-bit lane with
+// that matrix.  Scalar tails keep using the ordinary shared nibble tables
+// through the separate scalar table pointers below.
+#if defined(LEO2_GFNI_VARIANT)
+static LEO_FORCE_INLINE uint64_t GFNIAffineMatrixBit(
+    unsigned output_bit, unsigned input_bit)
+{
+    return static_cast<uint64_t>(1) << (8 * (7 - output_bit) + input_bit);
+}
+
+static void GFNIStoreMatrix(uint8_t row[16], uint64_t matrix)
+{
+    for (unsigned byte = 0; byte < 8; ++byte)
+    {
+        const uint8_t value = static_cast<uint8_t>(matrix >> (8 * byte));
+        row[byte] = value;
+        row[byte + 8] = value;
+    }
+}
+
+static LEO_FORCE_INLINE uint8_t GFNIParity(uint8_t value)
+{
+    value = static_cast<uint8_t>(value ^ (value >> 4));
+    value = static_cast<uint8_t>(value ^ (value >> 2));
+    return static_cast<uint8_t>((value ^ (value >> 1)) & 1U);
+}
+
+// Scalar evaluation of one stored affine matrix.  Sub-vector tails use this
+// instead of a second set of nibble tables, so the variant needs no extra
+// storage beyond the affine operands themselves.  Operand byte 7 - output_bit
+// holds that output bit's input mask, matching GFNIAffineMatrixBit.
+static LEO_FORCE_INLINE uint8_t GFNIApplyMatrix(
+    const uint8_t row[16], uint8_t value)
+{
+    uint8_t result = 0;
+    for (unsigned output_bit = 0; output_bit < 8; ++output_bit)
+        result = static_cast<uint8_t>(result |
+            (GFNIParity(static_cast<uint8_t>(row[7 - output_bit] & value))
+                << output_bit));
+    return result;
+}
 #endif
 
 #ifdef LEO_HAS_FF8
@@ -48,8 +115,12 @@ static const FF16NibbleTable* FF16Tables = NULL;
 static uint8_t FF8Product(uint16_t log, uint8_t value)
 {
     const FF8NibbleTable& table = FF8Tables[log];
+#if defined(LEO2_GFNI_VARIANT)
+    return GFNIApplyMatrix(table.low, value);
+#else
     return static_cast<uint8_t>(
         table.low[value & 15U] ^ table.high[value >> 4]);
+#endif
 }
 #endif
 
@@ -77,17 +148,51 @@ static LEO2_AVX2_OPERATION_INLINE void AVX2FF8Operation(
     const uint8_t* input = static_cast<const uint8_t*>(source);
     const FF8NibbleTable& table = FF8Tables[multiplier_log];
     const __m256i low_table = BroadcastTable(table.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high_table = BroadcastTable(table.high);
     const __m256i nibble_mask = _mm256_set1_epi8(15);
+#endif
+#if defined(LEO2_GFNI_VARIANT)
+    // The affine form leaves only one arithmetic operation per vector, so the
+    // three loop-bookkeeping instructions would otherwise be a large share of
+    // the issue slots.  Two independent vectors per iteration also give the
+    // three-cycle affine latency somewhere to hide.  This matches Leopard1's
+    // 64-byte mul_mem/muladd_mem stride.
+    while (byte_count >= 64)
+    {
+        const __m256i data0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input));
+        const __m256i data1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 32));
+        __m256i product0 = _mm256_gf2p8affine_epi64_epi8(data0, low_table, 0);
+        __m256i product1 = _mm256_gf2p8affine_epi64_epi8(data1, low_table, 0);
+        if (Add)
+        {
+            product0 = _mm256_xor_si256(product0, _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(output)));
+            product1 = _mm256_xor_si256(product1, _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(output + 32)));
+        }
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), product0);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output + 32), product1);
+        input += 64;
+        output += 64;
+        byte_count -= 64;
+    }
+#endif
     while (byte_count >= 32)
     {
         const __m256i data = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(input));
+#if defined(LEO2_GFNI_VARIANT)
+        __m256i product = _mm256_gf2p8affine_epi64_epi8(data, low_table, 0);
+#else
         const __m256i low = _mm256_shuffle_epi8(
             low_table, _mm256_and_si256(data, nibble_mask));
         const __m256i high = _mm256_shuffle_epi8(high_table,
             _mm256_and_si256(_mm256_srli_epi64(data, 4), nibble_mask));
         __m256i product = _mm256_xor_si256(low, high);
+#endif
         if (Add)
             product = _mm256_xor_si256(product, _mm256_loadu_si256(
                 reinterpret_cast<const __m256i*>(output)));
@@ -107,6 +212,7 @@ static LEO2_AVX2_OPERATION_INLINE void AVX2FF8Operation(
 }
 
 #undef LEO2_AVX2_OPERATION_INLINE
+
 
 static void AVX2FF8Multiply(
     void* destination, const void* source,
@@ -139,12 +245,18 @@ static __m256i AVX2FF8ProductVector(
     __m256i low_table,
     __m256i high_table)
 {
+#if defined(LEO2_GFNI_VARIANT)
+    // low_table carries the broadcast affine matrix; high_table is unused.
+    (void)high_table;
+    return _mm256_gf2p8affine_epi64_epi8(data, low_table, 0);
+#else
     const __m256i nibble_mask = _mm256_set1_epi8(15);
     const __m256i low = _mm256_shuffle_epi8(
         low_table, _mm256_and_si256(data, nibble_mask));
     const __m256i high = _mm256_shuffle_epi8(high_table,
         _mm256_and_si256(_mm256_srli_epi64(data, 4), nibble_mask));
     return _mm256_xor_si256(low, high);
+#endif
 }
 
 static __m256i AVX2FF8ApplyWeight(__m256i data, uint16_t weight_log)
@@ -428,6 +540,18 @@ static void AVX2FF8IFFTButterfly2Xor(
 static uint16_t FF16Product(uint16_t log, uint16_t value)
 {
     const FF16NibbleTable& table = FF16Tables[log];
+#if defined(LEO2_GFNI_VARIANT)
+    const uint8_t input_low = static_cast<uint8_t>(value);
+    const uint8_t input_high = static_cast<uint8_t>(value >> 8);
+    const uint8_t product_low = static_cast<uint8_t>(
+        GFNIApplyMatrix(table.low[0], input_low) ^
+        GFNIApplyMatrix(table.low[1], input_high));
+    const uint8_t product_high = static_cast<uint8_t>(
+        GFNIApplyMatrix(table.low[2], input_low) ^
+        GFNIApplyMatrix(table.low[3], input_high));
+    return static_cast<uint16_t>(
+        product_low | (static_cast<unsigned>(product_high) << 8));
+#else
     const unsigned n0 = value & 15U;
     const unsigned n1 = (value >> 4) & 15U;
     const unsigned n2 = (value >> 8) & 15U;
@@ -439,6 +563,7 @@ static uint16_t FF16Product(uint16_t log, uint16_t value)
         table.high[0][n0] ^ table.high[1][n1] ^
         table.high[2][n2] ^ table.high[3][n3]);
     return static_cast<uint16_t>(low | (static_cast<unsigned>(high) << 8));
+#endif
 }
 
 static void AVX2FF16ProductVectors(
@@ -449,6 +574,18 @@ static void AVX2FF16ProductVectors(
     __m256i& product_low,
     __m256i& product_high)
 {
+#if defined(LEO2_GFNI_VARIANT)
+    // low_tables carries the four broadcast affine blocks of the 16-by-16 bit
+    // multiplication matrix, ordered (low<-low, low<-high, high<-low,
+    // high<-high).  high_tables is unused.
+    (void)high_tables;
+    product_low = _mm256_xor_si256(
+        _mm256_gf2p8affine_epi64_epi8(low_data, low_tables[0], 0),
+        _mm256_gf2p8affine_epi64_epi8(high_data, low_tables[1], 0));
+    product_high = _mm256_xor_si256(
+        _mm256_gf2p8affine_epi64_epi8(low_data, low_tables[2], 0),
+        _mm256_gf2p8affine_epi64_epi8(high_data, low_tables[3], 0));
+#else
     const __m256i mask = _mm256_set1_epi8(15);
     const __m256i nibbles[4] = {
         _mm256_and_si256(low_data, mask),
@@ -465,6 +602,7 @@ static void AVX2FF16ProductVectors(
         product_high = _mm256_xor_si256(product_high,
             _mm256_shuffle_epi8(high_tables[i], nibbles[i]));
     }
+#endif
 }
 
 template<bool Add>
@@ -481,11 +619,13 @@ static void AVX2FF16Operation(
         BroadcastTable(table.low[0]), BroadcastTable(table.low[1]),
         BroadcastTable(table.low[2]), BroadcastTable(table.low[3])
     };
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high_tables[4] = {
         BroadcastTable(table.high[0]), BroadcastTable(table.high[1]),
         BroadcastTable(table.high[2]), BroadcastTable(table.high[3])
     };
     const __m256i mask = _mm256_set1_epi8(15);
+#endif
     uint64_t offset = 0;
     while (byte_count - offset >= 64)
     {
@@ -493,6 +633,14 @@ static void AVX2FF16Operation(
             reinterpret_cast<const __m256i*>(input + offset));
         const __m256i high_data = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(input + offset + 32));
+#if defined(LEO2_GFNI_VARIANT)
+        __m256i product_low = _mm256_xor_si256(
+            _mm256_gf2p8affine_epi64_epi8(low_data, low_tables[0], 0),
+            _mm256_gf2p8affine_epi64_epi8(high_data, low_tables[1], 0));
+        __m256i product_high = _mm256_xor_si256(
+            _mm256_gf2p8affine_epi64_epi8(low_data, low_tables[2], 0),
+            _mm256_gf2p8affine_epi64_epi8(high_data, low_tables[3], 0));
+#else
         const __m256i nibbles[4] = {
             _mm256_and_si256(low_data, mask),
             _mm256_and_si256(_mm256_srli_epi64(low_data, 4), mask),
@@ -508,6 +656,7 @@ static void AVX2FF16Operation(
             product_high = _mm256_xor_si256(product_high,
                 _mm256_shuffle_epi8(high_tables[i], nibbles[i]));
         }
+#endif
         if (Add)
         {
             product_low = _mm256_xor_si256(product_low,
@@ -3319,7 +3468,20 @@ static void AVX2FF16Butterfly4(
     // Keep small working sets fused.  This also covers public tails such as
     // 66 bytes, which staging rounds to 128 bytes.  Larger shards use the
     // split schedule to bound register pressure and table residency.
+    //
+    // The GFNI variant has no such bound.  A nibble multiplier needs eight
+    // broadcast table vectors, so three of them plus eight data vectors do not
+    // fit in sixteen ymm; an affine multiplier needs four, they are
+    // re-broadcast at each use rather than held, and the live set is eight
+    // data vectors plus four matrices plus two products.  Fusing at every size
+    // loads and stores the four shards once per radix-four group instead of
+    // four times, which measured 1.72x to 1.89x against the split schedule
+    // from 1 KiB to 256 KiB per shard.
+#if defined(LEO2_GFNI_VARIANT)
+    if (byte_count < 64)
+#else
     if (byte_count < 64 || byte_count > 128)
+#endif
     {
         AVX2FF16Butterfly4Split<Inverse>(
             value0, value1, value2, value3,
@@ -3647,7 +3809,20 @@ static void AVX2FF16Butterfly4Range(
     uint16_t log01, uint16_t log23, uint16_t log02,
     uint64_t byte_count, bool prefer_fused)
 {
-#if defined(LEO2_AVX512_VARIANT)
+#if defined(LEO2_GFNI_VARIANT)
+    // Affine multipliers cost four re-broadcast vectors instead of eight held
+    // ones, so the fused radix-four group fits at every size and the caller's
+    // prefer_fused hint, which exists to bound nibble-table register pressure,
+    // no longer applies to this backend.
+    (void)prefer_fused;
+    for (unsigned i = 0; i < distance; ++i)
+    {
+        AVX2FF16Butterfly4<Inverse>(
+            work[i], work[i + distance],
+            work[i + distance * 2U], work[i + distance * 3U],
+            log01, log23, log02, byte_count);
+    }
+#elif defined(LEO2_AVX512_VARIANT)
     for (unsigned i = 0; i < distance; ++i)
     {
         void* const value0 = work[i];
@@ -3755,28 +3930,40 @@ AVX2FF8MultiplyAddOutputPair(
     const FF8NibbleTable& table0 = FF8Tables[log0];
     const FF8NibbleTable& table1 = FF8Tables[log1];
     const __m256i low0 = BroadcastTable(table0.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high0 = BroadcastTable(table0.high);
+#endif
     const __m256i low1 = BroadcastTable(table1.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high1 = BroadcastTable(table1.high);
     const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+#endif
     uint64_t offset = 0;
     while (byte_count - offset >= 32)
     {
         const __m256i data = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(source + offset));
+#if defined(LEO2_GFNI_VARIANT)
+        __m256i product = _mm256_gf2p8affine_epi64_epi8(data, low0, 0);
+#else
         const __m256i low_indices = _mm256_and_si256(data, nibble_mask);
         const __m256i high_indices = _mm256_and_si256(
             _mm256_srli_epi64(data, 4), nibble_mask);
         __m256i product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low0, low_indices),
             _mm256_shuffle_epi8(high0, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination0 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
             destination0 + offset), product);
+#if defined(LEO2_GFNI_VARIANT)
+        product = _mm256_gf2p8affine_epi64_epi8(data, low1, 0);
+#else
         product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low1, low_indices),
             _mm256_shuffle_epi8(high1, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination1 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
@@ -3905,46 +4092,72 @@ AVX2FF8MultiplyAddOutputGroup4(
     const FF8NibbleTable& table2 = FF8Tables[log2];
     const FF8NibbleTable& table3 = FF8Tables[log3];
     const __m256i low0 = BroadcastTable(table0.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high0 = BroadcastTable(table0.high);
+#endif
     const __m256i low1 = BroadcastTable(table1.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high1 = BroadcastTable(table1.high);
+#endif
     const __m256i low2 = BroadcastTable(table2.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high2 = BroadcastTable(table2.high);
+#endif
     const __m256i low3 = BroadcastTable(table3.low);
+#if !defined(LEO2_GFNI_VARIANT)
     const __m256i high3 = BroadcastTable(table3.high);
     const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+#endif
     uint64_t offset = 0;
     while (byte_count - offset >= 32)
     {
         const __m256i data = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(source + offset));
+#if !defined(LEO2_GFNI_VARIANT)
         const __m256i low_indices = _mm256_and_si256(data, nibble_mask);
         const __m256i high_indices = _mm256_and_si256(
             _mm256_srli_epi64(data, 4), nibble_mask);
+#endif
+#if defined(LEO2_GFNI_VARIANT)
+        __m256i product = _mm256_gf2p8affine_epi64_epi8(data, low0, 0);
+#else
         __m256i product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low0, low_indices),
             _mm256_shuffle_epi8(high0, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination0 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
             destination0 + offset), product);
+#if defined(LEO2_GFNI_VARIANT)
+        product = _mm256_gf2p8affine_epi64_epi8(data, low1, 0);
+#else
         product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low1, low_indices),
             _mm256_shuffle_epi8(high1, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination1 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
             destination1 + offset), product);
+#if defined(LEO2_GFNI_VARIANT)
+        product = _mm256_gf2p8affine_epi64_epi8(data, low2, 0);
+#else
         product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low2, low_indices),
             _mm256_shuffle_epi8(high2, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination2 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
             destination2 + offset), product);
+#if defined(LEO2_GFNI_VARIANT)
+        product = _mm256_gf2p8affine_epi64_epi8(data, low3, 0);
+#else
         product = _mm256_xor_si256(
             _mm256_shuffle_epi8(low3, low_indices),
             _mm256_shuffle_epi8(high3, high_indices));
+#endif
         product = _mm256_xor_si256(product, _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(destination3 + offset)));
         _mm256_storeu_si256(reinterpret_cast<__m256i*>(
@@ -4084,6 +4297,197 @@ static void AVX2FF8MultiplyAdd2Sources2Outputs(
 
 #endif
 
+
+#if defined(LEO2_GFNI_VARIANT) && defined(LEO_HAS_FF8)
+/*
+    One out-of-place inverse radix-eight group: three transform layers per
+    load/store round instead of two.
+
+    The staging kernel this replaces owns about 40% of a legacy-high GF8 encode
+    call and runs within a few percent of a kernel that only moves the bytes, so
+    it is bound by load/store throughput, not arithmetic.  The way past a
+    movement floor is to move less: eight loads and eight stores carry
+    twenty-four shard-layers here against sixteen for two radix-four rounds, a
+    third less traffic per unit of transform work.
+
+    Register pressure is not the obstacle it looks like.  Out-of-place means the
+    eight inputs are consumed into registers before any output is written, so
+    eight data vectors are live rather than sixteen, and every multiplier matrix
+    is a memory operand, which costs nothing on a memory-bound kernel.  This is
+    why the same idea does not pay for the in-place ALU-bound kernels.
+*/
+static LEO_FORCE_INLINE void AVX2FF8Radix8Butterfly(
+    __m256i& x, __m256i& y, uint16_t log)
+{
+    static const uint16_t kZeroSkew = 255;
+    y = _mm256_xor_si256(y, x);
+    if (log != kZeroSkew)
+        x = _mm256_xor_si256(x, _mm256_gf2p8affine_epi64_epi8(
+            y, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                FF8Tables[log].low)), 0));
+}
+
+static LEO_FORCE_INLINE void AVX2FF8Radix8ForwardButterfly(
+    __m256i& x, __m256i& y, uint16_t log)
+{
+    static const uint16_t kZeroSkew = 255;
+    if (log != kZeroSkew)
+        x = _mm256_xor_si256(x, _mm256_gf2p8affine_epi64_epi8(
+            y, _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                FF8Tables[log].low)), 0));
+    y = _mm256_xor_si256(y, x);
+}
+
+#define LEO2_R8_LOAD(NAME, LANE) \
+    __m256i NAME = _mm256_loadu_si256( \
+        reinterpret_cast<const __m256i*>(in[LANE] + offset));
+#define LEO2_R8_STORE(LANE, NAME) \
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(out[LANE] + offset), NAME);
+
+static void AVX2FF8IFFTButterfly8Out(
+    const void* const* inputs,
+    void* const* outputs,
+    const uint8_t* skews,
+    uint64_t byte_count)
+{
+    const uint8_t* in[8];
+    uint8_t* out[8];
+    for (unsigned lane = 0; lane < 8; ++lane)
+    {
+        in[lane] = static_cast<const uint8_t*>(inputs[lane]);
+        out[lane] = static_cast<uint8_t*>(outputs[lane]);
+    }
+    const uint16_t s01 = skews[0], s23 = skews[1], s45 = skews[2];
+    const uint16_t s67 = skews[3], s02 = skews[4], s46 = skews[5];
+    const uint16_t s04 = skews[6];
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        LEO2_R8_LOAD(x0, 0) LEO2_R8_LOAD(x1, 1)
+        LEO2_R8_LOAD(x2, 2) LEO2_R8_LOAD(x3, 3)
+        LEO2_R8_LOAD(x4, 4) LEO2_R8_LOAD(x5, 5)
+        LEO2_R8_LOAD(x6, 6) LEO2_R8_LOAD(x7, 7)
+        AVX2FF8Radix8Butterfly(x0, x1, s01);
+        AVX2FF8Radix8Butterfly(x2, x3, s23);
+        AVX2FF8Radix8Butterfly(x4, x5, s45);
+        AVX2FF8Radix8Butterfly(x6, x7, s67);
+        AVX2FF8Radix8Butterfly(x0, x2, s02);
+        AVX2FF8Radix8Butterfly(x1, x3, s02);
+        AVX2FF8Radix8Butterfly(x4, x6, s46);
+        AVX2FF8Radix8Butterfly(x5, x7, s46);
+        AVX2FF8Radix8Butterfly(x0, x4, s04);
+        AVX2FF8Radix8Butterfly(x1, x5, s04);
+        AVX2FF8Radix8Butterfly(x2, x6, s04);
+        AVX2FF8Radix8Butterfly(x3, x7, s04);
+        LEO2_R8_STORE(0, x0) LEO2_R8_STORE(1, x1)
+        LEO2_R8_STORE(2, x2) LEO2_R8_STORE(3, x3)
+        LEO2_R8_STORE(4, x4) LEO2_R8_STORE(5, x5)
+        LEO2_R8_STORE(6, x6) LEO2_R8_STORE(7, x7)
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        uint8_t v[8];
+        for (unsigned lane = 0; lane < 8; ++lane)
+            v[lane] = in[lane][offset];
+        static const uint16_t kZeroSkewScalar = 255;
+        static const unsigned pairs[12][3] = {
+            {0,1,0},{2,3,1},{4,5,2},{6,7,3},
+            {0,2,4},{1,3,4},{4,6,5},{5,7,5},
+            {0,4,6},{1,5,6},{2,6,6},{3,7,6}
+        };
+        for (unsigned p = 0; p < 12; ++p)
+        {
+            const unsigned a = pairs[p][0], b = pairs[p][1];
+            const uint16_t log = skews[pairs[p][2]];
+            v[b] ^= v[a];
+            if (log != kZeroSkewScalar)
+                v[a] ^= FF8Product(log, v[b]);
+        }
+        for (unsigned lane = 0; lane < 8; ++lane)
+            out[lane][offset] = v[lane];
+        ++offset;
+    }
+}
+
+/*
+    Forward mirror.  The group order reverses — largest distance first — and the
+    butterfly becomes x ^= mul(y, log); y ^= x, both taken from the forward
+    branch of AVX2FF8Butterfly4Out, which applies the distance-2d skew before
+    the two distance-d skews.  Skews arrive largest distance first:
+    skew[4d], skew[2d], skew[6d], skew[d], skew[3d], skew[5d], skew[7d].
+*/
+static void AVX2FF8FFTButterfly8Out(
+    const void* const* inputs,
+    void* const* outputs,
+    const uint8_t* skews,
+    uint64_t byte_count)
+{
+    const uint8_t* in[8];
+    uint8_t* out[8];
+    for (unsigned lane = 0; lane < 8; ++lane)
+    {
+        in[lane] = static_cast<const uint8_t*>(inputs[lane]);
+        out[lane] = static_cast<uint8_t*>(outputs[lane]);
+    }
+    const uint16_t s04 = skews[0];
+    const uint16_t s02 = skews[1], s46 = skews[2];
+    const uint16_t s01 = skews[3], s23 = skews[4];
+    const uint16_t s45 = skews[5], s67 = skews[6];
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        LEO2_R8_LOAD(x0, 0) LEO2_R8_LOAD(x1, 1)
+        LEO2_R8_LOAD(x2, 2) LEO2_R8_LOAD(x3, 3)
+        LEO2_R8_LOAD(x4, 4) LEO2_R8_LOAD(x5, 5)
+        LEO2_R8_LOAD(x6, 6) LEO2_R8_LOAD(x7, 7)
+        AVX2FF8Radix8ForwardButterfly(x0, x4, s04);
+        AVX2FF8Radix8ForwardButterfly(x1, x5, s04);
+        AVX2FF8Radix8ForwardButterfly(x2, x6, s04);
+        AVX2FF8Radix8ForwardButterfly(x3, x7, s04);
+        AVX2FF8Radix8ForwardButterfly(x0, x2, s02);
+        AVX2FF8Radix8ForwardButterfly(x1, x3, s02);
+        AVX2FF8Radix8ForwardButterfly(x4, x6, s46);
+        AVX2FF8Radix8ForwardButterfly(x5, x7, s46);
+        AVX2FF8Radix8ForwardButterfly(x0, x1, s01);
+        AVX2FF8Radix8ForwardButterfly(x2, x3, s23);
+        AVX2FF8Radix8ForwardButterfly(x4, x5, s45);
+        AVX2FF8Radix8ForwardButterfly(x6, x7, s67);
+        LEO2_R8_STORE(0, x0) LEO2_R8_STORE(1, x1)
+        LEO2_R8_STORE(2, x2) LEO2_R8_STORE(3, x3)
+        LEO2_R8_STORE(4, x4) LEO2_R8_STORE(5, x5)
+        LEO2_R8_STORE(6, x6) LEO2_R8_STORE(7, x7)
+        offset += 32;
+    }
+    while (offset < byte_count)
+    {
+        uint8_t v[8];
+        for (unsigned lane = 0; lane < 8; ++lane)
+            v[lane] = in[lane][offset];
+        static const uint16_t kZeroSkewScalar = 255;
+        static const unsigned pairs[12][3] = {
+            {0,4,0},{1,5,0},{2,6,0},{3,7,0},
+            {0,2,1},{1,3,1},{4,6,2},{5,7,2},
+            {0,1,3},{2,3,4},{4,5,5},{6,7,6}
+        };
+        for (unsigned p = 0; p < 12; ++p)
+        {
+            const unsigned a = pairs[p][0], b = pairs[p][1];
+            const uint16_t log = skews[pairs[p][2]];
+            if (log != kZeroSkewScalar)
+                v[a] ^= FF8Product(log, v[b]);
+            v[b] ^= v[a];
+        }
+        for (unsigned lane = 0; lane < 8; ++lane)
+            out[lane][offset] = v[lane];
+        ++offset;
+    }
+}
+
+#undef LEO2_R8_LOAD
+#undef LEO2_R8_STORE
+#endif
+
 static const Ops AVX2Ops = {
     LEO2_AVX_BACKEND_KIND,
     LEO2_AVX_BACKEND_NAME,
@@ -4185,7 +4589,103 @@ static const Ops AVX2Ops = {
 #else
     , NULL
 #endif
+#if defined(LEO2_GFNI_VARIANT) && defined(LEO_HAS_FF8)
+    , AVX2FF8IFFTButterfly8Out
+    , AVX2FF8FFTButterfly8Out
+#else
+    , NULL
+    , NULL
+#endif
 };
+
+#if defined(LEO2_GFNI_VARIANT)
+// Derives the affine operands from the same multiplication callbacks that build
+// the nibble tables, so both backends are generated from one field definition.
+// Fixed multiplication is GF(2)-linear, so each output byte of the product is
+// determined by the products of the input basis vectors.
+static bool GFNITablesPublished = false;
+
+static const Ops* GFNIPublishTables(const InitializeArgs& args)
+{
+    if (GFNITablesPublished)
+        return &AVX2Ops;
+# ifdef LEO_HAS_FF8
+#  ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, false))
+        return NULL;
+#  endif
+    std::unique_ptr<FF8NibbleTable[]> ff8(
+        new (std::nothrow) FF8NibbleTable[256]);
+    if (!ff8)
+        return NULL;
+    for (unsigned log = 0; log < 256; ++log)
+    {
+        uint64_t matrix = 0;
+        for (unsigned input_bit = 0; input_bit < 8; ++input_bit)
+        {
+            const uint8_t product = args.ff8_multiply_log(
+                static_cast<uint8_t>(1U << input_bit),
+                static_cast<uint8_t>(log));
+            for (unsigned output_bit = 0; output_bit < 8; ++output_bit)
+                if ((product >> output_bit) & 1U)
+                    matrix |= GFNIAffineMatrixBit(output_bit, input_bit);
+        }
+        GFNIStoreMatrix(ff8[log].low, matrix);
+        GFNIStoreMatrix(ff8[log].high, matrix);
+    }
+# endif
+# ifdef LEO_HAS_FF16
+#  ifdef LEO2_ENABLE_TEST_HOOKS
+    if (TestShouldFailAllocation(LEO2_AVX_BACKEND_KIND, true))
+        return NULL;
+#  endif
+    std::unique_ptr<FF16NibbleTable[]> ff16(
+        new (std::nothrow) FF16NibbleTable[65536]);
+    if (!ff16)
+        return NULL;
+    for (unsigned log = 0; log < 65536; ++log)
+    {
+        // block order: (low<-low, low<-high, high<-low, high<-high)
+        uint64_t block[4] = { 0, 0, 0, 0 };
+        for (unsigned input_bit = 0; input_bit < 8; ++input_bit)
+        {
+            const uint16_t from_low = args.ff16_multiply_log(
+                static_cast<uint16_t>(1U << input_bit),
+                static_cast<uint16_t>(log));
+            const uint16_t from_high = args.ff16_multiply_log(
+                static_cast<uint16_t>(1U << (input_bit + 8)),
+                static_cast<uint16_t>(log));
+            for (unsigned output_bit = 0; output_bit < 8; ++output_bit)
+            {
+                const uint64_t bit =
+                    GFNIAffineMatrixBit(output_bit, input_bit);
+                if ((from_low >> output_bit) & 1U)
+                    block[0] |= bit;
+                if ((from_high >> output_bit) & 1U)
+                    block[1] |= bit;
+                if ((from_low >> (output_bit + 8)) & 1U)
+                    block[2] |= bit;
+                if ((from_high >> (output_bit + 8)) & 1U)
+                    block[3] |= bit;
+            }
+        }
+        for (unsigned index = 0; index < 4; ++index)
+        {
+            GFNIStoreMatrix(ff16[log].low[index], block[index]);
+            GFNIStoreMatrix(ff16[log].high[index], block[index]);
+        }
+    }
+# endif
+# ifdef LEO_HAS_FF8
+    FF8Tables = ff8.release();
+# endif
+# ifdef LEO_HAS_FF16
+    FF16Tables = ff16.release();
+# endif
+    GFNITablesPublished = true;
+    return &AVX2Ops;
+}
+#endif // LEO2_GFNI_VARIANT
 
 const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
 {
@@ -4196,6 +4696,11 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
 #ifdef LEO_HAS_FF16
     if (!args.ff16_multiply_log)
         return NULL;
+#endif
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_AVX512_VARIANT)
+    // GFNI compiled under the AVX2 backend identity: this translation unit owns
+    // the published table and no nibble table is required.
+    return GFNIPublishTables(args);
 #endif
 #if defined(LEO2_AVX512_VARIANT)
 # ifdef LEO2_ENABLE_TEST_HOOKS
@@ -4211,6 +4716,9 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
     const Ops* const base = InitializeAVX2(args);
     if (!base)
         return NULL;
+# if defined(LEO2_GFNI_VARIANT)
+    return GFNIPublishTables(args);
+# endif
 # ifdef LEO_HAS_FF8
     FF8Tables = static_cast<const FF8NibbleTable*>(GetAVX2FF8Tables());
     if (!FF8Tables)
@@ -4295,7 +4803,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
 #endif
 }
 
-#if !defined(LEO2_AVX512_VARIANT)
+#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_MEMBER)
 const void* GetAVX2FF8Tables()
 {
 #ifdef LEO_HAS_FF8

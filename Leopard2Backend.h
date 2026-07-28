@@ -324,6 +324,27 @@ bool IsWeightedIFFTButterfly4AliasingValid(
     uint8_t live_mask,
     uint64_t byte_count);
 
+// Optional GF8 operation: one out-of-place inverse radix-eight group, which
+// carries three transform layers per load/store round instead of the two a
+// radix-four group carries.  The staging kernel that reads caller source shards
+// into the work slots is the single largest operation in legacy-high GF8
+// encoding and is bound by load/store throughput rather than arithmetic, so
+// cutting its traffic per transform layer by a third is a direct win.  Only
+// eight data vectors are live because the inputs are consumed into registers
+// before any output is written, which is what makes radix eight fit at all.
+//
+// inputs[0..7] are read-only and disjoint from the pairwise-disjoint
+// outputs[0..7].  The seven skews follow the same convention the radix-four
+// staging call uses, generalized one layer: distance one takes
+// skew[r+1], skew[r+3], skew[r+5], skew[r+7]; distance two takes skew[r+2] and
+// skew[r+6]; distance four takes skew[r+4].  A skew equal to the GF8 zero
+// sentinel means the multiply is skipped for that butterfly.
+typedef void (*FF8IFFTButterfly8Out)(
+    const void* const* inputs,
+    void* const* outputs,
+    const uint8_t* skews,
+    uint64_t byte_count);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -370,6 +391,14 @@ struct Ops
     // Optional remainder-specific source groups selected only by measured R=1
     // GF8 policies.  Keeping them separate preserves mature coarse codegen.
     XorMemorySources xor_memory_sources_fused_final;
+    // Optional: three inverse layers in one out-of-place round.  See the
+    // FF8IFFTButterfly8Out contract above.  Backends that do not publish it
+    // leave it null and the encoder keeps the radix-four staging schedule.
+    FF8IFFTButterfly8Out ff8_ifft_butterfly8_out;
+    // Optional: forward mirror of the above.  Skews are ordered largest
+    // distance first: skew[4d], skew[2d], skew[6d], skew[d], skew[3d],
+    // skew[5d], skew[7d].
+    FF8IFFTButterfly8Out ff8_fft_butterfly8_out;
 };
 
 struct X86Features
@@ -377,6 +406,7 @@ struct X86Features
     bool ssse3;
     bool avx2;
     bool avx512;
+    bool gfni;
 };
 
 struct X86ProcessorIdentity
@@ -395,12 +425,15 @@ X86ProcessorIdentity DetectX86Processor();
 bool IsCalibratedAutoAVX512EncodeProcessor(
     const X86ProcessorIdentity& identity);
 bool IsCalibratedAutoAVX512EncodeHost();
+bool IsCalibratedAutoGFNIProcessor(const X86ProcessorIdentity& identity);
+bool IsCalibratedAutoGFNIHost();
 
 // Pure feature classifier used by both the runtime probe and synthetic tests.
 X86Features ClassifyX86Features(
     uint32_t maximum_basic_leaf,
     uint32_t leaf1_ecx,
     uint32_t leaf7_ebx,
+    uint32_t leaf7_ecx,
     uint64_t xcr0);
 X86Features DetectX86Features();
 
@@ -432,6 +465,10 @@ const void* GetAVX2FF16Tables();
 
 #if defined(LEO2_HAVE_AVX512_BACKEND)
 const Ops* InitializeAVX512(const InitializeArgs& args);
+#endif
+
+#if defined(LEO2_HAVE_GFNI_BACKEND)
+const Ops* InitializeGFNI(const InitializeArgs& args);
 #endif
 
 // Called once after both legacy fields have initialized their logarithm tables.
@@ -484,7 +521,10 @@ enum TestSetupFault
     TestSetupFaultAVX2KAT,
     TestSetupFaultAVX512FF8Allocation,
     TestSetupFaultAVX512FF16Allocation,
-    TestSetupFaultAVX512KAT
+    TestSetupFaultAVX512KAT,
+    TestSetupFaultGFNIFF8Allocation,
+    TestSetupFaultGFNIFF16Allocation,
+    TestSetupFaultGFNIKAT
 };
 
 struct TestBackendState
@@ -514,6 +554,9 @@ void TestGetAVX2TableState(TestBackendState* state);
 # endif
 # if defined(LEO2_HAVE_AVX512_BACKEND)
 void TestGetAVX512TableState(TestBackendState* state);
+# endif
+# if defined(LEO2_HAVE_GFNI_BACKEND)
+void TestGetGFNITableState(TestBackendState* state);
 # endif
 
 // Test-only injection point for a copied/tracing immutable ops table.  The

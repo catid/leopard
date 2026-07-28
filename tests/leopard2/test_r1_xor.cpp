@@ -1233,7 +1233,8 @@ int main()
             LEO2_BACKEND_SCALAR,
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2,
-            LEO2_BACKEND_AVX512
+            LEO2_BACKEND_AVX512,
+            LEO2_BACKEND_GFNI
         };
         unsigned ops_tested = 0;
         for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); ++i)

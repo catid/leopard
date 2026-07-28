@@ -1,0 +1,10 @@
+K=224 R=32 shape: 7 blocks x 8 radix-4 groups, 224 shards in / 32 out
+    bytes    memfloor    xorfloor  production     offset1     offset2 nontemporal
+     1024        2.17        2.44        2.99        2.99        3.04       11.75   prod/mem=1.38x  best=production
+    GB/s:       211.4       188.0       153.4       153.4       150.9        39.0
+     4096        9.88        9.60       11.64       12.09       12.17       33.56   prod/mem=1.18x  best=production
+    GB/s:       185.7       191.1       157.6       151.8       150.8        54.7
+    16384       43.11       43.59       46.83       45.89       45.56      121.19   prod/mem=1.09x  best=offset2
+    GB/s:       170.3       168.4       156.7       159.9       161.1        60.6
+    65536      216.13      215.91      225.17      224.60      227.05      479.74   prod/mem=1.04x  best=offset1
+    GB/s:       135.8       136.0       130.4       130.7       129.3        61.2

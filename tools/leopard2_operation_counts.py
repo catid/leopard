@@ -237,7 +237,8 @@ def verify_high_decode_receive_fusion_source(source: str, label: str) -> None:
         "constboolqualified_source_backend="
         "ops.kind==LEO2_BACKEND_SSSE3||"
         "ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512;"
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI;"
     )
     if qualified_backends not in helper or \
             "!qualified_source_backend" not in helper:
@@ -292,7 +293,8 @@ def verify_high_decode_weighted_locator_source(source: str, label: str) -> None:
     helper = compact[begin:end]
     required = (
         "(ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512)",
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI)",
         "ops.ff8_weighted_ifft_butterfly4!=NULL",
         "m>=64",
         "bytes>=16U*1024U",
@@ -512,9 +514,10 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
 
     Runtime cross-checks compare public query bytes.  This scoped source guard
     additionally makes the intended distinctions reviewable: N coordinate
-    pointers are metadata, large GF8 AVX2 payloads may size work rows to the
-    largest balanced pass, ragged K+R input slots are fixed 64-byte staging,
-    and direct execution retains range metadata without shard-data slots.
+    pointers are metadata, large legacy-high AVX2 payloads may size work rows
+    to the largest balanced pass (GF8 by padded_side, GF16 at padded_side 256
+    and 512), ragged K+R input slots are fixed 64-byte staging, and direct
+    execution retains range metadata without shard-data slots.
     """
     compact = re.sub(r"\s+", "", source)
     selector_begin = compact.find("staticboolSelectTransformDecodePath(")
@@ -551,7 +554,7 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     required_layout = (
         "geometry.execution_tile_count=geometry.aligned_prefix_bytes==0?0:1;",
         "geometry.execution_tile_bytes=geometry.aligned_prefix_bytes;",
-        "constsize_trequested_tile_bytes=GF8AVX2DecodeExecutionTileBytes("
+        "constsize_trequested_tile_bytes=AVX2DecodeExecutionTileBytes("
         "codec,geometry.selection,geometry.aligned_prefix_bytes);",
         "ComputeBalancedExecutionTiles(geometry.aligned_prefix_bytes,"
         "requested_tile_bytes,geometry.execution_tile_count,"
@@ -640,17 +643,20 @@ def verify_decode_policy_source(source: str, label: str) -> None:
         "backend==LEO2_BACKEND_SCALAR||"
         "backend==LEO2_BACKEND_SSSE3||"
         "backend==LEO2_BACKEND_AVX2||"
-        "backend==LEO2_BACKEND_AVX512);"
+        "backend==LEO2_BACKEND_AVX512||"
+        "backend==LEO2_BACKEND_GFNI);"
     )
     materialized_backend = (
         "if(backend==LEO2_BACKEND_AVX2||"
-        "backend==LEO2_BACKEND_AVX512)"
+        "backend==LEO2_BACKEND_AVX512||"
+        "backend==LEO2_BACKEND_GFNI)"
         "returnrounded_shard_bytes>=24*1024;"
     )
     batch_backend = (
         "if(input.multi_item_batch&&"
         "(input.backend==LEO2_BACKEND_AVX2||"
-        "input.backend==LEO2_BACKEND_AVX512)){"
+        "input.backend==LEO2_BACKEND_AVX512||"
+        "input.backend==LEO2_BACKEND_GFNI)){"
     )
     if balanced_backend not in balanced:
         raise ModelError(
@@ -687,7 +693,8 @@ def verify_decode_fusion_sources(
         "aligned_prefix_bytes>=4096&&"
         "(codec->context->backend==LEO2_BACKEND_SSSE3||"
         "codec->context->backend==LEO2_BACKEND_AVX2||"
-        "codec->context->backend==LEO2_BACKEND_AVX512);",
+        "codec->context->backend==LEO2_BACKEND_AVX512||"
+        "codec->context->backend==LEO2_BACKEND_GFNI);",
         "return(plan->codec->profile==LEO2_PROFILE_LOW_V1||"
         "PlanUsesTranslatedLowDecode(plan))&&"
         "aligned_prefix_bytes!=0;",
@@ -720,7 +727,8 @@ def verify_decode_fusion_sources(
         )
     ff8_tokens = (
         "if(ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512)returnbuffer_bytes>=1024;",
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI)returnbuffer_bytes>=1024;",
         "if(ops.kind==LEO2_BACKEND_SSSE3)returnbuffer_bytes>=65536;",
         "IFFT_DIT_DecoderImpl(ops,bytes,m_truncated,work,m,skewLUT,"
         "xor_result,1);",
@@ -740,12 +748,15 @@ def verify_decode_fusion_sources(
     ff16_tokens = (
         "returnbytes==64||(bytes==128&&"
         "(ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512));",
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI));",
         "return(ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512)&&buffer_bytes>=1024;",
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI)&&buffer_bytes>=1024;",
         "if(ops.kind==LEO2_BACKEND_SSSE3||"
         "ops.kind==LEO2_BACKEND_AVX2||"
-        "ops.kind==LEO2_BACKEND_AVX512){"
+        "ops.kind==LEO2_BACKEND_AVX512||"
+        "ops.kind==LEO2_BACKEND_GFNI){"
         "returnIFFT_DIT_DecoderImpl<true>(",
     )
     if any(token not in ff16 for token in ff16_tokens):

@@ -255,6 +255,17 @@ def _validate_compile_flags(tokens: Sequence[str], source: Path) -> str:
     require(not positive_avx512,
             f"pure-AVX2 build compiled {source.name} with AVX-512")
     name = source.name
+    if name.startswith("Leopard2BackendGFNI"):
+        # The GFNI member is the AVX2 algorithms recompiled with the affine
+        # kernels.  Its data path stays VEX 256-bit, so it is admissible in a
+        # pure-AVX2 build, but it must carry the affine flag explicitly and
+        # remain EVEX-free.
+        require("-mavx2" in tokens and "-mgfni" in tokens and
+                "-mno-avx512f" in tokens,
+                f"GFNI source lacks exact AVX2/GFNI/no-AVX512 flags: {name}")
+        return "avx2-gfni-no-avx512"
+    require("-mgfni" not in tokens,
+            f"non-GFNI source compiled with the affine ISA: {name}")
     if name.startswith("Leopard2BackendAVX2"):
         require("-mavx2" in tokens and "-mno-avx512f" in tokens,
                 f"AVX2 source lacks exact AVX2/no-AVX512 flags: {name}")
@@ -308,6 +319,10 @@ def _expected_library_sources(
     require(avx2_sources,
             "candidate source contains no production AVX2 translation unit")
     names.update(avx2_sources)
+    # The GFNI member joins the archive whenever its compiler probe passes.
+    # It contains no AVX-512 encoding, so a pure-AVX2 candidate retains it.
+    if _cmake_true(cache.get("LEO2_FLAG_MGFNI")):
+        names.add("Leopard2BackendGFNI.cpp")
     expected = {(source / name).resolve(strict=True) for name in names}
     require(expected.issubset(tracked),
             "candidate build expects a library source not tracked at HEAD")

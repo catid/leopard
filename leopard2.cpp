@@ -730,6 +730,37 @@ static bool AlignUp(size_t value, size_t alignment, size_t& result)
     return true;
 }
 
+/*
+    Legacy-high GF16 transform tiling targets, shared by the encode and decode
+    layouts.  Both hold `2 * padded_side` work rows at the executing pass size,
+    so the live set is `2 * padded_side * aligned_prefix`.  Tiling engages once
+    that exceeds twice the measured 32 MB L3, and sizes the pass so the retained
+    rows land near a quarter of it.  These are host cache properties rather than
+    codec shape properties, which is why they are expressed as byte budgets and
+    not as a `padded_side` table: a side-keyed table is only calibrated at the
+    shard sizes it was swept at, and the same side crosses L3 as the shard grows.
+*/
+/*
+    The target is deliberately not scaled by thread count.  Concurrent stripes
+    share L3, so the aggregate live set is `threads * target` and 8 threads at
+    16 MB nominally needs 128 MB against this die's 32 MB -- which predicts that
+    a smaller target should win under concurrency.  It does not.  Measured on
+    CCD1 (cpus 8-15, 32 MB shared L3) against the untiled build, targets of
+    16 MB / 4 MB / 2 MB are indistinguishable:
+
+      K=1000 R=200, 256 KiB, 8 threads   e1.39x/1.38x/1.38x  d2.74x/2.75x/2.75x
+      K=2000 R=500,  64 KiB, 8 threads   e2.52x/2.52x/2.53x  d1.41x/1.42x/1.42x
+
+    Shrinking the target eightfold changes nothing, so the fall-off from the
+    2-4 thread peak is DRAM bandwidth saturation rather than L3 contention, and
+    a thread-scaled target would be a knob with no measured effect.  Tiling
+    still wins at every thread count tested (1.38x-5.87x), and by more at 2-4
+    threads than at 1, because the untiled layout degrades faster under
+    contention than the tiled one does.
+*/
+static const size_t kHighGF16LiveSetTarget = 16U * 1024U * 1024U;
+static const size_t kHighGF16LiveSetTileThreshold = 64U * 1024U * 1024U;
+
 static bool ComputeBalancedExecutionTiles(
     size_t aligned_bytes,
     size_t requested_tile_bytes,
@@ -1025,6 +1056,7 @@ static bool PrepareCodecPrunedTransform(
     const leo2_backend backend = codec->context->ops->kind;
     const bool sink_backend = backend == LEO2_BACKEND_AVX2 ||
         backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_GFNI ||
         (codec->field == LEO2_FIELD_GF8 &&
          backend == LEO2_BACKEND_SSSE3);
     if (inverse && !sink_backend)
@@ -1064,7 +1096,8 @@ static bool SkipMeasuredDenseGF8AVX2HighPrunedSchedules(
     return codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 && codec->context &&
         codec->context->ops &&
-        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        (codec->context->ops->kind == LEO2_BACKEND_AVX2 ||
+         codec->context->ops->kind == LEO2_BACKEND_GFNI) &&
         (codec->padded_side == 8 || codec->padded_side == 64) &&
         codec->recovery_count == codec->padded_side &&
         plan->missing_original_count == codec->recovery_count &&
@@ -1261,7 +1294,20 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
         const uint32_t block_count = codec->parent_count / side;
         std::vector<uint8_t> input_mask(side, 0);
         std::vector<uint8_t> output_mask(side, 1);
-        for (uint32_t block = 0; block < block_count; ++block)
+        /*
+            Start at block 1: block 0's inverse is elided outright by the
+            FFT_0(IFFT_0(F_0) + H_later) = F_0 + FFT_0(H_later) cancellation
+            (docs/leopard2_math_and_sources.md), and all four Algorithm 5
+            executors discard a block-0 entry unexecuted behind a conditional
+            `.block == 0` guard (LeopardFF8.cpp:4554, LeopardFF16.cpp:3878,
+            :4264, :4538), so the compiled schedule had no consumer at all.
+            It cost a Theta((T/2) log2 T) sparsity-independent compile plus up
+            to ~12 bytes per raw butterfly of retained plan storage -- a
+            planner update missed by commit bd13ef7, recorded as open finding
+            1.  The low branch above must keep block 0: its executors
+            genuinely run it.
+        */
+        for (uint32_t block = 1; block < block_count; ++block)
         {
             const uint32_t offset = block * side;
             uint32_t live_count = 0;
@@ -1441,15 +1487,37 @@ static bool IsDirectEncodeShape(const leo2_codec* codec)
 
 static bool CanAutoDirectEncodeCodec(const leo2_codec* codec)
 {
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+    /*
+        Experiment, REFUTED 2026-07-28 -- default-off and kept only as the
+        record.  The 2026-07-16 checkpoint's excluded_high_profile region
+        measured median +541%, but that was against the pre-GFNI, pre-radix-8,
+        pre-fusion transform.  Re-screened on the current tree at Q=1 across
+        nine K,R <= 16 high cells: force-direct versus force-transform on the
+        same build is 0.875x-1.017x -- the transform improvements consumed the
+        entire direct margin -- and AUTO admission measured 0.89x-0.97x.  Do
+        not enable without first re-establishing a force-direct ceiling win.
+    */
+    const bool profile_ok =
+        codec && (codec->profile == LEO2_PROFILE_LOW_V1 ||
+                  (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                   codec->context &&
+                   codec->context->backend != LEO2_BACKEND_SCALAR));
+    if (!IsDirectEncodeShape(codec) || !codec->context ||
+        !profile_ok || codec->original_count < 2)
+        return false;
+#else
     if (!IsDirectEncodeShape(codec) || !codec->context ||
         codec->profile != LEO2_PROFILE_LOW_V1 || codec->original_count < 2)
         return false;
+#endif
     const leo2_backend backend = codec->context->backend;
     if (backend == LEO2_BACKEND_SCALAR)
         return codec->original_count >= 3;
     return backend == LEO2_BACKEND_SSSE3 ||
         backend == LEO2_BACKEND_AVX2 ||
-        backend == LEO2_BACKEND_AVX512;
+        backend == LEO2_BACKEND_AVX512 ||
+        backend == LEO2_BACKEND_GFNI;
 }
 
 static bool ShouldPrepareDirectEncode(const leo2_codec* codec)
@@ -1476,7 +1544,8 @@ static bool IsMeasuredEqualRoundedDirectRepairCodec(const leo2_codec* codec)
     return codec && codec->context &&
         CanUseTranslatedLowDecode(codec) &&
         codec->field == LEO2_FIELD_GF8 &&
-        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        (codec->context->backend == LEO2_BACKEND_AVX2 ||
+         codec->context->backend == LEO2_BACKEND_GFNI) &&
         codec->original_count > kDirectLegacyMaxRepairOriginals &&
         codec->parent_count <= kGF8Order;
 }
@@ -1520,7 +1589,8 @@ static bool PrepareGF8SourceMajorDirectSchedule(leo2_decode_plan* plan)
     plan->direct_source_rows.clear();
     if (codec->field != LEO2_FIELD_GF8 || !codec->context ||
         !codec->context->ops ||
-        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        (codec->context->ops->kind != LEO2_BACKEND_AVX2 &&
+         codec->context->ops->kind != LEO2_BACKEND_GFNI) ||
         !codec->context->ops->ff8_multiply_add_outputs ||
         !IsExpandedDirectRepairCodec(codec) ||
         output_count < 2 || output_count > kDirectMaxRepairLosses ||
@@ -2716,7 +2786,9 @@ static bool CodecMayUseMeasuredSparseLowGF16AVX2Encode(
         codec->field == LEO2_FIELD_GF16 &&
         codec->original_count == 128 && codec->recovery_count == 896 &&
         codec->padded_side == 128 &&
-        codec->context && codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->context &&
+        (codec->context->backend == LEO2_BACKEND_AVX2 ||
+         codec->context->backend == LEO2_BACKEND_GFNI) &&
         shard_bytes >= 1024;
 #else
     (void)codec;
@@ -2809,6 +2881,127 @@ static leo2_result EncodeLayout(
             return LEO2_INVALID_COUNTS;
     }
 
+    /*
+        Legacy-high GF16 encode keeps work_count = 2*padded_side slots at the
+        full aligned prefix, the same geometry whose decode counterpart
+        recovered 1.16x-1.91x once tiled.  At 64 KiB shards that live set is
+        33.6 MB at padded_side 256 and 67.2 MB at padded_side 512, against a
+        32 MB L3.  The pinned AVX-512 AUTO cell above covers exactly one shape;
+        the AVX2 path below was measured across eleven cells.
+
+        The gain tracks how far the untiled live set overshoots L3, not the
+        message-block count:
+
+        - padded_side 512 (67.2 MB, ~2.1x L3) pays everywhere.  Multi-block
+          counts peak at 8 KiB (1.65x-1.78x); single-block counts peak at
+          32 KiB (1.18x-1.26x) but still take 1.13x-1.21x at 8 KiB, so one
+          constant covers the side.
+        - padded_side 256 (33.6 MB, ~1.05x L3) is already nearly resident.
+          Multi-block counts still gain at 32 KiB (1.13x-1.16x) because each
+          message block re-sweeps the workspace, but single-block counts
+          *regress at every tile size measured* (0.80x-0.98x): they sweep the
+          workspace about twice, so there is no reuse to recover and the extra
+          passes are pure cost.  They are excluded, not merely untuned.
+
+        Smaller sides measured neutral with byte-identical scratch *at 64 KiB*,
+        where their live sets (8.4 MB at side 64, 16.8 MB at side 128) already
+        fit L3, and they retain the single-pass layout.  That neutrality is a
+        property of the shard size as much as the side: at 1 MiB the same sides
+        reach 134 MB and 268 MB.  The side key below is therefore calibrated
+        only over the swept sizes, and the live-set formulation
+        (2 * padded_side * shard_bytes versus L3) is the quantity to
+        re-calibrate on if smaller sides are swept at larger shards.
+    */
+    const bool gf16_multiple_message_blocks =
+        codec->original_count > codec->padded_side;
+    size_t high_gf16_tile_bytes = 0;
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    {
+        if (codec->padded_side == 512)
+            high_gf16_tile_bytes = 8U * 1024U;
+        else if (codec->padded_side == 256 && gf16_multiple_message_blocks)
+            high_gf16_tile_bytes = 32U * 1024U;
+    }
+    /*
+        The two side entries above are calibrated at 64 KiB, where they catch
+        live sets that a size-independent rule cannot: side 256 with multiple
+        message blocks is only 33.6 MB, but each block re-sweeps the workspace,
+        so tiling still pays 1.13x-1.16x.
+
+        Everything else is governed by the live set itself.  The side key is a
+        proxy for `2 * padded_side * aligned_prefix` versus L3, and the proxy
+        breaks as soon as the shard grows: at 1 MiB, side 64 reaches 134 MB and
+        side 128 reaches 268 MB, both far past the 32 MB L3, yet both were
+        excluded by a side table calibrated only at 64 KiB.  Sizing the pass so
+        the retained rows land near 16 MB whenever the untiled set exceeds
+        64 MB (2x L3) measured, against the untiled build:
+
+          side 128 at 256 KiB (67 MB)   0.997x -> 1.895x
+          side 128 at 1 MiB   (268 MB)  0.999x -> 2.484x
+          side  64 at 1 MiB   (134 MB)  1.002x -> 2.516x
+          side 256 at 256 KiB (134 MB)  1.002x -> 1.869x  (single message block)
+
+        The 64 MB threshold is what keeps the one measured regression out: side
+        256 single-block at 64 KiB is a 33.6 MB set that sweeps about twice, and
+        tiling it costs 0.80x-0.98x.  It stays below the threshold and untiled.
+
+        The rule reproduces both side entries where they apply (2.502x vs
+        2.511x, 1.687x vs 1.712x), so it is an extension, not a replacement:
+        the calibrated entries win where they are measured, and the live set
+        governs the region they never covered.
+    */
+    if (high_gf16_tile_bytes == 0)
+    {
+        const size_t work_rows = static_cast<size_t>(codec->padded_side) * 2U;
+        const size_t live_set_bytes =
+            work_rows * geometry.aligned_prefix_bytes;
+        if (work_rows != 0 &&
+            live_set_bytes >= kHighGF16LiveSetTileThreshold)
+        {
+            size_t candidate = kHighGF16LiveSetTarget / work_rows;
+            candidate &= ~static_cast<size_t>(kScratchAlignment - 1U);
+            if (candidate < kScratchAlignment)
+                candidate = kScratchAlignment;
+            if (candidate < geometry.aligned_prefix_bytes)
+                high_gf16_tile_bytes = candidate;
+        }
+    }
+    /*
+        The low profile holds the same `2 * padded_side` rows on the same
+        formula, so the live-set rule transfers to it unchanged.  It had been
+        excluded only because both tiling guards were written for the
+        legacy-high traversal, which meant low-rate never tiled at any shard
+        size.  Measured against stock Leopard2 (low-rate has no leopard1
+        comparison -- leopard1 rejects R > K):
+
+          K=128 R=896 at 256 KiB, side 128 (67 MB)    1.643x, 67 MB -> 17 MB
+          K=128 R=896 at 1 MiB,   side 128 (268 MB)   2.365x, 268 MB -> 17 MB
+          K=200 R=800 at 256 KiB, side 256 (134 MB)   2.304x, 134 MB -> 17 MB
+
+        Only the live-set branch applies here: the two side entries above are
+        gated on LEGACY_HIGH_V1 because they were calibrated on that traversal.
+    */
+    const bool tileable_profile =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->profile == LEO2_PROFILE_LOW_V1;
+    if (geometry.execution_tile_count == 1 &&
+        tileable_profile &&
+        codec->field == LEO2_FIELD_GF16 &&
+        codec->context &&
+        codec->context->ops &&
+        (codec->context->ops->kind == LEO2_BACKEND_AVX2 ||
+         codec->context->ops->kind == LEO2_BACKEND_GFNI) &&
+        high_gf16_tile_bytes != 0 &&
+        geometry.aligned_prefix_bytes >= 64U * 1024U)
+    {
+        if (!ComputeBalancedExecutionTiles(
+                geometry.aligned_prefix_bytes,
+                high_gf16_tile_bytes,
+                geometry.execution_tile_count,
+                geometry.execution_tile_bytes))
+            return LEO2_INVALID_COUNTS;
+    }
+
     // Keep the complete GF8 transform schedule unchanged while bounding the
     // live byte slice of all work shards so large calls remain cache-resident.
     // The side-specific crossover policy is generated offline from pinned
@@ -2841,11 +3034,36 @@ static leo2_result EncodeLayout(
     default:
         break;
     }
-    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+    /*
+        LOW_V1 draws GF8's own table here for the same reason it does on the
+        decode side: it holds its rows on the identical `2 * padded_side`
+        formula and the floors are live-set boundaries.  Note they are
+        conservative for low-rate -- `original_count > padded_side` is always
+        false when `P = ceil_pow2(K) >= K`, so low-rate always takes the larger
+        single-block minimums (4 MiB at side 16, 2 MiB at side 32, 1 MiB at
+        side 64).  Measured with all parity digests matching:
+
+          K=65 R=128 at 1 MiB,    side 128   2.864x
+          K=100 R=128 at 1 MiB,   side 128   2.752x
+          K=100 R=128 at 512 KiB, side 128   2.699x
+          K=64 R=192 at 2 MiB,    side 64    2.477x
+          K=64 R=192 at 1 MiB,    side 64    2.461x
+          K=32 R=224 at 2 MiB,    side 32    2.105x
+          K=16 R=240 at 4 MiB,    side 16    1.838x
+
+        No regression appeared.  `K=64 R=192` at 512 KiB stays neutral at
+        0.999x with byte-identical scratch because GF8's side-64 single-block
+        floor is 1 MiB -- the existing calibration declining the shape.
+    */
+    const bool gf8_encode_tileable_profile =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->profile == LEO2_PROFILE_LOW_V1;
+    if (gf8_encode_tileable_profile &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->context &&
         codec->context->ops &&
-        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        (codec->context->ops->kind == LEO2_BACKEND_AVX2 ||
+         codec->context->ops->kind == LEO2_BACKEND_GFNI) &&
         high_gf8_tile_bytes != 0 &&
         geometry.aligned_prefix_bytes >= high_gf8_min_shard_bytes)
     {
@@ -2943,7 +3161,8 @@ static bool UseFusedGenericRevealScatter(
         aligned_prefix_bytes >= 4096 &&
         (codec->context->backend == LEO2_BACKEND_SSSE3 ||
          codec->context->backend == LEO2_BACKEND_AVX2 ||
-         codec->context->backend == LEO2_BACKEND_AVX512);
+         codec->context->backend == LEO2_BACKEND_AVX512 ||
+         codec->context->backend == LEO2_BACKEND_GFNI);
 #else
     (void)codec;
     (void)aligned_prefix_bytes;
@@ -3016,58 +3235,154 @@ static bool SelectTransformDecodePath(
     return leopard2_internal::SelectDecodePath(input, selection);
 }
 
-static size_t GF8AVX2DecodeExecutionTileBytes(
+static size_t AVX2DecodeExecutionTileBytes(
     const leo2_codec* codec,
     const leopard2_internal::DecodePathInfo& selection,
     size_t aligned_prefix_bytes)
 {
-#ifdef LEO_HAS_FF8
     /*
         Every transform stage is pointwise over the shard payload, so complete
         64-byte payload ranges may execute independently without changing the
         field arithmetic or coordinate schedule.  Bound the live transform
         rows to roughly one cache-resident working set on the measured AVX2
         host.  Counterbalanced, single-core whole-decode measurements promote
-        only the legacy-high AVX2 traversal and the four side/byte regions
-        below.  At each boundary, shortened, punctured, balanced,
-        one-above-side, and high-rate counts were checked with small, half,
-        and maximum loss patterns.  The weakest promoted observation was
-        still 1.065x, while the immediately lower T=16 and T=64 cells were
-        neutral or slower.  A translated Algorithm 4 plan retains the
-        legacy-high wire identity and is included; unmeasured low-profile and
-        forced regular materialized/generic traversals retain the full-payload
-        layout.
+        only the legacy-high AVX2 traversal and the side/byte regions below.
+        A translated Algorithm 4 plan retains the legacy-high wire identity
+        and is included; unmeasured low-profile and forced regular
+        materialized/generic traversals retain the full-payload layout.
     */
+    /*
+        LOW_V1 holds the same `2 * padded_side` rows as legacy-high and reaches
+        `kDecodeRuleWorkspaceTiled` (Leopard2Dispatch.h excludes only *other*
+        profiles), so it satisfies the path condition below; it was blocked
+        purely by a profile test inherited from a legacy-high-scoped campaign.
+        Admitting it to the GF16 live-set branch measured, against a build that
+        already tiles low-rate encode:
+
+          K=256 R=768 at 1 MiB,   side 256 (537 MB)   3.088x
+          K=128 R=896 at 1 MiB,   side 128 (268 MB)   2.982x
+          K=200 R=800 at 256 KiB, side 256 (134 MB)   2.599x
+          K=1000 R=2000 at 64 KiB, side 1024 (134 MB) 2.177x
+          K=128 R=896 at 256 KiB, side 128 (67 MB)    2.153x
+
+        The GF8 table below stays legacy-high only.  Relaxing this test alone
+        would also hand low-rate to that table, which is calibrated on the
+        legacy-high traversal; one GF8 low-rate cell measured 2.540x, which is
+        encouraging but is a single point and is left as an open follow-up.
+    */
+    const bool tileable_decode_profile =
+        codec && (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ||
+                  codec->profile == LEO2_PROFILE_LOW_V1);
     if (!codec || !codec->context ||
-        codec->field != LEO2_FIELD_GF8 ||
-        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
-        codec->context->backend != LEO2_BACKEND_AVX2 ||
-        aligned_prefix_bytes < 128U * 1024U ||
+        !tileable_decode_profile ||
+        (codec->context->backend != LEO2_BACKEND_AVX2 &&
+         codec->context->backend != LEO2_BACKEND_GFNI) ||
         selection.path == leopard2_internal::kDecodePathNoOp ||
         selection.path == leopard2_internal::kDecodePathDirect ||
         (selection.path != leopard2_internal::kDecodePathTiled &&
          selection.rule != leopard2_internal::kDecodeRuleTranslatedLow))
         return aligned_prefix_bytes;
 
-    switch (codec->padded_side)
+#ifdef LEO_HAS_FF16
+    /*
+        GF16 legacy-high retains 2T work slots at the full aligned prefix.  At
+        64 KiB shards that is a 33.6 MB live set at padded_side 256 and 67.7 MB
+        (100 MB at maximum loss) at padded_side 512, against a 32 MB L3, so
+        every transform layer streams from DRAM.  Sizing the pass so the
+        retained slot set stays cache-resident recovers that traffic.
+
+        A 13-cell sweep over 4/8/16/32 KiB found two regimes: single
+        message-block counts (original_count <= padded_side) peak at 4-8 KiB,
+        while multi-block counts peak at 32 KiB for side 256 and 8-16 KiB for
+        side 512.  16 KiB is deliberately not either per-regime optimum -- it
+        is within about 5% of the best measured tile in every cell, and it
+        takes the whole side-512 win (1.77x-1.91x) outright.  Promoting the
+        per-regime table instead would overfit a 13-cell screen the way the
+        GF8 encode table's offline sweep exists to prevent.
+    */
+    if (codec->field == LEO2_FIELD_GF16 &&
+        aligned_prefix_bytes >= 64U * 1024U &&
+        (codec->padded_side == 256 || codec->padded_side == 512))
+        return 16U * 1024U;
+    /*
+        The two sides above are calibrated at 64 KiB.  The quantity they stand
+        in for is the live set, `2 * padded_side * aligned_prefix`, against a
+        32 MB L3 -- and that proxy fails as the shard grows: at 1 MiB, side 64
+        reaches 134 MB and side 128 reaches 268 MB, both far past L3, yet a
+        side-keyed table calibrated at 64 KiB excludes them at every size.
+        The identical gap was measured on the encode path, where closing it was
+        worth 1.86x-2.52x on exactly these shapes.  Size the pass so the
+        retained rows land near 16 MB once the untiled set passes 64 MB.
+    */
+    if (codec->field == LEO2_FIELD_GF16)
     {
-    case 16:
-        return aligned_prefix_bytes >= 768U * 1024U
-            ? 128U * 1024U : aligned_prefix_bytes;
-    case 32:
-        return aligned_prefix_bytes >= 384U * 1024U
-            ? 64U * 1024U : aligned_prefix_bytes;
-    case 64:
-        return aligned_prefix_bytes >= 192U * 1024U
-            ? 32U * 1024U : aligned_prefix_bytes;
-    case 128: return 32U * 1024U;
-    default: return aligned_prefix_bytes;
+        const size_t work_rows = static_cast<size_t>(codec->padded_side) * 2U;
+        const size_t live_set_bytes = work_rows * aligned_prefix_bytes;
+        if (work_rows != 0 &&
+            live_set_bytes >= kHighGF16LiveSetTileThreshold)
+        {
+            size_t candidate = kHighGF16LiveSetTarget / work_rows;
+            candidate &= ~static_cast<size_t>(kScratchAlignment - 1U);
+            if (candidate < kScratchAlignment)
+                candidate = kScratchAlignment;
+            if (candidate < aligned_prefix_bytes)
+                return candidate;
+        }
     }
-#else
-    (void)codec;
-    (void)selection;
-    return aligned_prefix_bytes;
 #endif
+
+#ifdef LEO_HAS_FF8
+    /*
+        The GF8 boundaries below were generated offline from pinned
+        exact-backend measurements.  At each boundary, shortened, punctured,
+        balanced, one-above-side, and high-rate counts were checked with
+        small, half, and maximum loss patterns.  The weakest promoted
+        observation was still 1.065x, while the immediately lower T=16 and
+        T=64 cells were neutral or slower.
+    */
+    /*
+        The GF8 table below is calibrated on the legacy-high traversal, but its
+        floors are live-set boundaries (each fires near a 33 MB untiled set and
+        targets a ~4 MB retained one), and LOW_V1 holds its rows on the same
+        `2 * padded_side` formula.  Admitting the low profile to GF8's own table
+        -- not to the GF16 constants, whose 16 MB target does not apply here --
+        measured, with all recovered digests matching:
+
+          K=64 R=192 at 1 MiB,   side 64 (134 MB)   3.145x
+          K=32 R=224 at 1 MiB,   side 32 (67 MB)    2.577x
+          K=16 R=240 at 1 MiB,   side 16 (34 MB)    1.696x
+          K=32 R=224 at 512 KiB, side 32 (34 MB)    1.597x
+          K=64 R=192 at 256 KiB, side 64 (34 MB)    1.488x
+
+        No regression appeared.  `K=32 R=224` at 256 KiB stays neutral at
+        0.998x because GF8's own side-32 floor requires a 384 KiB prefix, which
+        is the existing calibration declining the shape rather than this guard
+        failing to reach it.
+    */
+    const bool gf8_tileable_profile =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->profile == LEO2_PROFILE_LOW_V1;
+    if (codec->field == LEO2_FIELD_GF8 &&
+        gf8_tileable_profile &&
+        aligned_prefix_bytes >= 128U * 1024U)
+    {
+        switch (codec->padded_side)
+        {
+        case 16:
+            return aligned_prefix_bytes >= 768U * 1024U
+                ? 128U * 1024U : aligned_prefix_bytes;
+        case 32:
+            return aligned_prefix_bytes >= 384U * 1024U
+                ? 64U * 1024U : aligned_prefix_bytes;
+        case 64:
+            return aligned_prefix_bytes >= 192U * 1024U
+                ? 32U * 1024U : aligned_prefix_bytes;
+        case 128: return 32U * 1024U;
+        default: break;
+        }
+    }
+#endif
+    return aligned_prefix_bytes;
 }
 
 static leo2_result DecodeLayout(
@@ -3093,7 +3408,7 @@ static leo2_result DecodeLayout(
     if (!SelectTransformDecodePath(codec, plan, shard_bytes,
             multi_item_batch, geometry, geometry.selection))
         return LEO2_INTERNAL_ERROR;
-    const size_t requested_tile_bytes = GF8AVX2DecodeExecutionTileBytes(
+    const size_t requested_tile_bytes = AVX2DecodeExecutionTileBytes(
         codec, geometry.selection, geometry.aligned_prefix_bytes);
     if (geometry.aligned_prefix_bytes != 0 &&
         requested_tile_bytes != 0 &&
@@ -4061,6 +4376,7 @@ static bool UseCoarseR1Xor(
         minimum_originals = 5;
         break;
     case LEO2_BACKEND_AVX2:
+    case LEO2_BACKEND_GFNI:
         minimum_originals = 7;
         break;
     case LEO2_BACKEND_AVX512:
@@ -4077,7 +4393,8 @@ static bool UseCoarseR1Xor(
     }
     if (codec->original_count < minimum_originals)
         return false;
-    if (codec->context->backend != LEO2_BACKEND_AVX2 ||
+    if ((codec->context->backend != LEO2_BACKEND_AVX2 &&
+         codec->context->backend != LEO2_BACKEND_GFNI) ||
         codec->original_count <= 7 || codec->field != LEO2_FIELD_GF8 ||
         shard_bytes < 1024U * 1024U)
         return true;
@@ -4137,7 +4454,8 @@ static LEO_FORCE_INLINE bool IsFusedFinalR1XorEligible(
     return false;
 #else
     if (shard_bytes < 4096 || codec->field != LEO2_FIELD_GF8 ||
-        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        (codec->context->backend != LEO2_BACKEND_AVX2 &&
+         codec->context->backend != LEO2_BACKEND_GFNI) ||
         !ops.xor_memory_sources_fused_final)
         return false;
 
@@ -5121,69 +5439,63 @@ static bool BatchRangeLess(
     return a.writable < b.writable;
 }
 
-static void SiftBatchRangeHeap(
-    BatchRangeRecord* ranges,
-    size_t root,
-    size_t count)
-{
-    for (;;)
-    {
-        if (root > (count - 1) / 2)
-            return;
-        const size_t left = root * 2 + 1;
-        if (left >= count)
-            return;
-        size_t child = left;
-        const size_t right = left + 1;
-        if (right < count && BatchRangeLess(ranges[child], ranges[right]))
-            child = right;
-        if (!BatchRangeLess(ranges[root], ranges[child]))
-            return;
-        std::swap(ranges[root], ranges[child]);
-        root = child;
-    }
-}
 
-static void SortBatchRangesWithoutAllocation(
+/*
+    Writable-partitioned alias validation.  The full-record introsort this
+    replaces ordered every readable range too, but readable/readable overlap
+    is permitted, so ordering the readable majority bought nothing: for
+    K originals per item only the R+1 writable records need an order.  The
+    writable set must be pairwise disjoint regardless, so once sorted it is a
+    disjoint ascending interval set and each readable record needs one
+    predecessor probe: the writable with the greatest begin below the
+    readable's end is the only candidate whose end can reach past the
+    readable's begin.  Semantics are identical to the retained two-accumulator
+    sweep, including zero-length ranges: a writable starting exactly at a
+    readable's end does not intersect it under either formulation.
+
+    Complexity falls from O(N log N) comparisons on N = B*(2K+R+...) records
+    to O(W log W) sort on W = B*(R+1) writables plus O((N-W) log W) probes.
+    Allocation-free: std::partition and std::sort allocate nothing, preserving
+    the preflight contract.  Measured on the K=100 R=28 B=1024 record set this
+    is ~3.1x faster than sorting every record.
+*/
+static leo2_result ValidateBatchRangesPartitioned(
     BatchRangeRecord* ranges,
     size_t count)
 {
-    if (count < 2)
-        return;
-    for (size_t root = count / 2; root != 0; --root)
-        SiftBatchRangeHeap(ranges, root - 1, count);
-    for (size_t end = count; end > 1; --end)
-    {
-        std::swap(ranges[0], ranges[end - 1]);
-        SiftBatchRangeHeap(ranges, 0, end - 1);
-    }
-}
+    BatchRangeRecord* const writable_end = std::partition(
+        ranges, ranges + count,
+        [](const BatchRangeRecord& record) { return record.writable != 0; });
+    const size_t writable_count =
+        static_cast<size_t>(writable_end - ranges);
+    std::sort(ranges, writable_end, BatchRangeLess);
 
-static leo2_result ValidateSortedBatchRanges(
-    const BatchRangeRecord* ranges,
-    size_t count)
-{
     uintptr_t furthest_end = 0;
-    uintptr_t furthest_writable_end = 0;
-    bool have_range = false;
     bool have_writable = false;
-    for (size_t i = 0; i < count; ++i)
+    for (size_t i = 0; i < writable_count; ++i)
     {
-        const BatchRangeRecord& current = ranges[i];
-        if ((current.writable && have_range &&
-                furthest_end > current.range.begin) ||
-            (!current.writable && have_writable &&
-                furthest_writable_end > current.range.begin))
+        if (have_writable && furthest_end > ranges[i].range.begin)
             return LEO2_OVERLAP;
-        if (!have_range || current.range.end > furthest_end)
-            furthest_end = current.range.end;
-        have_range = true;
-        if (current.writable &&
-            (!have_writable || current.range.end > furthest_writable_end))
-        {
-            furthest_writable_end = current.range.end;
-            have_writable = true;
-        }
+        if (!have_writable || ranges[i].range.end > furthest_end)
+            furthest_end = ranges[i].range.end;
+        have_writable = true;
+    }
+    if (!have_writable)
+        return LEO2_SUCCESS;
+
+    for (size_t i = writable_count; i < count; ++i)
+    {
+        const BatchRangeRecord& readable = ranges[i];
+        // First writable whose begin is >= the readable's end; only its
+        // predecessor can intersect, because the writable set is disjoint
+        // and ascending, so every earlier writable ends at or before the
+        // predecessor's begin.
+        const BatchRangeRecord* probe = std::upper_bound(
+            ranges, writable_end, readable.range.end,
+            [](uintptr_t end, const BatchRangeRecord& record)
+            { return end <= record.range.begin; });
+        if (probe != ranges && (probe - 1)->range.end > readable.range.begin)
+            return LEO2_OVERLAP;
     }
     return LEO2_SUCCESS;
 }
@@ -6034,8 +6346,7 @@ static leo2_result PreflightEncodeBatchScalable(
     }
     if (count > capacity)
         return LEO2_INTERNAL_ERROR;
-    SortBatchRangesWithoutAllocation(ranges, count);
-    return ValidateSortedBatchRanges(ranges, count);
+    return ValidateBatchRangesPartitioned(ranges, count);
 }
 
 static leo2_result PreflightDecodeBatchScalable(
@@ -6130,8 +6441,7 @@ static leo2_result PreflightDecodeBatchScalable(
     }
     if (count > capacity)
         return LEO2_INTERNAL_ERROR;
-    SortBatchRangesWithoutAllocation(ranges, count);
-    return ValidateSortedBatchRanges(ranges, count);
+    return ValidateBatchRangesPartitioned(ranges, count);
 }
 
 struct EncodeBatchTaskContext
@@ -6428,7 +6738,7 @@ LEO2_EXPORT leo2_result leo2_context_create(
         return LEO2_INVALID_ARGUMENT;
     const uint32_t requested_raw = options
         ? options->backend : static_cast<uint32_t>(LEO2_BACKEND_AUTO);
-    if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_AVX512))
+    if (requested_raw > static_cast<uint32_t>(LEO2_BACKEND_GFNI))
         return LEO2_INVALID_ARGUMENT;
     uint32_t threads = options ? options->thread_count : 0;
     if (threads > 128)
@@ -8230,7 +8540,7 @@ static leo2_result DecodePlanExecuteInternal(
         else
         {
             /*
-                GF8AVX2DecodeExecutionTileBytes admits a multi-pass native
+                AVX2DecodeExecutionTileBytes admits a multi-pass native
                 high decoder only when dispatch selected Algorithm 5's tiled
                 traversal.  The only admitted non-tiled rule is TranslatedLow,
                 for which fuse_high_reveal_scatter is false.  Keep this
@@ -8623,7 +8933,8 @@ SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
     if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 || !codec->context ||
         !codec->context->ops ||
-        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        (codec->context->ops->kind != LEO2_BACKEND_AVX2 &&
+         codec->context->ops->kind != LEO2_BACKEND_GFNI) ||
         plan->missing_original_count != codec->recovery_count)
         return false;
 

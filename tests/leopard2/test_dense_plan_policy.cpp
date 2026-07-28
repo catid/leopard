@@ -356,6 +356,10 @@ int main()
           LEO2_PROFILE_LEGACY_HIGH_V1, 16, 6, 6, false },
         { "positive-auto-avx2", LEO2_BACKEND_AUTO, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 8, true },
+        // GFNI executes the same AVX2-tier dense schedule and the setup
+        // policy names it explicitly.  Unqualified hosts skip the row.
+        { "positive-gfni-t8-k2r", LEO2_BACKEND_GFNI, LEO2_FIELD_GF8,
+          LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 8, true },
         { "negative-scalar", LEO2_BACKEND_SCALAR, LEO2_FIELD_GF8,
           LEO2_PROFILE_LEGACY_HIGH_V1, 16, 8, 8, false },
         { "negative-gf16", LEO2_BACKEND_AVX2, LEO2_FIELD_GF16,

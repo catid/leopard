@@ -1392,7 +1392,8 @@ void test_requested_matrix_on_other_available_backends(
         LEO2_BACKEND_SCALAR,
         LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX2,
-        LEO2_BACKEND_AVX512
+        LEO2_BACKEND_AVX512,
+        LEO2_BACKEND_GFNI
     };
     for (size_t backend_i = 0;
          backend_i < sizeof(backends) / sizeof(backends[0]); ++backend_i)

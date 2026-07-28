@@ -18,6 +18,8 @@ static const uint32_t kAVX2 = 0x00000020U;
 static const uint32_t kAVX512F = 0x00010000U;
 static const uint32_t kAVX512BW = 0x40000000U;
 static const uint32_t kAVX512VL = 0x80000000U;
+// CPUID.(7,0):ECX bit 8.
+static const uint32_t kGFNI = 1U << 8;
 
 X86ProcessorIdentity ClassifyX86Processor(
     uint32_t vendor_ebx,
@@ -50,9 +52,10 @@ X86Features ClassifyX86Features(
     uint32_t maximum_basic_leaf,
     uint32_t leaf1_ecx,
     uint32_t leaf7_ebx,
+    uint32_t leaf7_ecx,
     uint64_t xcr0)
 {
-    X86Features features = { false, false, false };
+    X86Features features = { false, false, false, false };
     if (maximum_basic_leaf < 1)
         return features;
 
@@ -66,6 +69,11 @@ X86Features ClassifyX86Features(
     const bool zmm_enabled = (xcr0 & 0xe6U) == 0xe6U;
     features.avx512 = features.avx2 && zmm_enabled &&
         (leaf7_ebx & avx512_mask) == avx512_mask;
+    // GFNI is CPUID.(7,0):ECX bit 8.  The VEX-encoded 256-bit forms the GFNI
+    // backend emits require exactly GFNI plus AVX2-class YMM state, so the
+    // qualification is the AVX2 gate with the additional feature bit; ZMM
+    // state is deliberately not required.
+    features.gfni = features.avx2 && (leaf7_ecx & kGFNI) != 0;
     return features;
 }
 
@@ -138,7 +146,7 @@ X86Features DetectX86Features()
 {
     if (!CPUIDSupported())
     {
-        X86Features features = { false, false, false };
+        X86Features features = { false, false, false, false };
         return features;
     }
     uint32_t registers[4] = {};
@@ -154,13 +162,15 @@ X86Features DetectX86Features()
         if ((leaf1_ecx & (kAVX | kOSXSAVE)) == (kAVX | kOSXSAVE))
             xcr0 = ReadXCR0();
     }
+    uint32_t leaf7_ecx = 0;
     if (maximum_basic_leaf >= 7)
     {
         ReadCPUID(7, registers);
         leaf7_ebx = registers[1];
+        leaf7_ecx = registers[2];
     }
     return ClassifyX86Features(
-        maximum_basic_leaf, leaf1_ecx, leaf7_ebx, xcr0);
+        maximum_basic_leaf, leaf1_ecx, leaf7_ebx, leaf7_ecx, xcr0);
 }
 
 X86ProcessorIdentity DetectX86Processor()
@@ -214,6 +224,27 @@ bool IsCalibratedAutoAVX512EncodeProcessor(
 bool IsCalibratedAutoAVX512EncodeHost()
 {
     return IsCalibratedAutoAVX512EncodeProcessor(DetectX86Processor());
+}
+
+bool IsCalibratedAutoGFNIProcessor(const X86ProcessorIdentity& identity)
+{
+    /*
+        Same Zen 5 Granite Ridge pin as the AVX-512 encode exception.  The
+        qualifying evidence is the 2026-07-28 44-cell same-binary screen
+        (both fields, K=2..4096, low and high rate, 1 KiB-1 MiB): zero digest
+        mismatches, zero encode regressions, and the single flagged decode
+        cell re-measured at parity over four clean trials.  This predicate
+        gates a default-off candidate only; flipping the AUTO default
+        additionally requires the isolated exact-main campaign
+        (docs/leopard2_gfni_codec.md requirement 4).
+    */
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x44U;
+}
+
+bool IsCalibratedAutoGFNIHost()
+{
+    return IsCalibratedAutoGFNIProcessor(DetectX86Processor());
 }
 
 }} // namespace leopard::backend

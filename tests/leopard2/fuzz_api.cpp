@@ -128,10 +128,11 @@ extern "C" int LLVMFuzzerTestOneInput(const uint8_t* data, size_t size)
             LEO2_BACKEND_SCALAR,
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2,
-            LEO2_BACKEND_AVX512
+            LEO2_BACKEND_AVX512,
+            LEO2_BACKEND_GFNI
         };
         const leo2_backend requested_backend =
-            requested_backends[(data[4] >> 2) % 5u];
+            requested_backends[(data[4] >> 2) % 6u];
         context_options.backend = requested_backend;
         leo2_context* context = NULL;
         leo2_result context_result = leo2_context_create(

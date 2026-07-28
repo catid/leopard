@@ -114,6 +114,7 @@ const char* backend_name(leo2_backend backend)
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
+    case LEO2_BACKEND_GFNI: return "avx2-gfni";
     case LEO2_BACKEND_AUTO: return "auto";
     default: return "unknown";
     }

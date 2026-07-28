@@ -1,0 +1,64 @@
+{
+  "schema": "leopard2.gfni_codec.gf16_liveset_tiling.v1",
+  "date": "2026-07-28",
+  "host": "AMD Ryzen 9 9950X3D, L1d 48 KiB, L2 1 MiB, L3 32 MiB",
+  "pinned_cpu": 14,
+  "method": {
+    "metric": "metrics.encode_execution / metrics.decode_execution median_us_per_batch_call",
+    "samples": "best-of-3 child processes, each iterations=5 warmup=2",
+    "backend": "explicit avx2 on both builds",
+    "base_build": "GFNI + radix-eight, untiled GF16 transform workspace",
+    "digest_check": "transmitted_parity and recovered_originals compared against base in every cell"
+  },
+  "rule": {
+    "live_set_bytes": "2 * padded_side * aligned_prefix_bytes",
+    "target_bytes": 16777216,
+    "threshold_bytes": 67108864,
+    "tile_bytes": "target / (2 * padded_side), floored to 64 B, applied only when < aligned_prefix",
+    "calibrated_entries_retained": {
+      "encode": {"side_512": 8192, "side_256_multi_block": 32768},
+      "decode": {"side_256": 16384, "side_512": 16384}
+    },
+    "rationale": "The padded_side key is a proxy for the live set against L3. It is only calibrated at the shard sizes swept: sides 64 and 128 fit L3 at 64 KiB but overshoot it 4-8x at 1 MiB. The calibrated entries are retained because they catch below-threshold re-sweep wins (side 256 multi-block at 64 KiB is a 33.6 MB set that still pays 1.12x-1.16x). The 64 MB threshold excludes the one measured regression, side 256 single-block at 64 KiB (0.80x-0.98x)."
+  },
+  "prediction_test": {
+    "statement": "side 128 at 256 KiB is a 67.1 MB live set, essentially identical to side 512 at 64 KiB (67.2 MB) which measured 1.73x, so it should gain about the same",
+    "made_before_measuring": true,
+    "encode_measured": 1.903,
+    "decode_measured": 2.281
+  },
+  "encode": [
+    {"k": 2000, "r": 500, "bytes": 1048576, "side": 512, "live_mb": 1074, "ratio": 2.735},
+    {"k": 1000, "r": 200, "bytes": 262144, "side": 256, "live_mb": 134, "ratio": 2.504},
+    {"k": 300, "r": 100, "bytes": 1048576, "side": 128, "live_mb": 268, "ratio": 2.497},
+    {"k": 200, "r": 50, "bytes": 1048576, "side": 64, "live_mb": 134, "ratio": 2.491},
+    {"k": 300, "r": 100, "bytes": 262144, "side": 128, "live_mb": 67, "ratio": 1.903},
+    {"k": 250, "r": 250, "bytes": 262144, "side": 256, "live_mb": 134, "ratio": 1.864},
+    {"k": 2000, "r": 500, "bytes": 65536, "side": 512, "live_mb": 67, "ratio": 1.718},
+    {"k": 1000, "r": 200, "bytes": 65536, "side": 256, "live_mb": 34, "ratio": 1.154},
+    {"k": 250, "r": 250, "bytes": 65536, "side": 256, "live_mb": 34, "ratio": 1.003,
+     "note": "below threshold, correctly untiled; tiling this shape costs 0.80x-0.98x"},
+    {"k": 200, "r": 50, "bytes": 262144, "side": 64, "live_mb": 34, "ratio": 1.005,
+     "note": "below threshold, correctly untiled"}
+  ],
+  "decode": [
+    {"k": 300, "r": 100, "bytes": 1048576, "side": 128, "live_mb": 268, "ratio": 3.226,
+     "note": "best cell of the campaign; padded_side 128 was excluded by both earlier tables"},
+    {"k": 200, "r": 50, "bytes": 1048576, "side": 64, "live_mb": 134, "ratio": 3.044},
+    {"k": 2000, "r": 500, "bytes": 262144, "side": 512, "live_mb": 268, "ratio": 2.683},
+    {"k": 1000, "r": 200, "bytes": 262144, "side": 256, "live_mb": 134, "ratio": 2.553},
+    {"k": 250, "r": 250, "bytes": 262144, "side": 256, "live_mb": 134, "ratio": 2.444},
+    {"k": 300, "r": 100, "bytes": 262144, "side": 128, "live_mb": 67, "ratio": 2.281},
+    {"k": 2000, "r": 500, "bytes": 65536, "side": 512, "live_mb": 67, "ratio": 1.945},
+    {"k": 250, "r": 250, "bytes": 65536, "side": 256, "live_mb": 34, "ratio": 1.367},
+    {"k": 1000, "r": 200, "bytes": 65536, "side": 256, "live_mb": 34, "ratio": 1.124},
+    {"k": 200, "r": 50, "bytes": 262144, "side": 64, "live_mb": 34, "ratio": 1.006,
+     "note": "below threshold, correctly untiled"}
+  ],
+  "validation": {
+    "stock_suite": "100% passed, 0 failures out of 100",
+    "gfni_suite": "99%, sole failure leopard2_portable_isa, pre-existing in the unmodified GFNI build",
+    "randomized_differential": {"shapes": 300, "mismatches": 0, "tile_activating_shapes": 71},
+    "stock_differential": {"shapes": 200, "seed": 909}
+  }
+}

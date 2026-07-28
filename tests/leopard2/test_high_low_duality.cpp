@@ -987,7 +987,8 @@ int main()
             LEO2_BACKEND_SSSE3,
             LEO2_BACKEND_AVX2,
             LEO2_BACKEND_AVX512,
-            LEO2_BACKEND_NEON
+            LEO2_BACKEND_NEON,
+            LEO2_BACKEND_GFNI
         };
         for (size_t i = 0; i < sizeof(backends) / sizeof(backends[0]); ++i)
         {
