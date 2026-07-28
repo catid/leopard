@@ -83,9 +83,9 @@ physical wire size before it is passed to this model.
 
 ## Decode selection, fusion traffic, and scratch accounting
 
-Schema version 3 retains schema v2's corrected pointer-versus-copy accounting
-and adds the actual selected decode rule plus backend-qualified reveal and
-syndrome boundaries.  A
+Schema version 4 retains schema v3's corrected pointer-versus-copy and
+backend-boundary accounting, then adds the production byte-pass geometry used
+to size cache-tiled decode scratch.  A
 transform decode owns an N-entry coordinate pointer map, but complete aligned
 passes point those entries directly at the selected K caller shards.  Mapping a
 pointer is metadata work; it is not a K-shard data copy.  The transform kernel
@@ -98,7 +98,7 @@ tail is not misrepresented as another whole rounded shard.  Algorithm 5 gathers
 L complete requested payloads.  Algorithm 4 reveals every aligned prefix
 directly and gathers only `L * (shard_bytes mod 64)` tail bytes.  Generic decode
 retains the in-scratch reveal and scatter except where qualified GF8
-SSSE3/AVX2/AVX512 execution removes both for the aligned prefix.
+SSSE3/AVX2/AVX512/GFNI execution removes both for the aligned prefix.
 
 Reports separate:
 
@@ -125,16 +125,16 @@ drifting silently.
 The `estimated_backend_bytes_*` metrics apply those exact boundary deltas to the
 broader logical traffic bounds.  They remain estimates because they do not
 model caches, write allocation, tables, or backend instruction sequences.
-Schema v3 applies only reveal and syndrome deltas to those totals; the existing
-receive-source and weighted-locator fusion effects remain explicit detail
-fields and are not silently folded into the aggregate.
+As in schema v3, only reveal and syndrome deltas are folded into those totals;
+the existing receive-source and weighted-locator fusion effects remain
+explicit detail fields and are not silently folded into the aggregate.
 
 The exact public scratch metrics mirror `leo2_decode_plan_scratch_size()` and
 `leo2_decode_scratch_size()`:
 
 - validation reserves 2K+R `AddressRange` records;
 - transform plans reserve N coordinate pointers plus one pointer per work slot;
-- materialized and generic decoders use N work slots;
+- materialized and generic scratch layouts use N work slots;
 - a forced tiled low decoder uses 2P work slots;
 - a forced tiled high plan uses 2T+L slots, while the pattern-independent
   one-shot codec query conservatively uses 2T+R;
@@ -145,25 +145,65 @@ The exact public scratch metrics mirror `leo2_decode_plan_scratch_size()` and
 - a no-loss plan reports zero scratch, although its codec's pattern-independent
   one-shot query remains nonzero.
 
+Those slot counts describe reserved rows, not the width of each row.  Schema v4
+separately reports the balanced execution geometry:
+
+- `decode_plan_execution_tile_count` and
+  `decode_plan_execution_tile_bytes` describe the plan's number of aligned
+  byte passes and the widest pass;
+- the corresponding `decode_codec_*` fields describe the conservative,
+  pattern-independent codec query; and
+- `decode_work_slot_bytes` and `decode_codec_work_slot_bytes` reserve the
+  widest balanced pass, with a 64-byte minimum when a ragged tail exists.
+
+The codec query decides whether to tile GF16 from the minimum 2P or 2T base
+rows while still allocating its conservative maximum row count.  A known plan
+uses its actual retained row count.  This asymmetry prevents a codec query from
+tiling too early merely because it has to reserve for a later maximum-loss
+pattern.
+
 For a ragged final 64-byte tile, transform scratch reserves K+R fixed 64-byte
 public-coordinate slots.  Exactly K selected coordinates are populated for a
 valid plan; absent, surplus, shortened, and punctured coordinates do not cause
 additional copies.  Reports therefore distinguish reserved tail bytes from
 selected payload bytes and zero-padding bytes.  Work slots are sized to
-`max(aligned_prefix_bytes, 64)` for a ragged shard, not to the rounded total
-shard length.  `--pointer-bytes` declares the 4- or 8-byte ABI used to account
-for `AddressRange`, pointer maps, alignment, and the corresponding `size_t`
-limit.  The model mirrors production's checked add, multiply, and alignment
-operations: it rejects a zero shard length, a value outside `uint64_t`, a value
-that cannot round up to 64 bytes in the declared `size_t`, or a complete scratch
-layout that overflows.  It never labels an unrepresentable Python integer as an
-exact public-query byte count.
+`max(maximum_balanced_pass_bytes, 64)` for a ragged shard, not to the rounded
+total shard length.  `--pointer-bytes` declares the 4- or 8-byte ABI used to
+account for `AddressRange`, pointer maps, alignment, and the corresponding
+`size_t` limit.  The model mirrors production's checked add, multiply, and
+alignment operations: it rejects a zero shard length, a value outside
+`uint64_t`, a value that cannot round up to 64 bytes in the declared `size_t`,
+or a complete scratch layout that overflows.  It never labels an
+unrepresentable Python integer as an exact public-query byte count.
 
-`--backend scalar|ssse3|avx2|avx512|neon` chooses the backend predicates used
-for traffic accounting.  It never changes the structural butterfly count.
+The production cache rules mirrored by schema v4 are:
+
+- explicit GF16 AVX2 accepts a caller-supplied creation-affinity L3 observation,
+  clamps it to the measured 32--96 MiB range, retains a 16 MiB live-set target,
+  and sets the generic crossover to `max(effective L3, 64 MiB)`;
+- GF16 GFNI uses the conservative 32 MiB calibration.  The current production
+  context does not transfer the explicit-AVX2 affinity qualification to GFNI,
+  AUTO, or another backend merely because it may execute related kernels;
+- the measured GF16 side-256/side-512 overrides remain cache-gated and scale
+  their pass size with effective L3 for the legacy-high traversal.  A positive
+  LOW side-256 diagnostic is not promoted because it covered only one erasure
+  mask; and
+- GF8 uses its production side table: side 16 at 768 KiB uses 128 KiB passes,
+  side 32 at 384 KiB uses 64 KiB passes, side 64 at 192 KiB uses 32 KiB passes,
+  and side 128 at 128 KiB uses 32 KiB passes.
+
+`--gf16-detected-l3-bytes` supplies the detector result for an explicit GF16
+AVX2 model cell.  Other fields and backends retain the fallback policy even
+when this option is present.
+
+`--backend scalar|ssse3|avx2|avx512|gfni|neon` chooses the production backend
+predicates used for traffic accounting, decode selection, and scratch tiling.
+It never changes the structural butterfly count.
 The AVX512 choice models the explicit AVX-512VL context backend; ordinary AUTO
 selection remains the production backend observed by the linked probe and does
-not change merely because this reporting option is available.
+not change merely because this reporting option is available.  GFNI selects
+the promoted GFNI traffic predicates but, as noted above, does not opt into
+affinity-derived GF16 cache geometry.
 `--decode-selection path` forces the path named by the report and
 `--decode-workspace materialized|tiled` selects that specialized workspace.
 `--decode-selection auto` mirrors production AUTO, including bounded direct
@@ -171,6 +211,14 @@ repair and measured crossover rules; `specialized` mirrors
 `LEO2_CODEC_FORCE_SPECIALIZED_DECODE`.  `--multi-item-batch` applies the
 multi-stripe selector exception.  Every decode report records the selected
 path, rule, matching automatic-rule mask, and required work slots.
+
+For a multi-item batch, public scratch is intentionally selected by the
+ordinary non-batch query while the byte-heavy schedule may take a smaller
+batch-qualified execution path.  `decode_plan_work_slots` and scratch-byte
+metrics therefore remain the public allocation contract, whereas
+`estimated_full_workspace_passes_*` is normalized by the actual selected
+execution's `required_work_slots`.  Schema v4 does not overwrite the latter
+with the conservative scratch row count.
 
 The standalone selector mirror returns an immutable no-loss plan before byte
 geometry validation, matching private path introspection and execution.  Public
@@ -182,9 +230,13 @@ length even when its selected plan path is no-op.
 The production-linked
 `leopard2_decode_scratch_probe` additionally emits AUTO rows.  Those rows record
 the context's selected backend and the actual deterministic policy path at each
-shard size.  The independent Python selector is cross-checked against those
-production rows at every configured boundary; AUTO backend choice itself is a
-host observation, never a universal crossover claim.
+shard size.  Probe schema v3 also obtains the plan and codec execution-tile
+count/maximum-pass values independently from the production objects, checks
+each against the observed scratch slot width, and emits the raw detected L3
+alongside the immutable effective L3, target, and threshold.  The independent
+Python selector and scratch model are cross-checked against those production
+rows at every configured boundary, including a GF8 tiling crossover.  AUTO
+backend choice itself is a host observation, never a universal crossover claim.
 
 ## Usage
 
@@ -238,9 +290,10 @@ Model the generic parent FFT with a non-prefix output mask:
 
 The output is stable: JSON object keys and CSV metric rows are sorted, mask
 ranges are canonical, floating pass estimates are rounded, and the schema has
-an explicit version.  Schema v3 includes schema v2's exact scratch
-byte/component metrics and adds selected-rule/backend-traffic fields.  Use
-`--output FILE` to write either format directly.
+an explicit version.  Schema v4 retains schema v3's selected-rule and
+backend-traffic fields and adds cache policy, exact plan/codec pass geometry,
+and maximum-pass scratch sizing.  Use `--output FILE` to write either format
+directly.
 
 ## Representative validated counts
 
@@ -266,7 +319,7 @@ The self-test fixes two useful schedule checks:
   directly.  The receive boundary copies 16 live rows and zeroes 16 absent
   rows, removing 224 logical copy vectors (224 shard reads and 224 shard
   writes) from the former copy-first schedule.  These are exact
-  boundary deltas.  Schema v3's absolute accounting treats the K received
+  boundary deltas.  Schema v4's absolute accounting treats the K received
   coordinate entries as pointer mappings, and charges Algorithm 5's separate
   copy-first work staging before applying this qualified SIMD delta.  Scalar,
   NEON, exact-mask plans, and other unqualified backends retain copy-first

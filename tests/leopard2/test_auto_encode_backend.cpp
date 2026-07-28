@@ -290,19 +290,18 @@ void require_cache_policy(
 
 void require_context_cache_policy_wiring(
     Context& context,
-    uint64_t detected_l3_bytes)
+    uint64_t detected_l3_bytes,
+    bool cache_sensitive)
 {
     if (context.result() != LEO2_SUCCESS)
         return;
 
     static const uint64_t mib = UINT64_C(1024) * 1024;
-    const leo2_backend backend = leo2_context_backend(context.get());
-    const bool cache_sensitive =
+    const bool has_gf16 =
         (leo2_context_field_mask(context.get()) &
-            LEO2_FIELD_MASK_GF16) != 0 &&
-        (backend == LEO2_BACKEND_AVX2 ||
-         backend == LEO2_BACKEND_GFNI);
-    const uint64_t detected = cache_sensitive ? detected_l3_bytes : 0;
+            LEO2_FIELD_MASK_GF16) != 0;
+    const uint64_t detected =
+        cache_sensitive && has_gf16 ? detected_l3_bytes : 0;
     uint64_t expected_l3 = 32 * mib;
     if (detected >= expected_l3)
     {
@@ -317,8 +316,9 @@ void require_context_cache_policy_wiring(
             context.get(), &actual_l3, &actual_target, &actual_threshold),
         "context-created GF16 cache-policy query");
     require(actual_l3 == expected_l3 &&
-            actual_target == expected_l3 / 2 &&
-            actual_threshold == expected_l3 + 32 * mib,
+            actual_target == 16 * mib &&
+            actual_threshold ==
+                (expected_l3 < 64 * mib ? 64 * mib : expected_l3),
         "context creation did not wire the detected GF16 cache policy");
 }
 
@@ -342,9 +342,9 @@ void test_gf16_cache_policy(Context& avx2)
     require_cache_policy(avx2.get(), 0, 32 * mib, 16 * mib, 64 * mib);
     require_cache_policy(avx2.get(), 8 * mib, 32 * mib, 16 * mib, 64 * mib);
     require_cache_policy(avx2.get(), 32 * mib, 32 * mib, 16 * mib, 64 * mib);
-    require_cache_policy(avx2.get(), 64 * mib, 64 * mib, 32 * mib, 96 * mib);
-    require_cache_policy(avx2.get(), 96 * mib, 96 * mib, 48 * mib, 128 * mib);
-    require_cache_policy(avx2.get(), 256 * mib, 96 * mib, 48 * mib, 128 * mib);
+    require_cache_policy(avx2.get(), 64 * mib, 64 * mib, 16 * mib, 64 * mib);
+    require_cache_policy(avx2.get(), 96 * mib, 96 * mib, 16 * mib, 96 * mib);
+    require_cache_policy(avx2.get(), 256 * mib, 96 * mib, 16 * mib, 96 * mib);
 
     const uint32_t forced_specialized =
         LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
@@ -388,6 +388,43 @@ void test_gf16_cache_policy(Context& avx2)
                 side512.get(), 2000, 500, 9, 64U * 1024U),
             4, 16U * 1024U,
             "32-MiB high side-512 decode override");
+    }
+    {
+        Codec low_side256(avx2.get(), 200, 800,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(low_side256.get(), 64U * 1024U),
+            1, 64U * 1024U,
+            "32-MiB low side-256 encode inherited a high-only override");
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 9, 64U * 1024U),
+            1, 64U * 1024U,
+            "32-MiB low side-256 unqualified pattern");
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 8, 64U * 1024U),
+            1, 64U * 1024U,
+            "32-MiB low side-256 loss neighbor exclusion");
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 9, 96U * 1024U),
+            1, 96U * 1024U,
+            "32-MiB low side-256 byte neighbor exclusion");
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 9, 64U * 1024U + 2U),
+            1, 64U * 1024U,
+            "32-MiB low side-256 ragged neighbor exclusion");
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 9, 128U * 1024U),
+            4, 32U * 1024U,
+            "32-MiB low side-256 generic crossover");
+    }
+    {
+        Codec low_side256_neighbor(avx2.get(), 201, 799,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(decode_tiles(
+                low_side256_neighbor.get(), 201, 799, 9, 64U * 1024U),
+            1, 64U * 1024U,
+            "32-MiB low side-256 count neighbor exclusion");
     }
 
     // A 96-MiB context declines the measured 32/64-MiB over-tiling region.
@@ -435,18 +472,18 @@ void test_gf16_cache_policy(Context& avx2)
     {
         /*
             A codec-level one-shot query reserves 2T+R rows, while this
-            small-loss plan retains only 2T+9.  At 448 KiB the former crosses
-            the 128-MiB tiling threshold and the latter does not.  The codec
-            query must therefore keep a conservative full pass; otherwise
-            leo2_decode() would build the smaller-row plan and reject its
-            caller-provided scratch.
+            small-loss plan retains only 2T+9.  At 376 KiB the codec query's
+            minimum 2T policy rows remain below the 96-MiB threshold while
+            the known plan crosses it.  The codec query must therefore keep a
+            conservative full pass; otherwise leo2_decode() could build the
+            tiled plan and reject its caller-provided scratch.
         */
         Codec one_shot_bound(avx2.get(), 300, 100,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
             forced_specialized);
         Plan small_loss(
             one_shot_bound.get(), 300, 100, 9);
-        static const size_t bytes = 448U * 1024U;
+        static const size_t bytes = 376U * 1024U;
         size_t codec_scratch_bytes = 0;
         size_t plan_scratch_bytes = 0;
         require_result(leo2_decode_scratch_size(
@@ -457,22 +494,22 @@ void test_gf16_cache_policy(Context& avx2)
             LEO2_SUCCESS, "96-MiB plan decode scratch query");
         require_tiles(decode_tiles(
                 one_shot_bound.get(), 300, 100, 9, bytes),
-            1, bytes, "96-MiB small-loss one-pass decode");
+            7, 55040, "96-MiB small-loss tiled decode");
         require(codec_scratch_bytes >= plan_scratch_bytes,
             "codec decode scratch query under-sized a small-loss plan");
     }
     {
         Codec low(avx2.get(), 64, 193, LEO2_PROFILE_LOW_V1,
             LEO2_FIELD_GF16, forced_specialized);
-        require_tiles(encode_tiles(low.get(), 1024U * 1024U - 64U),
-            1, 1024U * 1024U - 64U,
+        require_tiles(encode_tiles(low.get(), 768U * 1024U - 64U),
+            1, 768U * 1024U - 64U,
             "96-MiB low encode below threshold");
-        require_tiles(encode_tiles(low.get(), 1024U * 1024U),
-            3, 349568,
+        require_tiles(encode_tiles(low.get(), 768U * 1024U),
+            6, 128U * 1024U,
             "96-MiB low encode at threshold");
         require_tiles(decode_tiles(
-                low.get(), 64, 193, 9, 1024U * 1024U),
-            3, 349568,
+                low.get(), 64, 193, 9, 768U * 1024U),
+            6, 128U * 1024U,
             "96-MiB low decode at threshold");
     }
     {
@@ -480,20 +517,29 @@ void test_gf16_cache_policy(Context& avx2)
             LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
             forced_specialized);
         require_tiles(encode_tiles(low_side512.get(), 96U * 1024U),
-            1, 96U * 1024U,
-            "96-MiB low profile did not inherit high override");
+            6, 16U * 1024U,
+            "96-MiB low side-512 generic encode crossover");
         require_tiles(decode_tiles(
                 low_side512.get(), 300, 800, 9, 96U * 1024U),
-            1, 96U * 1024U,
-            "96-MiB low decode did not inherit high override");
+            6, 16U * 1024U,
+            "96-MiB low side-512 generic decode crossover");
         require_tiles(encode_tiles(
                 low_side512.get(), 128U * 1024U),
-            3, 43712,
+            8, 16U * 1024U,
             "96-MiB low side-512 generic encode threshold");
         require_tiles(decode_tiles(
                 low_side512.get(), 300, 800, 9, 128U * 1024U),
-            3, 43712,
+            8, 16U * 1024U,
             "96-MiB low side-512 generic decode threshold");
+    }
+    {
+        Codec low_side256(avx2.get(), 200, 800,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(decode_tiles(
+                low_side256.get(), 200, 800, 9, 64U * 1024U),
+            1, 64U * 1024U,
+            "96-MiB low side-256 cache exclusion");
     }
 
 #ifdef LEO_HAS_FF8
@@ -1022,8 +1068,8 @@ void test_gf16_cache_policy_bytes(Context& avx2)
         First exercise the public codec-level scratch bound in the 32-MiB
         max-row/min-row crossover.  The high and low profile cases then each
         reach a 128-MiB live set, at 64- and 128-KiB shards respectively.
-        Under the injected 96-MiB policy they execute three balanced passes,
-        including a partial final pass, rather than merely inspecting geometry.
+        Under the injected 96-MiB policy they execute eight balanced passes
+        rather than merely inspecting geometry.
     */
     run_codec_scratch_query_round_trip(avx2);
     run_injected_gf16_cache_round_trip(
@@ -1729,12 +1775,18 @@ int main()
         require_explicit_backend(gfni, LEO2_BACKEND_GFNI);
         const uint64_t detected_l3_bytes =
             leopard::backend::DetectConservativeL3Bytes();
-        require_context_cache_policy_wiring(automatic, detected_l3_bytes);
-        require_context_cache_policy_wiring(scalar, detected_l3_bytes);
-        require_context_cache_policy_wiring(ssse3, detected_l3_bytes);
-        require_context_cache_policy_wiring(avx2, detected_l3_bytes);
-        require_context_cache_policy_wiring(avx512, detected_l3_bytes);
-        require_context_cache_policy_wiring(gfni, detected_l3_bytes);
+        require_context_cache_policy_wiring(
+            automatic, detected_l3_bytes, false);
+        require_context_cache_policy_wiring(
+            scalar, detected_l3_bytes, false);
+        require_context_cache_policy_wiring(
+            ssse3, detected_l3_bytes, false);
+        require_context_cache_policy_wiring(
+            avx2, detected_l3_bytes, true);
+        require_context_cache_policy_wiring(
+            avx512, detected_l3_bytes, false);
+        require_context_cache_policy_wiring(
+            gfni, detected_l3_bytes, false);
         test_balanced_execution_tile_geometry();
         test_linux_cache_topology();
         test_gf16_cache_policy(avx2);

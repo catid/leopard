@@ -745,11 +745,12 @@ static bool AlignUp(size_t value, size_t alignment, size_t& result)
 /*
     GF16 transform tiling policy shared by encode and decode.  Both layouts hold
     `2 * padded_side` work rows at the executing pass size, so their nominal
-    live set is `2 * padded_side * aligned_prefix`.  A context snapshots the
-    smallest L3 visible through its creation-time affinity.  The retained-row
-    target is half that cache and the generic crossover is L3 + 32 MiB, bounded
-    to the measured 32-96 MiB range.  Unknown, smaller, and unsupported cache
-    topologies preserve the established 16-MiB target / 64-MiB threshold.
+    live set is `2 * padded_side * aligned_prefix`.  An explicitly requested
+    AVX2 context snapshots the smallest L3 visible through its creation-time
+    affinity.  The retained-row target remains the calibrated 16 MiB, while
+    the generic crossover is the larger of L3 and 64 MiB, bounded to the
+    measured 32-96 MiB range. Unknown, smaller, and unsupported cache
+    topologies preserve the same established 16-MiB target / 64-MiB threshold.
 
     These are cache properties rather than codec-shape properties, which is why
     the general rule uses byte budgets rather than a `padded_side` table: a
@@ -807,16 +808,25 @@ static GF16CachePolicy DeriveGF16CachePolicy(
 
     GF16CachePolicy policy;
     policy.effective_l3_bytes = effective;
-    policy.live_set_target_bytes =
-        (effective / 2U) & ~(kScratchAlignment - 1U);
     /*
-        Pure proportional scaling would set a 192 MiB threshold on a 96 MiB
-        cache and miss the measured 134 MiB win.  `L3 + 32 MiB` preserves the
-        established 64 MiB threshold exactly and selects 128 MiB on the large
-        cache: measured 34/67 MiB regressions stay untiled while 134 MiB tiles.
+        Keep the execution target at the calibrated 16 MiB.  The cache
+        capacity is a useful crossover guard, but proportional target scaling
+        made a nominal 96 MiB live set effectively cache-sized and left too
+        little associativity/headroom for the surrounding state.  It also
+        increased memory traffic at larger live sets by making each pass three
+        times wider on a 96 MiB cache.
+    */
+    policy.live_set_target_bytes =
+        (kFallbackGF16L3Bytes / 2U) & ~(kScratchAlignment - 1U);
+    /*
+        Preserve the established 64 MiB floor so a 33.6 MiB single-sweep set
+        is not tiled on the 32 MiB calibration.  Above that floor, use L3 as
+        the crossover: measured 34/67 MiB regressions stay untiled on the
+        96 MiB cache, while nominal 96 MiB and larger sets retain enough
+        cache headroom by executing with the calibrated 16 MiB target.
     */
     policy.tile_threshold_bytes =
-        effective + kFallbackGF16L3Bytes;
+        std::max(effective, kFallbackGF16L3Bytes * 2U);
     return policy;
 }
 
@@ -3039,7 +3049,8 @@ static leo2_result EncodeLayout(
         32 MiB, side-256 single-block at 64 KiB is a 33.6-MiB set that sweeps
         about twice; tiling it costs 0.80x-0.98x, so the 64-MiB threshold
         declines it.  At 96 MiB, 34/67-MiB sets also stay untiled while the
-        measured 134-MiB win crosses the 128-MiB threshold.
+        measured 96-MiB boundary and larger sets use the retained 16-MiB
+        execution target.
 
         The rule reproduces both side entries where they apply (2.502x vs
         2.511x, 1.687x vs 1.712x), so it is an extension, not a replacement:
@@ -3339,8 +3350,9 @@ static size_t AVX2DecodeExecutionTileBytes(
     const leo2_codec* codec,
     const leopard2_internal::DecodePathInfo& selection,
     size_t aligned_prefix_bytes,
-    bool plan_known)
+    const leo2_decode_plan* plan)
 {
+    const bool plan_known = plan != NULL;
     (void)plan_known;
     /*
         Every transform stage is pointwise over the shard payload, so complete
@@ -3418,6 +3430,11 @@ static size_t AVX2DecodeExecutionTileBytes(
         takes the whole side-512 win (1.77x-1.91x) outright.  Promoting the
         per-regime table instead would overfit a 13-cell screen the way the
         GF8 encode table's offline sweep exists to prevent.
+
+        A LOW_V1 side-256 diagnostic measured 1.185x for one nine-erasure
+        pattern, but other nine-erasure patterns produce different pruned
+        schedules.  Do not extend this legacy-high side rule to LOW until a
+        counterbalanced pattern-shape campaign qualifies that broader region.
     */
     if (codec->field == LEO2_FIELD_GF16 &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -3442,8 +3459,8 @@ static size_t AVX2DecodeExecutionTileBytes(
         the shard grows: at 1 MiB, even the base rows for side 64 reach 134 MB
         and side 128 reach 268 MB.  The identical gap was measured on encode,
         where closing it was worth 1.86x-2.52x on these shapes.  The context
-        policy preserves the original 16/64-MiB rule on a 32-MiB cache and uses
-        a 48/128-MiB target/threshold on a 96-MiB cache.
+        policy preserves the 16-MiB execution target and raises only the
+        generic crossover from 64 MiB to the detected L3 size.
     */
     if (codec->field == LEO2_FIELD_GF16)
     {
@@ -3542,7 +3559,7 @@ static leo2_result DecodeLayout(
         return LEO2_INTERNAL_ERROR;
     const size_t requested_tile_bytes = AVX2DecodeExecutionTileBytes(
         codec, geometry.selection, geometry.aligned_prefix_bytes,
-        plan != NULL);
+        plan);
     if (geometry.aligned_prefix_bytes != 0 &&
         requested_tile_bytes != 0 &&
         requested_tile_bytes < geometry.aligned_prefix_bytes)
@@ -6807,6 +6824,79 @@ leo2_result GetDecodeCodecScratchPathInfo(
     return LEO2_SUCCESS;
 }
 
+leo2_result GetDecodePlanExecutionTiles(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out)
+{
+    if (!plan || !execution_tile_count_out || !maximum_pass_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *execution_tile_count_out = 0;
+    *maximum_pass_bytes_out = 0;
+    if (shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+    if (plan->no_op)
+        return LEO2_SUCCESS;
+    if (plan->direct_repair || plan->direct_xor || plan->direct_copy)
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        return DirectDecodeLayout(
+            plan->codec, shard_bytes, layout, rounded_bytes);
+    }
+    DecodeScratchGeometry geometry;
+    const leo2_result result = DecodeLayout(
+        plan->codec, plan, shard_bytes, false, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+    *execution_tile_count_out = geometry.execution_tile_count;
+    *maximum_pass_bytes_out = geometry.execution_tile_bytes;
+    return LEO2_SUCCESS;
+}
+
+leo2_result GetDecodeCodecExecutionTiles(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out)
+{
+    if (!codec || !execution_tile_count_out || !maximum_pass_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *execution_tile_count_out = 0;
+    *maximum_pass_bytes_out = 0;
+    if (IsLegacyHighK1R1Codec(codec))
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        return DirectDecodeLayout(
+            codec, shard_bytes, layout, rounded_bytes);
+    }
+    DecodeScratchGeometry geometry;
+    const leo2_result result = DecodeLayout(
+        codec, NULL, shard_bytes, false, geometry);
+    if (result != LEO2_SUCCESS)
+        return result;
+    *execution_tile_count_out = geometry.execution_tile_count;
+    *maximum_pass_bytes_out = geometry.execution_tile_bytes;
+    return LEO2_SUCCESS;
+}
+
+leo2_result GetContextGF16CachePolicy(
+    const leo2_context* context,
+    uint64_t* effective_l3_bytes_out,
+    uint64_t* live_set_target_bytes_out,
+    uint64_t* tile_threshold_bytes_out)
+{
+    if (!context || !effective_l3_bytes_out ||
+        !live_set_target_bytes_out || !tile_threshold_bytes_out)
+        return LEO2_INVALID_ARGUMENT;
+    *effective_l3_bytes_out = context->gf16_effective_l3_bytes;
+    *live_set_target_bytes_out = context->gf16_live_set_target_bytes;
+    *tile_threshold_bytes_out = context->gf16_tile_threshold_bytes;
+    return LEO2_SUCCESS;
+}
+
 } // namespace leopard2_internal
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -6866,17 +6956,9 @@ bool TestOnlyGetDecodeExecutionTiles(
     size_t* execution_tile_count_out,
     size_t* maximum_pass_bytes_out)
 {
-    if (!plan || !execution_tile_count_out ||
-        !maximum_pass_bytes_out)
-        return false;
-    DecodeScratchGeometry geometry;
-    if (DecodeLayout(
-            plan->codec, plan, shard_bytes, false,
-            geometry) != LEO2_SUCCESS)
-        return false;
-    *execution_tile_count_out = geometry.execution_tile_count;
-    *maximum_pass_bytes_out = geometry.execution_tile_bytes;
-    return true;
+    return leopard2_internal::GetDecodePlanExecutionTiles(
+            plan, shard_bytes, execution_tile_count_out,
+            maximum_pass_bytes_out) == LEO2_SUCCESS;
 }
 
 }} // namespace leopard::backend
@@ -7017,9 +7099,14 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->auto_avx512_encode_host = context->auto_requested &&
         leopard::backend::IsCalibratedAutoAVX512EncodeHost();
     context->thread_count = threads;
+    /*
+        The retained cache-policy campaigns used an explicitly requested AVX2
+        table.  AUTO may widen encode to AVX-512, and GFNI owns different GF16
+        arithmetic kernels, so both keep the established 32-MiB fallback until
+        separately qualified.
+    */
     const bool cache_sensitive_gf16_backend =
-        effective_backend == LEO2_BACKEND_AVX2 ||
-        effective_backend == LEO2_BACKEND_GFNI;
+        requested == LEO2_BACKEND_AVX2;
 #ifdef LEO_HAS_FF16
     const GF16CachePolicy gf16_cache_policy = DeriveGF16CachePolicy(
         cache_sensitive_gf16_backend

@@ -55,6 +55,8 @@ def build_decode_report(**overrides: object) -> dict:
         "decode_workspace": "materialized",
         "decode_selection": "auto",
         "multi_item_batch": False,
+        "context_auto_requested": False,
+        "gf16_detected_l3_bytes": 0,
     }
     values.update(overrides)
     return COUNTS.build_report(types.SimpleNamespace(**values))
@@ -462,6 +464,12 @@ class OperationCountTests(unittest.TestCase):
             (batch["selection"]["path"], batch["selection"]["rule"]),
             ("tiled", "measured_batch_tiled"),
         )
+        self.assertEqual(
+            batch["metrics"]["execution_working_slots"]["value"], 72
+        )
+        self.assertEqual(
+            batch["metrics"]["decode_plan_work_slots"]["value"], 256
+        )
         avx512_batch = build_decode_report(
             k=224, r=32, loss_count=8, shard_bytes=32 * 1024,
             backend="avx512", multi_item_batch=True,
@@ -793,6 +801,7 @@ class OperationCountTests(unittest.TestCase):
         )
         self.assertEqual(direct.plan_work_slots, 0)
         self.assertEqual(direct.plan_pointer_count, 0)
+        self.assertEqual(direct.work_slot_bytes, 0)
         self.assertEqual(direct.plan_total_bytes, 640)
         self.assertGreater(direct.codec_total_bytes, direct.plan_total_bytes)
         no_op = COUNTS.decode_scratch_accounting(
@@ -800,7 +809,348 @@ class OperationCountTests(unittest.TestCase):
             codec_workspace="tiled", no_op=True,
         )
         self.assertEqual(no_op.plan_total_bytes, 0)
+        self.assertEqual(no_op.work_slot_bytes, 0)
         self.assertGreater(no_op.codec_total_bytes, 0)
+        k1 = COUNTS.decode_scratch_accounting(
+            1, 1, 2, 1, "high", 65, 1, "specialized", 8,
+            codec_workspace="specialized", direct=True,
+        )
+        self.assertEqual(k1.plan_work_slots, 0)
+        self.assertEqual(k1.codec_work_slots, 0)
+        self.assertEqual(k1.work_slot_bytes, 0)
+        self.assertEqual(k1.codec_work_slot_bytes, 0)
+
+    def test_gf16_cache_policy_and_balanced_pass_geometry(self) -> None:
+        mib = COUNTS.MIB
+        expected = {
+            0: (32, 16, 64),
+            8: (32, 16, 64),
+            32: (32, 16, 64),
+            64: (64, 16, 64),
+            96: (96, 16, 96),
+            256: (96, 16, 96),
+        }
+        for detected_mib, policy_mib in expected.items():
+            with self.subTest(detected_mib=detected_mib):
+                policy = COUNTS.derive_gf16_cache_policy(
+                    detected_mib * mib
+                )
+                self.assertEqual(
+                    (
+                        policy.effective_l3_bytes // mib,
+                        policy.live_set_target_bytes // mib,
+                        policy.tile_threshold_bytes // mib,
+                    ),
+                    policy_mib,
+                )
+        quantized = COUNTS.derive_gf16_cache_policy(64 * mib + 12345)
+        self.assertEqual(quantized.effective_l3_bytes, 64 * mib)
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.derive_gf16_cache_policy(-1)
+
+        self.assertEqual(
+            COUNTS.balanced_execution_tiles(128 * 1024, 48 * 1024),
+            COUNTS.ExecutionTiles(3, 43712),
+        )
+        self.assertEqual(
+            COUNTS.balanced_execution_tiles(1024 * 1024, 384 * 1024),
+            COUNTS.ExecutionTiles(3, 349568),
+        )
+        self.assertEqual(
+            COUNTS.balanced_execution_tiles(64 * 1024, 64 * 1024),
+            COUNTS.ExecutionTiles(1, 64 * 1024),
+        )
+
+    def test_gf16_decode_cache_crossovers_and_backend_scope(self) -> None:
+        mib = COUNTS.MIB
+        # LOW_V1 side 64 has 128 retained rows.  These three payloads land
+        # exactly on the 32/64/96-MiB policy crossovers.
+        expected_passes = {
+            (32, 512 * 1024): (4, 128 * 1024),
+            (64, 512 * 1024): (4, 128 * 1024),
+            (96, 512 * 1024): (1, 512 * 1024),
+            (32, 768 * 1024): (6, 128 * 1024),
+            (64, 768 * 1024): (6, 128 * 1024),
+            (96, 768 * 1024): (6, 128 * 1024),
+            (32, 1024 * 1024): (8, 128 * 1024),
+            (64, 1024 * 1024): (8, 128 * 1024),
+            (96, 1024 * 1024): (8, 128 * 1024),
+        }
+        for backend in ("avx2",):
+            for (cache_mib, shard_bytes), expected in expected_passes.items():
+                with self.subTest(
+                    backend=backend, cache_mib=cache_mib,
+                    shard_bytes=shard_bytes,
+                ):
+                    report = build_decode_report(
+                        path="low_decode", k=64, r=193, field="gf16",
+                        backend=backend, shard_bytes=shard_bytes,
+                        loss_count=9, decode_selection="specialized",
+                        gf16_detected_l3_bytes=cache_mib * mib,
+                    )
+                    metrics = report["metrics"]
+                    self.assertEqual(
+                        (
+                            metrics["decode_plan_execution_tile_count"]["value"],
+                            metrics["decode_plan_execution_tile_bytes"]["value"],
+                        ),
+                        expected,
+                    )
+                    self.assertEqual(
+                        metrics["decode_work_slot_bytes"]["value"],
+                        expected[1],
+                    )
+        gfni = build_decode_report(
+            path="low_decode", k=64, r=193, field="gf16",
+            backend="gfni", shard_bytes=768 * 1024,
+            loss_count=9, decode_selection="specialized",
+            gf16_detected_l3_bytes=96 * mib,
+        )
+        self.assertEqual(
+            (
+                gfni["metrics"][
+                    "decode_plan_execution_tile_count"
+                ]["value"],
+                gfni["metrics"][
+                    "decode_plan_execution_tile_bytes"
+                ]["value"],
+            ),
+            (6, 128 * 1024),
+        )
+        self.assertEqual(
+            gfni["inputs"]["gf16_cache_policy"],
+            {
+                "detected_l3_bytes": 0,
+                "effective_l3_bytes": 32 * mib,
+                "live_set_target_bytes": 16 * mib,
+                "tile_threshold_bytes": 64 * mib,
+            },
+        )
+        auto_avx2 = build_decode_report(
+            path="low_decode", k=64, r=193, field="gf16",
+            backend="avx2", shard_bytes=512 * 1024,
+            loss_count=9, decode_selection="specialized",
+            gf16_detected_l3_bytes=96 * mib,
+            context_auto_requested=True,
+        )
+        self.assertEqual(
+            (
+                auto_avx2["metrics"][
+                    "decode_plan_execution_tile_count"
+                ]["value"],
+                auto_avx2["metrics"][
+                    "decode_plan_execution_tile_bytes"
+                ]["value"],
+            ),
+            (4, 128 * 1024),
+        )
+        self.assertEqual(
+            auto_avx2["inputs"]["gf16_cache_policy"][
+                "effective_l3_bytes"
+            ],
+            32 * mib,
+        )
+
+        for backend in ("scalar", "ssse3", "avx512"):
+            with self.subTest(excluded_backend=backend):
+                report = build_decode_report(
+                    path="low_decode", k=64, r=193, field="gf16",
+                    backend=backend, shard_bytes=1024 * 1024,
+                    loss_count=9, decode_selection="specialized",
+                    gf16_detected_l3_bytes=32 * mib,
+                )
+                self.assertEqual(
+                    report["metrics"][
+                        "decode_plan_execution_tile_bytes"
+                    ]["value"],
+                    1024 * 1024,
+                )
+
+        low_side256 = {}
+        for cache_mib in (32, 64, 96):
+            report = build_decode_report(
+                path="low_decode", k=200, r=800, field="gf16",
+                backend="avx2", shard_bytes=64 * 1024,
+                loss_count=9, decode_selection="specialized",
+                gf16_detected_l3_bytes=cache_mib * mib,
+            )
+            low_side256[cache_mib] = (
+                report["metrics"][
+                    "decode_plan_execution_tile_count"
+                ]["value"],
+                report["metrics"][
+                    "decode_plan_execution_tile_bytes"
+                ]["value"],
+            )
+        self.assertEqual(
+            low_side256,
+            {
+                32: (1, 64 * 1024),
+                64: (1, 64 * 1024),
+                96: (1, 64 * 1024),
+            },
+        )
+        low_neighbors = {
+            "loss": build_decode_report(
+                path="low_decode", k=200, r=800, field="gf16",
+                backend="avx2", shard_bytes=64 * 1024,
+                loss_count=8, decode_selection="specialized",
+                gf16_detected_l3_bytes=32 * mib,
+            ),
+            "bytes": build_decode_report(
+                path="low_decode", k=200, r=800, field="gf16",
+                backend="avx2", shard_bytes=96 * 1024,
+                loss_count=9, decode_selection="specialized",
+                gf16_detected_l3_bytes=32 * mib,
+            ),
+            "ragged": build_decode_report(
+                path="low_decode", k=200, r=800, field="gf16",
+                backend="avx2", shard_bytes=64 * 1024 + 2,
+                loss_count=9, decode_selection="specialized",
+                gf16_detected_l3_bytes=32 * mib,
+            ),
+            "auto": build_decode_report(
+                path="low_decode", k=200, r=800, field="gf16",
+                backend="avx2", shard_bytes=64 * 1024,
+                loss_count=9, decode_selection="specialized",
+                gf16_detected_l3_bytes=32 * mib,
+                context_auto_requested=True,
+            ),
+            "count": build_decode_report(
+                path="low_decode", k=201, r=799, field="gf16",
+                backend="avx2", shard_bytes=64 * 1024,
+                loss_count=9, decode_selection="specialized",
+                gf16_detected_l3_bytes=32 * mib,
+            ),
+        }
+        for neighbor, report in low_neighbors.items():
+            with self.subTest(low_side256_neighbor=neighbor):
+                prefix = (
+                    report["inputs"]["shard_bytes"] //
+                    COUNTS.SCRATCH_ALIGNMENT * COUNTS.SCRATCH_ALIGNMENT
+                )
+                self.assertEqual(
+                    (
+                        report["metrics"][
+                            "decode_plan_execution_tile_count"
+                        ]["value"],
+                        report["metrics"][
+                            "decode_plan_execution_tile_bytes"
+                        ]["value"],
+                    ),
+                    (1, prefix),
+                )
+
+        gf8 = build_decode_report(
+            path="low_decode", k=8, r=248, field="gf8",
+            backend="avx2", shard_bytes=1024 * 1024,
+            loss_count=8, decode_selection="specialized",
+            gf16_detected_l3_bytes=96 * mib,
+        )
+        self.assertEqual(
+            gf8["metrics"]["decode_plan_execution_tile_bytes"]["value"],
+            1024 * 1024,
+        )
+        gf8_tiled = build_decode_report(
+            k=192, r=64, field="gf8", backend="avx2",
+            shard_bytes=256 * 1024, loss_count=9,
+            decode_selection="specialized",
+        )
+        self.assertEqual(
+            (
+                gf8_tiled["metrics"][
+                    "decode_plan_execution_tile_count"
+                ]["value"],
+                gf8_tiled["metrics"][
+                    "decode_plan_execution_tile_bytes"
+                ]["value"],
+                gf8_tiled["metrics"][
+                    "decode_codec_execution_tile_count"
+                ]["value"],
+                gf8_tiled["metrics"][
+                    "decode_codec_execution_tile_bytes"
+                ]["value"],
+            ),
+            (8, 32 * 1024, 8, 32 * 1024),
+        )
+
+    def test_gf16_plan_rows_and_conservative_codec_query(self) -> None:
+        mib = COUNTS.MIB
+        expected = {
+            32: ((8, 57344), (7, 65536)),
+            64: ((8, 57344), (7, 65536)),
+            96: ((8, 57344), (7, 65536)),
+        }
+        for cache_mib, (plan_geometry, codec_geometry) in expected.items():
+            with self.subTest(cache_mib=cache_mib):
+                report = build_decode_report(
+                    k=300, r=100, field="gf16", backend="avx2",
+                    shard_bytes=448 * 1024, loss_count=9,
+                    decode_selection="specialized",
+                    gf16_detected_l3_bytes=cache_mib * mib,
+                )
+                metrics = report["metrics"]
+                self.assertEqual(
+                    metrics["decode_plan_work_slots"]["value"], 265
+                )
+                self.assertEqual(
+                    metrics["decode_codec_work_slots"]["value"], 356
+                )
+                self.assertEqual(
+                    (
+                        metrics[
+                            "decode_plan_execution_tile_count"
+                        ]["value"],
+                        metrics[
+                            "decode_plan_execution_tile_bytes"
+                        ]["value"],
+                    ),
+                    plan_geometry,
+                )
+                self.assertEqual(
+                    (
+                        metrics[
+                            "decode_codec_execution_tile_count"
+                        ]["value"],
+                        metrics[
+                            "decode_codec_execution_tile_bytes"
+                        ]["value"],
+                    ),
+                    codec_geometry,
+                )
+                self.assertGreaterEqual(
+                    metrics["decode_codec_scratch_bytes"]["value"],
+                    metrics["decode_plan_scratch_bytes"]["value"],
+                )
+
+        # GFNI retains the conservative 32-MiB policy because only explicit
+        # AVX2 contexts were qualified for affinity-derived cache sizing.
+        # Both the known plan and plan-null query therefore take the existing
+        # side-512 16-KiB override and the codec remains an upper bound.
+        maximum_loss = build_decode_report(
+            k=2000, r=512, field="gf16", backend="gfni",
+            shard_bytes=64 * 1024, loss_count=512,
+            decode_selection="specialized",
+            gf16_detected_l3_bytes=96 * mib,
+        )["metrics"]
+        self.assertEqual(
+            (
+                maximum_loss["decode_plan_execution_tile_count"]["value"],
+                maximum_loss["decode_plan_execution_tile_bytes"]["value"],
+            ),
+            (4, 16 * 1024),
+        )
+        self.assertEqual(
+            (
+                maximum_loss["decode_codec_execution_tile_count"]["value"],
+                maximum_loss["decode_codec_execution_tile_bytes"]["value"],
+            ),
+            (4, 16 * 1024),
+        )
+        self.assertGreaterEqual(
+            maximum_loss["decode_codec_scratch_bytes"]["value"],
+            maximum_loss["decode_plan_scratch_bytes"]["value"],
+        )
 
     def test_decode_scratch_declared_abi_boundaries(self) -> None:
         for pointer_bytes in (4, 8):
@@ -860,6 +1210,17 @@ class OperationCountTests(unittest.TestCase):
                 1, 1, 4, 1, "low", 64, 1, "specialized", 8,
                 codec_workspace="specialized", direct=True,
             )
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.decode_scratch_accounting(
+                300, 100, 512, 128, "high", 64, 1, "tiled", 8,
+                codec_workspace="tiled", field_name="gf8",
+            )
+        with self.assertRaises(COUNTS.ModelError):
+            COUNTS.decode_scratch_accounting(
+                1, 1, 2, 1, "low", 65, 1, "specialized", 8,
+                codec_workspace="specialized", direct=True,
+                field_name="gf16",
+            )
 
         completed = subprocess.run(
             [sys.executable, str(TOOL), "report", "--path", "low_decode",
@@ -886,6 +1247,41 @@ class OperationCountTests(unittest.TestCase):
             (
                 "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
                 "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
+            ),
+            (
+                "codec->context->gf16_live_set_target_bytes / work_rows",
+                "codec->context->gf16_live_set_target_bytes / "
+                "(work_rows + 1)",
+            ),
+            (
+                "policy.live_set_target_bytes =\n"
+                "        (kFallbackGF16L3Bytes / 2U)",
+                "policy.live_set_target_bytes =\n"
+                "        (kFallbackGF16L3Bytes / 4U)",
+            ),
+            (
+                "std::max(effective, kFallbackGF16L3Bytes * 2U)",
+                "std::max(effective, kFallbackGF16L3Bytes * 3U)",
+            ),
+            (
+                "scaled /= kFallbackGF16L3Bytes / kMiB;",
+                "scaled /= kMaximumCalibratedGF16L3Bytes / kMiB;",
+            ),
+            (
+                "(aligned_bytes - 1U) / requested_tile_bytes",
+                "(aligned_bytes + 1U) / requested_tile_bytes",
+            ),
+            (
+                "case 64:\n"
+                "            return aligned_prefix_bytes >= 192U * 1024U",
+                "case 64:\n"
+                "            return aligned_prefix_bytes >= 256U * 1024U",
+            ),
+            (
+                "const bool cache_sensitive_gf16_backend =\n"
+                "        requested == LEO2_BACKEND_AVX2;",
+                "const bool cache_sensitive_gf16_backend =\n"
+                "        effective_backend == LEO2_BACKEND_AVX2;",
             ),
         )
         for old, new in mutations:
@@ -929,7 +1325,7 @@ class OperationCountTests(unittest.TestCase):
         second = subprocess.check_output(command, text=True)
         self.assertEqual(first, second)
         document = json.loads(first)
-        self.assertEqual(document["schema_version"], 3)
+        self.assertEqual(document["schema_version"], 4)
         self.assertEqual(
             document["metrics"]["decode_plan_scratch_bytes"]["classification"],
             "exact_schedule",

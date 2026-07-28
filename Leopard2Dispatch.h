@@ -397,4 +397,22 @@ leo2_result GetDecodeCodecScratchPathInfo(
     uint64_t shard_bytes,
     DecodePathInfo* info_out);
 
+leo2_result GetDecodePlanExecutionTiles(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out);
+
+leo2_result GetDecodeCodecExecutionTiles(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out);
+
+leo2_result GetContextGF16CachePolicy(
+    const leo2_context* context,
+    uint64_t* effective_l3_bytes_out,
+    uint64_t* live_set_target_bytes_out,
+    uint64_t* tile_threshold_bytes_out);
+
 } // namespace leopard2_internal

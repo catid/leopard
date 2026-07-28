@@ -25,10 +25,13 @@ from dataclasses import dataclass, field
 from typing import Dict, Iterable, List, Optional, Sequence, Set, TextIO, Tuple
 
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 UINT32_MAX = (1 << 32) - 1
 UINT64_MAX = (1 << 64) - 1
 SCRATCH_ALIGNMENT = 64
+MIB = 1024 * 1024
+FALLBACK_GF16_L3_BYTES = 32 * MIB
+MAXIMUM_CALIBRATED_GF16_L3_BYTES = 96 * MIB
 PATHS = (
     "legacy_high_encode",
     "legacy_high_decode",
@@ -41,7 +44,7 @@ PATHS = (
 FIELDS = ("gf8", "gf16")
 PROFILES = ("high", "low")
 DECODE_WORKSPACES = ("materialized", "tiled")
-BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "neon")
+BACKENDS = ("scalar", "ssse3", "avx2", "avx512", "gfni", "neon")
 DECODE_SELECTIONS = ("path", "auto", "specialized")
 
 
@@ -510,7 +513,7 @@ def verify_low_decode_weighted_fusion_source(source: str, label: str) -> None:
 
 
 def verify_decode_scratch_source(source: str, label: str) -> None:
-    """Guard the production layout boundaries mirrored by schema v2.
+    """Guard the production layout/cache boundaries mirrored by schema v4.
 
     Runtime cross-checks compare public query bytes.  This scoped source guard
     additionally makes the intended distinctions reviewable: N coordinate
@@ -520,6 +523,20 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     execution retains range metadata without shard-data slots.
     """
     compact = re.sub(r"\s+", "", source)
+    policy_begin = compact.find("staticconstsize_tkMiB=")
+    derive_begin = compact.find(
+        "staticGF16CachePolicyDeriveGF16CachePolicy(", policy_begin
+    )
+    scale_begin = compact.find(
+        "static size_tScaleGF16CalibratedTileBytes(".replace(" ", ""),
+        derive_begin,
+    )
+    policy_end = compact.find(
+        "staticboolComputeBalancedExecutionTiles(", scale_begin
+    )
+    balanced_end = compact.find(
+        "staticleo2_resultComputeBatchPreflightScratchBytes(", policy_end
+    )
     selector_begin = compact.find("staticboolSelectTransformDecodePath(")
     begin = compact.find("staticleo2_resultDecodeLayout(", selector_begin)
     end = compact.find("staticleo2_resultDirectDecodeLayout(", begin)
@@ -527,14 +544,73 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     populate = compact.find("staticvoidPopulateDecodeCoordinates(")
     populate_end = compact.find("staticLEO_FORCE_INLINEvoidGatherTransformDecodeOne(", populate)
     execute = compact.find("staticleo2_resultDecodePlanExecuteInternal(", direct_end)
-    if min(selector_begin, begin, end, direct_end, populate, populate_end,
-           execute) < 0:
+    context_begin = compact.find(
+        "LEO2_EXPORTleo2_resultleo2_context_create("
+    )
+    context_end = compact.find(
+        "LEO2_EXPORTvoidleo2_context_destroy(", context_begin
+    )
+    if min(policy_begin, derive_begin, scale_begin, policy_end, balanced_end,
+           selector_begin, begin, end, direct_end, populate, populate_end,
+           execute, context_begin, context_end) < 0:
         raise ModelError("{} is missing a decode scratch boundary".format(label))
+    policy = compact[policy_begin:scale_begin]
+    scaling = compact[scale_begin:policy_end]
+    balanced = compact[policy_end:balanced_end]
     selector = compact[selector_begin:begin]
     layout = compact[begin:end]
     direct = compact[end:direct_end]
     staging = compact[populate:populate_end]
     execution = compact[execute:]
+    context_creation = compact[context_begin:context_end]
+    required_policy = (
+        "staticconstsize_tkFallbackGF16L3Bytes=32U*kMiB;",
+        "staticconstsize_tkMaximumCalibratedGF16L3Bytes=96U*kMiB;",
+        "detected_l3_bytes>=kFallbackGF16L3Bytes",
+        "std::min<uint64_t>(detected_l3_bytes,"
+        "kMaximumCalibratedGF16L3Bytes)",
+        "effective=effective/kMiB*kMiB;",
+        "policy.live_set_target_bytes=(kFallbackGF16L3Bytes/2U)&"
+        "~(kScratchAlignment-1U);",
+        "policy.tile_threshold_bytes=std::max(effective,"
+        "kFallbackGF16L3Bytes*2U);",
+    )
+    required_scaling = (
+        "context?context->gf16_effective_l3_bytes:"
+        "kFallbackGF16L3Bytes",
+        "CheckedMultiply(base_tile_bytes,effective_mib,scaled)",
+        "scaled/=kFallbackGF16L3Bytes/kMiB;",
+        "scaled&=~(kScratchAlignment-1U);",
+        "returnstd::max(scaled,kScratchAlignment);",
+    )
+    if (any(token not in policy for token in required_policy) or
+            any(token not in scaling for token in required_scaling)):
+        raise ModelError(
+            "{} GF16 cache policy diverged from schema v4".format(label)
+        )
+    required_context_policy = (
+        "constboolcache_sensitive_gf16_backend="
+        "requested==LEO2_BACKEND_AVX2;",
+        "cache_sensitive_gf16_backend?"
+        "leopard::backend::DetectConservativeL3Bytes():0",
+    )
+    if any(token not in context_creation for token in required_context_policy):
+        raise ModelError(
+            "{} context cache-policy qualification diverged from schema v4".
+            format(label)
+        )
+    required_balanced = (
+        "execution_tile_count=1U+(aligned_bytes-1U)/requested_tile_bytes;",
+        "constsize_ttotal_tiles=aligned_bytes/kScratchAlignment;",
+        "constsize_tmaximum_pass_tiles=total_tiles/execution_tile_count+"
+        "(total_tiles%execution_tile_count!=0);",
+        "CheckedMultiply(maximum_pass_tiles,kScratchAlignment,"
+        "maximum_pass_bytes)",
+    )
+    if any(token not in balanced for token in required_balanced):
+        raise ModelError(
+            "{} balanced pass splitter diverged from schema v4".format(label)
+        )
     required_selector = (
         "plan?plan->requested_coordinates.size():"
         "codec->recovery_count",
@@ -547,6 +623,22 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "constsize_tpolicy_work_rows=plan_known?"
         "selection.required_work_slots:"
         "static_cast<size_t>(codec->padded_side)*2U;",
+        "codec->context->backend!=LEO2_BACKEND_AVX2&&"
+        "codec->context->backend!=LEO2_BACKEND_GFNI",
+        "codec->profile==LEO2_PROFILE_LEGACY_HIGH_V1&&"
+        "aligned_prefix_bytes>=64U*1024U&&"
+        "(codec->padded_side==256||codec->padded_side==512)",
+        "ProductAtLeast(work_rows,aligned_prefix_bytes,effective_l3)",
+        "ProductAtLeast(work_rows,aligned_prefix_bytes,"
+        "codec->context->gf16_tile_threshold_bytes)",
+        "codec->context->gf16_live_set_target_bytes/work_rows",
+        "case16:returnaligned_prefix_bytes>=768U*1024U?"
+        "128U*1024U:aligned_prefix_bytes;",
+        "case32:returnaligned_prefix_bytes>=384U*1024U?"
+        "64U*1024U:aligned_prefix_bytes;",
+        "case64:returnaligned_prefix_bytes>=192U*1024U?"
+        "32U*1024U:aligned_prefix_bytes;",
+        "case128:return32U*1024U;",
     )
     if any(token not in selector for token in required_selector):
         raise ModelError(
@@ -559,7 +651,7 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "geometry.execution_tile_bytes=geometry.aligned_prefix_bytes;",
         "constsize_trequested_tile_bytes=AVX2DecodeExecutionTileBytes("
         "codec,geometry.selection,geometry.aligned_prefix_bytes,"
-        "plan!=NULL);",
+        "plan);",
         "ComputeBalancedExecutionTiles(geometry.aligned_prefix_bytes,"
         "requested_tile_bytes,geometry.execution_tile_count,"
         "geometry.execution_tile_bytes)",
@@ -580,7 +672,7 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
     )
     if any(token not in layout for token in required_layout):
         raise ModelError(
-            "{} decode transform scratch formula diverged from schema v2".format(
+            "{} decode transform scratch formula diverged from schema v4".format(
                 label
             )
         )
@@ -664,17 +756,17 @@ def verify_decode_policy_source(source: str, label: str) -> None:
     )
     if balanced_backend not in balanced:
         raise ModelError(
-            "{} balanced decode backends diverged from schema v3".format(label)
+            "{} balanced decode backends diverged from schema v4".format(label)
         )
     if materialized_backend not in materialized:
         raise ModelError(
-            "{} materialized decode backends diverged from schema v3".format(
+            "{} materialized decode backends diverged from schema v4".format(
                 label
             )
         )
     if batch_backend not in selector:
         raise ModelError(
-            "{} batch decode backends diverged from schema v3".format(label)
+            "{} batch decode backends diverged from schema v4".format(label)
         )
 
 
@@ -683,7 +775,7 @@ def verify_decode_fusion_sources(
     ff8_source: str,
     ff16_source: str,
 ) -> None:
-    """Bind schema-v3 traffic predicates to the production source.
+    """Bind schema-v4 traffic predicates to the production source.
 
     The operation model is intentionally independent code, but backend traffic
     would become misleading if a production crossover changed without a schema
@@ -727,7 +819,7 @@ def verify_decode_fusion_sources(
     )
     if any(token not in core for token in core_tokens):
         raise ModelError(
-            "leopard2.cpp decode reveal-fusion policy diverged from schema v3"
+            "leopard2.cpp decode reveal-fusion policy diverged from schema v4"
         )
     ff8_tokens = (
         "if(ops.kind==LEO2_BACKEND_AVX2||"
@@ -739,7 +831,7 @@ def verify_decode_fusion_sources(
     )
     if any(token not in ff8 for token in ff8_tokens):
         raise ModelError(
-            "LeopardFF8.cpp syndrome-fusion policy diverged from schema v3"
+            "LeopardFF8.cpp syndrome-fusion policy diverged from schema v4"
         )
     ff8_sink_assignment = (
         "constbooluse_accumulating_sink="
@@ -747,7 +839,7 @@ def verify_decode_fusion_sources(
     )
     if ff8.count(ff8_sink_assignment) != 2:
         raise ModelError(
-            "LeopardFF8.cpp pruned syndrome-sink wiring diverged from schema v3"
+            "LeopardFF8.cpp pruned syndrome-sink wiring diverged from schema v4"
         )
     ff16_tokens = (
         "returnbytes==64||(bytes==128&&"
@@ -765,7 +857,7 @@ def verify_decode_fusion_sources(
     )
     if any(token not in ff16 for token in ff16_tokens):
         raise ModelError(
-            "LeopardFF16.cpp syndrome-fusion policy diverged from schema v3"
+            "LeopardFF16.cpp syndrome-fusion policy diverged from schema v4"
         )
     ff16_sink_assignment = (
         "constbooluse_accumulating_sink="
@@ -773,7 +865,7 @@ def verify_decode_fusion_sources(
     )
     if ff16.count(ff16_sink_assignment) != 2:
         raise ModelError(
-            "LeopardFF16.cpp pruned syndrome-sink wiring diverged from schema v3"
+            "LeopardFF16.cpp pruned syndrome-sink wiring diverged from schema v4"
         )
 
 
@@ -832,6 +924,32 @@ class Schedule:
 
 
 @dataclass(frozen=True)
+class DecodeSelection:
+    path: str
+    rule: str
+    matching_auto_rules: int
+    required_work_slots: int
+
+
+@dataclass(frozen=True)
+class GF16CachePolicy:
+    """Deterministic mirror of a context's immutable GF16 cache policy."""
+
+    detected_l3_bytes: int
+    effective_l3_bytes: int
+    live_set_target_bytes: int
+    tile_threshold_bytes: int
+
+
+@dataclass(frozen=True)
+class ExecutionTiles:
+    """Balanced byte-pass geometry used by transform encode/decode."""
+
+    count: int
+    maximum_pass_bytes: int
+
+
+@dataclass(frozen=True)
 class DecodeScratchAccounting:
     """Exact public decode scratch layout for one declared ABI and path.
 
@@ -856,6 +974,8 @@ class DecodeScratchAccounting:
     tail_staged_payload_bytes: int
     tail_staged_zero_padding_bytes: int
     work_slot_bytes: int
+    plan_execution_tile_count: int
+    plan_execution_tile_bytes: int
     plan_work_slots: int
     plan_work_bytes: int
     plan_total_bytes: int
@@ -867,6 +987,9 @@ class DecodeScratchAccounting:
     codec_data_offset: int
     codec_tail_reserved_slots: int
     codec_tail_reserved_bytes: int
+    codec_work_slot_bytes: int
+    codec_execution_tile_count: int
+    codec_execution_tile_bytes: int
     codec_work_slots: int
     codec_work_bytes: int
     codec_total_bytes: int
@@ -912,6 +1035,152 @@ def round_shard_bytes(shard_bytes: int, pointer_bytes: int) -> int:
         raise ModelError(
             "shard bytes cannot be rounded within the declared ABI size_t"
         ) from error
+
+
+def derive_gf16_cache_policy(detected_l3_bytes: int = 0) -> GF16CachePolicy:
+    """Mirror ``DeriveGF16CachePolicy`` without consulting the model host.
+
+    Reports default to a detected value of zero, which intentionally selects
+    production's conservative 32-MiB fallback.  Callers that want to model a
+    particular context pass the creation-affinity detector result explicitly;
+    the result is quantized and capped exactly like the immutable C++ policy.
+    """
+    if detected_l3_bytes < 0 or detected_l3_bytes > UINT64_MAX:
+        raise ModelError("detected L3 bytes must fit uint64_t")
+    effective = FALLBACK_GF16_L3_BYTES
+    if detected_l3_bytes >= FALLBACK_GF16_L3_BYTES:
+        effective = min(
+            detected_l3_bytes, MAXIMUM_CALIBRATED_GF16_L3_BYTES
+        )
+        effective = effective // MIB * MIB
+        effective = max(effective, FALLBACK_GF16_L3_BYTES)
+    return GF16CachePolicy(
+        detected_l3_bytes=detected_l3_bytes,
+        effective_l3_bytes=effective,
+        live_set_target_bytes=(FALLBACK_GF16_L3_BYTES // 2)
+        & ~(SCRATCH_ALIGNMENT - 1),
+        tile_threshold_bytes=max(
+            effective, FALLBACK_GF16_L3_BYTES * 2
+        ),
+    )
+
+
+def balanced_execution_tiles(
+    aligned_bytes: int, requested_tile_bytes: int
+) -> ExecutionTiles:
+    """Mirror production's balanced pass split, including its larger maximum.
+
+    The requested byte budget is not itself the scratch slot width unless it
+    divides the payload.  Production first chooses a pass count and then
+    distributes 64-byte units as evenly as possible; the widest resulting pass
+    is what every work slot reserves.
+    """
+    if aligned_bytes < 0 or requested_tile_bytes <= 0:
+        raise ModelError("invalid execution tile byte count")
+    if ((aligned_bytes | requested_tile_bytes) &
+            (SCRATCH_ALIGNMENT - 1)) != 0:
+        raise ModelError("execution tile bytes must be 64-byte aligned")
+    if aligned_bytes == 0:
+        return ExecutionTiles(0, 0)
+    if requested_tile_bytes >= aligned_bytes:
+        return ExecutionTiles(1, aligned_bytes)
+    count = 1 + (aligned_bytes - 1) // requested_tile_bytes
+    total_units = aligned_bytes // SCRATCH_ALIGNMENT
+    maximum_units = total_units // count + (
+        1 if total_units % count else 0
+    )
+    if maximum_units == 0:
+        raise AssertionError("balanced execution produced an empty pass")
+    return ExecutionTiles(count, maximum_units * SCRATCH_ALIGNMENT)
+
+
+def decode_execution_tiles(
+    k: int,
+    r: int,
+    profile: str,
+    field_name: str,
+    backend: str,
+    padded: int,
+    aligned_prefix_bytes: int,
+    tail_bytes: int,
+    selection_path: str,
+    selection_rule: str,
+    required_work_slots: int,
+    loss_count: int,
+    detected_l3_bytes: int = 0,
+    plan_known: bool = True,
+    auto_requested: bool = False,
+) -> ExecutionTiles:
+    """Return exact production byte-pass geometry for one decode selection.
+
+    GF16 AVX2/GFNI known plans use their actual retained row count.  A
+    pattern-independent codec query deliberately makes the *tiling decision*
+    with only ``2 * padded`` base rows, while still allocating
+    ``required_work_slots`` rows.  This conservative asymmetry prevents a
+    maximum-row codec query from tiling below a later small-loss plan.
+    """
+    if profile not in PROFILES:
+        raise ModelError("profile must be high or low")
+    if field_name not in FIELDS:
+        raise ModelError("unsupported field")
+    if backend not in BACKENDS:
+        raise ModelError("unsupported backend")
+    if (k <= 0 or r <= 0 or padded <= 0 or required_work_slots < 0 or
+            loss_count < 0):
+        raise ModelError("invalid decode tile geometry")
+    if aligned_prefix_bytes < 0 or (
+            aligned_prefix_bytes & (SCRATCH_ALIGNMENT - 1)) != 0:
+        raise ModelError("aligned decode prefix must be 64-byte aligned")
+    if tail_bytes < 0 or tail_bytes >= SCRATCH_ALIGNMENT:
+        raise ModelError("decode tail must be in [0, 64)")
+    full = ExecutionTiles(
+        0 if aligned_prefix_bytes == 0 else 1, aligned_prefix_bytes
+    )
+    if aligned_prefix_bytes == 0:
+        return full
+    if (backend not in ("avx2", "gfni") or
+            selection_path in ("no_op", "direct") or
+            (selection_path != "tiled" and
+             selection_rule != "translated_low")):
+        return full
+
+    if field_name == "gf8":
+        requested = aligned_prefix_bytes
+        if aligned_prefix_bytes >= 128 * 1024:
+            if padded == 16 and aligned_prefix_bytes >= 768 * 1024:
+                requested = 128 * 1024
+            elif padded == 32 and aligned_prefix_bytes >= 384 * 1024:
+                requested = 64 * 1024
+            elif padded == 64 and aligned_prefix_bytes >= 192 * 1024:
+                requested = 32 * 1024
+            elif padded == 128:
+                requested = 32 * 1024
+        return balanced_execution_tiles(aligned_prefix_bytes, requested)
+
+    policy = derive_gf16_cache_policy(
+        detected_l3_bytes
+        if backend == "avx2" and not auto_requested else 0
+    )
+    policy_rows = required_work_slots if plan_known else 2 * padded
+    if policy_rows <= 0:
+        return full
+
+    requested = aligned_prefix_bytes
+    if (profile == "high" and aligned_prefix_bytes >= 64 * 1024 and
+            padded in (256, 512) and
+            policy_rows * aligned_prefix_bytes >= policy.effective_l3_bytes):
+        requested = 16 * 1024 * (
+            policy.effective_l3_bytes // MIB
+        ) // (FALLBACK_GF16_L3_BYTES // MIB)
+        requested &= ~(SCRATCH_ALIGNMENT - 1)
+        requested = max(requested, SCRATCH_ALIGNMENT)
+    elif (policy_rows * aligned_prefix_bytes >=
+          policy.tile_threshold_bytes):
+        requested = policy.live_set_target_bytes // policy_rows
+        requested &= ~(SCRATCH_ALIGNMENT - 1)
+        requested = max(requested, SCRATCH_ALIGNMENT)
+
+    return balanced_execution_tiles(aligned_prefix_bytes, requested)
 
 
 def _decode_transform_work_slots(
@@ -991,6 +1260,12 @@ def decode_scratch_accounting(
     codec_workspace: Optional[str] = None,
     no_op: bool = False,
     direct: bool = False,
+    field_name: str = "gf8",
+    backend: str = "scalar",
+    detected_l3_bytes: int = 0,
+    auto_requested: bool = False,
+    plan_selection: Optional[DecodeSelection] = None,
+    codec_selection: Optional[DecodeSelection] = None,
 ) -> DecodeScratchAccounting:
     """Mirror DecodeLayout/DirectDecodeLayout and both public queries.
 
@@ -1007,11 +1282,19 @@ def decode_scratch_accounting(
         raise ModelError("invalid decode loss count")
     if profile not in PROFILES:
         raise ModelError("profile must be high or low")
+    if field_name not in FIELDS:
+        raise ModelError("unsupported field")
+    if backend not in BACKENDS:
+        raise ModelError("unsupported backend")
+    if field_name == "gf16" and shard_bytes % 2:
+        raise ModelError("current GF16 profile requires an even shard byte count")
+    derive_gf16_cache_policy(detected_l3_bytes)
     expected_geometry = parent_geometry(k, r, profile)
     if (parent != expected_geometry["parent_count"] or
             padded != expected_geometry["padded_side"] or
             parent > 65536 or parent > UINT32_MAX or padded > UINT32_MAX):
         raise ModelError("decode geometry does not match a public codec")
+    validate_field(parent, field_name)
     if no_op and loss_count != 0:
         raise ModelError("a no-op decode plan cannot contain losses")
     if direct and (no_op or loss_count == 0):
@@ -1031,36 +1314,63 @@ def decode_scratch_accounting(
     )
     tail = shard_bytes & (SCRATCH_ALIGNMENT - 1)
     prefix = shard_bytes - tail
-    work_slot_bytes = shard_bytes if tail == 0 else max(
-        prefix, SCRATCH_ALIGNMENT
-    )
     tail_reserved_slots = checked_size_add(k, r, maximum) if tail else 0
     tail_selected_staged_slots = k if tail and not no_op and not direct else 0
 
     if no_op:
         plan_pointer_count = 0
         plan_work_slots = 0
+        plan_tiles = ExecutionTiles(0, 0)
+        plan_work_slot_bytes = 0
         plan_values = (0, 0, 0, 0, 0, 0, 0)
         plan_range_count = 0
         plan_tail_slots = 0
     elif direct:
         plan_pointer_count = 0
         plan_work_slots = 0
+        plan_tiles = ExecutionTiles(0, 0)
+        plan_work_slot_bytes = 0
         plan_values = _scratch_components(
-            range_count, 0, 0, 0, work_slot_bytes, pointer_bytes
+            range_count, 0, 0, 0, plan_work_slot_bytes, pointer_bytes
         )
         plan_range_count = range_count
         plan_tail_slots = 0
     else:
-        plan_work_slots = _decode_transform_work_slots(
+        expected_plan_work_slots = _decode_transform_work_slots(
             parent, padded, profile, loss_count, plan_workspace, maximum
+        )
+        plan_work_slots = (
+            plan_selection.required_work_slots
+            if plan_selection is not None else expected_plan_work_slots
+        )
+        if plan_work_slots != expected_plan_work_slots:
+            raise ModelError("plan selection/workspace slot mismatch")
+        plan_path = (
+            plan_selection.path if plan_selection is not None
+            else "materialized" if plan_workspace == "specialized"
+            else plan_workspace
+        )
+        plan_rule = (
+            plan_selection.rule if plan_selection is not None
+            else "workspace_tiled" if plan_path == "tiled"
+            else "workspace_materialized"
+        )
+        plan_tiles = decode_execution_tiles(
+            k, r, profile, field_name, backend, padded, prefix, tail,
+            plan_path, plan_rule, plan_work_slots,
+            loss_count, detected_l3_bytes, plan_known=True,
+            auto_requested=auto_requested,
+        )
+        plan_work_slot_bytes = max(
+            plan_tiles.maximum_pass_bytes,
+            SCRATCH_ALIGNMENT if tail else 0,
         )
         plan_pointer_count = checked_size_add(
             parent, plan_work_slots, maximum
         )
         plan_values = _scratch_components(
             range_count, plan_pointer_count, tail_reserved_slots,
-            plan_work_slots, work_slot_bytes, pointer_bytes
+            plan_work_slots, plan_work_slot_bytes, pointer_bytes
         )
         plan_range_count = range_count
         plan_tail_slots = tail_reserved_slots
@@ -1069,24 +1379,52 @@ def decode_scratch_accounting(
         codec_workspace = plan_workspace
     if k1_legacy_high:
         codec_work_slots = 0
+        codec_tiles = ExecutionTiles(0, 0)
+        codec_work_slot_bytes = 0
         codec_pointer_count = 0
         codec_values = _scratch_components(
-            0, 0, 0, 0, work_slot_bytes, pointer_bytes
+            0, 0, 0, 0, codec_work_slot_bytes, pointer_bytes
         )
         codec_tail_slots = 0
     else:
-        codec_work_slots = _decode_transform_work_slots(
+        expected_codec_work_slots = _decode_transform_work_slots(
             parent, padded, profile,
             r if profile == "high" else loss_count,
             codec_workspace,
             maximum,
+        )
+        codec_work_slots = (
+            codec_selection.required_work_slots
+            if codec_selection is not None else expected_codec_work_slots
+        )
+        if codec_work_slots != expected_codec_work_slots:
+            raise ModelError("codec selection/workspace slot mismatch")
+        codec_path = (
+            codec_selection.path if codec_selection is not None
+            else "materialized" if codec_workspace == "specialized"
+            else codec_workspace
+        )
+        codec_rule = (
+            codec_selection.rule if codec_selection is not None
+            else "workspace_tiled" if codec_path == "tiled"
+            else "workspace_materialized"
+        )
+        codec_tiles = decode_execution_tiles(
+            k, r, profile, field_name, backend, padded, prefix, tail,
+            codec_path, codec_rule, codec_work_slots,
+            loss_count, detected_l3_bytes, plan_known=False,
+            auto_requested=auto_requested,
+        )
+        codec_work_slot_bytes = max(
+            codec_tiles.maximum_pass_bytes,
+            SCRATCH_ALIGNMENT if tail else 0,
         )
         codec_pointer_count = checked_size_add(
             parent, codec_work_slots, maximum
         )
         codec_values = _scratch_components(
             range_count, codec_pointer_count, tail_reserved_slots,
-            codec_work_slots, work_slot_bytes, pointer_bytes
+            codec_work_slots, codec_work_slot_bytes, pointer_bytes
         )
         codec_tail_slots = tail_reserved_slots
 
@@ -1122,7 +1460,9 @@ def decode_scratch_accounting(
         tail_selected_staged_slots=tail_selected_staged_slots,
         tail_staged_payload_bytes=tail_payload_bytes,
         tail_staged_zero_padding_bytes=tail_zero_padding_bytes,
-        work_slot_bytes=work_slot_bytes,
+        work_slot_bytes=plan_work_slot_bytes,
+        plan_execution_tile_count=plan_tiles.count,
+        plan_execution_tile_bytes=plan_tiles.maximum_pass_bytes,
         plan_work_slots=plan_work_slots,
         plan_work_bytes=plan_work_bytes,
         plan_total_bytes=plan_total,
@@ -1134,6 +1474,9 @@ def decode_scratch_accounting(
         codec_data_offset=codec_data_offset,
         codec_tail_reserved_slots=codec_tail_slots,
         codec_tail_reserved_bytes=codec_tail_bytes,
+        codec_work_slot_bytes=codec_work_slot_bytes,
+        codec_execution_tile_count=codec_tiles.count,
+        codec_execution_tile_bytes=codec_tiles.maximum_pass_bytes,
         codec_work_slots=codec_work_slots,
         codec_work_bytes=codec_work_bytes,
         codec_total_bytes=codec_total,
@@ -1374,14 +1717,6 @@ def _block_prefix(data_coordinates: Set[int], offset: int, width: int) -> int:
     return max(local) + 1 if local else 0
 
 
-@dataclass(frozen=True)
-class DecodeSelection:
-    path: str
-    rule: str
-    matching_auto_rules: int
-    required_work_slots: int
-
-
 def select_decode_execution(
     k: int,
     r: int,
@@ -1441,13 +1776,14 @@ def select_decode_execution(
         profile == "high" and field_name == "gf8" and
         k == 128 and r == 128 and padded == 128 and parent == 256 and
         loss_count == 128 and 256 <= rounded <= 1024 * 1024 and
-        backend in ("scalar", "ssse3", "avx2", "avx512")
+        backend in ("scalar", "ssse3", "avx2", "avx512", "gfni")
     )
     measured_materialized = (
         profile == "high" and field_name == "gf8" and
         k == 224 and r == 32 and padded == 32 and parent == 256 and
         0 < loss_count <= 8 and rounded <= 64 * 1024 and
-        ((backend in ("avx2", "avx512") and rounded >= 24 * 1024) or
+        ((backend in ("avx2", "avx512", "gfni") and
+          rounded >= 24 * 1024) or
          (backend == "ssse3" and rounded >= 32 * 1024))
     )
     matching = (1 if balanced else 0) | (2 if measured_materialized else 0)
@@ -1468,7 +1804,7 @@ def select_decode_execution(
             "generic", "balanced_generic", matching, materialized_slots
         )
     if measured_materialized:
-        if multi_item_batch and backend in ("avx2", "avx512"):
+        if multi_item_batch and backend in ("avx2", "avx512", "gfni"):
             return DecodeSelection(
                 "tiled", "measured_batch_tiled", matching, tiled_slots
             )
@@ -1508,7 +1844,8 @@ def select_codec_transform_execution(
         profile == "high" and field_name == "gf8" and
         k == 224 and r == 32 and padded == 32 and parent == 256 and
         rounded <= 64 * 1024 and
-        ((backend in ("avx2", "avx512") and rounded >= 24 * 1024) or
+        ((backend in ("avx2", "avx512", "gfni") and
+          rounded >= 24 * 1024) or
          (backend == "ssse3" and rounded >= 32 * 1024))
     )
     matching = 2 if measured_materialized else 0
@@ -1532,7 +1869,7 @@ def select_codec_transform_execution(
 def _gf16_mature_syndrome_fuses(
     padded: int, backend: str, pass_bytes: int
 ) -> bool:
-    if backend not in ("ssse3", "avx2", "avx512"):
+    if backend not in ("ssse3", "avx2", "avx512", "gfni"):
         return False
     # An odd transform depth ends in a two-way layer, which the qualified
     # vector decoder always accumulates.  Even depths end in a four-way layer;
@@ -1541,7 +1878,7 @@ def _gf16_mature_syndrome_fuses(
         return True
     if pass_bytes == 64:
         return False
-    if pass_bytes == 128 and backend in ("avx2", "avx512"):
+    if pass_bytes == 128 and backend in ("avx2", "avx512", "gfni"):
         return False
     return True
 
@@ -1549,7 +1886,7 @@ def _gf16_mature_syndrome_fuses(
 def _pruned_syndrome_fuses(
     field_name: str, backend: str, pass_bytes: int
 ) -> bool:
-    if backend in ("avx2", "avx512"):
+    if backend in ("avx2", "avx512", "gfni"):
         return pass_bytes >= 1024
     return field_name == "gf8" and backend == "ssse3" and pass_bytes >= 65536
 
@@ -1596,7 +1933,7 @@ def apply_decode_backend_accounting(
         aligned != 0 and
         (use_low_specialized or use_high_specialized or
          (use_generic and field_name == "gf8" and aligned >= 4096 and
-          backend in ("ssse3", "avx2", "avx512")))
+          backend in ("ssse3", "avx2", "avx512", "gfni")))
     )
 
     if use_generic or use_low_specialized:
@@ -1844,7 +2181,7 @@ def model_generic_decode(
     schedule.decode_output_gather_classification = "estimated_upper_bound"
     schedule.decode_output_gather_note = (
         "Copy-first backend-neutral baseline. Qualified GF8 "
-        "SSSE3/AVX2/AVX512 "
+        "SSSE3/AVX2/AVX512/GFNI "
         "generic reveal fusion can remove the aligned-prefix gather."
     )
     schedule.details.update({
@@ -2029,20 +2366,22 @@ def model_high_decode(
         "copy_first_copies_after_cancellation": copy_first_copies,
         "copy_first_zero_fills_after_cancellation": copy_first_zeros,
         "receive_source_fusion_scope": (
-            "GF8 qualified SSSE3/AVX2/AVX512 mature unpruned schedule delta"
+            "GF8 qualified SSSE3/AVX2/AVX512/GFNI mature unpruned "
+            "schedule delta"
             if field_name == "gf8" else
             "GF16 deterministic copy-first policy"
         ),
         "syndrome_reduction_vectors": reduction,
         "locator_scale_vectors": len(selected_parities),
         "locator_weighted_fusion_scope": (
-            "qualified GF8 AVX2/AVX512 delta only: T>=64, "
+            "qualified GF8 AVX2/AVX512/GFNI delta only: T>=64, "
             "live_count>=ceil(T/2), "
             "and each kernel pass in [16 KiB, 256 KiB]"
         ),
         "locator_weighted_live_scan_scope": (
-            "statically qualified GF8 AVX2/AVX512 passes scan receive pointers "
-            "until ceil(T/2) live rows are found; sparse fallback scans all T"
+            "statically qualified GF8 AVX2/AVX512/GFNI passes scan receive "
+            "pointers until ceil(T/2) live rows are found; sparse fallback "
+            "scans all T"
         ),
         "locator_weighted_fusion_applied_to_isa_independent_totals": False,
         "evaluation_block_prefixes": evaluation_prefixes,
@@ -2318,9 +2657,11 @@ def schedule_metrics(
             "Backend-qualified logical traffic adds the alias-safe in-place "
             "reveal temporary and public scatter, and subtracts one read plus "
             "one write for each syndrome byte accumulated by the final inverse "
-            "layer. Schema v3 applies only these reveal/syndrome deltas; "
+            "layer. Schema v4 applies only these reveal/syndrome deltas; "
             "receive-source and weighted-locator effects remain separately "
-            "reported structural details. This is logical, not cache traffic."
+            "reported structural details. Schema v4 additionally models "
+            "cache-derived scratch pass widths, but this traffic estimate "
+            "remains logical rather than measured cache traffic."
         )
         metrics.update({
             "decode_reveal_inplace_temporary_payload_bytes": Metric(
@@ -2404,7 +2745,16 @@ def schedule_metrics(
                 scratch.tail_staged_zero_padding_bytes, "bytes", "exact_schedule"
             ),
             "decode_work_slot_bytes": Metric(
-                scratch.work_slot_bytes, "bytes", "exact_schedule"
+                scratch.work_slot_bytes, "bytes", "exact_schedule",
+                "Maximum balanced byte pass reserved by each plan work slot."
+            ),
+            "decode_plan_execution_tile_count": Metric(
+                scratch.plan_execution_tile_count, "byte_passes",
+                "exact_schedule"
+            ),
+            "decode_plan_execution_tile_bytes": Metric(
+                scratch.plan_execution_tile_bytes, "bytes", "exact_schedule",
+                "Maximum balanced plan pass, before the optional 64-byte tail."
             ),
             "decode_plan_work_slots": Metric(
                 scratch.plan_work_slots, "shard_slots", "exact_schedule"
@@ -2414,6 +2764,19 @@ def schedule_metrics(
             ),
             "decode_codec_work_slots": Metric(
                 scratch.codec_work_slots, "shard_slots", "exact_schedule"
+            ),
+            "decode_codec_work_slot_bytes": Metric(
+                scratch.codec_work_slot_bytes, "bytes", "exact_schedule",
+                "Maximum balanced pattern-independent codec-query pass."
+            ),
+            "decode_codec_execution_tile_count": Metric(
+                scratch.codec_execution_tile_count, "byte_passes",
+                "exact_schedule"
+            ),
+            "decode_codec_execution_tile_bytes": Metric(
+                scratch.codec_execution_tile_bytes, "bytes", "exact_schedule",
+                "Codec policy uses minimum base rows for this decision while "
+                "allocating its conservative maximum row count."
             ),
             "decode_codec_work_bytes": Metric(
                 scratch.codec_work_bytes, "bytes", "exact_schedule"
@@ -2448,14 +2811,32 @@ def attach_decode_scratch(
     pointer_bytes: int,
     codec_workspace: Optional[str] = None,
     direct: bool = False,
+    field_name: str = "gf8",
+    backend: str = "scalar",
+    detected_l3_bytes: int = 0,
+    auto_requested: bool = False,
+    plan_selection: Optional[DecodeSelection] = None,
+    codec_selection: Optional[DecodeSelection] = None,
+    execution_work_slots: Optional[int] = None,
 ) -> None:
+    if (execution_work_slots is not None and
+            (not isinstance(execution_work_slots, int) or
+             execution_work_slots < 0)):
+        raise ModelError("execution work slots must be a nonnegative integer")
     scratch = decode_scratch_accounting(
         k, r, parent, padded, profile, shard_bytes, len(losses),
         plan_workspace, pointer_bytes, codec_workspace=codec_workspace,
         no_op=not losses, direct=direct and bool(losses),
+        field_name=field_name, backend=backend,
+        detected_l3_bytes=detected_l3_bytes,
+        auto_requested=auto_requested,
+        plan_selection=plan_selection, codec_selection=codec_selection,
     )
     schedule.decode_scratch = scratch
-    schedule.execution_slots = scratch.plan_work_slots
+    schedule.execution_slots = (
+        scratch.plan_work_slots
+        if execution_work_slots is None else execution_work_slots
+    )
     schedule.api_scratch_slots = 0
     schedule.details.update({
         "decode_workspace": scratch.workspace,
@@ -2466,6 +2847,10 @@ def attach_decode_scratch(
         "work_pointer_entries": scratch.plan_work_slots,
         "tail_reserved_input_slots": scratch.tail_reserved_slots,
         "tail_selected_staged_slots": scratch.tail_selected_staged_slots,
+        "plan_execution_tile_count": scratch.plan_execution_tile_count,
+        "plan_execution_tile_bytes": scratch.plan_execution_tile_bytes,
+        "codec_execution_tile_count": scratch.codec_execution_tile_count,
+        "codec_execution_tile_bytes": scratch.codec_execution_tile_bytes,
         "scratch_accounting": "exact_public_api_bytes",
     })
 
@@ -2479,6 +2864,17 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
     validate_field(parent, args.field)
     if args.field == "gf16" and args.shard_bytes % 2:
         raise ModelError("current GF16 profile requires an even shard byte count")
+    detected_l3_bytes = int(getattr(
+        args, "gf16_detected_l3_bytes", 0
+    ))
+    context_auto_requested = bool(getattr(
+        args, "context_auto_requested", False
+    ))
+    cache_policy = derive_gf16_cache_policy(
+        detected_l3_bytes
+        if (args.field == "gf16" and args.backend == "avx2" and
+            not context_auto_requested) else 0
+    )
 
     requested = parse_mask(args.requested_parity, args.r, default_all=True)
     if args.loss_mask is not None and args.loss_count is not None:
@@ -2495,24 +2891,35 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
         "legacy_high_decode", "low_decode", "generic_decode", "direct_repair"
     }
     selection: Optional[DecodeSelection] = None
+    scratch_selection: Optional[DecodeSelection] = None
+    decode_force = "auto"
     if path in decode_paths:
         if path == "direct_repair":
             selection = DecodeSelection("direct", "direct", 0, 0)
+            scratch_selection = selection
         else:
             if path == "generic_decode":
                 if args.decode_selection != "path":
                     raise ModelError(
                         "generic_decode already names its selected path"
                     )
-                force = "generic"
+                decode_force = "generic"
             elif args.decode_selection == "path":
-                force = args.decode_workspace
+                decode_force = args.decode_workspace
             else:
-                force = args.decode_selection
+                decode_force = args.decode_selection
             selection = select_decode_execution(
                 args.k, args.r, profile, args.field, args.backend, geometry,
-                args.shard_bytes, len(losses), force,
+                args.shard_bytes, len(losses), decode_force,
                 multi_item_batch=args.multi_item_batch,
+            )
+            scratch_selection = (
+                select_decode_execution(
+                    args.k, args.r, profile, args.field, args.backend,
+                    geometry, args.shard_bytes, len(losses), decode_force,
+                    multi_item_batch=False,
+                )
+                if args.multi_item_batch else selection
             )
 
     if path == "legacy_high_encode":
@@ -2566,38 +2973,48 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
 
     if path in decode_paths:
         assert selection is not None
+        assert scratch_selection is not None
         apply_decode_backend_accounting(
             schedule, args.k, args.r, profile, args.field, args.backend,
             geometry, args.shard_bytes, losses, selection,
             args.multi_item_batch,
         )
-        if selection.path == "generic":
+        if scratch_selection.path == "generic":
             plan_workspace = "generic"
-        elif selection.path in ("materialized", "tiled"):
-            plan_workspace = selection.path
+        elif scratch_selection.path in ("materialized", "tiled"):
+            plan_workspace = scratch_selection.path
         else:
             # Direct/no-op plan layout ignores this value.  The one-shot codec
             # query remains transform-capable and uses the ordinary specialized
             # capacity policy for the same immutable codec.
             plan_workspace = "specialized"
-        if path == "generic_decode":
-            codec_workspace = "generic"
-        elif args.decode_selection == "path" and path != "direct_repair":
-            codec_workspace = args.decode_workspace
+        if path == "direct_repair":
+            codec_force = "auto"
+        elif path == "generic_decode":
+            codec_force = "generic"
+        elif args.decode_selection == "path":
+            codec_force = args.decode_workspace
         else:
             codec_force = (
                 args.decode_selection
                 if args.decode_selection in ("auto", "specialized") else "auto"
             )
-            codec_workspace = select_codec_transform_execution(
-                args.k, args.r, profile, args.field, args.backend,
-                geometry, args.shard_bytes, codec_force,
-            ).path
+        codec_selection = select_codec_transform_execution(
+            args.k, args.r, profile, args.field, args.backend,
+            geometry, args.shard_bytes, codec_force,
+        )
+        codec_workspace = codec_selection.path
         direct = selection.path == "direct"
         attach_decode_scratch(
             schedule, args.k, args.r, parent, padded, profile,
             args.shard_bytes, losses, plan_workspace, args.pointer_bytes,
             codec_workspace=codec_workspace, direct=direct,
+            field_name=args.field, backend=args.backend,
+            detected_l3_bytes=detected_l3_bytes,
+            auto_requested=context_auto_requested,
+            plan_selection=scratch_selection,
+            codec_selection=codec_selection,
+            execution_work_slots=selection.required_work_slots,
         )
 
     metrics = schedule_metrics(schedule, args.field, args.shard_bytes)
@@ -2619,6 +3036,15 @@ def build_report(args: argparse.Namespace) -> Dict[str, object]:
             ),
             "decode_selection": args.decode_selection,
             "multi_item_batch": args.multi_item_batch,
+            "context_auto_requested": context_auto_requested,
+            "gf16_detected_l3_bytes": detected_l3_bytes,
+            "gf16_cache_policy": {
+                "detected_l3_bytes": cache_policy.detected_l3_bytes,
+                "effective_l3_bytes": cache_policy.effective_l3_bytes,
+                "live_set_target_bytes":
+                    cache_policy.live_set_target_bytes,
+                "tile_threshold_bytes": cache_policy.tile_threshold_bytes,
+            },
             "requested_parity": mask_to_ranges(requested),
             "missing_originals": mask_to_ranges(losses),
         },
@@ -2657,7 +3083,9 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
     columns = [
         "schema_version", "path", "K", "R", "profile", "field",
         "backend", "shard_bytes", "pointer_bytes", "decode_workspace",
-        "decode_selection", "multi_item_batch", "selected_decode_path",
+        "decode_selection", "multi_item_batch", "context_auto_requested",
+        "gf16_detected_l3_bytes",
+        "gf16_effective_l3_bytes", "selected_decode_path",
         "selected_decode_rule", "selected_decode_matching_auto_rules",
         "selected_decode_required_work_slots", "parent_count",
         "padded_side", "metric", "value", "unit", "classification", "note",
@@ -2680,6 +3108,10 @@ def write_csv(report: Dict[str, object], output: TextIO) -> None:
             "decode_workspace": inputs["decode_workspace"],
             "decode_selection": inputs["decode_selection"],
             "multi_item_batch": inputs["multi_item_batch"],
+            "context_auto_requested": inputs["context_auto_requested"],
+            "gf16_detected_l3_bytes": inputs["gf16_detected_l3_bytes"],
+            "gf16_effective_l3_bytes":
+                inputs["gf16_cache_policy"]["effective_l3_bytes"],
             "selected_decode_path": (
                 report["selection"]["path"] if report["selection"] else ""
             ),
@@ -2746,8 +3178,9 @@ def run_self_test(verbose: bool = True) -> None:
     assert high_decode.details["block_zero_raw_xor_vectors"] == 1
     assert high_decode.decode_output_gather_payload_bytes == 1024
     assert high_decode.details["locator_weighted_live_scan_scope"] == (
-        "statically qualified GF8 AVX2/AVX512 passes scan receive pointers "
-        "until ceil(T/2) live rows are found; sparse fallback scans all T"
+        "statically qualified GF8 AVX2/AVX512/GFNI passes scan receive "
+        "pointers until ceil(T/2) live rows are found; sparse fallback "
+        "scans all T"
     )
     balanced_high_decode = model_high_decode(
         128, 128, 256, 128, 1024, set(range(128))
@@ -3106,7 +3539,8 @@ def run_self_test(verbose: bool = True) -> None:
         loss_mask=None, direction="forward", active_input_count=None,
         transform_output_mask=None, pointer_bytes=struct.calcsize("P"),
         decode_workspace="materialized", decode_selection="path",
-        multi_item_batch=False,
+        multi_item_batch=False, context_auto_requested=False,
+        gf16_detected_l3_bytes=0,
     )
     first = json.dumps(build_report(namespace), sort_keys=True)
     second = json.dumps(build_report(namespace), sort_keys=True)
@@ -3148,6 +3582,21 @@ def _add_model_arguments(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--multi-item-batch", action="store_true",
         help="apply the production multi-item batch decode selector rule",
+    )
+    parser.add_argument(
+        "--gf16-detected-l3-bytes", type=int, default=0,
+        help=(
+            "creation-affinity L3 detector result used by an explicitly "
+            "requested GF16 AVX2 context (default: 0, the conservative "
+            "32-MiB fallback)"
+        ),
+    )
+    parser.add_argument(
+        "--context-auto-requested", action="store_true",
+        help=(
+            "model a context created with AUTO; selected AVX2 then retains "
+            "the conservative cache policy and excludes explicit-only cells"
+        ),
     )
     parser.add_argument(
         "--requested-parity", default=None,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Cross-check schema-v3 decode policy/scratch accounting against production."""
+"""Cross-check schema-v4 decode policy/scratch accounting against production."""
 
 from __future__ import annotations
 
@@ -85,7 +85,7 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
         require(name not in names, "duplicate probe row " + name)
         names.add(name)
         require(
-            row.get("schema") == "leopard2-decode-scratch-probe/v2",
+            row.get("schema") == "leopard2-decode-scratch-probe/v3",
             name + " probe schema changed",
         )
         selected_path = str(row["selected_path"])
@@ -104,9 +104,26 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             ),
         }
         force = decode_force_from_flags(int(row["flags"]))
+        backend = str(row["backend"])
+        context_auto_requested = bool(row["context_auto_requested"])
+        detected_l3_bytes = int(row["detected_l3_bytes"])
+        cache_policy = COUNTS.derive_gf16_cache_policy(
+            detected_l3_bytes
+            if (str(row["field"]) == "gf16" and backend == "avx2" and
+                not context_auto_requested) else 0
+        )
+        require(
+            cache_policy.effective_l3_bytes ==
+            int(row["effective_l3_bytes"]) and
+            cache_policy.live_set_target_bytes ==
+            int(row["live_set_target_bytes"]) and
+            cache_policy.tile_threshold_bytes ==
+            int(row["tile_threshold_bytes"]),
+            name + " context cache-policy mismatch",
+        )
         selected_model = COUNTS.select_decode_execution(
             int(row["K"]), int(row["R"]), profile, str(row["field"]),
-            str(row["backend"]), geometry, int(row["shard_bytes"]),
+            backend, geometry, int(row["shard_bytes"]),
             int(row["losses"]), force,
             multi_item_batch=bool(row["multi_item_batch"]),
         )
@@ -124,9 +141,18 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             int(row["selected_required_work_slots"]),
             name + " selected policy work-slot mismatch",
         )
+        scratch_model = COUNTS.select_decode_execution(
+            int(row["K"]), int(row["R"]), profile, str(row["field"]),
+            backend, geometry, int(row["shard_bytes"]),
+            int(row["losses"]), force, multi_item_batch=False,
+        )
+        require(scratch_model.path == scratch_path,
+                name + " plan-query policy path mismatch")
+        require(scratch_model.rule == str(row["scratch_rule"]),
+                name + " plan-query policy rule mismatch")
         codec_model = COUNTS.select_codec_transform_execution(
             int(row["K"]), int(row["R"]), profile, str(row["field"]),
-            str(row["backend"]), geometry, int(row["shard_bytes"]), force,
+            backend, geometry, int(row["shard_bytes"]), force,
         )
         require(codec_model.path == codec_path,
                 name + " codec-query policy path mismatch")
@@ -152,6 +178,10 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             int(row["shard_bytes"]), int(row["losses"]),
             plan_workspace, int(row["pointer_bytes"]),
             codec_workspace=codec_path, no_op=no_op, direct=direct,
+            field_name=str(row["field"]), backend=backend,
+            detected_l3_bytes=detected_l3_bytes,
+            auto_requested=context_auto_requested,
+            plan_selection=scratch_model, codec_selection=codec_model,
         )
         require(
             accounting.plan_total_bytes == int(row["plan_scratch_bytes"]),
@@ -173,6 +203,33 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             accounting.codec_work_slots == int(row["codec_work_slots"]),
             name + " codec work-slot mismatch",
         )
+        require(
+            accounting.work_slot_bytes == int(row["plan_work_slot_bytes"]),
+            name + " plan work-slot byte mismatch",
+        )
+        require(
+            accounting.codec_work_slot_bytes ==
+            int(row["codec_work_slot_bytes"]),
+            name + " codec work-slot byte mismatch",
+        )
+        require(
+            accounting.plan_execution_tile_count ==
+            int(row["plan_execution_tile_count"]) and
+            accounting.plan_execution_tile_bytes ==
+            int(row["plan_execution_tile_bytes"]),
+            name + " plan execution-tile geometry mismatch",
+        )
+        require(
+            accounting.codec_execution_tile_count ==
+            int(row["codec_execution_tile_count"]) and
+            accounting.codec_execution_tile_bytes ==
+            int(row["codec_execution_tile_bytes"]),
+            name + " codec execution-tile geometry mismatch",
+        )
+        require(
+            accounting.codec_total_bytes >= accounting.plan_total_bytes,
+            name + " codec query under-bounds its plan query",
+        )
         selected_accounting = COUNTS.decode_scratch_accounting(
             int(row["K"]), int(row["R"]), int(row["parent"]),
             int(row["padded"]), str(row["profile"]),
@@ -181,6 +238,10 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
              normalized_workspace(selected_path)),
             int(row["pointer_bytes"]), codec_workspace=codec_path,
             no_op=no_op, direct=direct,
+            field_name=str(row["field"]), backend=backend,
+            detected_l3_bytes=detected_l3_bytes,
+            auto_requested=context_auto_requested,
+            plan_selection=selected_model, codec_selection=codec_model,
         )
         require(
             selected_accounting.plan_work_slots ==
@@ -227,25 +288,43 @@ def cross_check_rows(rows: List[Dict[str, object]]) -> int:
             auto_rows += 1
             require(
                 str(row["backend"]) in
-                ("scalar", "ssse3", "avx2", "avx512", "neon"),
+                ("scalar", "ssse3", "avx2", "avx512", "gfni", "neon"),
                 name + " did not record the selected production backend",
             )
         require(str(row["selected_rule"]) and str(row["scratch_rule"]) and
                 str(row["codec_rule"]), name + " missing selected rule")
-        checks += 24
+        checks += 31
 
     required = {
         "noop_ragged", "forced_high_materialized_aligned",
         "forced_high_materialized_ragged", "forced_high_tiled_aligned",
-        "forced_high_tiled_ragged", "forced_generic_ragged",
+        "forced_high_tiled_ragged", "forced_gf8_high_tiled_side64",
+        "forced_generic_ragged",
         "forced_low_materialized_ragged", "forced_low_tiled_aligned",
         "direct_xor", "direct_k1_r1", "direct_copy", "direct_repair",
         "auto_ordinary_high", "auto_balanced_64", "auto_balanced_256",
         "auto_high_16k", "auto_high_32k", "auto_high_128k", "auto_low",
         "auto_high_32k_batch",
     }
+    gf16_required = {
+        "gf16_low_cache_512k", "gf16_low_cache_768k",
+        "gf16_low_cache_1m", "gf16_low_side256",
+        "gf16_high_codec_bound",
+        "gf16_high_max_loss",
+    }
+    if any(str(row["field"]) == "gf16" for row in rows):
+        required.update(gf16_required)
     require(required.issubset(names), "probe is missing required rows")
     require(auto_rows >= 7, "probe did not cover AUTO size transitions")
+    if gf16_required.issubset(names):
+        bound = next(row for row in rows
+                     if row["name"] == "gf16_high_codec_bound")
+        require(
+            int(bound["codec_scratch_bytes"]) >=
+            int(bound["plan_scratch_bytes"]),
+            "explicit codec>=plan crossover failed",
+        )
+        checks += 1
     return checks + 2
 
 
@@ -278,10 +357,52 @@ def mutation_checks() -> int:
         ),
         (
             "geometry.selection, geometry.aligned_prefix_bytes,\n"
-            "        plan != NULL);",
+            "        plan);",
             "geometry.selection, geometry.aligned_prefix_bytes,\n"
-            "        true);",
+            "        NULL);",
             "plan-known layout mutation",
+        ),
+        (
+            "codec->context->gf16_live_set_target_bytes / work_rows",
+            "codec->context->gf16_live_set_target_bytes / "
+            "(work_rows + 1)",
+            "GF16 cache target mutation",
+        ),
+        (
+            "policy.live_set_target_bytes =\n"
+            "        (kFallbackGF16L3Bytes / 2U)",
+            "policy.live_set_target_bytes =\n"
+            "        (kFallbackGF16L3Bytes / 4U)",
+            "GF16 policy target mutation",
+        ),
+        (
+            "std::max(effective, kFallbackGF16L3Bytes * 2U)",
+            "std::max(effective, kFallbackGF16L3Bytes * 3U)",
+            "GF16 policy threshold mutation",
+        ),
+        (
+            "scaled /= kFallbackGF16L3Bytes / kMiB;",
+            "scaled /= kMaximumCalibratedGF16L3Bytes / kMiB;",
+            "GF16 side scaling mutation",
+        ),
+        (
+            "(aligned_bytes - 1U) / requested_tile_bytes",
+            "(aligned_bytes + 1U) / requested_tile_bytes",
+            "balanced pass-count mutation",
+        ),
+        (
+            "case 64:\n"
+            "            return aligned_prefix_bytes >= 192U * 1024U",
+            "case 64:\n"
+            "            return aligned_prefix_bytes >= 256U * 1024U",
+            "GF8 side-64 threshold mutation",
+        ),
+        (
+            "const bool cache_sensitive_gf16_backend =\n"
+            "        requested == LEO2_BACKEND_AVX2;",
+            "const bool cache_sensitive_gf16_backend =\n"
+            "        effective_backend == LEO2_BACKEND_AVX2;",
+            "context cache-policy qualification mutation",
         ),
         (
             "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
@@ -321,6 +442,25 @@ def mutation_checks() -> int:
     require(exact.tail_reserved_slots == 256, "K+R tail sentinel")
     require(exact.plan_work_slots == 33, "high plan L-slot sentinel")
     require(exact.codec_work_slots == 48, "high codec R-slot sentinel")
+    direct = COUNTS.decode_scratch_accounting(
+        1, 1, 2, 1, "high", 65, 1, "specialized", 8,
+        codec_workspace="specialized", direct=True,
+    )
+    require(direct.work_slot_bytes == 0, "direct plan slot-width sentinel")
+    require(
+        direct.codec_work_slot_bytes == 0,
+        "K1 codec slot-width sentinel",
+    )
+    try:
+        COUNTS.decode_scratch_accounting(
+            300, 100, 512, 128, "high", 64, 1, "tiled", 8,
+            codec_workspace="tiled", field_name="gf8",
+        )
+    except COUNTS.ModelError:
+        pass
+    else:
+        raise AssertionError(
+            "GF8 scratch helper accepted a parent above field capacity")
     ff8 = (ROOT / "LeopardFF8.cpp").read_text(encoding="utf-8")
     ff16 = (ROOT / "LeopardFF16.cpp").read_text(encoding="utf-8")
     COUNTS.verify_decode_fusion_sources(source, ff8, ff16)

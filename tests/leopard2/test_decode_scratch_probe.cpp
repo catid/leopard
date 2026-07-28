@@ -1,6 +1,8 @@
 #include "leopard2.h"
+#include "Leopard2Backend.h"
 #include "Leopard2Dispatch.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -52,7 +54,8 @@ size_t align_up(size_t value, size_t alignment)
 size_t transform_scratch_bytes(
     const ProbeCase& test,
     uint32_t parent,
-    size_t work_slots)
+    size_t work_slots,
+    size_t work_slot_bytes)
 {
     const size_t range_count = static_cast<size_t>(test.k) * 2 + test.r;
     const size_t ranges = range_count * sizeof(uintptr_t) * 2;
@@ -61,13 +64,9 @@ size_t transform_scratch_bytes(
     const size_t data_offset = align_up(
         pointer_offset + pointer_count * sizeof(void*), 64);
     const size_t tail = static_cast<size_t>(test.shard_bytes) & 63;
-    const size_t prefix = static_cast<size_t>(test.shard_bytes) - tail;
     const size_t input_bytes = tail == 0
         ? 0
         : (static_cast<size_t>(test.k) + test.r) * 64;
-    const size_t work_slot_bytes = tail == 0
-        ? static_cast<size_t>(test.shard_bytes)
-        : (prefix > 64 ? prefix : 64);
     return data_offset + input_bytes + work_slots * work_slot_bytes;
 }
 
@@ -81,28 +80,27 @@ size_t direct_scratch_bytes(const ProbeCase& test)
     return align_up(range_count * sizeof(uintptr_t) * 2, 64);
 }
 
-size_t observe_work_slots(
+size_t observe_work_slot_bytes(
     const ProbeCase& test,
     uint32_t parent,
-    uint32_t padded,
     size_t scratch_bytes,
+    size_t work_slots,
     bool codec_query)
 {
-    const size_t upper = static_cast<size_t>(parent) + 2 * padded + test.r + 1;
-    size_t match = static_cast<size_t>(-1);
-    for (size_t slots = 0; slots <= upper; ++slots)
-    {
-        if (transform_scratch_bytes(test, parent, slots) != scratch_bytes)
-            continue;
-        if (match != static_cast<size_t>(-1))
-            throw std::runtime_error("scratch query has ambiguous work-slot count");
-        match = slots;
-    }
-    if (match == static_cast<size_t>(-1))
+    if (work_slots == 0)
+        throw std::runtime_error("cannot observe zero transform work slots");
+    const size_t base = transform_scratch_bytes(test, parent, work_slots, 0);
+    if (scratch_bytes < base ||
+        (scratch_bytes - base) % work_slots != 0)
         throw std::runtime_error(codec_query
-            ? "codec scratch query does not match any production layout"
-            : "plan scratch query does not match any production layout");
-    return match;
+            ? "codec scratch query has a non-integral work-slot width"
+            : "plan scratch query has a non-integral work-slot width");
+    const size_t bytes = (scratch_bytes - base) / work_slots;
+    if (bytes == 0 || (bytes & 63U) != 0)
+        throw std::runtime_error(codec_query
+            ? "codec scratch query has an invalid work-slot width"
+            : "plan scratch query has an invalid work-slot width");
+    return bytes;
 }
 
 const char* backend_name(leo2_backend backend)
@@ -114,7 +112,7 @@ const char* backend_name(leo2_backend backend)
     case LEO2_BACKEND_AVX2: return "avx2";
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
-    case LEO2_BACKEND_GFNI: return "avx2-gfni";
+    case LEO2_BACKEND_GFNI: return "gfni";
     case LEO2_BACKEND_AUTO: return "auto";
     default: return "unknown";
     }
@@ -133,6 +131,7 @@ const char* field_name(leo2_field field)
 void emit_case(
     leo2_context* context,
     const ProbeCase& test,
+    uint64_t detected_l3_bytes,
     bool multi_item_batch = false)
 {
     leo2_codec_options options;
@@ -181,17 +180,71 @@ void emit_case(
     if (direct != (!no_op && plan_scratch == direct_bytes))
         throw std::runtime_error("direct introspection/scratch mismatch");
     const size_t plan_work_slots = direct || no_op
+        ? 0 : scratch_selection.required_work_slots;
+    const size_t plan_work_slot_bytes = direct || no_op
         ? 0
-        : observe_work_slots(test, parent, padded, plan_scratch, false);
+        : observe_work_slot_bytes(
+            test, parent, plan_scratch, plan_work_slots, false);
     const bool k1_legacy_high =
         test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         test.k == 1 && test.r == 1;
     const size_t codec_work_slots = k1_legacy_high
+        ? 0 : codec_selection.required_work_slots;
+    const size_t codec_work_slot_bytes = k1_legacy_high
         ? 0
-        : observe_work_slots(test, parent, padded, codec_scratch, true);
+        : observe_work_slot_bytes(
+            test, parent, codec_scratch, codec_work_slots, true);
+    size_t plan_execution_tile_count = 0;
+    size_t plan_execution_tile_bytes = 0;
+    require_result(leopard2_internal::GetDecodePlanExecutionTiles(
+        plan, test.shard_bytes, &plan_execution_tile_count,
+        &plan_execution_tile_bytes), "plan execution-tile query");
+    if (direct || no_op)
+    {
+        if (plan_execution_tile_count != 0 ||
+            plan_execution_tile_bytes != 0)
+            throw std::runtime_error(
+                "terminal plan reported transform execution tiles");
+    }
+    else
+    {
+        const size_t expected_slot_bytes = std::max(
+            plan_execution_tile_bytes,
+            (static_cast<size_t>(test.shard_bytes) & 63U) ? size_t(64) : 0);
+        if (expected_slot_bytes != plan_work_slot_bytes)
+            throw std::runtime_error(
+                "plan execution-tile/work-slot mismatch");
+    }
+    size_t codec_execution_tile_count = 0;
+    size_t codec_execution_tile_bytes = 0;
+    require_result(leopard2_internal::GetDecodeCodecExecutionTiles(
+        codec, test.shard_bytes, &codec_execution_tile_count,
+        &codec_execution_tile_bytes), "codec execution-tile query");
+    if (k1_legacy_high)
+    {
+        if (codec_execution_tile_count != 0 ||
+            codec_execution_tile_bytes != 0)
+            throw std::runtime_error(
+                "terminal codec reported transform execution tiles");
+    }
+    else
+    {
+        const size_t expected_slot_bytes = std::max(
+            codec_execution_tile_bytes,
+            (static_cast<size_t>(test.shard_bytes) & 63U) ? size_t(64) : 0);
+        if (expected_slot_bytes != codec_work_slot_bytes)
+            throw std::runtime_error(
+                "codec execution-tile/work-slot mismatch");
+    }
+    uint64_t effective_l3_bytes = 0;
+    uint64_t live_set_target_bytes = 0;
+    uint64_t tile_threshold_bytes = 0;
+    require_result(leopard2_internal::GetContextGF16CachePolicy(
+        context, &effective_l3_bytes, &live_set_target_bytes,
+        &tile_threshold_bytes), "context GF16 cache-policy query");
 
     std::cout
-        << "{\"schema\":\"leopard2-decode-scratch-probe/v2\""
+        << "{\"schema\":\"leopard2-decode-scratch-probe/v3\""
         << ",\"name\":\"" << test.name
         << "\",\"K\":" << test.k
         << ",\"R\":" << test.r
@@ -203,6 +256,10 @@ void emit_case(
         << ",\"parent\":" << parent
         << ",\"padded\":" << padded
         << ",\"pointer_bytes\":" << sizeof(void*)
+        << ",\"detected_l3_bytes\":" << detected_l3_bytes
+        << ",\"effective_l3_bytes\":" << effective_l3_bytes
+        << ",\"live_set_target_bytes\":" << live_set_target_bytes
+        << ",\"tile_threshold_bytes\":" << tile_threshold_bytes
         << ",\"backend\":\"" << backend_name(backend)
         << "\",\"selected_path\":\""
         << leopard2_internal::DecodePathName(selected.path)
@@ -227,10 +284,21 @@ void emit_case(
         << ",\"aligned_prefix_bytes\":" << selected.aligned_prefix_bytes
         << ",\"tail_bytes\":" << selected.tail_bytes
         << ",\"rounded_bytes\":" << selected.rounded_shard_bytes
+        << ",\"context_auto_requested\":true"
         << ",\"auto_host_backend_observed\":"
         << (test.auto_observed ? "true" : "false")
         << ",\"plan_work_slots\":" << plan_work_slots
+        << ",\"plan_work_slot_bytes\":" << plan_work_slot_bytes
+        << ",\"plan_execution_tile_count\":"
+        << plan_execution_tile_count
+        << ",\"plan_execution_tile_bytes\":"
+        << plan_execution_tile_bytes
         << ",\"codec_work_slots\":" << codec_work_slots
+        << ",\"codec_work_slot_bytes\":" << codec_work_slot_bytes
+        << ",\"codec_execution_tile_count\":"
+        << codec_execution_tile_count
+        << ",\"codec_execution_tile_bytes\":"
+        << codec_execution_tile_bytes
         << ",\"plan_scratch_bytes\":" << plan_scratch
         << ",\"codec_scratch_bytes\":" << codec_scratch
         << "}\n";
@@ -257,14 +325,17 @@ void verify_query_boundaries(leo2_context* context, leo2_field field)
     const size_t maximum = std::numeric_limits<size_t>::max();
     const size_t work_slots = 2;
     const size_t data_offset = transform_scratch_bytes(
-        test, parent, work_slots) - work_slots * test.shard_bytes;
+        test, parent, work_slots, static_cast<size_t>(test.shard_bytes)) -
+        work_slots * test.shard_bytes;
     const size_t largest_layout_shard =
         ((maximum - data_offset) / work_slots) & ~static_cast<size_t>(63);
     test.shard_bytes = static_cast<uint64_t>(largest_layout_shard);
     size_t scratch_bytes = 0;
     require_result(leo2_decode_scratch_size(
         codec, test.shard_bytes, &scratch_bytes), "boundary codec scratch");
-    if (scratch_bytes != transform_scratch_bytes(test, parent, work_slots))
+    if (scratch_bytes != transform_scratch_bytes(
+            test, parent, work_slots,
+            static_cast<size_t>(test.shard_bytes)))
         throw std::runtime_error("boundary codec scratch byte mismatch");
 
     require_result(leo2_decode_scratch_size(
@@ -296,6 +367,8 @@ int main()
         options.thread_count = 1;
         leo2_context* context = NULL;
         require_result(leo2_context_create(&options, &context), "context create");
+        const uint64_t detected_l3_bytes =
+            leopard::backend::DetectConservativeL3Bytes();
 
         const ProbeCase cases[] = {
             { "noop_ragged", 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -312,6 +385,9 @@ int main()
             { "forced_high_tiled_ragged", 240, 16,
               LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
               LEO2_CODEC_FORCE_TILED_DECODE, 65, 1, false },
+            { "forced_gf8_high_tiled_side64", 192, 64,
+              LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 256 * 1024, 9, false },
             { "forced_generic_ragged", 240, 16,
               LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
               LEO2_CODEC_FORCE_GENERIC_DECODE, 129, 2, false },
@@ -324,6 +400,24 @@ int main()
             { "forced_gf16_high_tiled_ragged", 240, 16,
               LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
               LEO2_CODEC_FORCE_TILED_DECODE, 66, 1, false },
+            { "gf16_low_cache_512k", 64, 193,
+              LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 512 * 1024, 9, false },
+            { "gf16_low_cache_768k", 64, 193,
+              LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 768 * 1024, 9, false },
+            { "gf16_low_cache_1m", 64, 193,
+              LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 1024 * 1024, 9, false },
+            { "gf16_low_side256", 200, 800,
+              LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 64 * 1024, 9, false },
+            { "gf16_high_codec_bound", 300, 100,
+              LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 448 * 1024, 9, false },
+            { "gf16_high_max_loss", 2000, 512,
+              LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+              LEO2_CODEC_FORCE_SPECIALIZED_DECODE, 64 * 1024, 512, false },
             { "direct_xor", 9, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
               LEO2_FIELD_GF8, 0, 65, 1, false },
             { "direct_k1_r1", 1, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -356,7 +450,7 @@ int main()
             const uint32_t bit = cases[i].field == LEO2_FIELD_GF16
                 ? LEO2_FIELD_MASK_GF16 : LEO2_FIELD_MASK_GF8;
             if ((fields & bit) != 0)
-                emit_case(context, cases[i]);
+                emit_case(context, cases[i], detected_l3_bytes);
         }
         if ((fields & LEO2_FIELD_MASK_GF8) != 0)
         {
@@ -365,7 +459,7 @@ int main()
                 LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
                 0, 32 * 1024, 8, true
             };
-            emit_case(context, batch_case, true);
+            emit_case(context, batch_case, detected_l3_bytes, true);
         }
         leo2_context_destroy(context);
         return 0;
