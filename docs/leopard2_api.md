@@ -272,6 +272,21 @@ exceeds the current affinity budget; a larger count returns
 `leo2_context_thread_count` reports the effective value.  This option controls
 parallelism across batch items, not the wire profile or the result bytes.
 
+On Linux, GF16 AVX2/GFNI context creation also snapshots the creating thread's
+affinity for cache-tiling policy.  Leopard2 reads the level-three data cache for
+every allowed CPU and uses the smallest capacity, so an affinity spanning
+asymmetric cache dies remains conservative while a context created after
+pinning to a larger-cache die can use a larger byte tile.  Missing, malformed,
+or changing topology retains the established 32-MiB calibration.  This
+snapshot affects scratch and execution geometry only, never field arithmetic
+or wire identity.  Assuming every later execution CPU supports the context's
+selected ISA, changing or widening affinity after context creation remains
+correct but may make the cached performance policy suboptimal; applications
+managing affinity should set it before creating the context and retain the same
+mask for ordinary execution and every batch call.  The pool starts lazily and
+may grow on a later batch, so newly created workers inherit the affinity of that
+batch caller; Leopard2 does not pin them itself.
+
 An explicit context `backend` option selects one immutable execution table.
 `AUTO` reports the production-default table that passed the startup capability
 checks and known-answer tests as its immutable baseline.  In one ordinary

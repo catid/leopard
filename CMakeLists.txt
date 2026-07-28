@@ -1288,6 +1288,8 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_public_api_contract_test
         tests/leopard2/test_public_api_contract.cpp)
+    target_compile_definitions(leopard2_public_api_contract_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
     target_link_libraries(leopard2_public_api_contract_test leopard_test_hooks)
     add_test(NAME leopard2_public_api_contract
         COMMAND leopard2_public_api_contract_test)

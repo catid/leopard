@@ -28,6 +28,7 @@
 
 #include "leopard.h"
 #include "leopard2.h"
+#include "Leopard2Backend.h"
 #include "LeopardCommon.h"
 
 #include <algorithm>
@@ -1529,6 +1530,18 @@ void test_gf16_live_set_scratch_boundaries(
         (leo2_context_field_mask(context) & LEO2_FIELD_MASK_GF16) == 0)
         return;
 
+    uint64_t original_l3_bytes = 0;
+    uint64_t original_target_bytes = 0;
+    uint64_t original_threshold_bytes = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            context, &original_l3_bytes, &original_target_bytes,
+            &original_threshold_bytes),
+        "GF16 live-set original cache policy");
+    (void)original_target_bytes;
+    (void)original_threshold_bytes;
+    leopard::backend::TestOnlySetContextL3Bytes(
+        context, UINT64_C(32) * 1024 * 1024);
+
     /*
         LOW_V1 K=64,R=193 has P=64 and therefore retains 2P=128 work
         rows.  Its GF16 live set reaches the 64-MiB tiling threshold at an
@@ -1630,6 +1643,8 @@ void test_gf16_live_set_scratch_boundaries(
         "GF16 overflow-edge encode scratch was not bounded by tiling");
     require(decode_extreme < 32U * 1024U * 1024U,
         "GF16 overflow-edge decode scratch was not bounded by tiling");
+    leopard::backend::TestOnlySetContextL3Bytes(
+        context, original_l3_bytes);
     counts->scratch_checks += 10;
 #else
     (void)context;

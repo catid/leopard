@@ -27,6 +27,7 @@
 */
 
 #include "Leopard2Direct.h"
+#include "Leopard2Backend.h"
 #include "LeopardFF16.h"
 #include "LeopardFF8.h"
 #include "direct_oracle.h"
@@ -1140,6 +1141,15 @@ void test_high_gf16_byte_tiling(
     require_result(leo2_encode_scratch_size(
         owner->codec, bytes + 2U, &ragged_scratch),
         "GF16 byte-tile ragged scratch query");
+    uint64_t effective_l3_bytes = 0;
+    uint64_t live_set_target_bytes = 0;
+    uint64_t tile_threshold_bytes = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            context, &effective_l3_bytes, &live_set_target_bytes,
+            &tile_threshold_bytes),
+        "GF16 byte-tile cache-policy query");
+    (void)live_set_target_bytes;
+    (void)tile_threshold_bytes;
     const bool byte_tiling_active = tiled_scratch == one_pass_scratch;
     require(byte_tiling_active ||
             tiled_scratch == one_pass_scratch + 512U * tile_bytes,
@@ -1160,11 +1170,30 @@ void test_high_gf16_byte_tiling(
         require(tiled_scratch ==
                 work_base + 512U * balanced_pass_bytes(bytes, tile_bytes),
             "GF16 byte tiling lost its balanced pass geometry");
-        require(neighboring_scratch ==
-                work_base + 512U * balanced_pass_bytes(bytes + 64U, tile_bytes),
-            "GF16 byte tiling stopped covering the neighboring size");
-        require(neighboring_scratch <= one_pass_scratch,
-            "GF16 byte tiling exceeded its requested pass bound");
+        /*
+            The exact 64-KiB AUTO/AVX-512 cell is independently calibrated and
+            intentionally ignores the general cache budget.  On a context
+            created inside the 96-MiB affinity domain, that exact cell remains
+            two-pass while its 64-byte neighbor correctly stays one-pass until
+            the larger-cache threshold.  Every other active case retains the
+            general neighboring-size coverage.
+        */
+        if (effective_l3_bytes == UINT64_C(32) * 1024 * 1024)
+        {
+            require(neighboring_scratch ==
+                    work_base + 512U *
+                        balanced_pass_bytes(bytes + 64U, tile_bytes),
+                "GF16 byte tiling stopped covering the neighboring size");
+        }
+        else
+        {
+            require(effective_l3_bytes >
+                    UINT64_C(32) * 1024 * 1024,
+                "GF16 neighboring tile was lost at the fallback cache policy");
+            require(neighboring_scratch ==
+                    work_base + 512U * (bytes + 64U),
+                "exact GF16 AUTO tile has invalid one-pass neighbor");
+        }
         require(ragged_scratch > tiled_scratch,
             "GF16 byte tiling lost its ragged staging slots");
 
@@ -1214,6 +1243,10 @@ void test_high_gf16_byte_tiling(
         if (created == LEO2_UNSUPPORTED)
             continue;
         require_result(created, "fixed-backend byte-tile context create");
+        // This is a deterministic regression test for the established
+        // 32-MiB calibration, independent of the CI worker's host affinity.
+        leopard::backend::TestOnlySetContextL3Bytes(
+            fixed_context, UINT64_C(32) * 1024 * 1024);
         CodecOwner* fixed_owner = make_codec(fixed_context, k, r,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16);
         size_t fixed_small_scratch = 0;

@@ -270,6 +270,20 @@ def mutation_checks() -> int:
             "plan-output-slot mutation",
         ),
         (
+            "const size_t policy_work_rows = plan_known\n"
+            "        ? selection.required_work_slots\n"
+            "        : static_cast<size_t>(codec->padded_side) * 2U;",
+            "const size_t policy_work_rows = selection.required_work_slots;",
+            "plan-null tile-policy mutation",
+        ),
+        (
+            "geometry.selection, geometry.aligned_prefix_bytes,\n"
+            "        plan != NULL);",
+            "geometry.selection, geometry.aligned_prefix_bytes,\n"
+            "        true);",
+            "plan-known layout mutation",
+        ),
+        (
             "ComputeScratchLayout(range_count, 0, 0, rounded_bytes, layout)",
             "ComputeScratchLayout(range_count, 1, 0, rounded_bytes, layout)",
             "direct-pointer mutation",

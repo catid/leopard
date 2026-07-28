@@ -544,6 +544,9 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "input.rounded_shard_bytes=geometry.rounded_bytes;",
         "input.multi_item_batch=multi_item_batch;",
         "returnleopard2_internal::SelectDecodePath(input,selection);",
+        "constsize_tpolicy_work_rows=plan_known?"
+        "selection.required_work_slots:"
+        "static_cast<size_t>(codec->padded_side)*2U;",
     )
     if any(token not in selector for token in required_selector):
         raise ModelError(
@@ -555,7 +558,8 @@ def verify_decode_scratch_source(source: str, label: str) -> None:
         "geometry.execution_tile_count=geometry.aligned_prefix_bytes==0?0:1;",
         "geometry.execution_tile_bytes=geometry.aligned_prefix_bytes;",
         "constsize_trequested_tile_bytes=AVX2DecodeExecutionTileBytes("
-        "codec,geometry.selection,geometry.aligned_prefix_bytes);",
+        "codec,geometry.selection,geometry.aligned_prefix_bytes,"
+        "plan!=NULL);",
         "ComputeBalancedExecutionTiles(geometry.aligned_prefix_bytes,"
         "requested_tile_bytes,geometry.execution_tile_count,"
         "geometry.execution_tile_bytes)",

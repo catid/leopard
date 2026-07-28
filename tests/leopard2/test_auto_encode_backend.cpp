@@ -45,6 +45,9 @@
 
 #if defined(_MSC_VER)
 #include <malloc.h>
+#elif defined(__linux__)
+#include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #ifndef LEO2_ENABLE_TEST_HOOKS
@@ -172,11 +175,16 @@ public:
         uint32_t k,
         uint32_t r,
         leo2_profile profile = LEO2_PROFILE_LEGACY_HIGH_V1,
-        leo2_field field = LEO2_FIELD_GF16)
+        leo2_field field = LEO2_FIELD_GF16,
+        uint32_t flags = 0)
         : value_(NULL)
     {
+        leo2_codec_options options;
+        std::memset(&options, 0, sizeof(options));
+        options.struct_size = sizeof(options);
+        options.flags = flags;
         require_result(leo2_codec_create(context, k, r,
-            profile, field, NULL, &value_),
+            profile, field, flags == 0 ? NULL : &options, &value_),
             LEO2_SUCCESS, "codec create");
     }
 
@@ -188,6 +196,505 @@ private:
     Codec& operator=(const Codec&);
     leo2_codec* value_;
 };
+
+class Plan
+{
+public:
+    Plan(leo2_codec* codec, uint32_t k, uint32_t r, uint32_t losses)
+        : value_(NULL)
+    {
+        std::vector<uint8_t> original_present(k, 1);
+        std::vector<uint8_t> recovery_present(r, 1);
+        for (uint32_t i = 0; i < losses; ++i)
+            original_present[i] = 0;
+        require_result(leo2_decode_plan_create(
+                codec, original_present.data(), recovery_present.data(),
+                &value_),
+            LEO2_SUCCESS, "decode plan create");
+    }
+
+    ~Plan() { leo2_decode_plan_destroy(value_); }
+    leo2_decode_plan* get() const { return value_; }
+
+private:
+    Plan(const Plan&);
+    Plan& operator=(const Plan&);
+    leo2_decode_plan* value_;
+};
+
+struct ExecutionTiles
+{
+    size_t count;
+    size_t maximum_bytes;
+};
+
+ExecutionTiles encode_tiles(const leo2_codec* codec, uint64_t shard_bytes)
+{
+    ExecutionTiles tiles = { 0, 0 };
+    require(leopard::backend::TestOnlyGetEncodeExecutionTiles(
+            codec, shard_bytes, &tiles.count, &tiles.maximum_bytes),
+        "encode execution-tile query");
+    return tiles;
+}
+
+ExecutionTiles decode_tiles(
+    leo2_codec* codec,
+    uint32_t k,
+    uint32_t r,
+    uint32_t losses,
+    uint64_t shard_bytes)
+{
+    Plan plan(codec, k, r, losses);
+    ExecutionTiles tiles = { 0, 0 };
+    require(leopard::backend::TestOnlyGetDecodeExecutionTiles(
+            plan.get(), shard_bytes, &tiles.count, &tiles.maximum_bytes),
+        "decode execution-tile query");
+    return tiles;
+}
+
+void require_tiles(
+    const ExecutionTiles& actual,
+    size_t expected_count,
+    size_t expected_maximum_bytes,
+    const char* message)
+{
+    if (actual.count != expected_count ||
+        actual.maximum_bytes != expected_maximum_bytes)
+    {
+        throw std::runtime_error(std::string(message) +
+            ": count=" + std::to_string(actual.count) +
+            " bytes=" + std::to_string(actual.maximum_bytes));
+    }
+}
+
+void require_cache_policy(
+    leo2_context* context,
+    uint64_t detected_l3_bytes,
+    uint64_t expected_l3_bytes,
+    uint64_t expected_target_bytes,
+    uint64_t expected_threshold_bytes)
+{
+    leopard::backend::TestOnlySetContextL3Bytes(
+        context, detected_l3_bytes);
+    uint64_t l3_bytes = 0;
+    uint64_t target_bytes = 0;
+    uint64_t threshold_bytes = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            context, &l3_bytes, &target_bytes, &threshold_bytes),
+        "GF16 cache-policy query");
+    require(l3_bytes == expected_l3_bytes &&
+            target_bytes == expected_target_bytes &&
+            threshold_bytes == expected_threshold_bytes,
+        "GF16 cache-policy derivation");
+}
+
+void require_context_cache_policy_wiring(
+    Context& context,
+    uint64_t detected_l3_bytes)
+{
+    if (context.result() != LEO2_SUCCESS)
+        return;
+
+    static const uint64_t mib = UINT64_C(1024) * 1024;
+    const leo2_backend backend = leo2_context_backend(context.get());
+    const bool cache_sensitive =
+        (leo2_context_field_mask(context.get()) &
+            LEO2_FIELD_MASK_GF16) != 0 &&
+        (backend == LEO2_BACKEND_AVX2 ||
+         backend == LEO2_BACKEND_GFNI);
+    const uint64_t detected = cache_sensitive ? detected_l3_bytes : 0;
+    uint64_t expected_l3 = 32 * mib;
+    if (detected >= expected_l3)
+    {
+        expected_l3 = detected < 96 * mib ? detected : 96 * mib;
+        expected_l3 = expected_l3 / mib * mib;
+    }
+
+    uint64_t actual_l3 = 0;
+    uint64_t actual_target = 0;
+    uint64_t actual_threshold = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            context.get(), &actual_l3, &actual_target, &actual_threshold),
+        "context-created GF16 cache-policy query");
+    require(actual_l3 == expected_l3 &&
+            actual_target == expected_l3 / 2 &&
+            actual_threshold == expected_l3 + 32 * mib,
+        "context creation did not wire the detected GF16 cache policy");
+}
+
+void test_gf16_cache_policy(Context& avx2)
+{
+    if (avx2.result() != LEO2_SUCCESS ||
+        (leo2_context_field_mask(avx2.get()) &
+            LEO2_FIELD_MASK_GF16) == 0)
+        return;
+
+    static const uint64_t mib = UINT64_C(1024) * 1024;
+    uint64_t original_l3_bytes = 0;
+    uint64_t original_target_bytes = 0;
+    uint64_t original_threshold_bytes = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            avx2.get(), &original_l3_bytes, &original_target_bytes,
+            &original_threshold_bytes),
+        "original GF16 cache-policy query");
+    (void)original_target_bytes;
+    (void)original_threshold_bytes;
+    require_cache_policy(avx2.get(), 0, 32 * mib, 16 * mib, 64 * mib);
+    require_cache_policy(avx2.get(), 8 * mib, 32 * mib, 16 * mib, 64 * mib);
+    require_cache_policy(avx2.get(), 32 * mib, 32 * mib, 16 * mib, 64 * mib);
+    require_cache_policy(avx2.get(), 64 * mib, 64 * mib, 32 * mib, 96 * mib);
+    require_cache_policy(avx2.get(), 96 * mib, 96 * mib, 48 * mib, 128 * mib);
+    require_cache_policy(avx2.get(), 256 * mib, 96 * mib, 48 * mib, 128 * mib);
+
+    const uint32_t forced_specialized =
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
+
+    // The 32-MiB fallback exactly reproduces the established generic boundary.
+    leopard::backend::TestOnlySetContextL3Bytes(avx2.get(), 32 * mib);
+    {
+        Codec low(avx2.get(), 64, 193, LEO2_PROFILE_LOW_V1,
+            LEO2_FIELD_GF16, forced_specialized);
+        require_tiles(encode_tiles(low.get(), 512U * 1024U - 64U),
+            1, 512U * 1024U - 64U,
+            "32-MiB low encode below threshold");
+        require_tiles(encode_tiles(low.get(), 512U * 1024U),
+            4, 128U * 1024U,
+            "32-MiB low encode at threshold");
+        require_tiles(decode_tiles(
+                low.get(), 64, 193, 9, 512U * 1024U),
+            4, 128U * 1024U,
+            "32-MiB low decode at threshold");
+    }
+    {
+        Codec side256(avx2.get(), 1000, 200,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(side256.get(), 64U * 1024U),
+            2, 32U * 1024U,
+            "32-MiB high side-256 encode override");
+        require_tiles(decode_tiles(
+                side256.get(), 1000, 200, 9, 64U * 1024U),
+            4, 16U * 1024U,
+            "32-MiB high side-256 decode override");
+    }
+    {
+        Codec side512(avx2.get(), 2000, 500,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(side512.get(), 64U * 1024U),
+            8, 8U * 1024U,
+            "32-MiB high side-512 encode override");
+        require_tiles(decode_tiles(
+                side512.get(), 2000, 500, 9, 64U * 1024U),
+            4, 16U * 1024U,
+            "32-MiB high side-512 decode override");
+    }
+
+    // A 96-MiB context declines the measured 32/64-MiB over-tiling region.
+    leopard::backend::TestOnlySetContextL3Bytes(avx2.get(), 96 * mib);
+    {
+        Codec side256(avx2.get(), 1000, 200,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(side256.get(), 64U * 1024U),
+            1, 64U * 1024U,
+            "96-MiB high side-256 encode exclusion");
+        require_tiles(decode_tiles(
+                side256.get(), 1000, 200, 9, 64U * 1024U),
+            1, 64U * 1024U,
+            "96-MiB high side-256 decode exclusion");
+    }
+    {
+        Codec side512(avx2.get(), 2000, 500,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(side512.get(), 64U * 1024U),
+            1, 64U * 1024U,
+            "96-MiB high side-512 encode exclusion");
+        require_tiles(decode_tiles(
+                side512.get(), 2000, 500, 9, 64U * 1024U),
+            1, 64U * 1024U,
+            "96-MiB high side-512 decode exclusion");
+        require_tiles(encode_tiles(side512.get(), 128U * 1024U),
+            6, 21888,
+            "96-MiB high side-512 scaled encode override");
+        require_tiles(decode_tiles(
+                side512.get(), 2000, 500, 9, 128U * 1024U),
+            3, 43712,
+            "96-MiB high side-512 scaled decode override");
+    }
+    {
+        Codec side512_max_loss(avx2.get(), 2000, 512,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(decode_tiles(
+                side512_max_loss.get(), 2000, 512, 512, 64U * 1024U),
+            2, 32U * 1024U,
+            "96-MiB high side-512 maximum-loss live-set inclusion");
+    }
+    {
+        /*
+            A codec-level one-shot query reserves 2T+R rows, while this
+            small-loss plan retains only 2T+9.  At 448 KiB the former crosses
+            the 128-MiB tiling threshold and the latter does not.  The codec
+            query must therefore keep a conservative full pass; otherwise
+            leo2_decode() would build the smaller-row plan and reject its
+            caller-provided scratch.
+        */
+        Codec one_shot_bound(avx2.get(), 300, 100,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        Plan small_loss(
+            one_shot_bound.get(), 300, 100, 9);
+        static const size_t bytes = 448U * 1024U;
+        size_t codec_scratch_bytes = 0;
+        size_t plan_scratch_bytes = 0;
+        require_result(leo2_decode_scratch_size(
+                one_shot_bound.get(), bytes, &codec_scratch_bytes),
+            LEO2_SUCCESS, "96-MiB codec decode scratch query");
+        require_result(leo2_decode_plan_scratch_size(
+                small_loss.get(), bytes, &plan_scratch_bytes),
+            LEO2_SUCCESS, "96-MiB plan decode scratch query");
+        require_tiles(decode_tiles(
+                one_shot_bound.get(), 300, 100, 9, bytes),
+            1, bytes, "96-MiB small-loss one-pass decode");
+        require(codec_scratch_bytes >= plan_scratch_bytes,
+            "codec decode scratch query under-sized a small-loss plan");
+    }
+    {
+        Codec low(avx2.get(), 64, 193, LEO2_PROFILE_LOW_V1,
+            LEO2_FIELD_GF16, forced_specialized);
+        require_tiles(encode_tiles(low.get(), 1024U * 1024U - 64U),
+            1, 1024U * 1024U - 64U,
+            "96-MiB low encode below threshold");
+        require_tiles(encode_tiles(low.get(), 1024U * 1024U),
+            3, 349568,
+            "96-MiB low encode at threshold");
+        require_tiles(decode_tiles(
+                low.get(), 64, 193, 9, 1024U * 1024U),
+            3, 349568,
+            "96-MiB low decode at threshold");
+    }
+    {
+        Codec low_side512(avx2.get(), 300, 800,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16,
+            forced_specialized);
+        require_tiles(encode_tiles(low_side512.get(), 96U * 1024U),
+            1, 96U * 1024U,
+            "96-MiB low profile did not inherit high override");
+        require_tiles(decode_tiles(
+                low_side512.get(), 300, 800, 9, 96U * 1024U),
+            1, 96U * 1024U,
+            "96-MiB low decode did not inherit high override");
+        require_tiles(encode_tiles(
+                low_side512.get(), 128U * 1024U),
+            3, 43712,
+            "96-MiB low side-512 generic encode threshold");
+        require_tiles(decode_tiles(
+                low_side512.get(), 300, 800, 9, 128U * 1024U),
+            3, 43712,
+            "96-MiB low side-512 generic decode threshold");
+    }
+
+#ifdef LEO_HAS_FF8
+    // GF8 owns a separately calibrated table and must ignore the GF16 budget.
+    leopard::backend::TestOnlySetContextL3Bytes(avx2.get(), 32 * mib);
+    Codec gf8_32(avx2.get(), 100, 128, LEO2_PROFILE_LOW_V1,
+        LEO2_FIELD_GF8, forced_specialized);
+    const ExecutionTiles gf8_encode_32 =
+        encode_tiles(gf8_32.get(), 512U * 1024U);
+    const ExecutionTiles gf8_decode_32 = decode_tiles(
+        gf8_32.get(), 100, 128, 9, 512U * 1024U);
+    leopard::backend::TestOnlySetContextL3Bytes(avx2.get(), 96 * mib);
+    require_tiles(encode_tiles(gf8_32.get(), 512U * 1024U),
+        gf8_encode_32.count, gf8_encode_32.maximum_bytes,
+        "GF8 encode changed with GF16 cache budget");
+    require_tiles(decode_tiles(
+            gf8_32.get(), 100, 128, 9, 512U * 1024U),
+        gf8_decode_32.count, gf8_decode_32.maximum_bytes,
+        "GF8 decode changed with GF16 cache budget");
+#endif
+    leopard::backend::TestOnlySetContextL3Bytes(
+        avx2.get(), original_l3_bytes);
+}
+
+#if defined(__linux__)
+class TemporaryCacheTree
+{
+public:
+    TemporaryCacheTree()
+    {
+        char pattern[] = "/tmp/leopard2-cache-topology-XXXXXX";
+        char* created = mkdtemp(pattern);
+        require(created != NULL, "temporary cache root");
+        root_ = created;
+        directories_.push_back(root_);
+    }
+
+    ~TemporaryCacheTree()
+    {
+        for (std::vector<std::string>::reverse_iterator i = files_.rbegin();
+             i != files_.rend(); ++i)
+            unlink(i->c_str());
+        for (std::vector<std::string>::reverse_iterator i =
+                 directories_.rbegin(); i != directories_.rend(); ++i)
+            rmdir(i->c_str());
+    }
+
+    const std::string& root() const { return root_; }
+
+    void directory(const std::string& relative)
+    {
+        const std::string path = root_ + "/" + relative;
+        require(mkdir(path.c_str(), 0700) == 0,
+            "temporary cache directory");
+        directories_.push_back(path);
+    }
+
+    void write(const std::string& relative, const char* text)
+    {
+        const std::string path = root_ + "/" + relative;
+        FILE* file = std::fopen(path.c_str(), "wb");
+        require(file != NULL, "temporary cache attribute create");
+        const size_t bytes = std::strlen(text);
+        const bool wrote = std::fwrite(text, 1, bytes, file) == bytes;
+        const bool closed = std::fclose(file) == 0;
+        require(wrote && closed, "temporary cache attribute write");
+        files_.push_back(path);
+    }
+
+private:
+    std::string root_;
+    std::vector<std::string> directories_;
+    std::vector<std::string> files_;
+};
+
+void add_fake_cache_cpu(
+    TemporaryCacheTree& tree,
+    uint32_t cpu,
+    const char* shared_l3_cpus,
+    const char* l3_size)
+{
+    const std::string prefix = "cpu" + std::to_string(cpu);
+    tree.directory(prefix);
+    tree.directory(prefix + "/cache");
+    for (unsigned index = 0; index < 4; ++index)
+        tree.directory(prefix + "/cache/index" + std::to_string(index));
+
+    tree.write(prefix + "/cache/index0/type", "Data\n");
+    tree.write(prefix + "/cache/index0/level", "1\n");
+    tree.write(prefix + "/cache/index0/size", "32K\n");
+    tree.write(prefix + "/cache/index0/shared_cpu_list",
+        (std::to_string(cpu) + "\n").c_str());
+
+    tree.write(prefix + "/cache/index1/type", "Instruction\n");
+
+    tree.write(prefix + "/cache/index2/type", "Unified\n");
+    tree.write(prefix + "/cache/index2/level", "2\n");
+    tree.write(prefix + "/cache/index2/size", "1024K\n");
+    tree.write(prefix + "/cache/index2/shared_cpu_list",
+        (std::to_string(cpu) + "\n").c_str());
+
+    tree.write(prefix + "/cache/index3/type", "Unified\n");
+    tree.write(prefix + "/cache/index3/level", "3\n");
+    tree.write(prefix + "/cache/index3/size", l3_size);
+    tree.write(prefix + "/cache/index3/shared_cpu_list", shared_l3_cpus);
+}
+
+void test_linux_cache_topology()
+{
+    struct ParseCase
+    {
+        const char* text;
+        bool valid;
+        uint64_t bytes;
+    };
+    static const ParseCase cases[] = {
+        { "32K\n", true, UINT64_C(32) * 1024 },
+        { "98304K\n", true, UINT64_C(96) * 1024 * 1024 },
+        { "96M", true, UINT64_C(96) * 1024 * 1024 },
+        { "1G\n", true, UINT64_C(1) << 30 },
+        { "1048576\n", true, UINT64_C(1) << 20 },
+        { "", false, 0 },
+        { "0K\n", false, 0 },
+        { "-1M\n", false, 0 },
+        { "+1M\n", false, 0 },
+        { "1.5M\n", false, 0 },
+        { "96m\n", false, 0 },
+        { " 96M\n", false, 0 },
+        { "96M \n", false, 0 },
+        { "96M\n\n", false, 0 },
+        { "96M\r\n", false, 0 },
+        { "18446744073709551615G\n", false, 0 }
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        uint64_t bytes = UINT64_MAX;
+        const bool valid = leopard::backend::TestOnlyParseLinuxCacheSize(
+            cases[i].text, &bytes);
+        require(valid == cases[i].valid,
+            "Linux cache-size parser validity");
+        if (valid)
+            require(bytes == cases[i].bytes,
+                "Linux cache-size parser value");
+    }
+
+    TemporaryCacheTree tree;
+    add_fake_cache_cpu(tree, 0, "0-1\n", "98304K\n");
+    add_fake_cache_cpu(tree, 1, "0-1\n", "96M\n");
+    add_fake_cache_cpu(tree, 8, "8\n", "32768K\n");
+    tree.directory("cpu8/cache/index4");
+    tree.write("cpu8/cache/index4/type", "Unified\n");
+    tree.write("cpu8/cache/index4/level", "4\n");
+    tree.write("cpu8/cache/index4/size", "256M\n");
+    tree.write("cpu8/cache/index4/shared_cpu_list", "8\n");
+    add_fake_cache_cpu(tree, 9, "9\n", "1K\n");
+
+    const uint32_t large_domain[] = { 0, 1 };
+    uint64_t bytes = 0;
+    require(leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), large_domain, 2, &bytes) &&
+            bytes == UINT64_C(96) * 1024 * 1024,
+        "large Linux cache-domain detection");
+
+    const uint32_t mixed_domains[] = { 0, 1, 8 };
+    require(leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), mixed_domains, 3, &bytes) &&
+            bytes == UINT64_C(32) * 1024 * 1024,
+        "mixed Linux cache-domain minimum");
+    const uint32_t l4_domain[] = { 8 };
+    require(leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), l4_domain, 1, &bytes) &&
+            bytes == UINT64_C(32) * 1024 * 1024,
+        "Linux L4 replaced calibrated L3 capacity");
+    const uint32_t implausible_l3[] = { 9 };
+    require(!leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), implausible_l3, 1, &bytes),
+        "implausibly small Linux L3 accepted");
+
+    const uint32_t unsorted[] = { 8, 1 };
+    require(!leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), unsorted, 2, &bytes),
+        "unsorted Linux CPU list accepted");
+    require(!leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            tree.root().c_str(), mixed_domains, 3, NULL),
+        "null Linux cache output accepted");
+}
+#else
+void test_linux_cache_topology()
+{
+    uint64_t bytes = UINT64_C(0x123456789abcdef0);
+    require(!leopard::backend::TestOnlyParseLinuxCacheSize(
+            "32M\n", &bytes) &&
+            bytes == UINT64_C(0x123456789abcdef0),
+        "non-Linux cache-size hook modified its output");
+    const uint32_t cpu = 0;
+    require(!leopard::backend::TestOnlyDetectLinuxL3Bytes(
+            "/non-linux", &cpu, 1, &bytes) &&
+            bytes == UINT64_C(0x123456789abcdef0),
+        "non-Linux cache-topology hook modified its output");
+}
+#endif
 
 class AlignedBuffer
 {
@@ -386,6 +893,145 @@ void require_sparse_matches_full(
     require(sparse.size() == full.size(), "sparse parity size mismatch");
     for (size_t i = 0; i < full.size(); i += 2)
         require(sparse[i] == full[i], "sparse parity differs from full parity");
+}
+
+void run_injected_gf16_cache_round_trip(
+    Context& context,
+    uint32_t k,
+    uint32_t r,
+    leo2_profile profile,
+    size_t shard_bytes)
+{
+    static const uint32_t losses = 9;
+    Codec codec(context.get(), k, r, profile, LEO2_FIELD_GF16,
+        LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    const Shards original = make_original(k, shard_bytes);
+    static const uint64_t mib = UINT64_C(1024) * 1024;
+    leopard::backend::TestOnlySetContextL3Bytes(context.get(), 32 * mib);
+    const Shards established_recovery =
+        encode(codec.get(), original, r, false);
+    leopard::backend::TestOnlySetContextL3Bytes(context.get(), 96 * mib);
+    const ExecutionTiles encode_geometry =
+        encode_tiles(codec.get(), shard_bytes);
+    const ExecutionTiles decode_geometry =
+        decode_tiles(codec.get(), k, r, losses, shard_bytes);
+    require(encode_geometry.count > 1 &&
+            encode_geometry.maximum_bytes < shard_bytes,
+        "injected 96-MiB encode did not exercise byte tiling");
+    require(decode_geometry.count > 1 &&
+            decode_geometry.maximum_bytes < shard_bytes,
+        "injected 96-MiB decode did not exercise byte tiling");
+    const Shards recovery = encode(codec.get(), original, r, false);
+    require(recovery == established_recovery,
+        "injected GF16 cache policy changed encoded parity bytes");
+
+    Plan plan(codec.get(), k, r, losses);
+    std::vector<const void*> original_inputs(k);
+    for (uint32_t i = 0; i < k; ++i)
+        original_inputs[i] = i < losses ? NULL : original[i].data();
+    std::vector<const void*> recovery_inputs(r);
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_inputs[i] = recovery[i].data();
+
+    Shards restored(losses, Bytes(shard_bytes));
+    std::vector<void*> restored_outputs(k, NULL);
+    for (uint32_t i = 0; i < losses; ++i)
+        restored_outputs[i] = restored[i].data();
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+            plan.get(), shard_bytes, &scratch_bytes),
+        LEO2_SUCCESS, "injected GF16 decode scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_decode_plan_execute(
+            plan.get(), shard_bytes, original_inputs.data(),
+            recovery_inputs.data(), restored_outputs.data(),
+            scratch.get(), scratch_bytes),
+        LEO2_SUCCESS, "injected GF16 decode execute");
+    for (uint32_t i = 0; i < losses; ++i)
+        require(restored[i] == original[i],
+            "injected GF16 cache policy changed recovered bytes");
+}
+
+void run_codec_scratch_query_round_trip(Context& context)
+{
+    static const uint32_t k = 129;
+    static const uint32_t r = 100;
+    static const uint32_t losses = 9;
+    static const size_t shard_bytes = 224U * 1024U;
+    static const uint64_t mib = UINT64_C(1024) * 1024;
+
+    leopard::backend::TestOnlySetContextL3Bytes(context.get(), 32 * mib);
+    Codec codec(context.get(), k, r, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF16, LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+    const Shards original = make_original(k, shard_bytes);
+    const Shards recovery = encode(codec.get(), original, r, false);
+
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    std::vector<const void*> original_inputs(k);
+    std::vector<const void*> recovery_inputs(r);
+    for (uint32_t i = 0; i < k; ++i)
+    {
+        if (i < losses)
+            original_present[i] = 0;
+        original_inputs[i] = i < losses ? NULL : original[i].data();
+    }
+    for (uint32_t i = 0; i < r; ++i)
+        recovery_inputs[i] = recovery[i].data();
+
+    Shards restored(losses, Bytes(shard_bytes));
+    std::vector<void*> restored_outputs(k, NULL);
+    for (uint32_t i = 0; i < losses; ++i)
+        restored_outputs[i] = restored[i].data();
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(
+            codec.get(), shard_bytes, &scratch_bytes),
+        LEO2_SUCCESS, "one-shot GF16 decode scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_decode(
+            codec.get(), shard_bytes, original_present.data(),
+            recovery_present.data(), original_inputs.data(),
+            recovery_inputs.data(), restored_outputs.data(),
+            scratch.get(), scratch_bytes),
+        LEO2_SUCCESS, "one-shot GF16 decode at queried scratch bound");
+    for (uint32_t i = 0; i < losses; ++i)
+        require(restored[i] == original[i],
+            "one-shot GF16 queried scratch changed recovered bytes");
+}
+
+void test_gf16_cache_policy_bytes(Context& avx2)
+{
+    if (avx2.result() != LEO2_SUCCESS ||
+        (leo2_context_field_mask(avx2.get()) &
+            LEO2_FIELD_MASK_GF16) == 0)
+        return;
+
+    uint64_t original_l3_bytes = 0;
+    uint64_t original_target_bytes = 0;
+    uint64_t original_threshold_bytes = 0;
+    require(leopard::backend::TestOnlyGetContextGF16CachePolicy(
+            avx2.get(), &original_l3_bytes, &original_target_bytes,
+            &original_threshold_bytes),
+        "original GF16 byte-test cache-policy query");
+    (void)original_target_bytes;
+    (void)original_threshold_bytes;
+
+    /*
+        First exercise the public codec-level scratch bound in the 32-MiB
+        max-row/min-row crossover.  The high and low profile cases then each
+        reach a 128-MiB live set, at 64- and 128-KiB shards respectively.
+        Under the injected 96-MiB policy they execute three balanced passes,
+        including a partial final pass, rather than merely inspecting geometry.
+    */
+    run_codec_scratch_query_round_trip(avx2);
+    run_injected_gf16_cache_round_trip(
+        avx2, 1025, 513, LEO2_PROFILE_LEGACY_HIGH_V1, 64U * 1024U);
+    run_injected_gf16_cache_round_trip(
+        avx2, 257, 513, LEO2_PROFILE_LOW_V1, 128U * 1024U);
+    leopard::backend::TestOnlySetContextL3Bytes(
+        avx2.get(), original_l3_bytes);
 }
 
 void require_explicit_backend(Context& context, leo2_backend expected)
@@ -1081,7 +1727,18 @@ int main()
         require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
         require_explicit_backend(avx512, LEO2_BACKEND_AVX512);
         require_explicit_backend(gfni, LEO2_BACKEND_GFNI);
+        const uint64_t detected_l3_bytes =
+            leopard::backend::DetectConservativeL3Bytes();
+        require_context_cache_policy_wiring(automatic, detected_l3_bytes);
+        require_context_cache_policy_wiring(scalar, detected_l3_bytes);
+        require_context_cache_policy_wiring(ssse3, detected_l3_bytes);
+        require_context_cache_policy_wiring(avx2, detected_l3_bytes);
+        require_context_cache_policy_wiring(avx512, detected_l3_bytes);
+        require_context_cache_policy_wiring(gfni, detected_l3_bytes);
         test_balanced_execution_tile_geometry();
+        test_linux_cache_topology();
+        test_gf16_cache_policy(avx2);
+        test_gf16_cache_policy_bytes(avx2);
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);
 

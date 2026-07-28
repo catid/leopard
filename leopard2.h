@@ -229,6 +229,18 @@ LEO2_EXPORT const char* leo2_result_string(int result);
     LEO2_INVALID_ARGUMENT before the handle is written.  Scalar size-query
     outputs follow the same rule: their complete size_t or uint64_t object span
     must be representable before the function clears or fills it.
+
+    On Linux, context construction snapshots the creating thread's affinity and
+    the smallest level-three cache visible through that mask for cache-sensitive
+    GF16 AVX2/GFNI execution geometry.  Missing or inconsistent topology retains
+    a conservative built-in calibration.  The snapshot changes only scratch
+    sizing and byte tiling, never the field, profile, or wire bytes.  Changing
+    affinity later remains correct, provided the later CPUs support the
+    selected ISA, but may be performance-suboptimal.  Callers that manage
+    affinity should establish it before context creation and retain the same
+    mask for ordinary execution and every batch call.  Batch workers are
+    created lazily and may grow on a later call, inheriting that caller's
+    affinity.
 */
 LEO2_EXPORT leo2_result leo2_context_create(
     const leo2_context_options* options,

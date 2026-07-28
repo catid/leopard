@@ -166,8 +166,10 @@ class OperationCountTests(unittest.TestCase):
             )
         mutated_backend = source.replace(
             "        ops.kind == LEO2_BACKEND_AVX2 ||\n"
-            "        ops.kind == LEO2_BACKEND_AVX512;",
-            "        ops.kind == LEO2_BACKEND_AVX2;",
+            "        ops.kind == LEO2_BACKEND_AVX512 ||\n"
+            "        ops.kind == LEO2_BACKEND_GFNI;",
+            "        ops.kind == LEO2_BACKEND_AVX2 ||\n"
+            "        ops.kind == LEO2_BACKEND_GFNI;",
             1,
         )
         self.assertNotEqual(mutated_backend, source)
@@ -293,9 +295,11 @@ class OperationCountTests(unittest.TestCase):
                 core,
                 ff8.replace(
                     "    if (ops.kind == LEO2_BACKEND_AVX2 ||\n"
-                    "        ops.kind == LEO2_BACKEND_AVX512)\n"
+                    "        ops.kind == LEO2_BACKEND_AVX512 ||\n"
+                    "        ops.kind == LEO2_BACKEND_GFNI)\n"
                     "        return buffer_bytes >= 1024;",
-                    "    if (ops.kind == LEO2_BACKEND_AVX2)\n"
+                    "    if (ops.kind == LEO2_BACKEND_AVX2 ||\n"
+                    "        ops.kind == LEO2_BACKEND_GFNI)\n"
                     "        return buffer_bytes >= 1024;",
                     1,
                 ),
@@ -307,8 +311,10 @@ class OperationCountTests(unittest.TestCase):
                 ff8,
                 ff16.replace(
                     "         (ops.kind == LEO2_BACKEND_AVX2 ||\n"
-                    "          ops.kind == LEO2_BACKEND_AVX512));",
-                    "         ops.kind == LEO2_BACKEND_AVX2);",
+                    "          ops.kind == LEO2_BACKEND_AVX512 ||\n"
+                    "          ops.kind == LEO2_BACKEND_GFNI));",
+                    "         (ops.kind == LEO2_BACKEND_AVX2 ||\n"
+                    "          ops.kind == LEO2_BACKEND_GFNI));",
                     1,
                 ),
                 "GF16 compact AVX512 qualification",

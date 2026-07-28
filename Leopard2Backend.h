@@ -30,6 +30,7 @@
 
 #include "leopard2.h"
 
+#include <stddef.h>
 #include <stdint.h>
 
 namespace leopard { namespace backend {
@@ -437,6 +438,15 @@ X86Features ClassifyX86Features(
     uint64_t xcr0);
 X86Features DetectX86Features();
 
+/*
+    Best-effort capacity of the smallest level-three data cache visible through
+    the creating thread's current affinity mask.  Zero means that topology was
+    unavailable or internally inconsistent.  Callers must retain their
+    established fallback policy in that case: cache discovery is a setup-time
+    performance hint, never a reason for context creation to fail.
+*/
+uint64_t DetectConservativeL3Bytes();
+
 const Ops* InitializeScalar(const InitializeArgs& args);
 
 #if defined(LEO2_HAVE_SSSE3_BACKEND)
@@ -562,6 +572,40 @@ void TestGetGFNITableState(TestBackendState* state);
 // Test-only injection point for a copied/tracing immutable ops table.  The
 // caller must restore the qualified table before destroying the tracing table.
 void TestSetContextOps(leo2_context* context, const Ops* ops);
+
+/*
+    Strict Linux-sysfs parser and topology oracle used by deterministic tests.
+    The production detector passes the real affinity mask; this hook accepts an
+    explicit CPU list and alternate root so tests need not depend on host cache
+    geometry.  It is absent from production archives and non-Linux builds
+    return false.
+*/
+bool TestOnlyParseLinuxCacheSize(
+    const char* text,
+    uint64_t* bytes_out);
+bool TestOnlyDetectLinuxL3Bytes(
+    const char* cpu_root,
+    const uint32_t* cpu_ids,
+    size_t cpu_count,
+    uint64_t* bytes_out);
+void TestOnlySetContextL3Bytes(
+    leo2_context* context,
+    uint64_t detected_l3_bytes);
+bool TestOnlyGetContextGF16CachePolicy(
+    const leo2_context* context,
+    uint64_t* effective_l3_bytes_out,
+    uint64_t* live_set_target_bytes_out,
+    uint64_t* tile_threshold_bytes_out);
+bool TestOnlyGetEncodeExecutionTiles(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out);
+bool TestOnlyGetDecodeExecutionTiles(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    size_t* execution_tile_count_out,
+    size_t* maximum_pass_bytes_out);
 #endif
 
 }} // namespace leopard::backend
