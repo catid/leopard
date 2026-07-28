@@ -25,7 +25,8 @@ from pathlib import Path
 
 
 HISTORICAL_SCHEMA = "leopard2-backend-matrix/v1"
-SCHEMA = "leopard2-backend-matrix/v2"
+PRE_GFNI_SCHEMA = "leopard2-backend-matrix/v2"
+SCHEMA = "leopard2-backend-matrix/v3"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2", "avx512")
 COMPARE_TESTS = (
     "field_options",
@@ -198,7 +199,7 @@ BUILD_CACHE_KEYS = (
     "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
 )
 
-EXPECTED_COMPILE_SOURCE_COUNTS = {
+PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS = {
     # The default dual-field test configuration builds the production
     # archive, the test-hook archive, and the legacy whole-TU SIMD
     # initialization fixture.  ISA sources appear in the production and
@@ -207,7 +208,6 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "Leopard2BackendAVX2.cpp": 2,
     "Leopard2BackendAVX2Xor.cpp": 2,
     "Leopard2BackendAVX512.cpp": 2,
-    "Leopard2BackendGFNI.cpp": 2,
     "Leopard2BackendSSSE3.cpp": 2,
     "Leopard2BackendScalar.cpp": 3,
     "Leopard2CpuFeatures.cpp": 3,
@@ -258,7 +258,10 @@ EXPECTED_COMPILE_SOURCE_COUNTS = {
     "tests/leopard2/test_random.cpp": 1,
     "tests/leopard2/test_transform_differential.cpp": 1,
 }
-SOURCE_FILES = (
+EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+    PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS)
+EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2BackendGFNI.cpp"] = 2
+PRE_GFNI_SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
     "LeopardCommon.h",
@@ -269,7 +272,6 @@ SOURCE_FILES = (
     "Leopard2BackendAVX2.cpp",
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp",
-    "Leopard2BackendGFNI.cpp",
     "Leopard2CpuFeatures.cpp",
     "LeopardFF8.cpp",
     "LeopardFF8.h",
@@ -331,21 +333,27 @@ SOURCE_FILES = (
     "tools/check_leopard2_portable_isa.sh",
     "tools/leopard2_backend_matrix.py",
 )
+SOURCE_FILES = PRE_GFNI_SOURCE_FILES + ("Leopard2BackendGFNI.cpp",)
 
 
-def evidence_contract():
-    """Return the exact schema-v2 producer contract consumed by ABBA tools.
+def evidence_contract(schema=SCHEMA):
+    """Return a frozen, versioned producer contract consumed by ABBA tools.
 
     Keeping this as data, rather than another hand-copied list, makes a matrix
     producer change fail the consumer's schema/contract binding immediately.
-    A future producer schema must retain this v2 contract or require consumers
-    to introduce a new evidence schema before accepting its output.
+    Schema v2 remains available for historical butterfly-v9 replay; current
+    schema v3 additionally binds the GFNI object and qualification failures.
     """
-    return {
-        "schema": SCHEMA,
-        "source_files": tuple(SOURCE_FILES),
+    if schema not in (PRE_GFNI_SCHEMA, SCHEMA):
+        raise ValueError("unsupported backend-matrix evidence schema")
+    current = schema == SCHEMA
+    contract = {
+        "schema": schema,
+        "source_files": tuple(
+            SOURCE_FILES if current else PRE_GFNI_SOURCE_FILES),
         "expected_compile_source_counts": dict(
-            EXPECTED_COMPILE_SOURCE_COUNTS),
+            EXPECTED_COMPILE_SOURCE_COUNTS if current else
+            PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS),
         "compare_tests": tuple(COMPARE_TESTS),
         "run_only_tests": tuple(RUN_ONLY_TESTS),
         "run_tests": tuple(RUN_TESTS),
@@ -359,12 +367,14 @@ def evidence_contract():
         "base_backend_failure_tests": tuple(BASE_BACKEND_FAILURE_TESTS),
         "avx512_backend_failure_tests": tuple(
             AVX512_BACKEND_FAILURE_TESTS),
-        "gfni_backend_failure_tests": tuple(
-            GFNI_BACKEND_FAILURE_TESTS),
         "backend_failure_ctest_regex": BACKEND_FAILURE_CTEST_REGEX,
         "portable_ctest_regex": PORTABLE_CTEST_REGEX,
         "cuda_ctest_regex": CUDA_CTEST_REGEX,
     }
+    if current:
+        contract["gfni_backend_failure_tests"] = tuple(
+            GFNI_BACKEND_FAILURE_TESTS)
+    return contract
 
 
 class MatrixError(Exception):
@@ -1258,6 +1268,14 @@ def matrix_run(arguments):
 
 
 def self_test():
+    def check(condition, label):
+        # Keep schema-contract regressions live under ``python -O``.  This
+        # runner predates optimized-Python evidence replay and much of its
+        # unrelated smoke coverage still uses assertions; new producer
+        # versioning must not inherit that fail-open behavior.
+        if not condition:
+            raise MatrixError("self-test failed: " + label)
+
     def failure_output_for(names):
         return b"".join(
             "{}/{} Test #{}: {} ... Passed\n".format(
@@ -1268,6 +1286,33 @@ def self_test():
 
     assert compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9"
     assert compact_cpu_list([]) == ""
+    current_contract = evidence_contract()
+    historical_contract = evidence_contract(PRE_GFNI_SCHEMA)
+    check(current_contract["schema"] == SCHEMA,
+          "current contract schema")
+    check(historical_contract["schema"] == PRE_GFNI_SCHEMA,
+          "pre-GFNI contract schema")
+    check("gfni_backend_failure_tests" in current_contract,
+          "current contract GFNI failure tests")
+    check("gfni_backend_failure_tests" not in historical_contract,
+          "pre-GFNI contract excludes GFNI failure tests")
+    check("Leopard2BackendGFNI.cpp" in current_contract["source_files"],
+          "current contract GFNI source")
+    check("Leopard2BackendGFNI.cpp" not in
+          historical_contract["source_files"],
+          "pre-GFNI contract excludes GFNI source")
+    check("Leopard2BackendGFNI.cpp" in
+          current_contract["expected_compile_source_counts"],
+          "current contract GFNI compile closure")
+    check("Leopard2BackendGFNI.cpp" not in
+          historical_contract["expected_compile_source_counts"],
+          "pre-GFNI contract excludes GFNI compile closure")
+    try:
+        evidence_contract("leopard2-backend-matrix/v999")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("unknown evidence contract schema was accepted")
     assert normalized_output(b"a\r\nb\rc\n") == b"a\nb\nc\n"
     assert portable_ctest_executed(
         b"1/1 Test #1: leopard2_portable_isa ... Passed\n"
