@@ -1439,6 +1439,13 @@ def validate_effective_flags(
         raise EvidenceError(str(error)) from error
 
 
+def parse_single_executable_recipe(text: object, label: str) -> list[str]:
+    try:
+        return link_common.parse_single_executable_recipe(text, label)
+    except link_common.EvidenceError as error:
+        raise EvidenceError(str(error)) from error
+
+
 EXTERNAL_LINK_INPUT_ROLES = link_common.EXTERNAL_LINK_INPUT_ROLES
 EXTERNAL_LINK_INPUT_ORDER = link_common.EXTERNAL_LINK_INPUT_ORDER
 
@@ -2140,7 +2147,8 @@ def build_provenance(
             f"{implementation} archive recipe is not strict UTF-8") from error
     require(names["archive"] in archive_link,
             f"{implementation} archive recipe does not produce its declared archive")
-    executable_link_tokens = shlex.split(executable_link)
+    executable_link_tokens = parse_single_executable_recipe(
+        executable_link, f"{implementation} benchmark link recipe")
     require(executable_link_tokens and
             Path(executable_link_tokens[0]).resolve(strict=True) == compiler,
             f"{implementation} link recipe uses a different compiler")
@@ -2659,10 +2667,7 @@ def validate_complete_executable_recipe(
     require(recipe["size"] == retained["size"] and
             recipe["sha256"] == retained["sha256"],
             f"{label} bytes differ from its file identity")
-    try:
-        tokens = shlex.split(retained["text"], posix=True)
-    except ValueError as error:
-        raise EvidenceError(f"cannot parse {label}: {error}") from error
+    tokens = parse_single_executable_recipe(retained["text"], label)
     validate_executable_link_semantics(
         tokens, compiler_invocation=compiler_invocation,
         archive_name=archive_name, executable_name=executable_name,

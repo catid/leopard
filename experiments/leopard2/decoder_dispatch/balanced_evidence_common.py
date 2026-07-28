@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import shlex
 import stat
 import subprocess
 import sys
@@ -118,6 +119,20 @@ def validate_effective_flags(
     optimizations = [token for token in tokens if token.startswith("-O")]
     require(optimizations and optimizations[-1] == "-O3",
             f"{label} final optimization flag is not -O3: {optimizations}")
+
+
+def parse_single_executable_recipe(text: object, label: str) -> list[str]:
+    """Parse exactly one nonempty shell command from a retained link recipe."""
+    require(isinstance(text, str), f"{label} is not text")
+    commands = [line for line in text.splitlines() if line.strip()]
+    require(len(commands) == 1,
+            f"{label} must contain exactly one nonempty command")
+    try:
+        tokens = shlex.split(commands[0], posix=True)
+    except ValueError as error:
+        raise EvidenceError(f"cannot parse {label}: {error}") from error
+    require(tokens and all(tokens), f"{label} token stream is empty")
+    return tokens
 
 
 def validate_external_link_operand_path(

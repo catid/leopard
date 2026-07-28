@@ -1206,6 +1206,18 @@ class MainCompareRunnerTests(unittest.TestCase):
                 build["archive_link_recipe"]["sha256"] = content["sha256"]
             synchronize_identity(value)
 
+        def multiline_executable_recipe(value: dict) -> None:
+            for role in ("baseline", "candidate"):
+                build = value["identities_initial"][f"{role}_build"]
+                text = build["executable_link_recipe_content"]["text"] + \
+                    "\n-O3\n"
+                content = runner.exact_text_content(
+                    text, f"multiline {role} executable recipe")
+                build["executable_link_recipe_content"] = content
+                build["executable_link_recipe"]["size"] = content["size"]
+                build["executable_link_recipe"]["sha256"] = content["sha256"]
+            synchronize_identity(value)
+
         def missing_dynamic_loader(value: dict) -> None:
             for role in ("baseline", "candidate"):
                 closure = value["identities_initial"][f"{role}_runtime_closure"]
@@ -1270,6 +1282,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             "reduced-outputs": reduced_outputs,
             "topology-only-host": topology_only_host,
             "truncated-tu-closure": truncated_tu_closure,
+            "multiline-executable-recipe": multiline_executable_recipe,
             "missing-dynamic-loader": missing_dynamic_loader,
             "swapped-runtime-file-records": swapped_runtime_file_records,
             "noncanonical-runtime-loader-paths":
@@ -1889,6 +1902,8 @@ class MainCompareRunnerTests(unittest.TestCase):
         canonical = complete_build_fixture("candidate")[
             "executable_link_recipe_content"]["text"]
         mutations = {
+            "second flag command": canonical + "\n-O3\n",
+            "leading flag command": "-O3\r\n" + canonical,
             "absolute same-basename archive": canonical.replace(
                 " libleopard.a ", " /tmp/libleopard.a ", 1),
             "sibling same-basename archive": canonical.replace(
@@ -1956,6 +1971,23 @@ class MainCompareRunnerTests(unittest.TestCase):
         value = synthetic_raw()
         runner.validate_raw(
             resign(value), None, check_files=False, check_current_inputs=False)
+
+    def test_executable_recipe_parser_preserves_command_boundaries(self) -> None:
+        canonical = complete_build_fixture("candidate")[
+            "executable_link_recipe_content"]["text"]
+        self.assertEqual(
+            runner.parse_single_executable_recipe(
+                canonical, "canonical executable recipe"),
+            runner.shlex.split(canonical, posix=True))
+        for label, recipe in (
+            ("second LF command", canonical + "\n-O3\n"),
+            ("leading CRLF command", "-O3\r\n" + canonical),
+            ("second Unicode line command", canonical + "\u2028-O3"),
+        ):
+            with self.subTest(label=label), \
+                 self.assertRaises(runner.EvidenceError):
+                runner.parse_single_executable_recipe(
+                    recipe, "multiline executable recipe")
 
     def test_external_link_inputs_bind_paths_roles_and_bytes(self) -> None:
         canonical = complete_build_fixture("candidate")[

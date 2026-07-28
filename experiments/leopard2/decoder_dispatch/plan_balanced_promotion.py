@@ -1137,7 +1137,12 @@ def _validate_scope_build(
             archive_commands[0][3:] == expected_archive_objects and
             archive_commands[1] == [tools["ranlib"]["invocation"], archive_name],
             f"{role} normalized archive recipe semantics differ")
-    executable_tokens = shlex.split(executable_text["text"], posix=True)
+    try:
+        executable_tokens = common.parse_single_executable_recipe(
+            executable_text["text"],
+            f"{role} normalized executable link recipe")
+    except common.EvidenceError as error:
+        raise PlanError(str(error)) from error
     expected_benchmark_object = benchmark_pairs[0]["object"]["path"][
         len(expected_root) + 1:]
     external_link_inputs = build.get("validated_external_link_inputs")
@@ -3724,6 +3729,19 @@ def self_test() -> None:
                 f"uniform {label}",
                 lambda values, item=control:
                     add_all_link_controls(values, item))
+        def append_all_executable_commands(values) -> None:
+            for value in values:
+                for role in ("baseline", "candidate"):
+                    build = value["builds"][role]
+                    text = build[
+                        "executable_link_recipe_content"]["text"] + "\n-O3\n"
+                    retained = retained_text(text)
+                    build["executable_link_recipe_content"] = retained
+                    build["executable_link_recipe"]["size"] = retained["size"]
+                    build["executable_link_recipe"]["sha256"] = retained["sha256"]
+        reject_scope_mutation(
+            "uniform multiline executable recipes",
+            append_all_executable_commands)
         def redirect_all_pthread_inputs(values) -> None:
             old = "/usr/lib/x86_64-linux-gnu/libpthread.a"
             new = "/tmp/libpthread.a"
