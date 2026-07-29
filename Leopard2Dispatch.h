@@ -60,6 +60,13 @@ enum DecodePathRule
     kDecodeRuleUnsupportedProfile
 };
 
+enum DirectRepairExecutor
+{
+    kDirectRepairExecutorNone = 0,
+    kDirectRepairExecutorOutputMajor,
+    kDirectRepairExecutorSourceMajor
+};
+
 enum DecodeAutoRule
 {
     kDecodeAutoRuleBalancedGeneric = 1u << 0,
@@ -104,6 +111,7 @@ struct DecodePathInfo
 {
     DecodePath path;
     DecodePathRule rule;
+    DirectRepairExecutor direct_executor;
     uint32_t matching_auto_rules;
     size_t required_work_slots;
     size_t aligned_prefix_bytes;
@@ -209,6 +217,7 @@ static inline bool SelectDecodePath(
 {
     selection.path = kDecodePathMaterialized;
     selection.rule = kDecodeRuleUnsupportedProfile;
+    selection.direct_executor = kDirectRepairExecutorNone;
     selection.matching_auto_rules = 0;
     selection.required_work_slots = 0;
     selection.aligned_prefix_bytes = input.aligned_prefix_bytes;
@@ -381,6 +390,18 @@ static inline const char* DecodePathRuleName(DecodePathRule rule)
     case kDecodeRuleWorkspaceMaterialized: return "workspace_materialized";
     case kDecodeRuleTranslatedLow: return "translated_low";
     case kDecodeRuleUnsupportedProfile: return "unsupported_profile";
+    }
+    return "unknown";
+}
+
+static inline const char* DirectRepairExecutorName(
+    DirectRepairExecutor executor)
+{
+    switch (executor)
+    {
+    case kDirectRepairExecutorNone: return "none";
+    case kDirectRepairExecutorOutputMajor: return "output_major";
+    case kDirectRepairExecutorSourceMajor: return "source_major";
     }
     return "unknown";
 }

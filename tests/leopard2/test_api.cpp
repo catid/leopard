@@ -48,6 +48,10 @@
 #include <malloc.h>
 #endif
 
+#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -182,6 +186,20 @@ Shards make_originals(unsigned count, size_t bytes, uint64_t seed)
         }
     return shards;
 }
+
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+uint64_t shards_digest(const Shards& shards)
+{
+    uint64_t digest = UINT64_C(1469598103934665603);
+    for (size_t shard = 0; shard < shards.size(); ++shard)
+        for (size_t byte_i = 0; byte_i < shards[shard].size(); ++byte_i)
+        {
+            digest ^= shards[shard][byte_i];
+            digest *= UINT64_C(1099511628211);
+        }
+    return digest;
+}
+#endif
 
 std::vector<const void*> const_pointers(const Shards& shards)
 {
@@ -685,6 +703,7 @@ void test_concurrent_preformatted_source_major_plan(
     for (unsigned worker = 0; worker < worker_count; ++worker)
     {
         workers.push_back(std::thread([&]() {
+            bool announced_ready = false;
             try
             {
                 AlignedBuffer scratch(scratch_bytes);
@@ -710,6 +729,7 @@ void test_concurrent_preformatted_source_major_plan(
                 }
 
                 ready.fetch_add(1, std::memory_order_release);
+                announced_ready = true;
                 while (!go.load(std::memory_order_acquire))
                     std::this_thread::yield();
                 for (unsigned repeat = 0; repeat < repetitions; ++repeat)
@@ -730,6 +750,8 @@ void test_concurrent_preformatted_source_major_plan(
             }
             catch (...)
             {
+                if (!announced_ready)
+                    ready.fetch_add(1, std::memory_order_release);
                 failures.fetch_add(1, std::memory_order_relaxed);
             }
         }));
@@ -788,6 +810,8 @@ void test_no_loss_no_op(leo2_context* context)
 
 void test_direct_repair_dispatch_bounds(leo2_context* context)
 {
+    static const bool experimental_small_direct =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0;
     struct Case
     {
         unsigned k;
@@ -802,6 +826,14 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
     const Case cases[] = {
         { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, true, false },
+        { 5, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 5, experimental_small_direct, true },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 8, experimental_small_direct, true },
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 8, experimental_small_direct, true },
+        { 16, 9, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 8, false, false },
         { 17, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           33, 4, false, false },
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -828,12 +860,24 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           66, 4, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           63, 8, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 2, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 2, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 8, true, true },
+        { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 8, true, true },
         { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 4, true, true },
         { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, true, true },
+        { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 8, true, true },
+        { 65, 66, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 8, true, true },
         { 65, 96, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 65, 96, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -848,6 +892,10 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
           64, 4, true, true },
         { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, true, true },
+        { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2047, 8, true, true },
+        { 65, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          2048, 8, true, true },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 9, false, false },
         { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -876,8 +924,10 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         std::vector<uint8_t> recovery_present(test.r, 1);
         for (unsigned i = 0; i < test.losses; ++i)
             original_present[i] = 0;
-        // Force deterministic selection to skip parity zero.
-        recovery_present[0] = 0;
+        // Force deterministic selection to skip parity zero when enough
+        // parity remains. A full-loss R=L case requires every parity.
+        if (test.losses < test.r)
+            recovery_present[0] = 0;
 
         leo2_codec* codec = make_codec(
             context, test.k, test.r, test.profile, test.field);
@@ -907,6 +957,36 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         const bool expect_direct = test.expect_direct &&
             (!test.avx2_only ||
              leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+        leopard2_internal::DecodePathInfo path_info;
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            plan, test.bytes, false, &path_info),
+            "direct-dispatch path introspection");
+        require((path_info.path == leopard2_internal::kDecodePathDirect) ==
+                expect_direct,
+            "direct-repair path introspection disagrees with scratch shape");
+        if (expect_direct)
+        {
+            const bool expanded_k65_source_major =
+                test.k == 65 && test.r >= 65 && test.r <= 128 &&
+                test.losses >= 2 &&
+                test.bytes >= 2048;
+            const bool experimental_small_source_major =
+                test.k >= 5 && test.k <= 16 &&
+                test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
+                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2;
+            const leopard2_internal::DirectRepairExecutor expected_executor =
+                expanded_k65_source_major || experimental_small_source_major
+                    ? leopard2_internal::kDirectRepairExecutorSourceMajor
+                    : leopard2_internal::kDirectRepairExecutorOutputMajor;
+            require(path_info.direct_executor == expected_executor,
+                "direct-repair executor introspection selected wrong loop order");
+        }
+        else
+        {
+            require(path_info.direct_executor ==
+                    leopard2_internal::kDirectRepairExecutorNone,
+                "transform plan reported a direct-repair executor");
+        }
 #if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
         const bool expect_source_rows = expect_direct && test.k == 65 &&
             test.losses >= 2 && test.losses <= 8 &&
@@ -1017,6 +1097,316 @@ void test_generalized_one_loss_direct_repair_execution(
     }
 }
 
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+void test_experimental_small_direct_unaligned(
+    leo2_context* context,
+    size_t bytes,
+    TestCounts* counts)
+{
+    const unsigned k = 16;
+    const unsigned r = 8;
+    const unsigned losses = 5;
+    leo2_codec* codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards source = make_originals(
+        k, bytes, UINT64_C(0x51a11d0000000000) + bytes);
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (unsigned i = 0; i < losses; ++i)
+        original_present[i] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        &recovery_present[0], &plan), "unaligned small-direct plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes), "unaligned small-direct scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+
+    Shards original_storage(k, std::vector<uint8_t>(bytes + 2, 0x5a));
+    Shards recovery_storage(r, std::vector<uint8_t>(bytes + 2, 0x5a));
+    Shards output_storage(k, std::vector<uint8_t>(bytes + 2, 0xa5));
+    std::vector<const void*> original_input(k, NULL);
+    std::vector<const void*> recovery_input(r, NULL);
+    std::vector<void*> output(k, NULL);
+    for (unsigned i = 0; i < k; ++i)
+    {
+        std::memcpy(&original_storage[i][1], source[i].data(), bytes);
+        if (original_present[i])
+            original_input[i] = &original_storage[i][1];
+        else
+            output[i] = &output_storage[i][1];
+    }
+    for (unsigned i = 0; i < r; ++i)
+    {
+        std::memcpy(&recovery_storage[i][1], parity[i].data(), bytes);
+        recovery_input[i] = &recovery_storage[i][1];
+    }
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        original_input.data(), recovery_input.data(), output.data(),
+        scratch.data, scratch.bytes), "unaligned small-direct execute");
+    for (unsigned i = 0; i < losses; ++i)
+    {
+        require(std::memcmp(&output_storage[i][1], source[i].data(), bytes) == 0,
+            "unaligned small-direct output differs from source");
+        require(output_storage[i][0] == 0xa5 &&
+                output_storage[i][bytes + 1] == 0xa5,
+            "unaligned small-direct output changed a guard byte");
+    }
+    for (unsigned i = losses; i < k; ++i)
+        require(original_storage[i][0] == 0x5a &&
+                original_storage[i][bytes + 1] == 0x5a,
+            "unaligned small-direct execution changed an input guard");
+    for (unsigned i = 0; i < r; ++i)
+        require(recovery_storage[i][0] == 0x5a &&
+                recovery_storage[i][bytes + 1] == 0x5a,
+            "unaligned small-direct execution changed a parity guard");
+    counts->recovered_shards += losses;
+    ++counts->plan_executions;
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_experimental_small_direct_batch_and_concurrent(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    static const unsigned k = 8;
+    static const unsigned r = 8;
+    static const size_t bytes = 65;
+    static const unsigned lanes = 2;
+    const Shards source[lanes] = {
+        make_originals(k, bytes, UINT64_C(0x82a1000000000001)),
+        make_originals(k, bytes, UINT64_C(0x82b2000000000002))
+    };
+    require(shards_digest(source[0]) != shards_digest(source[1]),
+        "small-direct batch sources did not have distinct digests");
+
+    leo2_codec* codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards parity[lanes] = {
+        encode_new(codec, source[0], bytes),
+        encode_new(codec, source[1], bytes)
+    };
+    require(shards_digest(parity[0]) != shards_digest(parity[1]),
+        "small-direct batch parity did not have distinct digests");
+
+    std::vector<uint8_t> original_present(k, 0);
+    std::vector<uint8_t> recovery_present(r, 1);
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, original_present.data(),
+        recovery_present.data(), &plan),
+        "small-direct shared plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes), "small-direct shared scratch query");
+    leopard2_internal::DecodePathInfo path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, bytes, true, &path), "small-direct batch path introspection");
+    const leopard2_internal::DirectRepairExecutor expected_executor =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+            ? leopard2_internal::kDirectRepairExecutorSourceMajor
+            : leopard2_internal::kDirectRepairExecutorOutputMajor;
+    require(path.path == leopard2_internal::kDecodePathDirect &&
+            path.direct_executor == expected_executor,
+        "small-direct batch selected the wrong executor");
+
+    std::vector<const void*> original_input(k, NULL);
+    Shards recovery_storage[lanes] = {
+        Shards(r, std::vector<uint8_t>(bytes + 2, 0x51)),
+        Shards(r, std::vector<uint8_t>(bytes + 2, 0x62))
+    };
+    Shards batch_output[lanes] = {
+        Shards(k, std::vector<uint8_t>(bytes + 2, 0xa1)),
+        Shards(k, std::vector<uint8_t>(bytes + 2, 0xb2))
+    };
+    std::vector<const void*> recovery_input[lanes] = {
+        std::vector<const void*>(r, NULL),
+        std::vector<const void*>(r, NULL)
+    };
+    std::vector<void*> output[lanes] = {
+        std::vector<void*>(k, NULL),
+        std::vector<void*>(k, NULL)
+    };
+    for (unsigned lane = 0; lane < lanes; ++lane)
+    {
+        for (unsigned recovery = 0; recovery < r; ++recovery)
+        {
+            std::memcpy(&recovery_storage[lane][recovery][1],
+                parity[lane][recovery].data(), bytes);
+            recovery_input[lane][recovery] =
+                &recovery_storage[lane][recovery][1];
+        }
+        for (unsigned original = 0; original < k; ++original)
+            output[lane][original] = &batch_output[lane][original][1];
+    }
+    AlignedBuffer batch_scratch0(scratch_bytes);
+    AlignedBuffer batch_scratch1(scratch_bytes);
+    AlignedBuffer* batch_scratch[lanes] = {
+        &batch_scratch0, &batch_scratch1
+    };
+    leo2_decode_batch_item items[lanes];
+    std::memset(items, 0, sizeof(items));
+    for (unsigned lane = 0; lane < lanes; ++lane)
+    {
+        items[lane].shard_bytes = bytes;
+        items[lane].original = original_input.data();
+        items[lane].recovery = recovery_input[lane].data();
+        items[lane].restored_original = output[lane].data();
+        items[lane].scratch = batch_scratch[lane]->data;
+        items[lane].scratch_bytes = batch_scratch[lane]->bytes;
+    }
+    require_result(leo2_decode_plan_execute_batch(plan, items, lanes),
+        "small-direct two-item batch execute");
+    for (unsigned lane = 0; lane < lanes; ++lane)
+    {
+        const uint8_t recovery_guard =
+            lane == 0 ? static_cast<uint8_t>(0x51)
+                      : static_cast<uint8_t>(0x62);
+        const uint8_t output_guard =
+            lane == 0 ? static_cast<uint8_t>(0xa1)
+                      : static_cast<uint8_t>(0xb2);
+        for (unsigned recovery = 0; recovery < r; ++recovery)
+            require(recovery_storage[lane][recovery][0] == recovery_guard &&
+                    recovery_storage[lane][recovery][bytes + 1] ==
+                        recovery_guard,
+                "small-direct batch changed a parity guard");
+        for (unsigned original = 0; original < k; ++original)
+        {
+            require(std::memcmp(&batch_output[lane][original][1],
+                        source[lane][original].data(), bytes) == 0,
+                "small-direct batch recovery mismatch");
+            require(batch_output[lane][original][0] == output_guard &&
+                    batch_output[lane][original][bytes + 1] == output_guard,
+                "small-direct batch changed an output guard");
+        }
+    }
+
+    Shards concurrent_output[lanes] = {
+        Shards(k, std::vector<uint8_t>(bytes + 2, 0xc3)),
+        Shards(k, std::vector<uint8_t>(bytes + 2, 0xd4))
+    };
+    std::vector<void*> concurrent_ptrs[lanes] = {
+        std::vector<void*>(k, NULL), std::vector<void*>(k, NULL)
+    };
+    for (unsigned lane = 0; lane < lanes; ++lane)
+        for (unsigned original = 0; original < k; ++original)
+            concurrent_ptrs[lane][original] =
+                &concurrent_output[lane][original][1];
+    std::atomic<unsigned> ready(0);
+    std::atomic<bool> go(false);
+    std::vector<std::string> errors(lanes);
+    std::vector<std::thread> workers;
+    AlignedBuffer concurrent_scratch0(scratch_bytes);
+    AlignedBuffer concurrent_scratch1(scratch_bytes);
+    AlignedBuffer* concurrent_scratch[lanes] = {
+        &concurrent_scratch0, &concurrent_scratch1
+    };
+    for (unsigned lane = 0; lane < lanes; ++lane)
+    {
+        workers.push_back(std::thread([&, lane]() {
+            try
+            {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!go.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (unsigned repeat = 0; repeat < 4; ++repeat)
+                    require_result(leo2_decode_plan_execute(
+                        plan, bytes, original_input.data(),
+                        recovery_input[lane].data(),
+                        concurrent_ptrs[lane].data(),
+                        concurrent_scratch[lane]->data,
+                        concurrent_scratch[lane]->bytes),
+                        "small-direct concurrent shared-plan execute");
+            }
+            catch (const std::exception& error)
+            {
+                errors[lane] = error.what();
+            }
+        }));
+    }
+    while (ready.load(std::memory_order_acquire) != lanes)
+        std::this_thread::yield();
+    go.store(true, std::memory_order_release);
+    for (size_t lane = 0; lane < workers.size(); ++lane)
+        workers[lane].join();
+    for (unsigned lane = 0; lane < lanes; ++lane)
+    {
+        require(errors[lane].empty(),
+            std::string("small-direct shared-plan lane failed: ") +
+                errors[lane]);
+        const uint8_t guard =
+            lane == 0 ? static_cast<uint8_t>(0xc3)
+                      : static_cast<uint8_t>(0xd4);
+        for (unsigned original = 0; original < k; ++original)
+        {
+            require(std::memcmp(&concurrent_output[lane][original][1],
+                        source[lane][original].data(), bytes) == 0,
+                "small-direct concurrent recovery mismatch");
+            require(concurrent_output[lane][original][0] == guard &&
+                    concurrent_output[lane][original][bytes + 1] == guard,
+                "small-direct concurrent execution changed an output guard");
+        }
+    }
+    counts->recovered_shards += lanes * k * 5;
+    counts->plan_executions += lanes * 5;
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void test_experimental_small_direct_repair_execution(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+        unsigned losses;
+    };
+    static const Shape shapes[] = {
+        { 5, 5, 5 }, { 8, 8, 5 }, { 8, 8, 8 },
+        { 9, 6, 6 }, { 12, 7, 7 }, { 14, 8, 8 },
+        { 16, 6, 6 }, { 16, 8, 5 }, { 16, 8, 7 }, { 16, 8, 8 }
+    };
+    static const size_t boundary_bytes[] = {
+        31, 32, 33, 63, 64, 65,
+        2047, 2048, 2049, 4095, 4096, 4097,
+        65535, 65536, 65537
+    };
+    for (size_t shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]); ++shape_i)
+    {
+        const Shape& shape = shapes[shape_i];
+        std::vector<unsigned> missing(shape.losses, 0);
+        for (unsigned i = 0; i < shape.losses; ++i)
+            missing[i] = i;
+        for (size_t byte_i = 0;
+             byte_i < sizeof(boundary_bytes) / sizeof(boundary_bytes[0]);
+             ++byte_i)
+        {
+            run_decode_case(context, shape.k, shape.r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                boundary_bytes[byte_i], missing, std::vector<unsigned>(),
+                counts);
+        }
+    }
+
+    std::vector<unsigned> all_missing(8, 0);
+    for (unsigned i = 0; i < all_missing.size(); ++i)
+        all_missing[i] = i;
+    for (size_t bytes = 1; bytes <= 257; ++bytes)
+    {
+        run_decode_case(context, 8, 8,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            bytes, all_missing, std::vector<unsigned>(), counts);
+    }
+    test_experimental_small_direct_unaligned(context, 65, counts);
+    test_experimental_small_direct_unaligned(context, 2049, counts);
+    test_experimental_small_direct_batch_and_concurrent(context, counts);
+}
+#endif
+
 void test_concurrent_expanded_direct_repair_cache(
     leo2_context* context,
     TestCounts* counts)
@@ -1044,6 +1434,7 @@ void test_concurrent_expanded_direct_repair_cache(
     {
         threads.push_back(std::thread(
             [context, lane, &ready, &go, &lane_counts, &errors]() {
+            bool announced_ready = false;
             try
             {
                 const unsigned recovery_count = recovery_counts[lane];
@@ -1062,6 +1453,7 @@ void test_concurrent_expanded_direct_repair_cache(
                     recovery_present[missing_recovery[i]] = 0;
 
                 ready.fetch_add(1, std::memory_order_release);
+                announced_ready = true;
                 while (!go.load(std::memory_order_acquire))
                     std::this_thread::yield();
 
@@ -1108,7 +1500,15 @@ void test_concurrent_expanded_direct_repair_cache(
             }
             catch (const std::exception& error)
             {
+                if (!announced_ready)
+                    ready.fetch_add(1, std::memory_order_release);
                 errors[lane] = error.what();
+            }
+            catch (...)
+            {
+                if (!announced_ready)
+                    ready.fetch_add(1, std::memory_order_release);
+                errors[lane] = "unknown exception before or during lane";
             }
         }));
     }
@@ -1155,6 +1555,9 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     test_concurrent_expanded_direct_repair_cache(context, counts);
     test_direct_repair_dispatch_bounds(context);
     test_generalized_one_loss_direct_repair_execution(context, counts);
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+    test_experimental_small_direct_repair_execution(context, counts);
+#endif
     const std::vector<unsigned> missing_originals = {
         0, 1, 7, 16, 32, 48, 63, 64
     };
@@ -2301,6 +2704,10 @@ leopard2_internal::DecodePathInfo require_decode_path(
     require(selection.rule == expected_rule,
         std::string(operation) + " selected rule " +
         leopard2_internal::DecodePathRuleName(selection.rule));
+    require(selection.direct_executor ==
+            leopard2_internal::kDirectRepairExecutorNone,
+        std::string(operation) +
+        " transform selector reported a direct-repair executor");
     require(selection.aligned_prefix_bytes == input.aligned_prefix_bytes &&
             selection.tail_bytes == input.tail_bytes &&
             selection.rounded_shard_bytes == input.rounded_shard_bytes &&
@@ -2627,10 +3034,19 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                     plans[path], bytes, &scratch[path]),
                     "balanced family scratch query");
             }
+            const bool experimental_auto_direct =
+                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0 &&
+                leo2_context_backend(context) == LEO2_BACKEND_AVX2 &&
+                k >= 5 && k <= 8;
             require_balanced_family(
-                scratch[0] == scratch[1] && scratch[0] == scratch[2],
+                scratch[1] == scratch[2] &&
+                (experimental_auto_direct
+                    ? scratch[0] < scratch[1]
+                    : scratch[0] == scratch[1]),
                 k, bytes,
-                "AUTO, generic, and materialized scratch differ");
+                experimental_auto_direct
+                    ? "experimental AUTO did not use bounded direct scratch"
+                    : "AUTO, generic, and materialized scratch differ");
             require_balanced_family(
                 scratch[3] == scratch[2], k, bytes,
                 "translated tiled and materialized scratch differ at N=2P");
@@ -2640,8 +3056,14 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                 codecs[0], bytes, &one_shot_scratch),
                 "balanced family one-shot scratch query");
             require_balanced_family(
-                one_shot_scratch == scratch[0], k, bytes,
-                "one-shot query does not cover the full-loss AUTO plan");
+                experimental_auto_direct
+                    ? one_shot_scratch == scratch[1] &&
+                        one_shot_scratch > scratch[0]
+                    : one_shot_scratch == scratch[0],
+                k, bytes,
+                experimental_auto_direct
+                    ? "one-shot query did not retain conservative scratch"
+                    : "one-shot query does not cover the full-loss AUTO plan");
             if (bytes == execution_bytes)
                 std::copy(scratch, scratch + path_count, execution_scratch);
         }

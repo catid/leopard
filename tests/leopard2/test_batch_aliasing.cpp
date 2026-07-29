@@ -1525,11 +1525,13 @@ void TestConcurrentScalableCalls(Fixture& fixture)
     for (size_t caller = 0; caller < kCallers; ++caller)
     {
         threads.push_back(std::thread([&, caller]() {
+            bool announced_ready = false;
             try
             {
                 ScalableEncodeBatch encoded(fixture, 9);
                 ScalableDecodeBatch decoded(fixture, encoded);
                 ready.fetch_add(1, std::memory_order_release);
+                announced_ready = true;
                 while (!start.load(std::memory_order_acquire))
                     std::this_thread::yield();
                 for (unsigned repetition = 0; repetition < 4; ++repetition)
@@ -1544,7 +1546,16 @@ void TestConcurrentScalableCalls(Fixture& fixture)
             }
             catch (const std::exception& error)
             {
+                if (!announced_ready)
+                    ready.fetch_add(1, std::memory_order_release);
                 errors[caller] = error.what();
+            }
+            catch (...)
+            {
+                if (!announced_ready)
+                    ready.fetch_add(1, std::memory_order_release);
+                errors[caller] =
+                    "unknown exception before or during scalable call";
             }
         }));
     }

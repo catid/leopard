@@ -2836,11 +2836,13 @@ void test_concurrent_public_codecs(
                     lane * 17U);
                 threads.push_back(std::thread(
                     [context, test_case, seed, &ready, &go, &failures]() {
+                    bool announced_ready = false;
                     try
                     {
                         const Shards originals = make_originals(
                             test_case, seed);
                         ready.fetch_add(1, std::memory_order_release);
+                        announced_ready = true;
                         while (!go.load(std::memory_order_acquire))
                             std::this_thread::yield();
                         for (unsigned iteration = 0; iteration < 8;
@@ -2856,6 +2858,8 @@ void test_concurrent_public_codecs(
                     }
                     catch (...)
                     {
+                        if (!announced_ready)
+                            ready.fetch_add(1, std::memory_order_release);
                         failures.fetch_add(1, std::memory_order_relaxed);
                     }
                 }));

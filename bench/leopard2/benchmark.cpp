@@ -116,6 +116,7 @@ struct Options
     bool skip_legacy;
     bool retain_samples;
     bool report_decode_path;
+    bool report_direct_executor;
     bool attest_source;
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     bool force_translated_low;
@@ -152,6 +153,7 @@ struct Options
         , skip_legacy(false)
         , retain_samples(false)
         , report_decode_path(false)
+        , report_direct_executor(false)
         , attest_source(false)
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         , force_translated_low(false)
@@ -417,6 +419,11 @@ static void Usage(std::ostream& output, const char* program)
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+#if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
+    !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+        << "  --report-direct-executor\n"
+        << "                         Add direct loop-order metadata using schema v6\n"
+#endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         << "  --attest-source       Embed committed source identity using schema v5\n"
 #endif
@@ -465,6 +472,17 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+        else if (argument == "--report-direct-executor")
+        {
+#if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
+    defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+            Fail("--report-direct-executor is unavailable in the "
+                 "attribution benchmark");
+#else
+            options.report_direct_executor = true;
+            options.report_decode_path = true;
+#endif
+        }
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         else if (argument == "--attest-source") options.attest_source = true;
 #endif
@@ -508,6 +526,9 @@ static Options ParseOptions(int argc, char** argv)
         (options.force_tiled_decode || options.force_materialized_decode))
         Fail("--force-generic cannot select a specialized workspace kernel");
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
+    if (options.attest_source && options.report_direct_executor)
+        Fail("--attest-source and --report-direct-executor use distinct "
+             "JSON schemas");
     if (options.attest_source && options.report_decode_path)
         Fail("--attest-source and --report-decode-path use distinct JSON schemas");
 #endif
@@ -1165,11 +1186,13 @@ static int Run(const Options& options)
     }
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
-        options.report_decode_path || options.attest_source;
+        options.report_decode_path || options.report_direct_executor ||
+        options.attest_source;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.report_direct_executor ? 6 :
         options.attest_source ? 5 :
         (options.report_decode_path ? 3 : (extended_schema ? 2 : 1));
 #endif
@@ -1421,6 +1444,8 @@ static int Run(const Options& options)
              << (options.retain_samples ? "true" : "false") << ",\n";
         if (options.report_decode_path)
             json << "    \"report_decode_path\": true,\n";
+        if (options.report_direct_executor)
+            json << "    \"report_direct_executor\": true,\n";
         if (options.attest_source)
             json << "    \"attest_source\": true,\n";
     }
@@ -1467,6 +1492,12 @@ static int Run(const Options& options)
              << decode_path_info.rounded_shard_bytes << ",\n"
              << "    \"decode_multi_item_batch\": "
              << (decode_path_info.multi_item_batch ? "true" : "false");
+        if (options.report_direct_executor)
+            json << ",\n"
+                 << "    \"selected_direct_executor\": \""
+                 << leopard2_internal::DirectRepairExecutorName(
+                        decode_path_info.direct_executor)
+                 << "\"";
     }
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     json << ",\n"

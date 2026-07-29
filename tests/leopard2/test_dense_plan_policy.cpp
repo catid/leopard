@@ -22,6 +22,10 @@
 #include <malloc.h>
 #endif
 
+#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+
 namespace {
 
 class AlignedBytes
@@ -227,9 +231,21 @@ bool run_case(const PolicyCase& test)
     leo2_context* context = create_context(test.backend);
     if (!context)
         return false;
-    const bool expect_skip = test.expect_skip &&
-        (test.backend != LEO2_BACKEND_AUTO ||
-         leo2_context_backend(context) == LEO2_BACKEND_AVX2);
+    const bool avx2_context =
+        leo2_context_backend(context) == LEO2_BACKEND_AVX2;
+    const bool production_skip = test.expect_skip &&
+        (test.backend != LEO2_BACKEND_AUTO || avx2_context);
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+    const bool experimental_skip = avx2_context &&
+        test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        test.field == LEO2_FIELD_GF8 &&
+        test.k >= 5 && test.k <= 16 &&
+        test.r >= 5 && test.r <= 8 &&
+        test.losses >= 5 && test.losses <= 8;
+#else
+    const bool experimental_skip = false;
+#endif
+    const bool expect_skip = production_skip || experimental_skip;
     if ((test.field == LEO2_FIELD_GF8 &&
             (leo2_context_field_mask(context) & LEO2_FIELD_MASK_GF8) == 0) ||
         (test.field == LEO2_FIELD_GF16 &&
@@ -272,7 +288,7 @@ bool run_case(const PolicyCase& test)
     // Keep an independent algebraic oracle on every explicitly selected shape
     // covered by the production policy.  Control cases exercise only policy
     // boundaries and would make this focused test unnecessarily expensive.
-    if (test.expect_skip && test.backend == LEO2_BACKEND_AVX2)
+    if (expect_skip && avx2_context)
         check_direct_parity(test, original, recovery, bytes);
 
     const std::vector<uint32_t> missing =

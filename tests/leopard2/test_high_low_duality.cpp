@@ -61,6 +61,10 @@
 #error "high/low duality test requires LEO2_ENABLE_TEST_HOOKS"
 #endif
 
+#ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
+#define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+
 namespace {
 
 typedef std::vector<uint8_t> Bytes;
@@ -655,16 +659,38 @@ void test_direct_dispatch_bypass(leo2_context* context)
     require_success(leo2_decode_plan_create(automatic, &original_present[0],
         &recovery_present[0], &automatic_transform_plan),
         "automatic translated plan create");
-    require(leo2_test_decode_plan_uses_translated_low(
-                automatic_transform_plan) == 1,
-        "production AUTO did not select translated Algorithm 4");
     leopard2_internal::DecodePathInfo automatic_path;
     require_success(leopard2_internal::GetDecodePlanPathInfo(
         automatic_transform_plan, 64, false, &automatic_path),
         "automatic translated path introspection");
-    require(automatic_path.path == leopard2_internal::kDecodePathMaterialized &&
-            automatic_path.rule == leopard2_internal::kDecodeRuleTranslatedLow,
-        "production AUTO reported the wrong translated dispatch rule");
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+    if (leo2_context_backend(context) == LEO2_BACKEND_AVX2)
+    {
+        require(leo2_test_decode_plan_uses_translated_low(
+                    automatic_transform_plan) == 0,
+            "experimental AUTO direct plan retained translated Algorithm 4");
+        require(automatic_path.path == leopard2_internal::kDecodePathDirect &&
+                automatic_path.rule == leopard2_internal::kDecodeRuleDirect,
+            "experimental AUTO reported the wrong direct dispatch rule");
+        const leopard2_internal::DirectRepairExecutor expected_executor =
+            LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
+                ? leopard2_internal::kDirectRepairExecutorSourceMajor
+                : leopard2_internal::kDirectRepairExecutorOutputMajor;
+        require(automatic_path.direct_executor == expected_executor,
+            "experimental AUTO reported the wrong direct executor");
+    }
+    else
+#endif
+    {
+        require(leo2_test_decode_plan_uses_translated_low(
+                    automatic_transform_plan) == 1,
+            "production AUTO did not select translated Algorithm 4");
+        require(automatic_path.path ==
+                    leopard2_internal::kDecodePathMaterialized &&
+                automatic_path.rule ==
+                    leopard2_internal::kDecodeRuleTranslatedLow,
+            "production AUTO reported the wrong translated dispatch rule");
+    }
     leo2_decode_plan_destroy(automatic_transform_plan);
     leo2_codec_destroy(automatic);
 
