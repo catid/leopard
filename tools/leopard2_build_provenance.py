@@ -10,20 +10,136 @@ bytes.  The final-map and all-K runners both use the same closure.
 
 from __future__ import annotations
 
+from collections import Counter
+from contextlib import ExitStack
+import ctypes
+import errno
+import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
+import re
+import select
+import selectors
 import shlex
 import shutil
+import signal
 import stat
+import struct
 import subprocess
+import sys
 import tempfile
+import time
 from typing import Any, Mapping, Sequence
+import unicodedata
 
 
 MAX_FILE_BYTES = 256 * 1024 * 1024
 MAX_METADATA_BYTES = 16 * 1024 * 1024
+MAX_METADATA_JSON_DEPTH = 64
+MAX_TRACKED_SOURCE_FILES = 16 * 1024
+MAX_TRACKED_SOURCE_FILE_BYTES = 64 * 1024 * 1024
+MAX_TRACKED_SOURCE_TOTAL_BYTES = 512 * 1024 * 1024
+MAX_TRACKED_SOURCE_PATH_BYTES = 4096
+MAX_GITFILE_BYTES = 4096
+MAX_REPLAY_RECIPE_FILES = 4096
+MAX_REPLAY_RECIPE_TOTAL_BYTES = 128 * 1024 * 1024
+CHILD_REAP_TIMEOUT_SECONDS = 5.0
+PR_SET_CHILD_SUBREAPER = 36
+PR_GET_CHILD_SUBREAPER = 37
+
+# Linux inotify constants.  Provenance command containment is already
+# Linux-only; inotify gives retained pathname guards an event history, which
+# inode/mtime checks alone cannot provide after an A -> B -> A rename.
+IN_MODIFY = 0x00000002
+IN_ATTRIB = 0x00000004
+IN_CLOSE_WRITE = 0x00000008
+IN_MOVED_FROM = 0x00000040
+IN_MOVED_TO = 0x00000080
+IN_CREATE = 0x00000100
+IN_DELETE = 0x00000200
+IN_DELETE_SELF = 0x00000400
+IN_MOVE_SELF = 0x00000800
+IN_UNMOUNT = 0x00002000
+IN_Q_OVERFLOW = 0x00004000
+IN_IGNORED = 0x00008000
+IN_ONLYDIR = 0x01000000
+IN_DONT_FOLLOW = 0x02000000
+IN_EXCL_UNLINK = 0x04000000
+IN_MASK_ADD = 0x20000000
+IN_CLOEXEC = getattr(os, "O_CLOEXEC", 0)
+IN_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+INOTIFY_EVENT = struct.Struct("iIII")
+
+# A retained CMake recipe is executed by Make through a shell.  shlex splitting
+# alone is therefore not a security boundary: ``object.o&&evil`` is one shlex
+# token but two shell commands.  The canonical production recipes need none of
+# these expansion, substitution, globbing, redirection, comment, or control
+# characters, so reject them wherever they occur, including inside an option.
+SHELL_RECIPE_META = frozenset(";&|<>()`$*?[]{}~#")
+
+CMAKE_CACHE_ENTRY_TYPES = frozenset((
+    "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
+    "UNINITIALIZED",
+))
+
+# The production evidence contract below gives these cache entries semantic
+# meaning.  Bind that meaning to the exact type emitted by the canonical
+# configure rather than accepting a forged value under an unrelated CMake
+# type.  Entries that this helper does not consume still receive syntax and
+# known-type validation, but do not acquire a new semantic requirement here.
+CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
+    "CMAKE_AR": frozenset(("FILEPATH",)),
+    "CMAKE_BUILD_TYPE": frozenset(("STRING",)),
+    "CMAKE_C_COMPILER": frozenset(("FILEPATH",)),
+    "CMAKE_C_COMPILER_ARG1": frozenset(("STRING",)),
+    "CMAKE_C_COMPILER_LAUNCHER": frozenset(("STRING",)),
+    "CMAKE_C_COMPILER_TARGET": frozenset(("STRING",)),
+    "CMAKE_CXX_COMPILER": frozenset(("FILEPATH",)),
+    "CMAKE_CXX_COMPILER_ARG1": frozenset(("STRING",)),
+    "CMAKE_CXX_COMPILER_LAUNCHER": frozenset(("STRING",)),
+    "CMAKE_CXX_COMPILER_TARGET": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS_RELEASE": frozenset(("STRING",)),
+    "CMAKE_EXPORT_COMPILE_COMMANDS": frozenset(("UNINITIALIZED",)),
+    "CMAKE_GENERATOR": frozenset(("INTERNAL",)),
+    "CMAKE_HOME_DIRECTORY": frozenset(("INTERNAL",)),
+    "CMAKE_LINKER": frozenset(("FILEPATH",)),
+    "CMAKE_MAKE_PROGRAM": frozenset(("FILEPATH",)),
+    "CMAKE_POSITION_INDEPENDENT_CODE": frozenset(("BOOL",)),
+    "CMAKE_RANLIB": frozenset(("FILEPATH",)),
+    "CMAKE_SYSROOT": frozenset(("PATH",)),
+    "CMAKE_TOOLCHAIN_FILE": frozenset(("FILEPATH",)),
+    "ENABLE_OPENMP": frozenset(("BOOL",)),
+    "LEOPARD_ENABLE_GF8": frozenset(("BOOL",)),
+    "LEOPARD_ENABLE_GF16": frozenset(("BOOL",)),
+    "LEO2_BACKEND_VARIANT": frozenset(("STRING",)),
+    "LEO2_BENCHMARK_GIT_EXECUTABLE": frozenset(("FILEPATH",)),
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+        frozenset(("INTERNAL",)),
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+        frozenset(("INTERNAL",)),
+    "LEO2_BUILD_ALLK_DIAGNOSTIC": frozenset(("BOOL",)),
+    "LEO2_BUILD_BENCHMARKS": frozenset(("BOOL",)),
+    "LEO2_BUILD_FUZZERS": frozenset(("BOOL",)),
+    "LEO2_BUILD_TESTS": frozenset(("BOOL",)),
+    "LEO2_ENABLE_CUDA": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_FLAG_FALIGN_FUNCTIONS_64": frozenset(("INTERNAL",)),
+    "LEO2_FLAG_MAVX2": frozenset(("INTERNAL",)),
+    "LEO2_FLAG_MGFNI": frozenset(("INTERNAL",)),
+    "LEO2_FLAG_MNO_AVX512F": frozenset(("INTERNAL",)),
+    "LEO2_LOCATOR_GIT_EXECUTABLE": frozenset(("FILEPATH",)),
+    # The pure-AVX2 evidence configure deliberately seeds these otherwise
+    # successful probe variables to FALSE on its command line.
+    "LEO2_FLAG_MAVX512F": frozenset(("UNINITIALIZED",)),
+    "LEO2_FLAG_MAVX512BW": frozenset(("UNINITIALIZED",)),
+    "LEO2_FLAG_MAVX512VL": frozenset(("UNINITIALIZED",)),
+}
 
 CORE_LIBRARY_SOURCES = {
     "leopard.cpp",
@@ -55,58 +171,1098 @@ def require(condition: bool, message: str) -> None:
         raise BuildProvenanceError(message)
 
 
+def _linux_memfd_create(name: str, flags: int) -> int:
+    """Create a memfd even when this CPython omitted the os wrapper."""
+    wrapper = getattr(os, "memfd_create", None)
+    if callable(wrapper):
+        return wrapper(name, flags)
+    require(sys.platform.startswith("linux"),
+            "immutable executable snapshots require Linux memfd")
+    try:
+        function = ctypes.CDLL(None, use_errno=True).memfd_create
+    except (AttributeError, OSError) as error:
+        raise BuildProvenanceError(
+            f"Linux memfd_create is unavailable: {error}") from error
+    function.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    descriptor = function(name.encode("utf-8"), ctypes.c_uint(flags))
+    if descriptor >= 0:
+        return descriptor
+    number = ctypes.get_errno()
+    raise BuildProvenanceError(
+        "cannot create immutable executable memfd: " +
+        os.strerror(number or errno.EPERM))
+
+
+class _OwnedDescriptor:
+    """Own one raw descriptor across interruption-prone Python handoffs.
+
+    Directory descriptors cannot be wrapped by ``os.fdopen``.  Keeping their
+    identity with the integer lets a retry distinguish an already-closed (or
+    recycled) descriptor from the object originally acquired.
+    """
+
+    def __init__(self) -> None:
+        self._descriptor = -1
+        self._identity: tuple[int, int, int] | None = None
+
+    @property
+    def descriptor(self) -> int:
+        return self._descriptor
+
+    def open(self, path: Path | str, flags: int, mode: int = 0o777,
+             *, dir_fd: int | None = None) -> int:
+        require(self._descriptor < 0,
+                "owned descriptor was opened more than once")
+        if dir_fd is None:
+            self._descriptor = os.open(path, flags, mode)
+        else:
+            self._descriptor = os.open(path, flags, mode, dir_fd=dir_fd)
+        status = os.fstat(self._descriptor)
+        self._identity = (status.st_dev, status.st_ino, status.st_mode)
+        return self._descriptor
+
+    def close(self) -> None:
+        descriptor = self._descriptor
+        if descriptor < 0:
+            return
+        try:
+            status = os.fstat(descriptor)
+        except OSError as error:
+            if error.errno == errno.EBADF:
+                self._descriptor = -1
+                self._identity = None
+                return
+            raise
+        current = (status.st_dev, status.st_ino, status.st_mode)
+        if self._identity is not None and current != self._identity:
+            # An interruption handler reused the numeric descriptor after the
+            # original close completed.  It is no longer ours to close.
+            self._descriptor = -1
+            self._identity = None
+            return
+        try:
+            os.close(descriptor)
+        except BaseException:
+            # close(2) can be interrupted before or after taking effect.  Do
+            # not discard ownership merely because Python observed an
+            # exception: retain the same still-open file so cleanup can retry,
+            # but clear ownership when the original descriptor is gone or its
+            # numeric slot was recycled by an interruption handler.
+            try:
+                status = os.fstat(descriptor)
+            except OSError as probe_error:
+                if probe_error.errno == errno.EBADF:
+                    self._descriptor = -1
+                    self._identity = None
+            else:
+                observed = (status.st_dev, status.st_ino, status.st_mode)
+                if self._identity is not None and observed != self._identity:
+                    self._descriptor = -1
+                    self._identity = None
+            raise
+        else:
+            self._descriptor = -1
+            self._identity = None
+
+
+def _require_safe_unicode(value: str, label: str) -> None:
+    """Reject characters that can reframe or visually spoof evidence.
+
+    Cc covers C0, DEL, and C1 controls.  Cs covers unpaired surrogates.
+    Cf includes bidi overrides/isolates and zero-width format controls; those
+    are valid Unicode but unsafe in command/path evidence.  Zl/Zp are Unicode
+    line delimiters and are rejected for the same framing reason.
+    """
+    forbidden_categories = frozenset(("Cc", "Cs", "Cf", "Zl", "Zp"))
+    require(not any(
+                unicodedata.category(character) in forbidden_categories
+                for character in value),
+            f"{label} contains an unsafe control, format, surrogate, or "
+            "line-separator character")
+
+
+def _strict_json_loads(
+    encoded: bytes, label: str, *, maximum_depth: int = MAX_METADATA_JSON_DEPTH,
+) -> Any:
+    """Decode bounded metadata without accepting ambiguous JSON extensions."""
+    require(0 <= len(encoded) <= MAX_METADATA_BYTES,
+            f"{label} exceeds its retained byte bound")
+
+    def object_from_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            _require_safe_unicode(key, label)
+            require(key not in result, f"{label} contains duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def finite_float(token: str) -> float:
+        value = float(token)
+        require(math.isfinite(value),
+                f"{label} contains a non-finite number")
+        return value
+
+    def reject_constant(token: str) -> None:
+        raise BuildProvenanceError(
+            f"{label} contains non-standard constant {token!r}")
+
+    try:
+        text = encoded.decode("utf-8", errors="strict")
+        value = json.loads(
+            text,
+            object_pairs_hook=object_from_pairs,
+            parse_constant=reject_constant,
+            parse_float=finite_float,
+        )
+    except BuildProvenanceError:
+        raise
+    except (UnicodeDecodeError, json.JSONDecodeError, OverflowError,
+            RecursionError, ValueError) as error:
+        raise BuildProvenanceError(f"{label} is invalid: {error}") from error
+
+    stack: list[tuple[Any, int]] = [(value, 0)]
+    while stack:
+        current, depth = stack.pop()
+        require(depth <= maximum_depth,
+                f"{label} exceeds its maximum nesting depth")
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
+        elif isinstance(current, str):
+            _require_safe_unicode(current, label)
+        elif isinstance(current, float):
+            require(math.isfinite(current),
+                    f"{label} contains a non-finite number")
+    return value
+
+
 def _stable_fields(status: os.stat_result) -> tuple[int, ...]:
     return (
         status.st_dev,
         status.st_ino,
         status.st_mode,
+        status.st_uid,
+        status.st_gid,
+        status.st_nlink,
         status.st_size,
         status.st_mtime_ns,
         status.st_ctime_ns,
     )
 
 
+class _InotifyMutationGuard:
+    """Retain a fail-closed event history for exact pathnames or a tree."""
+
+    _DIRECTORY_MASK = (
+        IN_CLOSE_WRITE | IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE |
+        IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT | IN_IGNORED |
+        IN_EXCL_UNLINK
+    )
+    _FILE_MASK = (
+        IN_MODIFY | IN_ATTRIB | IN_CLOSE_WRITE | IN_DELETE_SELF |
+        IN_MOVE_SELF | IN_UNMOUNT | IN_IGNORED | IN_DONT_FOLLOW
+    )
+
+    def __init__(self, label: str) -> None:
+        require(sys.platform.startswith("linux"),
+                f"{label} pathname mutation guard requires Linux")
+        self.label = label
+        self._file: Any | None = None
+        # wd -> None means every event is relevant.  Otherwise only directory
+        # entry events naming one of the retained byte strings are relevant;
+        # self/unmount/overflow events remain unconditionally relevant.
+        self.rules: dict[int, set[bytes] | None] = {}
+        self.mutations: list[str] = []
+        descriptor = -1
+        retained_file = None
+        try:
+            library = ctypes.CDLL(None, use_errno=True)
+            function = library.inotify_init1
+            function.argtypes = (ctypes.c_int,)
+            function.restype = ctypes.c_int
+            ctypes.set_errno(0)
+            descriptor = function(
+                ctypes.c_int(IN_CLOEXEC | IN_NONBLOCK))
+            if descriptor < 0:
+                number = ctypes.get_errno()
+                raise OSError(number or errno.EPERM,
+                              os.strerror(number or errno.EPERM))
+            retained_file = os.fdopen(descriptor, "rb", buffering=0)
+            descriptor = retained_file.fileno()
+            self._library = library
+            self._file = retained_file
+        except BaseException as error:
+            try:
+                if retained_file is None and descriptor >= 0:
+                    os.close(descriptor)
+                elif retained_file is not None:
+                    retained_file.close()
+            except OSError as cleanup_error:
+                raise BuildProvenanceError(
+                    f"cannot close interrupted {label} pathname mutation "
+                    f"guard: {cleanup_error}; primary failure: "
+                    f"{type(error).__name__}: {error}") from cleanup_error
+            if self._file is retained_file:
+                self._file = None
+            self._close_without_verification()
+            if not isinstance(error, (AttributeError, OSError)):
+                raise
+            raise BuildProvenanceError(
+                f"cannot initialize {label} pathname mutation guard: "
+                f"{error}") from error
+
+    @property
+    def descriptor(self) -> int:
+        retained = self._file
+        if retained is None or retained.closed:
+            return -1
+        return retained.fileno()
+
+    def _add_watch(
+        self, path: Path, mask: int, names: set[bytes] | None,
+    ) -> None:
+        require(self.descriptor >= 0,
+                f"{self.label} pathname mutation guard is closed")
+        try:
+            function = self._library.inotify_add_watch
+            function.argtypes = (
+                ctypes.c_int, ctypes.c_char_p, ctypes.c_uint32)
+            function.restype = ctypes.c_int
+            encoded = os.fsencode(path)
+            require(b"\0" not in encoded,
+                    f"{self.label} pathname contains NUL")
+            ctypes.set_errno(0)
+            watch = function(
+                ctypes.c_int(self.descriptor), ctypes.c_char_p(encoded),
+                ctypes.c_uint32(mask | IN_MASK_ADD))
+            if watch < 0:
+                number = ctypes.get_errno()
+                raise OSError(number or errno.EPERM,
+                              os.strerror(number or errno.EPERM))
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot guard {self.label} pathname {path}: {error}") \
+                from error
+        previous = self.rules.get(watch)
+        if previous is None and watch in self.rules:
+            return
+        if names is None:
+            self.rules[watch] = None
+        elif previous is None:
+            self.rules[watch] = set(names)
+        else:
+            previous.update(names)
+
+    @staticmethod
+    def _absolute_lexical(path: Path) -> Path:
+        return Path(os.path.abspath(os.fspath(path)))
+
+    def add_file_path(self, path: Path | str) -> None:
+        """Watch every pathname component plus the final regular-file inode."""
+        absolute = self._absolute_lexical(Path(path))
+        parts = absolute.parts
+        require(absolute.is_absolute() and len(parts) >= 2,
+                f"{self.label} guarded file path is invalid")
+        current = Path(parts[0])
+        for component in parts[1:]:
+            self._add_watch(
+                current,
+                self._DIRECTORY_MASK | IN_ONLYDIR,
+                {os.fsencode(component)})
+            current = current / component
+        self._add_watch(absolute, self._FILE_MASK, None)
+
+    def add_tree(self, root: Path | str) -> None:
+        """Watch all existing directories and every mutation below root."""
+        absolute = self._absolute_lexical(Path(root))
+        parts = absolute.parts
+        require(absolute.is_absolute() and len(parts) >= 2,
+                f"{self.label} guarded tree path is invalid")
+        current = Path(parts[0])
+        for component in parts[1:]:
+            self._add_watch(
+                current,
+                self._DIRECTORY_MASK | IN_ONLYDIR,
+                {os.fsencode(component)})
+            current = current / component
+        try:
+            directories = [absolute]
+            for directory, child_directories, _files in os.walk(
+                    absolute, topdown=True, followlinks=False):
+                child_directories.sort()
+                parent = Path(directory)
+                for name in child_directories:
+                    child = parent / name
+                    require(not child.is_symlink(),
+                            f"{self.label} tree contains a directory symlink")
+                    directories.append(child)
+            for directory in directories:
+                self._add_watch(
+                    directory,
+                    self._DIRECTORY_MASK | IN_ONLYDIR,
+                    None)
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot enumerate guarded {self.label} tree: {error}") \
+                from error
+
+    def add_directory_path(self, path: Path | str) -> None:
+        """Watch an exact directory and all pathname components leading to it."""
+        absolute = self._absolute_lexical(Path(path))
+        parts = absolute.parts
+        require(absolute.is_absolute() and len(parts) >= 2,
+                f"{self.label} guarded directory path is invalid")
+        current = Path(parts[0])
+        for component in parts[1:]:
+            self._add_watch(
+                current,
+                self._DIRECTORY_MASK | IN_ONLYDIR,
+                {os.fsencode(component)})
+            current = current / component
+        # Child-entry changes are checked through retained openat descriptors
+        # and hashes.  Here only mutation of the directory itself is relevant.
+        self._add_watch(
+            absolute, self._DIRECTORY_MASK | IN_ONLYDIR, set())
+
+    def _drain(self) -> None:
+        require(self.descriptor >= 0,
+                f"{self.label} pathname mutation guard is closed")
+        while True:
+            try:
+                data = os.read(self.descriptor, 1 << 20)
+            except BlockingIOError:
+                return
+            except OSError as error:
+                raise BuildProvenanceError(
+                    f"cannot read {self.label} pathname mutation guard: "
+                    f"{error}") from error
+            if not data:
+                raise BuildProvenanceError(
+                    f"{self.label} pathname mutation guard reached EOF")
+            offset = 0
+            while offset < len(data):
+                require(len(data) - offset >= INOTIFY_EVENT.size,
+                        f"{self.label} pathname mutation event is truncated")
+                watch, mask, _cookie, name_size = INOTIFY_EVENT.unpack_from(
+                    data, offset)
+                offset += INOTIFY_EVENT.size
+                require(name_size <= len(data) - offset,
+                        f"{self.label} pathname mutation name is truncated")
+                name = data[offset:offset + name_size].rstrip(b"\0")
+                offset += name_size
+                if mask & IN_Q_OVERFLOW:
+                    self.mutations.append("inotify queue overflow")
+                    continue
+                rule = self.rules.get(watch)
+                self_event = bool(mask & (
+                    IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT | IN_IGNORED))
+                if (watch not in self.rules or self_event or rule is None or
+                        name in rule):
+                    self.mutations.append(
+                        f"wd={watch} mask=0x{mask:x} name={name!r}")
+
+    def verify(self) -> None:
+        self._drain()
+        require(not self.mutations,
+                f"{self.label} pathname changed while retained: " +
+                "; ".join(self.mutations[:8]))
+
+    def _close_without_verification(self) -> None:
+        retained = self._file
+        if retained is not None:
+            try:
+                retained.close()
+            except OSError:
+                pass
+            if retained.closed and self._file is retained:
+                self._file = None
+
+    def close(self) -> None:
+        retained = self._file
+        if retained is None:
+            return
+        failure: BaseException | None = None
+        if self.descriptor >= 0:
+            try:
+                self.verify()
+            except BaseException as error:
+                failure = error
+        try:
+            retained.close()
+        except BaseException as error:
+            if failure is None:
+                failure = BuildProvenanceError(
+                    f"cannot close {self.label} pathname mutation guard: "
+                    f"{error}")
+        if retained.closed and self._file is retained:
+            self._file = None
+        if failure is not None:
+            raise failure
+
+
+class _RetainedFileSnapshot:
+    """Hold the exact regular file whose bytes and pathname were attested.
+
+    Keeping this descriptor open lets callers execute or reopen the attested
+    object through /proc/self/fd without a pathname ABA window.  The lexical
+    command remains argv[0]; _run() uses the descriptor only as execve's
+    executable pathname.
+    """
+
+    def __init__(
+        self, path: Path | str, label: str, *,
+        maximum_bytes: int = MAX_FILE_BYTES,
+    ) -> None:
+        require(type(maximum_bytes) is int and maximum_bytes >= 0,
+                f"{label} retained byte bound is invalid")
+        self.requested = Path(os.path.abspath(os.fspath(path)))
+        self.label = label
+        self.maximum_bytes = maximum_bytes
+        self.resolved: Path | None = None
+        self._source_file: Any | None = None
+        self._executable_file: Any | None = None
+        self.identity: dict[str, Any] = {}
+        self.executable_identity: dict[str, Any] = {}
+        self.content = b""
+        self._fields: tuple[int, ...] | None = None
+        self._path_guard: _InotifyMutationGuard | None = None
+        try:
+            expected_resolved = self.requested.resolve(strict=True)
+            self._path_guard = _InotifyMutationGuard(label)
+            self._path_guard.add_file_path(self.requested)
+            if (self._path_guard._absolute_lexical(self.requested) !=
+                    expected_resolved):
+                self._path_guard.add_file_path(expected_resolved)
+            self._open(expected_resolved)
+            self._path_guard.verify()
+        except BaseException:
+            self._close_without_verification()
+            raise
+
+    def _verify_path(self, status: os.stat_result, action: str) -> None:
+        require(self.resolved is not None,
+                f"{self.label} retained pathname was lost")
+        try:
+            path_status = self.resolved.lstat()
+            requested_status = self.requested.stat()
+            resolved_after = self.requested.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise BuildProvenanceError(
+                f"{self.label} pathname changed {action}: {error}") from error
+        require(_stable_fields(status) == _stable_fields(path_status) and
+                _stable_fields(status) == _stable_fields(requested_status) and
+                resolved_after == self.resolved,
+                f"{self.label} pathname changed {action}")
+
+    def _open(self, expected_resolved: Path) -> None:
+        descriptor = -1
+        source_file = None
+        try:
+            requested_before = self.requested.stat()
+            require(stat.S_ISREG(requested_before.st_mode),
+                    f"{self.label} is not a regular file")
+            self.resolved = self.requested.resolve(strict=True)
+            require(self.resolved == expected_resolved,
+                    f"{self.label} pathname changed before it was opened")
+            path_before = self.resolved.lstat()
+            require(
+                _stable_fields(requested_before) == _stable_fields(path_before),
+                f"{self.label} pathname changed before it was opened")
+            descriptor = os.open(
+                self.resolved,
+                os.O_RDONLY |
+                getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_NONBLOCK", 0) |
+                getattr(os, "O_NOFOLLOW", 0),
+            )
+            source_file = os.fdopen(descriptor, "rb", buffering=0)
+            descriptor = source_file.fileno()
+            before = os.fstat(descriptor)
+            require(stat.S_ISREG(before.st_mode),
+                    f"{self.label} is not a regular file")
+            require(_stable_fields(path_before) == _stable_fields(before),
+                    f"{self.label} pathname changed while it was opened")
+            require(0 <= before.st_size <= self.maximum_bytes,
+                    f"{self.label} exceeds its retained byte bound")
+            chunks: list[bytes] = []
+            remaining = before.st_size
+            while remaining:
+                block = os.read(
+                    descriptor, min(1 << 20, remaining))
+                require(bool(block),
+                        f"{self.label} ended before its recorded size")
+                chunks.append(block)
+                remaining -= len(block)
+            require(not os.read(descriptor, 1),
+                    f"{self.label} grew beyond its recorded size while read")
+            after = os.fstat(descriptor)
+            require(_stable_fields(before) == _stable_fields(after),
+                    f"{self.label} changed while read")
+            self._verify_path(after, "while read")
+            content = b"".join(chunks)
+            fields = _stable_fields(after)
+            identity = {
+                "path": str(self.resolved),
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "device": after.st_dev,
+                "inode": after.st_ino,
+                "mode": after.st_mode,
+                "uid": after.st_uid,
+                "gid": after.st_gid,
+                "links": after.st_nlink,
+                "size": after.st_size,
+                "mtime_ns": after.st_mtime_ns,
+                "ctime_ns": after.st_ctime_ns,
+            }
+            self.content = content
+            self._fields = fields
+            self.identity = identity
+            self._source_file = source_file
+        except BaseException as primary:
+            try:
+                if source_file is None and descriptor >= 0:
+                    os.close(descriptor)
+                elif source_file is not None:
+                    source_file.close()
+            except OSError as cleanup_error:
+                raise BuildProvenanceError(
+                    f"cannot close interrupted retained {self.label}: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}") from cleanup_error
+            if self._source_file is source_file:
+                self._source_file = None
+            self._close_without_verification()
+            if isinstance(primary, BuildProvenanceError):
+                raise
+            if not isinstance(primary, (OSError, RuntimeError)):
+                raise
+            raise BuildProvenanceError(
+                f"cannot open stable {self.label}: {primary}") from primary
+
+    @property
+    def descriptor(self) -> int:
+        source = self._source_file
+        if source is None or source.closed:
+            return -1
+        return source.fileno()
+
+    @property
+    def proc_path(self) -> str:
+        require(self.descriptor >= 0,
+                f"{self.label} retained descriptor is closed")
+        return f"/proc/self/fd/{self.descriptor}"
+
+    @property
+    def _executable_descriptor(self) -> int:
+        executable = self._executable_file
+        if executable is None or executable.closed:
+            return -1
+        return executable.fileno()
+
+    @property
+    def executable_descriptor(self) -> int:
+        """Return a sealed immutable copy suitable for descriptor exec."""
+        require(self.descriptor >= 0,
+                f"{self.label} retained descriptor is closed")
+        if self._executable_descriptor >= 0:
+            self._verify_executable_descriptor()
+            return self._executable_descriptor
+        allow_sealing = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+        close_on_exec = getattr(os, "MFD_CLOEXEC", 0x0001)
+        descriptor = -1
+        executable = None
+        try:
+            descriptor = _linux_memfd_create(
+                "leo2-" + re.sub(
+                    r"[^A-Za-z0-9_.-]", "-", self.label)[:80],
+                allow_sealing | close_on_exec)
+            # os.fdopen() owns the raw descriptor only after it returns
+            # successfully.  Keep the raw integer under this cleanup boundary
+            # so an injected BaseException from fdopen cannot leak the memfd.
+            executable = os.fdopen(
+                descriptor, "r+b", buffering=0)
+            descriptor = executable.fileno()
+            view = memoryview(self.content)
+            while view:
+                written = os.write(descriptor, view)
+                require(written > 0,
+                        f"{self.label} immutable executable write stalled")
+                view = view[written:]
+            os.fchmod(descriptor, stat.S_IMODE(self.identity["mode"]))
+            seals = (
+                getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+                getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+                getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+                getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+            fcntl.fcntl(
+                descriptor, getattr(fcntl, "F_ADD_SEALS", 1033), seals)
+            observed_seals = fcntl.fcntl(
+                descriptor, getattr(fcntl, "F_GET_SEALS", 1034))
+            require(observed_seals & seals == seals,
+                    f"{self.label} immutable executable is not fully sealed")
+            executable_identity = self._executable_descriptor_identity(
+                descriptor)
+
+            # Keep ownership local until every operation that can fail has
+            # completed.  Publishing the descriptor earlier lets an
+            # asynchronous BaseException close the local fd while leaving the
+            # object claiming ownership of its number; if that number is then
+            # recycled, close() can close an unrelated file.
+            self.executable_identity = executable_identity
+            self._executable_file = executable
+            return self._executable_descriptor
+        except BaseException as primary:
+            try:
+                if executable is None and descriptor >= 0:
+                    os.close(descriptor)
+                elif executable is not None:
+                    executable.close()
+            except OSError as cleanup_error:
+                raise BuildProvenanceError(
+                    f"cannot close interrupted immutable {self.label} "
+                    f"executable: {cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}") from \
+                    cleanup_error
+            if self._executable_file is executable:
+                self._executable_file = None
+            self.executable_identity = {}
+            raise
+
+    def _executable_descriptor_identity(
+            self, descriptor: int) -> dict[str, Any]:
+        require(type(descriptor) is int and descriptor >= 0,
+                f"{self.label} immutable executable is closed")
+        status = os.fstat(descriptor)
+        seals = (
+            getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+            getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+            getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+            getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+        observed_seals = fcntl.fcntl(
+            descriptor,
+            getattr(fcntl, "F_GET_SEALS", 1034))
+        sealed_content = _read_bounded_descriptor(
+            descriptor, status.st_size,
+            f"{self.label} immutable executable", self.maximum_bytes)
+        sealed_digest = hashlib.sha256(sealed_content).hexdigest()
+        require(stat.S_ISREG(status.st_mode) and
+                status.st_size == len(self.content) and
+                observed_seals & seals == seals and
+                sealed_digest == self.identity["sha256"],
+                f"{self.label} immutable executable changed")
+        return {
+            "sha256": sealed_digest,
+            "size": status.st_size,
+            "seals": observed_seals,
+            "source_sha256": self.identity["sha256"],
+        }
+
+    def _verify_executable_descriptor(self) -> None:
+        require(self._executable_descriptor >= 0,
+                f"{self.label} immutable executable is closed")
+        require(
+            self._executable_descriptor_identity(
+                self._executable_descriptor) == self.executable_identity,
+            f"{self.label} immutable executable identity changed")
+
+    def verify(self) -> None:
+        require(self.descriptor >= 0 and self._fields is not None,
+                f"{self.label} retained descriptor is closed")
+        try:
+            current = os.fstat(self.descriptor)
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot verify retained {self.label}: {error}") from error
+        require(_stable_fields(current) == self._fields,
+                f"{self.label} changed while retained")
+        self._verify_path(current, "while retained")
+        if self._executable_descriptor >= 0:
+            self._verify_executable_descriptor()
+
+    def _close_without_verification(self) -> None:
+        executable = self._executable_file
+        if executable is not None:
+            try:
+                executable.close()
+            except OSError:
+                pass
+            if executable.closed and self._executable_file is executable:
+                self._executable_file = None
+        source = self._source_file
+        if source is not None:
+            try:
+                source.close()
+            except OSError:
+                pass
+            if source.closed and self._source_file is source:
+                self._source_file = None
+        guard = self._path_guard
+        if guard is not None:
+            guard._close_without_verification()
+            if guard.descriptor < 0 and self._path_guard is guard:
+                self._path_guard = None
+
+    def close(self) -> None:
+        if self._source_file is None and self._executable_file is None and \
+                self._path_guard is None:
+            return
+        verification_error: BaseException | None = None
+        if self.descriptor >= 0:
+            try:
+                self.verify()
+            except BaseException as error:
+                verification_error = error
+        guard = self._path_guard
+        if guard is not None:
+            try:
+                guard.close()
+            except BaseException as error:
+                if verification_error is None:
+                    verification_error = error
+            if guard.descriptor < 0 and self._path_guard is guard:
+                self._path_guard = None
+        source = self._source_file
+        if source is not None:
+            try:
+                source.close()
+            except BaseException as error:
+                if verification_error is None:
+                    verification_error = BuildProvenanceError(
+                        f"cannot close retained {self.label}: {error}")
+            if source.closed and self._source_file is source:
+                self._source_file = None
+        executable = self._executable_file
+        if executable is not None:
+            try:
+                executable.close()
+            except BaseException as error:
+                if verification_error is None:
+                    verification_error = BuildProvenanceError(
+                        f"cannot close immutable {self.label} executable: "
+                        f"{error}")
+            if executable.closed and self._executable_file is executable:
+                self._executable_file = None
+        if verification_error is not None:
+            raise verification_error
+
+    def __enter__(self) -> "_RetainedFileSnapshot":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                f"retained {self.label} cleanup failed: {cleanup_error}; "
+                f"primary failure: {type(exc).__name__}: {exc}") from \
+                cleanup_error
+
+
+class _RetainedDirectoryTree:
+    """Hold one exact directory inode and every mutation below it."""
+
+    def __init__(self, path: Path | str, label: str) -> None:
+        self.requested = Path(os.path.abspath(os.fspath(path)))
+        self.label = label
+        self.resolved: Path | None = None
+        self._owner = _OwnedDescriptor()
+        self._fields: tuple[int, ...] | None = None
+        self.guard: _InotifyMutationGuard | None = None
+        try:
+            expected = self.requested.resolve(strict=True)
+            require(expected.is_dir(), f"{label} is not a directory")
+            self.guard = _InotifyMutationGuard(label)
+            self.guard.add_directory_path(self.requested)
+            if self.guard._absolute_lexical(self.requested) != expected:
+                self.guard.add_directory_path(expected)
+            self.guard.add_tree(expected)
+            self._owner.open(
+                expected,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_NOFOLLOW", 0))
+            status = os.fstat(self.descriptor)
+            require(stat.S_ISDIR(status.st_mode),
+                    f"{label} retained object is not a directory")
+            self.resolved = expected
+            self._fields = _stable_fields(status)
+            self.verify()
+        except BaseException:
+            self._close_without_verification()
+            raise
+
+    @property
+    def descriptor(self) -> int:
+        return self._owner.descriptor
+
+    def verify(self) -> None:
+        require(self.descriptor >= 0 and self.resolved is not None and
+                self._fields is not None and self.guard is not None,
+                f"{self.label} retained directory is closed")
+        self.guard.verify()
+        try:
+            current = os.fstat(self.descriptor)
+            requested = self.requested.stat()
+            resolved_status = self.resolved.lstat()
+            resolved_after = self.requested.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise BuildProvenanceError(
+                f"{self.label} directory pathname changed while retained: "
+                f"{error}") from error
+        require(_stable_fields(current) == self._fields and
+                _stable_fields(requested) == self._fields and
+                _stable_fields(resolved_status) == self._fields and
+                resolved_after == self.resolved,
+                f"{self.label} directory pathname changed while retained")
+        self.guard.verify()
+
+    def _close_without_verification(self) -> None:
+        try:
+            self._owner.close()
+        except OSError:
+            pass
+        guard = self.guard
+        if guard is not None:
+            guard._close_without_verification()
+            if guard.descriptor < 0 and self.guard is guard:
+                self.guard = None
+
+    def close(self) -> None:
+        if self.descriptor < 0:
+            return
+        failure: BaseException | None = None
+        try:
+            self.verify()
+        except BaseException as error:
+            failure = error
+        guard = self.guard
+        if guard is not None:
+            try:
+                guard.close()
+            except BaseException as error:
+                if failure is None:
+                    failure = error
+            if guard.descriptor < 0 and self.guard is guard:
+                self.guard = None
+        try:
+            self._owner.close()
+        except OSError as error:
+            if failure is None:
+                failure = BuildProvenanceError(
+                    f"cannot close retained {self.label} directory: {error}")
+        if failure is not None:
+            raise failure
+
+    def __enter__(self) -> "_RetainedDirectoryTree":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                f"retained {self.label} directory cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}") from cleanup_error
+
+
+def _retain_exact_symlink_directory(
+    path: Path, expected_targets: Mapping[str, str], label: str,
+) -> _RetainedDirectoryTree:
+    """Retain a private tool prefix and bind every role to its exact target.
+
+    The directory guard is armed before this verification.  Enumerating through
+    its retained descriptor then closes the pre-guard window where a same-UID
+    process could replace one symlink after its initial readlink check but
+    before mutation monitoring began.
+    """
+    require(isinstance(expected_targets, Mapping) and expected_targets and
+            all(isinstance(role, str) and
+                re.fullmatch(r"[A-Za-z0-9_.+-]+", role) is not None and
+                isinstance(target, str) and target.startswith(
+                    "/proc/self/fd/") and "\0" not in target
+                for role, target in expected_targets.items()),
+            f"{label} expected mappings are invalid")
+    guard = _RetainedDirectoryTree(path, label)
+    try:
+        observed: dict[str, str] = {}
+        with os.scandir(guard.descriptor) as entries:
+            for entry in entries:
+                role = entry.name
+                require(role not in observed and entry.is_symlink(),
+                        f"{label} contains a duplicate or non-symlink entry")
+                target = os.readlink(role, dir_fd=guard.descriptor)
+                _require_safe_unicode(target, f"{label} mapping target")
+                observed[role] = target
+        require(observed == dict(expected_targets),
+                f"{label} mappings changed before retention")
+        guard.verify()
+        return guard
+    except BaseException:
+        guard._close_without_verification()
+        raise
+
+
+def _parse_git_directory_reference(
+    content: bytes, base: Path, label: str, *, prefix: bytes = b"",
+) -> Path:
+    require(0 < len(content) <= MAX_GITFILE_BYTES,
+            f"{label} is empty or oversized")
+    require(content.endswith(b"\n") and content.count(b"\n") == 1,
+            f"{label} is not one canonical LF-terminated record")
+    record = content[:-1]
+    require(record.startswith(prefix) and len(record) > len(prefix),
+            f"{label} has an invalid record prefix")
+    try:
+        value = record[len(prefix):].decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise BuildProvenanceError(
+            f"{label} path is not strict UTF-8") from error
+    _require_safe_unicode(value, f"{label} path")
+    require("\0" not in value and len(os.fsencode(value)) <=
+            MAX_TRACKED_SOURCE_PATH_BYTES,
+            f"{label} path is invalid or oversized")
+    path = Path(value)
+    if not path.is_absolute():
+        path = base / path
+    try:
+        return path.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise BuildProvenanceError(
+            f"{label} path cannot be resolved: {error}") from error
+
+
+class _RetainedGitMetadata:
+    """Retain the worktree .git entry, exact gitdir, and common metadata."""
+
+    def __init__(self, source: Path) -> None:
+        self.source = source
+        self.stack = ExitStack()
+        self.entry_file: _RetainedFileSnapshot | None = None
+        self.gitdir: _RetainedDirectoryTree | None = None
+        self.common: _RetainedDirectoryTree | None = None
+        self.common_file: _RetainedFileSnapshot | None = None
+        try:
+            entry = source / ".git"
+            entry_status = entry.lstat()
+            if stat.S_ISDIR(entry_status.st_mode):
+                gitdir_path = entry.resolve(strict=True)
+            elif stat.S_ISREG(entry_status.st_mode):
+                self.entry_file = self.stack.enter_context(
+                    _RetainedFileSnapshot(
+                        entry, "tracked source .git file",
+                        maximum_bytes=MAX_GITFILE_BYTES))
+                gitdir_path = _parse_git_directory_reference(
+                    self.entry_file.content, entry.parent,
+                    "tracked source .git file", prefix=b"gitdir: ")
+            else:
+                raise BuildProvenanceError(
+                    "tracked source .git entry is not a directory or "
+                    "regular gitfile")
+
+            self.gitdir = self.stack.enter_context(
+                _RetainedDirectoryTree(
+                    gitdir_path, "tracked source Git directory"))
+            commondir_path = self.gitdir.resolved / "commondir"
+            try:
+                commondir_status = commondir_path.lstat()
+            except FileNotFoundError:
+                commondir_status = None
+            if commondir_status is None:
+                self.common = self.gitdir
+            else:
+                require(stat.S_ISREG(commondir_status.st_mode),
+                        "tracked source Git commondir is not a regular file")
+                self.common_file = self.stack.enter_context(
+                    _RetainedFileSnapshot(
+                        commondir_path, "tracked source Git commondir",
+                        maximum_bytes=MAX_GITFILE_BYTES))
+                common_path = _parse_git_directory_reference(
+                    self.common_file.content, self.gitdir.resolved,
+                    "tracked source Git commondir")
+                if common_path == self.gitdir.resolved:
+                    self.common = self.gitdir
+                else:
+                    self.common = self.stack.enter_context(
+                        _RetainedDirectoryTree(
+                            common_path,
+                            "tracked source common Git directory"))
+
+            require(self.common is not None and
+                    self.common.resolved is not None,
+                    "tracked source common Git directory was lost")
+            for root in {self.gitdir.resolved, self.common.resolved}:
+                alternates = root / "objects" / "info" / "alternates"
+                require(not alternates.exists() and not alternates.is_symlink(),
+                        "tracked source Git object alternates are unsupported")
+            self.verify()
+        except BaseException:
+            self.stack.close()
+            raise
+
+    @property
+    def descriptor(self) -> int:
+        require(self.gitdir is not None and self.gitdir.descriptor >= 0,
+                "tracked source Git directory descriptor is closed")
+        return self.gitdir.descriptor
+
+    def verify(self) -> None:
+        if self.entry_file is not None:
+            self.entry_file.verify()
+        require(self.gitdir is not None,
+                "tracked source Git directory was lost")
+        self.gitdir.verify()
+        if self.common_file is not None:
+            self.common_file.verify()
+        if self.common is not None and self.common is not self.gitdir:
+            self.common.verify()
+
+    def close(self) -> None:
+        failure: BaseException | None = None
+        try:
+            self.verify()
+        except BaseException as error:
+            failure = error
+        try:
+            self.stack.close()
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
+
+    def __enter__(self) -> "_RetainedGitMetadata":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                "retained Git metadata cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}") from cleanup_error
+
+
 def file_snapshot(
     path: Path | str, label: str, *, maximum_bytes: int = MAX_FILE_BYTES,
 ) -> tuple[dict[str, Any], bytes]:
-    """Read one regular file once and bind the returned bytes to its pathname."""
-    resolved = Path(path).resolve(strict=True)
-    descriptor = os.open(
-        resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
-    try:
-        before = os.fstat(descriptor)
-        require(stat.S_ISREG(before.st_mode), f"{label} is not a regular file")
-        require(0 <= before.st_size <= maximum_bytes,
-                f"{label} exceeds its retained byte bound")
-        chunks: list[bytes] = []
-        remaining = before.st_size
-        while remaining:
-            block = os.read(descriptor, min(1 << 20, remaining))
-            require(bool(block), f"{label} ended before its recorded size")
-            chunks.append(block)
-            remaining -= len(block)
-        require(not os.read(descriptor, 1),
-                f"{label} grew beyond its recorded size while read")
-        after = os.fstat(descriptor)
-    finally:
-        os.close(descriptor)
-    require(_stable_fields(before) == _stable_fields(after),
-            f"{label} changed while read")
-    path_status = resolved.stat()
-    require(_stable_fields(after) == _stable_fields(path_status),
-            f"{label} pathname changed while read")
-    content = b"".join(chunks)
-    identity = {
-        "path": str(resolved),
-        "sha256": hashlib.sha256(content).hexdigest(),
-        "device": after.st_dev,
-        "inode": after.st_ino,
-        "mode": after.st_mode,
-        "size": after.st_size,
-        "mtime_ns": after.st_mtime_ns,
-        "ctime_ns": after.st_ctime_ns,
-    }
-    return identity, content
+    """Read one stable regular-file snapshot and close its retained handle."""
+    with _RetainedFileSnapshot(
+            path, label, maximum_bytes=maximum_bytes) as snapshot:
+        return snapshot.identity, snapshot.content
 
 
 def file_identity(
@@ -115,20 +1271,1488 @@ def file_identity(
     return file_snapshot(path, label, maximum_bytes=maximum_bytes)[0]
 
 
+def _read_bounded_descriptor(
+    descriptor: int, size: int, label: str, maximum_bytes: int,
+) -> bytes:
+    require(0 <= size <= maximum_bytes,
+            f"{label} exceeds its retained byte bound")
+    try:
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks: list[bytes] = []
+        remaining = size
+        while remaining:
+            block = os.read(descriptor, min(1 << 20, remaining))
+            require(bool(block), f"{label} ended before its recorded size")
+            chunks.append(block)
+            remaining -= len(block)
+        require(not os.read(descriptor, 1),
+                f"{label} grew beyond its recorded size while read")
+        return b"".join(chunks)
+    except OSError as error:
+        raise BuildProvenanceError(
+            f"cannot read stable {label}: {error}") from error
+
+
+class _OpenDirectoryTree:
+    """Traverse one retained directory without following component symlinks."""
+
+    def __init__(self, root: Path, stack: ExitStack, label: str) -> None:
+        self.root = root
+        self.stack = stack
+        self.label = label
+        self._owners: list[_OwnedDescriptor] = []
+        owner = _OwnedDescriptor()
+        self._owners.append(owner)
+        try:
+            descriptor = owner.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_NOFOLLOW", 0))
+            stack.callback(owner.close)
+        except BaseException as error:
+            owner.close()
+            if not isinstance(error, OSError):
+                raise
+            raise BuildProvenanceError(
+                f"cannot open retained {label} root: {error}") from error
+        self.root_descriptor = descriptor
+        self.directories: dict[tuple[str, ...], int] = {(): descriptor}
+
+    def directory(self, parts: tuple[str, ...]) -> int:
+        current_parts: tuple[str, ...] = ()
+        current = self.root_descriptor
+        for component in parts:
+            current_parts += (component,)
+            existing = self.directories.get(current_parts)
+            if existing is not None:
+                current = existing
+                continue
+            owner = _OwnedDescriptor()
+            self._owners.append(owner)
+            try:
+                descriptor = owner.open(
+                    component,
+                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_DIRECTORY", 0) |
+                    getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=current)
+                self.stack.callback(owner.close)
+            except BaseException as error:
+                owner.close()
+                if not isinstance(error, OSError):
+                    raise
+                raise BuildProvenanceError(
+                    f"{self.label} directory component "
+                    f"{'/'.join(current_parts)!r} is unstable or unsafe: "
+                    f"{error}") from error
+            self.directories[current_parts] = descriptor
+            current = descriptor
+        return current
+
+    def open_regular(self, relative: str) -> tuple[int, os.stat_result]:
+        parts = tuple(relative.split("/"))
+        require(parts and all(
+                    component not in ("", ".", "..")
+                    for component in parts),
+                f"{self.label} contains unsafe relative path {relative!r}")
+        parent = self.directory(parts[:-1])
+        owner = _OwnedDescriptor()
+        descriptor = -1
+        try:
+            descriptor = owner.open(
+                parts[-1],
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_NONBLOCK", 0) |
+                getattr(os, "O_NOFOLLOW", 0),
+                dir_fd=parent)
+            status = os.fstat(descriptor)
+        except BaseException as error:
+            owner.close()
+            if not isinstance(error, OSError):
+                raise
+            raise BuildProvenanceError(
+                f"cannot open stable {self.label} file {relative!r}: "
+                f"{error}") from error
+        if not stat.S_ISREG(status.st_mode):
+            owner.close()
+            raise BuildProvenanceError(
+                f"{self.label} file {relative!r} is not regular")
+        try:
+            self.stack.callback(owner.close)
+        except BaseException:
+            owner.close()
+            raise
+        self._owners.append(owner)
+        return descriptor, status
+
+
+class _CreateDirectoryTree:
+    """Create files below one retained private root using openat only."""
+
+    def __init__(self, root: Path, stack: ExitStack, label: str) -> None:
+        self.root = root
+        self.stack = stack
+        self.label = label
+        self._owners: list[_OwnedDescriptor] = []
+        owner = _OwnedDescriptor()
+        self._owners.append(owner)
+        try:
+            root.mkdir(mode=0o700)
+            descriptor = owner.open(
+                root,
+                os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_NOFOLLOW", 0))
+            stack.callback(owner.close)
+        except BaseException as error:
+            owner.close()
+            if not isinstance(error, OSError):
+                raise
+            raise BuildProvenanceError(
+                f"cannot create retained {label} root: {error}") from error
+        self.root_descriptor = descriptor
+        self.directories: dict[tuple[str, ...], int] = {(): descriptor}
+
+    def directory(self, parts: tuple[str, ...]) -> int:
+        current_parts: tuple[str, ...] = ()
+        current = self.root_descriptor
+        for component in parts:
+            current_parts += (component,)
+            existing = self.directories.get(current_parts)
+            if existing is not None:
+                current = existing
+                continue
+            try:
+                os.mkdir(component, mode=0o700, dir_fd=current)
+            except FileExistsError:
+                pass
+            except OSError as error:
+                raise BuildProvenanceError(
+                    f"cannot create {self.label} directory "
+                    f"{'/'.join(current_parts)!r}: {error}") from error
+            owner = _OwnedDescriptor()
+            self._owners.append(owner)
+            try:
+                descriptor = owner.open(
+                    component,
+                    os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_DIRECTORY", 0) |
+                    getattr(os, "O_NOFOLLOW", 0),
+                    dir_fd=current)
+                self.stack.callback(owner.close)
+            except BaseException as error:
+                owner.close()
+                if not isinstance(error, OSError):
+                    raise
+                raise BuildProvenanceError(
+                    f"{self.label} directory component "
+                    f"{'/'.join(current_parts)!r} is unstable or unsafe: "
+                    f"{error}") from error
+            self.directories[current_parts] = descriptor
+            current = descriptor
+        return current
+
+    def write_exclusive(
+        self, relative: str, content: bytes, mode: int,
+    ) -> None:
+        parts = tuple(relative.split("/"))
+        require(parts and all(
+                    component not in ("", ".", "..")
+                    for component in parts),
+                f"{self.label} contains unsafe relative path {relative!r}")
+        parent = self.directory(parts[:-1])
+        flags = (
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0))
+        owner = _OwnedDescriptor()
+        try:
+            descriptor = owner.open(
+                parts[-1], flags, mode | 0o400, dir_fd=parent)
+            try:
+                os.fchmod(descriptor, mode)
+                view = memoryview(content)
+                while view:
+                    written = os.write(descriptor, view)
+                    require(written > 0,
+                            f"{self.label} write stalled")
+                    view = view[written:]
+                os.fsync(descriptor)
+            finally:
+                owner.close()
+        except BaseException as error:
+            owner.close()
+            if not isinstance(error, OSError):
+                raise
+            raise BuildProvenanceError(
+                f"cannot write stable {self.label} file {relative!r}: "
+                f"{error}") from error
+
+
+def _git_source_state(
+    source_descriptor: int, inherited_descriptors: Sequence[int],
+    git_snapshot: _RetainedFileSnapshot,
+    git_metadata: _RetainedGitMetadata,
+) -> tuple[list[str], dict[str, Any]]:
+    require(git_snapshot.descriptor >= 0 and git_snapshot.resolved is not None,
+            "source-inventory Git executable is not retained")
+    git_snapshot.verify()
+    git_metadata.verify()
+    inherited = tuple(inherited_descriptors) + (
+        source_descriptor, git_metadata.descriptor)
+    source_argument = f"/proc/self/fd/{source_descriptor}"
+
+    def invoke(
+        arguments: Sequence[str], label: str,
+        maximum_bytes: int = MAX_METADATA_BYTES,
+    ) -> bytes:
+        return _run(
+            (
+                str(git_snapshot.resolved),
+                f"--git-dir=/proc/self/fd/{git_metadata.descriptor}",
+                f"--work-tree={source_argument}",
+                *arguments,
+            ),
+            label, maximum_bytes=maximum_bytes,
+            inherited_descriptors=inherited,
+            executable_descriptor=git_snapshot.executable_descriptor)
+
+    raw_paths = invoke(
+        ("ls-files", "--recurse-submodules", "-z"),
+        "tracked source inventory", 32 << 20)
+    commit = invoke(
+        ("rev-parse", "--verify", "HEAD"),
+        "tracked source commit").strip()
+    tree = invoke(
+        ("rev-parse", "--verify", "HEAD^{tree}"),
+        "tracked source tree").strip()
+    status_bytes = invoke(
+        ("status", "--porcelain=v1", "--untracked-files=normal",
+         "--ignore-submodules=none"),
+        "tracked source status", 32 << 20).rstrip()
+    git_metadata.verify()
+    git_snapshot.verify()
+
+    paths: list[str] = []
+    for encoded in raw_paths.split(b"\0"):
+        if not encoded:
+            continue
+        require(len(encoded) <= MAX_TRACKED_SOURCE_PATH_BYTES,
+                "tracked source path exceeds its byte bound")
+        try:
+            relative = encoded.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise BuildProvenanceError(
+                "tracked source path is not strict UTF-8") from error
+        _require_safe_unicode(relative, "tracked source path")
+        require(not relative.startswith("/") and
+                all(component not in ("", ".", "..")
+                    for component in relative.split("/")),
+                f"tracked source inventory contains unsafe path {relative!r}")
+        paths.append(relative)
+    require(paths and len(paths) <= MAX_TRACKED_SOURCE_FILES and
+            len(paths) == len(set(paths)),
+            "tracked source inventory is empty, oversized, or duplicated")
+    require(paths == sorted(paths),
+            "tracked source inventory is not canonical")
+    try:
+        commit_text = commit.decode("ascii")
+        tree_text = tree.decode("ascii")
+    except UnicodeDecodeError as error:
+        raise BuildProvenanceError(
+            "tracked source Git identity is not ASCII") from error
+    require(re.fullmatch(r"[0-9a-f]{40,64}", commit_text) is not None and
+            re.fullmatch(r"[0-9a-f]{40,64}", tree_text) is not None,
+            "tracked source Git identity is non-canonical")
+    return paths, {
+        "commit": commit_text,
+        "tree": tree_text,
+        "dirty": bool(status_bytes),
+        "status_sha256": hashlib.sha256(status_bytes).hexdigest(),
+    }
+
+
+def _capture_tracked_source_tree(
+    source: Path, destination: Path | None = None,
+    *, inherited_descriptors: Sequence[int] = (),
+) -> dict[str, Any]:
+    """Capture one simultaneous, bounded tracked-tree state.
+
+    Every source descriptor remains open until every file has been read and
+    revalidated by content and by root-relative pathname.  Consequently a
+    replacement restored before the final check cannot create a mixed tree.
+    """
+    source = source.resolve(strict=True)
+    require(source.is_dir(), "tracked source root is not a directory")
+    path_guard = _InotifyMutationGuard("tracked source root")
+    records: list[dict[str, Any]] = []
+    total = 0
+    try:
+        path_guard.add_directory_path(source)
+        with ExitStack() as stack:
+            tree = _OpenDirectoryTree(source, stack, "tracked source")
+            git_snapshot = stack.enter_context(
+                _RetainedFileSnapshot(
+                    Path("/usr/bin/git").resolve(strict=True),
+                    "source-inventory Git executable"))
+            git_metadata = stack.enter_context(
+                _RetainedGitMetadata(source))
+            paths_before, git_before = _git_source_state(
+                tree.root_descriptor, inherited_descriptors,
+                git_snapshot, git_metadata)
+            retained: list[
+                tuple[str, int, tuple[int, ...], str, int]
+            ] = []
+            output_tree: _CreateDirectoryTree | None = None
+            if destination is not None:
+                require(not destination.exists(),
+                        "tracked source snapshot destination already exists")
+                output_tree = _CreateDirectoryTree(
+                    destination, stack, "tracked source snapshot")
+            for relative in paths_before:
+                descriptor, status = tree.open_regular(relative)
+                require(status.st_size <= MAX_TRACKED_SOURCE_FILE_BYTES,
+                        f"tracked source file {relative!r} exceeds its "
+                        "individual byte bound")
+                total += status.st_size
+                require(total <= MAX_TRACKED_SOURCE_TOTAL_BYTES,
+                        "tracked source tree exceeds its total byte bound")
+                content = _read_bounded_descriptor(
+                    descriptor, status.st_size,
+                    f"tracked source file {relative!r}",
+                    MAX_TRACKED_SOURCE_FILE_BYTES)
+                after = os.fstat(descriptor)
+                require(_stable_fields(status) == _stable_fields(after),
+                        f"tracked source file {relative!r} changed while read")
+                digest = hashlib.sha256(content).hexdigest()
+                retained.append((
+                    relative, descriptor, _stable_fields(after), digest,
+                    stat.S_IMODE(after.st_mode)))
+                records.append({
+                    "path": relative,
+                    "sha256": digest,
+                    "size": after.st_size,
+                    "mode": stat.S_IMODE(after.st_mode),
+                })
+                if output_tree is not None:
+                    output_tree.write_exclusive(
+                        relative, content, stat.S_IMODE(after.st_mode))
+
+            paths_after, git_after = _git_source_state(
+                tree.root_descriptor, inherited_descriptors,
+                git_snapshot, git_metadata)
+            require(paths_after == paths_before and git_after == git_before,
+                    "tracked source Git state changed during capture")
+            for relative, descriptor, fields, digest, _mode in retained:
+                current = os.fstat(descriptor)
+                require(_stable_fields(current) == fields,
+                        f"tracked source file {relative!r} changed while "
+                        "retained")
+                content = _read_bounded_descriptor(
+                    descriptor, current.st_size,
+                    f"retained tracked source file {relative!r}",
+                    MAX_TRACKED_SOURCE_FILE_BYTES)
+                require(hashlib.sha256(content).hexdigest() == digest,
+                        f"tracked source file {relative!r} changed and was "
+                        "restored while retained")
+                reopened, reopened_status = tree.open_regular(relative)
+                del reopened
+                require(_stable_fields(reopened_status) == fields,
+                        f"tracked source file {relative!r} pathname changed "
+                        "while retained")
+            git_metadata.verify()
+            git_snapshot.verify()
+            path_guard.verify()
+    finally:
+        path_guard.close()
+    return {
+        "schema": "leopard2-tracked-source-tree/v1",
+        "total_bytes": total,
+        "files": records,
+        "git": git_before,
+        "git_tool": dict(git_snapshot.identity),
+    }
+
+
+class _RetainedPrivateSourceTree:
+    """Guard a runner-owned tracked source snapshot throughout clean replay."""
+
+    def __init__(
+        self, source: Path, destination: Path,
+        *, inherited_descriptors: Sequence[int] = (),
+    ) -> None:
+        self.destination = destination
+        self.manifest = _capture_tracked_source_tree(
+            source, destination,
+            inherited_descriptors=inherited_descriptors)
+        self.guard = _InotifyMutationGuard(
+            "runner-owned tracked source snapshot")
+        try:
+            self.guard.add_tree(destination)
+            self._verify_files()
+            self.guard.verify()
+        except BaseException:
+            self.guard._close_without_verification()
+            raise
+
+    def _verify_files(self) -> None:
+        expected = self.manifest.get("files")
+        require(isinstance(expected, list),
+                "runner-owned source manifest is malformed")
+        with ExitStack() as stack:
+            tree = _OpenDirectoryTree(
+                self.destination, stack, "runner-owned tracked source")
+            observed = []
+            total = 0
+            for record in expected:
+                require(isinstance(record, dict) and
+                        isinstance(record.get("path"), str),
+                        "runner-owned source manifest record is malformed")
+                relative = record["path"]
+                descriptor, status = tree.open_regular(relative)
+                content = _read_bounded_descriptor(
+                    descriptor, status.st_size,
+                    f"runner-owned source file {relative!r}",
+                    MAX_TRACKED_SOURCE_FILE_BYTES)
+                total += len(content)
+                observed.append({
+                    "path": relative,
+                    "sha256": hashlib.sha256(content).hexdigest(),
+                    "size": len(content),
+                    "mode": stat.S_IMODE(status.st_mode),
+                })
+            require(total == self.manifest.get("total_bytes") and
+                    observed == expected,
+                    "runner-owned tracked source snapshot changed")
+
+    def verify(self) -> None:
+        self.guard.verify()
+        self._verify_files()
+        self.guard.verify()
+
+    def close(self) -> None:
+        failure: BaseException | None = None
+        try:
+            self.verify()
+        except BaseException as error:
+            failure = error
+        try:
+            self.guard.close()
+        except BaseException as error:
+            if failure is None:
+                failure = error
+        if failure is not None:
+            raise failure
+
+    def __enter__(self) -> "_RetainedPrivateSourceTree":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                "runner-owned source cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}") from cleanup_error
+
+
+def _verify_tracked_source_manifest(
+    source: Path, manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(manifest.get("schema") == "leopard2-tracked-source-tree/v1" and
+            isinstance(manifest.get("files"), list) and
+            isinstance(manifest.get("git"), dict) and
+            isinstance(manifest.get("git_tool"), dict),
+            "tracked source manifest is malformed")
+    git = manifest["git"]
+    git_tool = manifest["git_tool"]
+    require(isinstance(git.get("commit"), str) and
+            re.fullmatch(r"[0-9a-f]{40,64}", git["commit"]) is not None and
+            isinstance(git.get("tree"), str) and
+            re.fullmatch(r"[0-9a-f]{40,64}", git["tree"]) is not None and
+            type(git.get("dirty")) is bool and
+            isinstance(git.get("status_sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", git["status_sha256"]) is not None,
+            "tracked source manifest Git identity is malformed")
+    require(isinstance(git_tool.get("path"), str) and
+            isinstance(git_tool.get("sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", git_tool["sha256"]) is not None and
+            type(git_tool.get("size")) is int and git_tool["size"] >= 0 and
+            type(git_tool.get("device")) is int and
+            type(git_tool.get("inode")) is int,
+            "tracked source manifest Git tool identity is malformed")
+    expected = manifest["files"]
+    require(expected and len(expected) <= MAX_TRACKED_SOURCE_FILES,
+            "tracked source manifest file count is invalid")
+    expected_paths = [
+        record.get("path") if isinstance(record, dict) else None
+        for record in expected
+    ]
+    require(all(isinstance(path, str) for path in expected_paths) and
+            expected_paths == sorted(expected_paths) and
+            len(expected_paths) == len(set(expected_paths)) and
+            type(manifest.get("total_bytes")) is int and
+            0 <= manifest["total_bytes"] <= MAX_TRACKED_SOURCE_TOTAL_BYTES,
+            "tracked source manifest path order or total is invalid")
+    with ExitStack() as stack:
+        tree = _OpenDirectoryTree(source, stack, "tracked source replay")
+        observed = []
+        total = 0
+        for record in expected:
+            require(isinstance(record, dict) and
+                    isinstance(record.get("path"), str) and
+                    type(record.get("size")) is int and
+                    type(record.get("mode")) is int and
+                    isinstance(record.get("sha256"), str) and
+                    re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is not
+                    None and
+                    0 <= record["size"] <= MAX_TRACKED_SOURCE_FILE_BYTES and
+                    0 <= record["mode"] <= 0o7777,
+                    "tracked source manifest file record is malformed")
+            relative = record["path"]
+            descriptor, status = tree.open_regular(relative)
+            require(status.st_size <= MAX_TRACKED_SOURCE_FILE_BYTES,
+                    f"tracked source replay file {relative!r} exceeds its "
+                    "individual byte bound")
+            content = _read_bounded_descriptor(
+                descriptor, status.st_size,
+                f"tracked source replay file {relative!r}",
+                MAX_TRACKED_SOURCE_FILE_BYTES)
+            total += len(content)
+            require(total <= MAX_TRACKED_SOURCE_TOTAL_BYTES,
+                    "tracked source replay exceeds its total byte bound")
+            observed.append({
+                "path": relative,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "size": len(content),
+                "mode": stat.S_IMODE(status.st_mode),
+            })
+        require(observed == expected and
+                total == manifest.get("total_bytes"),
+                "tracked source replay differs from its retained manifest")
+    return {
+        "schema": manifest["schema"],
+        "total_bytes": total,
+        "files": [dict(record) for record in expected],
+        "git": dict(git),
+        "git_tool": dict(git_tool),
+    }
+
+
+def _linux_prctl(option: int, argument: object) -> None:
+    """Invoke the Linux child-subreaper controls used by command containment."""
+    require(sys.platform.startswith("linux"),
+            "bounded command containment requires Linux")
+    try:
+        function = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as error:
+        raise BuildProvenanceError(
+            f"Linux child-subreaper prctl is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = function(
+        ctypes.c_int(option), argument, ctypes.c_ulong(0),
+        ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        raise BuildProvenanceError(
+            "Linux child-subreaper prctl failed: " +
+            os.strerror(number or errno.EPERM))
+
+
+def _get_child_subreaper() -> int:
+    value = ctypes.c_int(-1)
+    _linux_prctl(PR_GET_CHILD_SUBREAPER, ctypes.byref(value))
+    require(value.value in (0, 1),
+            "Linux returned an invalid child-subreaper state")
+    return value.value
+
+
+def _set_child_subreaper(value: int) -> None:
+    require(value in (0, 1), "invalid child-subreaper state")
+    _linux_prctl(PR_SET_CHILD_SUBREAPER, ctypes.c_ulong(value))
+    require(_get_child_subreaper() == value,
+            "Linux did not retain the requested child-subreaper state")
+
+
+def _read_proc_process_record_descriptor(
+    pid: int, directory_descriptor: int,
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Read one process through a caller-retained no-follow proc directory."""
+    stat_descriptor = -1
+    try:
+        directory_before = os.fstat(directory_descriptor)
+        stat_descriptor = os.open(
+            "stat",
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0),
+            dir_fd=directory_descriptor)
+        data = os.read(stat_descriptor, 4096)
+        require(data and len(data) < 4096 and not os.read(stat_descriptor, 1),
+                f"Linux process {pid} has oversized procfs stat data")
+        directory_after = os.fstat(directory_descriptor)
+        require(_stable_fields(directory_before) ==
+                _stable_fields(directory_after),
+                f"Linux process {pid} procfs directory changed while read")
+    except (FileNotFoundError, ProcessLookupError):
+        return None
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise BuildProvenanceError(
+            f"cannot inspect Linux process {pid}: {error}") from error
+    finally:
+        close_errors = []
+        for descriptor in (stat_descriptor,):
+            if descriptor < 0:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                close_errors.append(str(error))
+        if close_errors and sys.exc_info()[0] is None:
+            raise BuildProvenanceError(
+                f"cannot close Linux process {pid} procfs descriptors: " +
+                "; ".join(close_errors))
+    closing = data.rfind(b")")
+    require(closing > 0 and closing + 2 < len(data),
+            f"Linux process {pid} has malformed procfs stat data")
+    fields = data[closing + 2:].split()
+    require(len(fields) >= 20,
+            f"Linux process {pid} has truncated procfs stat data")
+    try:
+        state = fields[0].decode("ascii")
+        ppid, pgrp, session = int(fields[1]), int(fields[2]), int(fields[3])
+        starttime = int(fields[19])
+    except (UnicodeDecodeError, ValueError) as error:
+        raise BuildProvenanceError(
+            f"Linux process {pid} has invalid procfs stat fields") from error
+    require(len(state) == 1 and min(ppid, pgrp, session, starttime) >= 0,
+            f"Linux process {pid} has invalid procfs identity")
+    return (
+        ppid, pgrp, session, starttime, state,
+        directory_after.st_dev, directory_after.st_ino,
+    )
+
+
+def _open_proc_process_record(
+    pid: int,
+) -> tuple[tuple[int, int, int, int, str, int, int], int] | None:
+    """Open and return an exact process record with its directory FD held."""
+    directory_descriptor = -1
+    try:
+        directory_descriptor = os.open(
+            f"/proc/{pid}",
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0))
+        record = _read_proc_process_record_descriptor(
+            pid, directory_descriptor)
+        if record is None:
+            os.close(directory_descriptor)
+            return None
+        path_status = os.stat(
+            f"/proc/{pid}", follow_symlinks=False)
+        descriptor_status = os.fstat(directory_descriptor)
+        require(_stable_fields(path_status) ==
+                _stable_fields(descriptor_status) and
+                record[5:] ==
+                (descriptor_status.st_dev, descriptor_status.st_ino),
+                f"Linux process {pid} procfs pathname changed while opened")
+        return record, directory_descriptor
+    except (FileNotFoundError, ProcessLookupError):
+        if directory_descriptor >= 0:
+            os.close(directory_descriptor)
+        return None
+    except OSError as error:
+        if directory_descriptor >= 0:
+            try:
+                os.close(directory_descriptor)
+            except OSError:
+                pass
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise BuildProvenanceError(
+            f"cannot inspect Linux process {pid}: {error}") from error
+    except BaseException:
+        if directory_descriptor >= 0:
+            try:
+                os.close(directory_descriptor)
+            except OSError:
+                pass
+        raise
+
+
+def _proc_process_record(
+    pid: int,
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Return a process record while closing its temporary proc descriptor."""
+    opened = _open_proc_process_record(pid)
+    if opened is None:
+        return None
+    record, descriptor = opened
+    try:
+        return record
+    finally:
+        os.close(descriptor)
+
+
+def _close_retained_mapping_descriptor(
+    mapping: dict[Any, int], key: Any,
+) -> None:
+    """Close one mapped FD without dropping retry state before the syscall."""
+    descriptor = mapping[key]
+    before: tuple[int, int, int] | None = None
+    try:
+        status = os.fstat(descriptor)
+        before = (status.st_dev, status.st_ino, status.st_mode)
+    except OSError:
+        # Tests may use synthetic descriptor numbers with a mocked close.
+        pass
+    completed = False
+    try:
+        os.close(descriptor)
+        completed = True
+    finally:
+        relinquished = completed
+        if not relinquished and before is not None:
+            try:
+                status = os.fstat(descriptor)
+            except OSError as error:
+                relinquished = error.errno == errno.EBADF
+            else:
+                after = (status.st_dev, status.st_ino, status.st_mode)
+                relinquished = after != before
+        if relinquished and mapping.get(key) == descriptor:
+            del mapping[key]
+
+
+class _ProcProcessSnapshot:
+    """One procfs snapshot whose task-directory FDs stay open while used."""
+
+    def __init__(self) -> None:
+        require(Path("/proc/self/stat").is_file(),
+                "bounded command containment requires mounted Linux procfs")
+        self.records: dict[
+            int, tuple[int, int, int, int, str, int, int]] = {}
+        self.descriptors: dict[int, int] = {}
+        try:
+            names = os.listdir("/proc")
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot enumerate Linux procfs: {error}") from error
+        try:
+            for name in names:
+                if not name.isascii() or not name.isdigit():
+                    continue
+                pid = int(name)
+                try:
+                    opened = _open_proc_process_record(pid)
+                except BuildProvenanceError:
+                    try:
+                        owner = os.stat(
+                            f"/proc/{name}", follow_symlinks=False).st_uid
+                    except OSError:
+                        continue
+                    if owner == os.getuid():
+                        raise
+                    continue
+                if opened is not None:
+                    record, descriptor = opened
+                    self.records[pid] = record
+                    self.descriptors[pid] = descriptor
+            require(os.getpid() in self.records,
+                    "Linux procfs does not expose the provenance runner")
+        except BaseException:
+            self.close()
+            raise
+
+    def close(self) -> None:
+        errors = []
+        for pid in list(self.descriptors):
+            try:
+                _close_retained_mapping_descriptor(
+                    self.descriptors, pid)
+            except OSError as error:
+                errors.append(str(error))
+            if pid not in self.descriptors:
+                self.records.pop(pid, None)
+        if not self.descriptors:
+            self.records.clear()
+        require(not errors,
+                "cannot close Linux procfs snapshot descriptors: " +
+                "; ".join(errors))
+
+    def __enter__(self) -> "_ProcProcessSnapshot":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                "procfs snapshot cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}") from cleanup_error
+
+
+def _proc_process_snapshot() -> _ProcProcessSnapshot:
+    """Snapshot procfs and retain every observed task directory."""
+    return _ProcProcessSnapshot()
+
+
+def _linux_pidfd_open(pid: int) -> int | None:
+    """Open a race-free process handle with a libc fallback."""
+    python_wrapper = getattr(os, "pidfd_open", None)
+    if callable(python_wrapper):
+        try:
+            return python_wrapper(pid, 0)
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                return None
+            raise BuildProvenanceError(
+                f"cannot open pidfd for process {pid}: {error}") from error
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_open
+    except (AttributeError, OSError) as error:
+        raise BuildProvenanceError(
+            f"Linux pidfd_open is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    descriptor = function(ctypes.c_int(pid), ctypes.c_uint(0))
+    if descriptor >= 0:
+        return descriptor
+    number = ctypes.get_errno()
+    if number == errno.ESRCH:
+        return None
+    raise BuildProvenanceError(
+        f"cannot open pidfd for process {pid}: " +
+        os.strerror(number or errno.EPERM))
+
+
+def _linux_pidfd_signal(descriptor: int, signal_number: int) -> None:
+    python_wrapper = getattr(signal, "pidfd_send_signal", None)
+    if callable(python_wrapper):
+        try:
+            python_wrapper(descriptor, signal_number, None, 0)
+            return
+        except OSError as error:
+            if error.errno == errno.ESRCH:
+                return
+            raise BuildProvenanceError(
+                "cannot signal a contained process through pidfd: " +
+                str(error)) from error
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_send_signal
+    except (AttributeError, OSError) as error:
+        raise BuildProvenanceError(
+            f"Linux pidfd_send_signal is unavailable: {error}") from error
+    ctypes.set_errno(0)
+    result = function(
+        ctypes.c_int(descriptor), ctypes.c_int(signal_number), None,
+        ctypes.c_uint(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        if number == errno.ESRCH:
+            return
+        raise BuildProvenanceError(
+            "cannot signal a contained process through pidfd: " +
+            os.strerror(number or errno.EPERM))
+
+
+def _validate_pidfd_support() -> None:
+    descriptor = _linux_pidfd_open(os.getpid())
+    require(descriptor is not None,
+            "Linux pidfd support cannot identify the provenance runner")
+    try:
+        _linux_pidfd_signal(descriptor, 0)
+    finally:
+        os.close(descriptor)
+
+
+class _LinuxDescendantContainment:
+    """Own and reap the complete tree of one direct command.
+
+    Process groups are insufficient because a command can call setsid() and
+    double-fork while retaining benchmark locks or output descriptors.  A
+    temporary subreaper makes every such orphan our direct child.  Procfs
+    ancestry plus pidfds identifies and kills the exact tree after successful
+    commands as well as after errors and timeouts.
+    """
+
+    def __init__(self) -> None:
+        self.runner_pid = os.getpid()
+        self.previous_subreaper: int | None = None
+        self.leader: tuple[int, int, int, int] | None = None
+        self.known: set[tuple[int, int, int, int]] = set()
+        self.pidfds: dict[tuple[int, int, int, int], int] = {}
+        self.procfds: dict[tuple[int, int, int, int], int] = {}
+        self.process: subprocess.Popen[bytes] | None = None
+        self.active = False
+        self.proven_empty = False
+
+    @staticmethod
+    def _direct_children(
+        snapshot: Mapping[
+            int, tuple[int, int, int, int, str, int, int]],
+        parent: int,
+    ) -> set[tuple[int, int, int, int]]:
+        return {
+            (pid, record[3], record[5], record[6])
+            for pid, record in snapshot.items()
+                if record[0] == parent}
+
+    def __enter__(self) -> "_LinuxDescendantContainment":
+        require(sys.platform.startswith("linux"),
+                "bounded command containment requires Linux")
+        try:
+            task_count = sum(
+                1 for name in os.listdir("/proc/self/task")
+                if name.isascii() and name.isdigit())
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"cannot inspect runner threads: {error}") from error
+        require(task_count == 1,
+                "bounded command containment requires a single-threaded runner")
+        _validate_pidfd_support()
+        self.previous_subreaper = _get_child_subreaper()
+        try:
+            _set_child_subreaper(1)
+            with _proc_process_snapshot() as snapshot:
+                require(not self._direct_children(
+                            snapshot.records, self.runner_pid),
+                        "bounded command containment found pre-existing "
+                        "children")
+            self.active = True
+            return self
+        except BaseException:
+            _set_child_subreaper(self.previous_subreaper)
+            self.previous_subreaper = None
+            raise
+
+    def attach(self, process: subprocess.Popen[bytes]) -> None:
+        require(self.active and self.process is process and
+                self.leader is None and process.pid > 0,
+                "invalid bounded command attachment")
+        opened = _open_proc_process_record(process.pid)
+        require(opened is not None and opened[0][0] == self.runner_pid,
+                "spawned command is not an owned direct child")
+        record, observed_descriptor = opened
+        self.leader = (
+            process.pid, record[3], record[5], record[6])
+        try:
+            require(self._retain_pidfd(
+                        self.leader, record,
+                        observed_descriptor=observed_descriptor),
+                    "spawned command escaped before its pidfd was retained")
+        finally:
+            os.close(observed_descriptor)
+        self.known.add(self.leader)
+
+    @staticmethod
+    def _same_process_record(
+        first: tuple[int, int, int, int, str, int, int],
+        second: tuple[int, int, int, int, str, int, int],
+    ) -> bool:
+        # State is allowed to change while pidfd_open runs.  Parent, process
+        # group, session, start time, and the held/no-follow proc-directory
+        # inode together bind the observed process.
+        return first[:4] == second[:4] and first[5:] == second[5:]
+
+    def _retain_pidfd(
+        self,
+        identity: tuple[int, int, int, int],
+        expected: tuple[int, int, int, int, str, int, int],
+        *, observed_descriptor: int | None = None,
+    ) -> bool:
+        """Retain a race-free handle to one exact observed descendant."""
+        if identity in self.pidfds:
+            return True
+        pid, starttime, proc_device, proc_inode = identity
+        require(expected[3] == starttime and
+                expected[5:] == (proc_device, proc_inode),
+                "process snapshot identity does not match its start time")
+        owned_observation = -1
+        retained_proc = -1
+        descriptor = -1
+        retained_successfully = False
+        try:
+            if observed_descriptor is None:
+                opened = _open_proc_process_record(pid)
+                if opened is None:
+                    return False
+                before, owned_observation = opened
+                observed_descriptor = owned_observation
+            else:
+                before = _read_proc_process_record_descriptor(
+                    pid, observed_descriptor)
+            if (before is None or
+                    not self._same_process_record(before, expected)):
+                return False
+            retained_proc = os.dup(observed_descriptor)
+            # The exact proc inode is now pinned before pidfd_open.  Re-reading
+            # through this same descriptor after pidfd_open detects death/PID
+            # reuse even if starttime and a recycled numeric inode collide.
+            opened_pidfd = _linux_pidfd_open(pid)
+            if opened_pidfd is None:
+                return False
+            descriptor = opened_pidfd
+            retained_after = _read_proc_process_record_descriptor(
+                pid, retained_proc)
+            opened_after = _open_proc_process_record(pid)
+            if opened_after is None:
+                return False
+            after, after_descriptor = opened_after
+            try:
+                if (retained_after is None or
+                        not self._same_process_record(
+                            retained_after, expected) or
+                        not self._same_process_record(after, expected)):
+                    return False
+            finally:
+                os.close(after_descriptor)
+            self.pidfds[identity] = descriptor
+            self.procfds[identity] = retained_proc
+            retained_successfully = True
+        except BaseException:
+            raise
+        finally:
+            if owned_observation >= 0:
+                os.close(owned_observation)
+            if not retained_successfully:
+                if descriptor >= 0:
+                    os.close(descriptor)
+                if retained_proc >= 0:
+                    os.close(retained_proc)
+        return retained_successfully
+
+    def _close_pidfds(self) -> None:
+        errors = []
+        for mapping in (self.pidfds, self.procfds):
+            for identity in list(mapping):
+                descriptor = mapping[identity]
+                try:
+                    _close_retained_mapping_descriptor(
+                        mapping, identity)
+                except OSError as error:
+                    errors.append(f"fd {descriptor}: {error}")
+        require(not errors, "cannot close retained process descriptors: " +
+                "; ".join(errors))
+
+    def _signal_retained(
+        self, targets: set[tuple[int, int, int, int]], signal_number: int,
+    ) -> None:
+        for identity in sorted(targets, reverse=True):
+            descriptor = self.pidfds.get(identity)
+            if descriptor is not None:
+                _linux_pidfd_signal(descriptor, signal_number)
+
+    def leader_exited(self) -> bool:
+        require(self.leader is not None and self.leader in self.pidfds,
+                "bounded command leader has no retained pidfd")
+        descriptor = self.pidfds[self.leader]
+        try:
+            poller = select.poll()
+            poller.register(descriptor, select.POLLIN)
+            events = poller.poll(0)
+        except (OSError, ValueError) as error:
+            raise BuildProvenanceError(
+                f"cannot poll bounded command leader pidfd: {error}") \
+                from error
+        return bool(events)
+
+    def _discover(
+        self,
+        snapshot: _ProcProcessSnapshot | Mapping[
+            int, tuple[int, int, int, int, str, int, int]],
+    ) -> set[tuple[int, int, int, int]]:
+        if isinstance(snapshot, _ProcProcessSnapshot):
+            records = snapshot.records
+            observed_descriptors = snapshot.descriptors
+        else:
+            records = snapshot
+            observed_descriptors = {}
+        targets = {
+            identity for identity in self.known
+            if (identity[0] in records and
+                records[identity[0]][3] == identity[1] and
+                records[identity[0]][5:] == identity[2:])
+        }
+        targets.update(self._direct_children(records, self.runner_pid))
+        changed = True
+        while changed:
+            changed = False
+            parents = {identity[0] for identity in targets}
+            for pid, record in records.items():
+                identity = (pid, record[3], record[5], record[6])
+                if record[0] in parents and identity not in targets:
+                    targets.add(identity)
+                    changed = True
+        for identity in sorted(targets):
+            record = records.get(identity[0])
+            if (record is not None and record[3] == identity[1] and
+                    record[5:] == identity[2:]):
+                if self._retain_pidfd(
+                        identity, record,
+                        observed_descriptor=observed_descriptors.get(
+                            identity[0])):
+                    # Only race-free retained identities survive beyond this
+                    # ancestry-qualified snapshot.  A vanished observation may
+                    # not later rebind an unrelated same-tick PID by number.
+                    self.known.add(identity)
+        return targets
+
+    def _terminate_and_reap_owned_tree(
+        self, process: subprocess.Popen[bytes] | None,
+    ) -> None:
+        deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
+        empty_scans = 0
+        while True:
+            with _proc_process_snapshot() as snapshot:
+                targets = self._discover(snapshot)
+                self._signal_retained(targets, signal.SIGKILL)
+                records = dict(snapshot.records)
+            for identity in sorted(self.known):
+                if process is not None and identity == self.leader:
+                    continue
+                record = records.get(identity[0])
+                if (record is None or record[3] != identity[1] or
+                        record[5:] != identity[2:]):
+                    continue
+                try:
+                    os.waitpid(identity[0], os.WNOHANG)
+                except (ChildProcessError, ProcessLookupError):
+                    pass
+                except OSError as error:
+                    raise BuildProvenanceError(
+                        f"cannot reap contained process {identity[0]}: "
+                        f"{error}") from error
+
+            with _proc_process_snapshot() as live_snapshot:
+                live = self._discover(live_snapshot)
+            other_live = (
+                live if process is None else
+                {identity for identity in live
+                 if identity != self.leader})
+            leader_done = process is None or self.leader_exited()
+            if leader_done and not other_live:
+                empty_scans += 1
+                if empty_scans >= 2:
+                    if process is not None:
+                        try:
+                            process.wait(timeout=0.1)
+                        except subprocess.TimeoutExpired as error:
+                            raise BuildProvenanceError(
+                                "bounded command pidfd became readable "
+                                "before the leader was waitable") from error
+                    self.proven_empty = True
+                    return
+            else:
+                empty_scans = 0
+            remaining = deadline - time.monotonic()
+            require(remaining > 0,
+                    "bounded command descendants survived SIGKILL")
+            time.sleep(min(0.01, remaining))
+
+    def terminate_and_reap(self) -> None:
+        process = self.process
+        require(self.active and process is not None and
+                self.leader is not None and self.leader[0] == process.pid,
+                "bounded command containment is not attached")
+        self._terminate_and_reap_owned_tree(process)
+
+    def terminate_unattached_and_reap(self) -> None:
+        require(self.active and self.process is None and self.leader is None,
+                "unattached command containment has invalid state")
+        self._terminate_and_reap_owned_tree(None)
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del tb
+        if not self.active:
+            return
+        cleanup_error: BaseException | None = None
+        restore_error: BaseException | None = None
+        close_error: BaseException | None = None
+        previous = self.previous_subreaper
+        try:
+            if self.process is not None and not self.proven_empty:
+                try:
+                    # This path deliberately runs even when the leader exited
+                    # zero, proving that no detached FD holder survived.
+                    if self.leader is None:
+                        opened = _open_proc_process_record(self.process.pid)
+                        if opened is not None:
+                            record, observed_descriptor = opened
+                            identity = (
+                                self.process.pid, record[3],
+                                record[5], record[6])
+                            try:
+                                if self._retain_pidfd(
+                                        identity, record,
+                                        observed_descriptor=
+                                        observed_descriptor):
+                                    self.leader = identity
+                                    self.known.add(identity)
+                            finally:
+                                os.close(observed_descriptor)
+                    if self.leader is None:
+                        # The direct child may already have been reaped by an
+                        # installed SIGCHLD handler while detached descendants
+                        # remain adopted by this subreaper.  Fall back to the
+                        # complete unattached-child sweep instead of leaking
+                        # those descendants on the attachment error path.
+                        unattached_process = self.process
+                        self.process = None
+                        self.terminate_unattached_and_reap()
+                        unattached_process.poll()
+                    else:
+                        self.terminate_and_reap()
+                except BaseException as error:
+                    cleanup_error = error
+            elif self.process is None:
+                try:
+                    # Popen can fail after creating a child, and an asynchronous
+                    # exception can land before the returned object is attached.
+                    # Prove that no such direct child or detached descendant
+                    # survives before restoring the prior subreaper state.
+                    self.terminate_unattached_and_reap()
+                except BaseException as error:
+                    cleanup_error = error
+        finally:
+            self.active = False
+            self.previous_subreaper = None
+            if previous is None:
+                restore_error = BuildProvenanceError(
+                    "previous child-subreaper state was lost")
+            else:
+                try:
+                    _set_child_subreaper(previous)
+                except BaseException as error:
+                    restore_error = error
+            try:
+                self._close_pidfds()
+            except BaseException as error:
+                close_error = error
+        if (cleanup_error is not None or restore_error is not None or
+                close_error is not None):
+            details = []
+            if cleanup_error is not None:
+                details.append(
+                    "descendant cleanup failed: " +
+                    f"{type(cleanup_error).__name__}: {cleanup_error}")
+            if restore_error is not None:
+                details.append(
+                    "subreaper restore failed: " +
+                    f"{type(restore_error).__name__}: {restore_error}")
+            if close_error is not None:
+                details.append(
+                    "pidfd close failed: " +
+                    f"{type(close_error).__name__}: {close_error}")
+            if exc is not None:
+                details.append(
+                    f"primary failure: {type(exc).__name__}: {exc}")
+            raise BuildProvenanceError("; ".join(details)) from (
+                cleanup_error or restore_error or close_error)
+
+
 def _run(
     command: Sequence[str], label: str, *, maximum_bytes: int = 4 << 20,
-    timeout: float = 120,
+    timeout: float = 120, inherited_descriptors: Sequence[int] = (),
+    executable_descriptor: int | None = None,
+    environment_overrides: Mapping[str, str] | None = None,
 ) -> bytes:
-    completed = subprocess.run(
-        list(command), stdin=subprocess.DEVNULL,
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env=GIT_ENVIRONMENT, timeout=timeout, check=False)
-    require(completed.returncode == 0,
-            f"{label} failed with rc={completed.returncode}: "
-            f"{completed.stderr.decode(errors='replace').strip()}")
-    require(len(completed.stdout) <= maximum_bytes,
-            f"{label} output exceeds its retained byte bound")
-    return completed.stdout
+    # This argv is passed directly to execve through Popen(shell=False), so
+    # CR/LF and empty data arguments are not shell syntax.  Only argv[0] must
+    # be nonempty, and NUL is the sole forbidden character in every element.
+    require(isinstance(command, Sequence) and
+            not isinstance(command, (str, bytes)) and command and
+            isinstance(command[0], str) and command[0] and
+            all(isinstance(item, str) and "\0" not in item
+                for item in command),
+            f"{label} command argv is invalid")
+    require(type(maximum_bytes) is int and maximum_bytes >= 0,
+            f"{label} output byte bound is invalid")
+    require(isinstance(timeout, (int, float)) and
+            not isinstance(timeout, bool) and
+            math.isfinite(float(timeout)) and timeout > 0,
+            f"{label} timeout is invalid")
+    descriptor_set = set(inherited_descriptors)
+    if executable_descriptor is not None:
+        require(type(executable_descriptor) is int and
+                executable_descriptor >= 0,
+                f"{label} executable descriptor is invalid")
+        descriptor_set.add(executable_descriptor)
+    pass_fds = tuple(sorted(descriptor_set))
+    require(all(type(descriptor) is int and descriptor >= 0
+                for descriptor in pass_fds),
+            f"{label} inherited descriptor set is invalid")
+    for descriptor in pass_fds:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"{label} inherited descriptor {descriptor} is invalid: "
+                f"{error}") from error
+    environment = dict(GIT_ENVIRONMENT)
+    if environment_overrides is not None:
+        require(all(
+                    isinstance(name, str) and
+                    re.fullmatch(r"[A-Z][A-Z0-9_]*", name) is not None and
+                    isinstance(value, str)
+                    for name, value in environment_overrides.items()),
+                f"{label} environment overrides are invalid")
+        for name, value in environment_overrides.items():
+            _require_safe_unicode(value, f"{label} environment {name}")
+            require("\0" not in value,
+                    f"{label} environment {name} contains NUL")
+            environment[name] = value
+
+    process: subprocess.Popen[bytes] | None = None
+    selector = selectors.DefaultSelector()
+    stdout = bytearray()
+    stderr = bytearray()
+    failure: str | None = None
+    returncode = -int(signal.SIGKILL)
+    try:
+        with _LinuxDescendantContainment() as containment:
+            process = subprocess.Popen(
+                list(command), stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=environment, pass_fds=pass_fds,
+                start_new_session=True,
+                executable=(
+                    f"/proc/self/fd/{executable_descriptor}"
+                    if executable_descriptor is not None else None))
+            containment.process = process
+            containment.attach(process)
+            require(process.stdout is not None and process.stderr is not None,
+                    f"{label} output pipes are unavailable")
+            streams = {
+                process.stdout.fileno(): (process.stdout, stdout,
+                                          maximum_bytes),
+                process.stderr.fileno(): (process.stderr, stderr,
+                                          maximum_bytes),
+            }
+            for stream, _output, _limit in streams.values():
+                os.set_blocking(stream.fileno(), False)
+                selector.register(stream, selectors.EVENT_READ)
+
+            def consume(
+                events: Sequence[tuple[selectors.SelectorKey, int]],
+            ) -> None:
+                nonlocal failure
+                for key, _mask in events:
+                    descriptor = key.fileobj.fileno()
+                    stream, output, limit = streams[descriptor]
+                    try:
+                        block = os.read(descriptor, 65536)
+                    except BlockingIOError:
+                        continue
+                    if not block:
+                        selector.unregister(stream)
+                        continue
+                    output.extend(block)
+                    if len(output) > limit and failure is None:
+                        failure = (
+                            f"{label} output exceeds its retained byte bound")
+
+            deadline = time.monotonic() + float(timeout)
+            while True:
+                if containment.leader_exited():
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    failure = (
+                        f"{label} exceeded {float(timeout):.3f} seconds")
+                    break
+                events = selector.select(min(remaining, 0.1))
+                consume(events)
+                if failure is not None:
+                    break
+
+            # Required on every path, including rc=0, before any inherited lock
+            # can leave this call's lifetime.  Do this as soon as the direct
+            # leader exits: a detached descendant may intentionally retain the
+            # stdout/stderr write ends, so waiting for pipe EOF first would
+            # misclassify the successful direct command as a timeout.
+            containment.terminate_and_reap()
+            if isinstance(process.returncode, int):
+                returncode = process.returncode
+
+            # Every contained writer is now gone.  Drain bytes already buffered
+            # in the nonblocking pipes and require prompt EOF; an open pipe with
+            # no owned writer would mean a descriptor escaped containment.
+            drain_deadline = (
+                time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS)
+            while selector.get_map():
+                remaining = drain_deadline - time.monotonic()
+                require(remaining > 0,
+                        f"{label} output pipes remained open after "
+                        "descendant cleanup")
+                events = selector.select(min(remaining, 0.05))
+                if not events:
+                    continue
+                consume(events)
+                if failure is not None and (
+                        len(stdout) > maximum_bytes or
+                        len(stderr) > maximum_bytes):
+                    break
+    finally:
+        selector.close()
+        if process is not None:
+            if process.stdout is not None:
+                process.stdout.close()
+            if process.stderr is not None:
+                process.stderr.close()
+
+    if failure is not None:
+        raise BuildProvenanceError(failure)
+    require(returncode == 0,
+            f"{label} failed with rc={returncode}: "
+            f"{stderr.decode(errors='replace').strip()}")
+    return bytes(stdout)
+
+
+def _replay_invocation_record(
+    command: Sequence[str], *,
+    executable_label: str,
+    executable: _RetainedFileSnapshot,
+    inherited_descriptors: Sequence[int],
+    environment_overrides: Mapping[str, str] | None,
+    maximum_bytes: int,
+    timeout: float,
+) -> dict[str, Any]:
+    """Publish the exact argv, environment, and immutable exec binding."""
+    require(isinstance(executable_label, str) and executable_label,
+            "replay invocation executable label is invalid")
+    descriptor = executable.executable_descriptor
+    pass_fds = sorted({descriptor, *inherited_descriptors})
+    environment = dict(GIT_ENVIRONMENT)
+    if environment_overrides is not None:
+        environment.update(environment_overrides)
+    return {
+        "schema": "leopard2-replay-invocation/v1",
+        "argv": list(command),
+        "environment": {
+            name: environment[name] for name in sorted(environment)
+        },
+        "pass_fds": pass_fds,
+        "maximum_output_bytes": maximum_bytes,
+        "timeout_seconds": timeout,
+        "executable": {
+            "label": executable_label,
+            "logical_argv0": command[0],
+            "sealed_descriptor": descriptor,
+            "sealed_sha256": executable.executable_identity["sha256"],
+            "sealed_size": executable.executable_identity["size"],
+            "sealed_seals": executable.executable_identity["seals"],
+        },
+    }
 
 
 def parse_cmake_cache(content: bytes) -> dict[str, str]:
@@ -136,16 +2760,32 @@ def parse_cmake_cache(content: bytes) -> dict[str, str]:
         text = content.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise BuildProvenanceError("CMakeCache.txt is not strict UTF-8") from error
+    require("\0" not in text and "\r" not in text,
+            "CMakeCache.txt contains a forbidden delimiter")
     result: dict[str, str] = {}
-    for line in text.splitlines():
-        if not line or line.startswith(("#", "//")) or "=" not in line:
+    # CMakeCache.txt is LF-framed.  splitlines() would incorrectly interpret
+    # Unicode line separators as records.  They are unsafe evidence content
+    # and are rejected below together with controls and bidi format marks.
+    for line in text.split("\n"):
+        _require_safe_unicode(line, "CMakeCache.txt")
+        if not line or line.startswith(("#", "//")):
             continue
+        require("=" in line,
+                "CMakeCache.txt contains an unframed cache record")
         name_and_type, value = line.split("=", 1)
-        if ":" not in name_and_type:
-            continue
-        name, unused_type = name_and_type.split(":", 1)
-        require(name not in result,
-                f"CMakeCache.txt contains duplicate key {name}")
+        require(name_and_type.count(":") == 1,
+                "CMakeCache.txt contains a malformed typed key")
+        name, entry_type = name_and_type.split(":", 1)
+        require(bool(name) and
+                re.fullmatch(r"[A-Za-z0-9_.+-]+", name) is not None and
+                entry_type in CMAKE_CACHE_ENTRY_TYPES and
+                name not in result,
+                f"CMakeCache.txt contains a malformed or duplicate key "
+                f"{name!r}")
+        allowed_types = CMAKE_CACHE_REQUIRED_ENTRY_TYPES.get(name)
+        require(allowed_types is None or entry_type in allowed_types,
+                f"CMakeCache.txt key {name} has type {entry_type}, "
+                f"expected one of {sorted(allowed_types or ())}")
         result[name] = value
     return result
 
@@ -170,27 +2810,256 @@ def _resolve_build_operand(build: Path, directory: Path, value: str) -> Path:
     return resolved
 
 
-def _recipe_objects(content: bytes, build: Path, label: str) -> list[Path]:
+def _require_shell_literal_tokens(
+    tokens: Sequence[str], label: str,
+) -> None:
+    """Reject shell syntax even when shlex leaves it fused into one token."""
+    require(tokens and all(
+                token and not any(character in token
+                                  for character in SHELL_RECIPE_META) and
+                not any(character in token for character in "\0\r\n")
+                for token in tokens),
+            f"{label} contains shell control, substitution, or expansion "
+            "syntax")
+
+
+def _recipe_commands(content: bytes, label: str) -> list[list[str]]:
+    """Parse a CMake Unix-Makefiles link recipe without shell delegation."""
     try:
         text = content.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
         raise BuildProvenanceError(f"{label} is not strict UTF-8") from error
-    objects: list[Path] = []
-    for line in text.splitlines():
+    require("\0" not in text and "\r" not in text,
+            f"{label} contains a forbidden delimiter")
+    commands: list[list[str]] = []
+    for line in text.split("\n"):
         if not line.strip():
             continue
         try:
             tokens = shlex.split(line, posix=True)
         except ValueError as error:
-            raise BuildProvenanceError(f"cannot parse {label}: {error}") from error
-        require(tokens and all("@" not in token for token in tokens),
+            raise BuildProvenanceError(
+                f"cannot parse {label}: {error}") from error
+        require(tokens and all(token and "@" not in token for token in tokens),
                 f"{label} contains an empty command or response file")
-        for token in tokens:
-            if token.endswith((".o", ".obj")):
-                objects.append(_resolve_build_operand(build, build, token))
+        _require_shell_literal_tokens(tokens, label)
+        commands.append(tokens)
+    require(commands, f"{label} contains no command")
+    return commands
+
+
+def _require_exact_driver(
+    token: str, expected: Path, label: str,
+) -> None:
+    """Require CMake's retained driver spelling, not merely a symlink alias."""
+    require(expected.is_absolute() and token == str(expected),
+            f"{label} uses another command driver")
+    try:
+        resolved = Path(token).resolve(strict=True)
+        expected_resolved = expected.resolve(strict=True)
+    except (OSError, ValueError) as error:
+        raise BuildProvenanceError(
+            f"{label} has an invalid command driver") from error
+    require(resolved == expected_resolved,
+            f"{label} uses another command driver")
+
+
+def _normalize_root_token(
+    token: str, root_path: Path, replacement: str,
+) -> str:
+    """Replace exact root-path occurrences, never arbitrary substrings.
+
+    CMake emits the root as a standalone token, after path-valued option
+    prefixes such as -I, or after an '='.  Replacing an occurrence followed by
+    punctuation (for example ``/tmp/build-suffix``) would hide a semantic argv
+    difference between the candidate and clean rebuild.
+    """
+    root = str(root_path)
+    require(root_path.is_absolute() and root and "\0" not in token and
+            replacement,
+            "compile/link build-root normalization input is invalid")
+    attached_path_options = (
+        "-I", "-L", "-F", "-isystem", "-iquote", "-idirafter",
+        "-include", "-imacros",
+    )
+    result: list[str] = []
+    cursor = 0
+    while True:
+        position = token.find(root, cursor)
+        if position < 0:
+            result.append(token[cursor:])
+            break
+        end = position + len(root)
+        prefix = token[:position]
+        left_boundary = (
+            position == 0 or token[position - 1] in " \t'\"=,:"
+        )
+        if not left_boundary:
+            word_start = max(
+                token.rfind(" ", 0, position),
+                token.rfind("\t", 0, position),
+                token.rfind("'", 0, position),
+                token.rfind('"', 0, position),
+            ) + 1
+            option_prefix = token[word_start:position]
+            left_boundary = option_prefix in attached_path_options
+        right_boundary = (
+            end == len(token) or token[end] in "/ \t'\""
+        )
+        result.append(token[cursor:position])
+        if left_boundary and right_boundary:
+            result.append(replacement)
+        else:
+            result.append(root)
+        cursor = end
+    return "".join(result)
+
+
+def _normalize_build_token(token: str, build: Path) -> str:
+    return _normalize_root_token(token, build, "${BUILD_ROOT}")
+
+
+def _normalize_build_argv(
+    tokens: Sequence[str], build: Path, source: Path | None = None,
+) -> list[str]:
+    result = [_normalize_build_token(token, build) for token in tokens]
+    if source is not None:
+        result = [
+            _normalize_root_token(token, source, "${SOURCE_ROOT}")
+            for token in result
+        ]
+    return result
+
+
+def _canonical_compile_argv(
+    entry: Mapping[str, Any],
+    tokens: Sequence[str],
+    source: Path,
+    build: Path,
+    source_root: Path | None = None,
+) -> list[str]:
+    """Validate CMake's direct compile shape and retain its exact semantics."""
+    require(tokens and all(
+                token and not any(character in token for character in "\0\r\n")
+                for token in tokens),
+            f"compile command contains an invalid token for {source.name}")
+    _require_shell_literal_tokens(
+        tokens, f"compile command for {source.name}")
+    compile_positions = [
+        index for index, token in enumerate(tokens) if token == "-c"
+    ]
+    require(compile_positions == [len(tokens) - 2],
+            f"compile command has a non-canonical source operand for "
+            f"{source.name}")
+    retained_source = entry.get("file")
+    require(isinstance(retained_source, str) and
+            tokens[-1] == retained_source and
+            Path(tokens[-1]).resolve(strict=True) == source,
+            "candidate compile command source metadata differs from argv")
+    _compile_output(entry, tokens, build)
+    return _normalize_build_argv(tokens, build, source_root)
+
+
+def _archive_recipe_semantics(
+    content: bytes,
+    build: Path,
+    archive: Path,
+    archiver: Path,
+    ranlib: Path,
+) -> tuple[list[Path], list[list[str]]]:
+    """Validate the exact two-command CMake static-archive recipe shape."""
+    label = "candidate archive link recipe"
+    commands = _recipe_commands(content, label)
+    require(len(commands) == 2,
+            f"{label} must contain exactly archive and index commands")
+    archive_command, index_command = commands
+    require(len(archive_command) >= 4,
+            f"{label} archive command is incomplete")
+    _require_exact_driver(archive_command[0], archiver, label)
+    require(archive_command[1] == "qc",
+            f"{label} uses non-canonical archive flags")
+    archive_operand = _resolve_build_operand(
+        build, build, archive_command[2])
+    require(archive_operand == archive,
+            f"{label} writes another archive")
+    object_tokens = archive_command[3:]
+    require(all(not token.startswith("-") and
+                token.endswith((".o", ".obj"))
+                for token in object_tokens),
+            f"{label} contains a non-object or option-shaped archive operand")
+    objects = [
+        _resolve_build_operand(build, build, token)
+        for token in object_tokens
+    ]
     require(objects and len(objects) == len(set(objects)),
             f"{label} object closure is empty or contains duplicates")
-    return objects
+
+    require(len(index_command) == 2,
+            f"{label} index command has extra operands")
+    _require_exact_driver(index_command[0], ranlib, label)
+    require(_resolve_build_operand(build, build, index_command[1]) == archive,
+            f"{label} indexes another archive")
+    return objects, [
+        _normalize_build_argv(command, build) for command in commands
+    ]
+
+
+def _executable_recipe_semantics(
+    content: bytes,
+    build: Path,
+    executable: Path,
+    archive: Path,
+    compiler: Path,
+) -> tuple[list[Path], list[str]]:
+    """Validate the one canonical GNU/CMake production benchmark link argv."""
+    label = "candidate executable link recipe"
+    commands = _recipe_commands(content, label)
+    require(len(commands) == 1,
+            f"{label} must contain exactly one command")
+    tokens = commands[0]
+    _require_exact_driver(tokens[0], compiler, label)
+    target = executable.name
+    object_token = (
+        f"CMakeFiles/{target}.dir/bench/leopard2/benchmark.cpp.o")
+    canonical_prefix = [
+        str(compiler), "-Wall", "-Wextra", "-fopenmp",
+        "-O3", "-DNDEBUG", "-O3", object_token,
+        "-o", target, archive.name,
+    ]
+    require(len(tokens) == len(canonical_prefix) + 2 and
+            tokens[:len(canonical_prefix)] == canonical_prefix,
+            f"{label} differs from the canonical CMake compiler, flags, "
+            "benchmark object, output, or archive operands")
+
+    def system_runtime(token: str, lexical_name: str) -> Path:
+        operand = Path(token)
+        require(operand.is_absolute() and operand.name == lexical_name,
+                f"{label} contains a non-canonical system runtime operand")
+        try:
+            resolved = operand.resolve(strict=True)
+            metadata = resolved.stat()
+            allowed_roots = tuple(
+                root.resolve(strict=True)
+                for root in (Path("/usr/lib"), Path("/lib"))
+                if root.exists())
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"{label} system runtime operand is invalid: {error}") \
+                from error
+        require(stat.S_ISREG(metadata.st_mode) and
+                any(resolved.is_relative_to(root)
+                    for root in allowed_roots),
+                f"{label} system runtime operand is outside system "
+                "library roots")
+        return resolved
+
+    system_runtime(tokens[-2], "libgomp.so")
+    system_runtime(tokens[-1], "libpthread.a")
+    benchmark_object = _resolve_build_operand(build, build, object_token)
+    require(_resolve_build_operand(build, build, target) == executable and
+            _resolve_build_operand(build, build, archive.name) == archive,
+            f"{label} writes or links another artifact")
+    return [benchmark_object], _normalize_build_argv(tokens, build)
 
 
 def _compile_tokens(entry: Mapping[str, Any]) -> list[str]:
@@ -207,11 +3076,48 @@ def _compile_tokens(entry: Mapping[str, Any]) -> list[str]:
     value = entry["command"]
     require(isinstance(value, str) and value,
             "compile command string is malformed")
+    # Unlike the JSON ``arguments`` representation, this retained string is a
+    # shell recipe.  Reject delimiters and shell operators in the raw text
+    # before shlex can erase a command-separating newline or an escape.
+    require(not any(character in value for character in "\0\r\n") and
+            not any(character in value for character in SHELL_RECIPE_META),
+            "compile command string contains shell control, substitution, "
+            "or expansion syntax")
     try:
         return shlex.split(value, posix=True)
     except ValueError as error:
         raise BuildProvenanceError(
             f"cannot parse compile command: {error}") from error
+
+
+def _compile_recipe_identity(
+    entry: Mapping[str, Any], build: Path, source: Path | None = None,
+) -> dict[str, str]:
+    """Retain the exact compile_commands representation and safe variation."""
+    if "arguments" in entry:
+        return {"representation": "arguments"}
+    command = entry.get("command")
+    require(isinstance(command, str) and command,
+            "compile command string is malformed")
+    return {
+        "representation": "command",
+        "command": command,
+        "normalized_command": _normalize_root_token(
+            _normalize_build_token(command, build),
+            source, "${SOURCE_ROOT}") if source is not None else
+        _normalize_build_token(command, build),
+    }
+
+
+def _require_exact_compile_object_operand(
+    entry: Mapping[str, Any], normalized_recipe_operand: str,
+    build: Path, label: str,
+) -> None:
+    retained_output = entry.get("output")
+    require(isinstance(retained_output, str) and retained_output and
+            _normalize_build_token(retained_output, build) ==
+            normalized_recipe_operand,
+            f"{label} does not exactly name its compile output")
 
 
 def _compile_output(
@@ -236,55 +3142,222 @@ def _compile_output(
     return _resolve_build_operand(build, directory, output_value)
 
 
-def _validate_compile_flags(tokens: Sequence[str], source: Path) -> str:
-    require(tokens.count("-c") == 1 and "-O3" in tokens,
-            f"compile command is not an optimized compile for {source.name}")
-    require(all("@" not in token for token in tokens),
-            f"compile command uses an unbound response file for {source.name}")
-    forbidden_common = (
-        "-march=native", "-mtune=native", "-Ofast", "-ffast-math",
-        "-flto", "-fprofile-generate", "-fprofile-use",
-        "-fsanitize=", "-O0", "-O1", "-O2", "-Os", "-Og",
-    )
-    require(not any(token == item or token.startswith(item)
-                    for token in tokens for item in forbidden_common),
-            f"compile command has a non-canonical performance flag for "
+def _validate_compile_flags(
+    tokens: Sequence[str], source: Path, *,
+    source_root: Path | None = None,
+    build_root: Path | None = None,
+    cache: Mapping[str, Any] | None = None,
+    library_sources: set[Path] | None = None,
+) -> str:
+    """Accept only the direct GCC/Clang argv emitted by this CMake graph.
+
+    A denylist cannot bind the compilation closure: ``-B``, ``-specs``,
+    plugins, wrappers, response files, sysroots, and driver-specific escape
+    hatches can all select unretained code without spelling an ``-m`` flag.
+    This grammar instead enumerates every admissible option and definition.
+    """
+    require(len(tokens) >= 5 and
+            tokens[-4] == "-o" and tokens[-2] == "-c" and
+            tokens[-1] == str(source) and
+            tokens.count("-o") == 1 and tokens.count("-c") == 1,
+            f"compile command has a non-canonical output/source tail for "
             f"{source.name}")
-    positive_avx512 = [token for token in tokens
-                       if token.startswith("-mavx512")]
-    require(not positive_avx512,
-            f"pure-AVX2 build compiled {source.name} with AVX-512")
+    require(all(token and "@" not in token for token in tokens),
+            f"compile command uses an empty or response-file operand for "
+            f"{source.name}")
+    if build_root is not None:
+        require(build_root.is_absolute() and
+                _resolve_build_operand(
+                    build_root, build_root, tokens[-3]).is_relative_to(
+                        build_root),
+                f"compile command output escapes its build for {source.name}")
+    cache = {} if cache is None else cache
+    library_sources = set() if library_sources is None else library_sources
+
     name = source.name
     if name.startswith("Leopard2BackendGFNI"):
-        # The GFNI member is the AVX2 algorithms recompiled with the affine
-        # kernels.  Its data path stays VEX 256-bit, so it is admissible in a
-        # pure-AVX2 build, but it must carry the affine flag explicitly and
-        # remain EVEX-free.
-        require("-mavx2" in tokens and "-mgfni" in tokens and
-                "-mno-avx512f" in tokens,
-                f"GFNI source lacks exact AVX2/GFNI/no-AVX512 flags: {name}")
-        return "avx2-gfni-no-avx512"
-    require("-mgfni" not in tokens,
-            f"non-GFNI source compiled with the affine ISA: {name}")
-    if name.startswith("Leopard2BackendAVX2"):
-        require("-mavx2" in tokens and "-mno-avx512f" in tokens,
-                f"AVX2 source lacks exact AVX2/no-AVX512 flags: {name}")
-        return "avx2-no-avx512"
-    if name == "Leopard2BackendSSSE3.cpp":
-        require("-mssse3" in tokens and "-mno-avx" in tokens and
-                not any(token.startswith("-mavx") for token in tokens),
-                "SSSE3 source lacks exact SSSE3/no-AVX flags")
-        return "ssse3-no-avx"
-    require(not any(token.startswith(("-mavx", "-mssse3"))
-                    for token in tokens),
-            f"portable source has a target-local ISA flag: {name}")
-    return "portable-core"
+        profile = "avx2-gfni-no-avx512"
+        expected_target_flags = (
+            "-mavx2", "-mgfni", "-mno-avx512f")
+    elif name.startswith("Leopard2BackendAVX2"):
+        profile = "avx2-no-avx512"
+        expected_target_flags = ("-mavx2", "-mno-avx512f")
+    elif name == "Leopard2BackendSSSE3.cpp":
+        profile = "ssse3-no-avx"
+        expected_target_flags = ("-mssse3", "-mno-avx")
+    else:
+        profile = "portable-core"
+        expected_target_flags = ()
+
+    expected_options = Counter({
+        "-Wall": 1,
+        "-Wextra": 1,
+        "-fopenmp": (
+            1 if name.startswith((
+                "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
+                "Leopard2BackendGFNI")) else 2),
+        "-O3": 2,
+        "-std=gnu++11": 1,
+    })
+    expected_options.update(expected_target_flags)
+    if (name.startswith(("Leopard2BackendAVX2",
+                         "Leopard2BackendGFNI")) and
+            _cmake_true(cache.get("LEO2_FLAG_FALIGN_FUNCTIONS_64"))):
+        expected_options["-falign-functions=64"] = 1
+    if source_root is not None:
+        require(source_root.is_absolute(),
+                "compile source root is not absolute")
+        expected_options[f"-I{source_root}"] = 1
+
+    definitions = [
+        token for token in tokens[1:-4] if token.startswith("-D")]
+    observed_options = Counter(
+        token for token in tokens[1:-4] if not token.startswith("-D"))
+    require(observed_options == expected_options,
+            f"{profile} source has a non-canonical or indirect compile "
+            f"option: {name}: observed={sorted(observed_options.elements())!r} "
+            f"expected={sorted(expected_options.elements())!r}")
+    require(len(definitions) == len(set(definitions)),
+            f"{profile} source has duplicate compile definitions: {name}")
+
+    expected_definitions: set[str] = {"-DNDEBUG"}
+    if source_root is not None:
+        available_names = {path.name for path in library_sources}
+        enhanced_backend = name.startswith((
+            "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
+            "Leopard2BackendGFNI"))
+        if source in library_sources and not enhanced_backend:
+            expected_definitions.update((
+                "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+                "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            ))
+            for backend_name, definition in (
+                ("Leopard2BackendSSSE3.cpp",
+                 "-DLEO2_HAVE_SSSE3_BACKEND=1"),
+                ("Leopard2BackendAVX2.cpp",
+                 "-DLEO2_HAVE_AVX2_BACKEND=1"),
+                ("Leopard2BackendGFNI.cpp",
+                 "-DLEO2_HAVE_GFNI_BACKEND=1"),
+            ):
+                if backend_name in available_names:
+                    expected_definitions.add(definition)
+            if cache.get("LEO2_BACKEND_VARIANT") == "avx2":
+                expected_definitions.add("-DLEO2_BACKEND_FORCE_AVX2=1")
+            if (name == "leopard2.cpp" and
+                    cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE")
+                    in {"1", "2"}):
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=" +
+                    str(cache["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"]))
+        elif name.startswith("Leopard2BackendGFNI"):
+            expected_definitions.update((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_HAVE_GFNI_BACKEND=1",
+            ))
+        elif source == (
+                source_root / "bench/leopard2/benchmark.cpp").resolve(
+                    strict=True):
+            expected_header = (
+                build_root /
+                "generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h"
+                if build_root is not None else None)
+            require(expected_header is not None,
+                    "benchmark compile grammar lacks a build root")
+            expected_definitions.update((
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                '-DLEO2_BENCHMARK_BUILD_TYPE="Release"',
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=" +
+                f'"{expected_header}"',
+            ))
+            hashes = [
+                token for token in definitions
+                if token.startswith(
+                    "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=")]
+            require(len(hashes) == 1 and re.fullmatch(
+                        r'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256='
+                        r'"[0-9a-f]{64}"', hashes[0]) is not None,
+                    "benchmark compile configuration digest is malformed")
+            expected_definitions.add(hashes[0])
+
+    require(set(definitions) == expected_definitions,
+            f"{profile} source has non-canonical compile definitions: "
+            f"{name}: observed={sorted(definitions)!r} "
+            f"expected={sorted(expected_definitions)!r}")
+    return profile
 
 
-def _tracked_files(source: Path) -> set[Path]:
+def _compiler_subtool_identities(
+    compiler: Path, language: str,
+    inherited_descriptors: Sequence[int],
+) -> list[dict[str, Any]]:
+    """Bind GCC/Clang external frontend, assembler, and linker helpers."""
+    require(language in ("c", "c++"), "compiler subtool language is invalid")
+    names = (
+        ("cc1", "as", "collect2", "ld")
+        if language == "c" else
+        ("cc1plus", "as", "collect2", "ld"))
+    discovered: dict[Path, str] = {}
+    with _RetainedFileSnapshot(
+            compiler, f"candidate {language} compiler subtool driver"
+            ) as driver:
+        for name in names:
+            raw = _run(
+                (str(compiler), f"-print-prog-name={name}"),
+                f"candidate {language} compiler {name} lookup",
+                maximum_bytes=MAX_METADATA_BYTES,
+                inherited_descriptors=inherited_descriptors,
+                executable_descriptor=driver.executable_descriptor)
+            try:
+                value = raw.decode("utf-8", errors="strict").strip()
+            except UnicodeDecodeError as error:
+                raise BuildProvenanceError(
+                    f"candidate {language} compiler {name} path is not "
+                    "strict UTF-8") from error
+            _require_safe_unicode(
+                value, f"candidate {language} compiler {name} path")
+            require(value and "\n" not in value and "\r" not in value,
+                    f"candidate {language} compiler {name} lookup is "
+                    "malformed")
+            candidate = Path(value)
+            if not candidate.is_absolute():
+                located = shutil.which(value, path=GIT_ENVIRONMENT["PATH"])
+                if located is None:
+                    # Integrated frontends/assemblers legitimately report an
+                    # unresolved lexical name.  They have no pathname to race.
+                    continue
+                candidate = Path(located)
+            try:
+                resolved = candidate.resolve(strict=True)
+            except OSError as error:
+                raise BuildProvenanceError(
+                    f"candidate {language} compiler {name} subtool is "
+                    f"invalid: {error}") from error
+            require(resolved.is_file(),
+                    f"candidate {language} compiler {name} subtool is not "
+                    "a file")
+            discovered.setdefault(resolved, name)
+    records = []
+    for path, name in sorted(
+            discovered.items(), key=lambda item: str(item[0])):
+        records.append({
+            "language": language,
+            "role": name,
+            "identity": file_identity(
+                path, f"candidate {language} compiler {name} subtool"),
+        })
+    require(records,
+            f"candidate {language} compiler exposed no bindable subtool")
+    return records
+
+
+def _tracked_files(
+    source: Path, *, inherited_descriptors: Sequence[int] = (),
+) -> set[Path]:
     git = Path("/usr/bin/git").resolve(strict=True)
     raw = _run((str(git), "-C", str(source), "ls-files", "-z"),
-               "candidate tracked-file inventory", maximum_bytes=32 << 20)
+               "candidate tracked-file inventory", maximum_bytes=32 << 20,
+               inherited_descriptors=inherited_descriptors)
     result = set()
     for item in raw.split(b"\0"):
         if not item:
@@ -329,19 +3402,72 @@ def _expected_library_sources(
     return expected
 
 
+def _require_compile_driver(
+    tokens: Sequence[str],
+    source: Path,
+    c_compiler: Path,
+    cxx_compiler: Path,
+) -> None:
+    """Bind each configured compile entry to its exact language driver.
+
+    CMake emits entries for the C ABI tests when LEO2_BUILD_TESTS is enabled,
+    even though those objects do not enter the production archive.  They are
+    valid metadata only when a .c source uses the cached C compiler; every
+    supported C++ suffix must use the cached C++ compiler.  Looking at argv[0]
+    also rejects unbound compiler launchers.
+    """
+    suffix = source.suffix
+    if suffix == ".c":
+        expected = c_compiler
+    elif suffix in (".C", ".cc", ".cpp", ".cxx"):
+        expected = cxx_compiler
+    else:
+        raise BuildProvenanceError(
+            f"candidate compile command uses unsupported source language: "
+            f"{source.name}")
+    require(bool(tokens),
+            "candidate compile command omits its language compiler")
+    require(not any(token.startswith("@") for token in tokens),
+            "candidate compile command uses an unbound response file")
+    _require_exact_driver(
+        tokens[0], expected, "candidate compile command")
+
+
 def candidate_build_provenance(
     build_root: Path | str,
     source_root: Path | str,
     executable: Path | str,
     executable_target: str,
+    *,
+    inherited_descriptors: Sequence[int] = (),
+    tracked_source_manifest: Mapping[str, Any] | None = None,
+    logical_source_root: Path | str | None = None,
 ) -> dict[str, Any]:
     """Capture and validate one pure-AVX2 production benchmark build."""
     build = Path(build_root).resolve(strict=True)
     source = Path(source_root).resolve(strict=True)
+    logical_source = (
+        source if logical_source_root is None else
+        Path(logical_source_root).resolve(strict=True))
     require(build.is_dir(), "candidate build root is not a directory")
     require(source.is_dir(), "candidate source root is not a directory")
     require(executable_target in {"bench_leopard2", "bench_leopard2_allk"},
             "unsupported candidate benchmark target")
+    source_manifest = (
+        _capture_tracked_source_tree(
+            source, inherited_descriptors=inherited_descriptors)
+        if tracked_source_manifest is None else
+        _verify_tracked_source_manifest(source, tracked_source_manifest)
+    )
+    manifest_files = source_manifest.get("files")
+    require(isinstance(manifest_files, list) and manifest_files,
+            "candidate tracked source manifest is empty")
+    manifest_by_path = {
+        record["path"]: record for record in manifest_files
+        if isinstance(record, dict) and isinstance(record.get("path"), str)
+    }
+    require(len(manifest_by_path) == len(manifest_files),
+            "candidate tracked source manifest is malformed or duplicated")
 
     expected_executable = (build / executable_target).resolve(strict=True)
     requested_executable = Path(executable).resolve(strict=True)
@@ -365,6 +3491,8 @@ def candidate_build_provenance(
         "LEO2_BUILD_BENCHMARKS": "ON",
         "LEO2_BUILD_FUZZERS": "OFF",
         "LEO2_ENABLE_CUDA": "OFF",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
         "LEOPARD_ENABLE_GF8": "ON",
         "LEOPARD_ENABLE_GF16": "ON",
     }
@@ -372,12 +3500,27 @@ def candidate_build_provenance(
         require(cache.get(name) == expected,
                 f"candidate CMake cache {name} is {cache.get(name)!r}, "
                 f"expected {expected!r}")
+    benchmark_git_value = cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE")
+    locator_git_value = cache.get("LEO2_LOCATOR_GIT_EXECUTABLE")
+    require(isinstance(benchmark_git_value, str) and benchmark_git_value and
+            isinstance(locator_git_value, str) and locator_git_value and
+            Path(benchmark_git_value).is_absolute() and
+            Path(locator_git_value).is_absolute() and
+            benchmark_git_value == locator_git_value and
+            Path(benchmark_git_value).resolve(strict=True) ==
+            Path(locator_git_value).resolve(strict=True),
+            "candidate CMake cache does not bind one exact Git executable")
+    benchmark_git_identity = file_identity(
+        benchmark_git_value, "candidate benchmark Git executable")
     if executable_target == "bench_leopard2_allk":
         require(cache.get("LEO2_BUILD_ALLK_DIAGNOSTIC") == "ON",
                 "all-K candidate target was not explicitly enabled")
     variant = cache.get("LEO2_BACKEND_VARIANT")
     require(variant in {"auto", "avx2"},
             "candidate backend variant is not production auto or AVX2")
+    small_direct_mode = cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE")
+    require(small_direct_mode in {"0", "1", "2"},
+            "candidate small-direct selector is not exactly 0, 1, or 2")
     require(_cmake_true(cache.get("LEO2_FLAG_MAVX2")) and
             _cmake_true(cache.get("LEO2_FLAG_MNO_AVX512F")),
             "candidate compiler lacks the required pure-AVX2 flags")
@@ -393,7 +3536,9 @@ def candidate_build_provenance(
     require(cache.get("CMAKE_CXX_FLAGS") == "" and
             cache.get("CMAKE_CXX_FLAGS_RELEASE") == "-O3 -DNDEBUG",
             "candidate CMake flags differ from the canonical Release profile")
-    for name in ("CMAKE_CXX_COMPILER_LAUNCHER", "CMAKE_CXX_COMPILER_ARG1",
+    for name in ("CMAKE_C_COMPILER_LAUNCHER", "CMAKE_C_COMPILER_ARG1",
+                 "CMAKE_C_COMPILER_TARGET",
+                 "CMAKE_CXX_COMPILER_LAUNCHER", "CMAKE_CXX_COMPILER_ARG1",
                  "CMAKE_CXX_COMPILER_TARGET", "CMAKE_SYSROOT",
                  "CMAKE_TOOLCHAIN_FILE"):
         require(not cache.get(name),
@@ -408,42 +3553,71 @@ def candidate_build_provenance(
     compiler_invocation = cache.get("CMAKE_CXX_COMPILER", "")
     require(bool(compiler_invocation),
             "candidate CMake cache has no C++ compiler")
-    compiler = Path(compiler_invocation).resolve(strict=True)
-    compiler_identity = file_identity(compiler, "candidate C++ compiler")
-    compiler_version = _run((str(compiler), "--version"),
-                            "candidate compiler version")
+    compiler = Path(compiler_invocation)
+    require(compiler.is_absolute(),
+            "candidate C++ compiler invocation is not absolute")
+    with _RetainedFileSnapshot(
+            compiler, "candidate C++ compiler") as compiler_snapshot:
+        compiler_identity = compiler_snapshot.identity
+        compiler_version = _run(
+            (str(compiler), "--version"), "candidate compiler version",
+            inherited_descriptors=inherited_descriptors,
+            executable_descriptor=compiler_snapshot.executable_descriptor)
+    c_compiler_invocation = cache.get("CMAKE_C_COMPILER", "")
+    require(bool(c_compiler_invocation),
+            "candidate CMake cache has no C compiler")
+    c_compiler = Path(c_compiler_invocation)
+    require(c_compiler.is_absolute(),
+            "candidate C compiler invocation is not absolute")
+    c_compiler_identity = file_identity(
+        c_compiler, "candidate C compiler")
+    make_invocation = cache.get("CMAKE_MAKE_PROGRAM", "")
+    linker_invocation = cache.get("CMAKE_LINKER", "")
+    require(bool(make_invocation) and bool(linker_invocation),
+            "candidate CMake cache lacks its make program or linker")
+    make_program = Path(make_invocation)
+    linker = Path(linker_invocation)
+    require(make_program.is_absolute() and linker.is_absolute(),
+            "candidate make program or linker invocation is not absolute")
+    make_program_identity = file_identity(
+        make_program, "candidate make program")
+    linker_identity = file_identity(linker, "candidate linker")
+    compiler_subtools = (
+        _compiler_subtool_identities(
+            c_compiler, "c", inherited_descriptors) +
+        _compiler_subtool_identities(
+            compiler, "c++", inherited_descriptors)
+    )
 
     commands_identity, commands_bytes = file_snapshot(
         commands_path, "candidate compile commands",
         maximum_bytes=MAX_METADATA_BYTES)
-    try:
-        entries = json.loads(commands_bytes.decode("utf-8", errors="strict"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise BuildProvenanceError(
-            f"candidate compile_commands.json is invalid: {error}") from error
+    entries = _strict_json_loads(
+        commands_bytes, "candidate compile_commands.json")
     require(isinstance(entries, list) and entries,
             "candidate compile command closure is empty")
-    by_output: dict[Path, tuple[Mapping[str, Any], list[str], Path]] = {}
+    by_output: dict[
+        Path, tuple[
+            Mapping[str, Any], list[str], list[str], Path, dict[str, str],
+        ]
+    ] = {}
     for entry in entries:
         require(isinstance(entry, dict) and
                 isinstance(entry.get("file"), str),
                 "candidate compile command entry is malformed")
         tokens = _compile_tokens(entry)
-        require(tokens and
-                Path(tokens[0]).resolve(strict=True) == compiler,
-                "candidate compile command uses another compiler")
         source_operand = Path(entry["file"]).resolve(strict=True)
-        compile_positions = [index for index, token in enumerate(tokens)
-                             if token == "-c"]
-        require(len(compile_positions) == 1 and
-                compile_positions[0] + 1 < len(tokens) and
-                Path(tokens[compile_positions[0] + 1]).resolve(strict=True) ==
-                source_operand,
-                "candidate compile command source metadata differs from argv")
+        _require_compile_driver(
+            tokens, source_operand, c_compiler, compiler)
+        normalized_arguments = _canonical_compile_argv(
+            entry, tokens, source_operand, build, source)
+        recipe_identity = _compile_recipe_identity(entry, build, source)
         output = _compile_output(entry, tokens, build)
         require(output not in by_output,
                 f"duplicate candidate compile output: {output}")
-        by_output[output] = (entry, tokens, source_operand)
+        by_output[output] = (
+            entry, tokens, normalized_arguments, source_operand,
+            recipe_identity)
 
     archive_recipe_identity, archive_recipe_bytes = file_snapshot(
         archive_recipe_path, "candidate archive link recipe",
@@ -451,14 +3625,47 @@ def candidate_build_provenance(
     executable_recipe_identity, executable_recipe_bytes = file_snapshot(
         executable_recipe_path, "candidate executable link recipe",
         maximum_bytes=MAX_METADATA_BYTES)
-    archive_objects = _recipe_objects(
-        archive_recipe_bytes, build, "candidate archive link recipe")
-    executable_objects = _recipe_objects(
-        executable_recipe_bytes, build, "candidate executable link recipe")
+
+    ar_invocation = cache.get("CMAKE_AR", "")
+    require(bool(ar_invocation), "candidate CMake cache has no archiver")
+    archiver = Path(ar_invocation)
+    require(archiver.is_absolute(),
+            "candidate archiver invocation is not absolute")
+    ranlib_invocation = cache.get("CMAKE_RANLIB", "")
+    require(bool(ranlib_invocation), "candidate CMake cache has no ranlib")
+    ranlib = Path(ranlib_invocation)
+    require(ranlib.is_absolute(),
+            "candidate ranlib invocation is not absolute")
+    with _RetainedFileSnapshot(
+            archiver, "candidate archiver") as archiver_snapshot, \
+            _RetainedFileSnapshot(
+                ranlib, "candidate ranlib") as ranlib_snapshot, \
+            _RetainedFileSnapshot(
+                compiler,
+                "candidate executable-link compiler") as link_compiler:
+        archiver_identity = archiver_snapshot.identity
+        ranlib_identity = ranlib_snapshot.identity
+        require(link_compiler.identity == compiler_identity,
+                "candidate C++ compiler changed between version and link "
+                "recipe validation")
+        archive_objects, archive_link_commands = _archive_recipe_semantics(
+            archive_recipe_bytes, build, archive, archiver, ranlib)
+        executable_objects, executable_link_command = \
+            _executable_recipe_semantics(
+                executable_recipe_bytes, build, expected_executable, archive,
+                compiler)
     require(len(executable_objects) == 1,
             "candidate executable does not have one benchmark object")
+    archive_object_operands = dict(zip(
+        archive_objects, archive_link_commands[0][3:]))
+    executable_object_operands = {
+        executable_objects[0]: executable_link_command[7],
+    }
 
-    tracked = _tracked_files(source)
+    tracked = {
+        (source / relative).resolve(strict=True)
+        for relative in manifest_by_path
+    }
     expected_library_sources = _expected_library_sources(
         source, cache, tracked)
     closure_records: list[dict[str, Any]] = []
@@ -468,16 +3675,36 @@ def candidate_build_provenance(
         for obj in objects:
             require(obj in by_output,
                     f"{role} object has no exact compile command: {obj}")
-            entry, tokens, source_operand = by_output[obj]
+            (entry, tokens, normalized_arguments, source_operand,
+             recipe_identity) = \
+                by_output[obj]
+            normalized_recipe_operand = (
+                archive_object_operands[obj] if role == "archive"
+                else executable_object_operands[obj])
+            _require_exact_compile_object_operand(
+                entry, normalized_recipe_operand, build,
+                f"candidate {role} recipe object")
             require(source_operand.is_relative_to(source) and
                     source_operand in tracked,
                     f"{role} object source is not tracked at candidate HEAD")
-            source_identity = file_identity(
-                source_operand, f"candidate {role} source")
+            require(source_operand.suffix != ".c",
+                    f"{role} production closure contains a C object")
+            relative_source = source_operand.relative_to(source).as_posix()
+            source_record = manifest_by_path.get(relative_source)
+            require(source_record is not None,
+                    f"{role} object source is absent from the stable tracked "
+                    "source manifest")
+            source_identity = {
+                "path": str(logical_source / relative_source),
+                "sha256": source_record["sha256"],
+                "size": source_record["size"],
+                "mode": source_record["mode"],
+            }
             object_identity = file_identity(obj, f"candidate {role} object")
-            require(object_identity["mtime_ns"] >= source_identity["mtime_ns"],
-                    f"candidate object predates source: {source_operand.name}")
-            flag_profile = _validate_compile_flags(tokens, source_operand)
+            flag_profile = _validate_compile_flags(
+                tokens, source_operand,
+                source_root=source, build_root=build, cache=cache,
+                library_sources=expected_library_sources)
             if role == "archive":
                 archive_sources.add(source_operand)
             else:
@@ -495,6 +3722,8 @@ def candidate_build_provenance(
                     "file": entry["file"],
                     "output": entry["output"],
                     "arguments": tokens,
+                    "normalized_arguments": normalized_arguments,
+                    **recipe_identity,
                 },
                 "flag_profile": flag_profile,
             })
@@ -502,75 +3731,84 @@ def candidate_build_provenance(
             "candidate archive source closure differs from the production "
             "pure-AVX2 source set")
 
-    archive_identity = file_identity(archive, "candidate production archive")
-    executable_identity = file_identity(
-        expected_executable, "candidate benchmark executable")
-    require(stat.S_ISREG(executable_identity["mode"]) and
-            executable_identity["mode"] & 0o111,
-            "candidate benchmark is not executable")
     archive_records = [record for record in closure_records
                        if record["role"] == "archive"]
     benchmark_record = next(record for record in closure_records
                             if record["role"] == "benchmark")
-    require(all(archive_identity["mtime_ns"] >=
-                record["object"]["mtime_ns"] for record in archive_records),
-            "candidate archive predates one of its exact objects")
-    require(executable_identity["mtime_ns"] >= archive_identity["mtime_ns"] and
-            executable_identity["mtime_ns"] >=
-            benchmark_record["object"]["mtime_ns"],
-            "candidate benchmark predates one of its exact link inputs")
-
-    ar_invocation = cache.get("CMAKE_AR", "")
-    require(bool(ar_invocation), "candidate CMake cache has no archiver")
-    archiver = Path(ar_invocation).resolve(strict=True)
-    archiver_identity = file_identity(archiver, "candidate archiver")
-    members = _run((str(archiver), "t", str(archive)),
-                   "candidate archive inventory").decode(
-                       "utf-8", errors="strict").splitlines()
-    expected_members = [path.name for path in archive_objects]
-    require(members == expected_members and len(members) == len(set(members)),
-            "candidate archive members differ from its exact object recipe")
     object_identity_by_name = {
         Path(record["object"]["path"]).name: record["object"]
         for record in archive_records
     }
-    require(set(object_identity_by_name) == set(members),
-            "candidate archive object basenames are ambiguous")
-    archive_member_identities = []
-    for member in members:
-        content = _run(
-            (str(archiver), "p", str(archive), member),
-            f"candidate archive member {member}",
-            maximum_bytes=MAX_FILE_BYTES)
-        identity = {
-            "member": member, "size": len(content),
-            "sha256": hashlib.sha256(content).hexdigest(),
-        }
-        expected_object = object_identity_by_name[member]
-        require(identity["size"] == expected_object["size"] and
-                identity["sha256"] == expected_object["sha256"],
-                f"candidate archive member bytes differ from object: {member}")
-        archive_member_identities.append(identity)
+    with _RetainedFileSnapshot(
+            archive, "candidate production archive") as archive_snapshot, \
+            _RetainedFileSnapshot(
+                archiver,
+                "candidate archive inventory tool") as inventory_archiver, \
+            _RetainedFileSnapshot(
+                expected_executable,
+                "candidate benchmark executable") as executable_snapshot:
+        require(inventory_archiver.identity == archiver_identity,
+                "candidate archiver changed before archive inspection")
+        archive_identity = archive_snapshot.identity
+        executable_identity = executable_snapshot.identity
+        require(stat.S_ISREG(executable_identity["mode"]) and
+                executable_identity["mode"] & 0o111,
+                "candidate benchmark is not executable")
+        require(all(
+                    archive_identity["mtime_ns"] >=
+                    record["object"]["mtime_ns"]
+                    for record in archive_records),
+                "candidate archive predates one of its exact objects")
+        require(
+            executable_identity["mtime_ns"] >=
+            archive_identity["mtime_ns"] and
+            executable_identity["mtime_ns"] >=
+            benchmark_record["object"]["mtime_ns"],
+            "candidate benchmark predates one of its exact link inputs")
 
-    try:
-        executable_recipe_text = executable_recipe_bytes.decode(
-            "utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        raise BuildProvenanceError(
-            "candidate executable recipe is not strict UTF-8") from error
-    link_tokens = []
-    for line in executable_recipe_text.splitlines():
-        if line.strip():
-            link_tokens.extend(shlex.split(line, posix=True))
-    require(str(archive) in link_tokens or archive.name in link_tokens,
-            "candidate executable recipe does not link the validated archive")
-    require(not any("@" in token for token in link_tokens),
-            "candidate executable recipe uses an unbound response file")
+        inherited_for_archive = tuple(inherited_descriptors) + (
+            archive_snapshot.descriptor,)
+        members = _run(
+            (str(archiver), "t", archive_snapshot.proc_path),
+            "candidate archive inventory",
+            inherited_descriptors=inherited_for_archive,
+            executable_descriptor=
+            inventory_archiver.executable_descriptor).decode(
+                "utf-8", errors="strict").splitlines()
+        expected_members = [path.name for path in archive_objects]
+        require(
+            members == expected_members and
+            len(members) == len(set(members)),
+            "candidate archive members differ from its exact object recipe")
+        require(set(object_identity_by_name) == set(members),
+                "candidate archive object basenames are ambiguous")
+        archive_member_identities = []
+        for member in members:
+            content = _run(
+                (str(archiver), "p", archive_snapshot.proc_path, member),
+                f"candidate archive member {member}",
+                maximum_bytes=MAX_FILE_BYTES,
+                inherited_descriptors=inherited_for_archive,
+                executable_descriptor=
+                inventory_archiver.executable_descriptor)
+            identity = {
+                "member": member, "size": len(content),
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }
+            expected_object = object_identity_by_name[member]
+            require(
+                identity["size"] == expected_object["size"] and
+                identity["sha256"] == expected_object["sha256"],
+                f"candidate archive member bytes differ from object: "
+                f"{member}")
+            archive_member_identities.append(identity)
 
     return {
         "schema": "leopard2-production-build-closure/v1",
         "build_root": str(build),
-        "source_root": str(source),
+        "physical_source_root": str(source),
+        "source_root": str(logical_source),
+        "tracked_source_manifest": source_manifest,
         "executable_target": executable_target,
         "validated_cache": {
             **required_exact,
@@ -579,23 +3817,45 @@ def candidate_build_provenance(
             "LEO2_BUILD_TESTS": cache.get("LEO2_BUILD_TESTS"),
             "ENABLE_OPENMP": cache.get("ENABLE_OPENMP"),
             "LEO2_BACKEND_VARIANT": variant,
+            "LEO2_BENCHMARK_GIT_EXECUTABLE": benchmark_git_value,
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
+                cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
+                cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": small_direct_mode,
             "LEOPARD_ENABLE_GF16": cache.get("LEOPARD_ENABLE_GF16"),
+            "LEO2_FLAG_FALIGN_FUNCTIONS_64":
+                cache.get("LEO2_FLAG_FALIGN_FUNCTIONS_64"),
             "LEO2_FLAG_MAVX2": cache.get("LEO2_FLAG_MAVX2"),
             "LEO2_FLAG_MNO_AVX512F": cache.get("LEO2_FLAG_MNO_AVX512F"),
             "LEO2_FLAG_MAVX512F": cache.get("LEO2_FLAG_MAVX512F"),
             "LEO2_FLAG_MAVX512BW": cache.get("LEO2_FLAG_MAVX512BW"),
             "LEO2_FLAG_MAVX512VL": cache.get("LEO2_FLAG_MAVX512VL"),
+            "LEO2_LOCATOR_GIT_EXECUTABLE": locator_git_value,
             "CMAKE_CXX_FLAGS": cache.get("CMAKE_CXX_FLAGS"),
             "CMAKE_CXX_FLAGS_RELEASE": cache.get("CMAKE_CXX_FLAGS_RELEASE"),
+            "CMAKE_AR": cache.get("CMAKE_AR"),
+            "CMAKE_C_COMPILER": cache.get("CMAKE_C_COMPILER"),
             "CMAKE_CXX_COMPILER": cache.get("CMAKE_CXX_COMPILER"),
+            "CMAKE_LINKER": cache.get("CMAKE_LINKER"),
+            "CMAKE_MAKE_PROGRAM": cache.get("CMAKE_MAKE_PROGRAM"),
+            "CMAKE_RANLIB": cache.get("CMAKE_RANLIB"),
         },
         "cmake_cache": cache_identity,
         "compile_commands": commands_identity,
         "archive_link_recipe": archive_recipe_identity,
         "executable_link_recipe": executable_recipe_identity,
+        "archive_link_commands": archive_link_commands,
+        "executable_link_command": executable_link_command,
         "compiler": compiler_identity,
         "compiler_version_sha256": hashlib.sha256(compiler_version).hexdigest(),
+        "c_compiler": c_compiler_identity,
+        "make_program": make_program_identity,
+        "linker": linker_identity,
+        "compiler_subtools": compiler_subtools,
+        "benchmark_git": benchmark_git_identity,
         "archiver": archiver_identity,
+        "ranlib": ranlib_identity,
         "archive_members": members,
         "archive_member_identities": archive_member_identities,
         "archive": archive_identity,
@@ -620,6 +3880,12 @@ def compare_reproducible_builds(
             candidate.get("executable_target") ==
             rebuilt.get("executable_target"),
             "candidate/rebuild source or target differs")
+    require(candidate.get("tracked_source_manifest") ==
+            rebuilt.get("tracked_source_manifest"),
+            "clean rebuild tracked source tree differs")
+    require(candidate.get("validated_cache") ==
+            rebuilt.get("validated_cache"),
+            "clean rebuild effective CMake semantics differ")
     source = Path(str(candidate["source_root"]))
 
     def closure_map(record: Mapping[str, Any]) -> dict[tuple[str, str], Any]:
@@ -657,6 +3923,95 @@ def compare_reproducible_builds(
                 f"clean rebuild source bytes differ: {key[1]}")
         require(original["flag_profile"] == reproduction["flag_profile"],
                 f"clean rebuild ISA flag profile differs: {key[1]}")
+        original_entry = original.get("compile_entry")
+        rebuilt_entry = reproduction.get("compile_entry")
+        require(isinstance(original_entry, dict) and
+                isinstance(rebuilt_entry, dict) and
+                isinstance(original_entry.get("arguments"), list) and
+                original_entry.get("arguments") and
+                all(isinstance(argument, str) and argument
+                    for argument in original_entry["arguments"]) and
+                isinstance(rebuilt_entry.get("arguments"), list) and
+                rebuilt_entry.get("arguments") and
+                all(isinstance(argument, str) and argument
+                    for argument in rebuilt_entry["arguments"]) and
+                isinstance(original_entry.get("normalized_arguments"), list)
+                and original_entry.get("normalized_arguments") and
+                all(isinstance(argument, str) and argument
+                    for argument in
+                    original_entry["normalized_arguments"]) and
+                isinstance(rebuilt_entry.get("normalized_arguments"), list)
+                and rebuilt_entry.get("normalized_arguments") and
+                all(isinstance(argument, str) and argument
+                    for argument in
+                    rebuilt_entry["normalized_arguments"]),
+                f"clean rebuild compile argv is malformed: {key[1]}")
+        candidate_build_root = Path(
+            str(candidate.get("build_root", "")))
+        rebuilt_build_root = Path(str(rebuilt.get("build_root", "")))
+        candidate_physical_source = Path(
+            str(candidate.get("physical_source_root", "")))
+        rebuilt_physical_source = Path(
+            str(rebuilt.get("physical_source_root", "")))
+        require(candidate_build_root.is_absolute() and
+                rebuilt_build_root.is_absolute() and
+                candidate_physical_source.is_absolute() and
+                rebuilt_physical_source.is_absolute() and
+                _normalize_build_argv(
+                    original_entry["arguments"], candidate_build_root,
+                    candidate_physical_source) ==
+                original_entry["normalized_arguments"] and
+                _normalize_build_argv(
+                    rebuilt_entry["arguments"], rebuilt_build_root,
+                    rebuilt_physical_source) ==
+                rebuilt_entry["normalized_arguments"],
+                f"clean rebuild compile argv normalization is invalid: "
+                f"{key[1]}")
+        require(original_entry["normalized_arguments"] ==
+                rebuilt_entry["normalized_arguments"],
+                f"clean rebuild compile argv differs: {key[1]}")
+        original_representation = original_entry.get("representation")
+        rebuilt_representation = rebuilt_entry.get("representation")
+        require(original_representation in {"arguments", "command"} and
+                rebuilt_representation in {"arguments", "command"} and
+                original_representation == rebuilt_representation,
+                f"clean rebuild compile recipe representation differs: "
+                f"{key[1]}")
+        if original_representation == "command":
+            original_command = original_entry.get("command")
+            rebuilt_command = rebuilt_entry.get("command")
+            original_normalized_command = original_entry.get(
+                "normalized_command")
+            rebuilt_normalized_command = rebuilt_entry.get(
+                "normalized_command")
+            require(isinstance(original_command, str) and original_command and
+                    isinstance(rebuilt_command, str) and rebuilt_command and
+                    isinstance(original_normalized_command, str) and
+                    original_normalized_command and
+                    isinstance(rebuilt_normalized_command, str) and
+                    rebuilt_normalized_command and
+                    _normalize_root_token(
+                        _normalize_build_token(
+                            original_command, candidate_build_root),
+                        candidate_physical_source, "${SOURCE_ROOT}") ==
+                    original_normalized_command and
+                    _normalize_root_token(
+                        _normalize_build_token(
+                            rebuilt_command, rebuilt_build_root),
+                        rebuilt_physical_source, "${SOURCE_ROOT}") ==
+                    rebuilt_normalized_command,
+                    f"clean rebuild compile recipe normalization is invalid: "
+                    f"{key[1]}")
+            require(original_normalized_command ==
+                    rebuilt_normalized_command,
+                    f"clean rebuild raw compile recipe differs: {key[1]}")
+        else:
+            require("command" not in original_entry and
+                    "normalized_command" not in original_entry and
+                    "command" not in rebuilt_entry and
+                    "normalized_command" not in rebuilt_entry,
+                    f"clean rebuild arguments-form compile recipe contains "
+                    f"string-form metadata: {key[1]}")
         require(original["object"]["sha256"] ==
                 reproduction["object"]["sha256"] and
                 original["object"]["size"] ==
@@ -668,6 +4023,47 @@ def compare_reproducible_builds(
             "size": original["object"]["size"],
             "flag_profile": original["flag_profile"],
         })
+
+    for recipe in ("archive_link_recipe", "executable_link_recipe"):
+        original = candidate.get(recipe)
+        reproduction = rebuilt.get(recipe)
+        require(isinstance(original, dict) and
+                isinstance(reproduction, dict) and
+                original.get("sha256") == reproduction.get("sha256") and
+                original.get("size") == reproduction.get("size"),
+                f"clean rebuild {recipe.replace('_', ' ')} identity differs")
+    candidate_archive_commands = candidate.get("archive_link_commands")
+    rebuilt_archive_commands = rebuilt.get("archive_link_commands")
+    require(isinstance(candidate_archive_commands, list) and
+            len(candidate_archive_commands) == 2 and
+            all(isinstance(command, list) and command and
+                all(isinstance(argument, str) and argument
+                    for argument in command)
+                for command in candidate_archive_commands) and
+            isinstance(rebuilt_archive_commands, list) and
+            len(rebuilt_archive_commands) == 2 and
+            all(isinstance(command, list) and command and
+                all(isinstance(argument, str) and argument
+                    for argument in command)
+                for command in rebuilt_archive_commands),
+            "clean rebuild archive link recipe semantics are malformed")
+    require(candidate_archive_commands == rebuilt_archive_commands,
+            "clean rebuild archive link recipe semantics differ")
+    candidate_executable_command = candidate.get(
+        "executable_link_command")
+    rebuilt_executable_command = rebuilt.get("executable_link_command")
+    require(isinstance(candidate_executable_command, list) and
+            candidate_executable_command and
+            all(isinstance(argument, str) and argument
+                for argument in candidate_executable_command) and
+            isinstance(rebuilt_executable_command, list) and
+            rebuilt_executable_command and
+            all(isinstance(argument, str) and argument
+                for argument in rebuilt_executable_command),
+            "clean rebuild executable link recipe semantics are malformed")
+    require(candidate_executable_command == rebuilt_executable_command,
+            "clean rebuild executable link recipe semantics differ")
+
     require(candidate.get("archive_member_identities") ==
             rebuilt.get("archive_member_identities"),
             "clean rebuild archive member bytes differ")
@@ -684,6 +4080,19 @@ def compare_reproducible_builds(
             candidate.get("compiler_version_sha256") ==
             rebuilt.get("compiler_version_sha256"),
             "clean rebuild compiler identity differs")
+    for tool in (
+            "c_compiler", "archiver", "ranlib", "make_program", "linker",
+            "benchmark_git"):
+        original = candidate.get(tool)
+        reproduction = rebuilt.get(tool)
+        require(isinstance(original, dict) and
+                isinstance(reproduction, dict) and
+                original.get("sha256") == reproduction.get("sha256") and
+                original.get("size") == reproduction.get("size"),
+                f"clean rebuild {tool.replace('_', ' ')} identity differs")
+    require(candidate.get("compiler_subtools") ==
+            rebuilt.get("compiler_subtools"),
+            "clean rebuild compiler subtool identities differ")
     return {
         "schema": "leopard2-reproducible-build-proof/v1",
         "method": "runner-owned-empty-directory-configure-build-byte-compare",
@@ -697,61 +4106,2692 @@ def compare_reproducible_builds(
     }
 
 
+def _reproducible_configure_argv(
+    source: Path, build: Path, cache: Mapping[str, Any], *,
+    cmake_path: Path | str | None = None,
+) -> list[str]:
+    """Recreate the candidate's exact retained CMake cache semantics.
+
+    An untyped ``-Dname=value`` initially creates an ``UNINITIALIZED`` cache
+    entry.  CMake does not necessarily retag an already-defined compiler or
+    compiler-probe variable later: in particular, CMAKE_CXX_COMPILER remains
+    STRING and preseeded check_cxx_compiler_flag results remain UNINITIALIZED.
+    The production validator deliberately requires the canonical FILEPATH and
+    INTERNAL types, so the replay must preserve every declared type explicitly.
+    """
+    if cmake_path is None:
+        cmake = Path("/usr/bin/cmake").resolve(strict=True)
+    else:
+        cmake = Path(cmake_path)
+        require(cmake.is_absolute() and "\0" not in str(cmake),
+                "retained clean-rebuild CMake path is invalid")
+        _require_safe_unicode(
+            str(cmake), "retained clean-rebuild CMake path")
+    c_compiler = cache.get("CMAKE_C_COMPILER")
+    require(isinstance(c_compiler, str) and c_compiler,
+            "candidate build lacks a C compiler needed for clean rebuild")
+    compiler = cache.get("CMAKE_CXX_COMPILER")
+    require(isinstance(compiler, str) and compiler,
+            "candidate build lacks a C++ compiler needed for clean rebuild")
+    # CMake deliberately retags an explicitly -D-seeded compiler as STRING.
+    # The caller supplies these drivers through a bounded CC/CXX environment
+    # while executing this direct CMake argv from a sealed descriptor.
+    configure = [
+        str(cmake),
+        "-S", str(source), "-B", str(build),
+        "-G", "Unix Makefiles",
+    ]
+    cmake_values = {
+        "CMAKE_AR": cache.get("CMAKE_AR"),
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_CXX_FLAGS": cache.get("CMAKE_CXX_FLAGS"),
+        "CMAKE_CXX_FLAGS_RELEASE": cache.get("CMAKE_CXX_FLAGS_RELEASE"),
+        "CMAKE_LINKER": cache.get("CMAKE_LINKER"),
+        "CMAKE_MAKE_PROGRAM": cache.get("CMAKE_MAKE_PROGRAM"),
+        "ENABLE_OPENMP": cache.get("ENABLE_OPENMP"),
+        "LEO2_BACKEND_VARIANT": cache.get("LEO2_BACKEND_VARIANT"),
+        "LEO2_BENCHMARK_GIT_EXECUTABLE":
+            cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE"),
+        "LEO2_BUILD_ALLK_DIAGNOSTIC": cache.get(
+            "LEO2_BUILD_ALLK_DIAGNOSTIC"),
+        "LEO2_BUILD_BENCHMARKS": "ON",
+        "LEO2_BUILD_FUZZERS": "OFF",
+        "LEO2_BUILD_TESTS": cache.get("LEO2_BUILD_TESTS"),
+        "LEO2_ENABLE_CUDA": "OFF",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
+            cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
+            cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE":
+            cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"),
+        "LEOPARD_ENABLE_GF8": "ON",
+        "LEOPARD_ENABLE_GF16": cache.get("LEOPARD_ENABLE_GF16"),
+        "LEO2_FLAG_FALIGN_FUNCTIONS_64":
+            cache.get("LEO2_FLAG_FALIGN_FUNCTIONS_64"),
+        "LEO2_FLAG_MAVX2": cache.get("LEO2_FLAG_MAVX2"),
+        "LEO2_FLAG_MNO_AVX512F": cache.get("LEO2_FLAG_MNO_AVX512F"),
+        "LEO2_FLAG_MAVX512F": "FALSE",
+        "LEO2_FLAG_MAVX512BW": "FALSE",
+        "LEO2_FLAG_MAVX512VL": "FALSE",
+        "LEO2_LOCATOR_GIT_EXECUTABLE":
+            cache.get("LEO2_LOCATOR_GIT_EXECUTABLE"),
+        "CMAKE_RANLIB": cache.get("CMAKE_RANLIB"),
+    }
+    require(all(value is not None for value in cmake_values.values()),
+            "candidate build lacks a CMake value needed for clean rebuild")
+    for name, value in cmake_values.items():
+        allowed_types = CMAKE_CACHE_REQUIRED_ENTRY_TYPES.get(name)
+        require(allowed_types is not None and len(allowed_types) == 1,
+                f"clean rebuild has no unique cache type for {name}")
+        entry_type = next(iter(allowed_types))
+        configure.append(f"-D{name}:{entry_type}={value}")
+    return configure
+
+
+def _replay_git_identity_bytes(
+    source: Path, manifest: Mapping[str, Any], *,
+    interpreter_descriptor: int | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    """Generate the exact retained Git emulator and its semantic identity."""
+    git = manifest.get("git")
+    require(isinstance(git, dict) and
+            isinstance(git.get("commit"), str) and
+            isinstance(git.get("tree"), str) and
+            type(git.get("dirty")) is bool,
+            "clean rebuild tracked Git identity is malformed")
+    commit = git["commit"]
+    tree = git["tree"]
+    require(re.fullmatch(r"[0-9a-f]{40,64}", commit) is not None and
+            re.fullmatch(r"[0-9a-f]{40,64}", tree) is not None,
+            "clean rebuild tracked Git identity is non-canonical")
+    # The generated benchmark header consumes only commit, tree, and the
+    # status-empty predicate.  This direct argv emulator prevents CMake from
+    # consulting the mutable original .git directory during replay.
+    if interpreter_descriptor is None:
+        interpreter = "/bin/sh"
+    else:
+        require(type(interpreter_descriptor) is int and
+                interpreter_descriptor >= 0,
+                "clean rebuild Git interpreter descriptor is invalid")
+        interpreter = f"/proc/self/fd/{interpreter_descriptor}"
+    script = (
+        f"#!{interpreter}\n"
+        "set -eu\n"
+        "if [ \"${1-}\" = \"-C\" ]; then shift 2; fi\n"
+        "if [ \"${1-}\" = \"rev-parse\" ]; then\n"
+        "  shift\n"
+        "  if [ \"${1-}\" = \"--show-toplevel\" ]; then\n"
+        f"    printf '%s\\n' {shlex.quote(str(source))}; exit 0\n"
+        "  fi\n"
+        "  if [ \"${1-}\" = \"--verify\" ]; then shift; fi\n"
+        "  case \"${1-}\" in\n"
+        f"    HEAD) printf '%s\\n' {shlex.quote(commit)} ;;\n"
+        f"    'HEAD^{{tree}}') printf '%s\\n' {shlex.quote(tree)} ;;\n"
+        "    *) exit 2 ;;\n"
+        "  esac\n"
+        "  exit 0\n"
+        "fi\n"
+        "if [ \"${1-}\" = \"status\" ]; then\n" +
+        ("  printf '%s\\n' ' M .leo2-retained-dirty'\n"
+         if git["dirty"] else ": clean status\n") +
+        "  exit 0\n"
+        "fi\n"
+        "exit 2\n"
+    )
+    encoded = script.encode("utf-8", errors="strict")
+    return encoded, {
+        "source_root": str(source),
+        "commit": commit,
+        "tree": tree,
+        "dirty": git["dirty"],
+        "interpreter_descriptor": interpreter_descriptor,
+    }
+
+
+def _write_replay_git_identity(
+    path: Path, source: Path, manifest: Mapping[str, Any],
+    *, interpreter_descriptor: int | None = None,
+) -> tuple[bytes, dict[str, Any]]:
+    if interpreter_descriptor is not None:
+        os.fstat(interpreter_descriptor)
+    encoded, specification = _replay_git_identity_bytes(
+        source, manifest,
+        interpreter_descriptor=interpreter_descriptor)
+    require(not path.exists(), "clean rebuild Git identity path already exists")
+    _write_private_executable(path, encoded)
+    return encoded, specification
+
+
+def _retarget_replay_git_transport(
+    build: Path, identity_git: Path, transport_git: Path,
+) -> None:
+    """Change only the generated refresh command, not its attested identity.
+
+    The benchmark configuration digest intentionally includes the configured
+    Git pathname.  Reconfiguring with the private emulator would therefore
+    change benchmark.cpp.  Configure with the candidate's retained pathname,
+    then retarget the one runner-owned Make recipe to the private transport.
+    """
+    build = build.resolve(strict=True)
+    require(identity_git.is_absolute() and transport_git.is_absolute() and
+            identity_git.is_file() and transport_git.is_file(),
+            "clean replay Git identity/transport path is invalid")
+    for value in (str(identity_git), str(transport_git)):
+        _require_safe_unicode(value, "clean replay Git transport path")
+        require(re.fullmatch(r"[/A-Za-z0-9_.+-]+", value) is not None,
+                "clean replay Git transport path requires Make escaping")
+    recipe = (
+        build /
+        "CMakeFiles/leopard2_benchmark_source_attestation_refresh.dir/"
+        "build.make")
+    require(recipe.resolve(strict=True).is_relative_to(build) and
+            not recipe.is_symlink(),
+            "clean replay benchmark refresh recipe is unsafe")
+    identity, content = file_snapshot(
+        recipe, "clean replay benchmark refresh recipe",
+        maximum_bytes=MAX_METADATA_BYTES)
+    needle = (
+        "-DLEO2_GIT_EXECUTABLE=" + str(identity_git)).encode("utf-8")
+    replacement = (
+        "-DLEO2_GIT_EXECUTABLE=" + str(transport_git)).encode("utf-8")
+    require(content.count(needle) == 1 and replacement not in content,
+            "clean replay benchmark refresh recipe does not contain one "
+            "exact Git transport")
+    rewritten = content.replace(needle, replacement)
+    temporary = recipe.with_name(recipe.name + ".leo2-git-transport.tmp")
+    descriptor = -1
+    try:
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0),
+            stat.S_IMODE(identity["mode"]))
+        view = memoryview(rewritten)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0,
+                    "clean replay Git transport rewrite stalled")
+            view = view[written:]
+        os.fsync(descriptor)
+        os.close(descriptor)
+        descriptor = -1
+        os.replace(temporary, recipe)
+        directory_descriptor = os.open(
+            recipe.parent,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_DIRECTORY", 0) |
+            getattr(os, "O_NOFOLLOW", 0))
+        try:
+            os.fsync(directory_descriptor)
+        finally:
+            os.close(directory_descriptor)
+    except BaseException:
+        if descriptor >= 0:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+    rewritten_identity, observed = file_snapshot(
+        recipe, "retargeted clean replay benchmark refresh recipe",
+        maximum_bytes=MAX_METADATA_BYTES)
+    require(observed == rewritten and
+            stat.S_IMODE(rewritten_identity["mode"]) ==
+            stat.S_IMODE(identity["mode"]),
+            "clean replay Git transport rewrite was not retained exactly")
+
+
+def _write_private_executable(path: Path, content: bytes) -> None:
+    require(not path.exists() and path.parent.is_dir() and content,
+            "private replay executable destination is invalid")
+    owner = _OwnedDescriptor()
+    try:
+        descriptor = owner.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+            0o700)
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0,
+                    "private replay executable write stalled")
+            view = view[written:]
+        os.fsync(descriptor)
+    finally:
+        owner.close()
+
+
+def _replay_exec_wrapper_bytes(
+    interpreter_descriptor: int, lexical_argv0: str,
+    executable_descriptor: int, extra_arguments: Sequence[str] = (),
+) -> bytes:
+    """Return one exact Bash wrapper for a sealed executable descriptor."""
+    require(type(interpreter_descriptor) is int and
+            interpreter_descriptor >= 0 and
+            type(executable_descriptor) is int and
+            executable_descriptor >= 0,
+            "private replay wrapper descriptors are invalid")
+    require(isinstance(lexical_argv0, str) and lexical_argv0 and
+            "\0" not in lexical_argv0,
+            "private replay wrapper argv[0] is invalid")
+    _require_safe_unicode(
+        lexical_argv0, "private replay wrapper argv[0]")
+    require(isinstance(extra_arguments, Sequence) and
+            not isinstance(extra_arguments, (str, bytes)) and
+            all(isinstance(argument, str) and argument and
+                "\0" not in argument for argument in extra_arguments),
+            "private replay wrapper extra arguments are invalid")
+    for argument in extra_arguments:
+        _require_safe_unicode(
+            argument, "private replay wrapper extra argument")
+    command = [
+        "exec", "-a", lexical_argv0,
+        f"/proc/self/fd/{executable_descriptor}",
+        *extra_arguments,
+    ]
+    return (
+        f"#!/proc/self/fd/{interpreter_descriptor}\n"
+        "set -eu\n" +
+        " ".join(shlex.quote(argument) for argument in command) +
+        ' "$@"\n'
+    ).encode("utf-8", errors="strict")
+
+
+def _write_replay_exec_wrapper(
+    path: Path, interpreter_descriptor: int, lexical_argv0: str,
+    executable_descriptor: int, extra_arguments: Sequence[str] = (),
+) -> bytes:
+    """Write and return a Bash wrapper around one sealed executable."""
+    os.fstat(interpreter_descriptor)
+    os.fstat(executable_descriptor)
+    script = _replay_exec_wrapper_bytes(
+        interpreter_descriptor, lexical_argv0, executable_descriptor,
+        extra_arguments)
+    _write_private_executable(path, script)
+    return script
+
+
+def _retain_exact_generated_executable(
+    path: Path, expected_content: bytes, label: str,
+) -> _RetainedFileSnapshot:
+    """Retain a generated executable only when its exact intended bytes remain."""
+    require(isinstance(expected_content, bytes) and expected_content,
+            f"{label} expected executable bytes are invalid")
+    snapshot = _RetainedFileSnapshot(path, label)
+    try:
+        require(snapshot.content == expected_content,
+                f"{label} changed between generation and retention")
+        snapshot.executable_descriptor
+        return snapshot
+    except BaseException:
+        snapshot._close_without_verification()
+        raise
+
+
+def _replace_private_file(path: Path, content: bytes, mode: int) -> None:
+    """Atomically replace one runner-owned generated recipe."""
+    temporary = path.with_name(path.name + ".leo2-transport.tmp")
+    owner = _OwnedDescriptor()
+    try:
+        descriptor = owner.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0),
+            mode)
+        # open(2) applies the process umask even when restoring a previously
+        # captured mode.  Reinstate the exact retained mode before publishing.
+        os.fchmod(descriptor, mode)
+        view = memoryview(content)
+        while view:
+            written = os.write(descriptor, view)
+            require(written > 0,
+                    "private replay recipe write stalled")
+            view = view[written:]
+        os.fsync(descriptor)
+        owner.close()
+        os.replace(temporary, path)
+    except BaseException:
+        owner.close()
+        try:
+            temporary.unlink()
+        except FileNotFoundError:
+            pass
+        raise
+
+
+_REPLAY_RECIPE_REQUIRED_PATHS = frozenset((
+    "CMakeCache.txt",
+    "Makefile",
+    "CMakeFiles/Makefile2",
+    "CMakeFiles/Makefile.cmake",
+    "CMakeFiles/cmake.check_cache",
+))
+_REPLAY_DERIVED_MUTABLE_RECIPE_NAMES = frozenset((
+    "compiler_depend.make",
+    "depend.make",
+))
+REPLAY_EMPTY_DEPENDENCY_INCLUDE = (
+    b"# Leopard2 immutable empty dependency include\n")
+_REPLAY_DERIVED_DEPENDENCY_TOKEN = re.compile(
+    rb"(?:compiler_)?depend\.make")
+_REPLAY_SPECIAL_MAKE_VARIABLE = re.compile(
+    rb"(?:^|[ \t:])"
+    rb"(?:(?:override|export|unexport)[ \t]+)*"
+    rb"(?:SHELL|MAKE|CMAKE_COMMAND|MAKESILENT|MAKEFILES|MAKEFLAGS|"
+    rb"GNUMAKEFLAGS|MAKEOVERRIDES|"
+    rb"\.SHELLFLAGS|\.RECIPEPREFIX)"
+    rb"(?:[ \t]*(?:[:+?!]?=|$))")
+_REPLAY_SPECIAL_MAKE_REFERENCE = re.compile(
+    rb"\$(?:\((?P<paren>SHELL|MAKE|MAKESILENT|MAKEFILES|MAKEFLAGS|GNUMAKEFLAGS|"
+    rb"MAKEOVERRIDES|\.SHELLFLAGS|\.RECIPEPREFIX)\)|"
+    rb"\{(?P<brace>SHELL|MAKE|MAKESILENT|MAKEFILES|MAKEFLAGS|GNUMAKEFLAGS|"
+    rb"MAKEOVERRIDES|\.SHELLFLAGS|\.RECIPEPREFIX)\})")
+
+
+def _is_replay_recipe_relative_path(value: Any) -> bool:
+    if not isinstance(value, str) or not value:
+        return False
+    path = Path(value)
+    if path.is_absolute() or ".." in path.parts or path.as_posix() != value:
+        return False
+    if path.name in _REPLAY_DERIVED_MUTABLE_RECIPE_NAMES:
+        # These files are generated by the sealed cmake_depends invocation.
+        # Recording either one as an input (or rewrite) would let a forged
+        # proof authenticate mutable derived Make code as retained source.
+        return False
+    if value in _REPLAY_RECIPE_REQUIRED_PATHS:
+        return True
+    return (
+        len(path.parts) >= 2 and path.parts[0] == "CMakeFiles" and
+        (value.endswith(".make") or value.endswith(".cmake") or
+         path.name == "link.txt")
+    )
+
+
+def _replay_recipe_candidates(build: Path) -> list[Path]:
+    """Enumerate the complete code-bearing Unix-Makefiles input closure."""
+    lexical = Path(os.path.abspath(os.fspath(build)))
+    candidates = {
+        lexical / "CMakeCache.txt",
+        lexical / "Makefile",
+        lexical / "CMakeFiles/Makefile2",
+        lexical / "CMakeFiles/Makefile.cmake",
+        lexical / "CMakeFiles/cmake.check_cache",
+    }
+    for pattern in (
+            "CMakeFiles/**/*.make",
+            "CMakeFiles/**/*.cmake",
+            "CMakeFiles/**/link.txt"):
+        for path in lexical.glob(pattern):
+            candidates.add(path)
+            require(len(candidates) <= MAX_REPLAY_RECIPE_FILES,
+                    "private replay recipe inventory exceeds its file bound")
+    result = []
+    for path in sorted(candidates):
+        try:
+            status = path.lstat()
+        except FileNotFoundError:
+            continue
+        relative = path.relative_to(lexical).as_posix()
+        if path.name in _REPLAY_DERIVED_MUTABLE_RECIPE_NAMES:
+            # cmake_depends creates these from retained *.cmake inputs before
+            # the recursive build Make parses them.  They are outputs of the
+            # sealed CMake tool, not pre-existing replay inputs.
+            continue
+        require(_is_replay_recipe_relative_path(relative) and
+                stat.S_ISREG(status.st_mode) and
+                path.resolve(strict=True).is_relative_to(lexical),
+                "private replay recipe path is unsafe")
+        parent = lexical
+        for component in Path(relative).parts[:-1]:
+            parent = parent / component
+            require(not parent.is_symlink(),
+                    "private replay recipe parent is a symlink")
+        result.append(path)
+    return result
+
+
+def _replay_recipe_inventory_sha256(
+    records: Sequence[Mapping[str, Any]],
+) -> str:
+    encoded = json.dumps(
+        list(records), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _validate_replay_make_include_closure(
+    path: Path, build: Path, content: bytes, candidates: set[str],
+    cmake_logical_path: str,
+    source_logical_path: str | None = None,
+) -> None:
+    """Accept only CMake's direct, same-target generated Make includes."""
+    require(
+        b"\0" not in content and b"\r" not in content and
+        (not content or content.endswith(b"\n")),
+        "private replay Make input has non-canonical line framing")
+    relative = path.relative_to(build).as_posix()
+    parent = Path(relative).parent.as_posix()
+    allowed_names = {
+        b"depend.make", b"compiler_depend.make",
+        b"progress.make", b"flags.make",
+    }
+    observed: set[bytes] = set()
+    dangerous_functions = (
+        b"$(eval", b"${eval", b"$(shell", b"${shell",
+        b"$(file", b"${file", b"$(call", b"${call",
+        b"$(guile", b"${guile", b"$(value", b"${value",
+    )
+    allowed_reference = re.compile(
+        rb"(?:ARGS|CMAKE_BINARY_DIR|CMAKE_COMMAND|CMAKE_SOURCE_DIR|COLOR|"
+        rb"CXX_DEFINES|CXX_FLAGS|CXX_INCLUDES|C_DEFINES|C_FLAGS|C_INCLUDES|"
+        rb"MAKE|MAKESILENT|VERBOSE|CMAKE_PROGRESS_[0-9]+)")
+    value_variable = (
+        rb"(?:ARGS|CMAKE_BINARY_DIR|CMAKE_COMMAND|CMAKE_SOURCE_DIR|COLOR|"
+        rb"CXX_DEFINES|CXX_FLAGS|CXX_INCLUDES|C_DEFINES|C_FLAGS|C_INCLUDES|"
+        rb"VERBOSE|CMAKE_PROGRESS_[0-9]+)")
+    value_assignment_probe = re.compile(
+        rb"(?:^|[ \t:])(?P<name>" + value_variable + rb")"
+        rb"[ \t]*(?P<operator>:::=|::=|:=|\+=|\?=|!=|=)")
+    canonical_value_assignment = re.compile(
+        rb"(?P<name>" + value_variable + rb")[ \t]+=[ \t]*"
+        rb"(?P<value>.*)")
+    make_reference = re.compile(
+        rb"\$\((?P<paren>[^()]*)\)|\$\{(?P<brace>[^{}]*)\}")
+    make_alias = re.compile(
+        rb"(?<![A-Za-z0-9_.+-])"
+        rb"(?:[A-Za-z0-9_.+/-]*/)?g?make"
+        rb"(?![A-Za-z0-9_.+-])")
+    make_literal = re.compile(
+        r"(?:^|[^A-Za-z0-9_.+-])"
+        r"(?:[A-Za-z0-9_.+/-]*/)?g?make"
+        r"(?:$|[^A-Za-z0-9_.+-])")
+    safe_make_data = re.compile(
+        r"-DBUILD_PROGRAM=(?:[A-Za-z0-9_.+/-]*/)?g?make")
+    _require_safe_unicode(
+        cmake_logical_path, "private replay CMake identity path")
+    canonical_cmake_assignment = (
+        b"CMAKE_COMMAND = " +
+        cmake_logical_path.encode("utf-8", errors="strict"))
+    canonical_binary_assignment = (
+        b"CMAKE_BINARY_DIR = " +
+        str(build).encode("utf-8", errors="strict"))
+    canonical_source_assignment = (
+        None if source_logical_path is None else
+        b"CMAKE_SOURCE_DIR = " +
+        source_logical_path.encode("utf-8", errors="strict"))
+    if source_logical_path is not None:
+        _require_safe_unicode(
+            source_logical_path, "private replay source identity path")
+
+    def validate_value_assignment(line: bytes) -> None:
+        """Reject code-bearing values hidden behind allowed references."""
+        probe = value_assignment_probe.search(line)
+        if probe is None:
+            return
+        assignment = canonical_value_assignment.fullmatch(line)
+        require(
+            not line.startswith(b"\t") and assignment is not None and
+            probe.group("operator") == b"=",
+            "private replay Make input contains a non-canonical "
+            "value-bearing variable assignment")
+        name = assignment.group("name")
+        value = assignment.group("value")
+        # These variables are intentionally empty in the isolated replay
+        # environment.  CMake emits references to them but no file assignment;
+        # allowing an assignment would turn a harmless display/test argument
+        # into arbitrary shell syntax after Make expansion.
+        require(
+            name not in (b"ARGS", b"COLOR", b"VERBOSE"),
+            "private replay Make input assigns an external-only variable")
+        if name == b"CMAKE_COMMAND":
+            require(
+                line == canonical_cmake_assignment,
+                "private replay Make input changes an execution-control "
+                "variable")
+            return
+        if name == b"CMAKE_BINARY_DIR":
+            require(
+                line == canonical_binary_assignment,
+                "private replay Make input changes its canonical build "
+                "directory")
+            return
+        require(
+            not any(ord(character) in value
+                    for character in SHELL_RECIPE_META),
+            "private replay Make variable value contains shell code or "
+            "indirection")
+        try:
+            decoded = value.decode("utf-8", errors="strict")
+            _require_safe_unicode(
+                decoded, "private replay Make variable value")
+            tokens = shlex.split(decoded, posix=True)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise BuildProvenanceError(
+                "private replay Make variable value has non-canonical shell "
+                f"quoting: {error}") from error
+        require(
+            all(not token.startswith("@") for token in tokens),
+            "private replay Make variable value contains response-file "
+            "indirection")
+        if name == b"CMAKE_SOURCE_DIR":
+            require(
+                len(tokens) == 1 and tokens[0] == decoded and
+                Path(decoded).is_absolute() and
+                os.path.abspath(decoded) == decoded and
+                (canonical_source_assignment is None or
+                 line == canonical_source_assignment),
+                "private replay Make source directory is non-canonical")
+        elif name.startswith(b"CMAKE_PROGRESS_"):
+            require(
+                re.fullmatch(rb"[0-9]+", value) is not None,
+                "private replay Make progress value is non-canonical")
+
+    def shell_tokens(line: bytes) -> list[str]:
+        command = line[1:]
+        while command[:1] in (b"@", b"+", b"-"):
+            command = command[1:]
+        try:
+            decoded = command.decode("utf-8", errors="strict")
+            return shlex.split(decoded, posix=True)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise BuildProvenanceError(
+                "private replay Make recipe has non-canonical shell "
+                f"quoting: {error}") from error
+
+    def is_make_executable(token: str) -> bool:
+        return (
+            token and not token.startswith("-") and "=" not in token and
+            token.rsplit("/", 1)[-1] in ("make", "gmake")
+        )
+
+    def has_make_control_option(tokens: Sequence[str]) -> bool:
+        return any(
+            token in ("-f", "-C", "--file", "--makefile", "--directory") or
+            token.startswith(("-f", "-C", "--file=", "--makefile=",
+                              "--directory="))
+            for token in tokens
+        )
+
+    def invokes_noncanonical_make(line: bytes) -> bool:
+        if not line.startswith(b"\t"):
+            return (
+                b"=" in line and
+                make_alias.search(line.split(b"=", 1)[1]) is not None
+            )
+        tokens = shell_tokens(line)
+        for token in tokens:
+            if safe_make_data.fullmatch(token) is not None:
+                continue
+            if make_literal.search(token) is not None:
+                return True
+        while (tokens and
+               re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=.*", tokens[0])):
+            tokens.pop(0)
+        if not tokens:
+            return False
+        if is_make_executable(tokens[0]):
+            return True
+        # These command-position wrappers all execute a later argv token.
+        # Searching only their tail avoids mistaking CMake data such as
+        # -DBUILD_PROGRAM=/usr/bin/gmake for an invocation.
+        wrapper = tokens[0].rsplit("/", 1)[-1]
+        if wrapper in (
+                "command", "env", "exec", "nohup", "nice", "stdbuf",
+                "time"):
+            return any(is_make_executable(token) for token in tokens[1:])
+        variable = re.fullmatch(
+            r"\$\([A-Za-z0-9_.+-]+\)", tokens[0]) is not None
+        if variable and tokens[0] not in ("$(CMAKE_COMMAND)", "$(MAKE)"):
+            return True
+        return variable and has_make_control_option(tokens[1:])
+
+    for line in content.splitlines():
+        stripped = line.lstrip()
+        if stripped.startswith(b"#"):
+            continue
+        require(
+            re.match(
+                rb"^(?:(?:override|export|unexport)[ \t]+)*"
+                rb"(?:define|endef|undefine|-?load)(?:[ \t]|$)",
+                stripped) is None,
+            "private replay Make input contains a dynamic definition or "
+            "load directive")
+        require(not any(
+                    token in line
+                    for token in (
+                        b"$($", b"$(${", b"${$(", b"${${",
+                        b"$()", b"${}")),
+                "private replay Make input contains a computed variable "
+                "reference")
+        if not line.startswith(b"\t") and b"=" in line:
+            lhs = line.split(b"=", 1)[0]
+            require(
+                b"$" not in lhs or
+                line == b"$(VERBOSE)MAKESILENT = -s",
+                "private replay Make input contains a computed assignment")
+        require(not (
+                    stripped.startswith(
+                        (b"export ", b"unexport ", b"override ")) and
+                    b"$" in stripped),
+                "private replay Make input contains a computed directive")
+        require(not any(token in line for token in dangerous_functions),
+                "private replay Make input contains a dynamic code or shell "
+                "function")
+        control = _REPLAY_SPECIAL_MAKE_VARIABLE.search(line)
+        require(
+            control is None or
+            line in (b"SHELL = /bin/sh", canonical_cmake_assignment),
+            "private replay Make input changes an execution-control "
+            "variable")
+        validate_value_assignment(line)
+        special_references = list(
+            _REPLAY_SPECIAL_MAKE_REFERENCE.finditer(line))
+        require(
+            not special_references or (
+                line.startswith(b"\t") and
+                all((match.group("paren") or match.group("brace")) in
+                    {b"MAKE", b"MAKESILENT"}
+                    for match in special_references) and
+                b"${MAKE}" not in line and
+                b"${MAKESILENT}" not in line and
+                b"$(MAKE)" in line),
+            "private replay Make input aliases an execution-control "
+            "variable")
+        recursive = re.fullmatch(
+            rb"\t\$\(MAKE\) \$\(MAKESILENT\) -f "
+            rb"(?P<recipe>CMakeFiles/[A-Za-z0-9_.+/-]+) "
+            rb"(?P<target>[A-Za-z0-9_.+/][A-Za-z0-9_.+/-]*)",
+            line)
+        # Command-line MAKE is rebound to the immutable wrapper.  A literal
+        # make/gmake, an alias assigned to one, or another command using Make's
+        # recipe/directory switches would bypass that binding.  The canonical
+        # CMake form is deliberately the sole exception.
+        noncanonical_make = invokes_noncanonical_make(line)
+        require(
+            not noncanonical_make or recursive is not None,
+            "private replay Make input contains a non-canonical recursive "
+            "Make command")
+        # GNU Make also accepts single-character references such as $M and
+        # automatic variables such as $@.  Merely iterating over the
+        # parenthesized/braced references therefore leaves unparsed dollar
+        # syntax that can synthesize an executable or an unretained include.
+        # Consume every dollar byte and accept only the exact generated forms
+        # below; unmatched, escaped and one-character references all fail
+        # closed.
+        reference_offset = 0
+        while True:
+            reference_offset = line.find(b"$", reference_offset)
+            if reference_offset < 0:
+                break
+            match = make_reference.match(line, reference_offset)
+            require(
+                match is not None,
+                "private replay Make input contains a non-canonical variable "
+                "reference")
+            reference = match.group("paren") or match.group("brace")
+            require(
+                allowed_reference.fullmatch(reference) is not None,
+                "private replay Make input contains a non-canonical variable "
+                "reference")
+            reference_offset = match.end()
+        directive = re.match(
+            rb"^[ \t]*(?:-?include|sinclude)(?:[ \t]|$)", line)
+        if directive is not None:
+            require(path.name == "build.make",
+                    "private replay Make input contains an unexpected include")
+            match = re.fullmatch(
+                rb"include[ \t]+" +
+                re.escape(parent.encode("utf-8")) +
+                rb"/(?P<name>[A-Za-z0-9_.+-]+)",
+                line)
+            require(match is not None and
+                    match.group("name") in allowed_names and
+                    match.group("name") not in observed,
+                    "private replay Make input contains a non-canonical "
+                    "include")
+            name = match.group("name")
+            observed.add(name)
+            decoded_name = name.decode("ascii")
+            if decoded_name not in _REPLAY_DERIVED_MUTABLE_RECIPE_NAMES:
+                included = parent + "/" + decoded_name
+                require(included in candidates,
+                        "private replay Make include is outside the retained "
+                        "recipe closure")
+        if b"$(MAKE)" in line:
+            require(line.startswith(b"\t"),
+                    "private replay Make input aliases recursive Make")
+            require(recursive is not None,
+                    "private replay Make input contains a non-canonical "
+                    "recursive Make command")
+            recipe = recursive.group("recipe").decode("ascii")
+            require(
+                recipe == "CMakeFiles/Makefile2" or
+                (recipe.endswith("/build.make") and
+                 recipe in candidates),
+                "private replay recursive Make selects an unretained recipe")
+
+
+def _replay_candidate_compile_closure_sha256(
+    expected_closure: Sequence[Mapping[str, Any]],
+) -> str:
+    """Digest the candidate-normalized production compile semantics."""
+    require(isinstance(expected_closure, (list, tuple)) and expected_closure,
+            "private replay expected compile closure is empty")
+    records = []
+    outputs = set()
+    for item in expected_closure:
+        require(isinstance(item, Mapping) and
+                item.get("role") in ("archive", "benchmark") and
+                isinstance(item.get("compile_entry"), Mapping),
+                "private replay expected compile closure is malformed")
+        arguments = item["compile_entry"].get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 5 and
+                all(isinstance(token, str) and token for token in arguments)
+                and arguments[-4] == "-o" and arguments[-2] == "-c",
+                "private replay expected normalized compile argv is "
+                "malformed")
+        output = arguments[-3]
+        require(isinstance(output, str) and output not in outputs,
+                "private replay expected compile closure has duplicate "
+                "outputs")
+        outputs.add(output)
+        records.append({
+            "role": item["role"],
+            "output": output,
+            "normalized_arguments": arguments,
+        })
+    encoded = json.dumps(
+        sorted(records, key=lambda record: record["output"]),
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode(
+            "ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _replay_candidate_target_variables_sha256(
+    expected_closure: Sequence[Mapping[str, Any]],
+) -> str:
+    """Digest the canonical shared-variable argv for each CMake target."""
+    by_target: dict[str, list[list[str]]] = {}
+    for item in expected_closure:
+        require(isinstance(item, Mapping) and
+                isinstance(item.get("compile_entry"), Mapping),
+                "private replay expected compile closure is malformed")
+        arguments = item["compile_entry"].get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 5 and
+                all(isinstance(token, str) and token for token in arguments)
+                and arguments[-4] == "-o" and arguments[-2] == "-c",
+                "private replay expected normalized compile argv is "
+                "malformed")
+        output = Path(arguments[-3])
+        require(not output.is_absolute() and len(output.parts) >= 3 and
+                output.parts[0] == "CMakeFiles" and
+                output.parts[1].endswith(".dir"),
+                "private replay expected compile output is non-canonical")
+        target = "/".join(output.parts[:2])
+        by_target.setdefault(target, []).append(arguments[1:-4])
+    require(by_target,
+            "private replay expected target-variable closure is empty")
+    records = [{
+        "target": target,
+        # Source-specific CMake options are inserted around these shared
+        # variables.  The target-wide member is therefore the shortest exact
+        # production argv member; lexical order makes ties deterministic.
+        "normalized_tokens": min(values, key=lambda item: (len(item), item)),
+    } for target, values in sorted(by_target.items())]
+    encoded = json.dumps(
+        records, sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _require_replay_candidate_compile_closure_binding(
+    semantic: Mapping[str, Any],
+    expected_closure: Sequence[Mapping[str, Any]],
+    *,
+    label: str,
+) -> None:
+    """Recompute the proof's semantic closure binding from the candidate."""
+    require(
+        semantic.get("candidate_compile_closure_sha256") ==
+            _replay_candidate_compile_closure_sha256(expected_closure) and
+        semantic.get("candidate_target_variables_sha256") ==
+            _replay_candidate_target_variables_sha256(expected_closure),
+        f"{label} replay candidate compile closure digest differs")
+
+
+def _validate_replay_compile_variable_closure(
+    build: Path,
+    source: Path,
+    compile_commands_content: bytes,
+    recipe_contents: Mapping[Path, bytes],
+    expected_closure: Sequence[Mapping[str, Any]],
+    cmake_logical_path: str,
+) -> dict[str, Any]:
+    """Bind generated Make compilation inputs to the audited object closure.
+
+    ``compile_commands.json`` describes the complete compiler argv, whereas
+    CMake's Unix-Makefiles generator stores the target-wide portion in
+    ``flags.make`` and may add source-specific options in ``build.make``.
+    Require every linked production object's generated argv to equal its
+    already-audited candidate argv, then require each executed target's three
+    shared C++ variables to equal an exact retained argv member for that
+    target.  Thus a post-configure edit such as ``-B``, ``-fplugin``, or
+    ``-include`` cannot execute merely because it contains no shell operator.
+    """
+    build = build.resolve(strict=True)
+    source = source.resolve(strict=True)
+    require(build.is_dir() and source.is_dir(),
+            "private replay semantic roots are not directories")
+    _require_safe_unicode(
+        cmake_logical_path, "private replay CMake identity path")
+    require(isinstance(expected_closure, (list, tuple)) and expected_closure,
+            "private replay expected compile closure is empty")
+
+    expected_by_output: dict[str, list[str]] = {}
+    expected_by_target: dict[str, list[list[str]]] = {}
+    for item in expected_closure:
+        require(isinstance(item, Mapping) and
+                item.get("role") in ("archive", "benchmark"),
+                "private replay expected compile closure is malformed")
+        entry = item.get("compile_entry")
+        require(isinstance(entry, Mapping),
+                "private replay expected compile entry is malformed")
+        arguments = entry.get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 5 and
+                all(isinstance(token, str) and token for token in arguments),
+                "private replay expected normalized compile argv is "
+                "malformed")
+        output_positions = [
+            index for index, token in enumerate(arguments) if token == "-o"
+        ]
+        require(output_positions == [len(arguments) - 4] and
+                arguments[-2] == "-c",
+                "private replay expected compile argv has a non-canonical "
+                "tail")
+        output = arguments[-3]
+        output_path = Path(output)
+        require(not output_path.is_absolute() and
+                ".." not in output_path.parts and
+                len(output_path.parts) >= 3 and
+                output_path.parts[0] == "CMakeFiles" and
+                output_path.parts[1].endswith(".dir") and
+                output_path.as_posix() == output,
+                "private replay expected compile output is non-canonical")
+        require(output not in expected_by_output,
+                "private replay expected compile closure has duplicate "
+                "outputs")
+        expected_by_output[output] = list(arguments)
+        target = "/".join(output_path.parts[:2])
+        expected_by_target.setdefault(target, []).append(arguments[1:-4])
+
+    commands = _strict_json_loads(
+        compile_commands_content,
+        "private replay compile_commands.json")
+    require(isinstance(commands, list) and commands,
+            "private replay compile command closure is empty")
+    observed_by_output: dict[str, list[str]] = {}
+    observed_tokens_by_output: dict[str, list[str]] = {}
+    for raw_entry in commands:
+        require(isinstance(raw_entry, Mapping),
+                "private replay compile command entry is malformed")
+        tokens = _compile_tokens(raw_entry)
+        output = raw_entry.get("output")
+        if output not in expected_by_output:
+            continue
+        require(isinstance(output, str),
+                "private replay compile output metadata is malformed")
+        require(output not in observed_by_output,
+                "private replay compile command closure has a duplicate "
+                "production output")
+        file_value = raw_entry.get("file")
+        require(isinstance(file_value, str) and file_value,
+                "private replay compile command source is malformed")
+        try:
+            source_operand = Path(file_value).resolve(strict=True)
+        except (OSError, ValueError) as error:
+            raise BuildProvenanceError(
+                "private replay compile command source is invalid") from error
+        require(source_operand.is_relative_to(source),
+                "private replay compile command source escapes its retained "
+                "source root")
+        normalized = _canonical_compile_argv(
+            raw_entry, tokens, source_operand, build, source)
+        require(normalized == expected_by_output[output],
+                "private replay generated compile argv differs from the "
+                "audited candidate closure")
+        observed_by_output[output] = normalized
+        observed_tokens_by_output[output] = tokens
+    require(set(observed_by_output) == set(expected_by_output),
+            "private replay compile commands omit an audited production "
+            "object")
+
+    flags_assignment = re.compile(
+        rb"(?P<name>CXX_DEFINES|CXX_INCLUDES|CXX_FLAGS)"
+        rb"[ \t]+=[ \t]*(?P<value>.*)")
+    observed_targets: set[str] = set()
+    shared_tokens_by_target: dict[str, dict[bytes, list[str]]] = {}
+    for target, expected_middles in expected_by_target.items():
+        flags_path = build / target / "flags.make"
+        content = recipe_contents.get(flags_path)
+        require(isinstance(content, bytes),
+                "private replay recipe closure omits production flags.make")
+        assignments: dict[bytes, list[str]] = {}
+        for line in content.splitlines():
+            match = flags_assignment.fullmatch(line)
+            if match is None:
+                continue
+            name = match.group("name")
+            require(name not in assignments,
+                    "private replay production flags.make duplicates a "
+                    "C++ variable")
+            value = match.group("value")
+            require(not any(ord(character) in value
+                            for character in SHELL_RECIPE_META),
+                    "private replay production flags.make contains shell "
+                    "code or indirection")
+            try:
+                decoded = value.decode("utf-8", errors="strict")
+                _require_safe_unicode(
+                    decoded, "private replay production flags.make value")
+                tokens = shlex.split(decoded, posix=True)
+            except (UnicodeDecodeError, ValueError) as error:
+                raise BuildProvenanceError(
+                    "private replay production flags.make has "
+                    f"non-canonical quoting: {error}") from error
+            require(all(token and not token.startswith("@")
+                        for token in tokens),
+                    "private replay production flags.make contains an empty "
+                    "operand or response-file indirection")
+            assignments[name] = tokens
+        require(set(assignments) == {
+                    b"CXX_DEFINES", b"CXX_INCLUDES", b"CXX_FLAGS"},
+                "private replay production flags.make omits a canonical "
+                "C++ variable")
+        shared_tokens = (
+            assignments[b"CXX_DEFINES"] +
+            assignments[b"CXX_INCLUDES"] +
+            assignments[b"CXX_FLAGS"])
+        normalized_shared = _normalize_build_argv(
+            shared_tokens, build, source)
+        canonical_shared = min(
+            expected_middles, key=lambda item: (len(item), item))
+        require(normalized_shared == canonical_shared,
+                "private replay production flags.make variables differ from "
+                "the audited compile closure")
+        shared_tokens_by_target[target] = assignments
+        observed_targets.add(target)
+    require(observed_targets == set(expected_by_target),
+            "private replay did not bind every production flags target")
+
+    for output, compile_tokens in observed_tokens_by_output.items():
+        output_path = Path(output)
+        target = "/".join(output_path.parts[:2])
+        build_make_path = build / target / "build.make"
+        build_make = recipe_contents.get(build_make_path)
+        require(isinstance(build_make, bytes),
+                "private replay recipe closure omits production build.make")
+        output_bytes = output.encode("utf-8", errors="strict")
+        recipe_lines = []
+        lines = build_make.splitlines()
+        rule_indices = [
+            index for index, line in enumerate(lines)
+            if line.startswith(output_bytes + b":")
+        ]
+        expected_rules = [
+            output_bytes + b": " +
+                (target + "/flags.make").encode("utf-8"),
+            output_bytes + b": " +
+                compile_tokens[-1].encode("utf-8", errors="strict"),
+            output_bytes + b": " +
+                (target + "/compiler_depend.ts").encode("utf-8"),
+        ]
+        require([lines[index] for index in rule_indices] == expected_rules,
+                "private replay production object dependency rules differ "
+                "from canonical CMake output")
+        for index in rule_indices:
+            cursor = index + 1
+            while cursor < len(lines) and lines[cursor].startswith(b"\t"):
+                recipe_lines.append(lines[cursor])
+                cursor += 1
+        require(len(recipe_lines) == 2,
+                "private replay production object rule has a non-canonical "
+                "recipe count")
+        echo_pattern = re.compile(
+            rb"\t@\$\(CMAKE_COMMAND\) -E cmake_echo_color "
+            rb"\"--switch=\$\(COLOR\)\" --green --progress-dir=" +
+            re.escape(str(build).encode("utf-8")) +
+            rb"/CMakeFiles --progress-num=\$\(CMAKE_PROGRESS_[0-9]+\) "
+            rb"\"Building CXX object " + re.escape(output_bytes) + rb"\"")
+        require(echo_pattern.fullmatch(recipe_lines[0]) is not None,
+                "private replay production object status recipe differs "
+                "from canonical CMake output")
+        try:
+            command = recipe_lines[1][1:].decode(
+                "utf-8", errors="strict")
+            template_tokens = shlex.split(command, posix=True)
+        except (UnicodeDecodeError, ValueError) as error:
+            raise BuildProvenanceError(
+                "private replay production compile recipe has "
+                f"non-canonical quoting: {error}") from error
+        references = (
+            "$(CXX_DEFINES)", "$(CXX_INCLUDES)", "$(CXX_FLAGS)")
+        require([token for token in template_tokens
+                 if token in references] == list(references) and
+                all(token in references or
+                    ("$" not in token and
+                     not any(character in token
+                             for character in SHELL_RECIPE_META))
+                    for token in template_tokens),
+                "private replay production compile recipe contains a "
+                "non-canonical variable or shell operand")
+        shared = shared_tokens_by_target[target]
+        expansion = {
+            "$(CXX_DEFINES)": shared[b"CXX_DEFINES"],
+            "$(CXX_INCLUDES)": shared[b"CXX_INCLUDES"],
+            "$(CXX_FLAGS)": shared[b"CXX_FLAGS"],
+        }
+        expanded = []
+        for token in template_tokens:
+            if token in expansion:
+                expanded.extend(expansion[token])
+            else:
+                expanded.append(token)
+        expected_recipe = (
+            compile_tokens[:-4] +
+            ["-MD", "-MT", output, "-MF", output + ".d"] +
+            compile_tokens[-4:])
+        require(expanded == expected_recipe,
+                "private replay production compile recipe differs from the "
+                "audited compile command")
+
+    control_expected = {
+        b"CMAKE_COMMAND": cmake_logical_path.encode(
+            "utf-8", errors="strict"),
+        b"CMAKE_BINARY_DIR": str(build).encode(
+            "utf-8", errors="strict"),
+        b"CMAKE_SOURCE_DIR": str(source).encode(
+            "utf-8", errors="strict"),
+    }
+    control_assignment = re.compile(
+        rb"(?P<name>CMAKE_COMMAND|CMAKE_BINARY_DIR|CMAKE_SOURCE_DIR)"
+        rb"[ \t]+=[ \t]*(?P<value>.*)")
+    control_counts = Counter()
+    for content in recipe_contents.values():
+        for line in content.splitlines():
+            match = control_assignment.fullmatch(line)
+            if match is None:
+                continue
+            name = match.group("name")
+            require(match.group("value") == control_expected[name],
+                    "private replay Make control variable differs from its "
+                    "retained configure identity")
+            control_counts[name] += 1
+    require(all(control_counts[name] > 0 for name in control_expected),
+            "private replay recipe closure omits a required CMake control "
+            "binding")
+
+    cache_content = recipe_contents.get(build / "CMakeCache.txt")
+    require(isinstance(cache_content, bytes),
+            "private replay recipe closure omits CMakeCache.txt")
+    replay_cache = parse_cmake_cache(cache_content)
+    require(replay_cache.get("CMAKE_HOME_DIRECTORY") == str(source),
+            "private replay CMake cache points at another source root")
+    return {
+        "schema": "leopard2-replay-compile-variable-closure/v2",
+        "compile_commands_sha256":
+            hashlib.sha256(compile_commands_content).hexdigest(),
+        "candidate_compile_closure_sha256":
+            _replay_candidate_compile_closure_sha256(expected_closure),
+        "candidate_target_variables_sha256":
+            _replay_candidate_target_variables_sha256(expected_closure),
+        "object_count": len(expected_by_output),
+        "target_count": len(expected_by_target),
+        "control_assignment_counts": {
+            name.decode("ascii"): control_counts[name]
+            for name in sorted(control_counts)
+        },
+    }
+
+
+class _TemporaryReplayRecipeTransport:
+    """Route generated Make recipes through immutable sealed tool FDs."""
+
+    def __init__(
+        self, build: Path,
+        replacements: Mapping[str, tuple[str, str]],
+        required_labels: set[str],
+        *,
+        expected_compile_closure: Sequence[Mapping[str, Any]] | None = None,
+        expected_source: Path | None = None,
+    ) -> None:
+        self.build = build.resolve(strict=True)
+        semantic_enabled = expected_compile_closure is not None
+        require(
+            semantic_enabled == (expected_source is not None),
+            "private replay semantic closure and source must be supplied "
+            "together")
+        semantic_source = (
+            expected_source.resolve(strict=True)
+            if expected_source is not None else None)
+        self.originals: list[tuple[Path, bytes, int]] = []
+        self.manifest: dict[str, Any] = {}
+        self._guards: list[_InotifyMutationGuard] = []
+        self._expected: dict[
+            Path, tuple[dict[str, Any], bytes]] = {}
+        counts = Counter()
+        rewrites = []
+        try:
+            candidates = _replay_recipe_candidates(self.build)
+            relative_candidates = {
+                path.relative_to(self.build).as_posix()
+                for path in candidates
+            }
+            require(
+                _REPLAY_RECIPE_REQUIRED_PATHS.issubset(
+                    relative_candidates),
+                "private replay recipe inventory omits a required CMake "
+                "input")
+            capture_guard = _InotifyMutationGuard(
+                "private replay recipe capture")
+            try:
+                for path in candidates:
+                    capture_guard.add_file_path(path)
+                commands_path = self.build / "compile_commands.json"
+                if semantic_enabled:
+                    capture_guard.add_file_path(commands_path)
+                captured = {}
+                captured_total = 0
+                for path in candidates:
+                    snapshot = file_snapshot(
+                        path, "private replay generated recipe",
+                        maximum_bytes=MAX_METADATA_BYTES)
+                    captured[path] = snapshot
+                    captured_total += len(snapshot[1])
+                    require(
+                        captured_total <= MAX_REPLAY_RECIPE_TOTAL_BYTES,
+                        "private replay recipes exceed their aggregate byte "
+                        "bound")
+                commands_snapshot = None
+                if semantic_enabled:
+                    commands_snapshot = file_snapshot(
+                        commands_path, "private replay compile commands",
+                        maximum_bytes=MAX_METADATA_BYTES)
+                capture_guard.verify()
+                require(_replay_recipe_candidates(self.build) == candidates,
+                        "private replay recipe inventory changed while "
+                        "captured")
+            finally:
+                capture_guard.close()
+
+            cmake_replacement = replacements.get("cmake")
+            require(
+                isinstance(cmake_replacement, tuple) and
+                len(cmake_replacement) == 2 and
+                isinstance(cmake_replacement[0], str),
+                "private replay CMake transport is malformed")
+            for path, (_identity, original) in captured.items():
+                if path.name in ("Makefile", "Makefile2") or \
+                        path.suffix == ".make":
+                    _validate_replay_make_include_closure(
+                        path, self.build, original, relative_candidates,
+                        cmake_replacement[0],
+                        None if semantic_source is None
+                        else str(semantic_source))
+            semantic_manifest = None
+            if semantic_enabled:
+                require(commands_snapshot is not None and
+                        semantic_source is not None and
+                        expected_compile_closure is not None,
+                        "private replay semantic capture is incomplete")
+                semantic_manifest = \
+                    _validate_replay_compile_variable_closure(
+                        self.build, semantic_source, commands_snapshot[1],
+                        {path: content
+                         for path, (_identity, content) in captured.items()},
+                        expected_compile_closure, cmake_replacement[0])
+
+            prepared: dict[
+                Path, tuple[dict[str, Any], bytes, bytes]] = {}
+            prepared_total = 0
+            for path in candidates:
+                identity, original = captured[path]
+                if "make" in replacements:
+                    # Command-line MAKE is inherited by recursive GNU Make.
+                    # Count only actual recipe expansions, not CMake's
+                    # explanatory comments mentioning $(MAKE).
+                    counts["make"] += sum(
+                        line.count(b"$(MAKE)")
+                        for line in original.splitlines()
+                        if line.startswith(b"\t"))
+                rewritten = original
+                path_counts = Counter()
+                for label, (old, new) in replacements.items():
+                    _require_safe_unicode(
+                        old, f"private replay {label} identity path")
+                    _require_safe_unicode(
+                        new, f"private replay {label} transport path")
+                    if label == "dependency-includes":
+                        require(
+                            old ==
+                            "CMakeFiles/**/{compiler_,}depend.make" and
+                            re.fullmatch(r"/proc/self/fd/[0-9]+", new)
+                            is not None,
+                            "private replay dependency-include transport "
+                            "is malformed")
+                        relative_parent = path.relative_to(
+                            self.build).parent.as_posix().encode("utf-8")
+                        pattern = re.compile(
+                            rb"(?m)^include[ \t]+" +
+                            re.escape(relative_parent) +
+                            rb"/(?P<name>(?:compiler_)?depend\.make)$")
+                        matches = list(pattern.finditer(rewritten))
+                        tokens = list(
+                            _REPLAY_DERIVED_DEPENDENCY_TOKEN.finditer(
+                                rewritten))
+                        names = [
+                            match.group("name") for match in matches
+                        ]
+                        require(
+                            len(matches) == len(tokens) and
+                            len(names) == len(set(names)) and
+                            (not names or (
+                                path.name == "build.make" and
+                                set(names).issubset({
+                                    b"depend.make",
+                                    b"compiler_depend.make",
+                                }))),
+                            "private replay generated recipe contains an "
+                            "indirect, duplicate, or non-canonical derived "
+                            "dependency include")
+                        transport = new.encode("ascii")
+                        rewritten, count = pattern.subn(
+                            lambda unused_match:
+                                b"include " + transport,
+                            rewritten)
+                        require(
+                            _REPLAY_DERIVED_DEPENDENCY_TOKEN.search(
+                                rewritten) is None,
+                            "private replay generated recipe retains a "
+                            "derived dependency include")
+                    else:
+                        pattern = re.compile(
+                            rb"(?<![A-Za-z0-9_./+:-])" +
+                            re.escape(old.encode("utf-8")) +
+                            rb"(?![A-Za-z0-9_./+:-])")
+                        rewritten, count = pattern.subn(
+                            new.encode("utf-8"), rewritten)
+                    counts[label] += count
+                    path_counts[label] += count
+                require(
+                    len(rewritten) <= MAX_METADATA_BYTES,
+                    "transported private replay recipe exceeds its per-file "
+                    "byte bound")
+                prepared_total += len(rewritten)
+                require(
+                    prepared_total <= MAX_REPLAY_RECIPE_TOTAL_BYTES,
+                    "transported private replay recipes exceed their "
+                    "aggregate byte bound")
+                prepared[path] = (identity, original, rewritten)
+                if rewritten != original:
+                    mode = stat.S_IMODE(identity["mode"])
+                    rewrites.append({
+                        "path": path.relative_to(self.build).as_posix(),
+                        "mode": mode,
+                        "original_sha256":
+                            hashlib.sha256(original).hexdigest(),
+                        "transport_sha256":
+                            hashlib.sha256(rewritten).hexdigest(),
+                        "size": len(rewritten),
+                        "replacement_counts": {
+                            label: path_counts[label]
+                            for label in sorted(path_counts)
+                            if path_counts[label] != 0
+                        },
+                    })
+            require(all(counts[label] > 0 for label in required_labels),
+                    "private replay generated recipes omit a required "
+                    "immutable tool transport: " +
+                    repr({label: counts[label]
+                          for label in sorted(required_labels)}))
+
+            rewritten_paths = {
+                path for path, (_identity, original, rewritten)
+                in prepared.items() if rewritten != original
+            }
+            unrewritten_guard = _InotifyMutationGuard(
+                "unrewritten clean replay recipes")
+            self._guards.append(unrewritten_guard)
+            for path in candidates:
+                if path not in rewritten_paths:
+                    unrewritten_guard.add_file_path(path)
+            if semantic_enabled:
+                unrewritten_guard.add_file_path(commands_path)
+            unrewritten_guard.verify()
+
+            for path in candidates:
+                identity, original, rewritten = prepared[path]
+                if path not in rewritten_paths:
+                    continue
+                mode = stat.S_IMODE(identity["mode"])
+                self.originals.append((path, original, mode))
+                _replace_private_file(path, rewritten, mode)
+
+            rewritten_guard = _InotifyMutationGuard(
+                "rewritten clean replay recipes")
+            self._guards.append(rewritten_guard)
+            for path in candidates:
+                if path in rewritten_paths:
+                    rewritten_guard.add_file_path(path)
+            rewritten_guard.verify()
+
+            retained_recipes = []
+            for path in candidates:
+                expected = prepared[path][2]
+                identity, observed = file_snapshot(
+                    path, "transported clean replay recipe",
+                    maximum_bytes=MAX_METADATA_BYTES)
+                require(observed == expected and
+                        identity["path"] == str(path),
+                        "transported clean replay recipe differs from its "
+                        "captured bytes")
+                self._expected[path] = (identity, expected)
+                retained_recipes.append({
+                    "path": path.relative_to(self.build).as_posix(),
+                    "sha256": identity["sha256"],
+                    "size": identity["size"],
+                    "mode": identity["mode"],
+                    "rewritten": path in rewritten_paths,
+                })
+            semantic_inputs = []
+            if semantic_enabled:
+                require(commands_snapshot is not None,
+                        "private replay semantic snapshot is missing")
+                commands_identity, commands_content = file_snapshot(
+                    commands_path, "retained private replay compile commands",
+                    maximum_bytes=MAX_METADATA_BYTES)
+                require(commands_identity == commands_snapshot[0] and
+                        commands_content == commands_snapshot[1],
+                        "private replay compile commands changed before "
+                        "execution")
+                self._expected[commands_path] = (
+                    commands_identity, commands_content)
+                semantic_inputs.append({
+                    "path": "compile_commands.json",
+                    "sha256": commands_identity["sha256"],
+                    "size": commands_identity["size"],
+                    "mode": commands_identity["mode"],
+                })
+            require(_replay_recipe_candidates(self.build) == candidates,
+                    "private replay recipe inventory changed before "
+                    "execution")
+            for guard in self._guards:
+                guard.verify()
+            retained_total = sum(
+                record["size"] for record in retained_recipes)
+            require(
+                retained_total <= MAX_REPLAY_RECIPE_TOTAL_BYTES,
+                "transported private replay recipes exceed their aggregate "
+                "byte bound")
+            self.manifest = {
+                "schema": "leopard2-replay-recipe-transport/v2",
+                "file_count": len(retained_recipes),
+                "total_bytes": retained_total,
+                "required_labels": sorted(required_labels),
+                "replacement_counts": {
+                    label: counts[label] for label in sorted(counts)
+                },
+                "rewrites": sorted(
+                    rewrites, key=lambda record: record["path"]),
+                "retained_recipes": retained_recipes,
+                "inventory_sha256":
+                    _replay_recipe_inventory_sha256(retained_recipes),
+                "semantic_compile_closure": semantic_manifest,
+                "semantic_inputs": semantic_inputs,
+            }
+        except BaseException:
+            self.close()
+            raise
+
+    def _cleanup_owned_state(self) -> list[str]:
+        """Release every retained resource without dropping retry ownership."""
+        failures: list[str] = []
+        for guard in tuple(self._guards):
+            try:
+                guard.close()
+            except BaseException as error:
+                failures.append(
+                    "cannot close transported recipe guard: " + str(error))
+                try:
+                    guard._close_without_verification()
+                except BaseException as close_error:
+                    failures.append(
+                        "cannot force-close transported recipe guard: " +
+                        str(close_error))
+            if guard.descriptor < 0 and guard in self._guards:
+                self._guards.remove(guard)
+
+        for record in reversed(tuple(self.originals)):
+            path, content, mode = record
+            try:
+                _replace_private_file(path, content, mode)
+                identity, observed = file_snapshot(
+                    path, "restored private replay generated recipe",
+                    maximum_bytes=MAX_METADATA_BYTES)
+                require(observed == content and
+                        stat.S_IMODE(identity["mode"]) == mode,
+                        "private replay generated recipe was not restored")
+            except BaseException as error:
+                failures.append(f"{path}: {error}")
+            else:
+                if record in self.originals:
+                    self.originals.remove(record)
+        if not self.originals and not self._guards:
+            self._expected = {}
+        return failures
+
+    def close(self) -> None:
+        failures: list[str] = []
+        verification_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        try:
+            for guard in self._guards:
+                try:
+                    guard.verify()
+                except BaseException as error:
+                    failures.append(
+                        "transported recipe changed while retained: " +
+                        str(error))
+            for path, (expected_identity, expected) in self._expected.items():
+                try:
+                    identity, observed = file_snapshot(
+                        path, "retained transported clean replay recipe",
+                        maximum_bytes=MAX_METADATA_BYTES)
+                    require(identity == expected_identity and
+                            observed == expected,
+                            "transported recipe changed while retained")
+                except BaseException as error:
+                    failures.append(f"{path}: {error}")
+        except BaseException as error:
+            verification_error = error
+        finally:
+            # Cleanup is a separate retryable state machine.  In particular,
+            # an asynchronous BaseException anywhere in verification must not
+            # strand rewritten recipes or mutation-guard descriptors.
+            try:
+                failures.extend(self._cleanup_owned_state())
+            except BaseException as error:
+                cleanup_error = error
+            # _cleanup_owned_state records per-resource BaseExceptions so it
+            # can continue releasing unrelated resources.  Such a caught
+            # interruption therefore does not reach the exception handler
+            # above.  Retry the bounded remaining ownership set once whether
+            # the first pass returned or raised, while retaining its original
+            # diagnostic.
+            if self.originals or self._guards:
+                try:
+                    failures.extend(self._cleanup_owned_state())
+                except BaseException as retry_error:
+                    failures.append(
+                        "interrupted replay transport cleanup retry failed: "
+                        f"{type(retry_error).__name__}: {retry_error}")
+
+        if self.originals or self._guards:
+            failures.append(
+                "replay transport still owns rewritten recipes or guards")
+        if failures:
+            contexts = []
+            for error in (verification_error, cleanup_error):
+                if error is not None:
+                    contexts.append(
+                        f"{type(error).__name__}: {error}")
+            if contexts:
+                failures.append("interrupted phase: " + "; ".join(contexts))
+        elif verification_error is not None:
+            raise verification_error
+        elif cleanup_error is not None:
+            raise cleanup_error
+        require(not failures,
+                "cannot verify/restore private replay generated recipes: " +
+                "; ".join(failures))
+
+    def __enter__(self) -> "_TemporaryReplayRecipeTransport":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            raise BuildProvenanceError(
+                "private replay recipe transport cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}") from cleanup_error
+
+
 def verify_reproducible_candidate_build(
     candidate: Mapping[str, Any], *, jobs: int | None = None,
+    inherited_descriptors: Sequence[int] = (),
 ) -> dict[str, Any]:
     """Reconfigure/build in an empty directory and compare all linked bytes."""
     source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
     target = str(candidate.get("executable_target", ""))
+    require(re.fullmatch(r"[A-Za-z0-9_.+][A-Za-z0-9_.+-]*", target)
+            is not None,
+            "candidate executable target is unsafe")
     cache = candidate.get("validated_cache")
     require(isinstance(cache, dict),
             "candidate build has no retained CMake semantics")
     cmake = Path("/usr/bin/cmake").resolve(strict=True)
+    shell = Path("/bin/sh").resolve(strict=True)
+    bash = Path("/bin/bash").resolve(strict=True)
+    retained_manifest = candidate.get("tracked_source_manifest")
+    require(isinstance(retained_manifest, dict),
+            "candidate build has no retained tracked source tree")
     if jobs is None:
         jobs = min(128, len(os.sched_getaffinity(0)))
     require(type(jobs) is int and 1 <= jobs <= 128,
             "clean rebuild job count must be in 1..128")
 
-    temporary = Path(tempfile.mkdtemp(prefix="leopard2-proof-build-"))
+    workspace = Path(tempfile.mkdtemp(prefix="leopard2-proof-workspace-"))
+    temporary = workspace / "build"
+    private_source = workspace / "source"
+    private_tools = workspace / "tools"
     try:
-        configure = [
-            str(cmake), "-S", str(source), "-B", str(temporary),
-            "-G", "Unix Makefiles",
-        ]
-        cmake_values = {
-            "CMAKE_BUILD_TYPE": "Release",
-            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-            "CMAKE_CXX_COMPILER": cache.get("CMAKE_CXX_COMPILER"),
-            "CMAKE_CXX_FLAGS": cache.get("CMAKE_CXX_FLAGS"),
-            "CMAKE_CXX_FLAGS_RELEASE": cache.get("CMAKE_CXX_FLAGS_RELEASE"),
-            "ENABLE_OPENMP": cache.get("ENABLE_OPENMP"),
-            "LEO2_BACKEND_VARIANT": cache.get("LEO2_BACKEND_VARIANT"),
-            "LEO2_BUILD_ALLK_DIAGNOSTIC": cache.get(
-                "LEO2_BUILD_ALLK_DIAGNOSTIC"),
-            "LEO2_BUILD_BENCHMARKS": "ON",
-            "LEO2_BUILD_FUZZERS": "OFF",
-            "LEO2_BUILD_TESTS": cache.get("LEO2_BUILD_TESTS"),
-            "LEO2_ENABLE_CUDA": "OFF",
-            "LEOPARD_ENABLE_GF8": "ON",
-            "LEOPARD_ENABLE_GF16": cache.get("LEOPARD_ENABLE_GF16"),
-            "LEO2_FLAG_MAVX2": cache.get("LEO2_FLAG_MAVX2"),
-            "LEO2_FLAG_MNO_AVX512F": cache.get("LEO2_FLAG_MNO_AVX512F"),
-            "LEO2_FLAG_MAVX512F": "FALSE",
-            "LEO2_FLAG_MAVX512BW": "FALSE",
-            "LEO2_FLAG_MAVX512VL": "FALSE",
-        }
-        require(all(value is not None for value in cmake_values.values()),
-                "candidate build lacks a CMake value needed for clean rebuild")
-        configure.extend(
-            f"-D{name}={value}" for name, value in cmake_values.items())
-        _run(configure, "runner-owned candidate configure",
-             maximum_bytes=16 << 20, timeout=300)
-        _run((str(cmake), "--build", str(temporary), "--target", target,
-              "--parallel", str(jobs)),
-             "runner-owned candidate build", maximum_bytes=32 << 20,
-             timeout=1800)
-        rebuilt = candidate_build_provenance(
-            temporary, source, temporary / target, target)
-        return compare_reproducible_builds(candidate, rebuilt)
+        with _RetainedPrivateSourceTree(
+                source, private_source,
+                inherited_descriptors=inherited_descriptors) as source_tree, \
+                ExitStack() as retained_tools:
+            require(source_tree.manifest == retained_manifest,
+                    "candidate tracked source tree changed before clean "
+                    "rebuild")
+            private_tools.mkdir(mode=0o700)
+            tool_records = (
+                ("CMAKE_C_COMPILER", "c_compiler", "candidate C compiler"),
+                ("CMAKE_CXX_COMPILER", "compiler",
+                 "candidate C++ compiler"),
+                ("CMAKE_AR", "archiver", "candidate archiver"),
+                ("CMAKE_RANLIB", "ranlib", "candidate ranlib"),
+                ("CMAKE_MAKE_PROGRAM", "make_program",
+                 "candidate make program"),
+                ("CMAKE_LINKER", "linker", "candidate linker"),
+                ("LEO2_BENCHMARK_GIT_EXECUTABLE", "benchmark_git",
+                 "candidate benchmark Git executable"),
+            )
+            tool_snapshots: dict[str, _RetainedFileSnapshot] = {}
+            for cache_name, record_name, label in tool_records:
+                path = cache.get(cache_name)
+                record = candidate.get(record_name)
+                require(isinstance(path, str) and path and
+                        isinstance(record, dict),
+                        f"candidate build lacks retained {label}")
+                snapshot = retained_tools.enter_context(
+                    _RetainedFileSnapshot(path, label))
+                require(snapshot.identity == record,
+                        f"{label} changed before clean rebuild")
+                snapshot.executable_descriptor
+                tool_snapshots[record_name] = snapshot
+            subtools = candidate.get("compiler_subtools")
+            require(isinstance(subtools, list) and subtools,
+                    "candidate build lacks retained compiler subtools")
+            subtool_snapshots: list[
+                tuple[Mapping[str, Any], _RetainedFileSnapshot]
+            ] = []
+            for index, record in enumerate(subtools):
+                require(isinstance(record, dict) and
+                        record.get("language") in ("c", "c++") and
+                        record.get("role") in (
+                            "cc1", "cc1plus", "as", "collect2", "ld") and
+                        isinstance(record.get("identity"), dict) and
+                        isinstance(record["identity"].get("path"), str),
+                        "candidate compiler subtool record is malformed")
+                snapshot = retained_tools.enter_context(
+                    _RetainedFileSnapshot(
+                        record["identity"]["path"],
+                        f"candidate compiler subtool {index}"))
+                require(snapshot.identity == record["identity"],
+                        "candidate compiler subtool changed before clean "
+                        "rebuild")
+                snapshot.executable_descriptor
+                subtool_snapshots.append((record, snapshot))
+            cmake_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(cmake, "clean replay CMake"))
+            shell_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(shell, "clean replay command shell"))
+            bash_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(bash, "clean replay Bash"))
+            for snapshot in (
+                    cmake_snapshot, shell_snapshot, bash_snapshot):
+                snapshot.executable_descriptor
+
+            configure = _reproducible_configure_argv(
+                private_source, temporary, cache)
+            configure_environment_overrides = {
+                "CC": str(cache["CMAKE_C_COMPILER"]),
+                "CXX": str(cache["CMAKE_CXX_COMPILER"]),
+            }
+            configure_inherited_descriptors = (
+                *inherited_descriptors,
+                cmake_snapshot.executable_descriptor,
+            )
+            configure_invocation = _replay_invocation_record(
+                configure, executable_label="cmake",
+                executable=cmake_snapshot,
+                inherited_descriptors=configure_inherited_descriptors,
+                environment_overrides=configure_environment_overrides,
+                maximum_bytes=16 << 20, timeout=300)
+            _run(
+                configure, "runner-owned candidate configure",
+                maximum_bytes=16 << 20, timeout=300,
+                inherited_descriptors=configure_inherited_descriptors,
+                executable_descriptor=cmake_snapshot.executable_descriptor,
+                environment_overrides=configure_environment_overrides)
+            for snapshot in (
+                    *tool_snapshots.values(),
+                    *(item[1] for item in subtool_snapshots),
+                    cmake_snapshot, shell_snapshot, bash_snapshot):
+                snapshot.verify()
+
+            replay_git = private_tools / "git"
+            replay_git_bytes, replay_git_specification = \
+                _write_replay_git_identity(
+                    replay_git, private_source, source_tree.manifest,
+                    interpreter_descriptor=
+                        bash_snapshot.executable_descriptor)
+            replay_git_snapshot = retained_tools.enter_context(
+                _retain_exact_generated_executable(
+                    replay_git, replay_git_bytes,
+                    "clean replay Git identity executable"))
+            empty_dependency_include = (
+                private_tools / "empty-dependency-include")
+            empty_dependency_bytes = REPLAY_EMPTY_DEPENDENCY_INCLUDE
+            _write_private_executable(
+                empty_dependency_include, empty_dependency_bytes)
+            empty_dependency_snapshot = retained_tools.enter_context(
+                _retain_exact_generated_executable(
+                    empty_dependency_include, empty_dependency_bytes,
+                    "clean replay empty dependency include"))
+
+            prefix_guards: dict[str, _RetainedDirectoryTree] = {}
+            prefix_records = []
+            for language, directory_name in (
+                    ("c", "c-prefix"), ("c++", "cxx-prefix")):
+                prefix = private_tools / directory_name
+                prefix.mkdir(mode=0o700)
+                roles: dict[str, _RetainedFileSnapshot] = {}
+                for record, snapshot in subtool_snapshots:
+                    if record["language"] != language:
+                        continue
+                    role = str(record["role"])
+                    previous = roles.get(role)
+                    require(previous is None or
+                            previous.identity == snapshot.identity,
+                            f"candidate {language} compiler exposed "
+                            f"conflicting {role} subtools")
+                    roles.setdefault(role, snapshot)
+                roles.setdefault("ld", tool_snapshots["linker"])
+                mappings = []
+                expected_targets = {}
+                for role, snapshot in sorted(roles.items()):
+                    target_path = (
+                        f"/proc/self/fd/{snapshot.executable_descriptor}")
+                    os.symlink(
+                        target_path, prefix / role)
+                    require(os.readlink(prefix / role) == target_path,
+                            f"clean replay {language} compiler prefix "
+                            f"mapping changed for {role}")
+                    expected_targets[role] = target_path
+                    mappings.append({
+                        "role": role,
+                        "target_descriptor":
+                            snapshot.executable_descriptor,
+                        "source_path": snapshot.identity["path"],
+                        "source_sha256": snapshot.identity["sha256"],
+                        "sealed_sha256":
+                            snapshot.executable_identity["sha256"],
+                        "sealed_size": snapshot.executable_identity["size"],
+                        "sealed_seals": snapshot.executable_identity["seals"],
+                    })
+                guard = retained_tools.enter_context(
+                    _retain_exact_symlink_directory(
+                        prefix, expected_targets,
+                        f"clean replay {language} compiler prefix"))
+                prefix_guards[language] = guard
+                prefix_records.append({
+                    "language": language,
+                    "path": str(prefix),
+                    "descriptor": guard.descriptor,
+                    "mode": os.fstat(guard.descriptor).st_mode,
+                    "mappings": mappings,
+                })
+
+            wrapper_records = []
+            def retain_wrapper(
+                name: str, lexical: str,
+                executable: _RetainedFileSnapshot,
+                extra_arguments: Sequence[str] = (),
+                underlying_label: str = "",
+            ) -> _RetainedFileSnapshot:
+                path = private_tools / name
+                expected_script = _write_replay_exec_wrapper(
+                    path, bash_snapshot.executable_descriptor, lexical,
+                    executable.executable_descriptor, extra_arguments)
+                wrapper = retained_tools.enter_context(
+                    _retain_exact_generated_executable(
+                        path, expected_script,
+                        f"clean replay {name} wrapper"))
+                wrapper_records.append({
+                    "label": name,
+                    "underlying_label": underlying_label,
+                    "logical_argv0": lexical,
+                    "injected_arguments": list(extra_arguments),
+                    "interpreter_descriptor":
+                        bash_snapshot.executable_descriptor,
+                    "interpreter_sha256":
+                        bash_snapshot.executable_identity["sha256"],
+                    "underlying_descriptor":
+                        executable.executable_descriptor,
+                    "underlying_source_path": executable.identity["path"],
+                    "underlying_source_sha256":
+                        executable.identity["sha256"],
+                    "underlying_sealed_sha256":
+                        executable.executable_identity["sha256"],
+                    "script_sha256":
+                        hashlib.sha256(expected_script).hexdigest(),
+                    "script_size": len(expected_script),
+                    "sealed_descriptor": wrapper.executable_descriptor,
+                    "sealed_sha256":
+                        wrapper.executable_identity["sha256"],
+                    "sealed_size": wrapper.executable_identity["size"],
+                    "sealed_seals": wrapper.executable_identity["seals"],
+                })
+                return wrapper
+
+            c_wrapper = retain_wrapper(
+                "cc", str(cache["CMAKE_C_COMPILER"]),
+                tool_snapshots["c_compiler"],
+                (f"-B/proc/self/fd/"
+                 f"{prefix_guards['c'].descriptor}/",),
+                "c_compiler")
+            cxx_wrapper = retain_wrapper(
+                "cxx", str(cache["CMAKE_CXX_COMPILER"]),
+                tool_snapshots["compiler"],
+                (f"-B/proc/self/fd/"
+                 f"{prefix_guards['c++'].descriptor}/",),
+                "compiler")
+            archiver_wrapper = retain_wrapper(
+                "ar", str(cache["CMAKE_AR"]),
+                tool_snapshots["archiver"],
+                underlying_label="archiver")
+            ranlib_wrapper = retain_wrapper(
+                "ranlib", str(cache["CMAKE_RANLIB"]),
+                tool_snapshots["ranlib"],
+                underlying_label="ranlib")
+            linker_wrapper = retain_wrapper(
+                "ld", str(cache["CMAKE_LINKER"]),
+                tool_snapshots["linker"],
+                underlying_label="linker")
+            cmake_wrapper = retain_wrapper(
+                "cmake", str(cmake), cmake_snapshot,
+                underlying_label="cmake")
+            make_wrapper = retain_wrapper(
+                "make", str(cache["CMAKE_MAKE_PROGRAM"]),
+                tool_snapshots["make_program"],
+                underlying_label="make_program")
+
+            replacements = {
+                "c-compiler": (
+                    str(cache["CMAKE_C_COMPILER"]),
+                    f"/proc/self/fd/{c_wrapper.executable_descriptor}"),
+                "cxx-compiler": (
+                    str(cache["CMAKE_CXX_COMPILER"]),
+                    f"/proc/self/fd/{cxx_wrapper.executable_descriptor}"),
+                "archiver": (
+                    str(cache["CMAKE_AR"]),
+                    f"/proc/self/fd/{archiver_wrapper.executable_descriptor}"),
+                "ranlib": (
+                    str(cache["CMAKE_RANLIB"]),
+                    f"/proc/self/fd/{ranlib_wrapper.executable_descriptor}"),
+                "linker": (
+                    str(cache["CMAKE_LINKER"]),
+                    f"/proc/self/fd/{linker_wrapper.executable_descriptor}"),
+                "cmake": (
+                    str(cmake),
+                    f"/proc/self/fd/{cmake_wrapper.executable_descriptor}"),
+                # CMake's Unix Makefiles normally spell recursive invocations
+                # as $(MAKE), but retain this exact lexical replacement for
+                # generator versions that emit CMAKE_MAKE_PROGRAM directly.
+                "make": (
+                    str(cache["CMAKE_MAKE_PROGRAM"]),
+                    f"/proc/self/fd/{make_wrapper.executable_descriptor}"),
+                "git": (
+                    str(cache["LEO2_BENCHMARK_GIT_EXECUTABLE"]),
+                    f"/proc/self/fd/"
+                    f"{replay_git_snapshot.executable_descriptor}"),
+                "dependency-includes": (
+                    "CMakeFiles/**/{compiler_,}depend.make",
+                    f"/proc/self/fd/"
+                    f"{empty_dependency_snapshot.executable_descriptor}"),
+            }
+            transport_descriptors = {
+                *inherited_descriptors,
+                *(snapshot.executable_descriptor
+                  for snapshot in tool_snapshots.values()),
+                *(snapshot.executable_descriptor
+                  for _record, snapshot in subtool_snapshots),
+                cmake_snapshot.executable_descriptor,
+                shell_snapshot.executable_descriptor,
+                bash_snapshot.executable_descriptor,
+                replay_git_snapshot.executable_descriptor,
+                empty_dependency_snapshot.executable_descriptor,
+                *(guard.descriptor for guard in prefix_guards.values()),
+                c_wrapper.executable_descriptor,
+                cxx_wrapper.executable_descriptor,
+                archiver_wrapper.executable_descriptor,
+                ranlib_wrapper.executable_descriptor,
+                linker_wrapper.executable_descriptor,
+                cmake_wrapper.executable_descriptor,
+                make_wrapper.executable_descriptor,
+            }
+            with _TemporaryReplayRecipeTransport(
+                    temporary, replacements,
+                    {"cxx-compiler", "archiver", "ranlib",
+                     "cmake", "make", "git",
+                     "dependency-includes"},
+                    expected_compile_closure=candidate.get(
+                        "source_object_compile_closure"),
+                    expected_source=private_source) as recipe_transport:
+                build_command = (
+                    str(cache["CMAKE_MAKE_PROGRAM"]),
+                    "-C", str(temporary),
+                    "-f", "CMakeFiles/Makefile2",
+                    "-j", str(jobs),
+                    f"SHELL=/proc/self/fd/"
+                    f"{shell_snapshot.executable_descriptor}",
+                    f"MAKE=/proc/self/fd/"
+                    f"{make_wrapper.executable_descriptor}",
+                    "--", f"CMakeFiles/{target}.dir/all")
+                build_invocation = _replay_invocation_record(
+                    build_command, executable_label="make_program",
+                    executable=tool_snapshots["make_program"],
+                    inherited_descriptors=tuple(transport_descriptors),
+                    environment_overrides=None,
+                    maximum_bytes=32 << 20, timeout=1800)
+                _run(
+                    build_command,
+                    "runner-owned candidate build",
+                    maximum_bytes=32 << 20, timeout=1800,
+                    inherited_descriptors=tuple(transport_descriptors),
+                    executable_descriptor=tool_snapshots[
+                        "make_program"].executable_descriptor)
+                recipe_transport_manifest = recipe_transport.manifest
+            rebuilt = candidate_build_provenance(
+                temporary, private_source, temporary / target, target,
+                inherited_descriptors=inherited_descriptors,
+                tracked_source_manifest=source_tree.manifest,
+                logical_source_root=source)
+            result = compare_reproducible_builds(candidate, rebuilt)
+            result["schema"] = "leopard2-reproducible-build-proof/v2"
+            immutable_tools = []
+            for label, snapshot in (
+                    *tuple(tool_snapshots.items()),
+                    ("cmake", cmake_snapshot),
+                    ("command_shell", shell_snapshot),
+                    ("wrapper_shell", bash_snapshot),
+                    ("replay_git_identity", replay_git_snapshot),
+                    ("empty_dependency_include",
+                     empty_dependency_snapshot)):
+                immutable_tools.append({
+                    "label": label,
+                    "source_path": snapshot.identity["path"],
+                    "sealed_descriptor": snapshot.executable_descriptor,
+                    **snapshot.executable_identity,
+                })
+            for record, snapshot in subtool_snapshots:
+                immutable_tools.append({
+                    "label": (
+                        f"{record['language']}-compiler-"
+                        f"{record['role']}"),
+                    "source_path": snapshot.identity["path"],
+                    "sealed_descriptor": snapshot.executable_descriptor,
+                    **snapshot.executable_identity,
+                })
+            result["immutable_replay"] = {
+                "schema": "leopard2-immutable-replay-tools/v2",
+                "tools": sorted(
+                    immutable_tools,
+                    key=lambda item: (item["label"], item["source_path"])),
+                "wrappers": sorted(
+                    wrapper_records, key=lambda item: item["label"]),
+                "compiler_prefixes": sorted(
+                    prefix_records, key=lambda item: item["language"]),
+                "recipe_transport": recipe_transport_manifest,
+                "git_identity": {
+                    **replay_git_specification,
+                    "script_sha256":
+                        hashlib.sha256(replay_git_bytes).hexdigest(),
+                    "script_size": len(replay_git_bytes),
+                    "sealed_descriptor":
+                        replay_git_snapshot.executable_descriptor,
+                    "sealed_sha256":
+                        replay_git_snapshot.executable_identity["sha256"],
+                    "sealed_size":
+                        replay_git_snapshot.executable_identity["size"],
+                    "sealed_seals":
+                        replay_git_snapshot.executable_identity["seals"],
+                },
+                "invocations": {
+                    "configure": configure_invocation,
+                    "build": build_invocation,
+                },
+                "replacements": [
+                    {
+                        "label": label,
+                        "logical_path": logical,
+                        "transport_path": transport,
+                    }
+                    for label, (logical, transport) in sorted(
+                        replacements.items())
+                ],
+            }
+            source_tree.verify()
+            validate_reproducible_build_proof(
+                result, candidate, label="generated candidate")
+            # ExitStack and source_tree now revalidate every held tool and
+            # source pathname, including the inotify event history that makes
+            # an A -> B -> A replacement observable.
+            return result
     finally:
-        shutil.rmtree(temporary, ignore_errors=True)
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def validate_reproducible_build_proof(
+    proof: Any, candidate: Mapping[str, Any], *,
+    label: str = "candidate",
+) -> None:
+    """Strictly validate a complete v2 replay proof against its build closure."""
+
+    def exact(value: Any, keys: set[str], what: str) -> Mapping[str, Any]:
+        require(isinstance(value, Mapping) and set(value) == keys,
+                f"{label} {what} is malformed")
+        return value
+
+    def digest(value: Any, what: str) -> str:
+        require(isinstance(value, str) and
+                re.fullmatch(r"[0-9a-f]{64}", value) is not None,
+                f"{label} {what} digest is malformed")
+        return value
+
+    expected_core = compare_reproducible_builds(candidate, candidate)
+    expected_core["schema"] = "leopard2-reproducible-build-proof/v2"
+    proof_map = exact(
+        proof, {*expected_core, "immutable_replay"},
+        "clean reproducible-build proof")
+    for key, expected in expected_core.items():
+        require(proof_map[key] == expected,
+                f"{label} clean reproducible-build proof field {key!r} "
+                "is not bound to its closure")
+
+    replay = exact(
+        proof_map["immutable_replay"],
+        {
+            "schema", "tools", "wrappers", "compiler_prefixes",
+            "recipe_transport", "git_identity", "invocations",
+            "replacements",
+        },
+        "immutable replay proof")
+    require(replay["schema"] == "leopard2-immutable-replay-tools/v2",
+            f"{label} immutable replay schema is unsupported")
+
+    tool_keys = {
+        "label", "source_path", "sealed_descriptor", "sha256", "size",
+        "seals", "source_sha256",
+    }
+    tools = replay["tools"]
+    require(isinstance(tools, list) and tools,
+            f"{label} immutable replay tool list is empty")
+    tool_by_label: dict[str, Mapping[str, Any]] = {}
+    required_seals = (
+        getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+        getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+        getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+        getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+    for index, raw in enumerate(tools):
+        tool = exact(raw, tool_keys, f"immutable tool {index}")
+        tool_label = tool["label"]
+        require(isinstance(tool_label, str) and tool_label and
+                tool_label not in tool_by_label and
+                isinstance(tool["source_path"], str) and
+                Path(tool["source_path"]).is_absolute() and
+                type(tool["sealed_descriptor"]) is int and
+                tool["sealed_descriptor"] >= 0 and
+                type(tool["size"]) is int and tool["size"] > 0 and
+                type(tool["seals"]) is int and
+                tool["seals"] & required_seals == required_seals,
+                f"{label} immutable tool {index} identity is malformed")
+        digest(tool["sha256"], f"immutable tool {tool_label} sealed")
+        digest(
+            tool["source_sha256"],
+            f"immutable tool {tool_label} source")
+        require(tool["sha256"] == tool["source_sha256"],
+                f"{label} immutable tool {tool_label} differs from source")
+        tool_by_label[tool_label] = tool
+    require(tools == sorted(
+                tools, key=lambda item: (item["label"], item["source_path"])),
+            f"{label} immutable replay tools are not canonical")
+
+    base_tool_labels = {
+        "c_compiler": "c_compiler",
+        "compiler": "compiler",
+        "archiver": "archiver",
+        "ranlib": "ranlib",
+        "make_program": "make_program",
+        "linker": "linker",
+        "benchmark_git": "benchmark_git",
+    }
+    expected_tool_labels = set(base_tool_labels)
+    for tool_label, closure_key in base_tool_labels.items():
+        identity = candidate.get(closure_key)
+        require(isinstance(identity, Mapping),
+                f"{label} closure lacks {closure_key}")
+        tool = tool_by_label.get(tool_label)
+        require(tool is not None and
+                tool["source_path"] == identity.get("path") and
+                tool["source_sha256"] == identity.get("sha256") and
+                tool["size"] == identity.get("size"),
+                f"{label} immutable {tool_label} is not bound to closure")
+    subtool_roles: dict[str, dict[str, str]] = {"c": {}, "c++": {}}
+    subtools = candidate.get("compiler_subtools")
+    require(isinstance(subtools, list) and subtools,
+            f"{label} closure lacks compiler subtools")
+    for record in subtools:
+        require(isinstance(record, Mapping) and
+                record.get("language") in subtool_roles and
+                isinstance(record.get("role"), str) and
+                isinstance(record.get("identity"), Mapping),
+                f"{label} compiler subtool record is malformed")
+        language = str(record["language"])
+        role = str(record["role"])
+        tool_label = f"{language}-compiler-{role}"
+        require(role not in subtool_roles[language],
+                f"{label} compiler subtool role is duplicated")
+        subtool_roles[language][role] = tool_label
+        expected_tool_labels.add(tool_label)
+        identity = record["identity"]
+        tool = tool_by_label.get(tool_label)
+        require(tool is not None and
+                tool["source_path"] == identity.get("path") and
+                tool["source_sha256"] == identity.get("sha256") and
+                tool["size"] == identity.get("size"),
+                f"{label} immutable {tool_label} is not bound to closure")
+    expected_tool_labels.update({
+        "cmake", "command_shell", "wrapper_shell", "replay_git_identity",
+        "empty_dependency_include",
+    })
+    require(set(tool_by_label) == expected_tool_labels,
+            f"{label} immutable replay tool roles differ")
+    empty_dependency_tool = tool_by_label["empty_dependency_include"]
+    require(
+        empty_dependency_tool["sha256"] ==
+            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
+        empty_dependency_tool["source_sha256"] ==
+            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
+        empty_dependency_tool["size"] ==
+            len(REPLAY_EMPTY_DEPENDENCY_INCLUDE),
+        f"{label} immutable dependency include is not inert")
+    prefix_keys = {
+        "language", "path", "descriptor", "mode",
+        "mappings",
+    }
+    mapping_keys = {
+        "role", "target_descriptor", "source_path", "source_sha256",
+        "sealed_sha256", "sealed_size", "sealed_seals",
+    }
+    prefixes = replay["compiler_prefixes"]
+    require(isinstance(prefixes, list) and len(prefixes) == 2,
+            f"{label} compiler-prefix proof is malformed")
+    prefix_by_language: dict[str, Mapping[str, Any]] = {}
+    for raw in prefixes:
+        prefix = exact(raw, prefix_keys, "compiler-prefix record")
+        language = prefix["language"]
+        require(isinstance(language, str) and
+                language in ("c", "c++") and
+                language not in prefix_by_language and
+                isinstance(prefix["path"], str) and
+                Path(prefix["path"]).is_absolute() and
+                type(prefix["descriptor"]) is int and
+                prefix["descriptor"] >= 0 and
+                type(prefix["mode"]) is int and prefix["mode"] >= 0 and
+                stat.S_ISDIR(prefix["mode"]),
+                f"{label} compiler-prefix identity is malformed")
+        role_tools = dict(subtool_roles[language])
+        role_tools.setdefault("ld", "linker")
+        mappings = prefix["mappings"]
+        require(isinstance(mappings, list) and
+                len(mappings) == len(role_tools),
+                f"{label} {language} compiler-prefix mappings differ")
+        observed_roles = set()
+        for raw_mapping in mappings:
+            mapping = exact(
+                raw_mapping, mapping_keys,
+                f"{language} compiler-prefix mapping")
+            role = mapping["role"]
+            require(isinstance(role, str),
+                    f"{label} {language} compiler-prefix role differs")
+            tool_label = role_tools.get(role)
+            require(tool_label is not None and role not in observed_roles,
+                    f"{label} {language} compiler-prefix role differs")
+            observed_roles.add(role)
+            tool = tool_by_label[tool_label]
+            require(
+                mapping["target_descriptor"] ==
+                    tool["sealed_descriptor"] and
+                mapping["source_path"] == tool["source_path"] and
+                mapping["source_sha256"] == tool["source_sha256"] and
+                mapping["sealed_sha256"] == tool["sha256"] and
+                mapping["sealed_size"] == tool["size"] and
+                mapping["sealed_seals"] == tool["seals"],
+                f"{label} {language} compiler-prefix role {role} is "
+                "not bound to its immutable tool")
+        require(observed_roles == set(role_tools),
+                f"{label} {language} compiler-prefix roles differ")
+        require(mappings == sorted(
+                    mappings, key=lambda item: item["role"]),
+                f"{label} {language} compiler-prefix mappings are not "
+                "canonical")
+        prefix_by_language[language] = prefix
+    require(prefixes == sorted(prefixes, key=lambda item: item["language"]),
+            f"{label} compiler-prefix records are not canonical")
+
+    wrapper_keys = {
+        "label", "underlying_label", "logical_argv0",
+        "injected_arguments", "interpreter_descriptor",
+        "interpreter_sha256", "underlying_descriptor",
+        "underlying_source_path", "underlying_source_sha256",
+        "underlying_sealed_sha256", "script_sha256", "script_size",
+        "sealed_descriptor", "sealed_sha256", "sealed_size",
+        "sealed_seals",
+    }
+    wrapper_roles = {
+        "cc": "c_compiler",
+        "cxx": "compiler",
+        "ar": "archiver",
+        "ranlib": "ranlib",
+        "ld": "linker",
+        "cmake": "cmake",
+        "make": "make_program",
+    }
+    wrappers = replay["wrappers"]
+    require(isinstance(wrappers, list) and len(wrappers) == len(wrapper_roles),
+            f"{label} immutable replay wrappers are malformed")
+    wrapper_by_label: dict[str, Mapping[str, Any]] = {}
+    cache = candidate.get("validated_cache")
+    require(isinstance(cache, Mapping),
+            f"{label} closure lacks retained CMake cache semantics")
+    logical_wrapper_paths = {
+        "cc": cache.get("CMAKE_C_COMPILER"),
+        "cxx": cache.get("CMAKE_CXX_COMPILER"),
+        "ar": cache.get("CMAKE_AR"),
+        "ranlib": cache.get("CMAKE_RANLIB"),
+        "ld": cache.get("CMAKE_LINKER"),
+        "cmake": tool_by_label["cmake"]["source_path"],
+        "make": cache.get("CMAKE_MAKE_PROGRAM"),
+    }
+    for raw in wrappers:
+        wrapper = exact(raw, wrapper_keys, "immutable replay wrapper")
+        wrapper_label = wrapper["label"]
+        require(isinstance(wrapper_label, str),
+                f"{label} immutable wrapper role is malformed")
+        underlying_label = wrapper_roles.get(wrapper_label)
+        require(underlying_label is not None and
+                wrapper_label not in wrapper_by_label and
+                wrapper["underlying_label"] == underlying_label and
+                wrapper["logical_argv0"] ==
+                    logical_wrapper_paths[wrapper_label] and
+                isinstance(wrapper["injected_arguments"], list) and
+                all(isinstance(argument, str) and argument
+                    for argument in wrapper["injected_arguments"]),
+                f"{label} immutable wrapper role is malformed")
+        expected_arguments: list[str] = []
+        if wrapper_label == "cc":
+            expected_arguments = [
+                f"-B/proc/self/fd/"
+                f"{prefix_by_language['c']['descriptor']}/"]
+        elif wrapper_label == "cxx":
+            expected_arguments = [
+                f"-B/proc/self/fd/"
+                f"{prefix_by_language['c++']['descriptor']}/"]
+        require(wrapper["injected_arguments"] == expected_arguments,
+                f"{label} immutable {wrapper_label} wrapper arguments differ")
+        interpreter = tool_by_label["wrapper_shell"]
+        underlying = tool_by_label[underlying_label]
+        require(
+            wrapper["interpreter_descriptor"] ==
+                interpreter["sealed_descriptor"] and
+            wrapper["interpreter_sha256"] == interpreter["sha256"] and
+            wrapper["underlying_descriptor"] ==
+                underlying["sealed_descriptor"] and
+            wrapper["underlying_source_path"] ==
+                underlying["source_path"] and
+            wrapper["underlying_source_sha256"] ==
+                underlying["source_sha256"] and
+            wrapper["underlying_sealed_sha256"] ==
+                underlying["sha256"],
+            f"{label} immutable {wrapper_label} wrapper binding differs")
+        script = _replay_exec_wrapper_bytes(
+            wrapper["interpreter_descriptor"],
+            wrapper["logical_argv0"],
+            wrapper["underlying_descriptor"],
+            wrapper["injected_arguments"])
+        script_sha256 = hashlib.sha256(script).hexdigest()
+        require(
+            wrapper["script_sha256"] == script_sha256 and
+            wrapper["script_size"] == len(script) and
+            wrapper["sealed_sha256"] == script_sha256 and
+            wrapper["sealed_size"] == len(script) and
+            type(wrapper["sealed_descriptor"]) is int and
+            wrapper["sealed_descriptor"] >= 0 and
+            type(wrapper["sealed_seals"]) is int and
+            wrapper["sealed_seals"] & required_seals == required_seals,
+            f"{label} immutable {wrapper_label} wrapper bytes differ")
+        wrapper_by_label[wrapper_label] = wrapper
+    require(set(wrapper_by_label) == set(wrapper_roles) and
+            wrappers == sorted(wrappers, key=lambda item: item["label"]),
+            f"{label} immutable replay wrapper roles differ")
+
+    replacement_keys = {"label", "logical_path", "transport_path"}
+    replacements = replay["replacements"]
+    replacement_wrappers = {
+        "c-compiler": "cc", "cxx-compiler": "cxx", "archiver": "ar",
+        "ranlib": "ranlib", "linker": "ld", "cmake": "cmake",
+        "make": "make",
+    }
+    logical_replacements = {
+        "c-compiler": cache.get("CMAKE_C_COMPILER"),
+        "cxx-compiler": cache.get("CMAKE_CXX_COMPILER"),
+        "archiver": cache.get("CMAKE_AR"),
+        "ranlib": cache.get("CMAKE_RANLIB"),
+        "linker": cache.get("CMAKE_LINKER"),
+        "cmake": tool_by_label["cmake"]["source_path"],
+        "make": cache.get("CMAKE_MAKE_PROGRAM"),
+        "git": cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE"),
+        "dependency-includes":
+            "CMakeFiles/**/{compiler_,}depend.make",
+    }
+    replacement_by_label: dict[str, Mapping[str, Any]] = {}
+    require(isinstance(replacements, list),
+            f"{label} immutable replacement list is malformed")
+    for raw in replacements:
+        replacement = exact(
+            raw, replacement_keys, "immutable replay replacement")
+        replacement_label = replacement["label"]
+        require(isinstance(replacement_label, str) and
+                replacement_label in logical_replacements and
+                replacement_label not in replacement_by_label and
+                replacement["logical_path"] ==
+                    logical_replacements[replacement_label],
+                f"{label} immutable replay replacement identity differs")
+        if replacement_label == "git":
+            descriptor = tool_by_label[
+                "replay_git_identity"]["sealed_descriptor"]
+        elif replacement_label == "dependency-includes":
+            descriptor = tool_by_label[
+                "empty_dependency_include"]["sealed_descriptor"]
+        else:
+            descriptor = wrapper_by_label[
+                replacement_wrappers[replacement_label]][
+                    "sealed_descriptor"]
+        require(replacement["transport_path"] ==
+                f"/proc/self/fd/{descriptor}",
+                f"{label} immutable {replacement_label} transport differs")
+        replacement_by_label[replacement_label] = replacement
+    require(set(replacement_by_label) == set(logical_replacements) and
+            replacements == sorted(
+                replacements, key=lambda item: item["label"]),
+            f"{label} immutable replay replacement roles differ")
+
+    git_keys = {
+        "source_root", "commit", "tree", "dirty",
+        "interpreter_descriptor", "script_sha256", "script_size",
+        "sealed_descriptor", "sealed_sha256", "sealed_size",
+        "sealed_seals",
+    }
+    git_identity = exact(
+        replay["git_identity"], git_keys, "replay Git identity")
+    manifest = candidate.get("tracked_source_manifest")
+    require(isinstance(manifest, Mapping) and
+            isinstance(manifest.get("git"), Mapping) and
+            isinstance(git_identity["source_root"], str) and
+            Path(git_identity["source_root"]).is_absolute() and
+            git_identity["commit"] == manifest["git"].get("commit") and
+            git_identity["tree"] == manifest["git"].get("tree") and
+            git_identity["dirty"] == manifest["git"].get("dirty") and
+            git_identity["interpreter_descriptor"] ==
+                tool_by_label["wrapper_shell"]["sealed_descriptor"],
+            f"{label} replay Git semantic identity differs")
+    git_script, git_specification = _replay_git_identity_bytes(
+        Path(git_identity["source_root"]), manifest,
+        interpreter_descriptor=git_identity["interpreter_descriptor"])
+    require(all(git_identity[key] == value
+                for key, value in git_specification.items()),
+            f"{label} replay Git specification differs")
+    git_digest = hashlib.sha256(git_script).hexdigest()
+    replay_git_tool = tool_by_label["replay_git_identity"]
+    require(
+        git_identity["script_sha256"] == git_digest and
+        git_identity["script_size"] == len(git_script) and
+        git_identity["sealed_descriptor"] ==
+            replay_git_tool["sealed_descriptor"] and
+        git_identity["sealed_sha256"] == git_digest and
+        git_identity["sealed_size"] == len(git_script) and
+        git_identity["sealed_seals"] == replay_git_tool["seals"] and
+        replay_git_tool["sha256"] == git_digest,
+        f"{label} replay Git executable bytes differ")
+
+    recipe_keys = {
+        "schema", "file_count", "total_bytes", "required_labels",
+        "replacement_counts", "rewrites", "retained_recipes",
+        "inventory_sha256", "semantic_compile_closure",
+        "semantic_inputs",
+    }
+    recipe = exact(
+        replay["recipe_transport"], recipe_keys,
+        "replay recipe transport")
+    require(recipe["schema"] == "leopard2-replay-recipe-transport/v2" and
+            recipe["required_labels"] ==
+                sorted({"cxx-compiler", "archiver", "ranlib",
+                        "cmake", "make", "git",
+                        "dependency-includes"}) and
+            isinstance(recipe["replacement_counts"], Mapping) and
+            bool(recipe["replacement_counts"]) and
+            set(recipe["replacement_counts"]) ==
+                set(replacement_by_label) and
+            all(type(count) is int and count >= 0
+                for count in recipe["replacement_counts"].values()),
+            f"{label} replay recipe replacement counts are malformed")
+    semantic_keys = {
+        "schema", "compile_commands_sha256", "object_count",
+        "target_count", "control_assignment_counts",
+        "candidate_compile_closure_sha256",
+        "candidate_target_variables_sha256",
+    }
+    semantic = exact(
+        recipe["semantic_compile_closure"], semantic_keys,
+        "replay semantic compile closure")
+    semantic_inputs = recipe["semantic_inputs"]
+    require(isinstance(semantic_inputs, list) and
+            len(semantic_inputs) == 1,
+            f"{label} replay semantic input set is malformed")
+    semantic_input = exact(
+        semantic_inputs[0], {"path", "sha256", "size", "mode"},
+        "replay semantic input")
+    candidate_compile_closure = candidate.get(
+        "source_object_compile_closure")
+    require(isinstance(candidate_compile_closure, list) and
+            candidate_compile_closure,
+            f"{label} closure lacks its production compile objects")
+    candidate_targets = set()
+    for item in candidate_compile_closure:
+        require(isinstance(item, Mapping) and
+                isinstance(item.get("compile_entry"), Mapping) and
+                isinstance(
+                    item["compile_entry"].get("normalized_arguments"), list),
+                f"{label} production compile closure is malformed")
+        arguments = item["compile_entry"]["normalized_arguments"]
+        require(len(arguments) >= 5 and arguments[-4] == "-o" and
+                isinstance(arguments[-3], str),
+                f"{label} production compile argv is malformed")
+        output_parts = Path(arguments[-3]).parts
+        require(len(output_parts) >= 3 and
+                output_parts[0] == "CMakeFiles" and
+                output_parts[1].endswith(".dir"),
+                f"{label} production compile output is malformed")
+        candidate_targets.add("/".join(output_parts[:2]))
+    control_counts = semantic["control_assignment_counts"]
+    _require_replay_candidate_compile_closure_binding(
+        semantic, candidate_compile_closure, label=label)
+    require(
+        semantic["schema"] ==
+            "leopard2-replay-compile-variable-closure/v2" and
+        semantic_input["path"] == "compile_commands.json" and
+        semantic_input["sha256"] ==
+            semantic["compile_commands_sha256"] and
+        digest(semantic_input["sha256"],
+               "replay compile commands") ==
+            semantic_input["sha256"] and
+        type(semantic_input["size"]) is int and
+        0 < semantic_input["size"] <= MAX_METADATA_BYTES and
+        type(semantic_input["mode"]) is int and
+        stat.S_ISREG(semantic_input["mode"]) and
+        semantic["object_count"] == len(candidate_compile_closure) and
+        semantic["target_count"] == len(candidate_targets) and
+        isinstance(control_counts, Mapping) and
+        set(control_counts) == {
+            "CMAKE_COMMAND", "CMAKE_BINARY_DIR", "CMAKE_SOURCE_DIR"} and
+        all(type(count) is int and count > 0
+            for count in control_counts.values()),
+        f"{label} replay semantic compile closure differs")
+    require(all(recipe["replacement_counts"][item] > 0
+                for item in recipe["required_labels"]),
+            f"{label} replay recipe omits a required immutable transport")
+    rewrite_keys = {
+        "path", "mode", "original_sha256", "transport_sha256", "size",
+        "replacement_counts",
+    }
+    rewrites = recipe["rewrites"]
+    retained = recipe["retained_recipes"]
+    require(isinstance(rewrites, list) and rewrites and
+            isinstance(retained, list) and len(retained) >= len(rewrites) and
+            type(recipe["file_count"]) is int and
+            recipe["file_count"] == len(retained) and
+            recipe["file_count"] <= MAX_REPLAY_RECIPE_FILES and
+            type(recipe["total_bytes"]) is int and
+            0 <= recipe["total_bytes"] <=
+                MAX_REPLAY_RECIPE_TOTAL_BYTES,
+            f"{label} replay recipe retained set is malformed")
+    rewrite_by_path: dict[str, Mapping[str, Any]] = {}
+    sums = Counter()
+    for raw in rewrites:
+        rewrite = exact(raw, rewrite_keys, "replay recipe rewrite")
+        path = rewrite["path"]
+        require(_is_replay_recipe_relative_path(path) and
+                path not in rewrite_by_path and
+                type(rewrite["mode"]) is int and
+                0 <= rewrite["mode"] <= 0o7777 and
+                type(rewrite["size"]) is int and
+                0 <= rewrite["size"] <= MAX_METADATA_BYTES and
+                isinstance(rewrite["replacement_counts"], Mapping) and
+                bool(rewrite["replacement_counts"]) and
+                set(rewrite["replacement_counts"]).issubset(
+                    replacement_by_label) and
+                all(type(count) is int and count > 0
+                    for count in rewrite["replacement_counts"].values()),
+                f"{label} replay recipe rewrite is malformed")
+        digest(rewrite["original_sha256"], "recipe original")
+        digest(rewrite["transport_sha256"], "recipe transport")
+        require(rewrite["original_sha256"] !=
+                rewrite["transport_sha256"],
+                f"{label} replay recipe rewrite does not change bytes")
+        sums.update(rewrite["replacement_counts"])
+        rewrite_by_path[path] = rewrite
+    require(rewrites == sorted(rewrites, key=lambda item: item["path"]),
+            f"{label} replay recipe rewrites are not canonical")
+    for replacement_label, count in recipe["replacement_counts"].items():
+        if replacement_label == "make":
+            require(count >= sums[replacement_label],
+                    f"{label} recursive Make transport count differs")
+        else:
+            require(count == sums[replacement_label],
+                    f"{label} recipe {replacement_label} count differs")
+    retained_paths = set()
+    retained_keys = {"path", "sha256", "size", "mode", "rewritten"}
+    for raw in retained:
+        record = exact(raw, retained_keys, "retained replay recipe")
+        path = record["path"]
+        require(_is_replay_recipe_relative_path(path),
+                f"{label} retained replay recipe path is malformed")
+        rewrite = rewrite_by_path.get(path)
+        require(path not in retained_paths and
+                type(record["rewritten"]) is bool and
+                record["rewritten"] is (rewrite is not None) and
+                type(record["size"]) is int and
+                0 <= record["size"] <= MAX_METADATA_BYTES and
+                type(record["mode"]) is int and record["mode"] >= 0 and
+                stat.S_ISREG(record["mode"]),
+                f"{label} retained replay recipe identity differs")
+        digest(record["sha256"], "retained recipe")
+        if rewrite is not None:
+            require(
+                record["sha256"] == rewrite["transport_sha256"] and
+                record["size"] == rewrite["size"] and
+                stat.S_IMODE(record["mode"]) == rewrite["mode"],
+                f"{label} rewritten replay recipe identity differs")
+        retained_paths.add(path)
+    require(sum(record["size"] for record in retained) ==
+                recipe["total_bytes"] and
+            set(rewrite_by_path).issubset(retained_paths) and
+            _REPLAY_RECIPE_REQUIRED_PATHS.issubset(retained_paths) and
+            retained == sorted(retained, key=lambda item: item["path"]) and
+            digest(recipe["inventory_sha256"],
+                   "retained recipe inventory") ==
+                _replay_recipe_inventory_sha256(retained),
+            f"{label} retained replay recipe path set differs")
+
+    invocation_keys = {
+        "schema", "argv", "environment", "pass_fds",
+        "maximum_output_bytes", "timeout_seconds", "executable",
+    }
+    executable_keys = {
+        "label", "logical_argv0", "sealed_descriptor", "sealed_sha256",
+        "sealed_size", "sealed_seals",
+    }
+
+    def invocation(
+        raw: Any, name: str, tool_label: str, environment: Mapping[str, str],
+        maximum_bytes: int, timeout: int,
+    ) -> Mapping[str, Any]:
+        value = exact(raw, invocation_keys, f"{name} invocation")
+        executable = exact(
+            value["executable"], executable_keys,
+            f"{name} invocation executable")
+        tool = tool_by_label[tool_label]
+        pass_fds = value["pass_fds"]
+        require(
+            value["schema"] == "leopard2-replay-invocation/v1" and
+            isinstance(value["argv"], list) and value["argv"] and
+            all(isinstance(argument, str) and "\0" not in argument
+                for argument in value["argv"]) and
+            value["environment"] == {
+                key: environment[key] for key in sorted(environment)
+            } and
+            isinstance(pass_fds, list) and
+            all(type(descriptor) is int and descriptor >= 0
+                for descriptor in pass_fds) and
+            pass_fds == sorted(set(pass_fds)) and
+            value["maximum_output_bytes"] == maximum_bytes and
+            value["timeout_seconds"] == timeout and
+            executable["label"] == tool_label and
+            executable["logical_argv0"] == value["argv"][0] and
+            executable["sealed_descriptor"] ==
+                tool["sealed_descriptor"] and
+            executable["sealed_sha256"] == tool["sha256"] and
+            executable["sealed_size"] == tool["size"] and
+            executable["sealed_seals"] == tool["seals"] and
+            executable["sealed_descriptor"] in pass_fds,
+            f"{label} {name} replay invocation differs")
+        return value
+
+    invocations = exact(
+        replay["invocations"], {"configure", "build"},
+        "replay invocation set")
+    configure_environment = dict(GIT_ENVIRONMENT)
+    configure_environment.update({
+        "CC": str(cache.get("CMAKE_C_COMPILER")),
+        "CXX": str(cache.get("CMAKE_CXX_COMPILER")),
+    })
+    configure_record = invocation(
+        invocations["configure"], "configure", "cmake",
+        configure_environment, 16 << 20, 300)
+    configure_argv = configure_record["argv"]
+    require(len(configure_argv) >= 7 and
+            configure_argv[1] == "-S" and
+            configure_argv[2] == git_identity["source_root"] and
+            configure_argv[3] == "-B",
+            f"{label} replay configure roots are malformed")
+    replay_build_root = Path(configure_argv[4])
+    replay_source_root = Path(git_identity["source_root"])
+    require(replay_source_root.is_absolute() and
+            replay_build_root.is_absolute() and
+            replay_source_root.name == "source" and
+            replay_build_root.name == "build" and
+            replay_source_root.parent == replay_build_root.parent,
+            f"{label} replay workspace roots are malformed")
+    replay_workspace = replay_source_root.parent
+    replay_tools_root = replay_workspace / "tools"
+    require(
+        Path(prefix_by_language["c"]["path"]) ==
+            replay_tools_root / "c-prefix" and
+        Path(prefix_by_language["c++"]["path"]) ==
+            replay_tools_root / "cxx-prefix" and
+        stat.S_IMODE(prefix_by_language["c"]["mode"]) == 0o700 and
+        stat.S_IMODE(prefix_by_language["c++"]["mode"]) == 0o700 and
+        Path(tool_by_label["replay_git_identity"]["source_path"]) ==
+            replay_tools_root / "git" and
+        Path(tool_by_label["empty_dependency_include"]["source_path"]) ==
+            replay_tools_root / "empty-dependency-include",
+        f"{label} replay private-tool topology differs")
+    expected_configure = _reproducible_configure_argv(
+        Path(git_identity["source_root"]), replay_build_root, cache,
+        cmake_path=tool_by_label["cmake"]["source_path"])
+    require(configure_argv == expected_configure,
+            f"{label} replay configure argv differs")
+
+    build_record = invocation(
+        invocations["build"], "build", "make_program",
+        GIT_ENVIRONMENT, 32 << 20, 1800)
+    build_argv = build_record["argv"]
+    require(len(build_argv) == 11 and
+            build_argv[0] == cache.get("CMAKE_MAKE_PROGRAM") and
+            build_argv[1:6] == [
+                "-C", str(replay_build_root),
+                "-f", "CMakeFiles/Makefile2", "-j"] and
+            re.fullmatch(r"[1-9][0-9]{0,2}", build_argv[6]) is not None and
+            1 <= int(build_argv[6]) <= 128 and
+            build_argv[7] ==
+                f"SHELL=/proc/self/fd/"
+                f"{tool_by_label['command_shell']['sealed_descriptor']}" and
+            build_argv[8] ==
+                f"MAKE=/proc/self/fd/"
+                f"{wrapper_by_label['make']['sealed_descriptor']}" and
+            build_argv[9:] == [
+                "--",
+                f"CMakeFiles/{candidate.get('executable_target')}.dir/all"],
+            f"{label} replay build argv differs")
+    required_build_fds = {
+        *(tool["sealed_descriptor"] for tool in tool_by_label.values()),
+        *(wrapper["sealed_descriptor"]
+          for wrapper in wrapper_by_label.values()),
+        *(prefix["descriptor"] for prefix in prefix_by_language.values()),
+    }
+    require(required_build_fds.issubset(set(build_record["pass_fds"])),
+            f"{label} replay build descriptor transport is incomplete")
+
+    all_internal_descriptors = [
+        *(tool["sealed_descriptor"] for tool in tool_by_label.values()),
+        *(wrapper["sealed_descriptor"]
+          for wrapper in wrapper_by_label.values()),
+        *(prefix["descriptor"] for prefix in prefix_by_language.values()),
+    ]
+    require(len(all_internal_descriptors) ==
+            len(set(all_internal_descriptors)),
+            f"{label} immutable replay descriptor identities collide")
