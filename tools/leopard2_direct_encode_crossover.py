@@ -1,20 +1,22 @@
 #!/usr/bin/env python3
 """Reproduce Leopard2 tiny direct-encoder crossover measurements.
 
-Screening and generic pinned modes consume already-built
-``bench_leopard2_direct_encode`` binaries.  ``historical-avx2`` instead creates
-or strictly resumes a retained fresh Release/explicit-AVX2 build while holding
-the canonical authoritative lock, freezes that executable, and only then begins
-isolated ABBA measurement.  Every cell is a resumable JSON job with
-deterministic input data and retained logs.
+Screening mode consumes already-built ``bench_leopard2_direct_encode``
+binaries.  The legacy generic ``pinned`` command is deliberately fail-closed:
+hashing an externally supplied executable and its neighboring build artifacts
+does not prove a clean source-to-object-to-archive-to-link closure.
+``historical-avx2`` instead creates or strictly resumes a retained fresh
+Release/explicit-AVX2 build while holding the canonical authoritative lock,
+freezes that executable, and only then begins isolated ABBA measurement.  Every
+cell is a resumable JSON job with deterministic input data and retained logs.
 
 Typical use::
 
     tools/leopard2_direct_encode_crossover.py screen --build-root build
-    tools/leopard2_direct_encode_crossover.py pinned --build-root build \
+    tools/leopard2_direct_encode_crossover.py historical-avx2 \
         --cpu 16 --sibling 80
     tools/leopard2_direct_encode_crossover.py analyze \
-        --result-dir results/leopard2/direct-encode-crossover/pinned
+        --result-dir results/leopard2/direct-encode-crossover/historical-avx2
 
 The default build-root lookup accepts the repository's conventional trees
 ``build/direct-encode-SCALAR`` and ``build/SCALAR``.  ``--executable-root`` may
@@ -28,39 +30,62 @@ from __future__ import print_function
 
 import argparse
 import concurrent.futures
+import ctypes
+import errno
 import fcntl
 import hashlib
 import importlib.util
+import inspect
 import json
 import math
 import os
 import platform
 import re
+import resource
+import select
 import shutil
+import signal
 import stat
 import statistics
 import subprocess
 import sys
 import tempfile
+import threading
 import time
+import types
+import unicodedata
 from pathlib import Path
 
 
-SCHEMA = "leopard2-direct-encode-crossover/v3"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v3"
-ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v2"
+SCHEMA = "leopard2-direct-encode-crossover/v6"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v6"
+ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v4"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v2"
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
-FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v2"
-AUTHORITATIVE_COMMANDS = ("pinned", "historical-avx2")
+FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v3"
+AUTHORITATIVE_COMMANDS = ("historical-avx2",)
+RUN_COMMANDS = ("screen",) + AUTHORITATIVE_COMMANDS
+UNPROVED_PINNED_COMMAND = "pinned"
 AUTHORITATIVE_LOCK = Path("/tmp/leopard-gf8-authoritative.lock")
+DIRECT_COMMAND_SUPERVISOR_MODE = "--internal-direct-command-supervisor"
+DIRECT_COMMAND_OWNER_MODE = "--internal-direct-command-owner"
+MAX_SUPERVISOR_CONTROL_BYTES = 64 * 1024
+MAX_RAW_JSON_BYTES = 64 * 1024 * 1024
+MAX_RETAINED_LOG_BYTES = 128 * 1024 * 1024
+SUPERVISOR_REAP_GRACE_SECONDS = 12.0
+RAW_OUTPUT_DESCRIPTOR = 198
+EXECUTABLE_DESCRIPTOR = 199
+GIT_EXECUTABLE_DESCRIPTOR = 197
+TASKSET_EXECUTABLE_DESCRIPTOR = 196
+CONTROLLED_CMAKE_DESCRIPTOR = 195
+CONTROLLED_NINJA_DESCRIPTOR = 194
 CANONICAL_GIT = Path("/usr/bin/git")
-CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v3"
+CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v6"
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
-    "leopard2-benchmark-build-configuration-attestation/v1"
+    "leopard2-benchmark-build-configuration-attestation/v2"
 )
 BUILD_CONFIGURATION_FILE_SCHEMA = (
-    "leopard2-benchmark-build-configuration/v1"
+    "leopard2-benchmark-build-configuration/v2"
 )
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
@@ -83,21 +108,29 @@ BUILD_CONFIGURATION_VARIABLES = (
     "LEO2_BENCHMARK_GIT_EXECUTABLE",
     "LEO2_BUILD_BENCHMARKS",
     "LEO2_BUILD_TESTS",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+)
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
 ))
 CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
-    # These two bindings are written by the attestation producer itself.
-    # Other cache variables may legitimately retain a caller-selected cache
-    # type (for example STRING instead of FILEPATH/BOOL), so their values and
-    # uniqueness are authenticated without imposing a cosmetic type.
+    # These bindings have canonical CMake-declared types.  Reject a
+    # hand-edited cache that preserves text while changing CMake semantics.
     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
         frozenset(("INTERNAL",)),
     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
         frozenset(("INTERNAL",)),
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
 }
 BENCHMARK_ENVIRONMENT = {
     "LANG": "C",
@@ -117,6 +150,12 @@ GIT_ENVIRONMENT.update({
     "GIT_NO_REPLACE_OBJECTS": "1",
     "GIT_OPTIONAL_LOCKS": "0",
 })
+SOURCE_IDENTITY_LOCK = threading.Lock()
+RUNTIME_LAUNCHER_NAMES = (
+    "python", "script", "build_provenance", "git_capture",
+    "link_common", "containment",
+)
+RUNTIME_PYTHON_FLAGS = ("-I", "-S", "-B")
 
 
 class CrossoverError(Exception):
@@ -140,6 +179,19 @@ def attested_text(value, description):
     if forbidden:
         raise CrossoverError(
             "{} contains a forbidden record delimiter".format(description)
+        )
+    forbidden_categories = sorted(set(
+        unicodedata.category(character)
+        for character in value
+        if unicodedata.category(character) in (
+            "Cc", "Cf", "Zl", "Zp",
+        )
+    ))
+    if forbidden_categories:
+        raise CrossoverError(
+            "{} contains forbidden Unicode categories {}".format(
+                description, ",".join(forbidden_categories)
+            )
         )
     return value
 
@@ -304,14 +356,11 @@ class CanonicalAuthoritativeLock:
             }
             self.validate_current()
             return self
-        except Exception:
+        except BaseException:
             if self.descriptor is not None:
-                try:
-                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-                finally:
-                    os.close(self.descriptor)
-                    self.descriptor = None
-                    self.identity = None
+                os.close(self.descriptor)
+                self.descriptor = None
+                self.identity = None
             raise
 
     def __exit__(self, exc_type, exc, traceback):
@@ -323,12 +372,12 @@ class CanonicalAuthoritativeLock:
         descriptor = self.descriptor
         self.descriptor = None
         self.identity = None
-        try:
-            if descriptor is not None:
-                fcntl.flock(descriptor, fcntl.LOCK_UN)
-        finally:
-            if descriptor is not None:
-                os.close(descriptor)
+        # flock(LOCK_UN) would release the lock for the shared open-file
+        # description even while a timed child still owns an inherited
+        # descriptor.  Close-only lifetime lets the kernel release the lock
+        # only after the coordinator and every descendant have closed it.
+        if descriptor is not None:
+            os.close(descriptor)
         if validation_error is not None:
             raise validation_error
 
@@ -405,6 +454,569 @@ def digest_bytes(value):
 
 def digest_value(value):
     return digest_bytes(canonical_bytes(value))
+
+
+def metadata_signature(metadata):
+    """Return all mutable regular-file metadata relevant to evidence."""
+    return (
+        metadata.st_dev, metadata.st_ino, metadata.st_mode,
+        metadata.st_uid, metadata.st_nlink, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+
+
+def read_descriptor_bytes(descriptor, maximum_bytes, description):
+    """Double-read one retained inode and bind bytes to stable metadata."""
+    if (type(descriptor) is not int or descriptor < 0 or
+            type(maximum_bytes) is not int or maximum_bytes < 0):
+        raise CrossoverError(
+            "{} descriptor-read contract is invalid".format(description)
+        )
+    try:
+        before = os.fstat(descriptor)
+        values = []
+        for unused_pass in range(2):
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            chunks = []
+            total = 0
+            while total <= maximum_bytes:
+                block = os.read(
+                    descriptor,
+                    min(1024 * 1024, maximum_bytes + 1 - total),
+                )
+                if not block:
+                    break
+                chunks.append(block)
+                total += len(block)
+            if total > maximum_bytes:
+                raise CrossoverError(
+                    "{} exceeds {} bytes".format(
+                        description, maximum_bytes
+                    )
+                )
+            values.append(b"".join(chunks))
+        after = os.fstat(descriptor)
+    except OSError as error:
+        raise CrossoverError(
+            "cannot read {}: {}".format(description, error)
+        )
+    if (not stat.S_ISREG(before.st_mode) or
+            values[0] != values[1] or
+            metadata_signature(before) != metadata_signature(after) or
+            len(values[0]) != before.st_size):
+        raise CrossoverError(
+            "{} changed while its exact inode was read".format(description)
+        )
+    return values[0]
+
+
+def linux_memfd_create(name, flags):
+    """Call Linux memfd_create when the Python wrapper is unavailable."""
+    wrapper = getattr(os, "memfd_create", None)
+    if callable(wrapper):
+        return wrapper(name, flags)
+    if sys.platform != "linux":
+        raise CrossoverError("Linux memfd sealing is unavailable")
+    try:
+        function = ctypes.CDLL(None, use_errno=True).memfd_create
+    except (AttributeError, OSError) as error:
+        raise CrossoverError(
+            "Linux memfd sealing is unavailable: {}".format(error)
+        )
+    function.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    descriptor = function(name.encode("utf-8"), ctypes.c_uint(flags))
+    if descriptor >= 0:
+        return descriptor
+    number = ctypes.get_errno()
+    raise CrossoverError(
+        "Linux memfd_create failed: {}".format(
+            os.strerror(number or errno.EPERM)
+        )
+    )
+
+
+def create_sealed_executable_snapshot(value, description):
+    """Create a byte-immutable Linux memfd suitable for exact execution."""
+    if not isinstance(value, bytes) or not value:
+        raise CrossoverError(
+            "{} snapshot payload is invalid".format(description)
+        )
+    if sys.platform != "linux":
+        raise CrossoverError(
+            "{} requires Linux memfd sealing".format(description)
+        )
+    descriptor = None
+    transferred = False
+    try:
+        descriptor = linux_memfd_create(
+            "leopard2-executable-snapshot",
+            getattr(os, "MFD_CLOEXEC", 0x0001) |
+            getattr(os, "MFD_ALLOW_SEALING", 0x0002),
+        )
+        write_descriptor_all(descriptor, value)
+        os.fchmod(descriptor, 0o555)
+        os.fsync(descriptor)
+        add_seals = getattr(fcntl, "F_ADD_SEALS", 1033)
+        get_seals = getattr(fcntl, "F_GET_SEALS", 1034)
+        required_seals = (
+            getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+            getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+            getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+            getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+        )
+        fcntl.fcntl(descriptor, add_seals, required_seals)
+        if fcntl.fcntl(descriptor, get_seals) != required_seals:
+            raise CrossoverError(
+                "{} did not acquire the exact immutable seal set".format(
+                    description
+                )
+            )
+        metadata = os.fstat(descriptor)
+        retained = read_descriptor_bytes(
+            descriptor, len(value), description + " sealed snapshot"
+        )
+        after = os.fstat(descriptor)
+        if (retained != value or not stat.S_ISREG(metadata.st_mode) or
+                stat.S_IMODE(metadata.st_mode) != 0o555 or
+                metadata.st_size != len(value) or
+                metadata_signature(metadata) != metadata_signature(after)):
+            raise CrossoverError(
+                "{} sealed executable snapshot changed".format(description)
+            )
+        result = {
+            "descriptor": descriptor,
+            "sha256": digest_bytes(value),
+            "size": len(value),
+        }
+        transferred = True
+        return result
+    except OSError as error:
+        transferred = False
+        raise CrossoverError(
+            "cannot seal {}: {}".format(description, error)
+        )
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        # A successful return transfers the retained descriptor.  If a
+        # BaseException is delivered while evaluating that return, ownership
+        # remains here and the descriptor must still be closed.
+        if descriptor is not None and not transferred:
+            os.close(descriptor)
+
+
+def validate_sealed_executable_snapshot(snapshot, expected_sha256,
+                                        description):
+    if (not isinstance(snapshot, dict) or
+            set(snapshot) not in (
+                {"descriptor", "sha256", "size"},
+                {"descriptor", "path", "sha256", "size"},
+            ) or
+            type(snapshot.get("descriptor")) is not int or
+            type(snapshot.get("size")) is not int or
+            snapshot["size"] <= 0 or
+            snapshot.get("sha256") != expected_sha256):
+        raise CrossoverError(
+            "{} sealed snapshot contract is invalid".format(description)
+        )
+    descriptor = snapshot["descriptor"]
+    try:
+        seals = fcntl.fcntl(
+            descriptor, getattr(fcntl, "F_GET_SEALS", 1034)
+        )
+        required_seals = (
+            getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+            getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+            getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+            getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+        )
+        value = read_descriptor_bytes(
+            descriptor, snapshot["size"], description
+        )
+        metadata = os.fstat(descriptor)
+    except OSError as error:
+        raise CrossoverError(
+            "cannot validate {}: {}".format(description, error)
+        )
+    if (seals != required_seals or
+            stat.S_IMODE(metadata.st_mode) != 0o555 or
+            metadata.st_size != snapshot["size"] or
+            digest_bytes(value) != expected_sha256):
+        raise CrossoverError(
+            "{} sealed snapshot identity is stale".format(description)
+        )
+    return value
+
+
+def close_sealed_snapshot(snapshot):
+    if snapshot is not None and snapshot.get("descriptor") is not None:
+        try:
+            os.close(snapshot["descriptor"])
+        finally:
+            snapshot["descriptor"] = None
+
+
+def open_exact_executable_snapshot(
+        path, description, require_executable=True, allow_writable=False):
+    """Seal bytes read from one stable no-follow external file inode."""
+    path = checked_absolute_path(path, description)
+    descriptor = None
+    snapshot = None
+    snapshot_transferred = False
+    try:
+        descriptor = os.open(
+            str(path),
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+        )
+        before = os.fstat(descriptor)
+        current = os.lstat(str(path))
+        value = read_descriptor_bytes(
+            descriptor, MAX_RAW_JSON_BYTES, description
+        )
+        after = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or
+                (not allow_writable and
+                 stat.S_IMODE(before.st_mode) & 0o022) or
+                (require_executable and not before.st_mode & 0o111) or
+                metadata_signature(before) != metadata_signature(after) or
+                (before.st_dev, before.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "{} is not one stable permitted regular-file inode".format(
+                    description
+                )
+            )
+        snapshot = create_sealed_executable_snapshot(value, description)
+        snapshot["path"] = str(path)
+        snapshot_transferred = True
+        return snapshot
+    except OSError as error:
+        snapshot_transferred = False
+        raise CrossoverError(
+            "cannot retain {}: {}".format(description, error)
+        )
+    except BaseException:
+        snapshot_transferred = False
+        raise
+    finally:
+        try:
+            if descriptor is not None:
+                os.close(descriptor)
+        except BaseException:
+            snapshot_transferred = False
+            if snapshot is not None:
+                close_sealed_snapshot(snapshot)
+            raise
+        if snapshot is not None and not snapshot_transferred:
+            close_sealed_snapshot(snapshot)
+
+
+def open_current_interpreter_snapshot(python_path=None):
+    """Seal the running executable and bind a byte-identical prefix argv[0]."""
+    descriptor = None
+    snapshot = None
+    candidate_snapshot = None
+    transferred = False
+    try:
+        descriptor = os.open(
+            "/proc/self/exe",
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NONBLOCK", 0),
+        )
+        before = os.fstat(descriptor)
+        value = read_descriptor_bytes(
+            descriptor, MAX_RAW_JSON_BYTES,
+            "current Python interpreter executable",
+        )
+        after = os.fstat(descriptor)
+        if (not stat.S_ISREG(before.st_mode) or
+                not before.st_mode & 0o111 or
+                metadata_signature(before) != metadata_signature(after)):
+            raise CrossoverError(
+                "current Python interpreter executable is not stable"
+            )
+        snapshot = create_sealed_executable_snapshot(
+            value, "current Python interpreter executable"
+        )
+
+        if python_path is None:
+            prefix = Path(os.path.abspath(sys.base_prefix))
+            name = "python{}.{}{}".format(
+                sys.version_info.major, sys.version_info.minor, sys.abiflags
+            )
+            candidate = prefix / "bin" / name
+        else:
+            candidate = Path(python_path)
+        candidate = candidate.resolve(strict=True)
+        if not candidate.is_absolute():
+            raise CrossoverError(
+                "Python prefix-discovery executable is not absolute"
+            )
+        candidate_snapshot = open_exact_executable_snapshot(
+            candidate, "Python prefix-discovery executable",
+            require_executable=True, allow_writable=True,
+        )
+        if (candidate_snapshot["size"] != snapshot["size"] or
+                candidate_snapshot["sha256"] != snapshot["sha256"]):
+            raise CrossoverError(
+                "Python prefix-discovery executable differs from the "
+                "running interpreter inode"
+            )
+        snapshot["path"] = str(candidate)
+        transferred = True
+        return snapshot
+    except OSError as error:
+        transferred = False
+        raise CrossoverError(
+            "cannot retain current Python interpreter: {}".format(error)
+        ) from error
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        close_sealed_snapshot(candidate_snapshot)
+        if snapshot is not None and not transferred:
+            close_sealed_snapshot(snapshot)
+
+
+def sealed_snapshot_identity(snapshot):
+    if not isinstance(snapshot, dict):
+        raise CrossoverError("sealed snapshot is not an object")
+    return {
+        "path": snapshot["path"],
+        "sha256": snapshot["sha256"],
+        "size": snapshot["size"],
+    }
+
+
+def validate_sealed_snapshot_identity(value, description):
+    if not isinstance(value, dict) or set(value) != {
+            "path", "sha256", "size"}:
+        raise CrossoverError(
+            "{} sealed identity is invalid".format(description)
+        )
+    path = attested_text(value.get("path"), description + " path")
+    try:
+        path_is_absolute = Path(path).is_absolute()
+    except (OSError, TypeError, ValueError):
+        path_is_absolute = False
+    if (not path_is_absolute or
+            not isinstance(value.get("sha256"), str) or
+            not re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) or
+            type(value.get("size")) is not int or value["size"] <= 0):
+        raise CrossoverError(
+            "{} sealed identity is invalid".format(description)
+        )
+    return value
+
+
+def open_runtime_launcher_snapshots(
+        python_path=None, script_path=None):
+    script_path = (
+        Path(__file__).resolve()
+        if script_path is None else Path(script_path).resolve()
+    )
+    repository = Path(__file__).resolve().parents[1]
+    paths = {
+        # The current interpreter may come from a user-managed installation
+        # with group-writable mode bits.  It is never executed by pathname:
+        # exact bytes are read once and then executed only from a sealed memfd.
+        "python": (python_path, True, True),
+        "script": (script_path, False, True),
+        "build_provenance": (
+            repository / "tools" / "leopard2_build_provenance.py",
+            False, True,
+        ),
+        "git_capture": (
+            repository / "experiments" / "leopard2" /
+            "main_compare" / "git_capture.py",
+            False, True,
+        ),
+        "link_common": (
+            repository / "experiments" / "leopard2" /
+            "decoder_dispatch" / "balanced_evidence_common.py",
+            False, True,
+        ),
+        "containment": (
+            repository / "experiments" / "leopard2" /
+            "main_compare" / "run_abba.py",
+            False, True,
+        ),
+    }
+    snapshots = {}
+    try:
+        snapshots["python"] = open_current_interpreter_snapshot(python_path)
+        for name in RUNTIME_LAUNCHER_NAMES:
+            if name == "python":
+                continue
+            path, require_executable, allow_writable = paths[name]
+            snapshots[name] = open_exact_executable_snapshot(
+                path, "command-owner {} launcher input".format(name),
+                require_executable, allow_writable,
+            )
+        snapshots["identity"] = {
+            name: sealed_snapshot_identity(snapshots[name])
+            for name in RUNTIME_LAUNCHER_NAMES
+        }
+        return snapshots
+    except BaseException as primary:
+        cleanup_errors = []
+        for name in reversed(RUNTIME_LAUNCHER_NAMES):
+            if name in snapshots:
+                try:
+                    close_sealed_snapshot(snapshots[name])
+                except BaseException as error:
+                    cleanup_errors.append((name, error))
+        if cleanup_errors:
+            raise CrossoverError(
+                "runtime launcher setup failed: {}; cleanup also failed: "
+                "{}".format(
+                    primary,
+                    "; ".join(
+                        "{} {}: {}".format(
+                            name, type(error).__name__, error
+                        ) for name, error in cleanup_errors
+                    ),
+                )
+            ) from primary
+        raise
+
+
+def validate_runtime_launcher_snapshots(launcher):
+    if (not isinstance(launcher, dict) or
+            set(launcher) != {"identity"} | set(RUNTIME_LAUNCHER_NAMES) or
+            not isinstance(launcher.get("identity"), dict) or
+            set(launcher["identity"]) != set(RUNTIME_LAUNCHER_NAMES)):
+        raise CrossoverError("runtime launcher contract is invalid")
+    for name in RUNTIME_LAUNCHER_NAMES:
+        identity = validate_sealed_snapshot_identity(
+            launcher["identity"].get(name),
+            "runtime launcher " + name,
+        )
+        snapshot = launcher.get(name)
+        if (not isinstance(snapshot, dict) or
+                sealed_snapshot_identity(snapshot) != identity):
+            raise CrossoverError(
+                "runtime launcher {} snapshot is stale".format(name)
+            )
+        validate_sealed_executable_snapshot(
+            snapshot, identity["sha256"],
+            "runtime launcher " + name,
+        )
+    return launcher["identity"]
+
+
+def runtime_launcher_contract(launcher):
+    identity = validate_runtime_launcher_snapshots(launcher)
+    result = {"identity": identity}
+    result.update({
+        name + "_descriptor": launcher[name]["descriptor"]
+        for name in RUNTIME_LAUNCHER_NAMES
+    })
+    return result
+
+
+def runtime_launcher_from_contract(value):
+    descriptor_keys = {
+        name + "_descriptor" for name in RUNTIME_LAUNCHER_NAMES
+    }
+    if (not isinstance(value, dict) or
+            set(value) != {"identity"} | descriptor_keys or
+            not isinstance(value.get("identity"), dict) or
+            set(value["identity"]) != set(RUNTIME_LAUNCHER_NAMES) or
+            any(type(value.get(key)) is not int or value[key] < 3
+                for key in descriptor_keys) or
+            len({value[key] for key in descriptor_keys}) !=
+            len(descriptor_keys)):
+        raise CrossoverError("runtime launcher transport is invalid")
+    launcher = {"identity": value["identity"]}
+    for name in RUNTIME_LAUNCHER_NAMES:
+        identity = validate_sealed_snapshot_identity(
+            value["identity"].get(name), "runtime launcher " + name
+        )
+        launcher[name] = {
+            "descriptor": value[name + "_descriptor"],
+            "path": identity["path"],
+            "sha256": identity["sha256"],
+            "size": identity["size"],
+        }
+    validate_runtime_launcher_snapshots(launcher)
+    return launcher
+
+
+def close_runtime_launcher_snapshots(launcher):
+    errors = []
+    if launcher is None:
+        return
+    for name in reversed(RUNTIME_LAUNCHER_NAMES):
+        try:
+            close_sealed_snapshot(launcher.get(name))
+        except BaseException as error:
+            errors.append(error)
+    if errors:
+        raise CrossoverError(
+            "cannot close runtime launcher snapshots: {}".format(
+                "; ".join(str(error) for error in errors)
+            )
+        )
+
+
+def current_runtime_launcher_identity():
+    launcher = None
+    try:
+        launcher = open_runtime_launcher_snapshots()
+        return validate_runtime_launcher_snapshots(launcher)
+    finally:
+        if launcher is not None:
+            close_runtime_launcher_snapshots(launcher)
+
+
+def validate_current_executable_identity(identity, description):
+    identity = validate_sealed_snapshot_identity(identity, description)
+    snapshot = None
+    try:
+        snapshot = open_exact_executable_snapshot(
+            identity["path"], description, True
+        )
+        if sealed_snapshot_identity(snapshot) != identity:
+            raise CrossoverError(
+                "{} executable identity changed".format(description)
+            )
+        return identity
+    finally:
+        if snapshot is not None:
+            close_sealed_snapshot(snapshot)
+
+
+def load_sealed_python_module(snapshot, module_name, description):
+    if (not isinstance(module_name, str) or
+            not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", module_name)):
+        raise CrossoverError(
+            "{} module name is invalid".format(description)
+        )
+    value = validate_sealed_executable_snapshot(
+        snapshot, snapshot.get("sha256"), description
+    )
+    module = types.ModuleType(module_name)
+    module.__file__ = snapshot["path"]
+    module.__package__ = ""
+    previous = sys.modules.get(module_name)
+    sys.modules[module_name] = module
+    try:
+        code = compile(value, snapshot["path"], "exec")
+        exec(code, module.__dict__)  # pylint: disable=exec-used
+    except BaseException:
+        if previous is None:
+            sys.modules.pop(module_name, None)
+        else:
+            sys.modules[module_name] = previous
+        raise
+    return module
 
 
 def evidence_contract(frozen_executable_required):
@@ -494,7 +1106,7 @@ def decode_json_bytes(value, description):
         )
     except CrossoverError:
         raise
-    except ValueError as error:
+    except (ValueError, OverflowError, RecursionError) as error:
         raise CrossoverError("cannot parse {}: {}".format(description, error))
 
 
@@ -502,28 +1114,952 @@ def normalized_output(value):
     return value.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
 
 
-def atomic_write_json(path, value):
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary = tempfile.mkstemp(
-        prefix=path.name + ".", suffix=".tmp", dir=str(path.parent)
+def _open_absolute_directory_components(
+        path, description, create, required_mode=0o700):
+    """Open an absolute directory one no-follow component at a time.
+
+    ``O_NOFOLLOW`` on an absolute pathname protects only its final component.
+    Starting from a retained root dirfd closes the resolve/open race for every
+    intermediate component as well.
+    """
+    if required_mode not in (0o555, 0o700):
+        raise CrossoverError(
+            "{} directory mode contract is invalid".format(description)
+        )
+    if not hasattr(os, "O_NOFOLLOW") or not hasattr(os, "O_DIRECTORY"):
+        raise CrossoverError(
+            "{} requires O_NOFOLLOW and O_DIRECTORY".format(description)
+        )
+    lexical = Path(os.path.abspath(os.fspath(path)))
+    if not lexical.is_absolute():
+        raise CrossoverError("{} is not absolute".format(description))
+    flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+        getattr(os, "O_CLOEXEC", 0)
+    )
+    descriptor = None
+    try:
+        components = list(lexical.parts[1:])
+        if (len(components) >= 4 and components[:3] ==
+                ["proc", "self", "fd"] and components[3].isdigit()):
+            retained_descriptor = int(components[3])
+            descriptor = os.dup(retained_descriptor)
+            retained_metadata = os.fstat(descriptor)
+            if not stat.S_ISDIR(retained_metadata.st_mode):
+                raise CrossoverError(
+                    "{} retained procfd is not a directory".format(
+                        description
+                    )
+                )
+            current = Path("/proc/self/fd") / components[3]
+            components = components[4:]
+        else:
+            descriptor = os.open("/", flags)
+            current = Path("/")
+        for component in components:
+            if component in ("", ".", "..") or "/" in component:
+                raise CrossoverError(
+                    "{} has an unsafe component".format(description)
+                )
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileExistsError:
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            current = current / component
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISDIR(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or
+                stat.S_IMODE(metadata.st_mode) != required_mode):
+            raise CrossoverError(
+                "{} is not an exact mode-{:04o} owner directory: {}".format(
+                    description, required_mode, current
+                )
+            )
+        return {
+            "descriptor": descriptor,
+            "identity": (metadata.st_dev, metadata.st_ino),
+            "path": lexical,
+            "required_mode": required_mode,
+        }
+    except FileNotFoundError:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+    except OSError as error:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise CrossoverError(
+            "cannot open {} without following links: {}".format(
+                description, error
+            )
+        )
+    except BaseException:
+        if descriptor is not None:
+            os.close(descriptor)
+        raise
+
+
+def owned_canonical_directory(path, description):
+    """Create/open one owner-controlled directory without following links."""
+    return _open_absolute_directory_components(path, description, True)
+
+
+def validate_owned_directory(directory, description):
+    current = None
+    try:
+        try:
+            metadata = os.fstat(directory["descriptor"])
+            current = _open_absolute_directory_components(
+                directory["path"], description + " current path", False,
+                directory.get("required_mode", 0o700),
+            )
+            current_metadata = os.fstat(current["descriptor"])
+        except OSError as error:
+            raise CrossoverError(
+                "cannot revalidate {}: {}".format(description, error)
+            )
+        required_mode = directory.get("required_mode", 0o700)
+        if (not stat.S_ISDIR(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or
+                stat.S_IMODE(metadata.st_mode) != required_mode or
+                (metadata.st_dev, metadata.st_ino) != directory["identity"] or
+                (current_metadata.st_dev, current_metadata.st_ino) !=
+                directory["identity"] or
+                stat.S_IMODE(current_metadata.st_mode) != required_mode):
+            raise CrossoverError(
+                "{} was replaced or became unsafe".format(description)
+            )
+    finally:
+        if current is not None:
+            close_owned_directory(current)
+
+
+def close_owned_directory(directory):
+    descriptor = directory.get("descriptor")
+    if descriptor is not None:
+        os.close(descriptor)
+        directory["descriptor"] = None
+
+
+def duplicate_owned_directory(directory, description):
+    validate_owned_directory(directory, description)
+    return {
+        "descriptor": os.dup(directory["descriptor"]),
+        "identity": directory["identity"],
+        "path": directory["path"],
+        "required_mode": directory.get("required_mode", 0o700),
+    }
+
+
+def result_relative_parts(relative, description):
+    try:
+        path = Path(relative)
+    except (TypeError, ValueError) as error:
+        raise CrossoverError("{} is invalid: {}".format(description, error))
+    if path.is_absolute():
+        raise CrossoverError("{} must be relative".format(description))
+    parts = path.parts
+    if (not parts or any(
+            part in ("", ".", "..") or "/" in part or "\0" in part
+            for part in parts)):
+        raise CrossoverError("{} is unsafe".format(description))
+    return parts
+
+
+def open_result_directory(
+        root, relative, description, create=False, required_mode=0o700):
+    """Traverse retained result directories through O_NOFOLLOW dirfds."""
+    if required_mode not in (0o555, 0o700):
+        raise CrossoverError(
+            "{} directory mode contract is invalid".format(description)
+        )
+    parts = result_relative_parts(relative, description)
+    validate_owned_directory(root, "canonical result directory")
+    descriptor = os.dup(root["descriptor"])
+    current_path = root["path"]
+    flags = (
+        os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+        getattr(os, "O_CLOEXEC", 0)
     )
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            json.dump(
-                value, output, indent=2, sort_keys=True, ensure_ascii=True,
-                allow_nan=False
+        for component_index, component in enumerate(parts):
+            try:
+                child = os.open(component, flags, dir_fd=descriptor)
+            except FileNotFoundError:
+                if not create:
+                    raise
+                os.mkdir(component, 0o700, dir_fd=descriptor)
+                child = os.open(component, flags, dir_fd=descriptor)
+            os.close(descriptor)
+            descriptor = child
+            current_path = current_path / component
+            metadata = os.fstat(descriptor)
+            component_mode = (
+                required_mode
+                if component_index == len(parts) - 1 else 0o700
             )
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, str(path))
+            if (not stat.S_ISDIR(metadata.st_mode) or
+                    metadata.st_uid != os.getuid() or
+                    stat.S_IMODE(metadata.st_mode) != component_mode):
+                raise CrossoverError(
+                    "{} is not an exact mode-{:04o} owner directory".format(
+                        description, component_mode
+                    )
+                )
+        metadata = os.fstat(descriptor)
+        result = {
+            "descriptor": descriptor,
+            "identity": (metadata.st_dev, metadata.st_ino),
+            "path": current_path,
+            "required_mode": required_mode,
+        }
+        validate_owned_directory(result, description)
+        validate_owned_directory(root, "canonical result directory")
+        return result
     except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def open_existing_result_directory(
+        root, relative, description, required_mode=0o700):
+    return open_result_directory(
+        root, relative, description, False, required_mode
+    )
+
+
+def read_result_regular(
+        root, relative, maximum_bytes, description, mutation_hook=None,
+        required_mode=0o600):
+    """Read one retained artifact via a stable no-follow result-root walk."""
+    parts = result_relative_parts(relative, description)
+    if len(parts) == 1:
+        directory = {
+            "descriptor": os.dup(root["descriptor"]),
+            "identity": root["identity"],
+            "path": root["path"],
+        }
+    else:
+        directory = open_existing_result_directory(
+            root, Path(*parts[:-1]), description + " directory"
+        )
+    try:
+        value = read_owned_regular(
+            directory, parts[-1], maximum_bytes, description,
+            mutation_hook=mutation_hook,
+            required_mode=required_mode,
+        )
+        validate_owned_directory(root, "canonical result directory")
+        return value
+    finally:
+        close_owned_directory(directory)
+
+
+def list_result_regular_names(root, relative, suffix, description):
+    """Enumerate a retained directory and reject every non-regular entry."""
+    directory = open_existing_result_directory(root, relative, description)
+    try:
+        before = os.fstat(directory["descriptor"])
+        before_identity = (
+            before.st_dev, before.st_ino, before.st_size,
+            before.st_mtime_ns, before.st_ctime_ns,
+        )
+        names = sorted(os.listdir(directory["descriptor"]))
+        result = []
+        for name in names:
+            if (not isinstance(name, str) or name in ("", ".", "..") or
+                    "/" in name or "\0" in name):
+                raise CrossoverError(
+                    "{} contains an unsafe name".format(description)
+                )
+            metadata = os.stat(
+                name, dir_fd=directory["descriptor"],
+                follow_symlinks=False,
+            )
+            if (not stat.S_ISREG(metadata.st_mode) or
+                    metadata.st_uid != os.getuid() or
+                    metadata.st_nlink != 1 or
+                    stat.S_IMODE(metadata.st_mode) != 0o600):
+                raise CrossoverError(
+                    "{} contains unsafe entry {!r}".format(
+                        description, name
+                    )
+                )
+            if suffix is None or name.endswith(suffix):
+                result.append(name)
+            else:
+                raise CrossoverError(
+                    "{} contains unexpected entry {!r}".format(
+                        description, name
+                    )
+                )
+        after_names = sorted(os.listdir(directory["descriptor"]))
+        after = os.fstat(directory["descriptor"])
+        after_identity = (
+            after.st_dev, after.st_ino, after.st_size,
+            after.st_mtime_ns, after.st_ctime_ns,
+        )
+        if names != after_names or before_identity != after_identity:
+            raise CrossoverError(
+                "{} changed while it was being enumerated".format(description)
+            )
+        validate_owned_directory(directory, description)
+        validate_owned_directory(root, "canonical result directory")
+        return result
+    finally:
+        close_owned_directory(directory)
+
+
+def validate_atomic_destination(directory_descriptor, name, description):
+    try:
+        metadata = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise CrossoverError(
+            "cannot inspect {}: {}".format(description, error)
+        )
+    if (not stat.S_ISREG(metadata.st_mode) or
+            metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+            stat.S_IMODE(metadata.st_mode) != 0o600):
+        raise CrossoverError(
+            "refusing unsafe existing {}".format(description)
+        )
+    return metadata
+
+
+def link_descriptor_noreplace(
+        source_descriptor, destination_directory_descriptor,
+        destination_name, description):
+    """Link one exact anonymous inode to a new name without replacement."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    linkat = libc.linkat
+    linkat.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_int,
+    )
+    linkat.restype = ctypes.c_int
+    result = linkat(
+            source_descriptor, ctypes.c_char_p(b""),
+            destination_directory_descriptor,
+            os.fsencode(destination_name), 0x1000)  # AT_EMPTY_PATH
+    if result != 0:
+        error_number = ctypes.get_errno()
+        if error_number in (errno.ENOENT, errno.EPERM):
+            # Unprivileged O_TMPFILE publication uses the kernel's exact fd
+            # symlink with AT_SYMLINK_FOLLOW.
+            result = linkat(
+                -100, os.fsencode("/proc/self/fd/{}".format(
+                    source_descriptor
+                )),
+                destination_directory_descriptor,
+                os.fsencode(destination_name), 0x400,
+            )
+            if result == 0:
+                return
+            error_number = ctypes.get_errno()
+        raise CrossoverError(
+            "cannot publish {} without replacement: {}".format(
+                description, os.strerror(error_number)
+            )
+        )
+
+
+def rename_noreplace(
+        directory_descriptor, source_name, destination_name, description):
+    """Atomically rename one staged name only if its destination is absent."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError:
+        raise CrossoverError(
+            "{} requires renameat2(RENAME_NOREPLACE)".format(description)
+        )
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        directory_descriptor, os.fsencode(source_name),
+        directory_descriptor, os.fsencode(destination_name),
+        0x1,  # RENAME_NOREPLACE
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise CrossoverError(
+            "cannot atomically publish {} without replacement: {}".format(
+                description, os.strerror(error_number)
+            )
+        )
+
+
+def rename_exchange(
+        directory_descriptor, first_name, second_name, description):
+    """Atomically exchange two existing names in one retained directory."""
+    libc = ctypes.CDLL(None, use_errno=True)
+    try:
+        renameat2 = libc.renameat2
+    except AttributeError:
+        raise CrossoverError(
+            "{} requires renameat2(RENAME_EXCHANGE)".format(description)
+        )
+    renameat2.argtypes = (
+        ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+        ctypes.c_uint,
+    )
+    renameat2.restype = ctypes.c_int
+    result = renameat2(
+        directory_descriptor, os.fsencode(first_name),
+        directory_descriptor, os.fsencode(second_name),
+        0x2,  # RENAME_EXCHANGE
+    )
+    if result != 0:
+        error_number = ctypes.get_errno()
+        raise CrossoverError(
+            "cannot atomically exchange {}: {}".format(
+                description, os.strerror(error_number)
+            )
+        )
+
+
+def named_inode_identity(directory_descriptor, name, description):
+    """Return one no-follow name identity, or None when it is absent."""
+    try:
+        metadata = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise CrossoverError(
+            "cannot reconcile {}: {}".format(description, error)
+        )
+    return metadata.st_dev, metadata.st_ino
+
+
+def reconcile_atomic_publication(
+        directory_descriptor, destination_name, staged_name,
+        temporary_descriptor, old_descriptor, description):
+    """Classify state after an interrupted renameat2 publication syscall.
+
+    Python can deliver a BaseException after renameat2 committed but before
+    the caller executes its next bytecode.  Bind both names to the retained
+    new/prior file descriptors so that this boundary is either recognized as
+    committed and rolled back, or rejected as ambiguous without unlinking an
+    unrelated inode.
+    """
+    new_metadata = os.fstat(temporary_descriptor)
+    new_identity = (new_metadata.st_dev, new_metadata.st_ino)
+    old_identity = None
+    if old_descriptor is not None:
+        old_metadata = os.fstat(old_descriptor)
+        old_identity = (old_metadata.st_dev, old_metadata.st_ino)
+    destination_identity = named_inode_identity(
+        directory_descriptor, destination_name,
+        description + " destination",
+    )
+    staged_identity = named_inode_identity(
+        directory_descriptor, staged_name, description + " staging name"
+    )
+    if old_identity is None:
+        if (destination_identity is None and
+                staged_identity == new_identity):
+            return "uncommitted"
+        if (destination_identity == new_identity and
+                staged_identity is None):
+            return "new"
+    else:
+        if (destination_identity == old_identity and
+                staged_identity == new_identity):
+            return "uncommitted"
+        if (destination_identity == new_identity and
+                staged_identity == old_identity):
+            return "replacement"
+    raise CrossoverError(
+        "{} left an ambiguous destination/staging inode state".format(
+            description
+        )
+    )
+
+
+def write_result_bytes(
+        root, relative, encoded, description="atomic JSON destination",
+        replace=False, precommit_hook=None, postlink_hook=None,
+        postcommit_hook=None):
+    """Publish bytes relative to a retained root from one exact O_TMPFILE inode.
+
+    This binds the bytes and inode through the atomic commit and its immediate
+    retained-FD verification.  Mode 0600 intentionally leaves evidence
+    owner-writable for resumable campaigns, so no claim is made against a
+    malicious same-UID writer that mutates it after this function returns;
+    readers therefore repeat exact-inode byte/metadata validation.
+    """
+    if not isinstance(encoded, bytes):
+        raise CrossoverError("{} payload is not bytes".format(description))
+    parts = result_relative_parts(relative, description)
+    if len(parts) == 1:
+        directory = duplicate_owned_directory(
+            root, description + " directory"
+        )
+    else:
+        directory = open_result_directory(
+            root, Path(*parts[:-1]), description + " directory", True
+        )
+    name = parts[-1]
+    temporary_descriptor = None
+    old_descriptor = None
+    old_payload = None
+    staged_name = None
+    committed_state = "uncommitted"
+    try:
+        existing = validate_atomic_destination(
+            directory["descriptor"], name, description
+        )
+        if existing is not None and not replace:
+            raise CrossoverError(
+                "{} already exists; refusing to replace it".format(description)
+            )
+        if existing is not None:
+            old_descriptor = os.open(
+                name,
+                os.O_RDONLY | os.O_NOFOLLOW |
+                getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_NONBLOCK", 0),
+                dir_fd=directory["descriptor"],
+            )
+            old_metadata = os.fstat(old_descriptor)
+            if metadata_signature(old_metadata) != metadata_signature(
+                    existing):
+                raise CrossoverError(
+                    "{} changed while retaining prior evidence".format(
+                        description
+                    )
+                )
+            old_payload = read_descriptor_bytes(
+                old_descriptor, old_metadata.st_size,
+                description + " prior evidence",
+            )
+        if not hasattr(os, "O_TMPFILE"):
+            raise CrossoverError(
+                "{} requires O_TMPFILE exact-inode publication".format(
+                    description
+                )
+            )
+        temporary_descriptor = os.open(
+            ".", os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0),
+            0o600, dir_fd=directory["descriptor"],
+        )
+        os.fchmod(temporary_descriptor, 0o600)
+        offset = 0
+        while offset < len(encoded):
+            try:
+                written = os.write(
+                    temporary_descriptor, encoded[offset:]
+                )
+            except InterruptedError:
+                continue
+            if written <= 0:
+                raise CrossoverError(
+                    "atomic JSON write made no progress"
+                )
+            offset += written
+        os.fsync(temporary_descriptor)
+        metadata = os.fstat(temporary_descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or
+                metadata.st_nlink != 0 or
+                stat.S_IMODE(metadata.st_mode) != 0o600 or
+                metadata.st_size != len(encoded)):
+            raise CrossoverError(
+                "atomic JSON temporary metadata changed"
+            )
+        expected_sha256 = digest_bytes(encoded)
+        if read_descriptor_bytes(
+                temporary_descriptor, len(encoded),
+                description + " staged payload") != encoded:
+            raise CrossoverError(
+                "{} staged payload differs from requested bytes".format(
+                    description
+                )
+            )
+        validate_owned_directory(
+            directory, description + " directory"
+        )
+        current = validate_atomic_destination(
+            directory["descriptor"], name, description
+        )
+        if ((existing is None) != (current is None) or
+                (existing is not None and
+                 (existing.st_dev, existing.st_ino) !=
+                 (current.st_dev, current.st_ino))):
+            raise CrossoverError(
+                "{} changed before publication".format(description)
+            )
+        for unused_attempt in range(32):
+            candidate = ".leo2-stage-{}-{}-{}".format(
+                os.getpid(), threading.get_ident(),
+                os.urandom(12).hex(),
+            )
+            try:
+                link_descriptor_noreplace(
+                    temporary_descriptor, directory["descriptor"],
+                    candidate, description + " staged inode",
+                )
+                staged_name = candidate
+                break
+            except CrossoverError as error:
+                if "File exists" not in str(error):
+                    raise
+        if staged_name is None:
+            raise CrossoverError(
+                "{} could not allocate a unique staging name".format(
+                    description
+                )
+            )
+        if postlink_hook is not None:
+            postlink_hook(
+                temporary_descriptor, directory["descriptor"], staged_name
+            )
+        staged = os.stat(
+            staged_name, dir_fd=directory["descriptor"],
+            follow_symlinks=False,
+        )
+        retained_before_commit = os.fstat(temporary_descriptor)
+        retained_payload = read_descriptor_bytes(
+            temporary_descriptor, len(encoded),
+            description + " linked staged payload",
+        )
+        retained_after_read = os.fstat(temporary_descriptor)
+        if (retained_payload != encoded or
+                digest_bytes(retained_payload) != expected_sha256 or
+                (staged.st_dev, staged.st_ino) !=
+                (retained_before_commit.st_dev,
+                 retained_before_commit.st_ino) or
+                retained_before_commit.st_nlink != 1 or
+                retained_after_read.st_nlink != 1 or
+                metadata_signature(retained_before_commit) !=
+                metadata_signature(retained_after_read) or
+                stat.S_IMODE(staged.st_mode) != 0o600 or
+                staged.st_size != len(encoded)):
+            raise CrossoverError(
+                "{} linked staged inode or payload changed".format(
+                    description
+                )
+            )
+        if precommit_hook is not None:
+            precommit_hook()
+        current = validate_atomic_destination(
+            directory["descriptor"], name, description
+        )
+        if ((existing is None) != (current is None) or
+                (existing is not None and
+                 metadata_signature(existing) !=
+                 metadata_signature(current))):
+            raise CrossoverError(
+                "{} changed immediately before publication".format(
+                    description
+                )
+            )
+        publication_staged_name = staged_name
+        commit_error = None
         try:
-            os.unlink(temporary)
+            if current is None:
+                rename_noreplace(
+                    directory["descriptor"], staged_name, name, description
+                )
+                committed_state = "new"
+                staged_name = None
+            else:
+                rename_exchange(
+                    directory["descriptor"], staged_name, name, description
+                )
+                committed_state = "replacement"
+        except BaseException as error:
+            try:
+                reconciled_state = reconcile_atomic_publication(
+                    directory["descriptor"], name,
+                    publication_staged_name, temporary_descriptor,
+                    old_descriptor, description + " interrupted commit",
+                )
+            except BaseException as reconciliation_error:
+                raise CrossoverError(
+                    "{} commit failed: {}; state reconciliation also "
+                    "failed: {}: {}".format(
+                        description, error,
+                        type(reconciliation_error).__name__,
+                        reconciliation_error,
+                    )
+                ) from error
+            if reconciled_state == "uncommitted":
+                raise
+            committed_state = reconciled_state
+            staged_name = (
+                None if reconciled_state == "new"
+                else publication_staged_name
+            )
+            commit_error = error
+        try:
+            if commit_error is not None:
+                raise commit_error
+            if postcommit_hook is not None:
+                postcommit_hook(
+                    temporary_descriptor, directory["descriptor"], name
+                )
+            final = os.stat(
+                name, dir_fd=directory["descriptor"],
+                follow_symlinks=False,
+            )
+            retained = os.fstat(temporary_descriptor)
+            final_payload = read_descriptor_bytes(
+                temporary_descriptor, len(encoded),
+                description + " published payload",
+            )
+            retained_after_final_read = os.fstat(temporary_descriptor)
+            if (not stat.S_ISREG(final.st_mode) or
+                    final.st_uid != os.getuid() or final.st_nlink != 1 or
+                    stat.S_IMODE(final.st_mode) != 0o600 or
+                    final.st_size != len(encoded) or
+                    (final.st_dev, final.st_ino) !=
+                    (retained.st_dev, retained.st_ino) or
+                    final_payload != encoded or
+                    digest_bytes(final_payload) != expected_sha256 or
+                    metadata_signature(retained) !=
+                    metadata_signature(retained_after_final_read)):
+                raise CrossoverError(
+                    "{} final inode or payload differs from its retained "
+                    "temporary".format(description)
+                )
+            os.fsync(directory["descriptor"])
+            validate_owned_directory(
+                directory, description + " directory"
+            )
+            if committed_state == "replacement":
+                staged_old = os.stat(
+                    staged_name, dir_fd=directory["descriptor"],
+                    follow_symlinks=False,
+                )
+                retained_old = os.fstat(old_descriptor)
+                if ((staged_old.st_dev, staged_old.st_ino) !=
+                        (retained_old.st_dev, retained_old.st_ino) or
+                        read_descriptor_bytes(
+                            old_descriptor, len(old_payload),
+                            description + " retained prior evidence",
+                        ) != old_payload):
+                    raise CrossoverError(
+                        "{} prior-evidence rollback inode changed".format(
+                            description
+                        )
+                    )
+                try:
+                    os.unlink(
+                        staged_name, dir_fd=directory["descriptor"]
+                    )
+                except BaseException:
+                    # A signal may be delivered after unlinkat(2) committed
+                    # but before Python reports its return.  If the exact
+                    # retained old-evidence name is already absent, rollback
+                    # is no longer possible and reporting failure would
+                    # falsely describe the already durable replacement.
+                    try:
+                        os.stat(
+                            staged_name,
+                            dir_fd=directory["descriptor"],
+                            follow_symlinks=False,
+                        )
+                    except FileNotFoundError:
+                        staged_name = None
+                        committed_state = "success"
+                    else:
+                        raise
+                else:
+                    staged_name = None
+            committed_state = "success"
+        except BaseException as postcommit_error:
+            rollback_errors = []
+            try:
+                if committed_state == "replacement":
+                    try:
+                        rename_exchange(
+                            directory["descriptor"], staged_name, name,
+                            description + " rollback",
+                        )
+                    except BaseException:
+                        rollback_state = reconcile_atomic_publication(
+                            directory["descriptor"], name, staged_name,
+                            temporary_descriptor, old_descriptor,
+                            description + " interrupted rollback",
+                        )
+                        if rollback_state != "uncommitted":
+                            raise
+                    committed_state = "rolled-back"
+                    restored = os.stat(
+                        name, dir_fd=directory["descriptor"],
+                        follow_symlinks=False,
+                    )
+                    retained_old = os.fstat(old_descriptor)
+                    if ((restored.st_dev, restored.st_ino) !=
+                            (retained_old.st_dev, retained_old.st_ino) or
+                            stat.S_IMODE(restored.st_mode) != 0o600 or
+                            read_descriptor_bytes(
+                                old_descriptor, len(old_payload),
+                                description + " restored prior evidence",
+                            ) != old_payload):
+                        raise CrossoverError(
+                            "{} rollback did not restore prior evidence".format(
+                                description
+                            )
+                        )
+                    os.fsync(directory["descriptor"])
+                elif committed_state == "new":
+                    retained = os.fstat(temporary_descriptor)
+                    published_identity = named_inode_identity(
+                        directory["descriptor"], name,
+                        description + " new rollback destination",
+                    )
+                    if (published_identity !=
+                            (retained.st_dev, retained.st_ino)):
+                        raise CrossoverError(
+                            "{} new publication changed before rollback".format(
+                                description
+                            )
+                        )
+                    try:
+                        os.unlink(name, dir_fd=directory["descriptor"])
+                    except BaseException:
+                        if named_inode_identity(
+                                directory["descriptor"], name,
+                                description + " interrupted new rollback",
+                        ) is not None:
+                            raise
+                    os.fsync(directory["descriptor"])
+                    committed_state = "rolled-back"
+            except BaseException as rollback_error:
+                rollback_errors.append(rollback_error)
+            if rollback_errors:
+                raise CrossoverError(
+                    "{} post-commit failure could not be rolled back: {}; "
+                    "rollback: {}".format(
+                        description, postcommit_error,
+                        "; ".join(
+                            "{}: {}".format(type(error).__name__, error)
+                            for error in rollback_errors
+                        ),
+                    )
+                ) from postcommit_error
+            raise
+        # The new name and its containing directory were fully verified and
+        # fsynced before prior evidence was unlinked.  Cleanup durability is
+        # best-effort from this point: reporting failure would be false,
+        # because the replacement is already the committed evidence.
+        try:
+            os.fsync(directory["descriptor"])
         except OSError:
             pass
-        raise
+    except OSError as error:
+        raise CrossoverError(
+            "cannot publish {}: {}".format(description, error)
+        )
+    finally:
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        if staged_name is not None:
+            try:
+                staged = os.stat(
+                    staged_name, dir_fd=directory["descriptor"],
+                    follow_symlinks=False,
+                )
+                retained = (
+                    os.fstat(temporary_descriptor)
+                    if temporary_descriptor is not None else None
+                )
+                if (retained is not None and
+                        (staged.st_dev, staged.st_ino) ==
+                        (retained.st_dev, retained.st_ino)):
+                    os.unlink(
+                        staged_name, dir_fd=directory["descriptor"]
+                    )
+                    os.fsync(directory["descriptor"])
+            except FileNotFoundError:
+                pass
+            except BaseException as error:
+                # A same-UID actor can mutate owner-writable evidence after
+                # any validation returns.  Never unlink an ambiguous name.
+                cleanup_errors.append(error)
+        for label, descriptor in (
+                ("temporary", temporary_descriptor),
+                ("prior evidence", old_descriptor)):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    cleanup_errors.append(CrossoverError(
+                        "{} descriptor close failed: {}".format(label, error)
+                    ))
+        try:
+            close_owned_directory(directory)
+        except BaseException as error:
+            cleanup_errors.append(CrossoverError(
+                "publication directory close failed: {}".format(error)
+            ))
+        if cleanup_errors and committed_state != "success":
+            detail = "; ".join(
+                "{}: {}".format(type(error).__name__, error)
+                for error in cleanup_errors
+            )
+            if active_error is not None:
+                raise CrossoverError(
+                    "{} failed: {}; cleanup also failed: {}".format(
+                        description, active_error, detail
+                    )
+                ) from active_error
+            raise CrossoverError(
+                "{} cleanup failed: {}".format(description, detail)
+            )
+
+
+def write_bytes_atomic(path, encoded):
+    path = checked_path(path, "atomic JSON destination")
+    if path.name in ("", ".", ".."):
+        raise CrossoverError("atomic JSON destination has an unsafe name")
+    directory = owned_canonical_directory(
+        path.parent, "atomic JSON destination directory"
+    )
+    try:
+        write_result_bytes(
+            directory, path.name, encoded,
+            "atomic JSON destination", replace=True,
+        )
+    finally:
+        close_owned_directory(directory)
+
+
+def canonical_json_bytes(value):
+    return (
+        json.dumps(
+            value, indent=2, sort_keys=True, ensure_ascii=True,
+            allow_nan=False
+        ) + "\n"
+    ).encode("utf-8")
+
+
+def atomic_write_json(path, value):
+    write_bytes_atomic(Path(path), canonical_json_bytes(value))
+
+
+def write_result_json(root, relative, value, description, replace=False):
+    write_result_bytes(
+        root, relative, canonical_json_bytes(value), description, replace
+    )
 
 
 def compact_cpu_list(cpus):
@@ -639,51 +2175,141 @@ def machine_identity(cpus):
     return result
 
 
-def git_command_bytes(source, arguments, description):
+def open_canonical_git_snapshot():
+    """Retain and seal the exact Git bytes used for one source snapshot."""
+    descriptor = None
+    snapshot = None
+    snapshot_transferred = False
     try:
-        completed = subprocess.run(
-            [str(CANONICAL_GIT)] + list(arguments), cwd=str(source),
-            env=GIT_ENVIRONMENT,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=30, check=False
+        descriptor = os.open(
+            str(CANONICAL_GIT),
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
         )
+        before = os.fstat(descriptor)
+        current = os.lstat(str(CANONICAL_GIT))
+        value = read_descriptor_bytes(
+            descriptor, MAX_RAW_JSON_BYTES, "canonical Git executable"
+        )
+        after = os.fstat(descriptor)
+        if (CANONICAL_GIT.resolve() != CANONICAL_GIT or
+                not stat.S_ISREG(before.st_mode) or
+                not before.st_mode & 0o111 or
+                stat.S_IMODE(before.st_mode) & 0o022 or
+                metadata_signature(before) != metadata_signature(after) or
+                (before.st_dev, before.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "canonical Git executable is not one stable executable inode"
+            )
+        snapshot = create_sealed_executable_snapshot(
+            value, "canonical Git executable"
+        )
+        snapshot["path"] = str(CANONICAL_GIT)
+        snapshot_transferred = True
+        return snapshot
+    except OSError as error:
+        snapshot_transferred = False
+        raise CrossoverError(
+            "canonical Git executable is unavailable: {}".format(error)
+        )
+    except BaseException:
+        snapshot_transferred = False
+        raise
+    finally:
+        try:
+            if descriptor is not None:
+                os.close(descriptor)
+        except BaseException:
+            snapshot_transferred = False
+            if snapshot is not None:
+                close_sealed_snapshot(snapshot)
+            raise
+        if snapshot is not None and not snapshot_transferred:
+            close_sealed_snapshot(snapshot)
+
+
+def close_canonical_git_snapshot(snapshot):
+    if snapshot is not None:
+        snapshot.pop("path", None)
+        close_sealed_snapshot(snapshot)
+
+
+def git_command_bytes(source, arguments, description, git_tool=None):
+    owns_git_tool = git_tool is None
+    if git_tool is None:
+        git_tool = open_canonical_git_snapshot()
+    elif (not isinstance(git_tool, dict) or
+            set(git_tool) != {"descriptor", "path", "sha256", "size"}):
+        raise CrossoverError(
+            "{} exact Git tool contract is invalid".format(description)
+        )
+    try:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard2-git-command-") as temporary:
+            log_root = Path(temporary)
+            log_root.chmod(0o700)
+            stdout_path = log_root / "stdout.log"
+            stderr_path = log_root / "stderr.log"
+            validate_sealed_executable_snapshot(
+                git_tool, git_tool["sha256"], "canonical Git executable"
+            )
+            completed = run_command(
+                [
+                    str(Path("/proc/self/fd") /
+                        str(GIT_EXECUTABLE_DESCRIPTOR))
+                ] + list(arguments),
+                source,
+                stdout_path, stderr_path, 30, dict(GIT_ENVIRONMENT),
+                inherited_descriptors=(git_tool["descriptor"],),
+                descriptor_remaps={
+                    GIT_EXECUTABLE_DESCRIPTOR: git_tool["descriptor"],
+                },
+            )
+            validate_sealed_executable_snapshot(
+                git_tool, git_tool["sha256"], "canonical Git executable"
+            )
+            stdout = read_path_owned_regular(
+                stdout_path, MAX_RETAINED_LOG_BYTES,
+                description + " stdout",
+            )
+            stderr = read_path_owned_regular(
+                stderr_path, MAX_RETAINED_LOG_BYTES,
+                description + " stderr",
+            )
     except (OSError, subprocess.SubprocessError) as error:
         raise CrossoverError("cannot {}: {}".format(description, error))
-    if completed.returncode != 0:
+    finally:
+        if owns_git_tool:
+            close_canonical_git_snapshot(git_tool)
+    if completed["returncode"] != 0 or completed["timed_out"]:
         raise CrossoverError(
             "cannot {}: {}".format(
                 description,
-                normalized_output(completed.stderr).decode(
+                normalized_output(stderr).decode(
                     "utf-8", errors="replace"
                 ).strip()
             )
         )
-    return completed.stdout
+    return stdout
 
 
-def canonical_git_identity():
+def canonical_git_identity(git_tool=None):
+    owns_git_tool = git_tool is None
+    if git_tool is None:
+        git_tool = open_canonical_git_snapshot()
     try:
-        before = CANONICAL_GIT.stat()
-        value = CANONICAL_GIT.read_bytes()
-        after = CANONICAL_GIT.stat()
-    except OSError as error:
-        raise CrossoverError(
-            "canonical Git executable is unavailable: {}".format(error)
+        validate_sealed_executable_snapshot(
+            git_tool, git_tool["sha256"], "canonical Git executable"
         )
-    if (CANONICAL_GIT.resolve() != CANONICAL_GIT or
-            not stat.S_ISREG(before.st_mode) or
-            not os.access(str(CANONICAL_GIT), os.X_OK) or
-            (before.st_dev, before.st_ino, before.st_size,
-             before.st_mtime_ns, before.st_ctime_ns) !=
-            (after.st_dev, after.st_ino, after.st_size,
-             after.st_mtime_ns, after.st_ctime_ns)):
-        raise CrossoverError(
-            "canonical Git executable is not a stable regular executable"
-        )
+        sha256 = git_tool["sha256"]
+        path = git_tool["path"]
+    finally:
+        if owns_git_tool:
+            close_canonical_git_snapshot(git_tool)
     return {
         "environment": dict(GIT_ENVIRONMENT),
-        "path": str(CANONICAL_GIT),
-        "sha256": digest_bytes(value),
+        "path": path,
+        "sha256": sha256,
     }
 
 
@@ -762,11 +2388,12 @@ def parse_index_tags(value, description):
     return tags
 
 
-def repository_source_controls(source, stage_entries):
+def repository_source_controls(
+        source, stage_entries, expected_git, git_tool):
     replacements = normalized_output(git_command_bytes(
         source, (
             "for-each-ref", "--format=%(refname)", "refs/replace/",
-        ), "enumerate Git replacement refs"
+        ), "enumerate Git replacement refs", git_tool
     )).decode("utf-8", errors="strict").rstrip("\n")
     replacement_refs = replacements.splitlines() if replacements else []
     if replacement_refs:
@@ -778,7 +2405,7 @@ def repository_source_controls(source, stage_entries):
 
     graft_name = normalized_output(git_command_bytes(
         source, ("rev-parse", "--git-path", "info/grafts"),
-        "locate legacy Git grafts"
+        "locate legacy Git grafts", git_tool
     )).decode("utf-8", errors="strict").strip()
     graft_path = Path(graft_name)
     if not graft_path.is_absolute():
@@ -790,11 +2417,11 @@ def repository_source_controls(source, stage_entries):
 
     visible_tags = parse_index_tags(git_command_bytes(
         source, ("ls-files", "-v", "-z"),
-        "enumerate assume-unchanged/skip-worktree index flags"
+        "enumerate assume-unchanged/skip-worktree index flags", git_tool
     ), "git ls-files -v")
     fsmonitor_tags = parse_index_tags(git_command_bytes(
         source, ("ls-files", "-f", "-z"),
-        "enumerate fsmonitor-valid index flags"
+        "enumerate fsmonitor-valid index flags", git_tool
     ), "git ls-files -f")
     if (set(visible_tags) != set(stage_entries) or
             set(fsmonitor_tags) != set(stage_entries)):
@@ -803,8 +2430,8 @@ def repository_source_controls(source, stage_entries):
         )
 
     head_entries = parse_head_tree_entries(git_command_bytes(
-        source, ("ls-tree", "-r", "-z", "HEAD"),
-        "enumerate the exact HEAD tree"
+        source, ("ls-tree", "-r", "-z", expected_git["head"]),
+        "enumerate the exact captured HEAD tree", git_tool
     ), "git ls-tree HEAD")
     return {
         "head_index_match": head_entries == stage_entries,
@@ -826,15 +2453,18 @@ def git_blob_object_id(value):
     return hashlib.sha1(header + value).hexdigest()
 
 
-def tracked_git_closure(source):
+def _tracked_git_closure_bound(source, git_tool, expected_git):
     source = Path(source).resolve()
     output = git_command_bytes(
-        source, ("ls-files", "-s", "-z"), "enumerate tracked source closure"
+        source, ("ls-files", "-s", "-z"),
+        "enumerate tracked source closure", git_tool
     )
     stage_entries = parse_stage_zero_entries(
         output, "Git stage-0 source closure"
     )
-    controls = repository_source_controls(source, stage_entries)
+    controls = repository_source_controls(
+        source, stage_entries, expected_git, git_tool
+    )
     files = {}
     for relative, (mode, object_id) in stage_entries.items():
         path = source / relative
@@ -848,22 +2478,19 @@ def tracked_git_closure(source):
                             relative
                         )
                     )
-                head = normalized_output(git_command_bytes(
-                    resolved, ("rev-parse", "--verify", "HEAD"),
-                    "read submodule HEAD {}".format(relative)
-                )).decode("ascii").strip()
-                status_text = normalized_output(git_command_bytes(
-                    resolved, (
-                        "status", "--porcelain=v1", "--untracked-files=all",
-                        "--ignore-submodules=none",
-                    ), "read submodule status {}".format(relative)
-                )).decode("utf-8").rstrip("\n")
+                submodule_git = git_source_identity(
+                    resolved, False, git_tool
+                )
+                head = submodule_git["head"]
+                status_lines = submodule_git["status"]
                 if head != object_id:
                     raise CrossoverError(
                         "initialized submodule {} HEAD {} differs from index "
                         "{}".format(relative, head, object_id)
                     )
-                closure = tracked_git_closure(resolved)
+                closure = _tracked_git_closure_bound(
+                    resolved, git_tool, submodule_git
+                )
                 record = {
                     "index_mode": mode,
                     "index_object": object_id,
@@ -874,9 +2501,9 @@ def tracked_git_closure(source):
                         "repository_controls":
                             closure["repository_controls"],
                         "status": (
-                            status_text.splitlines() if status_text else []
+                            status_lines
                         ),
-                        "worktree_clean": not bool(status_text),
+                        "worktree_clean": not bool(status_lines),
                     },
                 }
             elif mode in ("100644", "100755", "120000"):
@@ -953,6 +2580,27 @@ def tracked_git_closure(source):
         "files": ordered,
         "repository_controls": controls,
     }
+    final_stage_entries = parse_stage_zero_entries(
+        git_command_bytes(
+            source, ("ls-files", "-s", "-z"),
+            "re-enumerate tracked source closure", git_tool,
+        ),
+        "final Git stage-0 source closure",
+    )
+    final_controls = repository_source_controls(
+        source, final_stage_entries, expected_git, git_tool
+    )
+    if (final_stage_entries != stage_entries or
+            canonical_bytes(final_controls) != canonical_bytes(controls)):
+        raise CrossoverError(
+            "Git index or repository controls changed across the tracked "
+            "closure"
+        )
+    final_git = git_source_identity(source, False, git_tool)
+    if canonical_bytes(final_git) != canonical_bytes(expected_git):
+        raise CrossoverError(
+            "Git source identity changed across the tracked closure"
+        )
     return {
         "digest": digest_value(material),
         "files": ordered,
@@ -960,26 +2608,48 @@ def tracked_git_closure(source):
     }
 
 
+def tracked_git_closure(source, git_tool=None, expected_git=None):
+    owns_git_tool = git_tool is None
+    if git_tool is None:
+        git_tool = open_canonical_git_snapshot()
+    try:
+        if expected_git is None:
+            expected_git = git_source_identity(source, False, git_tool)
+        return _tracked_git_closure_bound(
+            source, git_tool, expected_git
+        )
+    finally:
+        if owns_git_tool:
+            close_canonical_git_snapshot(git_tool)
+
+
 def source_fingerprint(source):
-    return tracked_git_closure(Path(source).resolve())
+    with SOURCE_IDENTITY_LOCK:
+        return tracked_git_closure(Path(source).resolve())
 
 
-def git_source_identity(source, require_clean):
+def git_source_identity(source, require_clean, git_tool=None):
     def git(arguments):
         return normalized_output(git_command_bytes(
-            source, arguments, "inspect Git source identity"
+            source, arguments, "inspect Git source identity", git_tool
         )).decode(
             "utf-8", errors="strict"
         ).strip()
 
-    head = git(("rev-parse", "--verify", "HEAD"))
-    tree = git(("rev-parse", "--verify", "HEAD^{tree}"))
+    revision_lines = git((
+        "rev-parse", "HEAD", "HEAD^{tree}",
+    )).splitlines()
+    if len(revision_lines) != 2:
+        raise CrossoverError(
+            "Git HEAD/tree query did not return exactly two identities"
+        )
+    head, tree = revision_lines
     branch = git(("branch", "--show-current"))
     status = normalized_output(git_command_bytes(
         source, (
             "status", "--porcelain=v1", "--untracked-files=all",
             "--ignore-submodules=none",
-        ), "read Git worktree status"
+        ), "read Git worktree status", git_tool
     )).decode("utf-8", errors="strict").rstrip("\n")
     for label, value in (("HEAD", head), ("tree", tree)):
         if not re.fullmatch(r"[0-9a-f]{40}", value):
@@ -1000,12 +2670,39 @@ def git_source_identity(source, require_clean):
 
 
 def source_identity(source, require_clean):
-    result = source_fingerprint(source)
-    result["git"] = git_source_identity(source, require_clean)
-    result["git_tool"] = canonical_git_identity()
-    return validate_source_state(
-        result, "captured source identity", require_clean
-    )
+    """Capture one cross-bound Git/index/worktree state with one Git image.
+
+    The process lock serializes this runner's own capture threads, and exact
+    pre/post Git identities reject a state transition that overlaps capture.
+    Like any unprivileged filesystem observation, this is not a claim that a
+    malicious same-UID actor cannot perform a complete A-B-A between probes or
+    mutate the repository after return; authoritative callers recapture and
+    compare the identity at campaign boundaries.
+    """
+    source = Path(source).resolve()
+    with SOURCE_IDENTITY_LOCK:
+        git_tool = open_canonical_git_snapshot()
+        try:
+            git_before = git_source_identity(
+                source, require_clean, git_tool
+            )
+            result = _tracked_git_closure_bound(
+                source, git_tool, git_before
+            )
+            git_after = git_source_identity(
+                source, require_clean, git_tool
+            )
+            if canonical_bytes(git_after) != canonical_bytes(git_before):
+                raise CrossoverError(
+                    "Git source identity changed across source capture"
+                )
+            result["git"] = git_before
+            result["git_tool"] = canonical_git_identity(git_tool)
+            return validate_source_state(
+                result, "captured source identity", require_clean
+            )
+        finally:
+            close_canonical_git_snapshot(git_tool)
 
 
 def validate_source_state(value, description, require_clean):
@@ -1253,6 +2950,12 @@ def build_configuration_digest(entries):
             entries[variable],
             "effective CMake configuration value {}".format(variable)
         )
+    if entries["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] not in (
+            "0", "1", "2"):
+        raise CrossoverError(
+            "effective CMake configuration has an invalid "
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"
+        )
     material = "".join(
         "{}={}\n".format(variable, entries[variable])
         for variable in BUILD_CONFIGURATION_VARIABLES
@@ -1281,9 +2984,9 @@ def read_build_configuration_attestation(path):
         raise CrossoverError(
             "effective CMake configuration is not newline-terminated"
         )
-    # The v1 framing delimiter is exactly LF.  str.splitlines() recognizes
-    # additional Unicode separators that CMake validly preserves inside a
-    # value, which would make the reader disagree with the producer.
+    # The v2 framing delimiter is exactly LF.  Values are subsequently passed
+    # through attested_text(), which also rejects Unicode line/paragraph
+    # separators and invisible/control format categories.
     lines = text[:-1].split("\n")
     expected_count = 2 + len(BUILD_CONFIGURATION_VARIABLES)
     if len(lines) != expected_count:
@@ -1440,7 +3143,9 @@ def cmake_build_metadata(executable):
         "LEO2_BENCHMARK_GIT_EXECUTABLE",
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
         "LEO2_BUILD_FUZZERS", "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
     )
     entries = parse_selected_cmake_cache(
         cache_bytes, prefixes, str(cache)
@@ -1456,7 +3161,11 @@ def cmake_build_metadata(executable):
             BUILD_CONFIGURATION_FILE_SCHEMA or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
-            ) != build_configuration_attestation["sha256"]):
+            ) != build_configuration_attestation["sha256"] or
+            any(entries.get(variable) !=
+                build_configuration_attestation["entries"].get(variable)
+                for variable in
+                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
         raise CrossoverError(
             "effective CMake configuration differs from its cache binding"
         )
@@ -1623,7 +3332,10 @@ def validate_build_source_binding(
             BUILD_CONFIGURATION_FILE_SCHEMA or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
-            ) != configuration_sha256):
+            ) != configuration_sha256 or
+            any(entries.get(variable) != configuration_entries.get(variable)
+                for variable in
+                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
         raise CrossoverError(
             "effective CMake configuration differs from its cache binding"
         )
@@ -1748,7 +3460,8 @@ def frozen_executable_identity(
     }
 
 
-def validate_frozen_executable(artifact, build_metadata=None, source_state=None):
+def validate_frozen_executable(
+        artifact, build_metadata=None, source_state=None, result_root=None):
     expected_keys = {
         "artifact_id", "backend", "directory", "executable",
         "executable_sha256", "provenance", "provenance_sha256", "schema",
@@ -1760,25 +3473,87 @@ def validate_frozen_executable(artifact, build_metadata=None, source_state=None)
     if (not isinstance(artifact_id, str) or
             not re.fullmatch(r"[0-9a-f]{64}", artifact_id)):
         raise CrossoverError("frozen executable artifact ID is invalid")
-    directory = Path(artifact["directory"]).resolve()
-    executable = Path(artifact["executable"]).resolve()
-    provenance_path = Path(artifact["provenance"]).resolve()
+    if result_root is None:
+        directory = Path(artifact["directory"]).resolve()
+        executable = Path(artifact["executable"]).resolve()
+        provenance_path = Path(artifact["provenance"]).resolve()
+    else:
+        directory = Path(os.path.abspath(artifact["directory"]))
+        executable = Path(os.path.abspath(artifact["executable"]))
+        provenance_path = Path(os.path.abspath(artifact["provenance"]))
     if executable.parent != directory or provenance_path.parent != directory:
         raise CrossoverError("frozen executable paths escape the artifact directory")
+    executable_held = None
+    provenance_held = None
+    artifact_directory = None
     try:
-        executable_bytes = executable.read_bytes()
-        provenance_bytes = provenance_path.read_bytes()
-        directory_mode = directory.stat().st_mode
-        executable_mode = executable.stat().st_mode
-        provenance_mode = provenance_path.stat().st_mode
+        if result_root is None:
+            executable_bytes = executable.read_bytes()
+            provenance_bytes = provenance_path.read_bytes()
+            directory_mode = directory.stat().st_mode
+            executable_mode = executable.stat().st_mode
+            provenance_mode = provenance_path.stat().st_mode
+        else:
+            try:
+                directory_relative = Path(os.path.abspath(
+                    os.fspath(directory)
+                )).relative_to(result_root["path"])
+                executable_relative = Path(os.path.abspath(
+                    os.fspath(executable)
+                )).relative_to(result_root["path"])
+                provenance_relative = Path(os.path.abspath(
+                    os.fspath(provenance_path)
+                )).relative_to(result_root["path"])
+            except ValueError:
+                raise CrossoverError(
+                    "frozen executable artifact escapes the held result root"
+                )
+            artifact_directory = open_existing_result_directory(
+                result_root, directory_relative,
+                "frozen executable artifact directory",
+                required_mode=0o555,
+            )
+            directory_mode = os.fstat(
+                artifact_directory["descriptor"]
+            ).st_mode
+            executable_held = open_result_regular_held(
+                result_root, executable_relative, MAX_RAW_JSON_BYTES,
+                "frozen executable", 0o555,
+                directory_required_mode=0o555,
+            )
+            provenance_held = open_result_regular_held(
+                result_root, provenance_relative, MAX_RAW_JSON_BYTES,
+                "frozen executable provenance", 0o444,
+                directory_required_mode=0o555,
+            )
+            executable_bytes = read_held_regular(
+                executable_held, MAX_RAW_JSON_BYTES, "frozen executable"
+            )
+            provenance_bytes = read_held_regular(
+                provenance_held, MAX_RAW_JSON_BYTES,
+                "frozen executable provenance",
+            )
+            executable_mode = os.fstat(executable_held["descriptor"]).st_mode
+            provenance_mode = os.fstat(provenance_held["descriptor"]).st_mode
     except OSError as error:
         raise CrossoverError("cannot read frozen executable artifact: {}".format(error))
-    if any(mode & 0o222 for mode in (
-            directory_mode, executable_mode, provenance_mode)):
-        raise CrossoverError("frozen executable artifact remains writable")
+    finally:
+        if provenance_held is not None:
+            close_log(provenance_held)
+        if executable_held is not None:
+            close_log(executable_held)
+        if artifact_directory is not None:
+            close_owned_directory(artifact_directory)
+    if (stat.S_IMODE(directory_mode) != 0o555 or
+            stat.S_IMODE(executable_mode) != 0o555 or
+            stat.S_IMODE(provenance_mode) != 0o444):
+        raise CrossoverError(
+            "frozen executable artifact modes are not exactly "
+            "0555/0555/0444"
+        )
     executable_sha256 = digest_bytes(executable_bytes)
     if (executable_sha256 != artifact.get("executable_sha256") or
-            not os.access(str(executable), os.X_OK)):
+            not executable_mode & 0o111):
         raise CrossoverError("frozen executable hash or mode is invalid")
     if digest_bytes(provenance_bytes) != artifact.get("provenance_sha256"):
         raise CrossoverError("frozen executable provenance hash is invalid")
@@ -1817,7 +3592,8 @@ def validate_frozen_executable(artifact, build_metadata=None, source_state=None)
 
 
 def freeze_executable(
-        result_dir, backend, executable, build_metadata, source_state):
+        result_dir, backend, executable, build_metadata, source_state,
+        result_root=None):
     executable = Path(executable).resolve()
     try:
         executable_bytes = executable.read_bytes()
@@ -1856,33 +3632,73 @@ def freeze_executable(
         "source_fingerprint": source_state,
     }
 
-    if not artifact_dir.exists():
-        frozen_root.mkdir(parents=True, exist_ok=True)
-        temporary = Path(tempfile.mkdtemp(
-            prefix=".{}-".format(backend), dir=str(frozen_root)
-        ))
+    if result_root is None:
+        result_root = owned_canonical_directory(
+            result_dir, "frozen executable result directory"
+        )
+        owns_result_root = True
+    else:
+        owns_result_root = False
+    frozen_directory = open_result_directory(
+        result_root, "frozen-executables",
+        "frozen executable parent", True,
+    )
+    artifact_relative = Path("frozen-executables") / artifact_dir.name
+    artifact_directory = None
+    try:
         try:
-            temporary_executable = temporary / frozen_name
-            temporary_executable.write_bytes(executable_bytes)
-            atomic_write_json(temporary / "provenance.json", provenance)
-            temporary_executable.chmod(0o555)
-            (temporary / "provenance.json").chmod(0o444)
-            temporary.chmod(0o555)
+            artifact_directory = open_existing_result_directory(
+                result_root, artifact_relative,
+                "frozen executable artifact", required_mode=0o555,
+            )
+        except FileNotFoundError:
             try:
-                os.replace(str(temporary), str(artifact_dir))
-            except OSError:
-                if not artifact_dir.is_dir():
-                    raise
-                temporary.chmod(0o755)
-                shutil.rmtree(str(temporary))
-        except BaseException:
-            if temporary.exists():
+                os.mkdir(
+                    artifact_dir.name, 0o700,
+                    dir_fd=frozen_directory["descriptor"],
+                )
+            except FileExistsError:
+                pass
+            artifact_directory = open_existing_result_directory(
+                result_root, artifact_relative,
+                "frozen executable artifact",
+            )
+            try:
+                executable_file = open_exclusive_owned_file(
+                    artifact_directory, frozen_name,
+                    "frozen executable",
+                )
                 try:
-                    temporary.chmod(0o755)
-                except OSError:
-                    pass
-                shutil.rmtree(str(temporary), ignore_errors=True)
-            raise
+                    write_descriptor_all(
+                        executable_file["descriptor"], executable_bytes
+                    )
+                    os.fsync(executable_file["descriptor"])
+                    os.fchmod(executable_file["descriptor"], 0o555)
+                finally:
+                    close_log(executable_file)
+                write_result_json(
+                    artifact_directory, "provenance.json", provenance,
+                    "frozen executable provenance", replace=False,
+                )
+                os.chmod(
+                    "provenance.json", 0o444,
+                    dir_fd=artifact_directory["descriptor"],
+                    follow_symlinks=False,
+                )
+                os.fchmod(artifact_directory["descriptor"], 0o555)
+                os.fsync(artifact_directory["descriptor"])
+                os.fsync(frozen_directory["descriptor"])
+            except BaseException:
+                # Leave a fail-closed partial artifact for explicit inspection.
+                # An existing artifact was also treated this way historically.
+                raise
+        finally:
+            if artifact_directory is not None:
+                close_owned_directory(artifact_directory)
+    finally:
+        close_owned_directory(frozen_directory)
+        if owns_result_root:
+            close_owned_directory(result_root)
 
     try:
         origin_bytes_after = executable.read_bytes()
@@ -1897,12 +3713,7 @@ def freeze_executable(
             "origin executable or CMake metadata changed while freezing"
         )
 
-    try:
-        provenance_sha256 = digest_bytes(provenance_path.read_bytes())
-    except OSError as error:
-        raise CrossoverError(
-            "cannot read frozen provenance {}: {}".format(provenance_path, error)
-        )
+    provenance_sha256 = digest_bytes(canonical_json_bytes(provenance))
     artifact = {
         "artifact_id": artifact_id,
         "backend": backend,
@@ -1913,7 +3724,10 @@ def freeze_executable(
         "provenance_sha256": provenance_sha256,
         "schema": FROZEN_EXECUTABLE_SCHEMA,
     }
-    return validate_frozen_executable(artifact, build_metadata, source_state)
+    return validate_frozen_executable(
+        artifact, build_metadata, source_state,
+        None if owns_result_root else result_root,
+    )
 
 
 def cell(region, backend, k, r, profile, field, shard_bytes, q, mask):
@@ -2175,7 +3989,11 @@ def benchmark_argv(job, timed_mode, raw_path, settings):
     item = job["cell"]
     benchmark = settings["benchmark"]
     argv = [
-        job["executable"],
+        (
+            str(Path("/proc/self/fd") / str(EXECUTABLE_DESCRIPTOR))
+            if job.get("executable_artifact") is not None
+            else job["executable"]
+        ),
         "--k", str(item["k"]),
         "--r", str(item["r"]),
         "--profile", item["profile"],
@@ -2193,42 +4011,2387 @@ def benchmark_argv(job, timed_mode, raw_path, settings):
         "--json", str(raw_path),
     ]
     if settings["mode"] in AUTHORITATIVE_COMMANDS:
-        argv = [settings["taskset"], "-c", str(settings["pin_cpu"])] + argv
+        argv = [
+            str(Path("/proc/self/fd") / str(
+                TASKSET_EXECUTABLE_DESCRIPTOR
+            )),
+            "-c", str(settings["pin_cpu"]),
+        ] + argv
     return argv
 
 
-def run_command(argv, cwd, stdout_path, stderr_path, timeout, environment):
-    timed_out = False
+_SUBREAPER_LOCK = threading.Lock()
+_SUBREAPER_ENABLED = False
+_PR_SET_CHILD_SUBREAPER = 36
+_PR_GET_CHILD_SUBREAPER = 37
+
+
+def ensure_child_subreaper():
+    """Make detached command descendants reapable by this coordinator.
+
+    Authoritative execution is Linux-only in practice, but screening remains
+    useful on other POSIX systems.  A new session still contains ordinary
+    descendants there; Linux additionally adopts children that deliberately
+    leave that session so the timeout path can reap them rather than merely
+    turning them into zombies owned by PID 1.
+    """
+    global _SUBREAPER_ENABLED
+    if sys.platform != "linux":
+        return False
+    with _SUBREAPER_LOCK:
+        if _SUBREAPER_ENABLED:
+            return True
+        libc = ctypes.CDLL(None, use_errno=True)
+        state = ctypes.c_int(-1)
+        if libc.prctl(
+                _PR_SET_CHILD_SUBREAPER, 1, 0, 0, 0) != 0:
+            error_number = ctypes.get_errno()
+            raise CrossoverError(
+                "cannot enable command descendant reaping: {}".format(
+                    os.strerror(error_number)
+                )
+            )
+        if libc.prctl(
+                _PR_GET_CHILD_SUBREAPER, ctypes.byref(state),
+                0, 0, 0) != 0 or state.value != 1:
+            error_number = ctypes.get_errno()
+            raise CrossoverError(
+                "cannot verify command descendant reaping: {}".format(
+                    os.strerror(error_number) if error_number else
+                    "kernel did not retain child-subreaper state"
+                )
+            )
+        _SUBREAPER_ENABLED = True
+        return True
+
+
+def parse_proc_stat(value):
+    """Return PID/session identity fields from one Linux /proc stat record."""
     try:
-        completed = subprocess.run(
-            [str(item) for item in argv], cwd=str(cwd), env=environment,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout
+        open_parenthesis = value.index("(")
+        close_parenthesis = value.rindex(")")
+        pid = int(value[:open_parenthesis].strip())
+        fields = value[close_parenthesis + 1:].split()
+        if len(fields) < 20:
+            return None
+        return {
+            "pid": pid,
+            "ppid": int(fields[1]),
+            "session": int(fields[3]),
+            "starttime_ticks": int(fields[19]),
+            "state": fields[0],
+        }
+    except (IndexError, ValueError):
+        return None
+
+
+def open_proc_record(pid):
+    """Return one process record retained by its exact /proc task inode."""
+    if sys.platform != "linux":
+        return None
+    proc_descriptor = None
+    task_descriptor = None
+    stat_descriptor = None
+    transferred_record = None
+    try:
+        flags = (
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+            getattr(os, "O_CLOEXEC", 0)
         )
-        returncode = completed.returncode
-        stdout = normalized_output(completed.stdout)
-        stderr = normalized_output(completed.stderr)
-    except subprocess.TimeoutExpired as error:
-        timed_out = True
-        returncode = 124
-        stdout = normalized_output(error.stdout or b"")
-        stderr = normalized_output(error.stderr or b"")
-    stdout_path.write_bytes(stdout)
-    stderr_path.write_bytes(stderr)
-    return {
-        "argv": [str(item) for item in argv],
-        "cwd": str(cwd),
-        "returncode": returncode,
-        "stderr_log": stderr_path.name,
-        "stderr_sha256": digest_bytes(stderr),
-        "stdout_log": stdout_path.name,
-        "stdout_sha256": digest_bytes(stdout),
-        "timed_out": timed_out,
+        proc_descriptor = os.open("/proc", flags)
+        task_descriptor = os.open(
+            str(pid), flags, dir_fd=proc_descriptor
+        )
+        task_metadata = os.fstat(task_descriptor)
+        current = os.stat(
+            str(pid), dir_fd=proc_descriptor, follow_symlinks=False
+        )
+        if (not stat.S_ISDIR(task_metadata.st_mode) or
+                (task_metadata.st_dev, task_metadata.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            return None
+        stat_descriptor = os.open(
+            "stat", os.O_RDONLY | os.O_NOFOLLOW |
+            getattr(os, "O_CLOEXEC", 0),
+            dir_fd=task_descriptor,
+        )
+        chunks = []
+        total = 0
+        while total <= 65536:
+            block = os.read(stat_descriptor, 65537 - total)
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+        if total > 65536:
+            return None
+        value = b"".join(chunks).decode("ascii")
+        record = parse_proc_stat(value)
+        if record is None or record["pid"] != pid:
+            return None
+        record["proc_identity"] = (
+            task_metadata.st_dev, task_metadata.st_ino
+        )
+        record["proc_descriptor"] = task_descriptor
+        transferred_record = record
+        return record
+    except (OSError, UnicodeError):
+        return None
+    except BaseException:
+        transferred_record = None
+        raise
+    finally:
+        for descriptor in (stat_descriptor, proc_descriptor):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        if (task_descriptor is not None and
+                transferred_record is None):
+            try:
+                os.close(task_descriptor)
+            except OSError:
+                pass
+
+
+def proc_record(pid):
+    record = open_proc_record(pid)
+    if record is None:
+        return None
+    descriptor = record.pop("proc_descriptor")
+    os.close(descriptor)
+    return record
+
+
+def process_has_descriptor_identity(pid, identity):
+    if sys.platform != "linux":
+        return False
+    directory = Path("/proc") / str(pid) / "fd"
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        try:
+            metadata = entry.stat()
+        except OSError:
+            continue
+        if (metadata.st_dev, metadata.st_ino) == identity:
+            return True
+    return False
+
+
+def direct_child_identities():
+    if sys.platform != "linux":
+        return set()
+    result = set()
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return result
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        record = proc_record(int(entry.name))
+        if record is not None and record["ppid"] == os.getpid():
+            result.add((
+                record["pid"], record["starttime_ticks"],
+                record.get("proc_identity"),
+            ))
+    return result
+
+
+def contained_processes(
+        session, containment_identity, adopted_baseline=None):
+    """Inventory this launch by session, ancestry, and its opaque pipe."""
+    if sys.platform != "linux":
+        return []
+    records = {}
+    try:
+        entries = list(Path("/proc").iterdir())
+    except OSError:
+        return []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        record = proc_record(int(entry.name))
+        if record is None or record["pid"] == os.getpid():
+            continue
+        records[record["pid"]] = record
+
+    def descends_from_leader(record):
+        seen = set()
+        parent = record["ppid"]
+        while parent > 0 and parent not in seen:
+            if parent == session:
+                return True
+            seen.add(parent)
+            ancestor = records.get(parent)
+            if ancestor is None:
+                return False
+            parent = ancestor["ppid"]
+        return False
+
+    result = []
+    for record in records.values():
+        identity = (
+            record["pid"], record["starttime_ticks"],
+            record.get("proc_identity"),
+        )
+        adopted = (
+            adopted_baseline is not None and
+            record["ppid"] == os.getpid() and
+            identity not in adopted_baseline
+        )
+        if (record["session"] == session or
+                descends_from_leader(record) or adopted or
+                process_has_descriptor_identity(
+                    record["pid"], containment_identity
+                )):
+            result.append(record)
+    return result
+
+
+def linux_pidfd_open(pid):
+    wrapper = getattr(os, "pidfd_open", None)
+    if callable(wrapper):
+        return wrapper(pid, 0)
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_open
+    except (AttributeError, OSError) as error:
+        raise CrossoverError(
+            "Linux pidfd support is unavailable: {}".format(error)
+        )
+    function.argtypes = (ctypes.c_int, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    descriptor = function(ctypes.c_int(pid), ctypes.c_uint(0))
+    if descriptor >= 0:
+        return descriptor
+    number = ctypes.get_errno()
+    if number == errno.ESRCH:
+        raise ProcessLookupError(number, os.strerror(number))
+    raise OSError(number or errno.EPERM,
+                  os.strerror(number or errno.EPERM))
+
+
+def linux_pidfd_send_signal(descriptor, signal_number):
+    wrapper = getattr(signal, "pidfd_send_signal", None)
+    if callable(wrapper):
+        wrapper(descriptor, signal_number, None, 0)
+        return
+    try:
+        function = ctypes.CDLL(None, use_errno=True).pidfd_send_signal
+    except (AttributeError, OSError) as error:
+        raise CrossoverError(
+            "Linux pidfd signaling is unavailable: {}".format(error)
+        )
+    function.argtypes = (
+        ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = function(
+        ctypes.c_int(descriptor), ctypes.c_int(signal_number),
+        None, ctypes.c_uint(0))
+    if result == 0:
+        return
+    number = ctypes.get_errno()
+    if number == errno.ESRCH:
+        raise ProcessLookupError(number, os.strerror(number))
+    raise OSError(number or errno.EPERM,
+                  os.strerror(number or errno.EPERM))
+
+
+def validate_pidfd_runtime(description):
+    """Prove pidfd open and signal operations work before any child starts."""
+    descriptor = None
+    try:
+        descriptor = linux_pidfd_open(os.getpid())
+        linux_pidfd_send_signal(descriptor, 0)
+    except (CrossoverError, OSError) as error:
+        raise CrossoverError(
+            "{} requires working Linux pidfd operations: {}".format(
+                description, error
+            )
+        ) from error
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def await_launch_gate(descriptor, description):
+    """Block a freshly execed helper until its pidfd identity is retained."""
+    if type(descriptor) is not int or descriptor < 3:
+        raise CrossoverError("{} launch gate is invalid".format(description))
+    try:
+        value = os.read(descriptor, 2)
+    except OSError as error:
+        raise CrossoverError(
+            "cannot read {} launch gate: {}".format(description, error)
+        ) from error
+    finally:
+        os.close(descriptor)
+    if value != b"G":
+        raise CrossoverError(
+            "{} launch gate was not released".format(description)
+        )
+
+
+def retain_process_identity(record, description):
+    """Open a pidfd only while one retained /proc task inode stays current."""
+    if sys.platform != "linux":
+        raise CrossoverError(
+            "{} requires Linux pidfd support".format(description)
+        )
+    before = open_proc_record(record["pid"])
+    if (before is None or before["starttime_ticks"] !=
+            record["starttime_ticks"] or
+            (record.get("proc_identity") is not None and
+             before["proc_identity"] != record["proc_identity"])):
+        if before is not None:
+            os.close(before["proc_descriptor"])
+        return None
+    descriptor = None
+    after = None
+    transferred = None
+    try:
+        descriptor = linux_pidfd_open(record["pid"])
+        after = open_proc_record(record["pid"])
+        if (after is None or
+                after["starttime_ticks"] != before["starttime_ticks"] or
+                after["starttime_ticks"] != record["starttime_ticks"] or
+                after["proc_identity"] != before["proc_identity"]):
+            os.close(descriptor)
+            descriptor = None
+            if after is not None:
+                os.close(after["proc_descriptor"])
+                after = None
+            return None
+        retained = dict(after)
+        retained["pidfd"] = descriptor
+        transferred = retained
+        return retained
+    except ProcessLookupError:
+        if descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+        return None
+    except OSError as error:
+        if descriptor is not None:
+            os.close(descriptor)
+            descriptor = None
+        raise CrossoverError(
+            "cannot retain {} PID {}: {}".format(
+                description, record["pid"], error
+            )
+        )
+    except BaseException:
+        transferred = None
+        raise
+    finally:
+        os.close(before["proc_descriptor"])
+        if descriptor is not None and transferred is None:
+            os.close(descriptor)
+        if after is not None and transferred is None:
+            os.close(after["proc_descriptor"])
+
+
+def retain_launched_process(process, description):
+    record = proc_record(process.pid)
+    if record is None:
+        raise CrossoverError(
+            "{} exited before its identity could be retained".format(
+                description
+            )
+        )
+    retained = retain_process_identity(record, description)
+    if retained is None:
+        raise CrossoverError(
+            "{} identity changed while opening its pidfd".format(description)
+        )
+    return retained
+
+
+def close_retained_process(record):
+    for key in ("pidfd", "proc_descriptor"):
+        descriptor = record.get(key)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            finally:
+                record[key] = None
+
+
+def retained_process_alive(record):
+    descriptor = record.get("pidfd")
+    if descriptor is None:
+        return False
+    try:
+        poller = select.poll()
+        poller.register(descriptor, select.POLLIN | select.POLLHUP |
+                       select.POLLERR)
+        return not poller.poll(0)
+    except OSError:
+        return False
+
+
+def wait_retained_process_exit(record, timeout):
+    """Wait for exact pidfd readiness without reaping/releasing the PID."""
+    if (not isinstance(timeout, (int, float)) or isinstance(timeout, bool) or
+            not math.isfinite(float(timeout)) or timeout < 0):
+        raise CrossoverError("retained-process timeout is invalid")
+    descriptor = record.get("pidfd")
+    if descriptor is None:
+        return True
+    deadline = time.monotonic() + float(timeout)
+    poller = select.poll()
+    poller.register(descriptor, select.POLLIN | select.POLLHUP |
+                    select.POLLERR)
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return not retained_process_alive(record)
+        try:
+            if poller.poll(max(1, int(math.ceil(remaining * 1000.0)))):
+                return True
+        except InterruptedError:
+            continue
+
+
+def signal_retained_process(record, signal_number):
+    descriptor = record.get("pidfd")
+    if descriptor is None:
+        return
+    try:
+        linux_pidfd_send_signal(descriptor, signal_number)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def reap_retained_process(record):
+    """Reap an adopted exact child through its retained pidfd."""
+    descriptor = record.get("pidfd")
+    if descriptor is None or not hasattr(os, "waitid"):
+        return
+    try:
+        os.waitid(
+            getattr(os, "P_PIDFD", 3), descriptor,
+            os.WEXITED | os.WNOHANG)
+    except (ChildProcessError, ProcessLookupError):
+        pass
+
+
+def retain_discovered_processes(
+        session, containment_identity, adopted_baseline, retained):
+    """Retain every discovered identity before it can be acted upon."""
+    for snapshot in contained_processes(
+            session, containment_identity, adopted_baseline):
+        key = (
+            snapshot["pid"], snapshot["starttime_ticks"],
+            snapshot.get("proc_identity"),
+        )
+        if key in retained:
+            continue
+        record = retain_process_identity(snapshot, "command descendant")
+        if record is not None:
+            retained[key] = record
+
+
+def open_containment_descriptor():
+    flags = getattr(os, "O_CLOEXEC", 0)
+    try:
+        if hasattr(os, "pipe2"):
+            read_descriptor, write_descriptor = os.pipe2(flags)
+        else:
+            read_descriptor, write_descriptor = os.pipe()
+            os.set_inheritable(read_descriptor, False)
+            os.set_inheritable(write_descriptor, False)
+        metadata = os.fstat(read_descriptor)
+        if not stat.S_ISFIFO(metadata.st_mode):
+            raise CrossoverError(
+                "command containment descriptor is not a pipe"
+            )
+        return (
+            read_descriptor, write_descriptor,
+            (metadata.st_dev, metadata.st_ino)
+        )
+    except BaseException:
+        for descriptor in (
+                locals().get("read_descriptor"),
+                locals().get("write_descriptor")):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+        raise
+
+
+def open_owned_directory(path, description):
+    path = checked_path(path, description)
+    if not path.is_absolute():
+        raise CrossoverError("{} is not absolute".format(description))
+    directory = _open_absolute_directory_components(path, description, False)
+    transferred = False
+    try:
+        transferred = True
+        return directory["descriptor"]
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        if not transferred:
+            close_owned_directory(directory)
+
+
+def open_existing_canonical_directory(path, description):
+    descriptor = None
+    transferred = False
+    try:
+        descriptor = open_owned_directory(
+            Path(os.path.abspath(os.fspath(path))), description
+        )
+        metadata = os.fstat(descriptor)
+        result = {
+            "descriptor": descriptor,
+            "identity": (metadata.st_dev, metadata.st_ino),
+            "path": Path(os.path.abspath(os.fspath(path))),
+            "required_mode": 0o700,
+        }
+        transferred = True
+        return result
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        if descriptor is not None and not transferred:
+            os.close(descriptor)
+
+
+def open_exclusive_log(path, description):
+    path = checked_path(path, description)
+    if path.name in ("", ".", ".."):
+        raise CrossoverError("{} has an unsafe name".format(description))
+    directory_descriptor = None
+    descriptor = None
+    identity = None
+    try:
+        directory_descriptor = open_owned_directory(
+            path.parent, description + " directory"
+        )
+        flags = (
+            os.O_RDWR | os.O_CREAT | os.O_EXCL |
+            os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+        descriptor = os.open(
+            path.name, flags, 0o600, dir_fd=directory_descriptor
+        )
+        os.fchmod(descriptor, 0o600)
+        metadata = os.fstat(descriptor)
+        current = os.stat(
+            path.name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != 0o600 or
+                (metadata.st_dev, metadata.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "{} is not a stable owner-only regular file".format(
+                    description
+                )
+            )
+        identity = (metadata.st_dev, metadata.st_ino)
+        result = {
+            "descriptor": descriptor,
+            "directory_identity": (
+                os.fstat(directory_descriptor).st_dev,
+                os.fstat(directory_descriptor).st_ino,
+            ),
+            "directory_descriptor": directory_descriptor,
+            "directory_path": path.parent,
+            "identity": identity,
+            "name": path.name,
+            "path": path,
+        }
+        return result
+    except FileExistsError as error:
+        primary = CrossoverError(
+            "{} already exists; refusing to replace or follow it".format(
+                description
+            )
+        )
+        primary.__cause__ = error
+    except BaseException as error:
+        primary = error
+    cleanup_errors = []
+    if descriptor is not None:
+        try:
+            descriptor_metadata = os.fstat(descriptor)
+            current = os.stat(
+                path.name, dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+            descriptor_identity = (
+                descriptor_metadata.st_dev, descriptor_metadata.st_ino
+            )
+            if (descriptor_identity !=
+                    (current.st_dev, current.st_ino) or
+                    (identity is not None and
+                     descriptor_identity != identity)):
+                raise CrossoverError(
+                    "{} rollback name changed".format(description)
+                )
+            os.unlink(path.name, dir_fd=directory_descriptor)
+            os.fsync(directory_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if directory_descriptor is not None:
+        try:
+            os.close(directory_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if cleanup_errors:
+        raise CrossoverError(
+            "{} failed and cleanup also failed: {}; cleanup: {}".format(
+                description, primary,
+                "; ".join(
+                    "{}: {}".format(type(error).__name__, error)
+                    for error in cleanup_errors
+                ),
+            )
+        ) from primary
+    raise primary
+
+
+def open_exclusive_owned_file(directory, name, description):
+    """Create one owner-only file relative to an already retained directory."""
+    if (not isinstance(name, str) or name in ("", ".", "..") or
+            "/" in name):
+        raise CrossoverError("{} has an unsafe name".format(description))
+    directory_descriptor = None
+    descriptor = None
+    identity = None
+    try:
+        validate_owned_directory(directory, description + " directory")
+        directory_descriptor = os.dup(directory["descriptor"])
+        flags = (
+            os.O_RDWR | os.O_CREAT | os.O_EXCL |
+            os.O_CLOEXEC | os.O_NOFOLLOW
+        )
+        descriptor = os.open(
+            name, flags, 0o600, dir_fd=directory_descriptor
+        )
+        os.fchmod(descriptor, 0o600)
+        metadata = os.fstat(descriptor)
+        current = os.stat(
+            name, dir_fd=directory_descriptor, follow_symlinks=False
+        )
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != 0o600 or
+                metadata.st_size != 0 or
+                (metadata.st_dev, metadata.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "{} is not a new stable owner-only regular file".format(
+                    description
+                )
+            )
+        validate_owned_directory(directory, description + " directory")
+        identity = (metadata.st_dev, metadata.st_ino)
+        result = {
+            "descriptor": descriptor,
+            "directory_identity": directory["identity"],
+            "directory_descriptor": directory_descriptor,
+            "directory_path": directory["path"],
+            "identity": identity,
+            "name": name,
+            "path": directory["path"] / name,
+        }
+        return result
+    except FileExistsError as error:
+        primary = CrossoverError(
+            "{} already exists; refusing to replace or follow it".format(
+                description
+            )
+        )
+        primary.__cause__ = error
+    except BaseException as error:
+        primary = error
+    cleanup_errors = []
+    if descriptor is not None:
+        try:
+            retained = os.fstat(descriptor)
+            current = os.stat(
+                name, dir_fd=directory_descriptor,
+                follow_symlinks=False,
+            )
+            retained_identity = (retained.st_dev, retained.st_ino)
+            if (retained_identity !=
+                    (current.st_dev, current.st_ino) or
+                    (identity is not None and
+                     retained_identity != identity)):
+                raise CrossoverError(
+                    "{} rollback name changed".format(description)
+                )
+            os.unlink(name, dir_fd=directory_descriptor)
+            os.fsync(directory_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+        try:
+            os.close(descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if directory_descriptor is not None:
+        try:
+            os.close(directory_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if cleanup_errors:
+        raise CrossoverError(
+            "{} failed and cleanup also failed: {}; cleanup: {}".format(
+                description, primary,
+                "; ".join(
+                    "{}: {}".format(type(error).__name__, error)
+                    for error in cleanup_errors
+                ),
+            )
+        ) from primary
+    raise primary
+
+
+def close_log(log):
+    errors = []
+    for key in ("descriptor", "directory_descriptor"):
+        descriptor = log.get(key)
+        if descriptor is not None:
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                errors.append(error)
+            finally:
+                log[key] = None
+    if errors:
+        raise CrossoverError(
+            "cannot close retained file descriptors: {}".format(
+                "; ".join(
+                    "{}: {}".format(type(error).__name__, error)
+                    for error in errors
+                )
+            )
+        )
+
+
+def validate_log_identity(log, description):
+    directory_current = None
+    try:
+        metadata = os.fstat(log["descriptor"])
+        directory_metadata = os.fstat(log["directory_descriptor"])
+        directory_required_mode = log.get(
+            "directory_required_mode", 0o700
+        )
+        directory_current = _open_absolute_directory_components(
+            log["directory_path"], description + " directory", False,
+            directory_required_mode,
+        )
+        current = os.stat(
+            log["name"], dir_fd=log["directory_descriptor"],
+            follow_symlinks=False
+        )
+        directory_current_metadata = os.fstat(
+            directory_current["descriptor"]
+        )
+        required_mode = log.get("required_mode", 0o600)
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != required_mode or
+                (directory_metadata.st_dev, directory_metadata.st_ino) !=
+                log["directory_identity"] or
+                (directory_current_metadata.st_dev,
+                 directory_current_metadata.st_ino) !=
+                log["directory_identity"] or
+                stat.S_IMODE(directory_metadata.st_mode) !=
+                directory_required_mode or
+                (metadata.st_dev, metadata.st_ino) != log["identity"] or
+                (current.st_dev, current.st_ino) != log["identity"]):
+            raise CrossoverError(
+                "{} changed during command execution".format(description)
+            )
+    finally:
+        if directory_current is not None:
+            close_owned_directory(directory_current)
+
+
+def open_result_regular_held(
+        root, relative, maximum_bytes, description, required_mode,
+        directory_required_mode=0o700):
+    """Retain one exact regular-file inode below an already held result root."""
+    parts = result_relative_parts(relative, description)
+    if len(parts) == 1:
+        directory = duplicate_owned_directory(
+            root, description + " directory"
+        )
+    else:
+        directory = open_existing_result_directory(
+            root, Path(*parts[:-1]), description + " directory",
+            required_mode=directory_required_mode,
+        )
+    descriptor = None
+    transferred = False
+    try:
+        descriptor = os.open(
+            parts[-1],
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory["descriptor"],
+        )
+        metadata = os.fstat(descriptor)
+        current = os.stat(
+            parts[-1], dir_fd=directory["descriptor"],
+            follow_symlinks=False,
+        )
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != required_mode or
+                metadata.st_size > maximum_bytes or
+                (metadata.st_dev, metadata.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "{} is not the expected bounded owner-controlled file".format(
+                    description
+                )
+            )
+        held = {
+            "descriptor": descriptor,
+            "directory_identity": directory["identity"],
+            "directory_descriptor": directory["descriptor"],
+            "directory_path": directory["path"],
+            "directory_required_mode":
+                directory.get("required_mode", 0o700),
+            "identity": (metadata.st_dev, metadata.st_ino),
+            "name": parts[-1],
+            "path": directory["path"] / parts[-1],
+            "required_mode": required_mode,
+        }
+        validate_log_identity(held, description)
+        validate_owned_directory(root, "canonical result directory")
+        transferred = True
+        return held
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        if descriptor is not None and not transferred:
+            os.close(descriptor)
+        if not transferred:
+            close_owned_directory(directory)
+
+
+def unlink_new_log(log):
+    errors = []
+    try:
+        metadata = os.fstat(log["descriptor"])
+        current = os.stat(
+            log["name"], dir_fd=log["directory_descriptor"],
+            follow_symlinks=False,
+        )
+        if ((metadata.st_dev, metadata.st_ino) != log["identity"] or
+                (current.st_dev, current.st_ino) != log["identity"]):
+            raise CrossoverError(
+                "new command log changed before rollback"
+            )
+        os.unlink(log["name"], dir_fd=log["directory_descriptor"])
+        os.fsync(log["directory_descriptor"])
+    except BaseException as error:
+        errors.append(error)
+    try:
+        close_log(log)
+    except BaseException as error:
+        errors.append(error)
+    if errors:
+        raise CrossoverError(
+            "cannot roll back new command log: {}".format(
+                "; ".join(
+                    "{}: {}".format(type(error).__name__, error)
+                    for error in errors
+                )
+            )
+        )
+
+
+def open_command_logs(stdout_path, stderr_path):
+    stdout_log = None
+    stderr_log = None
+    try:
+        stdout_log = open_exclusive_log(stdout_path, "stdout log")
+        stderr_log = open_exclusive_log(stderr_path, "stderr log")
+        return stdout_log, stderr_log
+    except BaseException as primary:
+        cleanup_errors = []
+        for label, log in (
+                ("stderr", stderr_log), ("stdout", stdout_log)):
+            if log is None:
+                continue
+            try:
+                unlink_new_log(log)
+            except BaseException as cleanup:
+                cleanup_errors.append((label, cleanup))
+        if cleanup_errors:
+            raise CrossoverError(
+                "command-log reservation failed: {}; rollback failed: "
+                "{}".format(
+                    primary,
+                    "; ".join(
+                        "{} {}: {}".format(
+                            label, type(cleanup).__name__, cleanup
+                        ) for label, cleanup in cleanup_errors
+                    ),
+                )
+            ) from primary
+        raise
+
+
+def append_log(log, value):
+    validate_log_identity(log, "command log")
+    os.lseek(log["descriptor"], 0, os.SEEK_END)
+    remaining = value
+    while remaining:
+        written = os.write(log["descriptor"], remaining)
+        if written <= 0:
+            raise CrossoverError("cannot append command log")
+        remaining = remaining[written:]
+
+
+def read_normalized_log(log, description):
+    validate_log_identity(log, description)
+    os.lseek(log["descriptor"], 0, os.SEEK_SET)
+    chunks = []
+    while True:
+        chunk = os.read(log["descriptor"], 1024 * 1024)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    raw = b"".join(chunks)
+    value = normalized_output(raw)
+    if value != raw:
+        os.lseek(log["descriptor"], 0, os.SEEK_SET)
+        os.ftruncate(log["descriptor"], 0)
+        remaining = value
+        while remaining:
+            written = os.write(log["descriptor"], remaining)
+            if written <= 0:
+                raise CrossoverError("cannot normalize {}".format(description))
+            remaining = remaining[written:]
+    os.fsync(log["descriptor"])
+    validate_log_identity(log, description)
+    return value
+
+
+def duplicate_lock_descriptor(descriptor):
+    if descriptor is None:
+        return None
+    if type(descriptor) is not int or descriptor < 0:
+        raise CrossoverError("inherited lock descriptor is invalid")
+    try:
+        metadata = os.fstat(descriptor)
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1):
+            raise CrossoverError(
+                "inherited lock descriptor is not an owned regular file"
+            )
+        return os.dup(descriptor)
+    except OSError as error:
+        raise CrossoverError(
+            "cannot duplicate inherited lock descriptor: {}".format(error)
+        )
+
+
+def write_descriptor_all(descriptor, value):
+    offset = 0
+    while offset < len(value):
+        try:
+            written = os.write(descriptor, value[offset:])
+        except InterruptedError:
+            continue
+        if written <= 0:
+            raise CrossoverError(
+                "direct command supervisor write made no progress"
+            )
+        offset += written
+
+
+class BoundedControlDrain(object):
+    """Drain a control pipe concurrently while retaining only a bounded prefix."""
+
+    def __init__(self, descriptor, maximum_bytes, description):
+        if (type(descriptor) is not int or descriptor < 0 or
+                type(maximum_bytes) is not int or maximum_bytes <= 0):
+            raise CrossoverError(
+                "{} drain contract is invalid".format(description)
+            )
+        self._descriptor = descriptor
+        self._maximum_bytes = maximum_bytes
+        self._description = description
+        self._payload = bytearray()
+        self._oversize = False
+        self._error = None
+        self._stop = threading.Event()
+        try:
+            os.set_blocking(self._descriptor, False)
+        except (AttributeError, OSError) as error:
+            os.close(self._descriptor)
+            self._descriptor = None
+            raise CrossoverError(
+                "cannot make {} nonblocking: {}".format(description, error)
+            )
+        self._thread = threading.Thread(
+            target=self._drain,
+            name="leopard2-bounded-control-drain",
+        )
+        self._thread.daemon = False
+        self._thread.start()
+
+    def _drain(self):
+        try:
+            poller = select.poll()
+            poller.register(
+                self._descriptor,
+                select.POLLIN | select.POLLHUP | select.POLLERR,
+            )
+            while True:
+                if self._stop.is_set():
+                    break
+                try:
+                    events = poller.poll(100)
+                except InterruptedError:
+                    continue
+                if not events:
+                    continue
+                while True:
+                    try:
+                        block = os.read(self._descriptor, 65536)
+                    except BlockingIOError:
+                        break
+                    except InterruptedError:
+                        continue
+                    if not block:
+                        return
+                    room = self._maximum_bytes + 1 - len(self._payload)
+                    if room > 0:
+                        self._payload.extend(block[:room])
+                    if (len(block) > room or
+                            len(self._payload) > self._maximum_bytes):
+                        self._oversize = True
+                    # Continue draining after the cap so the writer cannot block.
+        except BaseException as error:
+            self._error = error
+        finally:
+            try:
+                os.close(self._descriptor)
+            except OSError:
+                pass
+            self._descriptor = None
+
+    def finish(self, timeout=2.0):
+        if (not isinstance(timeout, (int, float)) or
+                isinstance(timeout, bool) or
+                not math.isfinite(float(timeout)) or timeout <= 0):
+            raise CrossoverError(
+                "{} drain timeout is invalid".format(self._description)
+            )
+        self._thread.join(float(timeout))
+        if self._thread.is_alive():
+            self._stop.set()
+            self._thread.join(0.5)
+            if self._thread.is_alive():
+                raise CrossoverError(
+                    "{} drain did not stop after its deadline".format(
+                        self._description
+                    )
+                )
+            raise CrossoverError(
+                "{} writer remained open after its deadline".format(
+                    self._description
+                )
+            )
+        if self._error is not None:
+            raise CrossoverError(
+                "cannot drain {}: {}".format(
+                    self._description, self._error
+                )
+            )
+        if self._oversize or len(self._payload) > self._maximum_bytes:
+            raise CrossoverError(
+                "{} exceeds {} bytes".format(
+                    self._description, self._maximum_bytes
+                )
+            )
+        return bytes(self._payload)
+
+
+def remap_inherited_descriptors(inherited, remaps, forbidden):
+    """Apply an arbitrary FD remap graph without clobbering any source.
+
+    Every source is snapshotted above the complete source/target/internal-FD
+    namespace before the first ``dup2``.  An inherited descriptor that is
+    overwritten but is not itself a remap source is retained at a backup FD;
+    this preserves containment and lock identities even under collisions.
+    """
+    inherited_set = set(inherited)
+    targets = set(remaps)
+    sources = set(remaps.values())
+    occupied = inherited_set | targets | sources | set(forbidden)
+    minimum = max(occupied | {2}) + 1
+    source_copies = {}
+    retained_backups = {}
+    transferred = False
+    try:
+        for source in sorted(sources):
+            copied = fcntl.fcntl(
+                source, fcntl.F_DUPFD_CLOEXEC, minimum
+            )
+            source_copies[source] = copied
+            occupied.add(copied)
+            minimum = max(minimum, copied + 1)
+        for target in sorted(targets):
+            if target in inherited_set and target not in sources:
+                copied = fcntl.fcntl(
+                    target, fcntl.F_DUPFD_CLOEXEC, minimum
+                )
+                retained_backups[target] = copied
+                occupied.add(copied)
+                minimum = max(minimum, copied + 1)
+        for target, source in sorted(remaps.items()):
+            os.dup2(source_copies[source], target, inheritable=True)
+        result = (
+            (inherited_set - sources - targets) |
+            set(targets) | set(retained_backups.values())
+        )
+        transferred = True
+        return tuple(sorted(result))
+    except OSError as error:
+        transferred = False
+        raise CrossoverError(
+            "cannot apply collision-safe descriptor remaps: {}".format(
+                error
+            )
+        )
+    except BaseException:
+        transferred = False
+        raise
+    finally:
+        for descriptor in source_copies.values():
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass
+        # Successful backups belong to the returned descriptor set.  On
+        # failure, close them here because no child will inherit them.
+        if not transferred:
+            for descriptor in retained_backups.values():
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+
+def relocate_control_descriptor(control_descriptor, inherited, remaps):
+    """Move a supervisor control FD away from arbitrary benchmark targets."""
+    if control_descriptor not in remaps:
+        return control_descriptor
+    relocation_floor = max(
+        set(inherited) | set(remaps) | set(remaps.values()) |
+        {control_descriptor}
+    ) + 1
+    try:
+        relocated = fcntl.fcntl(
+            control_descriptor, fcntl.F_DUPFD_CLOEXEC,
+            relocation_floor,
+        )
+        os.close(control_descriptor)
+        return relocated
+    except OSError as error:
+        raise CrossoverError(
+            "cannot relocate colliding supervisor control descriptor: "
+            "{}".format(error)
+        )
+
+
+def direct_command_supervisor(arguments):
+    """Single-threaded boundary for run_abba's audited Linux subreaper."""
+    if len(arguments) != 9:
+        raise CrossoverError(
+            "direct command supervisor argument count changed"
+        )
+    try:
+        launch_gate_descriptor = int(arguments[8])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise CrossoverError(
+            "direct command supervisor launch gate is invalid"
+        ) from error
+    await_launch_gate(
+        launch_gate_descriptor, "direct command supervisor")
+    argv = decode_json_bytes(
+        arguments[0].encode("utf-8"),
+        "direct command supervisor argv"
+    )
+    environment = decode_json_bytes(
+        arguments[2].encode("utf-8"),
+        "direct command supervisor environment"
+    )
+    inherited = decode_json_bytes(
+        arguments[4].encode("utf-8"),
+        "direct command supervisor descriptors"
+    )
+    remaps = decode_json_bytes(
+        arguments[5].encode("utf-8"),
+        "direct command supervisor descriptor remaps"
+    )
+    launcher_value = decode_json_bytes(
+        arguments[7].encode("utf-8"),
+        "direct command supervisor launcher"
+    )
+    launcher = runtime_launcher_from_contract(launcher_value)
+    try:
+        timeout = float(arguments[3])
+        control_descriptor = int(arguments[6])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise CrossoverError(
+            "direct command supervisor scalar argument is invalid: {}".format(
+                error
+            )
+        )
+    if (not isinstance(argv, list) or not argv or
+            not all(isinstance(item, str) and item and "\0" not in item
+                    for item in argv)):
+        raise CrossoverError(
+            "direct command supervisor argv is invalid"
+        )
+    if (not isinstance(environment, dict) or
+            not all(isinstance(key, str) and isinstance(value, str)
+                    for key, value in environment.items())):
+        raise CrossoverError(
+            "direct command supervisor environment is invalid"
+        )
+    if (not isinstance(inherited, list) or
+            not all(type(descriptor) is int and descriptor >= 0
+                    for descriptor in inherited) or
+            not isinstance(remaps, dict) or
+            type(control_descriptor) is not int or control_descriptor < 0 or
+            not math.isfinite(timeout) or timeout <= 0 or timeout > 3600):
+        raise CrossoverError(
+            "direct command supervisor execution contract is invalid"
+        )
+    inherited = tuple(sorted(set(inherited)))
+    parsed_remaps = {}
+    for target_text, source in remaps.items():
+        try:
+            target = int(target_text)
+        except (TypeError, ValueError) as error:
+            raise CrossoverError(
+                "direct command supervisor remap target is invalid"
+            ) from error
+        if (str(target) != target_text or target < 3 or
+                type(source) is not int or source not in inherited):
+            raise CrossoverError(
+                "direct command supervisor descriptor remap is unsafe"
+            )
+        parsed_remaps[target] = source
+    launcher_descriptors = tuple(
+        launcher[name]["descriptor"] for name in RUNTIME_LAUNCHER_NAMES
+    )
+    if (set(launcher_descriptors) & (
+            set(inherited) | set(remaps) | set(remaps.values()) |
+            {control_descriptor})):
+        raise CrossoverError(
+            "runtime launcher descriptors collide with command transport"
+        )
+    for descriptor in inherited + launcher_descriptors + (
+            control_descriptor,):
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            raise CrossoverError(
+                "direct command supervisor descriptor {} is invalid: "
+                "{}".format(descriptor, error)
+            )
+    control_descriptor = relocate_control_descriptor(
+        control_descriptor, inherited, parsed_remaps
+    )
+    inherited = remap_inherited_descriptors(
+        inherited, parsed_remaps, (control_descriptor,)
+    )
+    # Benchmark-created JSON must remain owner-only regardless of the
+    # coordinator's inherited shell umask.  The kernel additionally enforces
+    # the evidence byte ceiling on the exact inherited output inode.
+    os.umask(0o077)
+    try:
+        resource.setrlimit(
+            resource.RLIMIT_FSIZE,
+            (MAX_RAW_JSON_BYTES, MAX_RAW_JSON_BYTES),
+        )
+    except (OSError, ValueError) as error:
+        raise CrossoverError(
+            "cannot enforce benchmark output ceiling: {}".format(error)
+        )
+
+    load_sealed_python_module(
+        launcher["build_provenance"], "leopard2_build_provenance",
+        "sealed build-provenance module",
+    )
+    load_sealed_python_module(
+        launcher["git_capture"], "git_capture",
+        "sealed Git-capture module",
+    )
+    load_sealed_python_module(
+        launcher["link_common"], "balanced_evidence_common",
+        "sealed link-evidence module",
+    )
+    containment_module = load_sealed_python_module(
+        launcher["containment"], "run_abba",
+        "sealed command-containment module",
+    )
+    try:
+        ContainmentError = containment_module.EvidenceError
+        audited_run_process_bounded = (
+            containment_module.run_process_bounded
+        )
+    except AttributeError as error:
+        raise CrossoverError(
+            "sealed command-containment module omits its audited API"
+        ) from error
+
+    status = None
+    try:
+        completed = audited_run_process_bounded(
+            argv, cwd=Path(arguments[1]), environment=environment,
+            timeout=timeout, inherited_descriptors=inherited
+        )
+        write_descriptor_all(1, completed.stdout)
+        write_descriptor_all(2, completed.stderr)
+        status = {
+            "returncode": completed.returncode,
+            "status": "ok",
+        }
+    except ContainmentError as error:
+        message = str(error)
+        status = {
+            "message": message,
+            "status": (
+                "timeout" if message.startswith("command exceeded ")
+                else "error"
+            ),
+        }
+    except BaseException as error:
+        status = {
+            "message": "{}: {}".format(type(error).__name__, error),
+            "status": "error",
+        }
+    encoded = canonical_bytes(status)
+    if not encoded or len(encoded) > MAX_SUPERVISOR_CONTROL_BYTES:
+        raise CrossoverError(
+            "direct command supervisor control record is invalid"
+        )
+    try:
+        write_descriptor_all(control_descriptor, encoded)
+    finally:
+        os.close(control_descriptor)
+    return 0
+
+
+def decode_direct_supervisor_control(payload):
+    if not payload or len(payload) > MAX_SUPERVISOR_CONTROL_BYTES:
+        raise CrossoverError(
+            "direct command supervisor returned no valid control record"
+        )
+    control = decode_json_bytes(
+        payload, "direct command supervisor control"
+    )
+    if not isinstance(control, dict):
+        raise CrossoverError(
+            "direct command supervisor control is not an object"
+        )
+    return control
+
+
+def remove_stale_owned_file(directory, name, description):
+    """Remove only an exact owner-controlled regular file for safe resume."""
+    if not isinstance(name, str) or name in ("", ".", "..") or "/" in name:
+        raise CrossoverError("{} has an unsafe name".format(description))
+    validate_owned_directory(directory, description + " directory")
+    try:
+        metadata = os.stat(
+            name, dir_fd=directory["descriptor"], follow_symlinks=False
+        )
+    except FileNotFoundError:
+        return
+    except OSError as error:
+        raise CrossoverError(
+            "cannot inspect stale {}: {}".format(description, error)
+        )
+    if (not stat.S_ISREG(metadata.st_mode) or
+            metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+            stat.S_IMODE(metadata.st_mode) != 0o600):
+        raise CrossoverError(
+            "refusing to remove unsafe stale {}".format(description)
+        )
+    os.unlink(name, dir_fd=directory["descriptor"])
+    os.fsync(directory["descriptor"])
+    validate_owned_directory(directory, description + " directory")
+
+
+def read_owned_regular(
+        directory, name, maximum_bytes, description,
+        mutation_hook=None, required_mode=0o600):
+    """Read a bounded exact file from a held, revalidated directory."""
+    if (not isinstance(name, str) or name in ("", ".", "..") or
+            "/" in name or type(maximum_bytes) is not int or
+            maximum_bytes <= 0 or required_mode not in (0o600, 0o755)):
+        raise CrossoverError("{} read contract is invalid".format(description))
+    validate_owned_directory(directory, description + " directory")
+    flags = (
+        os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NONBLOCK", 0)
+    )
+    descriptor = None
+    try:
+        descriptor = os.open(
+            name, flags, dir_fd=directory["descriptor"]
+        )
+        metadata = os.fstat(descriptor)
+        current = os.stat(
+            name, dir_fd=directory["descriptor"], follow_symlinks=False
+        )
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != required_mode or
+                metadata.st_size > maximum_bytes or
+                (metadata.st_dev, metadata.st_ino) !=
+                (current.st_dev, current.st_ino)):
+            raise CrossoverError(
+                "{} is not a bounded owner-controlled regular file".format(
+                    description
+                )
+            )
+        initial_identity = (
+            metadata.st_dev, metadata.st_ino, metadata.st_size,
+            metadata.st_mtime_ns, metadata.st_ctime_ns,
+        )
+        chunks = []
+        total = 0
+        hook_called = False
+        while total <= maximum_bytes:
+            block = os.read(
+                descriptor, min(1024 * 1024, maximum_bytes + 1 - total)
+            )
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+            if mutation_hook is not None and not hook_called:
+                hook_called = True
+                mutation_hook()
+        if total > maximum_bytes:
+            raise CrossoverError(
+                "{} exceeds {} bytes".format(description, maximum_bytes)
+            )
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        verification = bytearray()
+        while len(verification) <= maximum_bytes:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024,
+                    maximum_bytes + 1 - len(verification))
+            )
+            if not block:
+                break
+            verification.extend(block)
+        if (len(verification) > maximum_bytes or
+                bytes(verification) != b"".join(chunks)):
+            raise CrossoverError(
+                "{} changed while it was being read".format(description)
+            )
+        final_metadata = os.fstat(descriptor)
+        final_current = os.stat(
+            name, dir_fd=directory["descriptor"], follow_symlinks=False
+        )
+        final_identity = (
+            final_metadata.st_dev, final_metadata.st_ino,
+            final_metadata.st_size, final_metadata.st_mtime_ns,
+            final_metadata.st_ctime_ns,
+        )
+        if (total != metadata.st_size or
+                final_identity != initial_identity or
+                (final_current.st_dev, final_current.st_ino) !=
+                (metadata.st_dev, metadata.st_ino) or
+                final_current.st_size != metadata.st_size or
+                final_current.st_mtime_ns != metadata.st_mtime_ns or
+                final_current.st_ctime_ns != metadata.st_ctime_ns):
+            raise CrossoverError(
+                "{} changed while it was being read".format(description)
+            )
+        validate_owned_directory(directory, description + " directory")
+        return b"".join(chunks)
+    except OSError as error:
+        raise CrossoverError(
+            "cannot read {}: {}".format(description, error)
+        )
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def read_held_regular(
+        held, maximum_bytes, description, mutation_hook=None):
+    """Read/hash/parse bytes through the exact pre-opened regular-file inode."""
+    if (type(maximum_bytes) is not int or maximum_bytes <= 0 or
+            not isinstance(held, dict) or held.get("descriptor") is None):
+        raise CrossoverError("{} held-read contract is invalid".format(
+            description
+        ))
+    validate_log_identity(held, description)
+    descriptor = held["descriptor"]
+    metadata = os.fstat(descriptor)
+    if metadata.st_size > maximum_bytes:
+        raise CrossoverError(
+            "{} exceeds {} bytes".format(description, maximum_bytes)
+        )
+    initial = (
+        metadata.st_dev, metadata.st_ino, metadata.st_size,
+        metadata.st_mtime_ns, metadata.st_ctime_ns,
+    )
+    values = []
+    for pass_index in range(2):
+        os.lseek(descriptor, 0, os.SEEK_SET)
+        chunks = []
+        total = 0
+        hook_called = False
+        while total <= maximum_bytes:
+            block = os.read(
+                descriptor,
+                min(1024 * 1024, maximum_bytes + 1 - total),
+            )
+            if not block:
+                break
+            chunks.append(block)
+            total += len(block)
+            if (mutation_hook is not None and pass_index == 0 and
+                    not hook_called):
+                hook_called = True
+                mutation_hook()
+        if total > maximum_bytes:
+            raise CrossoverError(
+                "{} exceeds {} bytes".format(description, maximum_bytes)
+            )
+        values.append(b"".join(chunks))
+    final = os.fstat(descriptor)
+    final_identity = (
+        final.st_dev, final.st_ino, final.st_size,
+        final.st_mtime_ns, final.st_ctime_ns,
+    )
+    validate_log_identity(held, description)
+    if (values[0] != values[1] or initial != final_identity or
+            len(values[0]) != metadata.st_size):
+        raise CrossoverError(
+            "{} changed while it was being read".format(description)
+        )
+    return values[0]
+
+
+def read_path_owned_regular(path, maximum_bytes, description):
+    path = checked_path(path, description)
+    try:
+        resolved_parent = path.parent.resolve(strict=True)
+    except (OSError, RuntimeError) as error:
+        raise CrossoverError(
+            "cannot resolve {} directory: {}".format(description, error)
+        )
+    if resolved_parent != path.parent:
+        raise CrossoverError(
+            "{} directory contains a symbolic-link component".format(
+                description
+            )
+        )
+    directory = owned_canonical_directory(
+        path.parent, description + " directory"
+    )
+    try:
+        return read_owned_regular(
+            directory, path.name, maximum_bytes, description
+        )
+    finally:
+        close_owned_directory(directory)
+
+
+def procfd_exact_path(held, description,
+                      child_descriptor=RAW_OUTPUT_DESCRIPTOR):
+    validate_log_identity(held, description)
+    if type(child_descriptor) is not int or child_descriptor < 3:
+        raise CrossoverError(
+            "{} child descriptor is invalid".format(description)
+        )
+    return Path("/proc/self/fd") / str(child_descriptor)
+
+
+def cleanup_command_tree(
+        process, containment_identity, timed_out,
+        adopted_baseline=None, leader_identity=None):
+    """Terminate and reap every observable member of one command launch."""
+    if leader_identity is None:
+        raise CrossoverError(
+            "command cleanup requires a retained launch pidfd"
+        )
+    retained = {
+        (
+            leader_identity["pid"], leader_identity["starttime_ticks"],
+            leader_identity.get("proc_identity"),
+        ):
+            leader_identity
     }
+    try:
+        retain_discovered_processes(
+            process.pid, containment_identity, adopted_baseline, retained
+        )
+        residual = sorted(
+            record["pid"] for record in retained.values()
+            if record is not leader_identity
+        )
+        if not timed_out and not residual:
+            process.wait(timeout=0)
+            return residual
+
+        # Never signal a numeric PID, process group, or session here.  A pidfd
+        # names the exact task retained between two matching /proc starttime
+        # reads and remains safe after the numeric identifier can be reused.
+        for record in retained.values():
+            signal_retained_process(record, signal.SIGTERM)
+
+        term_deadline = time.monotonic() + 0.35
+        quiescent_scans = 0
+        while time.monotonic() < term_deadline:
+            count_before = len(retained)
+            retain_discovered_processes(
+                process.pid, containment_identity, adopted_baseline, retained
+            )
+            for record in retained.values():
+                if record is not leader_identity:
+                    reap_retained_process(record)
+            live = [
+                record for record in retained.values()
+                if retained_process_alive(record)
+            ]
+            if not live:
+                quiescent_scans = (
+                    quiescent_scans + 1
+                    if len(retained) == count_before else 0
+                )
+                if quiescent_scans >= 3:
+                    process.wait(timeout=0)
+                    return residual
+            else:
+                quiescent_scans = 0
+            time.sleep(0.01)
+
+        for record in retained.values():
+            signal_retained_process(record, signal.SIGKILL)
+
+        kill_deadline = time.monotonic() + 2.0
+        quiescent_scans = 0
+        while time.monotonic() < kill_deadline:
+            count_before = len(retained)
+            retain_discovered_processes(
+                process.pid, containment_identity, adopted_baseline, retained
+            )
+            for record in retained.values():
+                signal_retained_process(record, signal.SIGKILL)
+                if record is not leader_identity:
+                    reap_retained_process(record)
+            remaining = [
+                record for record in retained.values()
+                if retained_process_alive(record)
+            ]
+            if not remaining:
+                quiescent_scans = (
+                    quiescent_scans + 1
+                    if len(retained) == count_before else 0
+                )
+                if quiescent_scans >= 3:
+                    process.wait(timeout=0)
+                    return residual
+            else:
+                quiescent_scans = 0
+            time.sleep(0.01)
+        raise CrossoverError(
+            "command descendant cleanup failed for retained PIDs {}".format(
+                ",".join(str(record["pid"]) for record in remaining)
+            )
+        )
+    finally:
+        for record in retained.values():
+            if record is not leader_identity:
+                close_retained_process(record)
+
+
+def _run_command_owned(
+        argv, cwd, stdout_path, stderr_path, timeout, environment,
+        inherited_lock_descriptor=None, inherited_descriptors=(),
+        descriptor_remaps=None, runtime_launcher=None):
+    validate_pidfd_runtime("direct command supervisor")
+    ensure_child_subreaper()
+    adopted_baseline = direct_child_identities()
+    if adopted_baseline:
+        raise CrossoverError(
+            "isolated command owner has pre-existing child processes"
+        )
+    if (not isinstance(inherited_descriptors, (tuple, list)) or
+            not all(type(descriptor) is int and descriptor >= 0
+                    for descriptor in inherited_descriptors)):
+        raise CrossoverError(
+            "command inherited descriptor set is invalid"
+        )
+    for descriptor in inherited_descriptors:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            raise CrossoverError(
+                "command inherited descriptor {} is invalid: {}".format(
+                    descriptor, error
+                )
+            )
+    if descriptor_remaps is None:
+        descriptor_remaps = {}
+    if (not isinstance(descriptor_remaps, dict) or
+            not all(type(target) is int and target >= 3 and
+                    type(source) is int and source in inherited_descriptors
+                    for target, source in descriptor_remaps.items())):
+        raise CrossoverError(
+            "command inherited descriptor remap is invalid"
+        )
+    launcher_identity = validate_runtime_launcher_snapshots(
+        runtime_launcher
+    )
+    launcher_contract = runtime_launcher_contract(runtime_launcher)
+    launcher_descriptors = tuple(
+        runtime_launcher[name]["descriptor"]
+        for name in RUNTIME_LAUNCHER_NAMES
+    )
+    if (set(launcher_descriptors) & (
+            set(inherited_descriptors) | set(descriptor_remaps) |
+            set(descriptor_remaps.values()))):
+        raise CrossoverError(
+            "runtime launcher descriptors collide with command transport"
+        )
+    stdout_log, stderr_log = open_command_logs(
+        stdout_path, stderr_path
+    )
+    containment_descriptor = None
+    containment_writer = None
+    lock_descriptor = None
+    process = None
+    leader_identity = None
+    control_read = None
+    control_write = None
+    control_drain = None
+    launch_gate_read = None
+    launch_gate_write = None
+    timed_out = False
+    residual = []
+    try:
+        (containment_descriptor, containment_writer,
+         containment_identity) = open_containment_descriptor()
+        lock_descriptor = duplicate_lock_descriptor(
+            inherited_lock_descriptor
+        )
+        control_read, control_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        launch_gate_read, launch_gate_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        benchmark_descriptors = list(inherited_descriptors)
+        benchmark_descriptors.append(containment_descriptor)
+        if lock_descriptor is not None:
+            benchmark_descriptors.append(lock_descriptor)
+        benchmark_descriptors = sorted(set(benchmark_descriptors))
+        pass_descriptors = (
+            benchmark_descriptors + list(launcher_descriptors) +
+            [control_write, launch_gate_read]
+        )
+        process = subprocess.Popen(
+            [
+                runtime_launcher["identity"]["python"]["path"],
+                *RUNTIME_PYTHON_FLAGS,
+                str(Path("/proc/self/fd") / str(
+                    runtime_launcher["script"]["descriptor"]
+                )),
+                DIRECT_COMMAND_SUPERVISOR_MODE,
+                json.dumps(
+                    [str(item) for item in argv],
+                    ensure_ascii=True, separators=(",", ":")
+                ),
+                str(cwd),
+                json.dumps(
+                    dict(environment), ensure_ascii=True,
+                    sort_keys=True, separators=(",", ":")
+                ),
+                repr(float(timeout)),
+                json.dumps(benchmark_descriptors, separators=(",", ":")),
+                json.dumps(
+                    {str(target): source for target, source
+                     in sorted(descriptor_remaps.items())},
+                    sort_keys=True, separators=(",", ":")
+                ),
+                str(control_write),
+                json.dumps(
+                    launcher_contract, ensure_ascii=True,
+                    sort_keys=True, separators=(",", ":")
+                ),
+                str(launch_gate_read),
+            ],
+            cwd=str(cwd), env=environment,
+            stdin=subprocess.DEVNULL,
+            stdout=stdout_log["descriptor"],
+            stderr=stderr_log["descriptor"],
+            start_new_session=True,
+            pass_fds=tuple(pass_descriptors),
+            executable=str(Path("/proc/self/fd") / str(
+                runtime_launcher["python"]["descriptor"]
+            )),
+        )
+        os.close(launch_gate_read)
+        launch_gate_read = None
+        leader_identity = retain_launched_process(
+            process, "direct command supervisor"
+        )
+        write_descriptor_all(launch_gate_write, b"G")
+        os.close(launch_gate_write)
+        launch_gate_write = None
+        os.close(control_write)
+        control_write = None
+        control_drain = BoundedControlDrain(
+            control_read, MAX_SUPERVISOR_CONTROL_BYTES,
+            "direct command supervisor control",
+        )
+        control_read = None
+        timed_out = not wait_retained_process_exit(
+            leader_identity,
+            float(timeout) + SUPERVISOR_REAP_GRACE_SECONDS,
+        )
+        residual = cleanup_command_tree(
+            process, containment_identity, timed_out, adopted_baseline,
+            leader_identity,
+        )
+        if timed_out:
+            raise CrossoverError(
+                "direct command supervisor exceeded its containment bound"
+            )
+        control = decode_direct_supervisor_control(control_drain.finish())
+        control_drain = None
+        if process.returncode != 0:
+            raise CrossoverError(
+                "direct command supervisor exited with status {}".format(
+                    process.returncode
+                )
+            )
+        status = control.get("status")
+        if status == "timeout":
+            if (set(control) != {"message", "status"} or
+                    not isinstance(control.get("message"), str)):
+                raise CrossoverError(
+                    "direct command supervisor timeout record is malformed"
+                )
+            timed_out = True
+            returncode = 124
+        elif status == "error":
+            if (set(control) != {"message", "status"} or
+                    not isinstance(control.get("message"), str)):
+                raise CrossoverError(
+                    "direct command supervisor error record is malformed"
+                )
+            returncode = 125
+            append_log(
+                stderr_log,
+                (
+                    "leopard2 runner: command containment failed: " +
+                    control["message"] + "\n"
+                ).encode("utf-8", errors="replace")
+            )
+        elif (status == "ok" and
+                set(control) == {"returncode", "status"} and
+                type(control.get("returncode")) is int):
+            returncode = control["returncode"]
+        else:
+            raise CrossoverError(
+                "direct command supervisor success record is malformed"
+            )
+        if residual:
+            returncode = 125
+            append_log(
+                stderr_log,
+                b"leopard2 runner: residual command descendants were "
+                b"terminated\n"
+            )
+        stdout = read_normalized_log(stdout_log, "stdout log")
+        stderr = read_normalized_log(stderr_log, "stderr log")
+        return {
+            "argv": [str(item) for item in argv],
+            "cwd": str(cwd),
+            "launcher_identity": launcher_identity,
+            "returncode": returncode,
+            "stderr_log": checked_path(stderr_path, "stderr log").name,
+            "stderr_sha256": digest_bytes(stderr),
+            "stdout_log": checked_path(stdout_path, "stdout log").name,
+            "stdout_sha256": digest_bytes(stdout),
+            "timed_out": timed_out,
+        }
+    except BaseException:
+        if process is not None and process.poll() is None:
+            try:
+                if leader_identity is not None:
+                    cleanup_command_tree(
+                        process, containment_identity, True,
+                        adopted_baseline, leader_identity,
+                    )
+                else:
+                    # The child is still an unreaped launch owned by this
+                    # Popen object, so its numeric PID cannot yet be reused.
+                    process.kill()
+                    process.wait(timeout=1.0)
+            except Exception:
+                pass
+        raise
+    finally:
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        if control_drain is not None:
+            try:
+                control_drain.finish()
+            except BaseException as error:
+                cleanup_errors.append(("control drain", error))
+        if leader_identity is not None:
+            try:
+                close_retained_process(leader_identity)
+            except BaseException as error:
+                cleanup_errors.append(("retained supervisor", error))
+        # The lock duplicate is deliberately closed only after process-tree
+        # cleanup.  Never issue LOCK_UN: descendants inherit the same
+        # open-file description and must keep it locked if this coordinator
+        # is killed.
+        for descriptor in (
+                lock_descriptor, containment_descriptor,
+                containment_writer, control_read, control_write,
+                launch_gate_read, launch_gate_write):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    cleanup_errors.append(("transport descriptor", error))
+        for label, log in (
+                ("stderr log", stderr_log), ("stdout log", stdout_log)):
+            try:
+                close_log(log)
+            except BaseException as error:
+                cleanup_errors.append((label, error))
+        if cleanup_errors:
+            detail = "; ".join(
+                "{} {}: {}".format(
+                    label, type(error).__name__, error
+                ) for label, error in cleanup_errors
+            )
+            if active_error is not None:
+                raise CrossoverError(
+                    "owned command failed: {}; cleanup also failed: {}".format(
+                        active_error, detail
+                    )
+                ) from active_error
+            raise CrossoverError(
+                "owned command cleanup failed: {}".format(detail)
+            )
+
+
+def direct_command_owner(arguments):
+    """Run exactly one command inside an isolated subreaper process."""
+    if len(arguments) != 12:
+        raise CrossoverError(
+            "direct command owner argument count changed"
+        )
+    try:
+        launch_gate_descriptor = int(arguments[11])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise CrossoverError(
+            "direct command owner launch gate is invalid"
+        ) from error
+    await_launch_gate(launch_gate_descriptor, "direct command owner")
+    argv = decode_json_bytes(
+        arguments[0].encode("utf-8"), "direct command owner argv"
+    )
+    environment = decode_json_bytes(
+        arguments[5].encode("utf-8"),
+        "direct command owner environment"
+    )
+    inherited = decode_json_bytes(
+        arguments[7].encode("utf-8"),
+        "direct command owner descriptors"
+    )
+    remaps_value = decode_json_bytes(
+        arguments[8].encode("utf-8"),
+        "direct command owner descriptor remaps"
+    )
+    launcher_value = decode_json_bytes(
+        arguments[10].encode("utf-8"),
+        "direct command owner launcher"
+    )
+    launcher = runtime_launcher_from_contract(launcher_value)
+    try:
+        timeout = float(arguments[4])
+        lock_descriptor_value = int(arguments[6])
+        control_descriptor = int(arguments[9])
+    except (TypeError, ValueError, OverflowError) as error:
+        raise CrossoverError(
+            "direct command owner scalar argument is invalid: {}".format(
+                error
+            )
+        )
+    if (not isinstance(argv, list) or not argv or
+            not all(isinstance(item, str) and item and "\0" not in item
+                    for item in argv) or
+            not isinstance(environment, dict) or
+            not all(isinstance(key, str) and isinstance(value, str)
+                    for key, value in environment.items()) or
+            not isinstance(inherited, list) or
+            not all(type(descriptor) is int and descriptor >= 0
+                    for descriptor in inherited) or
+            not isinstance(remaps_value, dict) or
+            not math.isfinite(timeout) or timeout <= 0 or timeout > 3600 or
+            lock_descriptor_value < -1 or
+            type(control_descriptor) is not int or control_descriptor < 0):
+        raise CrossoverError(
+            "direct command owner execution contract is invalid"
+        )
+    remaps = {}
+    for target_text, source in remaps_value.items():
+        try:
+            target = int(target_text)
+        except (TypeError, ValueError) as error:
+            raise CrossoverError(
+                "direct command owner remap target is invalid"
+            ) from error
+        if (str(target) != target_text or target < 3 or
+                type(source) is not int or source not in inherited):
+            raise CrossoverError(
+                "direct command owner remap is invalid"
+            )
+        remaps[target] = source
+    lock_descriptor = (
+        None if lock_descriptor_value < 0 else lock_descriptor_value
+    )
+    status = None
+    try:
+        record = _run_command_owned(
+            argv, Path(arguments[1]), Path(arguments[2]),
+            Path(arguments[3]), timeout, environment,
+            inherited_lock_descriptor=lock_descriptor,
+            inherited_descriptors=tuple(inherited),
+            descriptor_remaps=remaps,
+            runtime_launcher=launcher,
+        )
+        status = {"record": record, "status": "ok"}
+    except BaseException as error:
+        status = {
+            "message": "{}: {}".format(type(error).__name__, error),
+            "status": "error",
+        }
+    encoded = canonical_bytes(status)
+    if not encoded or len(encoded) > MAX_SUPERVISOR_CONTROL_BYTES:
+        raise CrossoverError(
+            "direct command owner control record is invalid"
+        )
+    try:
+        write_descriptor_all(control_descriptor, encoded)
+    finally:
+        os.close(control_descriptor)
+    return 0
+
+
+def run_command(
+        argv, cwd, stdout_path, stderr_path, timeout, environment,
+        inherited_lock_descriptor=None, inherited_descriptors=(),
+        descriptor_remaps=None):
+    """Execute through a per-command owner so concurrent jobs never mix."""
+    validate_pidfd_runtime("direct command owner")
+    if descriptor_remaps is None:
+        descriptor_remaps = {}
+    if (not isinstance(argv, (tuple, list)) or not argv or
+            not all(isinstance(item, (str, Path)) and
+                    str(item) and "\0" not in str(item)
+                    for item in argv) or
+            not isinstance(environment, dict) or
+            not all(isinstance(key, str) and isinstance(value, str)
+                    for key, value in environment.items()) or
+            not isinstance(timeout, (int, float)) or
+            isinstance(timeout, bool) or not math.isfinite(float(timeout)) or
+            timeout <= 0 or timeout > 3600 or
+            not isinstance(inherited_descriptors, (tuple, list)) or
+            not all(type(descriptor) is int and descriptor >= 0
+                    for descriptor in inherited_descriptors) or
+            not isinstance(descriptor_remaps, dict) or
+            not all(type(target) is int and target >= 3 and
+                    type(source) is int and source in inherited_descriptors
+                    for target, source in descriptor_remaps.items())):
+        raise CrossoverError(
+            "command owner execution contract is invalid"
+        )
+    for descriptor in inherited_descriptors:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            raise CrossoverError(
+                "command owner inherited descriptor {} is invalid: "
+                "{}".format(descriptor, error)
+            )
+    pass_descriptors = list(inherited_descriptors)
+    if inherited_lock_descriptor is not None:
+        if (type(inherited_lock_descriptor) is not int or
+                inherited_lock_descriptor < 0):
+            raise CrossoverError(
+                "command owner lock descriptor is invalid"
+            )
+        pass_descriptors.append(inherited_lock_descriptor)
+    containment_descriptor = None
+    containment_writer = None
+    control_read = None
+    control_write = None
+    process = None
+    leader_identity = None
+    control_drain = None
+    launch_gate_read = None
+    launch_gate_write = None
+    launcher = None
+    try:
+        launcher = open_runtime_launcher_snapshots()
+        launcher_identity = validate_runtime_launcher_snapshots(launcher)
+        launcher_contract = runtime_launcher_contract(launcher)
+        launcher_descriptors = tuple(
+            launcher[name]["descriptor"]
+            for name in RUNTIME_LAUNCHER_NAMES
+        )
+        if (set(launcher_descriptors) & (
+                set(inherited_descriptors) | set(descriptor_remaps) |
+                set(descriptor_remaps.values()) |
+                ({inherited_lock_descriptor}
+                 if inherited_lock_descriptor is not None else set()))):
+            raise CrossoverError(
+                "runtime launcher descriptors collide with command transport"
+            )
+        (containment_descriptor, containment_writer,
+         containment_identity) = open_containment_descriptor()
+        forwarded = sorted(set(
+            list(inherited_descriptors) + [containment_descriptor]
+        ))
+        control_read, control_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        launch_gate_read, launch_gate_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        pass_descriptors.extend(
+            launcher_descriptors +
+            (containment_descriptor, control_write, launch_gate_read)
+        )
+        process = subprocess.Popen(
+            [
+                launcher["identity"]["python"]["path"],
+                *RUNTIME_PYTHON_FLAGS,
+                str(Path("/proc/self/fd") / str(
+                    launcher["script"]["descriptor"]
+                )),
+                DIRECT_COMMAND_OWNER_MODE,
+                json.dumps(
+                    [str(item) for item in argv],
+                    ensure_ascii=True, separators=(",", ":")
+                ),
+                str(cwd), str(stdout_path), str(stderr_path),
+                repr(float(timeout)),
+                json.dumps(
+                    dict(environment), ensure_ascii=True,
+                    sort_keys=True, separators=(",", ":")
+                ),
+                str(
+                    -1 if inherited_lock_descriptor is None
+                    else inherited_lock_descriptor
+                ),
+                json.dumps(forwarded, separators=(",", ":")),
+                json.dumps(
+                    {str(target): source for target, source
+                     in sorted(descriptor_remaps.items())},
+                    sort_keys=True, separators=(",", ":")
+                ),
+                str(control_write),
+                json.dumps(
+                    launcher_contract, ensure_ascii=True,
+                    sort_keys=True, separators=(",", ":")
+                ),
+                str(launch_gate_read),
+            ],
+            cwd=str(cwd), env=environment, stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            pass_fds=tuple(sorted(set(pass_descriptors))),
+            executable=str(Path("/proc/self/fd") / str(
+                launcher["python"]["descriptor"]
+            )),
+        )
+        os.close(launch_gate_read)
+        launch_gate_read = None
+        leader_identity = retain_launched_process(
+            process, "direct command owner"
+        )
+        write_descriptor_all(launch_gate_write, b"G")
+        os.close(launch_gate_write)
+        launch_gate_write = None
+        os.close(control_write)
+        control_write = None
+        control_drain = BoundedControlDrain(
+            control_read, MAX_SUPERVISOR_CONTROL_BYTES,
+            "direct command owner control",
+        )
+        control_read = None
+        timed_out = False
+        timed_out = not wait_retained_process_exit(
+            leader_identity,
+            float(timeout) + 2.0 * SUPERVISOR_REAP_GRACE_SECONDS,
+        )
+        cleanup_command_tree(
+            process, containment_identity, timed_out,
+            leader_identity=leader_identity,
+        )
+        if timed_out:
+            raise CrossoverError(
+                "direct command owner exceeded its containment bound"
+            )
+        control = decode_direct_supervisor_control(control_drain.finish())
+        control_drain = None
+        if process.returncode != 0:
+            raise CrossoverError(
+                "direct command owner exited with status {}".format(
+                    process.returncode
+                )
+            )
+        if (control.get("status") == "error" and
+                set(control) == {"message", "status"} and
+                isinstance(control.get("message"), str)):
+            raise CrossoverError(
+                "direct command owner rejected execution: " +
+                control["message"]
+            )
+        if (control.get("status") != "ok" or
+                set(control) != {"record", "status"} or
+                not isinstance(control.get("record"), dict)):
+            raise CrossoverError(
+                "direct command owner control is malformed"
+            )
+        record = control["record"]
+        if canonical_bytes(record.get("launcher_identity")) != canonical_bytes(
+                launcher_identity):
+            raise CrossoverError(
+                "direct command owner launcher identity changed"
+            )
+        return record
+    except BaseException:
+        if process is not None and process.poll() is None:
+            try:
+                if leader_identity is not None:
+                    cleanup_command_tree(
+                        process, containment_identity, True,
+                        leader_identity=leader_identity,
+                    )
+                else:
+                    process.kill()
+                    process.wait(timeout=1.0)
+            except Exception:
+                pass
+        raise
+    finally:
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        if control_drain is not None:
+            try:
+                control_drain.finish()
+            except BaseException as error:
+                cleanup_errors.append(("owner control drain", error))
+        if leader_identity is not None:
+            try:
+                close_retained_process(leader_identity)
+            except BaseException as error:
+                cleanup_errors.append(("retained owner", error))
+        for descriptor in (
+                containment_descriptor, containment_writer,
+                control_read, control_write,
+                launch_gate_read, launch_gate_write):
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    cleanup_errors.append(("owner transport descriptor", error))
+        if launcher is not None:
+            try:
+                close_runtime_launcher_snapshots(launcher)
+            except BaseException as error:
+                cleanup_errors.append(("runtime launcher", error))
+        if cleanup_errors:
+            detail = "; ".join(
+                "{} {}: {}".format(
+                    label, type(error).__name__, error
+                ) for label, error in cleanup_errors
+            )
+            if active_error is not None:
+                raise CrossoverError(
+                    "command owner failed: {}; cleanup also failed: {}".format(
+                        active_error, detail
+                    )
+                ) from active_error
+            raise CrossoverError(
+                "command owner cleanup failed: {}".format(detail)
+            )
+
+
+def controlled_avx2_configure_argv(cmake, ninja, source, build_root):
+    """Return the stable historical mode-0 configure command.
+
+    The default small-direct mode deliberately remains implicit.  Adding an
+    explicit ``-D...=0`` would make otherwise equivalent historical campaign
+    commands differ even though production compilation is unchanged.
+    """
+    return [
+        str(cmake),
+        "-S", str(source),
+        "-B", str(build_root),
+        "-G", "Ninja",
+        "-DCMAKE_MAKE_PROGRAM={}".format(ninja),
+        "-DCMAKE_BUILD_TYPE=Release",
+        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+        "-DLEO2_BACKEND_VARIANT=avx2",
+        "-DLEO2_BENCHMARK_GIT_EXECUTABLE=/usr/bin/git",
+        "-DLEO2_BUILD_BENCHMARKS=ON",
+        "-DLEO2_BUILD_TESTS=ON",
+        "-DLEO2_BUILD_FUZZERS=OFF",
+        "-DLEO2_ENABLE_CUDA=OFF",
+        "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
+        "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
+        "-DLEOPARD_ENABLE_GF8=ON",
+        "-DLEOPARD_ENABLE_GF16=ON",
+    ]
 
 
 def controlled_avx2_build(
         source, result_dir, source_state, parallel, validate_guard,
-        guard_identity):
+        guard_identity, inherited_lock_descriptor, result_root):
     if type(parallel) is not int or parallel <= 0 or parallel > 128:
         raise CrossoverError("controlled build parallelism is outside [1,128]")
     if not callable(validate_guard):
@@ -2239,25 +6402,57 @@ def controlled_avx2_build(
             "controlled build requires exact campaign guard identities"
         )
     validate_guard()
+    validate_owned_directory(result_root, "canonical result directory")
     build_root = result_dir / "controlled-build-avx2"
     record_path = result_dir / "controlled-build.json"
-    if build_root.exists() or record_path.exists():
-        if not build_root.is_dir() or not record_path.is_file():
+    try:
+        build_metadata_entry = os.stat(
+            "controlled-build-avx2", dir_fd=result_root["descriptor"],
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        build_metadata_entry = None
+    try:
+        record_metadata_entry = os.stat(
+            "controlled-build.json", dir_fd=result_root["descriptor"],
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        record_metadata_entry = None
+    if build_metadata_entry is not None or record_metadata_entry is not None:
+        if (build_metadata_entry is None or record_metadata_entry is None or
+                not stat.S_ISDIR(build_metadata_entry.st_mode) or
+                not stat.S_ISREG(record_metadata_entry.st_mode)):
             raise CrossoverError(
                 "controlled build is only partially retained; use a new "
                 "--result-dir"
             )
         try:
-            record_bytes = record_path.read_bytes()
+            record_bytes = read_result_regular(
+                result_root, "controlled-build.json",
+                MAX_RAW_JSON_BYTES, "controlled-build record",
+            )
             record = decode_json_bytes(record_bytes, str(record_path))
             executable = Path(record["executable"]).resolve()
+            try:
+                executable_relative = executable.relative_to(result_dir)
+            except ValueError:
+                raise CrossoverError(
+                    "controlled-build executable escapes its result directory"
+                )
+            executable_bytes = read_result_regular(
+                result_root, executable_relative,
+                MAX_RAW_JSON_BYTES, "controlled-build executable",
+                required_mode=0o755,
+            )
             metadata = cmake_build_metadata(executable)
         except (CrossoverError, KeyError, OSError, TypeError) as error:
             raise CrossoverError(
                 "cannot resume controlled AVX2 build: {}".format(error)
             )
         if (not isinstance(record, dict) or set(record) != {
-                "backend", "build_metadata", "build_root", "commands",
+                "backend", "build_metadata", "build_root", "build_tools",
+                "commands",
                 "executable", "executable_sha256", "guard_identity",
                 "schema", "source_identity"} or
                 record.get("schema") != CONTROLLED_BUILD_SCHEMA or
@@ -2270,10 +6465,35 @@ def controlled_avx2_build(
                 canonical_bytes(record.get("build_metadata")) !=
                 canonical_bytes(metadata) or
                 record.get("executable_sha256") !=
-                digest_bytes(executable.read_bytes())):
+                digest_bytes(executable_bytes)):
             raise CrossoverError(
                 "retained controlled AVX2 build differs from this campaign"
             )
+        build_tools = record.get("build_tools")
+        if (not isinstance(build_tools, dict) or
+                set(build_tools) != {"cmake", "ninja"}):
+            raise CrossoverError(
+                "retained controlled AVX2 build tool identity is invalid"
+            )
+        validate_current_executable_identity(
+            build_tools["cmake"], "retained controlled CMake"
+        )
+        validate_current_executable_identity(
+            build_tools["ninja"], "retained controlled Ninja"
+        )
+        for command_index, command in enumerate(record["commands"]):
+            for stream in ("stdout", "stderr"):
+                relative = command.get(stream + "_log")
+                value = read_result_regular(
+                    result_root, relative, MAX_RETAINED_LOG_BYTES,
+                    "controlled-build {} {} log".format(
+                        command_index, stream
+                    ),
+                )
+                if digest_bytes(value) != command.get(stream + "_sha256"):
+                    raise CrossoverError(
+                        "retained controlled-build log hash changed"
+                    )
         validate_build_source_binding(
             metadata, source, source_state, "avx2", require_fresh=True
         )
@@ -2289,50 +6509,146 @@ def controlled_avx2_build(
         raise CrossoverError(
             "controlled authoritative build requires /usr/bin cmake and ninja"
         )
+    # These same-UID launchers are snapshotted because they orchestrate every
+    # build command.  The compiler/linker paths and their effective flags are
+    # captured by the CMake/object/link attestation below; the campaign threat
+    # model treats their root-owned installation as the OS/toolchain trust
+    # boundary rather than recursively snapshotting the dynamic loader,
+    # shared libraries, assembler, and linker dependency closure.
     log_dir = result_dir / "build-logs"
-    log_dir.mkdir(parents=True, exist_ok=True)
-    configure = [
-        str(Path(cmake).resolve()),
-        "-S", str(source),
-        "-B", str(build_root),
-        "-G", "Ninja",
-        "-DCMAKE_BUILD_TYPE=Release",
-        "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-        "-DLEO2_BACKEND_VARIANT=avx2",
-        "-DLEO2_BENCHMARK_GIT_EXECUTABLE=/usr/bin/git",
-        "-DLEO2_BUILD_BENCHMARKS=ON",
-        "-DLEO2_BUILD_TESTS=ON",
-        "-DLEO2_BUILD_FUZZERS=OFF",
-        "-DLEO2_ENABLE_CUDA=OFF",
-        "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
-        "-DLEOPARD_ENABLE_GF8=ON",
-        "-DLEOPARD_ENABLE_GF16=ON",
-    ]
+    build_log_directory = open_result_directory(
+        result_root, "build-logs", "controlled-build log directory", True
+    )
+    close_owned_directory(build_log_directory)
+    cmake_procfd = str(
+        Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
+    )
+    ninja_procfd = str(
+        Path("/proc/self/fd") / str(CONTROLLED_NINJA_DESCRIPTOR)
+    )
+    configure = controlled_avx2_configure_argv(
+        cmake_procfd, ninja_procfd, source, build_root
+    )
     build = [
-        str(Path(cmake).resolve()), "--build", str(build_root),
+        cmake_procfd, "--build", str(build_root),
         "--target", "bench_leopard2_direct_encode",
         "--parallel", str(parallel),
     ]
     commands = []
-    for label, argv in (("configure", configure), ("build", build)):
-        validate_guard()
-        stdout_path = log_dir / (label + ".stdout.log")
-        stderr_path = log_dir / (label + ".stderr.log")
-        command = run_command(
-            argv, source, stdout_path, stderr_path, 1800,
-            dict(GIT_ENVIRONMENT)
+    cmake_snapshot = None
+    ninja_snapshot = None
+    try:
+        cmake_snapshot = open_exact_executable_snapshot(
+            Path(cmake).resolve(), "controlled CMake executable", True
         )
-        command["environment"] = dict(GIT_ENVIRONMENT)
-        command["stdout_log"] = str(stdout_path.relative_to(result_dir))
-        command["stderr_log"] = str(stderr_path.relative_to(result_dir))
-        commands.append(command)
-        validate_guard()
-        if command["returncode"] != 0 or command["timed_out"]:
+        ninja_snapshot = open_exact_executable_snapshot(
+            Path(ninja).resolve(), "controlled Ninja executable", True
+        )
+        build_tools = {
+            "cmake": sealed_snapshot_identity(cmake_snapshot),
+            "ninja": sealed_snapshot_identity(ninja_snapshot),
+        }
+    except BaseException as primary:
+        cleanup_errors = []
+        for snapshot in (ninja_snapshot, cmake_snapshot):
+            if snapshot is not None:
+                try:
+                    close_sealed_snapshot(snapshot)
+                except BaseException as error:
+                    cleanup_errors.append(error)
+        if cleanup_errors:
             raise CrossoverError(
-                "controlled AVX2 {} failed; see {} and {}".format(
-                    label, stdout_path, stderr_path
+                "controlled build tool snapshot failed: {}; cleanup also "
+                "failed: {}".format(
+                    primary,
+                    "; ".join(
+                        "{}: {}".format(type(error).__name__, error)
+                        for error in cleanup_errors
+                    ),
+                )
+            ) from primary
+        raise
+    build_primary = None
+    try:
+        for label, argv in (("configure", configure), ("build", build)):
+            validate_guard()
+            stdout_path = log_dir / (label + ".stdout.log")
+            stderr_path = log_dir / (label + ".stderr.log")
+            bound_stdout_path = (
+                Path("/proc/self/fd") / str(result_root["descriptor"]) /
+                stdout_path.relative_to(result_dir)
+            )
+            bound_stderr_path = (
+                Path("/proc/self/fd") / str(result_root["descriptor"]) /
+                stderr_path.relative_to(result_dir)
+            )
+            command = run_command(
+                argv, source, bound_stdout_path, bound_stderr_path, 1800,
+                dict(GIT_ENVIRONMENT),
+                inherited_lock_descriptor=inherited_lock_descriptor,
+                inherited_descriptors=(
+                    result_root["descriptor"],
+                    cmake_snapshot["descriptor"],
+                    ninja_snapshot["descriptor"],
+                ),
+                descriptor_remaps={
+                    CONTROLLED_CMAKE_DESCRIPTOR:
+                        cmake_snapshot["descriptor"],
+                    CONTROLLED_NINJA_DESCRIPTOR:
+                        ninja_snapshot["descriptor"],
+                },
+            )
+            command["environment"] = dict(GIT_ENVIRONMENT)
+            command["stdout_log"] = str(stdout_path.relative_to(result_dir))
+            command["stderr_log"] = str(stderr_path.relative_to(result_dir))
+            commands.append(command)
+            validate_guard()
+            validate_sealed_executable_snapshot(
+                cmake_snapshot, build_tools["cmake"]["sha256"],
+                "executed controlled CMake snapshot",
+            )
+            validate_sealed_executable_snapshot(
+                ninja_snapshot, build_tools["ninja"]["sha256"],
+                "executed controlled Ninja snapshot",
+            )
+            if command["returncode"] != 0 or command["timed_out"]:
+                raise CrossoverError(
+                    "controlled AVX2 {} failed; see {} and {}".format(
+                        label, stdout_path, stderr_path
+                    )
+                )
+    except BaseException as error:
+        build_primary = error
+    close_errors = []
+    for label, snapshot in (
+            ("Ninja", ninja_snapshot), ("CMake", cmake_snapshot)):
+        try:
+            close_sealed_snapshot(snapshot)
+        except BaseException as error:
+            close_errors.append((label, error))
+    if build_primary is not None:
+        if close_errors:
+            raise CrossoverError(
+                "controlled build failed: {}; tool teardown failed: {}".format(
+                    build_primary,
+                    "; ".join(
+                        "{} {}: {}".format(
+                            label, type(error).__name__, error
+                        ) for label, error in close_errors
+                    ),
+                )
+            ) from build_primary
+        raise build_primary
+    if close_errors:
+        raise CrossoverError(
+            "controlled build tool teardown failed: {}".format(
+                "; ".join(
+                    "{} {}: {}".format(
+                        label, type(error).__name__, error
+                    ) for label, error in close_errors
                 )
             )
+        )
     executable = (build_root / "bench_leopard2_direct_encode").resolve()
     if not executable.is_file() or not os.access(str(executable), os.X_OK):
         raise CrossoverError(
@@ -2343,18 +6659,29 @@ def controlled_avx2_build(
         metadata, source, source_state, "avx2", require_fresh=True
     )
     validate_guard()
+    executable_bytes = read_result_regular(
+        result_root, executable.relative_to(result_dir),
+        MAX_RAW_JSON_BYTES, "controlled-build executable",
+        required_mode=0o755,
+    )
     record = {
         "backend": "avx2",
         "build_metadata": metadata,
         "build_root": str(build_root.resolve()),
+        "build_tools": build_tools,
         "commands": commands,
         "executable": str(executable),
-        "executable_sha256": digest_bytes(executable.read_bytes()),
+        "executable_sha256": digest_bytes(executable_bytes),
         "guard_identity": guard_identity,
         "schema": CONTROLLED_BUILD_SCHEMA,
         "source_identity": source_state,
     }
-    atomic_write_json(record_path, record)
+    validate_owned_directory(result_root, "canonical result directory")
+    write_result_json(
+        result_root, "controlled-build.json", record,
+        "controlled-build record", replace=False,
+    )
+    validate_owned_directory(result_root, "canonical result directory")
     try:
         validate_guard()
     except Exception:
@@ -2363,7 +6690,10 @@ def controlled_avx2_build(
         except FileNotFoundError:
             pass
         raise
-    record_bytes = record_path.read_bytes()
+    record_bytes = read_result_regular(
+        result_root, "controlled-build.json", MAX_RAW_JSON_BYTES,
+        "controlled-build record",
+    )
     return executable, {
         "path": str(record_path.relative_to(result_dir)),
         "schema": CONTROLLED_BUILD_SCHEMA,
@@ -2541,7 +6871,11 @@ def validate_raw(raw, job, timed_mode, settings):
             BUILD_CONFIGURATION_FILE_SCHEMA or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
-            ) != attested_configuration_sha256):
+            ) != attested_configuration_sha256 or
+            any(entries.get(variable) !=
+                configuration_attestation["entries"].get(variable)
+                for variable in
+                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
         raise CrossoverError(
             "job effective CMake configuration differs from its cache binding"
         )
@@ -2704,16 +7038,16 @@ def validate_raw(raw, job, timed_mode, settings):
     return median_us, mad_us, parity_identity
 
 
-def validate_execution_inputs(job):
+def validate_execution_inputs(job, result_root=None):
     executable = Path(job["executable"])
     executable_artifact = job.get("executable_artifact")
     if executable_artifact is not None:
         validate_frozen_executable(
             executable_artifact, build_metadata=job["build_metadata"],
-            source_state=job["source_identity"]
+            source_state=job["source_identity"], result_root=result_root,
         )
-        if (executable.resolve() !=
-                Path(executable_artifact["executable"]).resolve() or
+        if ((Path(os.path.abspath(os.fspath(executable))) !=
+             Path(os.path.abspath(executable_artifact["executable"]))) or
                 job.get("executable_sha256") !=
                 executable_artifact["executable_sha256"]):
             raise CrossoverError(
@@ -2747,7 +7081,10 @@ def artifact_path(root, relative, description):
     return candidate
 
 
-def validate_job_artifacts(result_dir, result, expected_job, settings):
+def validate_job_artifacts(
+        result_dir, result, expected_job, settings, result_root):
+    validate_owned_directory(result_root, "canonical result directory")
+    result_dir = result_root["path"]
     if not isinstance(result, dict) or result.get("schema") != JOB_SCHEMA:
         raise CrossoverError("job result has a legacy or unknown schema")
     common_keys = {
@@ -2758,10 +7095,10 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
     }
     if result.get("status") != "passed":
         if set(result) != common_keys or result.get("status") != "failed":
-            raise CrossoverError("failed job result has an invalid v2 shape")
+            raise CrossoverError("failed job result has an invalid v6 shape")
         return
     if set(result) != common_keys | {"parity_identity", "summary"}:
-        raise CrossoverError("passed job result has an invalid v2 shape")
+        raise CrossoverError("passed job result has an invalid v6 shape")
     if result.get("reason") != "" or not isinstance(result.get("resumed"), bool):
         raise CrossoverError("passed job contains inconsistent status metadata")
     if settings.get("mode") in AUTHORITATIVE_COMMANDS:
@@ -2805,7 +7142,7 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
                     expected_job["job_id"], key
                 )
             )
-    validate_execution_inputs(expected_job)
+    validate_execution_inputs(expected_job, result_root)
     order = expected_job.get("invocation_order", [])
     commands = result.get("commands")
     measurements = result.get("measurements")
@@ -2826,9 +7163,11 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
     except (KeyError, TypeError, ValueError):
         raise CrossoverError("job build provenance omits the source root")
     command_keys = {
-        "argv", "cwd", "environment", "returncode", "stderr_log",
+        "argv", "cwd", "environment", "launcher_identity", "returncode",
+        "stderr_log",
         "stderr_sha256", "stdout_log", "stdout_sha256", "timed_out",
     }
+    expected_launcher_identity = current_runtime_launcher_identity()
     measurement_keys = {
         "benchmark_json", "benchmark_json_sha256", "mad_us", "median_us",
         "parity_identity", "sequence_index", "timed_mode",
@@ -2848,6 +7187,9 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
         raw_path = (
             result_dir / "raw" / expected_job["job_id"] / (label + ".json")
         ).resolve()
+        child_raw_path = (
+            Path("/proc/self/fd") / str(RAW_OUTPUT_DESCRIPTOR)
+        )
         expected_relative_raw = str(raw_path.relative_to(result_dir.resolve()))
         expected_environment = dict(BENCHMARK_ENVIRONMENT)
         expected_environment["LEO2_EXPECT_BACKEND"] = (
@@ -2860,8 +7202,11 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
                 measurement.get("sequence_index") != index or
                 measurement.get("timed_mode") != timed_mode or
                 command.get("argv") != benchmark_argv(
-                    expected_job, timed_mode, raw_path, settings
-                ) or command.get("cwd") != str(source) or
+                    expected_job, timed_mode, child_raw_path, settings
+                ) or canonical_bytes(
+                    command.get("launcher_identity")
+                ) != canonical_bytes(expected_launcher_identity) or
+                command.get("cwd") != str(source) or
                 command.get("environment") != expected_environment or
                 command.get("stdout_log") != label + ".stdout.log" or
                 command.get("stderr_log") != label + ".stderr.log" or
@@ -2875,20 +7220,17 @@ def validate_job_artifacts(result_dir, result, expected_job, settings):
             name = command.get(stream + "_log")
             if not isinstance(name, str) or Path(name).name != name:
                 raise CrossoverError("job log name is missing or unsafe")
-            path = artifact_path(log_root, name, stream + " log")
-            try:
-                value = path.read_bytes()
-            except OSError as error:
-                raise CrossoverError("cannot read {}: {}".format(path, error))
+            path = log_root / name
+            value = read_result_regular(
+                result_root, path.relative_to(result_dir),
+                MAX_RETAINED_LOG_BYTES, stream + " log"
+            )
             if digest_bytes(value) != command.get(stream + "_sha256"):
                 raise CrossoverError("{} hash does not match the job record".format(path))
-        raw_path = artifact_path(
-            result_dir, measurement["benchmark_json"], "benchmark JSON"
+        raw_bytes = read_result_regular(
+            result_root, raw_path.relative_to(result_dir),
+            MAX_RAW_JSON_BYTES, "benchmark JSON"
         )
-        try:
-            raw_bytes = raw_path.read_bytes()
-        except OSError as error:
-            raise CrossoverError("cannot read {}: {}".format(raw_path, error))
         raw = decode_json_bytes(raw_bytes, str(raw_path))
         if digest_bytes(raw_bytes) != measurement.get("benchmark_json_sha256"):
             raise CrossoverError("{} hash does not match the job record".format(raw_path))
@@ -3083,6 +7425,15 @@ def summarize_measurements(measurements):
 
 def run_job(job, context):
     isolation_context = context.get("isolation")
+    campaign_result_root = context.get("result_root")
+    if campaign_result_root is None:
+        result_root = owned_canonical_directory(
+            context["result_dir"], "job canonical result directory"
+        )
+    else:
+        result_root = duplicate_owned_directory(
+            campaign_result_root, "campaign canonical result directory"
+        )
 
     def validate_guards():
         if isolation_context is not None:
@@ -3092,29 +7443,51 @@ def run_job(job, context):
             )
 
     result_path = context["result_dir"] / "jobs" / (job["job_id"] + ".json")
-    if context["resume"] and result_path.is_file():
-        validate_guards()
+    if context["resume"]:
         try:
-            previous = decode_json_bytes(
-                result_path.read_bytes(), str(result_path)
-            )
-            if (not isinstance(previous, dict) or
-                    previous.get("schema") != JOB_SCHEMA):
-                raise CrossoverError("resume job has a legacy or unknown schema")
-            if (previous.get("configuration_id") == job["configuration_id"] and
-                    previous.get("status") == "passed"):
-                validate_job_artifacts(
-                    context["result_dir"], previous, job, context["settings"]
-                )
-                validate_guards()
-                return previous
-        except (CrossoverError, OSError):
             validate_guards()
+            try:
+                previous = decode_json_bytes(
+                    read_result_regular(
+                        result_root,
+                        result_path.relative_to(context["result_dir"]),
+                        MAX_RAW_JSON_BYTES, "resume job JSON"
+                    ),
+                    str(result_path)
+                )
+                if (not isinstance(previous, dict) or
+                        previous.get("schema") != JOB_SCHEMA):
+                    raise CrossoverError(
+                        "resume job has a legacy or unknown schema"
+                    )
+                if (previous.get("configuration_id") ==
+                        job["configuration_id"] and
+                        previous.get("status") == "passed"):
+                    validate_job_artifacts(
+                        context["result_dir"], previous, job,
+                        context["settings"], result_root,
+                    )
+                    validate_guards()
+                    close_owned_directory(result_root)
+                    return previous
+            except (CrossoverError, OSError):
+                validate_guards()
+        except BaseException as primary:
+            try:
+                close_owned_directory(result_root)
+            except BaseException as cleanup:
+                raise CrossoverError(
+                    "resume validation failed: {}; result-root cleanup "
+                    "failed: {}: {}".format(
+                        primary, type(cleanup).__name__, cleanup
+                    )
+                ) from primary
+            raise
 
-    log_dir = context["result_dir"] / "logs" / job["job_id"]
-    raw_dir = context["result_dir"] / "raw" / job["job_id"]
-    log_dir.mkdir(parents=True, exist_ok=True)
-    raw_dir.mkdir(parents=True, exist_ok=True)
+    log_relative = Path("logs") / job["job_id"]
+    raw_relative = Path("raw") / job["job_id"]
+    log_dir = context["result_dir"] / log_relative
+    raw_dir = context["result_dir"] / raw_relative
     result = {
         "build_metadata": job["build_metadata"],
         "cell": job["cell"],
@@ -3137,47 +7510,206 @@ def run_job(job, context):
     environment["LEO2_EXPECT_BACKEND"] = job["cell"]["backend"]
     parity_identities = set()
     isolation_before = None
-    if isolation_context is not None:
-        support = isolation_context["support"]
-        validate_guards()
-        isolation_before = {
-            "monotonic_ns": time.monotonic_ns(),
-            "benchmark_cpu": support.cpu_stat_snapshot(
-                isolation_context["cpu"]
-            ),
-            "reserved_sibling": support.cpu_stat_snapshot(
-                isolation_context["sibling"]
-            ),
-        }
+    execution_file = None
+    execution_snapshot = None
+    taskset_snapshot = None
+    log_directory = None
+    raw_directory = None
     try:
+        log_directory = open_result_directory(
+            result_root, log_relative, "job log directory", True
+        )
+        raw_directory = open_result_directory(
+            result_root, raw_relative, "job raw-output directory", True
+        )
+    except BaseException as primary:
+        cleanup_errors = []
+        for label, directory in (
+                ("raw directory", raw_directory),
+                ("log directory", log_directory),
+                ("result root", result_root)):
+            if directory is None:
+                continue
+            try:
+                close_owned_directory(directory)
+            except BaseException as cleanup:
+                cleanup_errors.append((label, cleanup))
+        if cleanup_errors:
+            raise CrossoverError(
+                "job directory setup failed: {}; cleanup: {}".format(
+                    primary,
+                    "; ".join(
+                        "{} {}: {}".format(
+                            label, type(error).__name__, error
+                        )
+                        for label, error in cleanup_errors
+                    ),
+                )
+            ) from primary
+        raise
+    unhandled_error = None
+    try:
+        if context["settings"].get("mode") in AUTHORITATIVE_COMMANDS:
+            taskset_snapshot = open_exact_executable_snapshot(
+                context["settings"]["taskset"],
+                "authoritative taskset executable", True,
+            )
+            if (taskset_snapshot["sha256"] !=
+                    context["settings"]["taskset_sha256"]):
+                raise CrossoverError(
+                    "authoritative taskset snapshot differs from settings"
+                )
+        if isolation_context is not None:
+            support = isolation_context["support"]
+            validate_guards()
+            isolation_before = {
+                "monotonic_ns": time.monotonic_ns(),
+                "benchmark_cpu": support.cpu_stat_snapshot(
+                    isolation_context["cpu"]
+                ),
+                "reserved_sibling": support.cpu_stat_snapshot(
+                    isolation_context["sibling"]
+                ),
+            }
+        if job.get("executable_artifact") is not None:
+            try:
+                executable_relative = Path(os.path.abspath(
+                    job["executable_artifact"]["executable"]
+                )).relative_to(result_root["path"])
+            except (KeyError, TypeError, ValueError):
+                raise CrossoverError(
+                    "frozen job executable escapes the held result root"
+                )
+            execution_file = open_result_regular_held(
+                result_root, executable_relative, MAX_RAW_JSON_BYTES,
+                "frozen job executable", 0o555,
+                directory_required_mode=0o555,
+            )
+            if digest_bytes(read_held_regular(
+                    execution_file, MAX_RAW_JSON_BYTES,
+                    "frozen job executable")) != job["executable_sha256"]:
+                raise CrossoverError(
+                    "frozen job executable descriptor hash is stale"
+                )
+            execution_snapshot = create_sealed_executable_snapshot(
+                read_held_regular(
+                    execution_file, MAX_RAW_JSON_BYTES,
+                    "frozen job executable",
+                ),
+                "frozen job executable",
+            )
+            validate_sealed_executable_snapshot(
+                execution_snapshot, job["executable_sha256"],
+                "frozen job executable snapshot",
+            )
+        # Failed jobs own these deterministic names.  Remove only verified
+        # regular files before retrying so partial evidence cannot make
+        # --resume permanently fail on exclusive log creation.
+        for index, timed_mode in enumerate(job["invocation_order"]):
+            label = "{:02d}-{}".format(index, timed_mode)
+            remove_stale_owned_file(
+                raw_directory, label + ".json", "benchmark JSON"
+            )
+            remove_stale_owned_file(
+                log_directory, label + ".stdout.log", "stdout log"
+            )
+            remove_stale_owned_file(
+                log_directory, label + ".stderr.log", "stderr log"
+            )
         for index, timed_mode in enumerate(job["invocation_order"]):
             validate_guards()
-            validate_execution_inputs(job)
+            validate_execution_inputs(job, result_root)
             label = "{:02d}-{}".format(index, timed_mode)
             raw_path = raw_dir / (label + ".json")
+            raw_file = open_exclusive_owned_file(
+                raw_directory, raw_path.name, "benchmark JSON"
+            )
             stdout_path = log_dir / (label + ".stdout.log")
             stderr_path = log_dir / (label + ".stderr.log")
             try:
-                raw_path.unlink()
-            except FileNotFoundError:
-                pass
-            argv = benchmark_argv(job, timed_mode, raw_path, context["settings"])
-            command = run_command(
-                argv, context["source"], stdout_path, stderr_path,
-                context["timeout"], environment
-            )
-            command["environment"] = dict(environment)
-            result["commands"].append(command)
-            validate_guards()
-            validate_execution_inputs(job)
-            if command["returncode"] != 0:
-                raise CrossoverError(
-                    "{} exited with status {}".format(label, command["returncode"])
+                child_raw_path = procfd_exact_path(
+                    raw_file, "benchmark JSON"
                 )
-            try:
-                raw_bytes = raw_path.read_bytes()
-            except OSError as error:
-                raise CrossoverError("cannot read {}: {}".format(raw_path, error))
+                argv = benchmark_argv(
+                    job, timed_mode, child_raw_path, context["settings"]
+                )
+                inherited_descriptors = [raw_file["descriptor"]]
+                descriptor_remaps = {
+                    RAW_OUTPUT_DESCRIPTOR: raw_file["descriptor"],
+                }
+                if execution_snapshot is not None:
+                    inherited_descriptors.append(
+                        execution_snapshot["descriptor"]
+                    )
+                    descriptor_remaps[EXECUTABLE_DESCRIPTOR] = (
+                        execution_snapshot["descriptor"]
+                    )
+                if taskset_snapshot is not None:
+                    inherited_descriptors.append(
+                        taskset_snapshot["descriptor"]
+                    )
+                    descriptor_remaps[TASKSET_EXECUTABLE_DESCRIPTOR] = (
+                        taskset_snapshot["descriptor"]
+                    )
+                bound_stdout_path = (
+                    Path("/proc/self/fd") /
+                    str(result_root["descriptor"]) /
+                    stdout_path.relative_to(context["result_dir"])
+                )
+                bound_stderr_path = (
+                    Path("/proc/self/fd") /
+                    str(result_root["descriptor"]) /
+                    stderr_path.relative_to(context["result_dir"])
+                )
+                inherited_descriptors.append(result_root["descriptor"])
+                command = run_command(
+                    argv, context["source"], bound_stdout_path,
+                    bound_stderr_path,
+                    context["timeout"], environment,
+                    inherited_lock_descriptor=(
+                        isolation_context["canonical_guard"].descriptor
+                        if isolation_context is not None else None
+                    ),
+                    inherited_descriptors=tuple(inherited_descriptors),
+                    descriptor_remaps=descriptor_remaps,
+                )
+                command["environment"] = dict(environment)
+                result["commands"].append(command)
+                validate_guards()
+                validate_execution_inputs(job, result_root)
+                if execution_snapshot is not None:
+                    validate_sealed_executable_snapshot(
+                        execution_snapshot, job["executable_sha256"],
+                        "executed frozen executable snapshot",
+                    )
+                if taskset_snapshot is not None:
+                    validate_sealed_executable_snapshot(
+                        taskset_snapshot,
+                        context["settings"]["taskset_sha256"],
+                        "executed taskset snapshot",
+                    )
+                if command["returncode"] != 0:
+                    raise CrossoverError(
+                        "{} exited with status {}".format(
+                            label, command["returncode"]
+                        )
+                    )
+                raw_bytes = read_held_regular(
+                    raw_file, MAX_RAW_JSON_BYTES, "benchmark JSON"
+                )
+            finally:
+                primary = sys.exc_info()[1]
+                try:
+                    close_log(raw_file)
+                except BaseException as cleanup:
+                    if primary is not None:
+                        raise CrossoverError(
+                            "job invocation failed: {}; raw-file cleanup "
+                            "also failed: {}: {}".format(
+                                primary, type(cleanup).__name__, cleanup
+                            )
+                        ) from primary
+                    raise
             raw = decode_json_bytes(raw_bytes, str(raw_path))
             median_us, mad_us, parity_identity = validate_raw(
                 raw, job, timed_mode, context["settings"]
@@ -3201,43 +7733,128 @@ def run_job(job, context):
         result["status"] = "passed"
     except (CrossoverError, OSError, ValueError) as error:
         result["reason"] = str(error)
-    finally:
-        if isolation_context is not None and isolation_before is not None:
-            try:
-                support = isolation_context["support"]
-                after_cpu = support.cpu_stat_snapshot(
-                    isolation_context["cpu"]
-                )
-                after_sibling = support.cpu_stat_snapshot(
-                    isolation_context["sibling"]
-                )
-                after_monotonic = time.monotonic_ns()
-                validate_guards()
-                result["isolation"] = support.isolation_record(
-                    isolation_context["cpu"],
-                    isolation_context["sibling"],
-                    isolation_context["pair_lease"],
-                    isolation_before["monotonic_ns"],
-                    after_monotonic,
-                    isolation_before["benchmark_cpu"],
-                    after_cpu,
-                    isolation_before["reserved_sibling"],
-                    after_sibling,
-                )
-                support.validate_isolation(
-                    result["isolation"],
-                    isolation_context["cpu"],
-                    isolation_context["sibling"],
-                    require_accepted=True,
-                )
-            except Exception as error:
+    except BaseException as error:
+        unhandled_error = error
+
+    teardown_errors = []
+    if isolation_context is not None and isolation_before is not None:
+        try:
+            support = isolation_context["support"]
+            after_cpu = support.cpu_stat_snapshot(
+                isolation_context["cpu"]
+            )
+            after_sibling = support.cpu_stat_snapshot(
+                isolation_context["sibling"]
+            )
+            after_monotonic = time.monotonic_ns()
+            validate_guards()
+            result["isolation"] = support.isolation_record(
+                isolation_context["cpu"],
+                isolation_context["sibling"],
+                isolation_context["pair_lease"],
+                isolation_before["monotonic_ns"],
+                after_monotonic,
+                isolation_before["benchmark_cpu"],
+                after_cpu,
+                isolation_before["reserved_sibling"],
+                after_sibling,
+            )
+            support.validate_isolation(
+                result["isolation"],
+                isolation_context["cpu"],
+                isolation_context["sibling"],
+                require_accepted=True,
+            )
+        except BaseException as error:
+            if isinstance(error, Exception):
                 result["status"] = "failed"
                 result["reason"] = (
                     result["reason"] + "; " if result["reason"] else ""
                 ) + "isolation validation failed: {}".format(error)
                 result.pop("parity_identity", None)
                 result.pop("summary", None)
-    atomic_write_json(result_path, result)
+            else:
+                teardown_errors.append(("isolation validation", error))
+    for label, cleanup in (
+            ("taskset snapshot",
+             (lambda: close_sealed_snapshot(taskset_snapshot))
+             if taskset_snapshot is not None else None),
+            ("executable snapshot",
+             (lambda: close_sealed_snapshot(execution_snapshot))
+             if execution_snapshot is not None else None),
+            ("frozen executable",
+             (lambda: close_log(execution_file))
+             if execution_file is not None else None),
+            ("raw directory",
+             (lambda: close_owned_directory(raw_directory))),
+            ("log directory",
+             (lambda: close_owned_directory(log_directory)))):
+        if cleanup is None:
+            continue
+        try:
+            cleanup()
+        except BaseException as error:
+            teardown_errors.append((label, error))
+    if unhandled_error is not None or teardown_errors:
+        try:
+            close_owned_directory(result_root)
+        except BaseException as error:
+            teardown_errors.append(("result root", error))
+    if unhandled_error is not None:
+        if teardown_errors:
+            raise CrossoverError(
+                "job execution raised {}: {}; teardown also failed: {}".format(
+                    type(unhandled_error).__name__, unhandled_error,
+                    "; ".join(
+                        "{} {}: {}".format(
+                            label, type(error).__name__, error
+                        )
+                        for label, error in teardown_errors
+                    ),
+                )
+            ) from unhandled_error
+        raise unhandled_error
+    if teardown_errors:
+        raise CrossoverError(
+            "job teardown failed{}: {}".format(
+                " after " + result["reason"] if result["reason"] else "",
+                "; ".join(
+                    "{} {}: {}".format(
+                        label, type(error).__name__, error
+                    )
+                    for label, error in teardown_errors
+                ),
+            )
+        )
+    publication_error = None
+    try:
+        validate_owned_directory(result_root, "canonical result directory")
+        write_result_json(
+            result_root, result_path.relative_to(context["result_dir"]),
+            result, "job result JSON", replace=True,
+        )
+        validate_owned_directory(result_root, "canonical result directory")
+    except BaseException as error:
+        publication_error = error
+    close_error = None
+    try:
+        close_owned_directory(result_root)
+    except BaseException as error:
+        close_error = error
+    if publication_error is not None:
+        if close_error is not None:
+            raise CrossoverError(
+                "job-result publication failed: {}; result-root close also "
+                "failed: {}: {}".format(
+                    publication_error, type(close_error).__name__, close_error
+                )
+            ) from publication_error
+        raise publication_error
+    if close_error is not None:
+        raise CrossoverError(
+            "job-result publication succeeded but result-root close failed: "
+            "{}".format(close_error)
+        ) from close_error
     return result
 
 
@@ -3409,13 +8026,14 @@ def validate_manifest_settings(settings, jobs, path):
         "timeout_seconds_per_invocation", "workers",
     }
     mode = settings.get("mode")
+    validate_supported_run_mode(mode, str(path))
     expected_keys = set(core_keys)
     if mode in AUTHORITATIVE_COMMANDS:
         expected_keys.add("isolation")
     if mode == "historical-avx2":
         expected_keys.update(("campaign", "controlled_build"))
     if set(settings) != expected_keys:
-        raise CrossoverError("{} has invalid v2 settings fields".format(path))
+        raise CrossoverError("{} has invalid v6 settings fields".format(path))
     benchmark = settings.get("benchmark")
     if (not isinstance(benchmark, dict) or
             set(benchmark) != {"batch", "iterations", "reuse", "warmups"}):
@@ -3430,8 +8048,6 @@ def validate_manifest_settings(settings, jobs, path):
         raise CrossoverError("{} has a zero execution setting".format(path))
     if not isinstance(settings.get("placement_policy"), str):
         raise CrossoverError("{} has invalid placement policy".format(path))
-    if mode not in ("screen",) + AUTHORITATIVE_COMMANDS:
-        raise CrossoverError("{} has an unknown runner mode".format(path))
     frozen = settings.get("frozen_executable_required")
     if type(frozen) is not bool or frozen != (mode in AUTHORITATIVE_COMMANDS):
         raise CrossoverError("{} has inconsistent frozen policy".format(path))
@@ -3550,27 +8166,23 @@ def validate_manifest_settings(settings, jobs, path):
             )
 
 
-def validate_controlled_build(settings, jobs, manifest_path):
+def validate_controlled_build_held(
+        settings, jobs, manifest_path, result_root):
     if settings.get("mode") != "historical-avx2":
         return
     descriptor = settings["controlled_build"]
-    result_dir = Path(manifest_path).resolve().parent
-    record_path = artifact_path(
-        result_dir, descriptor["path"], "controlled build record"
+    result_dir = result_root["path"]
+    record_path = result_dir / descriptor["path"]
+    record_bytes = read_result_regular(
+        result_root, descriptor["path"], MAX_RAW_JSON_BYTES,
+        "controlled build record",
     )
-    try:
-        record_bytes = record_path.read_bytes()
-    except OSError as error:
-        raise CrossoverError(
-            "cannot read controlled build record {}: {}".format(
-                record_path, error
-            )
-        )
     if digest_bytes(record_bytes) != descriptor["sha256"]:
         raise CrossoverError("controlled build record hash is stale")
     record = decode_json_bytes(record_bytes, str(record_path))
     expected_keys = {
-        "backend", "build_metadata", "build_root", "commands", "executable",
+        "backend", "build_metadata", "build_root", "build_tools", "commands",
+        "executable",
         "executable_sha256", "guard_identity", "schema", "source_identity",
     }
     if (not isinstance(record, dict) or set(record) != expected_keys or
@@ -3582,12 +8194,13 @@ def validate_controlled_build(settings, jobs, manifest_path):
     if (record.get("build_root") != str(build_root) or
             record.get("executable") != str(executable)):
         raise CrossoverError("controlled build paths differ from the campaign")
-    try:
-        executable_bytes = executable.read_bytes()
-    except OSError as error:
-        raise CrossoverError(
-            "cannot read controlled build executable: {}".format(error)
-        )
+    executable_bytes = read_result_regular(
+        result_root,
+        executable.relative_to(result_dir),
+        MAX_RAW_JSON_BYTES,
+        "controlled build executable",
+        required_mode=0o755,
+    )
     if (digest_bytes(executable_bytes) != record.get("executable_sha256") or
             not os.access(str(executable), os.X_OK)):
         raise CrossoverError("controlled build executable changed")
@@ -3608,11 +8221,24 @@ def validate_controlled_build(settings, jobs, manifest_path):
         raise CrossoverError(
             "controlled build guard identity differs from the campaign"
         )
+    build_tools = record.get("build_tools")
+    if (not isinstance(build_tools, dict) or
+            set(build_tools) != {"cmake", "ninja"}):
+        raise CrossoverError(
+            "controlled build tool identity is malformed"
+        )
+    validate_current_executable_identity(
+        build_tools["cmake"], "controlled CMake"
+    )
+    validate_current_executable_identity(
+        build_tools["ninja"], "controlled Ninja"
+    )
     commands = record.get("commands")
     if not isinstance(commands, list) or len(commands) != 2:
         raise CrossoverError("controlled build command sequence is incomplete")
     command_keys = {
-        "argv", "cwd", "environment", "returncode", "stderr_log",
+        "argv", "cwd", "environment", "launcher_identity", "returncode",
+        "stderr_log",
         "stderr_sha256", "stdout_log", "stdout_sha256", "timed_out",
     }
     if any(not isinstance(command, dict) or set(command) != command_keys or
@@ -3638,33 +8264,30 @@ def validate_controlled_build(settings, jobs, manifest_path):
         current_metadata, source, record["source_identity"], "avx2",
         require_fresh=True
     )
-    cmake = commands[0]["argv"][0]
-    if (not Path(cmake).is_absolute() or Path(cmake).name != "cmake" or
-            commands[1]["argv"][0] != cmake):
-        raise CrossoverError("controlled build did not use one absolute cmake")
+    cmake = str(
+        Path("/proc/self/fd") / str(CONTROLLED_CMAKE_DESCRIPTOR)
+    )
+    ninja = str(
+        Path("/proc/self/fd") / str(CONTROLLED_NINJA_DESCRIPTOR)
+    )
+    if commands[0]["argv"][0] != cmake or commands[1]["argv"][0] != cmake:
+        raise CrossoverError(
+            "controlled build did not use its sealed CMake descriptor"
+        )
     expected_argv = (
-        [
-            cmake, "-S", str(source), "-B", str(build_root), "-G", "Ninja",
-            "-DCMAKE_BUILD_TYPE=Release",
-            "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
-            "-DLEO2_BACKEND_VARIANT=avx2",
-            "-DLEO2_BENCHMARK_GIT_EXECUTABLE=/usr/bin/git",
-            "-DLEO2_BUILD_BENCHMARKS=ON",
-            "-DLEO2_BUILD_TESTS=ON",
-            "-DLEO2_BUILD_FUZZERS=OFF",
-            "-DLEO2_ENABLE_CUDA=OFF",
-            "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
-            "-DLEOPARD_ENABLE_GF8=ON",
-            "-DLEOPARD_ENABLE_GF16=ON",
-        ],
+        controlled_avx2_configure_argv(cmake, ninja, source, build_root),
         [
             cmake, "--build", str(build_root), "--target",
             "bench_leopard2_direct_encode", "--parallel",
             str(min(len(settings["isolation"]["housekeeping_cpu_set"]), 128)),
         ],
     )
+    expected_launcher_identity = current_runtime_launcher_identity()
     for index, command in enumerate(commands):
         if (command.get("argv") != expected_argv[index] or
+                canonical_bytes(
+                    command.get("launcher_identity")
+                ) != canonical_bytes(expected_launcher_identity) or
                 command.get("cwd") != str(source) or
                 command.get("environment") != GIT_ENVIRONMENT or
                 type(command.get("returncode")) is not int or
@@ -3674,21 +8297,36 @@ def validate_controlled_build(settings, jobs, manifest_path):
                 "controlled build command {} is invalid".format(index)
             )
         for stream in ("stdout", "stderr"):
-            log_path = artifact_path(
-                result_dir, command[stream + "_log"],
-                "controlled build {} log".format(stream)
+            log_path = result_dir / command[stream + "_log"]
+            value = read_result_regular(
+                result_root, command[stream + "_log"],
+                MAX_RETAINED_LOG_BYTES,
+                "controlled build {} log".format(stream),
             )
-            try:
-                value = log_path.read_bytes()
-            except OSError as error:
-                raise CrossoverError(
-                    "cannot read controlled build log: {}".format(error)
-                )
             if digest_bytes(value) != command[stream + "_sha256"]:
                 raise CrossoverError("controlled build log hash changed")
 
 
-def validate_manifest(manifest, path):
+def validate_controlled_build(
+        settings, jobs, manifest_path, result_root=None):
+    if settings.get("mode") != "historical-avx2":
+        return
+    owns_root = result_root is None
+    if result_root is None:
+        result_root = open_existing_canonical_directory(
+            Path(manifest_path).parent,
+            "controlled-build validation result directory",
+        )
+    try:
+        return validate_controlled_build_held(
+            settings, jobs, manifest_path, result_root
+        )
+    finally:
+        if owns_root:
+            close_owned_directory(result_root)
+
+
+def validate_manifest(manifest, path, result_root=None):
     expected_keys = {
         "configuration_id", "evidence_contract", "executables", "jobs",
         "machine", "schema", "settings", "source_fingerprint",
@@ -3705,7 +8343,7 @@ def validate_manifest(manifest, path):
     if (not isinstance(settings, dict) or not isinstance(jobs, list) or
             not jobs or not isinstance(executables, dict) or not executables or
             not isinstance(source_state, dict)):
-        raise CrossoverError("{} omits required v3 manifest fields".format(path))
+        raise CrossoverError("{} omits required v5 manifest fields".format(path))
     expected_job_keys = {
         "build_metadata", "cell", "configuration_id", "executable",
         "executable_artifact", "executable_sha256", "invocation_order",
@@ -3713,9 +8351,9 @@ def validate_manifest(manifest, path):
     }
     if any(not isinstance(job, dict) or set(job) != expected_job_keys
            for job in jobs):
-        raise CrossoverError("{} contains an invalid v3 job".format(path))
+        raise CrossoverError("{} contains an invalid v6 job".format(path))
     validate_manifest_settings(settings, jobs, path)
-    validate_controlled_build(settings, jobs, path)
+    validate_controlled_build(settings, jobs, path, result_root)
     contract = evidence_contract(settings.get("frozen_executable_required") is True)
     if canonical_bytes(manifest.get("evidence_contract")) != canonical_bytes(contract):
         raise CrossoverError("{} has a stale or relabeled evidence contract".format(path))
@@ -3730,7 +8368,7 @@ def validate_manifest(manifest, path):
     expected_executables = {}
     for job in jobs:
         if not isinstance(job, dict) or set(job) != expected_job_keys:
-            raise CrossoverError("{} contains an invalid v3 job".format(path))
+            raise CrossoverError("{} contains an invalid v6 job".format(path))
         validate_cell_value(job.get("cell"), "manifest job")
         identity = job_identity(
             job["cell"], job["executable"], job["executable_artifact"],
@@ -3755,7 +8393,8 @@ def validate_manifest(manifest, path):
             raise CrossoverError("{} has inconsistent frozen job policy".format(path))
         if frozen_required:
             validate_frozen_executable(
-                job["executable_artifact"], job["build_metadata"], source_state
+                job["executable_artifact"], job["build_metadata"], source_state,
+                result_root,
             )
         backend = job["cell"].get("backend")
         if backend not in expected_executables:
@@ -3778,39 +8417,80 @@ def validate_manifest(manifest, path):
     return manifest
 
 
-def load_manifest(result_dir):
-    path = result_dir / "manifest.json"
-    try:
-        manifest_bytes = path.read_bytes()
-    except OSError as error:
-        raise CrossoverError("cannot read {}: {}".format(path, error))
-    manifest = decode_json_bytes(manifest_bytes, str(path))
-    return validate_manifest(manifest, path)
-
-
-def require_compatible_result_dir(result_dir, manifest):
-    path = result_dir / "manifest.json"
-    if not path.exists():
-        job_dir = result_dir / "jobs"
-        if job_dir.is_dir() and any(job_dir.glob("*.json")):
-            raise CrossoverError(
-                "result directory has jobs but no manifest: {}".format(result_dir)
-            )
-        return
-    previous = load_manifest(result_dir)
-    if previous.get("configuration_id") != manifest.get("configuration_id"):
-        raise CrossoverError(
-            "result directory belongs to configuration {}; new configuration is {}; "
-            "select a new --result-dir rather than mixing jobs".format(
-                previous.get("configuration_id"), manifest.get("configuration_id")
-            )
+def load_manifest(result_dir, result_root=None):
+    owns_root = result_root is None
+    if result_root is None:
+        result_root = open_existing_canonical_directory(
+            result_dir, "manifest canonical result directory"
         )
+    path = result_root["path"] / "manifest.json"
+    try:
+        manifest_bytes = read_result_regular(
+            result_root, "manifest.json", MAX_RAW_JSON_BYTES,
+            "campaign manifest",
+        )
+        manifest = decode_json_bytes(manifest_bytes, str(path))
+        return validate_manifest(manifest, path, result_root)
+    finally:
+        if owns_root:
+            close_owned_directory(result_root)
 
 
-def load_job_results(result_dir, manifest):
-    job_dir = result_dir / "jobs"
-    if not job_dir.is_dir():
-        raise CrossoverError("job directory does not exist: {}".format(job_dir))
+def require_compatible_result_dir(
+        result_dir, manifest, result_root=None):
+    owns_root = result_root is None
+    if result_root is None:
+        result_root = owned_canonical_directory(
+            result_dir, "resume canonical result directory"
+        )
+    try:
+        try:
+            metadata = os.stat(
+                "manifest.json", dir_fd=result_root["descriptor"],
+                follow_symlinks=False,
+            )
+        except FileNotFoundError:
+            try:
+                names = list_result_regular_names(
+                    result_root, "jobs", ".json", "resume job directory"
+                )
+            except FileNotFoundError:
+                names = []
+            if names:
+                raise CrossoverError(
+                    "result directory has jobs but no manifest: {}".format(
+                        result_dir
+                    )
+                )
+            return
+        if (not stat.S_ISREG(metadata.st_mode) or
+                metadata.st_uid != os.getuid() or
+                metadata.st_nlink != 1 or
+                stat.S_IMODE(metadata.st_mode) != 0o600):
+            raise CrossoverError("retained manifest is unsafe")
+        previous = load_manifest(result_dir, result_root)
+        if previous.get("configuration_id") != manifest.get(
+                "configuration_id"):
+            raise CrossoverError(
+                "result directory belongs to configuration {}; new "
+                "configuration is {}; select a new --result-dir rather than "
+                "mixing jobs".format(
+                    previous.get("configuration_id"),
+                    manifest.get("configuration_id")
+                )
+            )
+    finally:
+        if owns_root:
+            close_owned_directory(result_root)
+
+
+def load_job_results(result_dir, manifest, result_root=None):
+    owns_root = result_root is None
+    if result_root is None:
+        result_root = open_existing_canonical_directory(
+            result_dir, "job-results canonical result directory"
+        )
+    job_dir = result_root["path"] / "jobs"
     expected = {}
     for job in manifest["jobs"]:
         job_id = job.get("job_id")
@@ -3818,7 +8498,19 @@ def load_job_results(result_dir, manifest):
         if not job_id or not configuration_id or job_id in expected:
             raise CrossoverError("manifest contains a duplicate or incomplete job")
         expected[job_id] = job
-    actual_paths = {path.stem: path for path in sorted(job_dir.glob("*.json"))}
+    try:
+        actual_names = list_result_regular_names(
+            result_root, "jobs", ".json", "job result directory"
+        )
+    except FileNotFoundError:
+        if owns_root:
+            close_owned_directory(result_root)
+        raise CrossoverError(
+            "job directory does not exist: {}".format(job_dir)
+        )
+    actual_paths = {
+        Path(name).stem: job_dir / name for name in actual_names
+    }
     missing = sorted(set(expected) - set(actual_paths))
     extra = sorted(set(actual_paths) - set(expected))
     if missing or extra:
@@ -3827,30 +8519,49 @@ def load_job_results(result_dir, manifest):
                 ",".join(missing) or "none", ",".join(extra) or "none"
             )
         )
-    results = []
-    for job_id in sorted(expected):
-        path = actual_paths[job_id]
-        try:
-            item_bytes = path.read_bytes()
-        except OSError as error:
-            raise CrossoverError("cannot read {}: {}".format(path, error))
-        item = decode_json_bytes(item_bytes, str(path))
-        if not isinstance(item, dict) or item.get("schema") != JOB_SCHEMA:
-            raise CrossoverError("{} has a legacy or unknown job schema".format(path))
-        if item.get("job_id") != job_id:
-            raise CrossoverError("{} contains the wrong job ID".format(path))
-        if item.get("configuration_id") != expected[job_id]["configuration_id"]:
-            raise CrossoverError("{} belongs to a stale configuration".format(path))
-        validate_job_artifacts(
-            result_dir, item, expected[job_id], manifest["settings"]
+    try:
+        results = []
+        for job_id in sorted(expected):
+            path = actual_paths[job_id]
+            item_bytes = read_result_regular(
+                result_root, Path("jobs") / path.name,
+                MAX_RAW_JSON_BYTES, "job result JSON",
+            )
+            item = decode_json_bytes(item_bytes, str(path))
+            if not isinstance(item, dict) or item.get("schema") != JOB_SCHEMA:
+                raise CrossoverError(
+                    "{} has a legacy or unknown job schema".format(path)
+                )
+            if item.get("job_id") != job_id:
+                raise CrossoverError(
+                    "{} contains the wrong job ID".format(path)
+                )
+            if item.get("configuration_id") != expected[job_id][
+                    "configuration_id"]:
+                raise CrossoverError(
+                    "{} belongs to a stale configuration".format(path)
+                )
+            validate_job_artifacts(
+                result_dir, item, expected[job_id],
+                manifest["settings"], result_root,
+            )
+            results.append(item)
+        final_names = list_result_regular_names(
+            result_root, "jobs", ".json", "job result directory"
         )
-        results.append(item)
-    return results
+        if final_names != actual_names:
+            raise CrossoverError(
+                "job result inventory changed while artifacts were validated"
+            )
+        return results
+    finally:
+        if owns_root:
+            close_owned_directory(result_root)
 
 
 def write_merged(
         result_dir, manifest, results, source_end, promotion_percent,
-        execution_input_error=""):
+        execution_input_error="", result_root=None):
     ordered = sorted(results, key=lambda item: item["job_id"])
     source_changed = source_end is not None and (
         canonical_bytes(source_end) !=
@@ -3873,40 +8584,82 @@ def write_merged(
         "source_fingerprint_after": source_end,
         "status": run_status,
     }
-    atomic_write_json(result_dir / "matrix.json", merged)
-    atomic_write_json(result_dir / "analysis.json", analysis)
+    if result_root is None:
+        atomic_write_json(result_dir / "matrix.json", merged)
+        atomic_write_json(result_dir / "analysis.json", analysis)
+    else:
+        write_result_json(
+            result_root, "matrix.json", merged, "merged matrix", replace=True
+        )
+        write_result_json(
+            result_root, "analysis.json", analysis,
+            "merged analysis", replace=True,
+        )
     return merged
 
 
-def invalidate_authoritative_result_dir(result_dir, reason):
+def invalidate_authoritative_result_dir_held(result_root, reason):
     """Ensure a failed authoritative guard can never leave retained PASS."""
-    result_dir = Path(result_dir).resolve()
+    result_dir = result_root["path"]
     job_dir = result_dir / "jobs"
     retained = {}
-    if job_dir.is_dir():
-        for path in sorted(job_dir.glob("*.json")):
-            value = decode_json_bytes(path.read_bytes(), str(path))
-            if (not isinstance(value, dict) or
-                    value.get("schema") != JOB_SCHEMA):
-                continue
-            if value.get("status") == "passed":
-                value.pop("parity_identity", None)
-                value.pop("summary", None)
-                value["status"] = "failed"
-                value["reason"] = (
-                    "authoritative guard validation failed: {}".format(reason)
-                )
-                atomic_write_json(path, value)
-            retained[value.get("job_id")] = value
+    try:
+        job_names = list_result_regular_names(
+            result_root, "jobs", ".json", "invalidation job directory"
+        )
+    except FileNotFoundError:
+        job_names = []
+    for name in job_names:
+        path = job_dir / name
+        value = decode_json_bytes(
+            read_result_regular(
+                result_root, Path("jobs") / name,
+                MAX_RAW_JSON_BYTES, "invalidation job JSON",
+            ),
+            str(path),
+        )
+        if (not isinstance(value, dict) or
+                value.get("schema") != JOB_SCHEMA):
+            continue
+        if value.get("status") == "passed":
+            value.pop("parity_identity", None)
+            value.pop("summary", None)
+            value["status"] = "failed"
+            value["reason"] = (
+                "authoritative guard validation failed: {}".format(reason)
+            )
+            write_result_json(
+                result_root, Path("jobs") / name, value,
+                "invalidated job result", replace=True,
+            )
+            validate_owned_directory(
+                result_root, "canonical result directory"
+            )
+        retained[value.get("job_id")] = value
 
     matrix_path = result_dir / "matrix.json"
     manifest_path = result_dir / "manifest.json"
-    if not matrix_path.is_file():
+    try:
+        matrix_metadata = os.stat(
+            "matrix.json", dir_fd=result_root["descriptor"],
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
         return
-    matrix = decode_json_bytes(matrix_path.read_bytes(), str(matrix_path))
+    if not stat.S_ISREG(matrix_metadata.st_mode):
+        raise CrossoverError("invalidation matrix is not a regular file")
+    matrix_bytes = read_result_regular(
+        result_root, "matrix.json", MAX_RAW_JSON_BYTES,
+        "invalidation matrix",
+    )
+    matrix = decode_json_bytes(matrix_bytes, str(matrix_path))
     try:
         manifest = decode_json_bytes(
-            manifest_path.read_bytes(), str(manifest_path)
+            read_result_regular(
+                result_root, "manifest.json", MAX_RAW_JSON_BYTES,
+                "invalidation manifest",
+            ),
+            str(manifest_path),
         )
         ordered = [retained[job["job_id"]] for job in manifest["jobs"]]
         promotion = required_finite_number(
@@ -3916,7 +8669,10 @@ def invalidate_authoritative_result_dir(result_dir, reason):
         write_merged(
             result_dir, manifest, ordered,
             matrix.get("source_fingerprint_after"), promotion,
-            matrix.get("execution_input_error") or ""
+            matrix.get("execution_input_error") or "", result_root,
+        )
+        validate_owned_directory(
+            result_root, "canonical result directory"
         )
     except Exception:
         # Even if older/partial artifacts cannot be recomputed, never leave a
@@ -3926,9 +8682,25 @@ def invalidate_authoritative_result_dir(result_dir, reason):
             analysis = matrix.get("analysis")
             if isinstance(analysis, dict):
                 analysis["run_status"] = "failed"
-            atomic_write_json(matrix_path, matrix)
+            write_result_json(
+                result_root, "matrix.json", matrix,
+                "invalidated matrix", replace=True,
+            )
             if isinstance(analysis, dict):
-                atomic_write_json(result_dir / "analysis.json", analysis)
+                write_result_json(
+                    result_root, "analysis.json", analysis,
+                    "invalidated analysis", replace=True,
+                )
+
+
+def invalidate_authoritative_result_dir(result_dir, reason):
+    result_root = open_existing_canonical_directory(
+        result_dir, "invalidation canonical result directory"
+    )
+    try:
+        return invalidate_authoritative_result_dir_held(result_root, reason)
+    finally:
+        close_owned_directory(result_root)
 
 
 def print_analysis(analysis):
@@ -3974,7 +8746,24 @@ def resolve_path(source, value):
     return path.resolve() if path.is_absolute() else (source / path).resolve()
 
 
+def validate_supported_run_mode(command, context):
+    """Reject modes that cannot prove their claimed build closure."""
+    if command == UNPROVED_PINNED_COMMAND:
+        raise CrossoverError(
+            "{}: generic pinned mode is disabled because an externally built "
+            "bench_leopard2_direct_encode has no runner-owned clean-rebuild "
+            "source/object/archive/link proof; use screen for diagnostics or "
+            "historical-avx2 for authoritative evidence".format(context)
+        )
+    if command not in RUN_COMMANDS:
+        raise CrossoverError("{} has an unknown runner mode".format(context))
+
+
 def run_matrix(arguments):
+    # This must precede topology, lock, source, and artifact handling.  In
+    # particular, touching an executable linked from stale objects must never
+    # turn the old generic pinned path into authoritative evidence.
+    validate_supported_run_mode(arguments.command, "runner")
     if arguments.command not in AUTHORITATIVE_COMMANDS:
         return run_matrix_body(arguments, None)
     if arguments.cpu is None or arguments.sibling is None:
@@ -4044,12 +8833,14 @@ def run_matrix(arguments):
         )
 
 
-def run_matrix_body(arguments, isolation):
+def run_matrix_body_held(arguments, isolation, result_root):
+    # Defense in depth for tests or callers that invoke the body directly.
+    validate_supported_run_mode(arguments.command, "runner")
     source = Path(arguments.source).resolve()
     executable_root = resolve_path(
         source, arguments.executable_root or arguments.build_root
     )
-    result_dir = resolve_path(source, arguments.result_dir)
+    result_dir = result_root["path"]
     backends = parse_backends(arguments.backends)
     authoritative = arguments.command in AUTHORITATIVE_COMMANDS
 
@@ -4102,7 +8893,9 @@ def run_matrix_body(arguments, isolation):
             {
                 "canonical_lock": isolation["canonical_lock"],
                 "pair_lease": isolation["pair_lease"],
-            }
+            },
+            isolation["canonical_guard"].descriptor,
+            result_root,
         )
         validate_campaign_guards()
         executables = {"avx2": executable}
@@ -4172,7 +8965,7 @@ def run_matrix_body(arguments, isolation):
             validate_campaign_guards()
             artifact = freeze_executable(
                 result_dir, backend, executables[backend],
-                build_metadata[backend], source_state
+                build_metadata[backend], source_state, result_root
             )
             validate_campaign_guards()
             executable_artifacts[backend] = artifact
@@ -4205,10 +8998,28 @@ def run_matrix_body(arguments, isolation):
         "source_fingerprint": source_state,
     }
     manifest["configuration_id"] = digest_value(manifest_identity(manifest))
-    validate_manifest(manifest, result_dir / "manifest.json")
-    require_compatible_result_dir(result_dir, manifest)
+    validate_manifest(
+        manifest, result_dir / "manifest.json", result_root
+    )
+    require_compatible_result_dir(result_dir, manifest, result_root)
     validate_campaign_guards()
-    atomic_write_json(result_dir / "manifest.json", manifest)
+    validate_owned_directory(result_root, "canonical result directory")
+    try:
+        os.stat(
+            "manifest.json", dir_fd=result_root["descriptor"],
+            follow_symlinks=False,
+        )
+    except FileNotFoundError:
+        write_result_json(
+            result_root, "manifest.json", manifest,
+            "campaign manifest", replace=False,
+        )
+    else:
+        # require_compatible_result_dir already parsed and validated this exact
+        # retained manifest.  Keeping it avoids a crash window in which jobs
+        # could outlive a needlessly replaced manifest.
+        load_manifest(result_dir, result_root)
+    validate_owned_directory(result_root, "canonical result directory")
     if isolation is not None:
         isolation["campaign_state"]["evidence_started"] = True
     validate_campaign_guards()
@@ -4222,6 +9033,7 @@ def run_matrix_body(arguments, isolation):
     context = {
         "isolation": isolation,
         "result_dir": result_dir,
+        "result_root": result_root,
         "resume": not arguments.no_resume,
         "settings": settings,
         "source": source,
@@ -4248,14 +9060,15 @@ def run_matrix_body(arguments, isolation):
             key = (job["executable"], job["executable_sha256"])
             if key not in checked:
                 checked.add(key)
-                validate_execution_inputs(job)
+                validate_execution_inputs(job, result_root)
     except CrossoverError as error:
         execution_input_error = str(error)
     validate_campaign_guards()
     merged = write_merged(
         result_dir, manifest, results, source_end, arguments.promotion_percent,
-        execution_input_error
+        execution_input_error, result_root
     )
+    validate_owned_directory(result_root, "canonical result directory")
     validate_campaign_guards()
     print_analysis(merged["analysis"])
     promotion_passed = merged["analysis"]["candidate"][
@@ -4274,13 +9087,31 @@ def run_matrix_body(arguments, isolation):
     return 0
 
 
-def analyze_command(arguments):
-    result_dir = Path(arguments.result_dir).resolve()
-    manifest = load_manifest(result_dir)
-    results = load_job_results(result_dir, manifest)
+def run_matrix_body(arguments, isolation):
+    source = Path(arguments.source).resolve()
+    result_dir = resolve_path(source, arguments.result_dir)
+    result_root = owned_canonical_directory(
+        result_dir, "run canonical result directory"
+    )
+    try:
+        return run_matrix_body_held(arguments, isolation, result_root)
+    finally:
+        close_owned_directory(result_root)
+
+
+def analyze_command_held(arguments, result_root):
+    result_dir = result_root["path"]
+    manifest = load_manifest(result_dir, result_root)
+    results = load_job_results(result_dir, manifest, result_root)
     matrix_path = result_dir / "matrix.json"
     try:
-        matrix = decode_json_bytes(matrix_path.read_bytes(), str(matrix_path))
+        matrix = decode_json_bytes(
+            read_result_regular(
+                result_root, "matrix.json", MAX_RAW_JSON_BYTES,
+                "completed matrix",
+            ),
+            str(matrix_path),
+        )
     except (CrossoverError, OSError) as error:
         raise CrossoverError("cannot read completed matrix {}: {}".format(
             matrix_path, error
@@ -4323,7 +9154,7 @@ def analyze_command(arguments):
             key = (job["executable"], job["executable_sha256"])
             if key not in checked:
                 checked.add(key)
-                validate_execution_inputs(job)
+                validate_execution_inputs(job, result_root)
     except CrossoverError as error:
         execution_input_error = str(error)
     retained_input_error = matrix.get("execution_input_error")
@@ -4356,7 +9187,17 @@ def analyze_command(arguments):
         run_status, source_changed, execution_input_error or None
     )
     output = Path(arguments.output).resolve() if arguments.output else result_dir / "analysis.json"
-    atomic_write_json(output, analysis)
+    validate_owned_directory(result_root, "canonical result directory")
+    try:
+        output_relative = output.relative_to(result_dir)
+    except ValueError:
+        atomic_write_json(output, analysis)
+    else:
+        write_result_json(
+            result_root, output_relative, analysis,
+            "reanalyzed output", replace=True,
+        )
+    validate_owned_directory(result_root, "canonical result directory")
     print_analysis(analysis)
     print("analysis: {}".format(output))
     if analysis["jobs_failed"] != 0 or run_status != "passed":
@@ -4366,6 +9207,17 @@ def analyze_command(arguments):
                 "all_cells_confidently_meet_promotion_threshold"]):
         return 2
     return 0
+
+
+def analyze_command(arguments):
+    result_root = open_existing_canonical_directory(
+        Path(arguments.result_dir),
+        "analyze canonical result directory",
+    )
+    try:
+        return analyze_command_held(arguments, result_root)
+    finally:
+        close_owned_directory(result_root)
 
 
 def self_test():
@@ -4422,7 +9274,9 @@ def self_test():
             else:
                 os.environ["PATH"] = old_path
         check(
-            canonical_bytes(shim_state) == canonical_bytes(repository_state),
+            canonical_bytes(shim_state["git_tool"]) ==
+            canonical_bytes(repository_state["git_tool"]) and
+            shim_state["git_tool"]["path"] == str(CANONICAL_GIT),
             "source identity ignored the canonical absolute Git executable"
         )
     repository_gitlink = repository_state["files"].get("sse2neon")
@@ -4461,10 +9315,86 @@ def self_test():
     check(parse_r_values("all") == list(range(1, 17)), "all-R expansion")
     check(requested_indices("0,2-3", 4) == [0, 2, 3],
           "parity-mask expansion")
-    check(invocation_order("pinned", "00000000", 2) == (
+    check(invocation_order("historical-avx2", "00000000", 2) == (
         "direct", "transform", "transform", "direct",
         "direct", "transform", "transform", "direct",
-    ), "pinned ABBA order")
+    ), "historical authoritative ABBA order")
+    with tempfile.TemporaryDirectory(
+            prefix="leo2-crossover-stale-pinned-") as stale_directory:
+        stale_root = Path(stale_directory) / "avx2"
+        stale_object = (
+            stale_root / "CMakeFiles" / "leopard_test_hooks.dir" /
+            "leopard2.cpp.o"
+        )
+        stale_archive = stale_root / "libleopard_test_hooks.a"
+        touched_executable = stale_root / "bench_leopard2_direct_encode"
+        stale_object.parent.mkdir(parents=True)
+        stale_object.write_bytes(b"stale object")
+        stale_archive.write_bytes(b"archive containing stale object")
+        touched_executable.write_bytes(b"recently relinked-looking executable")
+        touched_executable.chmod(0o755)
+        now_ns = time.time_ns()
+        stale_ns = now_ns - 10_000_000_000
+        os.utime(stale_object, ns=(stale_ns, stale_ns))
+        os.utime(stale_archive, ns=(stale_ns + 1, stale_ns + 1))
+        os.utime(touched_executable, ns=(now_ns, now_ns))
+        check(
+            touched_executable.stat().st_mtime_ns >
+                stale_archive.stat().st_mtime_ns,
+            "adversarial executable appears newer than stale link inputs"
+        )
+        stale_pinned_arguments = parser().parse_args([
+            "pinned",
+            "--source", str(repository),
+            "--executable-root", str(Path(stale_directory)),
+            "--backends", "avx2",
+            "--cpu", "0",
+            "--sibling", "1",
+        ])
+        try:
+            run_matrix(stale_pinned_arguments)
+        except CrossoverError as error:
+            rejection = str(error)
+            check(
+                "generic pinned mode is disabled" in rejection and
+                "source/object/archive/link proof" in rejection,
+                "stale/touched pinned artifact is rejected for unproved closure"
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: stale/touched pinned artifact was accepted"
+            )
+        try:
+            validate_manifest_settings(
+                {"mode": "pinned"}, [], Path(stale_directory) / "manifest.json"
+            )
+        except CrossoverError as error:
+            check(
+                "generic pinned mode is disabled" in str(error),
+                "retained pinned manifest is rejected for unproved closure"
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: retained pinned manifest was accepted"
+            )
+    mode_zero_configure = controlled_avx2_configure_argv(
+        "/usr/bin/cmake", "/usr/bin/ninja",
+        "/self-test/source", "/self-test/build"
+    )
+    check(
+        not any(
+            argument.startswith(
+                "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+            )
+            for argument in mode_zero_configure
+        ),
+        "historical mode-0 configure command remains implicit"
+    )
+    check(
+        mode_zero_configure[0] == "/usr/bin/cmake" and
+        "-DCMAKE_MAKE_PROGRAM=/usr/bin/ninja" in mode_zero_configure,
+        "controlled configure binds the selected CMake and Ninja launchers"
+    )
 
     historical = historical_avx2_grid()
     exact = [
@@ -4502,7 +9432,9 @@ def self_test():
         "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
         "LEO2_BUILD_BENCHMARKS": "ON",
         "LEO2_BUILD_TESTS": "ON",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
     self_test_digest = build_configuration_digest(
         self_test_effective_entries
@@ -4535,28 +9467,63 @@ def self_test():
                 self_test_effective_entries,
             "effective configuration comes from the exact CMake sidecar"
         )
+        mode_digests = {}
+        for mode in ("0", "1", "2"):
+            mode_entries = dict(self_test_effective_entries)
+            mode_entries["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] = mode
+            mode_digest = build_configuration_digest(mode_entries)
+            mode_material = "".join(
+                "{}={}\n".format(variable, mode_entries[variable])
+                for variable in BUILD_CONFIGURATION_VARIABLES
+            )
+            configuration_path.write_text(
+                "schema={}\nsha256={}\n{}".format(
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                    mode_digest,
+                    mode_material
+                ),
+                encoding="utf-8"
+            )
+            mode_attestation = read_build_configuration_attestation(
+                configuration_path
+            )
+            check(
+                mode_attestation["entries"][
+                    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] == mode and
+                mode_attestation["sha256"] == mode_digest,
+                "small-direct mode {} sidecar round-trip".format(mode)
+            )
+            mode_digests[mode] = mode_digest
+        check(
+            len(set(mode_digests.values())) == 3,
+            "small-direct mode sidecars have distinct digests"
+        )
         separator_entries = dict(self_test_effective_entries)
         separator_entries["CMAKE_CXX_FLAGS"] += "\u2028preserved"
-        separator_digest = build_configuration_digest(separator_entries)
-        separator_material = "".join(
-            "{}={}\n".format(variable, separator_entries[variable])
-            for variable in BUILD_CONFIGURATION_VARIABLES
-        )
-        configuration_path.write_text(
-            "schema={}\nsha256={}\n{}".format(
-                BUILD_CONFIGURATION_FILE_SCHEMA,
-                separator_digest,
-                separator_material
-            ),
-            encoding="utf-8"
-        )
-        separator_attestation = read_build_configuration_attestation(
-            configuration_path
-        )
-        check(
-            separator_attestation["entries"] == separator_entries,
-            "non-LF Unicode separators survive sidecar round-trip"
-        )
+        try:
+            build_configuration_digest(separator_entries)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: U+2028 line separator was blessed in "
+                "attested text"
+            )
+        for category, character in (
+                ("Cc", "\t"), ("Cf", "\u2066"),
+                ("Zl", "\u2028"), ("Zp", "\u2029")):
+            try:
+                attested_text(
+                    "prefix" + character + "suffix",
+                    "self-test Unicode category " + category,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: Unicode category {} was accepted in "
+                    "attested text".format(category)
+                )
 
         def reject_configuration_file(name, contents):
             configuration_path.write_text(contents, encoding="utf-8")
@@ -4590,6 +9557,24 @@ def self_test():
             "missing variable",
             valid_configuration.replace(
                 "LEO2_BUILD_TESTS=ON\n", "", 1
+            )
+        )
+        reject_configuration_file(
+            "missing small-direct mode",
+            valid_configuration.replace(
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n", "", 1
+            )
+        )
+        reject_configuration_file(
+            "duplicate small-direct mode",
+            valid_configuration +
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n"
+        )
+        reject_configuration_file(
+            "forged small-direct mode",
+            valid_configuration.replace(
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=3\n", 1
             )
         )
         reject_configuration_file(
@@ -4636,6 +9621,19 @@ def self_test():
                     "self-test failed: {} in-memory attestation value was "
                     "accepted".format(label)
                 )
+        for invalid_mode in ("", "3", "01", "ON", "1\n2", "1\r2"):
+            invalid_entries = dict(self_test_effective_entries)
+            invalid_entries[
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] = invalid_mode
+            try:
+                build_configuration_digest(invalid_entries)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: forged small-direct mode {!r} was "
+                    "accepted".format(invalid_mode)
+                )
 
         for label, invalid_path in (
                 ("NUL sidecar path", "/self-test/\0configuration.txt"),
@@ -4671,10 +9669,14 @@ def self_test():
         "CMAKE_BUILD_TYPE",
         "CMAKE_CXX_COMPILER",
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
     )
     valid_cache = (
         "CMAKE_BUILD_TYPE:STRING=Release\n"
         "CMAKE_CXX_COMPILER:STRING=/usr/bin/clang++-18\n"
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL=OFF\n"
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING=0\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL={}\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256:INTERNAL={}\n"
     ).format(BUILD_CONFIGURATION_FILE_SCHEMA, self_test_digest).encode("utf-8")
@@ -4684,6 +9686,8 @@ def self_test():
     check(
         parsed_cache["CMAKE_BUILD_TYPE"] == "Release" and
         parsed_cache["CMAKE_CXX_COMPILER"] == "/usr/bin/clang++-18" and
+        parsed_cache["LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"] == "OFF" and
+        parsed_cache["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] == "0" and
         parsed_cache[
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
         ] == self_test_digest,
@@ -4817,7 +9821,9 @@ def self_test():
                 "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
                 "LEO2_BUILD_BENCHMARKS": "ON",
                 "LEO2_BUILD_TESTS": "ON",
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
                 "CMAKE_HOME_DIRECTORY": "/self-test/source",
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                     BUILD_CONFIGURATION_FILE_SCHEMA,
@@ -4945,6 +9951,17 @@ def self_test():
             raise CrossoverError(
                 "self-test failed: {} JSON was accepted".format(label)
             )
+    try:
+        decode_json_bytes(
+            b"[" * 10000 + b"0" + b"]" * 10000,
+            "self-test deeply nested JSON"
+        )
+    except CrossoverError:
+        pass
+    else:
+        raise CrossoverError(
+            "self-test failed: deeply nested JSON was accepted"
+        )
 
     def reject_raw_mutation(name, mutator):
         changed = json.loads(json.dumps(raw_fixture))
@@ -5001,6 +10018,24 @@ def self_test():
         "mutated cache digest binding",
         lambda value: value["build_metadata"]["entries"].update({
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "b" * 64
+        })
+    )
+    reject_job_mutation(
+        "small-direct mode cache mismatch",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "1"
+        })
+    )
+    reject_job_mutation(
+        "direct-source-plan cache mismatch",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "ON"
+        })
+    )
+    reject_job_mutation(
+        "high-direct-encode cache mismatch",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "ON"
         })
     )
     reject_job_mutation(
@@ -5246,6 +10281,1120 @@ def self_test():
         atomic_write_json(path, {"z": [3, 2, 1], "a": "stable"})
         check(json.loads(path.read_text(encoding="utf-8"))["a"] == "stable",
               "atomic JSON output")
+        atomic_victim = root / "atomic-victim"
+        atomic_victim.mkdir()
+        redirected_parent = root / "redirected-parent"
+        redirected_parent.symlink_to(atomic_victim.name)
+        try:
+            atomic_write_json(
+                redirected_parent / "manifest.json", {"unsafe": True}
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: atomic JSON followed a parent symlink"
+            )
+        check(
+            not (atomic_victim / "manifest.json").exists(),
+            "atomic JSON parent symlink victim is untouched"
+        )
+        race_parent = root / "raced-parent"
+        race_parent.mkdir(mode=0o700)
+        race_leaf = race_parent / "leaf"
+        race_leaf.mkdir(mode=0o700)
+        race_target = root / "raced-target"
+        race_target.mkdir(mode=0o700)
+        (race_target / "leaf").mkdir(mode=0o700)
+        race_saved = root / "raced-parent-saved"
+        original_os_open = os.open
+        raced_component = [False]
+
+        def race_intermediate_component(path_value, flags, *values, **options):
+            if (not raced_component[0] and path_value == race_parent.name and
+                    options.get("dir_fd") is not None):
+                raced_component[0] = True
+                race_parent.rename(race_saved)
+                race_parent.symlink_to(
+                    race_target.name, target_is_directory=True
+                )
+            return original_os_open(path_value, flags, *values, **options)
+
+        try:
+            os.open = race_intermediate_component
+            try:
+                owned_canonical_directory(
+                    race_leaf, "self-test raced directory"
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: raced intermediate symlink was followed"
+                )
+        finally:
+            os.open = original_os_open
+        check(
+            raced_component[0],
+            "componentwise directory race fixture executed",
+        )
+
+        class InjectedAbort(BaseException):
+            pass
+
+        def descriptor_closed(descriptor):
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                return error.errno == errno.EBADF
+            return False
+
+        def source_line_number(function, fragment):
+            lines, first_line = inspect.getsourcelines(function)
+            matches = [
+                first_line + index for index, line in enumerate(lines)
+                if line.strip() == fragment
+            ]
+            if len(matches) != 1:
+                raise CrossoverError(
+                    "self-test cannot locate unique {!r} in {}".format(
+                        fragment, function.__name__
+                    )
+                )
+            return matches[0]
+
+        def run_trace_abort(function, predicate, invocation, description):
+            triggered = [False]
+
+            def abort_trace(frame, event, unused_argument):
+                if (not triggered[0] and event == "line" and
+                        frame.f_code is function.__code__ and
+                        predicate(frame)):
+                    triggered[0] = True
+                    raise InjectedAbort(description)
+                return abort_trace
+
+            previous_trace = sys.gettrace()
+            try:
+                sys.settrace(abort_trace)
+                try:
+                    invocation()
+                except InjectedAbort:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} was ignored".format(description)
+                    )
+            finally:
+                sys.settrace(previous_trace)
+            check(
+                triggered[0],
+                "{} trace fixture executed".format(description),
+            )
+
+        sealed_transfer_descriptors = []
+        sealed_return_line = source_line_number(
+            create_sealed_executable_snapshot, "return result"
+        )
+
+        def abort_sealed_return(frame):
+            if frame.f_lineno != sealed_return_line:
+                return False
+            sealed_transfer_descriptors.append(
+                frame.f_locals["result"]["descriptor"]
+            )
+            return True
+
+        run_trace_abort(
+            create_sealed_executable_snapshot, abort_sealed_return,
+            lambda: create_sealed_executable_snapshot(
+                b"#!/bin/sh\nexit 0\n",
+                "self-test interrupted sealed snapshot",
+            ),
+            "sealed-snapshot return BaseException",
+        )
+        check(
+            len(sealed_transfer_descriptors) == 1 and
+            descriptor_closed(sealed_transfer_descriptors[0]),
+            "sealed-snapshot return interruption closes its retained FD",
+        )
+
+        caller_context_snapshot = None
+        try:
+            raise RuntimeError("self-test active caller exception")
+        except RuntimeError:
+            caller_context_snapshot = create_sealed_executable_snapshot(
+                b"#!/bin/sh\nexit 0\n",
+                "self-test caller-exception snapshot",
+            )
+        try:
+            check(
+                not descriptor_closed(
+                    caller_context_snapshot["descriptor"]
+                ) and
+                validate_sealed_executable_snapshot(
+                    caller_context_snapshot,
+                    caller_context_snapshot["sha256"],
+                    "self-test caller-exception snapshot",
+                ) == b"#!/bin/sh\nexit 0\n",
+                "a caller's actively handled exception does not revoke a "
+                "successful descriptor transfer",
+            )
+        finally:
+            close_sealed_snapshot(caller_context_snapshot)
+
+        exact_executable_path = root / "return-interrupt-executable"
+        exact_executable_path.write_bytes(b"#!/bin/sh\nexit 0\n")
+        exact_executable_path.chmod(0o755)
+        exact_snapshot_descriptors = []
+        exact_return_line = source_line_number(
+            open_exact_executable_snapshot, "return snapshot"
+        )
+
+        def abort_exact_snapshot_return(frame):
+            if frame.f_lineno != exact_return_line:
+                return False
+            exact_snapshot_descriptors.append(
+                frame.f_locals["snapshot"]["descriptor"]
+            )
+            return True
+
+        run_trace_abort(
+            open_exact_executable_snapshot, abort_exact_snapshot_return,
+            lambda: open_exact_executable_snapshot(
+                exact_executable_path,
+                "self-test interrupted exact executable",
+            ),
+            "exact-executable return BaseException",
+        )
+        check(
+            len(exact_snapshot_descriptors) == 1 and
+            descriptor_closed(exact_snapshot_descriptors[0]),
+            "exact-executable return interruption closes its sealed FD",
+        )
+
+        fd_fixture = owned_canonical_directory(
+            root, "self-test descriptor-cleanup directory"
+        )
+        original_open_components = globals()[
+            "_open_absolute_directory_components"
+        ]
+        original_fstat = os.fstat
+        opened_current = []
+
+        def open_current_then_abort(
+                unused_path, unused_description, unused_create,
+                required_mode=0o700):
+            descriptor = os.dup(fd_fixture["descriptor"])
+            opened_current.append(descriptor)
+            metadata = original_fstat(descriptor)
+            return {
+                "descriptor": descriptor,
+                "identity": (metadata.st_dev, metadata.st_ino),
+                "path": root,
+                "required_mode": required_mode,
+            }
+
+        def abort_current_fstat(descriptor):
+            if opened_current and descriptor == opened_current[-1]:
+                raise InjectedAbort("injected current-directory fstat abort")
+            return original_fstat(descriptor)
+
+        try:
+            globals()["_open_absolute_directory_components"] = (
+                open_current_then_abort
+            )
+            os.fstat = abort_current_fstat
+            try:
+                validate_owned_directory(
+                    fd_fixture, "self-test descriptor cleanup"
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: directory validation abort was ignored"
+                )
+        finally:
+            os.fstat = original_fstat
+            globals()["_open_absolute_directory_components"] = (
+                original_open_components
+            )
+        check(
+            len(opened_current) == 1 and
+            descriptor_closed(opened_current[0]),
+            "directory revalidation closes a newly opened FD on "
+            "BaseException",
+        )
+
+        held_log_path = root / "fd-validation.log"
+        held_log = open_exclusive_log(
+            held_log_path, "self-test held validation log"
+        )
+        original_stat = os.stat
+        log_current = []
+
+        def open_log_current(
+                unused_path, unused_description, unused_create,
+                required_mode=0o700):
+            descriptor = os.dup(held_log["directory_descriptor"])
+            log_current.append(descriptor)
+            metadata = original_fstat(descriptor)
+            return {
+                "descriptor": descriptor,
+                "identity": (metadata.st_dev, metadata.st_ino),
+                "path": root,
+                "required_mode": required_mode,
+            }
+
+        def abort_log_stat(*unused_values, **unused_options):
+            raise InjectedAbort("injected log stat abort")
+
+        try:
+            globals()["_open_absolute_directory_components"] = (
+                open_log_current
+            )
+            os.stat = abort_log_stat
+            try:
+                validate_log_identity(
+                    held_log, "self-test log descriptor cleanup"
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: log validation abort was ignored"
+                )
+        finally:
+            os.stat = original_stat
+            globals()["_open_absolute_directory_components"] = (
+                original_open_components
+            )
+        check(
+            len(log_current) == 1 and descriptor_closed(log_current[0]),
+            "log revalidation closes a newly opened directory FD on "
+            "BaseException",
+        )
+        close_log(held_log)
+
+        original_open_owned = globals()["open_owned_directory"]
+        transferred = []
+
+        def open_owned_then_abort(unused_path, unused_description):
+            descriptor = os.dup(fd_fixture["descriptor"])
+            transferred.append(descriptor)
+            return descriptor
+
+        def abort_transferred_fstat(descriptor):
+            if transferred and descriptor == transferred[-1]:
+                raise InjectedAbort("injected canonical-directory abort")
+            return original_fstat(descriptor)
+
+        try:
+            globals()["open_owned_directory"] = open_owned_then_abort
+            os.fstat = abort_transferred_fstat
+            try:
+                open_existing_canonical_directory(
+                    root, "self-test canonical transfer cleanup"
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: canonical transfer abort was ignored"
+                )
+        finally:
+            os.fstat = original_fstat
+            globals()["open_owned_directory"] = original_open_owned
+        check(
+            len(transferred) == 1 and descriptor_closed(transferred[0]),
+            "canonical directory opener closes its FD before ownership "
+            "transfer on BaseException",
+        )
+
+        canonical_return_descriptors = []
+        canonical_return_line = source_line_number(
+            open_existing_canonical_directory, "return result"
+        )
+
+        def abort_canonical_return(frame):
+            if frame.f_lineno != canonical_return_line:
+                return False
+            canonical_return_descriptors.append(
+                frame.f_locals["result"]["descriptor"]
+            )
+            return True
+
+        run_trace_abort(
+            open_existing_canonical_directory, abort_canonical_return,
+            lambda: open_existing_canonical_directory(
+                root, "self-test canonical return cleanup"
+            ),
+            "canonical-directory return BaseException",
+        )
+        check(
+            len(canonical_return_descriptors) == 1 and
+            descriptor_closed(canonical_return_descriptors[0]),
+            "canonical directory return interruption closes its FD",
+        )
+        close_owned_directory(fd_fixture)
+
+        abort_log_path = root / "abort-open.log"
+        original_fchmod = os.fchmod
+        abort_fchmod_once = [True]
+
+        def abort_created_log_fchmod(descriptor, mode):
+            if abort_fchmod_once[0]:
+                abort_fchmod_once[0] = False
+                raise InjectedAbort("injected exclusive-log abort")
+            return original_fchmod(descriptor, mode)
+
+        try:
+            os.fchmod = abort_created_log_fchmod
+            try:
+                open_exclusive_log(
+                    abort_log_path, "self-test aborting exclusive log"
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: exclusive-log abort was ignored"
+                )
+        finally:
+            os.fchmod = original_fchmod
+        check(
+            not abort_log_path.exists(),
+            "exclusive-log BaseException removes the exact newly created "
+            "inode",
+        )
+
+        return_abort_log_path = root / "abort-log-return.log"
+        returned_log_descriptors = []
+        log_return_line = source_line_number(
+            open_exclusive_log, "return result"
+        )
+
+        def abort_log_return(frame):
+            if frame.f_lineno != log_return_line:
+                return False
+            returned_log_descriptors.extend((
+                frame.f_locals["result"]["descriptor"],
+                frame.f_locals["result"]["directory_descriptor"],
+            ))
+            return True
+
+        run_trace_abort(
+            open_exclusive_log, abort_log_return,
+            lambda: open_exclusive_log(
+                return_abort_log_path,
+                "self-test interrupted log return",
+            ),
+            "exclusive-log return BaseException",
+        )
+        check(
+            len(returned_log_descriptors) == 2 and
+            all(descriptor_closed(value)
+                for value in returned_log_descriptors) and
+            not return_abort_log_path.exists(),
+            "exclusive-log return interruption closes both FDs and removes "
+            "its inode",
+        )
+
+        abort_raw_directory = owned_canonical_directory(
+            root, "self-test aborting raw-file directory"
+        )
+        abort_fchmod_once[0] = True
+        try:
+            os.fchmod = abort_created_log_fchmod
+            try:
+                open_exclusive_owned_file(
+                    abort_raw_directory, "abort-raw.json",
+                    "self-test aborting raw file",
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: raw-file abort was ignored"
+                )
+        finally:
+            os.fchmod = original_fchmod
+            close_owned_directory(abort_raw_directory)
+        check(
+            not (root / "abort-raw.json").exists(),
+            "raw-file BaseException removes the exact newly created inode",
+        )
+
+        raw_directory = owned_canonical_directory(
+            root, "self-test raw-directory transfer"
+        )
+        original_dup = os.dup
+        raw_directory_duplicates = []
+
+        def capture_raw_directory_dup(descriptor):
+            duplicate = original_dup(descriptor)
+            if descriptor == raw_directory["descriptor"]:
+                raw_directory_duplicates.append(duplicate)
+            return duplicate
+
+        def abort_after_raw_directory_dup(frame):
+            return (
+                frame.f_locals.get("directory_descriptor") is not None and
+                frame.f_locals.get("descriptor") is None
+            )
+
+        try:
+            os.dup = capture_raw_directory_dup
+            run_trace_abort(
+                open_exclusive_owned_file,
+                abort_after_raw_directory_dup,
+                lambda: open_exclusive_owned_file(
+                    raw_directory, "pre-file-abort.json",
+                    "self-test interrupted raw-directory transfer",
+                ),
+                "raw-directory duplicate BaseException",
+            )
+        finally:
+            os.dup = original_dup
+            close_owned_directory(raw_directory)
+        check(
+            len(raw_directory_duplicates) == 1 and
+            descriptor_closed(raw_directory_duplicates[0]) and
+            not (root / "pre-file-abort.json").exists(),
+            "raw-file setup interruption closes its directory duplicate",
+        )
+
+        command_stdout = root / "abort-command.stdout.log"
+        command_stderr = root / "abort-command.stderr.log"
+        original_open_exclusive = globals()["open_exclusive_log"]
+        log_open_count = [0]
+
+        def abort_second_log(path_value, description):
+            log_open_count[0] += 1
+            if log_open_count[0] == 2:
+                raise InjectedAbort("injected stderr reservation abort")
+            return original_open_exclusive(path_value, description)
+
+        try:
+            globals()["open_exclusive_log"] = abort_second_log
+            try:
+                open_command_logs(command_stdout, command_stderr)
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: command-log abort was ignored"
+                )
+        finally:
+            globals()["open_exclusive_log"] = original_open_exclusive
+        check(
+            not command_stdout.exists() and not command_stderr.exists(),
+            "stderr reservation BaseException rolls back the exact stdout "
+            "inode",
+        )
+
+        transfer_stdout = root / "transfer-command.stdout.log"
+        transfer_stderr = root / "transfer-command.stderr.log"
+
+        def abort_after_stdout_reservation(frame):
+            return (
+                frame.f_locals.get("stdout_log") is not None and
+                frame.f_locals.get("stderr_log") is None
+            )
+
+        run_trace_abort(
+            open_command_logs, abort_after_stdout_reservation,
+            lambda: open_command_logs(transfer_stdout, transfer_stderr),
+            "stdout-log ownership-transfer BaseException",
+        )
+        check(
+            not transfer_stdout.exists() and not transfer_stderr.exists(),
+            "stdout ownership-transfer interruption rolls back both log "
+            "names",
+        )
+
+        publication_path = root / "held-publication"
+        publication_path.mkdir(mode=0o700)
+        publication_root = owned_canonical_directory(
+            publication_path, "self-test held publication root"
+        )
+        original_link_descriptor = globals()["link_descriptor_noreplace"]
+        publication_saved = root / "held-publication-saved"
+        publication_replacement = root / "held-publication-replacement"
+
+        def publication_aba(
+                source_descriptor, destination_descriptor,
+                destination_name, description):
+            publication_path.rename(publication_saved)
+            publication_path.mkdir(mode=0o700)
+            original_link_descriptor(
+                source_descriptor, destination_descriptor,
+                destination_name, description,
+            )
+            publication_path.rename(publication_replacement)
+            publication_saved.rename(publication_path)
+
+        try:
+            globals()["link_descriptor_noreplace"] = publication_aba
+            write_result_json(
+                publication_root, "manifest.json", {"held": True},
+                "self-test held publication", replace=False,
+            )
+        finally:
+            globals()["link_descriptor_noreplace"] = original_link_descriptor
+        check(
+            json.loads((publication_path / "manifest.json").read_text(
+                encoding="utf-8"
+            )) == {"held": True} and
+            not (publication_replacement / "manifest.json").exists(),
+            "publication remains bound to the held result-root inode",
+        )
+
+        held_return_descriptors = []
+        held_return_line = source_line_number(
+            open_result_regular_held, "return held"
+        )
+
+        def abort_held_return(frame):
+            if frame.f_lineno != held_return_line:
+                return False
+            held_return_descriptors.extend((
+                frame.f_locals["held"]["descriptor"],
+                frame.f_locals["held"]["directory_descriptor"],
+            ))
+            return True
+
+        run_trace_abort(
+            open_result_regular_held, abort_held_return,
+            lambda: open_result_regular_held(
+                publication_root, "manifest.json", MAX_RAW_JSON_BYTES,
+                "self-test interrupted held-file return", 0o600,
+            ),
+            "held-file return BaseException",
+        )
+        check(
+            len(held_return_descriptors) == 2 and
+            all(descriptor_closed(value)
+                for value in held_return_descriptors),
+            "held-file return interruption closes file and directory FDs",
+        )
+
+        collision_path = publication_path / "collision.json"
+
+        def collide_exact_publication():
+            collision_descriptor = os.open(
+                collision_path.name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=publication_root["descriptor"],
+            )
+            try:
+                write_descriptor_all(collision_descriptor, b"collision\n")
+                os.fsync(collision_descriptor)
+            finally:
+                os.close(collision_descriptor)
+
+        try:
+            try:
+                write_result_bytes(
+                    publication_root, collision_path.name,
+                    canonical_json_bytes({"must_not_publish": True}),
+                    "self-test collided publication", replace=False,
+                    precommit_hook=collide_exact_publication,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: no-replace publication collision "
+                    "was accepted"
+                )
+        finally:
+            pass
+        check(
+            collision_path.read_bytes() == b"collision\n",
+            "no-replace publication leaves a raced destination untouched",
+        )
+
+        replacement_path = publication_path / "replace.json"
+        write_result_bytes(
+            publication_root, replacement_path.name, b"old!",
+            "self-test replace baseline", replace=False,
+        )
+
+        interrupted_new_path = publication_path / "interrupted-new.json"
+        original_rename_noreplace = globals()["rename_noreplace"]
+        original_unlink = os.unlink
+        interrupted_new_unlink = [False]
+
+        def commit_new_then_abort(*values, **options):
+            original_rename_noreplace(*values, **options)
+            raise InjectedAbort("injected post-rename new-publication abort")
+
+        def unlink_new_then_abort(path_value, *values, **options):
+            result = original_unlink(path_value, *values, **options)
+            if (path_value == interrupted_new_path.name and
+                    not interrupted_new_unlink[0]):
+                interrupted_new_unlink[0] = True
+                raise InjectedAbort(
+                    "injected post-unlink new-rollback abort"
+                )
+            return result
+
+        try:
+            globals()["rename_noreplace"] = commit_new_then_abort
+            os.unlink = unlink_new_then_abort
+            try:
+                write_result_bytes(
+                    publication_root, interrupted_new_path.name, b"new!",
+                    "self-test interrupted new publication", replace=False,
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: post-rename new-publication abort "
+                    "was ignored"
+                )
+        finally:
+            os.unlink = original_unlink
+            globals()["rename_noreplace"] = original_rename_noreplace
+        check(
+            interrupted_new_unlink[0] and
+            not interrupted_new_path.exists() and
+            not any(
+                path.name.startswith(".leo2-stage-")
+                for path in publication_path.iterdir()
+            ),
+            "post-rename/post-unlink BaseExceptions restore an absent "
+            "new-publication destination",
+        )
+
+        original_rename_exchange = globals()["rename_exchange"]
+        interrupted_exchange_count = [0]
+
+        def exchange_then_abort(*values, **options):
+            original_rename_exchange(*values, **options)
+            interrupted_exchange_count[0] += 1
+            raise InjectedAbort(
+                "injected post-exchange replacement abort"
+            )
+
+        try:
+            globals()["rename_exchange"] = exchange_then_abort
+            try:
+                write_result_bytes(
+                    publication_root, replacement_path.name, b"new!",
+                    "self-test interrupted replacement", replace=True,
+                )
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: post-exchange replacement abort "
+                    "was ignored"
+                )
+        finally:
+            globals()["rename_exchange"] = original_rename_exchange
+        check(
+            interrupted_exchange_count[0] == 2 and
+            replacement_path.read_bytes() == b"old!" and
+            not any(
+                path.name.startswith(".leo2-stage-")
+                for path in publication_path.iterdir()
+            ),
+            "post-exchange BaseExceptions reconcile both commit and rollback "
+            "without changing prior evidence",
+        )
+
+        def fail_before_publication():
+            raise CrossoverError("injected precommit failure")
+
+        try:
+            write_result_bytes(
+                publication_root, replacement_path.name, b"new!",
+                "self-test precommit replacement", replace=True,
+                precommit_hook=fail_before_publication,
+            )
+        except CrossoverError as error:
+            check(
+                "injected precommit failure" in str(error),
+                "precommit publication failure is surfaced",
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: injected precommit failure was ignored"
+            )
+        check(
+            replacement_path.read_bytes() == b"old!",
+            "precommit replacement failure preserves old evidence",
+        )
+
+        original_fsync = os.fsync
+        post_replace_fsync_target = [None]
+
+        def arm_post_replace_fsync(
+                unused_descriptor, directory_descriptor, unused_name):
+            post_replace_fsync_target[0] = directory_descriptor
+
+        def fail_one_post_replace_fsync(descriptor):
+            if descriptor == post_replace_fsync_target[0]:
+                post_replace_fsync_target[0] = None
+                raise OSError(
+                    errno.EIO, "injected post-replace fsync failure"
+                )
+            return original_fsync(descriptor)
+
+        try:
+            os.fsync = fail_one_post_replace_fsync
+            try:
+                write_result_bytes(
+                    publication_root, replacement_path.name, b"new!",
+                    "self-test post-replace fsync rollback", replace=True,
+                    postcommit_hook=arm_post_replace_fsync,
+                )
+            except CrossoverError as error:
+                check(
+                    "injected post-replace fsync failure" in str(error),
+                    "post-replace fsync failure is surfaced after rollback",
+                )
+            else:
+                raise CrossoverError(
+                    "self-test failed: post-replace fsync failure was ignored"
+                )
+        finally:
+            os.fsync = original_fsync
+        check(
+            replacement_path.read_bytes() == b"old!" and
+            not any(
+                path.name.startswith(".leo2-stage-")
+                for path in publication_path.iterdir()
+            ),
+            "post-replace fsync failure restores old evidence and removes "
+            "staging",
+        )
+
+        def mutate_linked_staging(
+                descriptor, unused_directory, unused_name):
+            os.pwrite(descriptor, b"evil", 0)
+            os.fsync(descriptor)
+
+        try:
+            write_result_bytes(
+                publication_root, replacement_path.name, b"new!",
+                "self-test mutated staged replacement", replace=True,
+                postlink_hook=mutate_linked_staging,
+            )
+        except CrossoverError as error:
+            check(
+                "staged inode or payload changed" in str(error),
+                "same-size post-link staging mutation is rejected",
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: same-size staged mutation was accepted"
+            )
+        check(
+            replacement_path.read_bytes() == b"old!",
+            "mutated staged replacement preserves old evidence",
+        )
+
+        def mutate_after_replace(
+                descriptor, unused_directory, unused_name):
+            os.pwrite(descriptor, b"evil", 0)
+            os.fsync(descriptor)
+
+        try:
+            write_result_bytes(
+                publication_root, replacement_path.name, b"new!",
+                "self-test post-replace verification rollback",
+                replace=True, postcommit_hook=mutate_after_replace,
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: post-replace payload mutation was "
+                "accepted"
+            )
+        check(
+            replacement_path.read_bytes() == b"old!",
+            "post-replace verification failure restores old evidence",
+        )
+        write_result_bytes(
+            publication_root, replacement_path.name, b"new!",
+            "self-test successful atomic replacement", replace=True,
+        )
+        check(
+            replacement_path.read_bytes() == b"new!" and
+            stat.S_IMODE(replacement_path.stat().st_mode) == 0o600,
+            "replacement atomically publishes exact mode-0600 evidence",
+        )
+        final_fsync_count = [0]
+        final_fsync_descriptor = [None]
+
+        def arm_cleanup_fsync(
+                unused_descriptor, directory_descriptor, unused_name):
+            final_fsync_descriptor[0] = directory_descriptor
+
+        def fail_cleanup_fsync_after_commit(descriptor):
+            if descriptor == final_fsync_descriptor[0]:
+                final_fsync_count[0] += 1
+                if final_fsync_count[0] == 2:
+                    raise OSError(
+                        errno.EIO, "injected irreversible cleanup fsync"
+                    )
+            return original_fsync(descriptor)
+
+        try:
+            os.fsync = fail_cleanup_fsync_after_commit
+            write_result_bytes(
+                publication_root, replacement_path.name, b"done",
+                "self-test irreversible replacement", replace=True,
+                postcommit_hook=arm_cleanup_fsync,
+            )
+        finally:
+            os.fsync = original_fsync
+        check(
+            final_fsync_count[0] == 2 and
+            replacement_path.read_bytes() == b"done",
+            "post-cleanup fsync failure never reports a false replacement "
+            "failure after old evidence is irreversibly removed",
+        )
+        replacement_path.chmod(0o640)
+        try:
+            read_result_regular(
+                publication_root, replacement_path.name, 16,
+                "self-test weak-mode evidence",
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: non-0600 evidence mode was accepted"
+            )
+        replacement_path.chmod(0o600)
+        close_owned_directory(publication_root)
+
+        weak_directory = root / "weak-mode-directory"
+        weak_directory.mkdir(mode=0o700)
+        weak_directory.chmod(0o750)
+        try:
+            owned_canonical_directory(
+                weak_directory, "self-test weak-mode directory"
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: non-0700 result directory was accepted"
+            )
+
+        retained_path = root / "retained-result"
+        retained_path.mkdir(mode=0o700)
+        retained_root = owned_canonical_directory(
+            retained_path, "self-test retained result"
+        )
+        try:
+            def write_retained_fixture(name, value):
+                fixture = retained_path / name
+                fixture.write_bytes(value)
+                fixture.chmod(0o600)
+                return fixture
+
+            write_retained_fixture("stable.bin", b"stable")
+            check(
+                read_result_regular(
+                    retained_root, "stable.bin", 16,
+                    "self-test stable retained file",
+                ) == b"stable",
+                "retained file stable snapshot",
+            )
+            write_retained_fixture("victim.bin", b"victim")
+            (retained_path / "linked.bin").symlink_to("victim.bin")
+            os.mkfifo(retained_path / "fifo.bin", 0o600)
+            os.link(
+                retained_path / "victim.bin",
+                retained_path / "hardlink.bin",
+            )
+            write_retained_fixture("oversize.bin", b"x" * 17)
+            for name, maximum in (
+                    ("linked.bin", 32), ("fifo.bin", 32),
+                    ("hardlink.bin", 32), ("oversize.bin", 16)):
+                try:
+                    read_result_regular(
+                        retained_root, name, maximum,
+                        "self-test unsafe retained file",
+                    )
+                except CrossoverError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: unsafe retained {} was "
+                        "accepted".format(name)
+                    )
+
+            write_retained_fixture(
+                "mutating.bin",
+                b"A" * (2 * 1024 * 1024)
+            )
+
+            def mutate_retained_file():
+                with open(
+                        retained_path / "mutating.bin", "r+b",
+                        buffering=0) as stream:
+                    stream.write(b"B")
+                    os.fsync(stream.fileno())
+
+            try:
+                read_result_regular(
+                    retained_root, "mutating.bin", 3 * 1024 * 1024,
+                    "self-test mutating retained file",
+                    mutation_hook=mutate_retained_file,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: in-place retained mutation was accepted"
+                )
+
+            inventory_path = retained_path / "inventory"
+            inventory_path.mkdir(mode=0o700)
+            inventory_expected = inventory_path / "expected.json"
+            inventory_expected.write_text("{}", encoding="ascii")
+            inventory_expected.chmod(0o600)
+            original_listdir = os.listdir
+            inventory_raced = [False]
+
+            def race_inventory(descriptor):
+                names = original_listdir(descriptor)
+                if not inventory_raced[0]:
+                    inventory_raced[0] = True
+                    extra_descriptor = os.open(
+                        "extra.json",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                        0o600, dir_fd=descriptor,
+                    )
+                    os.close(extra_descriptor)
+                return names
+
+            try:
+                os.listdir = race_inventory
+                try:
+                    list_result_regular_names(
+                        retained_root, "inventory", ".json",
+                        "self-test raced inventory",
+                    )
+                except CrossoverError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: raced result inventory was accepted"
+                    )
+            finally:
+                os.listdir = original_listdir
+            check(
+                inventory_raced[0],
+                "result inventory race fixture executed",
+            )
+
+            write_retained_fixture(
+                "parent-swap.bin",
+                b"P" * (2 * 1024 * 1024)
+            )
+            swapped_path = root / "retained-result-swapped"
+
+            def swap_retained_parent():
+                retained_path.rename(swapped_path)
+                retained_path.mkdir(mode=0o700)
+                replacement = retained_path / "parent-swap.bin"
+                replacement.write_bytes(b"replacement")
+                replacement.chmod(0o600)
+
+            try:
+                read_result_regular(
+                    retained_root, "parent-swap.bin", 3 * 1024 * 1024,
+                    "self-test parent-swapped retained file",
+                    mutation_hook=swap_retained_parent,
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: retained parent swap was accepted"
+                )
+        finally:
+            close_owned_directory(retained_root)
+        pidfd_probe_marker = root / "pidfd-probe-must-not-run"
+        original_pidfd_open = globals()["linux_pidfd_open"]
+
+        def unavailable_pidfd(unused_pid):
+            raise OSError(errno.ENOSYS, "pidfd unavailable")
+
+        try:
+            globals()["linux_pidfd_open"] = unavailable_pidfd
+            try:
+                run_command(
+                    [
+                        sys.executable, "-c",
+                        "from pathlib import Path;"
+                        "Path({!r}).write_text('bad')".format(
+                            str(pidfd_probe_marker)
+                        ),
+                    ],
+                    root, root / "pidfd-probe.stdout.log",
+                    root / "pidfd-probe.stderr.log", 5,
+                    os.environ.copy(),
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: unavailable pidfd operations were "
+                    "accepted"
+                )
+        finally:
+            globals()["linux_pidfd_open"] = original_pidfd_open
+        check(
+            not pidfd_probe_marker.exists(),
+            "pidfd operations are probed before command launch",
+        )
+
+        launch_gate_marker = root / "launch-gate-must-not-run"
+        original_retain_launch = globals()["retain_launched_process"]
+
+        def reject_launch_retention(unused_process, unused_description):
+            raise CrossoverError("injected launch-retention failure")
+
+        try:
+            globals()["retain_launched_process"] = reject_launch_retention
+            try:
+                run_command(
+                    [
+                        sys.executable, "-c",
+                        "from pathlib import Path;"
+                        "Path({!r}).write_text('bad')".format(
+                            str(launch_gate_marker)
+                        ),
+                    ],
+                    root, root / "launch-gate.stdout.log",
+                    root / "launch-gate.stderr.log", 5,
+                    os.environ.copy(),
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: unretained command owner was accepted"
+                )
+        finally:
+            globals()["retain_launched_process"] = original_retain_launch
+        check(
+            not launch_gate_marker.exists(),
+            "command owner cannot run before pidfd identity retention",
+        )
+
         record = run_command(
             [sys.executable, "-c", "print('ok')"], root,
             root / "stdout.log", root / "stderr.log", 5, os.environ.copy()
@@ -5253,6 +11402,1331 @@ def self_test():
         check(record["returncode"] == 0, "self-test subprocess exit")
         check((root / "stdout.log").read_bytes() == b"ok\n",
               "self-test subprocess output")
+
+        small_read, small_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        try:
+            fcntl.fcntl(small_read, fcntl.F_SETPIPE_SZ, 4096)
+            drain = BoundedControlDrain(
+                small_read, 16 * 1024, "self-test 4KiB control pipe"
+            )
+            small_read = None
+            payload = b"c" * 8192
+            writer = threading.Thread(
+                target=write_descriptor_all,
+                args=(small_write, payload),
+            )
+            writer.start()
+            writer.join(timeout=5)
+            check(not writer.is_alive(), "4KiB control writer did not deadlock")
+            os.close(small_write)
+            small_write = None
+            check(
+                drain.finish() == payload,
+                "4KiB control pipe was drained concurrently",
+            )
+        finally:
+            for descriptor in (small_read, small_write):
+                if descriptor is not None:
+                    os.close(descriptor)
+
+        bounded_read, bounded_write = os.pipe2(
+            getattr(os, "O_CLOEXEC", 0)
+        )
+        bounded_drain = BoundedControlDrain(
+            bounded_read, 1024, "self-test bounded open-writer drain"
+        )
+        bounded_started = time.monotonic()
+        try:
+            try:
+                bounded_drain.finish(timeout=0.1)
+            except CrossoverError as error:
+                check(
+                    "writer remained open" in str(error),
+                    "open-writer drain has an actionable bounded failure",
+                )
+            else:
+                raise CrossoverError(
+                    "self-test failed: open-writer drain unexpectedly finished"
+                )
+            check(
+                time.monotonic() - bounded_started < 1.0,
+                "control drain finish respects its deadline",
+            )
+        finally:
+            os.close(bounded_write)
+
+        proc_return_descriptors = []
+        proc_return_line = source_line_number(
+            open_proc_record, "return record"
+        )
+
+        def abort_proc_record_return(frame):
+            if frame.f_lineno != proc_return_line:
+                return False
+            proc_return_descriptors.append(
+                frame.f_locals["record"]["proc_descriptor"]
+            )
+            return True
+
+        run_trace_abort(
+            open_proc_record, abort_proc_record_return,
+            lambda: open_proc_record(os.getpid()),
+            "process-record return BaseException",
+        )
+        check(
+            len(proc_return_descriptors) == 1 and
+            descriptor_closed(proc_return_descriptors[0]),
+            "process-record return interruption closes its retained /proc FD",
+        )
+
+        process_snapshot = proc_record(os.getpid())
+        check(
+            process_snapshot is not None,
+            "self-test current process identity is readable",
+        )
+        retained_return_descriptors = []
+        retained_return_line = source_line_number(
+            retain_process_identity, "return retained"
+        )
+
+        def abort_retained_process_return(frame):
+            if frame.f_lineno != retained_return_line:
+                return False
+            retained_return_descriptors.extend((
+                frame.f_locals["retained"]["pidfd"],
+                frame.f_locals["retained"]["proc_descriptor"],
+            ))
+            return True
+
+        run_trace_abort(
+            retain_process_identity, abort_retained_process_return,
+            lambda: retain_process_identity(
+                process_snapshot,
+                "self-test interrupted retained process",
+            ),
+            "retained-process return BaseException",
+        )
+        check(
+            len(retained_return_descriptors) == 2 and
+            all(descriptor_closed(value)
+                for value in retained_return_descriptors),
+            "retained-process return interruption closes pidfd and /proc FD",
+        )
+
+        # Deterministically model PID reuse between pidfd_open and the second
+        # /proc read.  The transient pidfd must be closed and no identity
+        # returned for signaling.
+        original_open_proc_record = globals()["open_proc_record"]
+        original_pidfd_open = globals()["linux_pidfd_open"]
+        reuse_read = os.open("/dev/null", os.O_RDONLY)
+        before_proc = os.open("/dev/null", os.O_RDONLY)
+        after_proc = os.open("/dev/null", os.O_RDONLY)
+        reuse_reads = iter((
+            {
+                "pid": 4242, "starttime_ticks": 11,
+                "proc_identity": (1, 101),
+                "proc_descriptor": before_proc,
+            },
+            {
+                "pid": 4242, "starttime_ticks": 11,
+                "proc_identity": (1, 102),
+                "proc_descriptor": after_proc,
+            },
+        ))
+        try:
+            globals()["open_proc_record"] = lambda unused_pid: next(reuse_reads)
+            globals()["linux_pidfd_open"] = lambda unused_pid: reuse_read
+            check(
+                retain_process_identity(
+                    {
+                        "pid": 4242, "starttime_ticks": 11,
+                        "proc_identity": (1, 101),
+                    },
+                    "self-test reused process",
+                ) is None,
+                "same-jiffy PID reuse is rejected around pidfd_open",
+            )
+            try:
+                os.fstat(reuse_read)
+            except OSError as error:
+                check(error.errno == errno.EBADF,
+                      "reused PID transient pidfd is closed")
+            else:
+                raise CrossoverError(
+                    "self-test failed: reused PID pidfd leaked"
+                )
+            reuse_read = None
+            before_proc = None
+            after_proc = None
+        finally:
+            globals()["open_proc_record"] = original_open_proc_record
+            globals()["linux_pidfd_open"] = original_pidfd_open
+            for descriptor in (reuse_read, before_proc, after_proc):
+                if descriptor is not None:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+
+        remap_targets = (210, 211, 212, 213, 214)
+        saved_remap_targets = {}
+        remap_seed_descriptors = []
+        remapped_descriptors = ()
+        relocated_control = None
+        remap_lock_descriptor = None
+        try:
+            for target in remap_targets:
+                try:
+                    saved_remap_targets[target] = os.dup(target)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+            seed_identities = {}
+            for label, target in zip(("a", "b", "c", "control"),
+                                     remap_targets):
+                descriptor = linux_memfd_create(
+                    "leo2-remap-" + label,
+                    getattr(os, "MFD_CLOEXEC", 0x0001),
+                )
+                remap_seed_descriptors.append(descriptor)
+                write_descriptor_all(
+                    descriptor, label.encode("ascii")
+                )
+                os.dup2(descriptor, target, inheritable=True)
+                metadata = os.fstat(target)
+                seed_identities[label] = (
+                    metadata.st_dev, metadata.st_ino
+                )
+            for descriptor in remap_seed_descriptors:
+                os.close(descriptor)
+            remap_seed_descriptors = []
+            remaps = {
+                210: 211,
+                211: 210,
+                212: 210,
+                213: 211,
+            }
+            relocated_control = relocate_control_descriptor(
+                213, (210, 211, 212), remaps
+            )
+            check(
+                relocated_control != 213 and
+                (os.fstat(relocated_control).st_dev,
+                 os.fstat(relocated_control).st_ino) ==
+                seed_identities["control"],
+                "colliding supervisor control FD is retained elsewhere",
+            )
+            try:
+                raise RuntimeError(
+                    "self-test active remap caller exception"
+                )
+            except RuntimeError:
+                remapped_descriptors = remap_inherited_descriptors(
+                    (210, 211, 212), remaps, (relocated_control,)
+                )
+            remapped_identities = {
+                target: (
+                    os.fstat(target).st_dev, os.fstat(target).st_ino
+                ) for target in remaps
+            }
+            backup_identities = {
+                (
+                    os.fstat(descriptor).st_dev,
+                    os.fstat(descriptor).st_ino,
+                )
+                for descriptor in remapped_descriptors
+                if descriptor not in remap_targets
+            }
+            check(
+                remapped_identities == {
+                    210: seed_identities["b"],
+                    211: seed_identities["a"],
+                    212: seed_identities["a"],
+                    213: seed_identities["b"],
+                } and seed_identities["c"] in backup_identities,
+                "descriptor remap cycles/fan-out preserve every source and "
+                "colliding inherited identity",
+            )
+            remap_lock_path = root / "remap-graph.lock"
+            remap_lock_descriptor = os.open(
+                remap_lock_path,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600,
+            )
+            os.fchmod(remap_lock_descriptor, 0o600)
+            os.dup2(remap_lock_descriptor, 214, inheritable=True)
+            supervisor_remap_record = run_command(
+                [
+                    sys.executable, "-c",
+                    "import os;"
+                    "print(os.pread(210,1,0).decode(),"
+                    "os.pread(211,1,0).decode(),"
+                    "os.pread(214,1,0).decode())",
+                ],
+                root, root / "remap-graph.stdout.log",
+                root / "remap-graph.stderr.log", 5,
+                os.environ.copy(),
+                inherited_lock_descriptor=214,
+                inherited_descriptors=(210, 211, 214),
+                descriptor_remaps={
+                    210: 211,
+                    211: 210,
+                    214: 210,
+                },
+            )
+            check(
+                supervisor_remap_record["returncode"] == 0 and
+                (root / "remap-graph.stdout.log").read_bytes() ==
+                b"a b b\n",
+                "direct supervisor applies collision-safe cyclic remaps",
+            )
+        finally:
+            for descriptor in remapped_descriptors:
+                if descriptor not in remap_targets:
+                    try:
+                        os.close(descriptor)
+                    except OSError:
+                        pass
+            if relocated_control is not None:
+                try:
+                    os.close(relocated_control)
+                except OSError:
+                    pass
+            if remap_lock_descriptor is not None:
+                try:
+                    os.close(remap_lock_descriptor)
+                except OSError:
+                    pass
+            for descriptor in remap_seed_descriptors:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+            for target in remap_targets:
+                try:
+                    os.close(target)
+                except OSError:
+                    pass
+                saved = saved_remap_targets.get(target)
+                if saved is not None:
+                    os.dup2(saved, target)
+                    os.close(saved)
+
+        raw_directory = owned_canonical_directory(
+            root / "raw-descriptor", "self-test raw directory"
+        )
+        try:
+            raw_name = "output.json"
+            raw_file = open_exclusive_owned_file(
+                raw_directory, raw_name, "self-test raw output"
+            )
+            try:
+                raw_child_path = procfd_exact_path(
+                    raw_file, "self-test raw output"
+                )
+                raw_record = run_command(
+                    [
+                        sys.executable, "-c",
+                        "import pathlib,sys;"
+                        "pathlib.Path(sys.argv[1]).write_bytes("
+                        "b'{\"ok\":true}')",
+                        str(raw_child_path),
+                    ],
+                    root, root / "raw.stdout.log", root / "raw.stderr.log",
+                    5, os.environ.copy(),
+                    inherited_descriptors=(raw_file["descriptor"],),
+                    descriptor_remaps={
+                        RAW_OUTPUT_DESCRIPTOR: raw_file["descriptor"],
+                    },
+                )
+                check(
+                    raw_record["returncode"] == 0 and
+                    read_held_regular(
+                        raw_file, MAX_RAW_JSON_BYTES,
+                        "self-test raw output"
+                    ) == b'{"ok":true}',
+                    "raw output is bound to the exact held file descriptor"
+                )
+            finally:
+                close_log(raw_file)
+
+            raw_victim = root / "raw-symlink-victim"
+            raw_victim.write_bytes(b"victim")
+            os.symlink(
+                str(raw_victim), "raw-symlink.json",
+                dir_fd=raw_directory["descriptor"],
+            )
+            try:
+                open_exclusive_owned_file(
+                    raw_directory, "raw-symlink.json",
+                    "self-test raw symlink",
+                )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: raw symlink was accepted"
+                )
+            check(
+                raw_victim.read_bytes() == b"victim",
+                "raw symlink victim is untouched",
+            )
+            saved_target = None
+            collision_read = None
+            collision_write = None
+            collision_file = None
+            try:
+                try:
+                    saved_target = os.dup(RAW_OUTPUT_DESCRIPTOR)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+                collision_read, collision_write = os.pipe()
+                os.dup2(collision_read, RAW_OUTPUT_DESCRIPTOR)
+                collision_name = "descriptor-collision.json"
+                collision_file = open_exclusive_owned_file(
+                    raw_directory, collision_name,
+                    "self-test colliding raw output"
+                )
+                collision_child_path = procfd_exact_path(
+                    collision_file, "self-test colliding raw output"
+                )
+                collision_record = run_command(
+                    [
+                        sys.executable, "-c",
+                        "import pathlib,sys;"
+                        "pathlib.Path(sys.argv[1]).write_bytes(b'collision')",
+                        str(collision_child_path),
+                    ],
+                    root, root / "collision-raw.stdout.log",
+                    root / "collision-raw.stderr.log",
+                    5, os.environ.copy(),
+                    inherited_descriptors=(
+                        collision_file["descriptor"],
+                        RAW_OUTPUT_DESCRIPTOR,
+                    ),
+                    descriptor_remaps={
+                        RAW_OUTPUT_DESCRIPTOR:
+                            collision_file["descriptor"],
+                    },
+                )
+                check(
+                    collision_record["returncode"] == 0 and
+                    read_held_regular(
+                        collision_file,
+                        MAX_RAW_JSON_BYTES,
+                        "self-test colliding raw output"
+                    ) == b"collision",
+                    "raw descriptor remap preserves a colliding inherited FD"
+                )
+            finally:
+                if collision_file is not None:
+                    close_log(collision_file)
+                os.close(RAW_OUTPUT_DESCRIPTOR)
+                if saved_target is not None:
+                    os.dup2(saved_target, RAW_OUTPUT_DESCRIPTOR)
+                    os.close(saved_target)
+                if (collision_read is not None and
+                        collision_read != RAW_OUTPUT_DESCRIPTOR):
+                    os.close(collision_read)
+                if collision_write is not None:
+                    os.close(collision_write)
+
+            capped_file = open_exclusive_owned_file(
+                raw_directory, "over-cap.json",
+                "self-test capped raw output",
+            )
+            try:
+                capped_record = run_command(
+                    [
+                        sys.executable, "-c",
+                        "import os;"
+                        "block=b'x'*(1024*1024);"
+                        "fd=int(os.environ['LEO2_RAW_FD']);"
+                        "[os.write(fd,block) for _ in range(65)]",
+                    ],
+                    root, root / "capped-raw.stdout.log",
+                    root / "capped-raw.stderr.log",
+                    10,
+                    dict(os.environ, LEO2_RAW_FD=str(RAW_OUTPUT_DESCRIPTOR)),
+                    inherited_descriptors=(capped_file["descriptor"],),
+                    descriptor_remaps={
+                        RAW_OUTPUT_DESCRIPTOR: capped_file["descriptor"],
+                    },
+                )
+                check(
+                    capped_record["returncode"] != 0 and
+                    os.fstat(capped_file["descriptor"]).st_size <=
+                    MAX_RAW_JSON_BYTES,
+                    "kernel-enforced raw JSON write ceiling",
+                )
+            finally:
+                close_log(capped_file)
+            mutation_name = "mutating.json"
+            mutation_descriptor = os.open(
+                mutation_name,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW,
+                0o600, dir_fd=raw_directory["descriptor"]
+            )
+            try:
+                os.fchmod(mutation_descriptor, 0o600)
+                write_descriptor_all(
+                    mutation_descriptor, b"A" * (2 * 1024 * 1024)
+                )
+                os.fsync(mutation_descriptor)
+            finally:
+                os.close(mutation_descriptor)
+
+            def mutate_raw_during_read():
+                descriptor = os.open(
+                    mutation_name, os.O_WRONLY | os.O_NOFOLLOW,
+                    dir_fd=raw_directory["descriptor"]
+                )
+                try:
+                    os.pwrite(descriptor, b"B", 0)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+
+            try:
+                read_owned_regular(
+                    raw_directory, mutation_name, MAX_RAW_JSON_BYTES,
+                    "self-test mutating raw output",
+                    mutation_hook=mutate_raw_during_read
+                )
+            except CrossoverError as error:
+                check(
+                    "changed while it was being read" in str(error),
+                    "raw mutation has an actionable rejection"
+                )
+            else:
+                raise CrossoverError(
+                    "self-test failed: in-place raw mutation was accepted"
+                )
+        finally:
+            close_owned_directory(raw_directory)
+
+        executable_result_root = owned_canonical_directory(
+            root, "self-test executable result root"
+        )
+        executable_directory = root / "exact-executable"
+        executable_directory.mkdir(mode=0o700)
+        exact_executable_path = executable_directory / "codec"
+        exact_executable_path.write_bytes(
+            b"#!/bin/sh\nprintf 'held-executable\\n'\n"
+        )
+        exact_executable_path.chmod(0o555)
+        exact_executable = open_result_regular_held(
+            executable_result_root, Path("exact-executable") / "codec",
+            MAX_RAW_JSON_BYTES, "self-test exact executable", 0o555,
+        )
+        saved_executable_path = executable_directory / "codec.saved"
+        try:
+            validate_log_identity(
+                exact_executable, "self-test exact executable"
+            )
+            exact_executable_path.rename(saved_executable_path)
+            exact_executable_path.write_bytes(
+                b"#!/bin/sh\nprintf 'substituted-executable\\n'\n"
+            )
+            exact_executable_path.chmod(0o555)
+            exact_record = run_command(
+                [str(Path("/proc/self/fd") / str(EXECUTABLE_DESCRIPTOR))],
+                root, root / "exact-executable.stdout.log",
+                root / "exact-executable.stderr.log", 5,
+                os.environ.copy(),
+                inherited_descriptors=(exact_executable["descriptor"],),
+                descriptor_remaps={
+                    EXECUTABLE_DESCRIPTOR: exact_executable["descriptor"],
+                },
+            )
+            check(
+                exact_record["returncode"] == 0 and
+                (root / "exact-executable.stdout.log").read_bytes() ==
+                b"held-executable\n",
+                "execution uses the exact retained executable inode",
+            )
+            exact_executable_path.unlink()
+            saved_executable_path.rename(exact_executable_path)
+            validate_log_identity(
+                exact_executable, "self-test exact executable"
+            )
+
+            original_executable_bytes = read_held_regular(
+                exact_executable, MAX_RAW_JSON_BYTES,
+                "self-test exact executable",
+            )
+            execution_snapshot = create_sealed_executable_snapshot(
+                original_executable_bytes,
+                "self-test exact executable",
+            )
+            source_identity_before = exact_executable["identity"]
+            try:
+                exact_executable_path.chmod(0o755)
+                mutation_descriptor = os.open(
+                    exact_executable_path,
+                    os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
+                )
+                try:
+                    write_descriptor_all(
+                        mutation_descriptor,
+                        b"#!/bin/sh\nprintf 'evil-executable\\n'\n",
+                    )
+                    os.fsync(mutation_descriptor)
+                finally:
+                    os.close(mutation_descriptor)
+                exact_executable_path.chmod(0o555)
+                snapshot_record = run_command(
+                    [
+                        str(Path("/proc/self/fd") /
+                            str(EXECUTABLE_DESCRIPTOR))
+                    ],
+                    root, root / "sealed-executable.stdout.log",
+                    root / "sealed-executable.stderr.log", 5,
+                    os.environ.copy(),
+                    inherited_descriptors=(
+                        execution_snapshot["descriptor"],
+                    ),
+                    descriptor_remaps={
+                        EXECUTABLE_DESCRIPTOR:
+                            execution_snapshot["descriptor"],
+                    },
+                )
+                exact_executable_path.chmod(0o755)
+                restoration_descriptor = os.open(
+                    exact_executable_path,
+                    os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
+                )
+                try:
+                    write_descriptor_all(
+                        restoration_descriptor,
+                        original_executable_bytes,
+                    )
+                    os.fsync(restoration_descriptor)
+                finally:
+                    os.close(restoration_descriptor)
+                exact_executable_path.chmod(0o555)
+                validate_sealed_executable_snapshot(
+                    execution_snapshot,
+                    digest_bytes(original_executable_bytes),
+                    "self-test exact executable snapshot",
+                )
+                check(
+                    snapshot_record["returncode"] == 0 and
+                    (root / "sealed-executable.stdout.log").read_bytes() ==
+                    b"held-executable\n" and
+                    exact_executable["identity"] ==
+                    source_identity_before and
+                    read_held_regular(
+                        exact_executable, MAX_RAW_JSON_BYTES,
+                        "self-test restored exact executable",
+                    ) == original_executable_bytes,
+                    "sealed execution resists same-inode A-B-A source "
+                    "mutation at exec",
+                )
+            finally:
+                if exact_executable_path.exists():
+                    exact_executable_path.chmod(0o755)
+                    restoration_descriptor = os.open(
+                        exact_executable_path,
+                        os.O_WRONLY | os.O_TRUNC | os.O_NOFOLLOW,
+                    )
+                    try:
+                        write_descriptor_all(
+                            restoration_descriptor,
+                            original_executable_bytes,
+                        )
+                    finally:
+                        os.close(restoration_descriptor)
+                    exact_executable_path.chmod(0o555)
+                close_sealed_snapshot(execution_snapshot)
+        finally:
+            if saved_executable_path.exists():
+                if exact_executable_path.exists():
+                    exact_executable_path.unlink()
+                saved_executable_path.rename(exact_executable_path)
+            close_log(exact_executable)
+            close_owned_directory(executable_result_root)
+
+        retained_git_path = root / "retained-git"
+        retained_git_a = b"#!/bin/sh\nprintf 'retained-git-a\\n'\n"
+        retained_git_b = b"#!/bin/sh\nprintf 'retained-git-b\\n'\n"
+        retained_git_path.write_bytes(retained_git_a)
+        retained_git_path.chmod(0o755)
+        original_canonical_git = globals()["CANONICAL_GIT"]
+        retained_git_snapshot = None
+        try:
+            globals()["CANONICAL_GIT"] = retained_git_path
+            retained_git_snapshot = open_canonical_git_snapshot()
+            retained_git_path.write_bytes(retained_git_b)
+            retained_git_path.chmod(0o755)
+            retained_git_output = git_command_bytes(
+                root, ("--version",),
+                "self-test exact retained Git", retained_git_snapshot,
+            )
+            retained_git_path.write_bytes(retained_git_a)
+            retained_git_path.chmod(0o755)
+            check(
+                retained_git_output == b"retained-git-a\n" and
+                validate_sealed_executable_snapshot(
+                    retained_git_snapshot,
+                    digest_bytes(retained_git_a),
+                    "self-test retained Git snapshot",
+                ) == retained_git_a,
+                "Git commands use one sealed exact-tool snapshot across "
+                "same-inode A-B-A mutation",
+            )
+        finally:
+            globals()["CANONICAL_GIT"] = original_canonical_git
+            if retained_git_path.exists():
+                retained_git_path.write_bytes(retained_git_a)
+                retained_git_path.chmod(0o755)
+            close_canonical_git_snapshot(retained_git_snapshot)
+
+        launcher_script = root / "launcher-script.py"
+        launcher_a = b"print('launcher-a')\n"
+        launcher_b = b"print('launcher-b')\n"
+        launcher_script.write_bytes(launcher_a)
+        launcher_script.chmod(0o755)
+        unrelated_python = root / "unrelated-python"
+        unrelated_python.write_bytes(b"#!/bin/sh\nexit 0\n")
+        unrelated_python.chmod(0o755)
+        try:
+            open_runtime_launcher_snapshots(
+                python_path=unrelated_python, script_path=launcher_script
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: unrelated Python launcher inode was "
+                "accepted"
+            )
+        launcher_snapshots = open_runtime_launcher_snapshots(
+            python_path=sys.executable, script_path=launcher_script
+        )
+        try:
+            launcher_script.write_bytes(launcher_b)
+            launcher_script.chmod(0o755)
+            launcher_process = subprocess.Popen(
+                [
+                    launcher_snapshots["identity"]["python"]["path"],
+                    *RUNTIME_PYTHON_FLAGS,
+                    str(Path("/proc/self/fd") / str(
+                        launcher_snapshots["script"]["descriptor"]
+                    )),
+                ],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                pass_fds=(
+                    launcher_snapshots["python"]["descriptor"],
+                    launcher_snapshots["script"]["descriptor"],
+                ),
+                executable=str(Path("/proc/self/fd") / str(
+                    launcher_snapshots["python"]["descriptor"]
+                )),
+            )
+            launcher_stdout, launcher_stderr = launcher_process.communicate(
+                timeout=10
+            )
+            launcher_script.write_bytes(launcher_a)
+            launcher_script.chmod(0o755)
+            check(
+                launcher_process.returncode == 0 and
+                launcher_stdout == b"launcher-a\n" and
+                launcher_stderr == b"" and
+                validate_runtime_launcher_snapshots(
+                    launcher_snapshots
+                ) == launcher_snapshots["identity"],
+                "Python/runner re-exec uses sealed snapshots across a "
+                "same-inode A-B-A mutation",
+            )
+        finally:
+            if launcher_script.exists():
+                launcher_script.write_bytes(launcher_a)
+                launcher_script.chmod(0o755)
+            close_runtime_launcher_snapshots(launcher_snapshots)
+
+        sealed_tools = []
+        try:
+            for label, descriptor_target in (
+                    ("taskset", TASKSET_EXECUTABLE_DESCRIPTOR),
+                    ("cmake", CONTROLLED_CMAKE_DESCRIPTOR),
+                    ("ninja", CONTROLLED_NINJA_DESCRIPTOR)):
+                tool_path = root / ("sealed-" + label)
+                tool_a = (
+                    "#!/bin/sh\nprintf '{}-a\\\\n'\n".format(label)
+                ).encode("ascii")
+                tool_b = (
+                    "#!/bin/sh\nprintf '{}-b\\\\n'\n".format(label)
+                ).encode("ascii")
+                tool_path.write_bytes(tool_a)
+                tool_path.chmod(0o755)
+                snapshot = open_exact_executable_snapshot(
+                    tool_path, "self-test sealed " + label, True
+                )
+                sealed_tools.append(snapshot)
+                tool_path.write_bytes(tool_b)
+                tool_path.chmod(0o755)
+                record = run_command(
+                    [
+                        str(Path("/proc/self/fd") /
+                            str(descriptor_target))
+                    ],
+                    root,
+                    root / ("sealed-" + label + ".stdout.log"),
+                    root / ("sealed-" + label + ".stderr.log"),
+                    5, os.environ.copy(),
+                    inherited_descriptors=(snapshot["descriptor"],),
+                    descriptor_remaps={
+                        descriptor_target: snapshot["descriptor"],
+                    },
+                )
+                tool_path.write_bytes(tool_a)
+                tool_path.chmod(0o755)
+                check(
+                    record["returncode"] == 0 and
+                    (root / (
+                        "sealed-" + label + ".stdout.log"
+                    )).read_bytes() ==
+                    ("{}-a\\n".format(label)).encode("ascii") and
+                    validate_sealed_executable_snapshot(
+                        snapshot, digest_bytes(tool_a),
+                        "self-test sealed " + label,
+                    ) == tool_a,
+                    "{} execution uses a sealed descriptor across a "
+                    "same-inode A-B-A mutation".format(label),
+                )
+        finally:
+            for snapshot in reversed(sealed_tools):
+                close_sealed_snapshot(snapshot)
+
+        fake_git = root / "fake-git"
+        fake_git_child_pid = root / "fake-git-child.pid"
+        fake_git.write_text(
+            "#!/usr/bin/python3\n"
+            "import os,pathlib,signal,time\n"
+            "pid=os.fork()\n"
+            "if pid==0:\n"
+            " os.setsid()\n"
+            " target=pathlib.Path({!r})\n"
+            " tmp=target.with_suffix('.tmp')\n"
+            " tmp.write_text(str(os.getpid()),encoding='ascii')\n"
+            " os.replace(str(tmp),str(target))\n"
+            " signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+            " time.sleep(30)\n"
+            " os._exit(0)\n"
+            "deadline=time.monotonic()+5\n"
+            "while not pathlib.Path({!r}).exists() and "
+            "time.monotonic()<deadline: time.sleep(.01)\n"
+            "raise SystemExit(0)\n".format(
+                str(fake_git_child_pid), str(fake_git_child_pid)
+            ),
+            encoding="utf-8",
+        )
+        fake_git.chmod(0o700)
+        original_canonical_git = globals()["CANONICAL_GIT"]
+        try:
+            globals()["CANONICAL_GIT"] = fake_git
+            git_command_bytes(root, ("status",), "self-test bounded Git")
+        finally:
+            globals()["CANONICAL_GIT"] = original_canonical_git
+        fake_git_pid = int(fake_git_child_pid.read_text(encoding="ascii"))
+        check(
+            proc_record(fake_git_pid) is None,
+            "Git provenance helper descendant is killed and reaped",
+        )
+
+        resume_root = root / "resumable-job"
+        resume_log_root = resume_root / "logs" / "resume-fixture"
+        resume_raw_root = resume_root / "raw" / "resume-fixture"
+        resume_job_root = resume_root / "jobs"
+        for directory_path in (
+                resume_log_root, resume_raw_root, resume_job_root):
+            directory_path.mkdir(parents=True, mode=0o700)
+            directory_path.chmod(0o700)
+        resume_root.chmod(0o700)
+        (resume_root / "logs").chmod(0o700)
+        (resume_root / "raw").chmod(0o700)
+        resume_order = ["direct", "transform"]
+        for index, mode in enumerate(resume_order):
+            label = "{:02d}-{}".format(index, mode)
+            (resume_log_root / (label + ".stdout.log")).write_bytes(
+                b"stale stdout"
+            )
+            (resume_log_root / (label + ".stderr.log")).write_bytes(
+                b"stale stderr"
+            )
+            (resume_raw_root / (label + ".json")).write_bytes(
+                b'{"stale":true}'
+            )
+            for stale_path in (
+                    resume_log_root / (label + ".stdout.log"),
+                    resume_log_root / (label + ".stderr.log"),
+                    resume_raw_root / (label + ".json")):
+                stale_path.chmod(0o600)
+        atomic_write_json(
+            resume_job_root / "resume-fixture.json",
+            {
+                "configuration_id": "resume-configuration",
+                "schema": JOB_SCHEMA,
+                "status": "failed",
+            }
+        )
+        resume_job = {
+            "build_metadata": {},
+            "cell": {"backend": "scalar"},
+            "configuration_id": "resume-configuration",
+            "executable": "/self-test/executable",
+            "executable_artifact": None,
+            "executable_sha256": "a" * 64,
+            "invocation_order": resume_order,
+            "job_id": "resume-fixture",
+            "seed": 7,
+            "source_identity": {},
+        }
+        resume_context = {
+            "isolation": None,
+            "result_dir": resume_root,
+            "resume": True,
+            "settings": {},
+            "source": root,
+            "timeout": 5,
+        }
+        original_benchmark_argv = globals()["benchmark_argv"]
+        original_validate_execution_inputs = globals()[
+            "validate_execution_inputs"
+        ]
+        original_validate_raw = globals()["validate_raw"]
+        original_summarize_measurements = globals()[
+            "summarize_measurements"
+        ]
+
+        def resume_benchmark_argv(
+                unused_job, unused_mode, output_path, unused_settings):
+            return [
+                sys.executable, "-c",
+                "import pathlib,sys;"
+                "pathlib.Path(sys.argv[1]).write_bytes(b'{}')",
+                str(output_path),
+            ]
+
+        def resume_validate_raw(
+                unused_raw, unused_job, unused_mode, unused_settings):
+            return 1.0, 0.0, {
+                "algorithm": "fixture",
+                "digest": "stable",
+                "hashed_bytes": 1,
+                "requested_parity_indices": [0],
+            }
+
+        try:
+            globals()["benchmark_argv"] = resume_benchmark_argv
+            globals()["validate_execution_inputs"] = (
+                lambda unused_job, unused_root=None: None
+            )
+            globals()["validate_raw"] = resume_validate_raw
+            globals()["summarize_measurements"] = (
+                lambda unused_measurements: {"fixture": "passed"}
+            )
+            resumed_result = run_job(resume_job, resume_context)
+        finally:
+            globals()["benchmark_argv"] = original_benchmark_argv
+            globals()["validate_execution_inputs"] = (
+                original_validate_execution_inputs
+            )
+            globals()["validate_raw"] = original_validate_raw
+            globals()["summarize_measurements"] = (
+                original_summarize_measurements
+            )
+        check(
+            resumed_result["status"] == "passed" and
+            all(
+                (resume_raw_root / "{:02d}-{}.json".format(
+                    index, mode
+                )).read_bytes() == b"{}"
+                for index, mode in enumerate(resume_order)
+            ) and
+            all(
+                (resume_log_root / "{:02d}-{}.stdout.log".format(
+                    index, mode
+                )).read_bytes() == b""
+                for index, mode in enumerate(resume_order)
+            ),
+            "partial job artifacts are safely cleaned and resumable: "
+            "{}".format(resumed_result.get("reason"))
+        )
+
+        def live_descriptor_count():
+            count = 0
+            for name in os.listdir("/proc/self/fd"):
+                try:
+                    descriptor = int(name)
+                    os.fstat(descriptor)
+                except (OSError, ValueError):
+                    continue
+                count += 1
+            return count
+
+        class AbortingIsolationSupport(object):
+            @staticmethod
+            def cpu_stat_snapshot(unused_cpu):
+                raise InjectedAbort("injected isolation snapshot abort")
+
+        abort_job = dict(resume_job)
+        abort_job["configuration_id"] = "abort-configuration"
+        abort_job["job_id"] = "abort-fixture"
+        abort_context = dict(resume_context)
+        abort_context["resume"] = False
+        abort_context["settings"] = {"mode": "screen"}
+        abort_context["isolation"] = {
+            "canonical_guard": object(),
+            "cpu": 0,
+            "pair_guard": object(),
+            "pair_lease": {},
+            "sibling": 1,
+            "support": AbortingIsolationSupport(),
+        }
+        original_validate_authoritative_guards = globals()[
+            "validate_authoritative_guards"
+        ]
+        descriptors_before_abort = live_descriptor_count()
+        try:
+            globals()["validate_authoritative_guards"] = (
+                lambda unused_canonical, unused_pair: None
+            )
+            try:
+                run_job(abort_job, abort_context)
+            except InjectedAbort:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: isolation BaseException was ignored"
+                )
+        finally:
+            globals()["validate_authoritative_guards"] = (
+                original_validate_authoritative_guards
+            )
+        check(
+            live_descriptor_count() == descriptors_before_abort,
+            "run_job closes result/log/raw directories after a "
+            "BaseException during isolation",
+        )
+
+        escaped_pid_path = root / "closed-fd-escape.pid"
+        escape_program = (
+            "import os,pathlib,signal,sys,time\n"
+            "first=os.fork()\n"
+            "if first==0:\n"
+            " os.setsid()\n"
+            " daemon=os.fork()\n"
+            " if daemon!=0: os._exit(0)\n"
+            " null=os.open('/dev/null',os.O_RDWR)\n"
+            " os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
+            " if null>2: os.close(null)\n"
+            " for fd in range(3,256):\n"
+            "  try: os.close(fd)\n"
+            "  except OSError: pass\n"
+            " pathlib.Path(sys.argv[1]).write_text("
+            "str(os.getpid()),encoding='ascii')\n"
+            " signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+            " time.sleep(30)\n"
+            "deadline=time.monotonic()+5\n"
+            "while not os.path.exists(sys.argv[1]) and "
+            "time.monotonic()<deadline: time.sleep(.01)\n"
+            "sys.exit(0 if os.path.exists(sys.argv[1]) else 93)\n"
+        )
+        escaped_record = run_command(
+            [
+                sys.executable, "-c", escape_program,
+                str(escaped_pid_path),
+            ],
+            root, root / "escape.stdout.log", root / "escape.stderr.log",
+            5, os.environ.copy()
+        )
+        escaped_pid = int(escaped_pid_path.read_text(encoding="ascii"))
+        check(
+            escaped_record["returncode"] == 0 and
+            proc_record(escaped_pid) is None,
+            "closed-descriptor double-fork escape is killed and reaped"
+        )
+
+        killed_supervisor_pid_path = root / "killed-supervisor-escape.pid"
+        killed_supervisor_program = (
+            "import os,pathlib,signal,sys,time\n"
+            "first=os.fork()\n"
+            "if first==0:\n"
+            " os.setsid()\n"
+            " daemon=os.fork()\n"
+            " if daemon!=0: os._exit(0)\n"
+            " null=os.open('/dev/null',os.O_RDWR)\n"
+            " os.dup2(null,0);os.dup2(null,1);os.dup2(null,2)\n"
+            " if null>2: os.close(null)\n"
+            " for fd in range(3,256):\n"
+            "  try: os.close(fd)\n"
+            "  except OSError: pass\n"
+            " pathlib.Path(sys.argv[1]).write_text("
+            "str(os.getpid()),encoding='ascii')\n"
+            " signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+            " time.sleep(30)\n"
+            "deadline=time.monotonic()+5\n"
+            "while not os.path.exists(sys.argv[1]) and "
+            "time.monotonic()<deadline: time.sleep(.01)\n"
+            "if not os.path.exists(sys.argv[1]): sys.exit(93)\n"
+            "os.kill(os.getppid(),signal.SIGKILL)\n"
+            "time.sleep(.05)\n"
+            "os._exit(0)\n"
+        )
+        try:
+            run_command(
+                [
+                    sys.executable, "-c", killed_supervisor_program,
+                    str(killed_supervisor_pid_path),
+                ],
+                root,
+                root / "killed-supervisor.stdout.log",
+                root / "killed-supervisor.stderr.log",
+                5, os.environ.copy()
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: killed command supervisor was accepted"
+            )
+        killed_supervisor_escape_pid = int(
+            killed_supervisor_pid_path.read_text(encoding="ascii")
+        )
+        check(
+            proc_record(killed_supervisor_escape_pid) is None,
+            "outer owner reaps a closed-FD escape after supervisor SIGKILL"
+        )
+
+        timeout_pid_path = root / "timeout-tree.pids"
+        timeout_child_program = (
+            "import signal,time; "
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+            "time.sleep(30)"
+        )
+        timeout_program = (
+            "import os,pathlib,signal,subprocess,sys,time\n"
+            "child=subprocess.Popen("
+            "[sys.executable,'-c',{!r}],start_new_session=True)\n"
+            "pathlib.Path({!r}).write_text("
+            "str(os.getpid())+' '+str(child.pid),encoding='ascii')\n"
+            "signal.signal(signal.SIGTERM,signal.SIG_IGN)\n"
+            "time.sleep(30)\n"
+        ).format(timeout_child_program, str(timeout_pid_path))
+        timeout_started = time.monotonic()
+        timeout_record = run_command(
+            [sys.executable, "-c", timeout_program], root,
+            root / "timeout.stdout.log", root / "timeout.stderr.log",
+            2, os.environ.copy()
+        )
+        timeout_elapsed = time.monotonic() - timeout_started
+        check(
+            timeout_record["timed_out"] is True and
+            timeout_record["returncode"] == 124 and
+            timeout_elapsed < 6,
+            "timed-out process tree is terminated in bounded time"
+        )
+        check(
+            timeout_pid_path.is_file(),
+            "timed-out process tree recorded its identities"
+        )
+        timeout_pids = [
+            int(value) for value in timeout_pid_path.read_text(
+                encoding="ascii"
+            ).split()
+        ]
+        check(
+            len(timeout_pids) == 2 and
+            all(proc_record(pid) is None for pid in timeout_pids),
+            "timed-out leader and detached SIGTERM-ignoring child are reaped"
+        )
+
+        collision_stdout = root / "collision.stdout.log"
+        collision_stderr = root / "collision.stderr.log"
+        collision_stdout.write_bytes(b"pre-existing stdout\n")
+        try:
+            run_command(
+                [sys.executable, "-c", "print('must not run')"], root,
+                collision_stdout, collision_stderr, 5, os.environ.copy()
+            )
+        except CrossoverError as error:
+            check(
+                "already exists" in str(error),
+                "pre-existing stdout collision has an actionable rejection"
+            )
+        else:
+            raise CrossoverError(
+                "self-test failed: pre-existing stdout log was replaced"
+            )
+        check(
+            collision_stdout.read_bytes() == b"pre-existing stdout\n" and
+            not collision_stderr.exists(),
+            "pre-existing stdout collision is untouched"
+        )
+
+        collision_stdout.unlink()
+        collision_stderr.write_bytes(b"pre-existing stderr\n")
+        try:
+            run_command(
+                [sys.executable, "-c", "print('must not run')"], root,
+                collision_stdout, collision_stderr, 5, os.environ.copy()
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: pre-existing stderr log was replaced"
+            )
+        check(
+            not collision_stdout.exists() and
+            collision_stderr.read_bytes() == b"pre-existing stderr\n",
+            "stderr collision rolls back its newly reserved stdout log"
+        )
+
+        collision_stderr.unlink()
+        collision_victim = root / "collision-victim.txt"
+        collision_victim.write_bytes(b"symlink victim\n")
+        collision_stdout.symlink_to(collision_victim)
+        try:
+            run_command(
+                [sys.executable, "-c", "print('must not run')"], root,
+                collision_stdout, collision_stderr, 5, os.environ.copy()
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: symbolic-link stdout log was followed"
+            )
+        check(
+            collision_stdout.is_symlink() and
+            collision_victim.read_bytes() == b"symlink victim\n" and
+            not collision_stderr.exists(),
+            "symbolic-link log collision is untouched"
+        )
+
+        inherited_lock_path = root / "coordinator-exit.lock"
+        coordinator_root = root / "coordinator-exit"
+        coordinator_root.mkdir(mode=0o700)
+        coordinator_root.chmod(0o700)
+        child_started_path = coordinator_root / "child-started.pid"
+        child_finished_path = coordinator_root / "child-finished.txt"
+        lock_child_program = (
+            "import os,pathlib,time; "
+            "started=pathlib.Path({!r}); tmp=started.with_suffix('.tmp'); "
+            "tmp.write_text(str(os.getpid()),encoding='ascii'); "
+            "os.replace(str(tmp),str(started)); time.sleep(1.25); "
+            "finished=pathlib.Path({!r}); tmp=finished.with_suffix('.tmp'); "
+            "tmp.write_text('finished',encoding='ascii'); "
+            "os.replace(str(tmp),str(finished))"
+        ).format(str(child_started_path), str(child_finished_path))
+        module_path = str(Path(__file__).resolve())
+        coordinator_program = (
+            "import fcntl,importlib.util,os,sys; "
+            "spec=importlib.util.spec_from_file_location("
+            "'leo2_lock_lifetime_fixture',{!r}); "
+            "module=importlib.util.module_from_spec(spec); "
+            "sys.modules[spec.name]=module; spec.loader.exec_module(module); "
+            "lock=os.open({!r},os.O_RDWR|os.O_CREAT,0o600); "
+            "fcntl.flock(lock,fcntl.LOCK_EX); "
+            "module.run_command([sys.executable,'-c',{!r}],{!r},"
+            "{!r},{!r},10,os.environ.copy(),"
+            "inherited_lock_descriptor=lock)"
+        ).format(
+            module_path, str(inherited_lock_path), lock_child_program,
+            str(coordinator_root),
+            str(coordinator_root / "stdout.log"),
+            str(coordinator_root / "stderr.log"),
+        )
+        coordinator = None
+        try:
+            coordinator = subprocess.Popen(
+                [sys.executable, "-c", coordinator_program],
+                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL, start_new_session=True,
+            )
+            inherited_child_pid = None
+            child_started_deadline = time.monotonic() + 5
+            while time.monotonic() < child_started_deadline:
+                if coordinator.poll() is not None:
+                    break
+                try:
+                    candidate_pid = int(child_started_path.read_text(
+                        encoding="ascii"
+                    ))
+                    if candidate_pid > 0:
+                        inherited_child_pid = candidate_pid
+                        break
+                except (FileNotFoundError, OSError, UnicodeError, ValueError):
+                    pass
+                time.sleep(0.01)
+            check(
+                inherited_child_pid is not None and
+                coordinator.poll() is None,
+                "coordinator-exit fixture launched its timed child"
+            )
+            coordinator.kill()
+            coordinator.wait(timeout=5)
+        finally:
+            if coordinator is not None:
+                if coordinator.poll() is None:
+                    coordinator.kill()
+                try:
+                    coordinator.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    coordinator.kill()
+                    coordinator.wait(timeout=5)
+
+        def lock_can_be_acquired():
+            descriptor = os.open(
+                str(inherited_lock_path), os.O_RDWR | os.O_CLOEXEC
+            )
+            try:
+                try:
+                    fcntl.flock(
+                        descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB
+                    )
+                except BlockingIOError:
+                    return False
+                return True
+            finally:
+                # Close-only lifetime is the contract under test.
+                os.close(descriptor)
+
+        check(
+            not lock_can_be_acquired(),
+            "coordinator SIGKILL does not release a timed child's lock"
+        )
+        child_finished_deadline = time.monotonic() + 5
+        while (not child_finished_path.is_file() and
+               time.monotonic() < child_finished_deadline):
+            time.sleep(0.01)
+        check(
+            child_finished_path.is_file(),
+            "inherited-lock child completed after coordinator SIGKILL"
+        )
+        lock_release_deadline = time.monotonic() + 5
+        while time.monotonic() < lock_release_deadline:
+            if lock_can_be_acquired():
+                break
+            time.sleep(0.01)
+        else:
+            raise CrossoverError(
+                "self-test failed: inherited lock was not released after "
+                "the timed child closed its descriptor"
+            )
+        try:
+            os.waitpid(inherited_child_pid, 0)
+        except ChildProcessError:
+            pass
+
         result_root = root / "results"
         manifest_path = result_root / "manifest.json"
         for label, invalid_manifest in (
@@ -5266,6 +12740,24 @@ def self_test():
                     "configuration_id": "legacy",
                     "jobs": [], "schema":
                         "leopard2-direct-encode-crossover/v2",
+                    "settings": {},
+                }),
+                ("v3 manifest without small-direct mode binding", {
+                    "configuration_id": "legacy",
+                    "jobs": [], "schema":
+                        "leopard2-direct-encode-crossover/v3",
+                    "settings": {},
+                }),
+                ("v4 directory-fd raw-output manifest", {
+                    "configuration_id": "legacy",
+                    "jobs": [], "schema":
+                        "leopard2-direct-encode-crossover/v4",
+                    "settings": {},
+                }),
+                ("v5 mutable-launcher manifest", {
+                    "configuration_id": "legacy",
+                    "jobs": [], "schema":
+                        "leopard2-direct-encode-crossover/v5",
                     "settings": {},
                 }),
                 ("relabeled v1 manifest", {
@@ -5412,6 +12904,107 @@ def self_test():
             "hostile inherited Git config or PATH changed source identity"
         )
 
+        race_repository = root / "snapshot-race-repository"
+        race_repository.mkdir()
+        fixture_git(race_repository, ("init", "-q"))
+        fixture_git(
+            race_repository, ("config", "user.name", "Self Test")
+        )
+        fixture_git(
+            race_repository,
+            ("config", "user.email", "self@test.invalid"),
+        )
+        (race_repository / "tracked.txt").write_text(
+            "snapshot a\n", encoding="utf-8"
+        )
+        fixture_git(race_repository, ("add", "tracked.txt"))
+        fixture_git(
+            race_repository, ("commit", "-q", "-m", "snapshot a")
+        )
+        race_commit_a = fixture_git(
+            race_repository, ("rev-parse", "HEAD")
+        ).decode("ascii").strip()
+        (race_repository / "tracked.txt").write_text(
+            "snapshot b\n", encoding="utf-8"
+        )
+        fixture_git(
+            race_repository, ("commit", "-q", "-am", "snapshot b")
+        )
+        race_commit_b = fixture_git(
+            race_repository, ("rev-parse", "HEAD")
+        ).decode("ascii").strip()
+        fixture_git(
+            race_repository, ("reset", "--hard", "-q", race_commit_a)
+        )
+        race_worktree = root / "snapshot-race-worktree"
+        fixture_git(race_repository, (
+            "worktree", "add", "-q", "-b", "snapshot-race-worktree",
+            str(race_worktree), race_commit_a,
+        ))
+
+        def reject_cross_bound_snapshot(
+                capture_root, mutation_root, trigger_root,
+                baseline_commit, raced_commit, label):
+            original_git_command = globals()["git_command_bytes"]
+            triggered = [False]
+
+            def racing_git_command(
+                    source_value, arguments, description, git_tool=None):
+                if (not triggered[0] and
+                        Path(source_value).resolve() ==
+                        Path(trigger_root).resolve() and
+                        tuple(arguments) ==
+                        ("ls-files", "-s", "-z")):
+                    triggered[0] = True
+                    fixture_git(
+                        mutation_root,
+                        ("reset", "--hard", "-q", raced_commit),
+                    )
+                return original_git_command(
+                    source_value, arguments, description, git_tool
+                )
+
+            try:
+                globals()["git_command_bytes"] = racing_git_command
+                try:
+                    source_identity(capture_root, require_clean=False)
+                except CrossoverError:
+                    pass
+                else:
+                    raise CrossoverError(
+                        "self-test failed: {} source-snapshot race was "
+                        "accepted".format(label)
+                    )
+                check(
+                    triggered[0],
+                    "{} source-snapshot race fixture executed".format(label),
+                )
+            finally:
+                globals()["git_command_bytes"] = original_git_command
+                fixture_git(
+                    mutation_root,
+                    ("reset", "--hard", "-q", baseline_commit),
+                )
+
+        reject_cross_bound_snapshot(
+            race_repository, race_repository, race_repository,
+            race_commit_a, race_commit_b, "ordinary repository",
+        )
+        reject_cross_bound_snapshot(
+            race_worktree, race_worktree, race_worktree,
+            race_commit_a, race_commit_b, "linked worktree",
+        )
+        module_baseline = fixture_git(
+            module, ("rev-parse", "HEAD")
+        ).decode("ascii").strip()
+        module_prior = fixture_git(
+            module, ("rev-parse", "HEAD^")
+        ).decode("ascii").strip()
+        reject_cross_bound_snapshot(
+            superproject, module, module,
+            module_baseline, module_prior, "submodule",
+        )
+
         fixture_git(module, ("config", "user.name", "Self Test"))
         fixture_git(module, ("config", "user.email", "self@test.invalid"))
         (module / "tracked.txt").write_text(
@@ -5452,7 +13045,8 @@ def self_test():
     print(
         "leopard2 direct-encode crossover self-test passed "
         "(strict JSON/schema, provenance, parity, metric, summary, "
-        "Git-closure, and ABBA mutations; no codec required)"
+        "Git-closure, ABBA mutations, process-tree cleanup, inherited-lock "
+        "lifetime, and exclusive-log collisions; no codec required)"
     )
     return 0
 
@@ -5516,8 +13110,13 @@ def parser():
         screen, "results/leopard2/direct-encode-crossover/screen"
     )
     screen.set_defaults(workers=min(len(allowed_cpus()), 128))
+    pinned_help = (
+        "Disabled legacy command: external artifacts cannot prove clean "
+        "source/object/archive/link closure. Use screen for diagnostics or "
+        "historical-avx2 for authoritative evidence."
+    )
     pinned = subparsers.add_parser(
-        "pinned", help="run isolated, externally pinned ABBA measurements"
+        "pinned", help=pinned_help, description=pinned_help,
     )
     add_run_arguments(
         pinned, "results/leopard2/direct-encode-crossover/pinned"
@@ -5554,7 +13153,7 @@ def parser():
     )
     analyze.add_argument(
         "--result-dir",
-        default="results/leopard2/direct-encode-crossover/pinned",
+        default="results/leopard2/direct-encode-crossover/historical-avx2",
     )
     analyze.add_argument(
         "--promotion-percent", type=finite_percentage, default=5.0
@@ -5598,4 +13197,10 @@ def main():
 
 
 if __name__ == "__main__":
+    if (len(sys.argv) >= 2 and
+            sys.argv[1] == DIRECT_COMMAND_OWNER_MODE):
+        sys.exit(direct_command_owner(sys.argv[2:]))
+    if (len(sys.argv) >= 2 and
+            sys.argv[1] == DIRECT_COMMAND_SUPERVISOR_MODE):
+        sys.exit(direct_command_supervisor(sys.argv[2:]))
     sys.exit(main())
