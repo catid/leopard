@@ -1,10 +1,71 @@
-# Session resume state — 2026-07-28, branch `codex/leopard2`
+# Session resume state — 2026-07-29, branch `codex/leopard2`
 
 Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
     /home/catid/.nvm/versions/node/v24.1.0/bin/bd
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
+
+## 2026-07-29 bug-first resume gate
+
+The pre-optimization bug hunt is complete.  Nine reviewable commits capture
+the previously uncommitted AVX2 experiment and evidence work:
+
+- `4de69ba` — default-off small-direct AVX2 dispatch/executor introspection;
+- `9cf3f67` — compiler-replay transport and semantic compile closure;
+- `96c67cf` — exact-main immutable Git/executable/evidence capture;
+- `fca72cc` — all-K identity-bound descriptor and atomic evidence ownership;
+- `4e25515` — bounded small-direct ABBA/exhaustive experiment runners;
+- `8b91f0a` — CMake experiment, sanitizer, architecture, and attestation model;
+- `30e61f2` — direct-encode crossover evidence hardening;
+- `f9a22c1` — balanced-promotion evidence validation; and
+- `046158f` — remaining benchmark helper fail-closed boundaries.
+
+Concrete bugs fixed in the final pass included:
+
+- PairLease and Git-symlink descriptor transfer gaps;
+- all-K evidence-directory acquisition/close interruption gaps;
+- benchmark-attestation mutation through a symlinked output ancestor;
+- quoted/custom/multi-config sanitizer misclassification;
+- Apple target-architecture selection;
+- partial PID-marker publication and short-lived lab observation fixtures;
+- stale CMake attestation identity; and
+- a structural-verifier error that collapsed exact `STREQUAL` comparisons
+  against empty/zero into truthiness, incorrectly equating `OFF` with an empty
+  build type.
+
+Fresh validation at the committed source content:
+
+- GNU 13 Release: 113/113 CTests passed in 423.22 seconds using `-j30`;
+- exact-main runner: 125/125 under normal Python and 125/125 under `-O`;
+- all-K runner: 78/78 under normal Python and 78/78 under `-O`;
+- provenance: 71/71 on Python 3.12 and 3.13, normal and `-O`;
+- Visual Studio/CMake graph verifier: 145/145 normal and `-O`;
+- Clang 18 ASan+UBSan mode 2: API, dense-policy, and high/low-duality tests
+  passed; the exhaustive GF8 direct-repair executable checked 1,982,812
+  erasure patterns / 162,888,934 basis symbols without a sanitizer finding;
+- benchmark schema v6 reported the expected `source_major` executor for
+  K=8, R=8, L=5, 65-byte shards; and
+- both Python 3.12/3.13 compilation and `git diff --check` passed.
+
+The independent C++ audit found no correctness, UB, bounds, aliasing,
+concurrency, or backend-dispatch defect in the current direct-repair changes.
+The experimental small-direct selector remains disabled by default.
+
+One independent audit found a distinct, still-open authoritative replay gap:
+`leopard-79h.38.5.10.38.2.3.15.4.1`.  The selected Make target can still reach
+an added literal recipe, `cmake -E env` can launch an unretained helper, and a
+mutated reachable `DependInfo.cmake` can execute CMake language.  Do not treat
+clean-replay timings as authoritative until the complete selected
+target/prerequisite/recipe and executable CMake-input inventory is bound.
+This does not invalidate codec correctness tests or frozen-binary diagnostic
+screens.
+
+Resume the active AVX2 GF(256) goal with
+`leopard-79h.38.5.10.39`, `.39.2`, and `.39.2.2`: prototype and screen
+one-loss direct-L1 fusion against Leopard1 using lane-owned frozen binaries.
+Keep the default production build unchanged until a candidate meets the
+correctness and neighboring-regression gates.
 
 ## P0 pre-resume bug gate completed
 
