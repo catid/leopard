@@ -46,16 +46,59 @@ import time
 from pathlib import Path
 
 
-SCHEMA = "leopard2-direct-encode-crossover/v2"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v2"
+SCHEMA = "leopard2-direct-encode-crossover/v3"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v3"
 ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v2"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v2"
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
-FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v1"
+FROZEN_EXECUTABLE_SCHEMA = "leopard2-frozen-executable/v2"
 AUTHORITATIVE_COMMANDS = ("pinned", "historical-avx2")
 AUTHORITATIVE_LOCK = Path("/tmp/leopard-gf8-authoritative.lock")
 CANONICAL_GIT = Path("/usr/bin/git")
-CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v2"
+CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v3"
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v1"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = (
+    "leopard2-benchmark-build-configuration/v1"
+)
+BUILD_CONFIGURATION_RELATIVE_PATH = (
+    "generated/leopard2-benchmark-attestation/"
+    "leopard2_benchmark_build_configuration.txt"
+)
+BUILD_CONFIGURATION_VARIABLES = (
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_GENERATOR",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CXX_COMPILER",
+    "CMAKE_CXX_FLAGS",
+    "CMAKE_CXX_FLAGS_DEBUG",
+    "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
+    "CMAKE_CXX_FLAGS_MINSIZEREL",
+    "ENABLE_OPENMP",
+    "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16",
+    "LEO2_BACKEND_VARIANT",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE",
+    "LEO2_BUILD_BENCHMARKS",
+    "LEO2_BUILD_TESTS",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+)
+CMAKE_CACHE_ENTRY_TYPES = frozenset((
+    "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
+    "UNINITIALIZED",
+))
+CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
+    # These two bindings are written by the attestation producer itself.
+    # Other cache variables may legitimately retain a caller-selected cache
+    # type (for example STRING instead of FILEPATH/BOOL), so their values and
+    # uniqueness are authenticated without imposing a cosmetic type.
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+        frozenset(("INTERNAL",)),
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+        frozenset(("INTERNAL",)),
+}
 BENCHMARK_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -82,6 +125,72 @@ class CrossoverError(Exception):
 
 class AuthoritativeGuardError(CrossoverError):
     """A held canonical or physical-pair guard was lost or replaced."""
+
+
+def attested_text(value, description):
+    if not isinstance(value, str):
+        raise CrossoverError("{} is not text".format(description))
+    try:
+        value.encode("utf-8")
+    except UnicodeError as error:
+        raise CrossoverError(
+            "{} is not valid UTF-8 text: {}".format(description, error)
+        )
+    forbidden = sorted(set(value) & {"\0", "\n", "\r"})
+    if forbidden:
+        raise CrossoverError(
+            "{} contains a forbidden record delimiter".format(description)
+        )
+    return value
+
+
+def checked_path(value, description):
+    try:
+        path_value = os.fspath(value)
+    except (OSError, TypeError, ValueError) as error:
+        raise CrossoverError("{} is not a valid path: {}".format(
+            description, error
+        ))
+    if isinstance(path_value, bytes):
+        try:
+            path_value = os.fsdecode(path_value)
+        except (OSError, UnicodeError, ValueError) as error:
+            raise CrossoverError("{} is not a valid path: {}".format(
+                description, error
+            ))
+    if not isinstance(path_value, str) or "\0" in path_value:
+        raise CrossoverError(
+            "{} is not a valid NUL-free path".format(description)
+        )
+    try:
+        return Path(path_value)
+    except (OSError, TypeError, ValueError) as error:
+        raise CrossoverError("{} is not a valid path: {}".format(
+            description, error
+        ))
+
+
+def checked_absolute_path(value, description):
+    path = checked_path(value, description)
+    try:
+        absolute = path.is_absolute()
+    except (OSError, ValueError) as error:
+        raise CrossoverError("{} cannot be checked: {}".format(
+            description, error
+        ))
+    if not absolute:
+        raise CrossoverError("{} is not absolute".format(description))
+    return path
+
+
+def checked_resolve(value, description, strict=False):
+    path = checked_path(value, description)
+    try:
+        return path.resolve(strict=strict)
+    except (OSError, RuntimeError, ValueError) as error:
+        raise CrossoverError("{} cannot be resolved: {}".format(
+            description, error
+        ))
 
 
 def load_isolation_support(source):
@@ -301,6 +410,10 @@ def digest_value(value):
 def evidence_contract(frozen_executable_required):
     return {
         "benchmark_schema": BENCHMARK_SCHEMA,
+        "build_configuration_attestation_schema":
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        "build_configuration_file_schema":
+            BUILD_CONFIGURATION_FILE_SCHEMA,
         "execution_mad_path": (
             "metrics.encode_execution.mad_us_per_batch_call"
         ),
@@ -1126,8 +1239,180 @@ def find_executable(root, backend):
     )
 
 
+def build_configuration_digest(entries):
+    if not isinstance(entries, dict):
+        raise CrossoverError(
+            "effective CMake configuration is not an object"
+        )
+    if set(entries) != set(BUILD_CONFIGURATION_VARIABLES):
+        raise CrossoverError(
+            "effective CMake configuration has unexpected variables"
+        )
+    for variable in BUILD_CONFIGURATION_VARIABLES:
+        attested_text(
+            entries[variable],
+            "effective CMake configuration value {}".format(variable)
+        )
+    material = "".join(
+        "{}={}\n".format(variable, entries[variable])
+        for variable in BUILD_CONFIGURATION_VARIABLES
+    )
+    return digest_bytes(material.encode("utf-8"))
+
+
+def read_build_configuration_attestation(path):
+    configuration_path = checked_path(
+        path, "effective CMake configuration path"
+    )
+    try:
+        encoded = configuration_path.read_bytes()
+        text = encoded.decode("utf-8")
+    except (OSError, UnicodeError, ValueError) as error:
+        raise CrossoverError(
+            "cannot read effective CMake configuration {}: {}".format(
+                path, error
+            )
+        )
+    if "\0" in text or "\r" in text:
+        raise CrossoverError(
+            "effective CMake configuration contains a forbidden delimiter"
+        )
+    if not text.endswith("\n"):
+        raise CrossoverError(
+            "effective CMake configuration is not newline-terminated"
+        )
+    # The v1 framing delimiter is exactly LF.  str.splitlines() recognizes
+    # additional Unicode separators that CMake validly preserves inside a
+    # value, which would make the reader disagree with the producer.
+    lines = text[:-1].split("\n")
+    expected_count = 2 + len(BUILD_CONFIGURATION_VARIABLES)
+    if len(lines) != expected_count:
+        raise CrossoverError(
+            "effective CMake configuration has {} lines, expected {}".format(
+                len(lines), expected_count
+            )
+        )
+    if lines[0] != "schema={}".format(BUILD_CONFIGURATION_FILE_SCHEMA):
+        raise CrossoverError(
+            "effective CMake configuration has an invalid schema"
+        )
+    if not lines[1].startswith("sha256="):
+        raise CrossoverError(
+            "effective CMake configuration omits its digest"
+        )
+    declared_digest = lines[1][len("sha256="):]
+    entries = {}
+    for variable, line in zip(
+            BUILD_CONFIGURATION_VARIABLES, lines[2:]):
+        prefix = "{}=".format(variable)
+        if not line.startswith(prefix):
+            raise CrossoverError(
+                "effective CMake configuration expected {}, found {!r}".format(
+                    variable, line
+                )
+            )
+        entries[variable] = line[len(prefix):]
+    actual_digest = build_configuration_digest(entries)
+    if (not re.fullmatch(r"[0-9a-f]{64}", declared_digest) or
+            declared_digest != actual_digest):
+        raise CrossoverError(
+            "effective CMake configuration digest is invalid"
+        )
+    return {
+        "entries": entries,
+        "path": str(checked_resolve(
+            configuration_path, "effective CMake configuration path"
+        )),
+        "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        "sha256": actual_digest,
+    }
+
+
+def validate_build_configuration_attestation(value, expected_path=None):
+    expected_keys = {"entries", "path", "schema", "sha256"}
+    if not isinstance(value, dict) or set(value) != expected_keys:
+        raise CrossoverError(
+            "benchmark effective-configuration attestation is invalid"
+        )
+    if not isinstance(value.get("path"), str):
+        raise CrossoverError(
+            "benchmark effective-configuration attestation is invalid"
+        )
+    try:
+        attested_text(value.get("schema"), "attestation schema")
+        attested_path = checked_absolute_path(
+            value.get("path"), "attestation path"
+        )
+        attested_text(value.get("sha256"), "attestation digest")
+        valid = (
+            value.get("schema") ==
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA and
+            re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
+            value["sha256"] == build_configuration_digest(
+                value.get("entries")
+            )
+        )
+    except CrossoverError:
+        raise
+    if not valid:
+        raise CrossoverError(
+            "benchmark effective-configuration attestation is invalid"
+        )
+    if (expected_path is not None and checked_resolve(
+            attested_path, "attestation path") != checked_resolve(
+                expected_path, "expected attestation path")):
+        raise CrossoverError(
+            "benchmark effective-configuration path is unexpected"
+        )
+    return value["sha256"]
+
+
+def parse_selected_cmake_cache(cache_bytes, prefixes, description):
+    try:
+        cache_lines = cache_bytes.decode("utf-8").split("\n")
+    except (AttributeError, UnicodeError) as error:
+        raise CrossoverError("cannot read {}: {}".format(description, error))
+    entries = {}
+    for line in cache_lines:
+        if not line or line.startswith(("#", "//")) or "=" not in line:
+            continue
+        typed_key, value = line.split("=", 1)
+        key = typed_key.split(":", 1)[0]
+        if not any(
+                key == prefix or key.startswith(prefix + "_")
+                for prefix in prefixes):
+            continue
+        if typed_key.count(":") != 1:
+            raise CrossoverError(
+                "{} contains malformed selected cache key {!r}".format(
+                    description, typed_key
+                )
+            )
+        key, entry_type = typed_key.split(":", 1)
+        if (not key or not re.fullmatch(r"[A-Za-z0-9_.+-]+", key) or
+                entry_type not in CMAKE_CACHE_ENTRY_TYPES or
+                key in entries):
+            raise CrossoverError(
+                "{} contains malformed or duplicate selected cache key "
+                "{!r}".format(description, key)
+            )
+        allowed_types = CMAKE_CACHE_REQUIRED_ENTRY_TYPES.get(key)
+        if allowed_types is not None and entry_type not in allowed_types:
+            raise CrossoverError(
+                "{} cache key {} has type {}, expected one of {}".format(
+                    description, key, entry_type,
+                    sorted(allowed_types)
+                )
+            )
+        entries[key] = attested_text(
+            value, "CMake cache value {}".format(key)
+        )
+    return entries
+
+
 def cmake_build_metadata(executable):
     """Fingerprint the CMake inputs nearest an already-built benchmark."""
+    executable = checked_path(executable, "benchmark executable")
     cache = None
     directory = executable.parent
     for candidate_root in (directory, directory.parent, directory.parent.parent):
@@ -1143,32 +1428,43 @@ def cmake_build_metadata(executable):
         )
     try:
         cache_bytes = cache.read_bytes()
-        cache_lines = cache_bytes.decode("utf-8").splitlines()
     except (OSError, UnicodeError) as error:
         raise CrossoverError("cannot read {}: {}".format(cache, error))
     prefixes = (
-        "CMAKE_BINARY_DIR", "CMAKE_BUILD_TYPE", "CMAKE_C_COMPILER", "CMAKE_C_FLAGS",
-        "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS", "CMAKE_GENERATOR",
+        "CMAKE_BINARY_DIR", "CMAKE_BUILD_TYPE", "CMAKE_CONFIGURATION_TYPES",
+        "CMAKE_C_COMPILER", "CMAKE_C_FLAGS", "CMAKE_CXX_COMPILER",
+        "CMAKE_CXX_FLAGS", "CMAKE_GENERATOR",
         "CMAKE_HOME_DIRECTORY",
         "ENABLE_OPENMP", "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16",
         "LEO2_BACKEND_VARIANT", "LEO2_BUILD_BENCHMARKS",
         "LEO2_BENCHMARK_GIT_EXECUTABLE",
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
         "LEO2_BUILD_FUZZERS", "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     )
-    entries = {}
-    for line in cache_lines:
-        if not line or line.startswith(("#", "//")) or "=" not in line:
-            continue
-        typed_key, value = line.split("=", 1)
-        key = typed_key.split(":", 1)[0]
-        if any(key == prefix or key.startswith(prefix + "_") for prefix in prefixes):
-            entries[key] = value
+    entries = parse_selected_cmake_cache(
+        cache_bytes, prefixes, str(cache)
+    )
     build_root = cache.parent
+    build_configuration_path = (
+        build_root / BUILD_CONFIGURATION_RELATIVE_PATH
+    )
+    build_configuration_attestation = (
+        read_build_configuration_attestation(build_configuration_path)
+    )
+    if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
+            BUILD_CONFIGURATION_FILE_SCHEMA or
+            entries.get(
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
+            ) != build_configuration_attestation["sha256"]):
+        raise CrossoverError(
+            "effective CMake configuration differs from its cache binding"
+        )
     extra_files = {}
     for relative in (
             "compile_commands.json", "CMakeFiles/CMakeConfigureLog.yaml",
             "CMakeFiles/CMakeOutput.log", "build.ninja",
+            BUILD_CONFIGURATION_RELATIVE_PATH,
             "generated/leopard2-benchmark-attestation/"
             "leopard2_benchmark_source_attestation.h",
             "CMakeFiles/leopard.dir/flags.make",
@@ -1198,23 +1494,102 @@ def cmake_build_metadata(executable):
     executable_stat = executable.stat()
     return {
         "binding_scope": (
-            "exact executable, CMake cache, compile database/generator graph, "
-            "direct benchmark object/link recipe, and present test-hook "
-            "archive/object hashes; embedded clean Git commit/tree attestation "
-            "and full tracked-worktree hashes are validated separately"
+            "exact executable, effective-configuration sidecar, CMake cache, "
+            "available compile database/generator graph, direct benchmark "
+            "object/link recipe, and present test-hook archive/object hashes; "
+            "embedded clean Git commit/tree attestation and full tracked-"
+            "worktree hashes are validated separately"
         ),
-        "build_root": str(build_root.resolve()),
-        "cmake_cache": str(cache.resolve()),
+        "build_root": str(checked_resolve(
+            build_root, "CMake build root"
+        )),
+        "cmake_cache": str(checked_resolve(cache, "CMake cache")),
         "cmake_cache_sha256": digest_bytes(cache_bytes),
+        "effective_configuration_attestation":
+            build_configuration_attestation,
         "entries": entries,
         "executable": {
             "mtime_ns": executable_stat.st_mtime_ns,
-            "path": str(executable.resolve()),
+            "path": str(checked_resolve(
+                executable, "benchmark executable"
+            )),
             "sha256": digest_bytes(executable.read_bytes()),
             "size": executable_stat.st_size,
         },
         "extra_file_sha256": extra_files,
     }
+
+
+def cmake_configuration_types(entries):
+    if not isinstance(entries, dict):
+        raise CrossoverError(
+            "effective CMake configuration is not an object"
+        )
+    build_type = attested_text(
+        entries.get("CMAKE_BUILD_TYPE"),
+        "effective CMAKE_BUILD_TYPE"
+    )
+    encoded_types = attested_text(
+        entries.get("CMAKE_CONFIGURATION_TYPES"),
+        "effective CMAKE_CONFIGURATION_TYPES"
+    )
+    if not encoded_types:
+        return build_type, ()
+    configuration_types = tuple(encoded_types.split(";"))
+    if (any(not value for value in configuration_types) or
+            len(set(configuration_types)) != len(configuration_types)):
+        raise CrossoverError(
+            "effective CMAKE_CONFIGURATION_TYPES is malformed"
+        )
+    return build_type, configuration_types
+
+
+def cmake_generator_is_multi_config(entries):
+    if not isinstance(entries, dict):
+        raise CrossoverError(
+            "effective CMake configuration is not an object"
+        )
+    generator = attested_text(
+        entries.get("CMAKE_GENERATOR"), "effective CMake generator"
+    )
+    if not generator:
+        raise CrossoverError("effective CMake generator is empty")
+    return (
+        generator == "Xcode" or
+        generator.startswith("Visual Studio") or
+        "Multi-Config" in generator
+    )
+
+
+def validate_embedded_build_type(
+        entries, embedded_build_type, authoritative):
+    embedded_build_type = attested_text(
+        embedded_build_type, "embedded benchmark build type"
+    )
+    build_type, configuration_types = cmake_configuration_types(entries)
+    if cmake_generator_is_multi_config(entries):
+        if not configuration_types:
+            raise CrossoverError(
+                "multi-config CMake generator omits configuration types"
+            )
+        if (not embedded_build_type or
+                embedded_build_type not in configuration_types):
+            raise CrossoverError(
+                "benchmark multi-config build type {!r} is not one of "
+                "{!r}".format(embedded_build_type, configuration_types)
+            )
+    elif embedded_build_type != build_type:
+        raise CrossoverError(
+            "benchmark single-config build type {!r} differs from {!r}".format(
+                embedded_build_type, build_type
+            )
+        )
+    if authoritative and embedded_build_type != "Release":
+        raise CrossoverError(
+            "authoritative benchmark executable must be the Release "
+            "configuration"
+        )
+    return embedded_build_type
 
 
 def validate_build_source_binding(
@@ -1224,33 +1599,95 @@ def validate_build_source_binding(
     entries = metadata.get("entries")
     extra = metadata.get("extra_file_sha256")
     executable = metadata.get("executable")
-    if not all(isinstance(value, dict) for value in (entries, extra, executable)):
+    configuration_attestation = metadata.get(
+        "effective_configuration_attestation"
+    )
+    if not all(isinstance(value, dict) for value in (
+            entries, extra, executable, configuration_attestation)):
         raise CrossoverError("CMake build provenance is incomplete")
+    build_root = metadata.get("build_root")
+    if not isinstance(build_root, str):
+        raise CrossoverError("CMake build provenance omits its build root")
+    try:
+        build_root_path = checked_absolute_path(
+            build_root, "CMake build provenance root"
+        )
+    except CrossoverError:
+        raise CrossoverError("CMake build provenance omits its build root")
+    configuration_sha256 = validate_build_configuration_attestation(
+        configuration_attestation,
+        build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
+    )
+    configuration_entries = configuration_attestation["entries"]
+    if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
+            BUILD_CONFIGURATION_FILE_SCHEMA or
+            entries.get(
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
+            ) != configuration_sha256):
+        raise CrossoverError(
+            "effective CMake configuration differs from its cache binding"
+        )
     home_directory = entries.get("CMAKE_HOME_DIRECTORY")
-    if (not isinstance(home_directory, str) or not home_directory or
-            not Path(home_directory).is_absolute() or
-            Path(home_directory).resolve() != source.resolve()):
+    if not isinstance(home_directory, str) or not home_directory:
         raise CrossoverError("CMake build source root differs from --source")
-    if entries.get("LEO2_BACKEND_VARIANT", "").lower() != backend:
+    try:
+        home_path = checked_absolute_path(
+            home_directory, "CMake build source root"
+        )
+        source_path = checked_resolve(source, "--source")
+    except CrossoverError:
+        raise CrossoverError("CMake build source root differs from --source")
+    if checked_resolve(
+            home_path, "CMake build source root") != source_path:
+        raise CrossoverError("CMake build source root differs from --source")
+    if configuration_entries.get(
+            "LEO2_BACKEND_VARIANT", "").lower() != backend:
         raise CrossoverError(
             "CMake LEO2_BACKEND_VARIANT is {!r}, expected {!r}".format(
-                entries.get("LEO2_BACKEND_VARIANT"), backend
+                configuration_entries.get("LEO2_BACKEND_VARIANT"), backend
             )
         )
-    if entries.get("LEO2_BUILD_BENCHMARKS", "").upper() not in ("1", "ON", "TRUE"):
+    if configuration_entries.get(
+            "LEO2_BUILD_BENCHMARKS", "").upper() not in ("1", "ON", "TRUE"):
         raise CrossoverError("CMake build did not explicitly enable benchmarks")
     if not require_fresh:
         return
     git = source_state.get("git", {})
     if git.get("worktree_clean") is not True:
         raise CrossoverError("authoritative build requires a clean Git source tree")
-    if entries.get("CMAKE_BUILD_TYPE", "").lower() != "release":
-        raise CrossoverError("authoritative build must use CMAKE_BUILD_TYPE=Release")
-    if entries.get("LEO2_BUILD_TESTS", "").upper() not in ("1", "ON", "TRUE"):
+    configured_build_type, configured_types = cmake_configuration_types(
+        configuration_entries
+    )
+    is_multi_config = cmake_generator_is_multi_config(
+        configuration_entries
+    )
+    if ((is_multi_config and "Release" not in configured_types) or
+            (not is_multi_config and configured_build_type != "Release")):
+        raise CrossoverError(
+            "authoritative build must provide the Release configuration"
+        )
+    if configuration_entries.get(
+            "LEO2_BUILD_TESTS", "").upper() not in ("1", "ON", "TRUE"):
         raise CrossoverError("authoritative build did not explicitly enable tests")
-    embedded_git = entries.get("LEO2_BENCHMARK_GIT_EXECUTABLE")
-    if (not isinstance(embedded_git, str) or not embedded_git or
-            Path(embedded_git).resolve() != CANONICAL_GIT):
+    embedded_git = configuration_entries.get(
+        "LEO2_BENCHMARK_GIT_EXECUTABLE"
+    )
+    if not isinstance(embedded_git, str) or not embedded_git:
+        raise CrossoverError(
+            "authoritative benchmark attestation did not use canonical "
+            "{}".format(CANONICAL_GIT)
+        )
+    try:
+        embedded_git_path = checked_absolute_path(
+            embedded_git, "attested Git executable"
+        )
+    except CrossoverError:
+        raise CrossoverError(
+            "authoritative benchmark attestation did not use canonical "
+            "{}".format(CANONICAL_GIT)
+        )
+    if checked_resolve(
+            embedded_git_path, "attested Git executable") != CANONICAL_GIT:
         raise CrossoverError(
             "authoritative benchmark attestation did not use canonical "
             "{}".format(CANONICAL_GIT)
@@ -1259,6 +1696,7 @@ def validate_build_source_binding(
         "compile_commands.json",
         "CMakeFiles/bench_leopard2_direct_encode.dir/"
         "bench/leopard2/direct_encode_benchmark.cpp.o",
+        BUILD_CONFIGURATION_RELATIVE_PATH,
         "generated/leopard2-benchmark-attestation/"
         "leopard2_benchmark_source_attestation.h",
     }
@@ -1954,33 +2392,6 @@ def required_mapping(value, path):
     return value
 
 
-def build_configuration_digest(entries):
-    if not isinstance(entries, dict):
-        raise CrossoverError("CMake entries for build digest are not an object")
-    variables = (
-        "CMAKE_BUILD_TYPE",
-        "CMAKE_CXX_COMPILER",
-        "CMAKE_CXX_FLAGS",
-        "CMAKE_CXX_FLAGS_DEBUG",
-        "CMAKE_CXX_FLAGS_RELEASE",
-        "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
-        "CMAKE_CXX_FLAGS_MINSIZEREL",
-        "ENABLE_OPENMP",
-        "LEOPARD_ENABLE_GF8",
-        "LEOPARD_ENABLE_GF16",
-        "LEO2_BACKEND_VARIANT",
-        "LEO2_BENCHMARK_GIT_EXECUTABLE",
-        "LEO2_BUILD_BENCHMARKS",
-        "LEO2_BUILD_TESTS",
-        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
-    )
-    material = "".join(
-        "{}={}\n".format(variable, entries.get(variable, ""))
-        for variable in variables
-    )
-    return digest_bytes(material.encode("utf-8"))
-
-
 def require_exact_keys(value, expected, path):
     mapping = required_mapping(value, path)
     actual = set(mapping)
@@ -2091,12 +2502,55 @@ def validate_raw(raw, job, timed_mode, settings):
         )
     try:
         entries = job["build_metadata"]["entries"]
+        build_root = job["build_metadata"]["build_root"]
+        configuration_attestation = job["build_metadata"][
+            "effective_configuration_attestation"
+        ]
     except (KeyError, TypeError):
-        raise CrossoverError("job omits CMake entries for build attestation")
-    expected_build_type = entries.get("CMAKE_BUILD_TYPE", "")
-    if (build.get("build_type") != expected_build_type or
-            build.get("build_configuration_sha256") !=
-            build_configuration_digest(entries)):
+        raise CrossoverError(
+            "job omits CMake effective-configuration attestation"
+        )
+    if not isinstance(build_root, str):
+        raise CrossoverError("job omits its absolute CMake build directory")
+    try:
+        build_root_path = checked_absolute_path(
+            build_root, "job CMake build directory"
+        )
+    except CrossoverError:
+        raise CrossoverError("job omits its absolute CMake build directory")
+    home_directory = entries.get("CMAKE_HOME_DIRECTORY")
+    if not isinstance(home_directory, str) or not home_directory:
+        raise CrossoverError(
+            "job omits its absolute CMake source directory"
+        )
+    try:
+        checked_absolute_path(
+            home_directory, "job CMake source directory"
+        )
+    except CrossoverError:
+        raise CrossoverError(
+            "job omits its absolute CMake source directory"
+        )
+    attested_configuration_sha256 = (
+        validate_build_configuration_attestation(
+            configuration_attestation,
+            build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
+        )
+    )
+    if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
+            BUILD_CONFIGURATION_FILE_SCHEMA or
+            entries.get(
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
+            ) != attested_configuration_sha256):
+        raise CrossoverError(
+            "job effective CMake configuration differs from its cache binding"
+        )
+    validate_embedded_build_type(
+        configuration_attestation["entries"], build.get("build_type"),
+        settings.get("mode") in AUTHORITATIVE_COMMANDS
+    )
+    if (build.get("build_configuration_sha256") !=
+            attested_configuration_sha256):
         raise CrossoverError(
             "benchmark executable build configuration differs from CMake"
         )
@@ -3251,7 +3705,7 @@ def validate_manifest(manifest, path):
     if (not isinstance(settings, dict) or not isinstance(jobs, list) or
             not jobs or not isinstance(executables, dict) or not executables or
             not isinstance(source_state, dict)):
-        raise CrossoverError("{} omits required v2 manifest fields".format(path))
+        raise CrossoverError("{} omits required v3 manifest fields".format(path))
     expected_job_keys = {
         "build_metadata", "cell", "configuration_id", "executable",
         "executable_artifact", "executable_sha256", "invocation_order",
@@ -3259,7 +3713,7 @@ def validate_manifest(manifest, path):
     }
     if any(not isinstance(job, dict) or set(job) != expected_job_keys
            for job in jobs):
-        raise CrossoverError("{} contains an invalid v2 job".format(path))
+        raise CrossoverError("{} contains an invalid v3 job".format(path))
     validate_manifest_settings(settings, jobs, path)
     validate_controlled_build(settings, jobs, path)
     contract = evidence_contract(settings.get("frozen_executable_required") is True)
@@ -3276,7 +3730,7 @@ def validate_manifest(manifest, path):
     expected_executables = {}
     for job in jobs:
         if not isinstance(job, dict) or set(job) != expected_job_keys:
-            raise CrossoverError("{} contains an invalid v2 job".format(path))
+            raise CrossoverError("{} contains an invalid v3 job".format(path))
         validate_cell_value(job.get("cell"), "manifest job")
         identity = job_identity(
             job["cell"], job["executable"], job["executable_artifact"],
@@ -3919,6 +4373,28 @@ def self_test():
         if not condition:
             raise CrossoverError("self-test failed: {}".format(message))
 
+    class InvalidFilesystemPath(object):
+        def __init__(self, error):
+            self.error = error
+
+        def __fspath__(self):
+            raise self.error
+
+    for label, invalid_path in (
+            ("NUL", "/self-test/\0path"),
+            ("ValueError", InvalidFilesystemPath(ValueError("invalid"))),
+            ("OSError", InvalidFilesystemPath(OSError("unavailable")))):
+        try:
+            checked_resolve(invalid_path, "self-test malformed path")
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: {} malformed path was accepted".format(
+                    label
+                )
+            )
+
     check(compact_cpu_list([3, 2, 1, 7, 9, 8]) == "1-3,7-9",
           "CPU-list compaction")
     check(digest_value({"b": 2, "a": 1}) == digest_value({"a": 1, "b": 2}),
@@ -4007,16 +4483,333 @@ def self_test():
     }.issubset({item["region"] for item in historical}),
           "historical one-coordinate neighbors")
 
+    self_test_build_root = Path("/self-test/build")
+    self_test_effective_entries = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        "CMAKE_GENERATOR": "Ninja",
+        "CMAKE_CXX_COMPILER": "/self-test/c++",
+        # These deliberately differ from the stale cache-level values below.
+        "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+        "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+        "ENABLE_OPENMP": "ON",
+        "LEOPARD_ENABLE_GF8": "ON",
+        "LEOPARD_ENABLE_GF16": "ON",
+        "LEO2_BACKEND_VARIANT": "avx2",
+        "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
+        "LEO2_BUILD_BENCHMARKS": "ON",
+        "LEO2_BUILD_TESTS": "ON",
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+    }
+    self_test_digest = build_configuration_digest(
+        self_test_effective_entries
+    )
+    with tempfile.TemporaryDirectory(
+            prefix="leo2-build-config-self-test-") as configuration_dir:
+        configuration_path = Path(configuration_dir) / "configuration.txt"
+        configuration_material = "".join(
+            "{}={}\n".format(
+                variable, self_test_effective_entries[variable]
+            )
+            for variable in BUILD_CONFIGURATION_VARIABLES
+        )
+        valid_configuration = (
+            "schema={}\nsha256={}\n{}".format(
+                BUILD_CONFIGURATION_FILE_SCHEMA,
+                self_test_digest,
+                configuration_material
+            )
+        )
+        configuration_path.write_text(
+            valid_configuration, encoding="utf-8"
+        )
+        configuration_attestation = (
+            read_build_configuration_attestation(configuration_path)
+        )
+        check(
+            configuration_attestation["sha256"] == self_test_digest and
+            configuration_attestation["entries"] ==
+                self_test_effective_entries,
+            "effective configuration comes from the exact CMake sidecar"
+        )
+        separator_entries = dict(self_test_effective_entries)
+        separator_entries["CMAKE_CXX_FLAGS"] += "\u2028preserved"
+        separator_digest = build_configuration_digest(separator_entries)
+        separator_material = "".join(
+            "{}={}\n".format(variable, separator_entries[variable])
+            for variable in BUILD_CONFIGURATION_VARIABLES
+        )
+        configuration_path.write_text(
+            "schema={}\nsha256={}\n{}".format(
+                BUILD_CONFIGURATION_FILE_SCHEMA,
+                separator_digest,
+                separator_material
+            ),
+            encoding="utf-8"
+        )
+        separator_attestation = read_build_configuration_attestation(
+            configuration_path
+        )
+        check(
+            separator_attestation["entries"] == separator_entries,
+            "non-LF Unicode separators survive sidecar round-trip"
+        )
+
+        def reject_configuration_file(name, contents):
+            configuration_path.write_text(contents, encoding="utf-8")
+            try:
+                read_build_configuration_attestation(configuration_path)
+            except CrossoverError:
+                return
+            raise CrossoverError(
+                "self-test failed: configuration sidecar mutation was "
+                "accepted: {}".format(name)
+            )
+
+        reject_configuration_file(
+            "wrong schema",
+            valid_configuration.replace(
+                BUILD_CONFIGURATION_FILE_SCHEMA, "unknown", 1
+            )
+        )
+        reject_configuration_file(
+            "malformed digest",
+            valid_configuration.replace(self_test_digest, "not-a-digest", 1)
+        )
+        reject_configuration_file(
+            "material mismatch",
+            valid_configuration.replace(
+                "CMAKE_CXX_FLAGS= -Wall",
+                "CMAKE_CXX_FLAGS= -Werror", 1
+            )
+        )
+        reject_configuration_file(
+            "missing variable",
+            valid_configuration.replace(
+                "LEO2_BUILD_TESTS=ON\n", "", 1
+            )
+        )
+        reject_configuration_file(
+            "extra variable",
+            valid_configuration + "UNVERSIONED=1\n"
+        )
+        reject_configuration_file(
+            "missing final newline",
+            valid_configuration[:-1]
+        )
+        reject_configuration_file(
+            "embedded NUL",
+            valid_configuration.replace(
+                "CMAKE_CXX_FLAGS= -Wall",
+                "CMAKE_CXX_FLAGS= -Wall\0", 1
+            )
+        )
+        reject_configuration_file(
+            "embedded multiline value",
+            valid_configuration.replace(
+                "CMAKE_CXX_FLAGS= -Wall",
+                "CMAKE_CXX_FLAGS= -Wall\ninjected", 1
+            )
+        )
+        reject_configuration_file(
+            "embedded carriage return",
+            valid_configuration.replace(
+                "CMAKE_CXX_FLAGS= -Wall",
+                "CMAKE_CXX_FLAGS= -Wall\rinjected", 1
+            )
+        )
+
+        for label, delimiter in (
+                ("NUL", "\0"), ("LF", "\n"), ("CR", "\r"),
+                ("lone surrogate", "\ud800")):
+            invalid_entries = dict(self_test_effective_entries)
+            invalid_entries["CMAKE_CXX_FLAGS"] += delimiter + "injected"
+            try:
+                build_configuration_digest(invalid_entries)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: {} in-memory attestation value was "
+                    "accepted".format(label)
+                )
+
+        for label, invalid_path in (
+                ("NUL sidecar path", "/self-test/\0configuration.txt"),
+                ("NUL expected path", "/self-test/\0expected.txt")):
+            try:
+                if label == "NUL sidecar path":
+                    read_build_configuration_attestation(invalid_path)
+                else:
+                    validate_build_configuration_attestation(
+                        configuration_attestation, invalid_path
+                    )
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: {} was accepted".format(label)
+                )
+
+        invalid_path_attestation = dict(configuration_attestation)
+        invalid_path_attestation["path"] = "/self-test/\0configuration.txt"
+        try:
+            validate_build_configuration_attestation(
+                invalid_path_attestation
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: NUL attestation path was accepted"
+            )
+
+    cache_prefixes = (
+        "CMAKE_BUILD_TYPE",
+        "CMAKE_CXX_COMPILER",
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
+    )
+    valid_cache = (
+        "CMAKE_BUILD_TYPE:STRING=Release\n"
+        "CMAKE_CXX_COMPILER:STRING=/usr/bin/clang++-18\n"
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL={}\n"
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256:INTERNAL={}\n"
+    ).format(BUILD_CONFIGURATION_FILE_SCHEMA, self_test_digest).encode("utf-8")
+    parsed_cache = parse_selected_cmake_cache(
+        valid_cache, cache_prefixes, "self-test CMake cache"
+    )
+    check(
+        parsed_cache["CMAKE_BUILD_TYPE"] == "Release" and
+        parsed_cache["CMAKE_CXX_COMPILER"] == "/usr/bin/clang++-18" and
+        parsed_cache[
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
+        ] == self_test_digest,
+        "selected CMake cache parsing"
+    )
+    for compiler_type in ("FILEPATH", "UNINITIALIZED"):
+        variant_cache = valid_cache.replace(
+            b"CMAKE_CXX_COMPILER:STRING=",
+            ("CMAKE_CXX_COMPILER:{}=".format(
+                compiler_type
+            )).encode("ascii"),
+        )
+        check(
+            parse_selected_cmake_cache(
+                variant_cache, cache_prefixes, "self-test CMake cache"
+            )["CMAKE_CXX_COMPILER"] == "/usr/bin/clang++-18",
+            "caller-selected compiler cache type {}".format(compiler_type)
+        )
+
+    for label, mutated_cache in (
+            (
+                "duplicate selected CMake cache key",
+                valid_cache + b"CMAKE_BUILD_TYPE:STRING=Debug\n",
+            ),
+            (
+                "missing selected CMake cache entry type",
+                valid_cache.replace(
+                    b"CMAKE_BUILD_TYPE:STRING=",
+                    b"CMAKE_BUILD_TYPE=",
+                ),
+            ),
+            (
+                "wrong attestation-binding cache entry type",
+                valid_cache.replace(
+                    b"LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL=",
+                    b"LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:STRING=",
+                ),
+            ),
+            (
+                "unknown selected CMake cache entry type",
+                valid_cache.replace(
+                    b"CMAKE_BUILD_TYPE:STRING=",
+                    b"CMAKE_BUILD_TYPE:UNVERSIONED=",
+                ),
+            ),
+            (
+                "NUL selected CMake cache value",
+                valid_cache.replace(b"Release\n", b"Release\0injected\n"),
+            )):
+        try:
+            parse_selected_cmake_cache(
+                mutated_cache, cache_prefixes, "self-test CMake cache"
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: {} was accepted".format(label)
+            )
+
+    single_configuration = dict(self_test_effective_entries)
+    multi_configuration = dict(self_test_effective_entries)
+    multi_configuration["CMAKE_BUILD_TYPE"] = "Release"
+    multi_configuration["CMAKE_GENERATOR"] = "Ninja Multi-Config"
+    validate_embedded_build_type(
+        single_configuration, "Release", authoritative=False
+    )
+    validate_embedded_build_type(
+        multi_configuration, "Debug", authoritative=False
+    )
+    validate_embedded_build_type(
+        multi_configuration, "Release", authoritative=False
+    )
+    validate_embedded_build_type(
+        multi_configuration, "Release", authoritative=True
+    )
+    for label, configuration, build_type, authoritative in (
+            (
+                "single-config Debug",
+                single_configuration, "Debug", False,
+            ),
+            (
+                "multi-config unknown configuration",
+                multi_configuration, "RelWithDebInfo", False,
+            ),
+            (
+                "authoritative multi-config Debug",
+                multi_configuration, "Debug", True,
+            ),
+            (
+                "authoritative single-config Debug",
+                dict(single_configuration, CMAKE_BUILD_TYPE="Debug"),
+                "Debug", True,
+            ),
+            (
+                "multi-config without configuration types",
+                dict(
+                    multi_configuration,
+                    CMAKE_CONFIGURATION_TYPES="",
+                ),
+                "Release", False,
+            )):
+        try:
+            validate_embedded_build_type(
+                configuration, build_type, authoritative
+            )
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: {} build type was accepted".format(label)
+            )
+
     raw_job = {
         "build_metadata": {
+            "build_root": str(self_test_build_root),
             "entries": {
-                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_BUILD_TYPE": "",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
                 "CMAKE_CXX_COMPILER": "/self-test/c++",
                 "CMAKE_CXX_FLAGS": "",
                 "CMAKE_CXX_FLAGS_DEBUG": "-g",
                 "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
                 "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
                 "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+                "CMAKE_GENERATOR": "Ninja",
                 "ENABLE_OPENMP": "ON",
                 "LEOPARD_ENABLE_GF8": "ON",
                 "LEOPARD_ENABLE_GF16": "ON",
@@ -4025,6 +4818,20 @@ def self_test():
                 "LEO2_BUILD_BENCHMARKS": "ON",
                 "LEO2_BUILD_TESTS": "ON",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "CMAKE_HOME_DIRECTORY": "/self-test/source",
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                    self_test_digest,
+            },
+            "effective_configuration_attestation": {
+                "entries": self_test_effective_entries,
+                "path": str(
+                    self_test_build_root /
+                    BUILD_CONFIGURATION_RELATIVE_PATH
+                ),
+                "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                "sha256": self_test_digest,
             },
         },
         "cell": exact[0],
@@ -4037,6 +4844,7 @@ def self_test():
         },
     }
     raw_settings = {
+        "mode": "screen",
         "benchmark": {
             "batch": 1, "iterations": 15, "reuse": 64, "warmups": 4,
         },
@@ -4111,9 +4919,7 @@ def self_test():
         },
         "methodology": {},
     }
-    raw_fixture["build"]["build_configuration_sha256"] = (
-        build_configuration_digest(raw_job["build_metadata"]["entries"])
-    )
+    raw_fixture["build"]["build_configuration_sha256"] = self_test_digest
     median_us, mad_us, parity_identity = validate_raw(
         raw_fixture, raw_job, "direct", raw_settings
     )
@@ -4151,8 +4957,93 @@ def self_test():
             "self-test failed: raw mutation was accepted: {}".format(name)
         )
 
+    def reject_job_mutation(name, mutator):
+        changed = json.loads(json.dumps(raw_job))
+        mutator(changed)
+        try:
+            validate_raw(
+                raw_fixture, changed, "direct", raw_settings
+            )
+        except CrossoverError:
+            return
+        raise CrossoverError(
+            "self-test failed: job mutation was accepted: {}".format(name)
+        )
+
     reject_raw_mutation(
         "wrong schema", lambda value: value.update({"schema": "unknown"})
+    )
+    reject_raw_mutation(
+        "mismatched effective-configuration digest",
+        lambda value: value["build"].update(
+            {"build_configuration_sha256": "b" * 64}
+        )
+    )
+    reject_job_mutation(
+        "missing effective-configuration attestation",
+        lambda value: value["build_metadata"].pop(
+            "effective_configuration_attestation"
+        )
+    )
+    reject_job_mutation(
+        "malformed effective-configuration digest",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ].update({"sha256": "not-a-digest"})
+    )
+    reject_job_mutation(
+        "mutated cache schema binding",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA": "unknown"
+        })
+    )
+    reject_job_mutation(
+        "mutated cache digest binding",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "b" * 64
+        })
+    )
+    reject_job_mutation(
+        "unexpected effective-configuration path",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ].update({"path": "/self-test/other.txt"})
+    )
+    reject_job_mutation(
+        "NUL effective-configuration path",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ].update({"path": "/self-test/\0configuration.txt"})
+    )
+    reject_job_mutation(
+        "NUL CMake build root",
+        lambda value: value["build_metadata"].update({
+            "build_root": "/self-test/\0build"
+        })
+    )
+    reject_job_mutation(
+        "NUL CMake source root",
+        lambda value: value["build_metadata"]["entries"].update({
+            "CMAKE_HOME_DIRECTORY": "/self-test/\0source"
+        })
+    )
+    reject_job_mutation(
+        "multiline effective-configuration entry",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ]["entries"].update({"CMAKE_CXX_FLAGS": "-Wall\ninjected"})
+    )
+    reject_job_mutation(
+        "non-UTF-8 effective-configuration entry",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ]["entries"].update({"CMAKE_CXX_FLAGS": "\ud800"})
+    )
+    reject_job_mutation(
+        "extra effective-configuration field",
+        lambda value: value["build_metadata"][
+            "effective_configuration_attestation"
+        ].update({"unversioned_extra": True})
     )
     reject_raw_mutation(
         "missing exact metric object",
@@ -4369,6 +5260,12 @@ def self_test():
                     "configuration_id": "legacy",
                     "jobs": [], "schema":
                         "leopard2-direct-encode-crossover/v1",
+                    "settings": {},
+                }),
+                ("v2 manifest", {
+                    "configuration_id": "legacy",
+                    "jobs": [], "schema":
+                        "leopard2-direct-encode-crossover/v2",
                     "settings": {},
                 }),
                 ("relabeled v1 manifest", {

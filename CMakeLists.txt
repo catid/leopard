@@ -1741,7 +1741,7 @@ if(LEO2_BUILD_TESTS)
         # attests ELF instrumentation with nm and POSIX alias semantics.  Keep
         # both host-tool tests out of non-Linux CTest inventories; portable
         # codec and Python tests remain registered independently.
-        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        if(CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux")
             add_test(
                 NAME leopard2_allk_gap_identity_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
@@ -1779,6 +1779,18 @@ if(LEO2_BUILD_TESTS)
                 NAME leopard2_gf16_neighbor_evidence_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf16_high_encode/test_run_neighbor_abba.py)
+            # The direct-encode crossover runner uses fcntl leases and Linux
+            # affinity/procfs checks even in self-test mode.
+            add_test(
+                NAME leopard2_direct_encode_crossover_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
+                    self-test)
+            add_test(
+                NAME leopard2_direct_encode_crossover_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
+                    self-test)
         endif()
         add_test(
             NAME leopard2_benchmark_matrix_self_test
@@ -1834,11 +1846,6 @@ if(LEO2_BUILD_TESTS)
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/operation_counts/test_decode_scratch_crosscheck.py
                     --probe $<TARGET_FILE:leopard2_decode_scratch_probe>)
         endif()
-        add_test(
-            NAME leopard2_direct_encode_crossover_self_test
-            COMMAND ${LEO2_PYTHON_EXECUTABLE}
-                ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
-                self-test)
         add_test(
             NAME leopard2_tiled_high_runner_self_test
             COMMAND ${LEO2_PYTHON_EXECUTABLE}

@@ -23,6 +23,8 @@ function(leopard2_enable_benchmark_source_attestation target)
     set(build_configuration_material "")
     foreach(variable
             CMAKE_BUILD_TYPE
+            CMAKE_GENERATOR
+            CMAKE_CONFIGURATION_TYPES
             CMAKE_CXX_COMPILER
             CMAKE_CXX_FLAGS
             CMAKE_CXX_FLAGS_DEBUG
@@ -37,14 +39,52 @@ function(leopard2_enable_benchmark_source_attestation target)
             LEO2_BUILD_BENCHMARKS
             LEO2_BUILD_TESTS
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        set(variable_value "${${variable}}")
+        string(FIND "${variable_value}" "\n" newline_index)
+        string(FIND "${variable_value}" "\r" carriage_return_index)
+        if(NOT newline_index EQUAL -1 OR
+           NOT carriage_return_index EQUAL -1)
+            message(FATAL_ERROR
+                "Cannot attest ${variable}: effective build-configuration "
+                "values must not contain CR or LF characters")
+        endif()
         string(APPEND build_configuration_material
-            "${variable}=${${variable}}\n")
+            "${variable}=${variable_value}\n")
     endforeach()
     string(SHA256 build_configuration_sha256
         "${build_configuration_material}")
+    get_property(previous_build_configuration_sha256 GLOBAL PROPERTY
+        LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256)
+    if(previous_build_configuration_sha256 AND
+       NOT previous_build_configuration_sha256 STREQUAL
+           build_configuration_sha256)
+        message(FATAL_ERROR
+            "Leopard2 benchmark targets observed different effective "
+            "build configurations")
+    endif()
+    set_property(GLOBAL PROPERTY
+        LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
+        "${build_configuration_sha256}")
+    set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA
+        "leopard2-benchmark-build-configuration/v1"
+        CACHE INTERNAL
+        "Leopard2 benchmark effective-configuration schema"
+        FORCE)
+    set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
+        "${build_configuration_sha256}"
+        CACHE INTERNAL
+        "Leopard2 benchmark effective-configuration digest"
+        FORCE)
 
     set(output_dir
         "${CMAKE_BINARY_DIR}/generated/leopard2-benchmark-attestation")
+    file(MAKE_DIRECTORY "${output_dir}")
+    set(build_configuration_file
+        "${output_dir}/leopard2_benchmark_build_configuration.txt")
+    file(WRITE "${build_configuration_file}"
+        "schema=${LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA}\n"
+        "sha256=${build_configuration_sha256}\n"
+        "${build_configuration_material}")
     set(output_file
         "${output_dir}/leopard2_benchmark_source_attestation.h")
     set(refresh_target
@@ -77,10 +117,15 @@ function(leopard2_enable_benchmark_source_attestation target)
     # generated-header dependency are up to date.
     add_dependencies("${target}" "${refresh_target}")
     target_sources("${target}" PRIVATE "${output_file}")
+    if(CMAKE_GENERATOR MATCHES "Visual Studio|Xcode|Multi-Config")
+        set(benchmark_build_type "$<CONFIG>")
+    else()
+        set(benchmark_build_type "${CMAKE_BUILD_TYPE}")
+    endif()
     target_compile_definitions("${target}" PRIVATE
         LEO2_BENCHMARK_SOURCE_ATTESTATION=1
         "LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\"${build_configuration_sha256}\""
-        "LEO2_BENCHMARK_BUILD_TYPE=\"${CMAKE_BUILD_TYPE}\""
+        "LEO2_BENCHMARK_BUILD_TYPE=\"${benchmark_build_type}\""
         "LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=\"${output_file}\"")
 
     set(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER
