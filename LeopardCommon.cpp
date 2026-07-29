@@ -261,12 +261,24 @@ void xor_mem_baseline(
             x32 += 4, y32 += 4;
             bytes -= 128;
         };
-        if (bytes > 0)
+        while (bytes >= 32)
         {
-            const LEO_M256 x0 = _mm256_xor_si256(_mm256_loadu_si256(x32),     _mm256_loadu_si256(y32));
-            const LEO_M256 x1 = _mm256_xor_si256(_mm256_loadu_si256(x32 + 1), _mm256_loadu_si256(y32 + 1));
+            const LEO_M256 x0 = _mm256_xor_si256(
+                _mm256_loadu_si256(x32),
+                _mm256_loadu_si256(y32));
             _mm256_storeu_si256(x32, x0);
-            _mm256_storeu_si256(x32 + 1, x1);
+            ++x32;
+            ++y32;
+            bytes -= 32;
+        }
+        uint8_t* LEO_RESTRICT x_bytes =
+            reinterpret_cast<uint8_t*>(x32);
+        const uint8_t* LEO_RESTRICT y_bytes =
+            reinterpret_cast<const uint8_t*>(y32);
+        while (bytes > 0)
+        {
+            *x_bytes++ ^= *y_bytes++;
+            --bytes;
         }
         return;
     }

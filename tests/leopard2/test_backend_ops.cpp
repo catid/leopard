@@ -13,6 +13,13 @@
 #include <thread>
 #include <vector>
 
+namespace leopard {
+void xor_mem_baseline(
+    void* destination,
+    const void* source,
+    uint64_t byte_count);
+}
+
 namespace {
 
 void require(bool condition, const char* message)
@@ -442,6 +449,41 @@ void test_vector_xor_count_tail()
     }
 }
 
+void test_baseline_xor_exact_tails()
+{
+    static const size_t kGuardBytes = 79;
+    static const size_t kMaximumBytes = 513;
+    static const size_t kStorageBytes =
+        kGuardBytes + kMaximumBytes + kGuardBytes;
+
+    for (size_t bytes = 0; bytes <= kMaximumBytes; ++bytes)
+    {
+        std::vector<uint8_t> destination(kStorageBytes);
+        std::vector<uint8_t> source(kStorageBytes);
+        for (size_t i = 0; i < kStorageBytes; ++i)
+        {
+            destination[i] = static_cast<uint8_t>(
+                i * 73U + bytes * 19U + 0x35U);
+            source[i] = static_cast<uint8_t>(
+                i * 29U + bytes * 47U + 0xa7U);
+        }
+        const std::vector<uint8_t> source_before = source;
+        std::vector<uint8_t> expected = destination;
+        for (size_t i = 0; i < bytes; ++i)
+            expected[kGuardBytes + i] ^= source[kGuardBytes + i];
+
+        leopard::xor_mem_baseline(
+            destination.data() + kGuardBytes,
+            source.data() + kGuardBytes,
+            bytes);
+
+        require(destination == expected,
+            "scalar XOR changed a guard byte or mishandled an exact tail");
+        require(source == source_before,
+            "scalar XOR modified its read-only source");
+    }
+}
+
 void verify_expected_backend(leo2_backend backend)
 {
     const char* expected = std::getenv("LEO2_EXPECT_BACKEND");
@@ -505,6 +547,14 @@ int main()
         require(leo_init() == Leopard_Success, "Leopard initialization");
         require(leopard::backend::StartupSelfTestPassed(),
             "backend startup known-answer tests");
+        const char* baseline_xor_only =
+            std::getenv("LEO2_TEST_BASELINE_XOR_ONLY");
+        if (baseline_xor_only && std::strcmp(baseline_xor_only, "1") == 0)
+        {
+            test_baseline_xor_exact_tails();
+            std::printf("Leopard2 baseline XOR exact-tail test passed\n");
+            return 0;
+        }
         const leopard::backend::Ops& ops = leopard::backend::GetOps();
         require(ops.kind == leopard::backend::SelectedBackend(),
             "fixed-ops introspection is not derived from selected ops");
@@ -562,6 +612,7 @@ int main()
         leo2_context_destroy(context);
 
         test_vector_xor_count_tail();
+        test_baseline_xor_exact_tails();
         test_concurrent_immutable_ops();
         std::printf("Leopard2 backend ops passed: threads=16 "
             "iterations=1024 startup_kat=pass\n");
