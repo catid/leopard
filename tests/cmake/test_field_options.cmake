@@ -1,6 +1,7 @@
 if(NOT DEFINED LEO2_SOURCE_DIR OR NOT DEFINED LEO2_BINARY_DIR OR
    NOT DEFINED LEO2_GENERATOR OR NOT DEFINED LEO2_CTEST_COMMAND OR
    NOT DEFINED LEO2_ARCHIVE_SYMBOL_CHECKS OR
+   NOT DEFINED LEO2_EXPECT_SMALL_DIRECT_EXHAUSTIVE_TARGET OR
    NOT DEFINED LEO2_STATIC_LIBRARY_PREFIX OR
    NOT DEFINED LEO2_STATIC_LIBRARY_SUFFIX)
     message(FATAL_ERROR "Field-option test is missing required tool inputs")
@@ -68,6 +69,25 @@ foreach(field_variant gf8 gf16)
         message(FATAL_ERROR
             "${field_variant} build failed (${build_result})\n"
             "${build_stdout}\n${build_stderr}")
+    endif()
+    if(field_variant STREQUAL "gf8" AND
+       LEO2_EXPECT_SMALL_DIRECT_EXHAUSTIVE_TARGET)
+        # The bounded exhaustive verifier has no GF16 dependency.  Building
+        # it explicitly in a reduced GF8 graph prevents an accidental lexical
+        # move back under the dual-field-only test suite.
+        execute_process(
+            COMMAND "${CMAKE_COMMAND}" --build . --config Release
+                --target leopard2_small_direct_exhaustive_test
+            WORKING_DIRECTORY "${build_dir}"
+            RESULT_VARIABLE exhaustive_build_result
+            OUTPUT_VARIABLE exhaustive_build_stdout
+            ERROR_VARIABLE exhaustive_build_stderr)
+        if(NOT exhaustive_build_result EQUAL 0)
+            message(FATAL_ERROR
+                "gf8-only exhaustive target failed "
+                "(${exhaustive_build_result})\n"
+                "${exhaustive_build_stdout}\n${exhaustive_build_stderr}")
+        endif()
     endif()
     execute_process(
         COMMAND "${LEO2_CTEST_COMMAND}" -C Release -R

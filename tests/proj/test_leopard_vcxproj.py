@@ -9,6 +9,7 @@ MSBuild configurations, ISA isolation, or optional-CUDA contract drifts.
 from collections import Counter
 import copy
 import hashlib
+import json
 from pathlib import Path, PurePosixPath
 import re
 import sys
@@ -26,7 +27,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "bec4470c90c23ee5e81d88bc02c01f7787960b1e8e8f38f3d09058c558286f49"
+    "886ebc7101327b95fc6fa730cb379fd542c8ff810549572b665762ba8a0e4b0e"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -488,6 +489,33 @@ class CMakeProductionGraph(object):
         r"cuda|nvcc|nvrtc|nvidia|cudart|ptxas|nvlink|fatbinary|"
         r"cuobjdump|nvc\+\+",
         re.IGNORECASE)
+    _small_direct_source_property = (
+        "SOURCE", "leopard2.cpp", "APPEND", "PROPERTY",
+        "COMPILE_DEFINITIONS",
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+        "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+    _small_direct_test_source_properties = frozenset((
+        (
+            "SOURCE", "tests/leopard2/test_api.cpp", "APPEND", "PROPERTY",
+            "COMPILE_DEFINITIONS",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+            "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}"),
+        (
+            "SOURCE", "tests/leopard2/test_dense_plan_policy.cpp", "APPEND",
+            "PROPERTY", "COMPILE_DEFINITIONS",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+            "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}"),
+        (
+            "SOURCE", "tests/leopard2/test_high_low_duality.cpp", "APPEND",
+            "PROPERTY", "COMPILE_DEFINITIONS",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+            "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}"),
+        (
+            "SOURCE", "tests/leopard2/test_small_direct_exhaustive.cpp",
+            "APPEND", "PROPERTY", "COMPILE_DEFINITIONS",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
+            "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}"),
+    ))
 
     _target_build_mutation_commands = {
         "target_compile_definitions", "target_compile_features",
@@ -536,7 +564,8 @@ class CMakeProductionGraph(object):
         r"ENABLE_OPENMP|LEO2_FLAG_ARCH_AVX2|"
         r"LEO2_(?:BACKEND_VARIANT(?:_NORMALIZED)?|BUILD_BENCHMARKS|BUILD_FUZZERS|"
         r"BUILD_TESTS|ENABLE_CUDA|PORTABLE_ISA_RELEASE_AUDIT|"
-        r"EXPERIMENT_(?:DIRECT_SOURCE_PLAN|HIGH_DIRECT_ENCODE))|"
+        r"EXPERIMENT_(?:DIRECT_SOURCE_PLAN|HIGH_DIRECT_ENCODE|"
+        r"GF8_SMALL_DIRECT_MODE))|"
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
     _approved_production_mutations = {
@@ -602,6 +631,7 @@ class CMakeProductionGraph(object):
          "${CMAKE_INSTALL_LIBDIR}/cmake/leopard"),
         ("LEO2_BACKEND_VARIANT", "auto"),
         ("LEO2_BACKEND_VARIANT", "${LEO2_BACKEND_VARIANT_NORMALIZED}"),
+        ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0"),
     }
     _approved_protected_set_commands = {
         ("CMAKE_CONFIGURATION_TYPES", "Debug;Release", "CACHE", "STRING",
@@ -624,6 +654,9 @@ class CMakeProductionGraph(object):
          "CACHE", "STRING",
          "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512",
          "FORCE"),
+        ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
+         "Default-off small GF8 direct-repair experiment: 0=transform, "
+         "1=output-major, 2=source-major"),
     }
     _approved_package_configure = (
         "cmake/leopardConfig.cmake.in",
@@ -698,6 +731,7 @@ class CMakeProductionGraph(object):
         ("include", ("CMakePackageConfigHelpers",)): 1,
         ("include", ("GNUInstallDirs",)): 1,
         ("include", ("cmake/Leopard2BenchmarkAttestation.cmake",)): 1,
+        ("include", ("cmake/Leopard2SanitizerClassification.cmake",)): 1,
         ("find_package", ("OpenMP",)): 1,
         ("find_package", ("Threads", "REQUIRED")): 1,
         ("option", (
@@ -759,6 +793,150 @@ class CMakeProductionGraph(object):
             "NAMESPACE", "leopard::", "DESTINATION",
             "${LEOPARD_INSTALL_CMAKEDIR}")): 1,
     })
+    _required_python_package_commands = Counter({
+        ("PythonInterp", "3.10", "QUIET"): 1,
+        ("Python3", "3.10", "COMPONENTS", "Interpreter", "QUIET"): 1,
+    })
+    _required_python_executable_assignments = Counter({
+        ("LEO2_PYTHON_EXECUTABLE", ""): 1,
+        ("LEO2_PYTHON_EXECUTABLE", "${PYTHON_EXECUTABLE}"): 1,
+        ("LEO2_PYTHON_EXECUTABLE", "${Python3_EXECUTABLE}"): 1,
+    })
+    _python_discovery_variables = frozenset({
+        "PYTHON_EXECUTABLE",
+        "PYTHONINTERP_FOUND",
+        "Python3_EXECUTABLE",
+        "Python3_Interpreter_FOUND",
+        "LEO2_PYTHON_EXECUTABLE",
+    })
+    _required_python_discovery_event_order = (
+        ("assignment", ("LEO2_PYTHON_EXECUTABLE", "")),
+        ("package", ("PythonInterp", "3.10", "QUIET")),
+        ("assignment", (
+            "LEO2_PYTHON_EXECUTABLE", "${PYTHON_EXECUTABLE}")),
+        ("package", (
+            "Python3", "3.10", "COMPONENTS", "Interpreter", "QUIET")),
+        ("assignment", (
+            "LEO2_PYTHON_EXECUTABLE", "${Python3_EXECUTABLE}")),
+        ("registration-gate", ("LEO2_PYTHON_EXECUTABLE",)),
+    )
+    _required_python_test_registrations = Counter({
+        "leopard2_build_provenance_compiler_replay": 1,
+        "leopard2_locator_benchmark_smoke": 1,
+        "leopard2_benchmark_json_regression": 2,
+        "leopard2_pruned_transform_benchmark_smoke": 1,
+        "leopard2_sparse_encode_benchmark_smoke": 1,
+        "leopard2_cost_model_self_test": 1,
+        "leopard2_allk_gap_identity_self_test": 1,
+        "leopard2_allk_gap_identity_optimized_self_test": 1,
+        "leopard2_affinity_supervisor_self_test": 1,
+        "leopard2_affinity_supervisor_optimized_self_test": 1,
+        "leopard2_lab_self_test": 1,
+        "leopard2_fuzz_campaign_self_test": 1,
+        "leopard2_gf16_neighbor_evidence_self_test": 1,
+        "leopard2_direct_encode_crossover_self_test": 1,
+        "leopard2_direct_encode_crossover_optimized_self_test": 1,
+        "leopard2_small_direct_abba_self_test": 1,
+        "leopard2_small_direct_abba_optimized_self_test": 1,
+        "leopard2_small_direct_exhaustive_self_test": 1,
+        "leopard2_small_direct_exhaustive_optimized_self_test": 1,
+        "leopard2_benchmark_matrix_self_test": 1,
+        "leopard2_sparse_encode_crossover_self_test": 1,
+        "leopard2_r1_xor_crossover_self_test": 1,
+        "leopard2_external_comparison_self_test": 1,
+        "leopard2_isal_comparison_self_test": 1,
+        "leopard2_jerasure_comparison_self_test": 1,
+        "leopard2_jerasure_default_optionality_test": 1,
+        "leopard2_operation_counts_self_test": 1,
+        "leopard2_decode_scratch_crosscheck": 1,
+        "leopard2_tiled_high_runner_self_test": 1,
+        "leopard2_high_decode_copy_contract_self_test": 1,
+        "leopard2_high_decode_copy_runner_self_test": 1,
+        "leopard2_high_decode_copy_composite_self_test": 1,
+        "leopard2_high_decode_copy_benchmark_smoke": 1,
+        "leopard2_high_decode_copy_build_identity": 1,
+        "leopard2_tiled_high_analyzer_self_test": 1,
+        "leopard2_balanced_forced_runner_self_test": 1,
+        "leopard2_balanced_forced_analyzer_self_test": 1,
+        "leopard2_balanced_promotion_plan_self_test": 1,
+        "leopard2_visual_studio_project_self_test": 1,
+        "leopard2_canonical_library_docs_self_test": 1,
+    })
+    _linux_python_test_registrations = frozenset({
+        "leopard2_allk_gap_identity_self_test",
+        "leopard2_allk_gap_identity_optimized_self_test",
+        "leopard2_affinity_supervisor_self_test",
+        "leopard2_affinity_supervisor_optimized_self_test",
+        "leopard2_lab_self_test",
+        "leopard2_fuzz_campaign_self_test",
+        "leopard2_gf16_neighbor_evidence_self_test",
+        "leopard2_direct_encode_crossover_self_test",
+        "leopard2_direct_encode_crossover_optimized_self_test",
+        "leopard2_small_direct_abba_self_test",
+        "leopard2_small_direct_abba_optimized_self_test",
+        "leopard2_small_direct_exhaustive_self_test",
+        "leopard2_small_direct_exhaustive_optimized_self_test",
+    })
+    _benchmark_python_test_registrations = frozenset({
+        "leopard2_locator_benchmark_smoke",
+        "leopard2_pruned_transform_benchmark_smoke",
+        "leopard2_sparse_encode_benchmark_smoke",
+    })
+    # Canonical SHA-256 of the sorted complete token tuples for the 41
+    # registrations above.  Names and guards alone are insufficient: a
+    # mutation could otherwise replace the script with ``-c pass`` or add a
+    # CONFIGURATIONS clause while preserving the apparent inventory.
+    _required_python_test_command_sha256 = \
+        "87ed3e177e6a9608b5d9156258b158ef64080f749a4b3cb88caee1ad238990f7"
+    _required_python_test_property_commands = Counter({
+        ("set_tests_properties", (
+            "leopard2_build_provenance_compiler_replay", "PROPERTIES",
+            "RUN_SERIAL", "TRUE", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_locator_benchmark_smoke", "PROPERTIES", "ENVIRONMENT",
+            "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
+        ("set_tests_properties", (
+            "leopard2_benchmark_json_regression", "PROPERTIES", "ENVIRONMENT",
+            "LEO2_EXPECTED_SOURCE_ATTESTATION_HEADER="
+            "${LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER};"
+            "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
+        ("set_tests_properties", (
+            "leopard2_pruned_transform_benchmark_smoke", "PROPERTIES",
+            "ENVIRONMENT", "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
+        ("set_tests_properties", (
+            "leopard2_sparse_encode_benchmark_smoke", "PROPERTIES",
+            "ENVIRONMENT", "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
+        ("set_tests_properties", (
+            "leopard2_high_decode_copy_benchmark_smoke", "PROPERTIES",
+            "ENVIRONMENT", "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")): 1,
+        ("set_tests_properties", (
+            "leopard2_small_direct_abba_self_test", "PROPERTIES",
+            "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_small_direct_abba_optimized_self_test", "PROPERTIES",
+            "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_small_direct_exhaustive_self_test", "PROPERTIES",
+            "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_small_direct_exhaustive_optimized_self_test",
+            "PROPERTIES", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+    })
     # CMake is an imperative language: proving that each security-sensitive
     # command appears once is not enough when moving a package discovery,
     # compiler probe, or cache assignment changes what later commands see.
@@ -810,6 +988,10 @@ class CMakeProductionGraph(object):
             "Enable default-off candidate legacy-high GF8/AVX2 direct "
             "diagnostics", "OFF"))),
         ("protected", (
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
+            "Default-off small GF8 direct-repair experiment: 0=transform, "
+            "1=output-major, 2=source-major")),
+        ("protected", (
             "LEO2_BACKEND_VARIANT", "auto", "CACHE", "STRING",
             "Diagnostic backend variant: auto, scalar, ssse3, avx2, or avx512")),
         ("trusted", ("string", (
@@ -843,6 +1025,8 @@ class CMakeProductionGraph(object):
         ("protected", (
             "CMAKE_EXE_LINKER_FLAGS",
             "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")),
+        ("trusted", ("include", (
+            "cmake/Leopard2SanitizerClassification.cmake",))),
         ("trusted", ("add_library", (
             "leopard", "STATIC", "${LIB_SOURCE_FILES}"))),
         ("trusted", ("add_library", (
@@ -851,6 +1035,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"))),
+        ("source-mutation", (
+            "set_property", _small_direct_source_property)),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
@@ -939,6 +1125,7 @@ class CMakeProductionGraph(object):
             "set_property", _sparse_sidecar_link_depends)),
         ("sparse-sidecar", (
             "add_custom_command", _sparse_sidecar_post_build)),
+        ("test-enablement", ()),
         ("guarded", (
             "leopard2_enable_benchmark_source_attestation",
             ("bench_leopard2_direct_encode",))),
@@ -989,6 +1176,9 @@ class CMakeProductionGraph(object):
         ("set_property", (
             "CACHE", "LEO2_BACKEND_VARIANT", "PROPERTY", "STRINGS",
             "auto", "scalar", "ssse3", "avx2", "avx512")),
+        ("set_property", (
+            "CACHE", "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "PROPERTY",
+            "STRINGS", "0", "1", "2")),
     }
 
     def __init__(self, text, processor="AMD64", pointer_size="8",
@@ -1035,6 +1225,14 @@ class CMakeProductionGraph(object):
         self.attachments = {}
         self.target_build_mutations = []
         self.trusted_command_counts = Counter()
+        self.python_package_counts = Counter()
+        self.python_executable_assignment_counts = Counter()
+        self.python_discovery_events = []
+        self.python_test_registration_counts = Counter()
+        self.python_test_guard_counts = Counter()
+        self.python_test_commands = []
+        self.python_test_property_counts = Counter()
+        self.test_enablement_count = 0
         self.locator_provenance_counts = Counter()
         self.sparse_sidecar_counts = Counter()
         self.protected_assignments = []
@@ -1048,6 +1246,7 @@ class CMakeProductionGraph(object):
                 "MSVC": "TRUE",
                 "CMAKE_CXX_COMPILER_ID": "MSVC",
                 "CMAKE_C_COMPILER_ID": "MSVC",
+                "APPLE": "FALSE",
                 "CMAKE_SYSTEM_PROCESSOR": processor,
                 "CMAKE_SIZEOF_VOID_P": pointer_size,
                 "CMAKE_VS_PLATFORM_NAME": platform_name,
@@ -1180,6 +1379,322 @@ class CMakeProductionGraph(object):
         self.trusted_command_counts[key] += 1
         self.contract_events.append(("trusted", key))
 
+    def _record_test_enablement(self, tokens, guard, reasons):
+        expected_guard = bool_atom("option:LEO2_BUILD_TESTS")
+        if (tokens or reasons or
+                not self._formula_equivalent(guard, expected_guard)):
+            raise ContractError("CTest enablement guard or arguments drift")
+        self.test_enablement_count += 1
+        self.contract_events.append(("test-enablement", ()))
+
+    @staticmethod
+    def _cmake_version_less_guard(version):
+        return bool_atom(
+            "comparison:" + repr((
+                (BOOL_SYMBOL_PREFIX + "external:CMAKE_VERSION",),
+                "VERSION_LESS", (version,))))
+
+    @staticmethod
+    def _cmake_release_build_type_guard():
+        """Model the defaulted cache value without losing its external value.
+
+        CMake assigns Release only when CMAKE_BUILD_TYPE is exactly empty.
+        False-like but nonempty configuration names such as OFF remain caller
+        values.  A later STREQUAL Release check is therefore true only on the
+        exact-empty default branch or when the external string is Release.
+        """
+        exact_empty = bool_atom(
+            "comparison:" + repr((
+                (BOOL_SYMBOL_PREFIX + "external:CMAKE_BUILD_TYPE",),
+                "STREQUAL", ("",))))
+        exact_release = bool_atom(
+            "comparison:" + repr((
+                (BOOL_SYMBOL_PREFIX + "external:CMAKE_BUILD_TYPE",),
+                "STREQUAL", ("Release",))))
+        return bool_or(exact_empty, exact_release)
+
+    def _record_python_package_command(
+            self, tokens, guard, reasons):
+        key = tuple(tokens)
+        if key not in self._required_python_package_commands:
+            return
+        version_guard = self._cmake_version_less_guard("3.12")
+        dual_field_test_guard = bool_and(
+            bool_atom("option:LEO2_BUILD_TESTS"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEOPARD_ENABLE_GF16"))
+        expected_guard = bool_and(
+            dual_field_test_guard,
+            version_guard if key[0] == "PythonInterp"
+            else bool_not(version_guard))
+        expected_reasons = (
+            "unmodeled unquoted CMake conditional operand: CMAKE_VERSION",
+            "unsupported comparison of symbolic CMake boolean",
+            "unsupported CMake comparison operator: VERSION_LESS",
+        )
+        if (reasons != expected_reasons or
+                not self._formula_equivalent(guard, expected_guard)):
+            raise ContractError(
+                "Python package discovery guard drift: " + " ".join(tokens))
+        self.python_package_counts[key] += 1
+        self.python_discovery_events.append(("package", key))
+
+    def _record_python_executable_assignment(
+            self, tokens, guard, reasons):
+        if not tokens or tokens[0] != "LEO2_PYTHON_EXECUTABLE":
+            return
+        key = tuple(tokens)
+        if key not in self._required_python_executable_assignments:
+            raise ContractError(
+                "unapproved Python executable assignment: " +
+                " ".join(tokens))
+        dual_field_test_guard = bool_and(
+            bool_atom("option:LEO2_BUILD_TESTS"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEOPARD_ENABLE_GF16"))
+        expected_reasons = ()
+        if key[1] == "":
+            expected_guard = dual_field_test_guard
+        else:
+            version_guard = self._cmake_version_less_guard("3.12")
+            found_name = (
+                "PYTHONINTERP_FOUND" if key[1] == "${PYTHON_EXECUTABLE}"
+                else "Python3_Interpreter_FOUND")
+            expected_guard = bool_and(
+                dual_field_test_guard,
+                version_guard if found_name == "PYTHONINTERP_FOUND"
+                else bool_not(version_guard),
+                bool_atom("external:" + found_name))
+            expected_reasons = (
+                "unmodeled unquoted CMake conditional operand: CMAKE_VERSION",
+                "unsupported comparison of symbolic CMake boolean",
+                "unsupported CMake comparison operator: VERSION_LESS",
+                "unmodeled CMake conditional variable: " + found_name,
+            )
+        if (reasons != expected_reasons or
+                not self._formula_equivalent(guard, expected_guard)):
+            raise ContractError(
+                "Python executable assignment guard drift: " +
+                " ".join(tokens))
+        self.python_executable_assignment_counts[key] += 1
+        self.python_discovery_events.append(("assignment", key))
+
+    def _record_python_registration_gate(
+            self, body, guard, reasons):
+        condition_tokens = cmake_condition_tokens(body)
+        references_selected_python = any(
+            token in {
+                "LEO2_PYTHON_EXECUTABLE",
+                "${LEO2_PYTHON_EXECUTABLE}",
+            }
+            for token, unused_quoted in condition_tokens)
+        if not references_selected_python:
+            return False
+        expected_tokens = [("LEO2_PYTHON_EXECUTABLE", False)]
+        if condition_tokens != expected_tokens:
+            raise ContractError(
+                "Python registration gate condition drift")
+        expected_guard = bool_and(
+            bool_atom("option:LEO2_BUILD_TESTS"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEOPARD_ENABLE_GF16"))
+        if (reasons or
+                not self._formula_equivalent(guard, expected_guard)):
+            raise ContractError("Python registration gate guard drift")
+        self.python_discovery_events.append(
+            ("registration-gate", ("LEO2_PYTHON_EXECUTABLE",)))
+        return True
+
+    def _expected_python_test_guards(self, name):
+        base = bool_and(
+            bool_atom("option:LEO2_BUILD_TESTS"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEOPARD_ENABLE_GF16"),
+            bool_atom("python-interpreter-selected"))
+        benchmark = bool_and(
+            base, bool_atom("option:LEO2_BUILD_BENCHMARKS"))
+        host_linux = bool_atom(
+            "comparison:" + repr((
+                (BOOL_SYMBOL_PREFIX + "external:CMAKE_HOST_SYSTEM_NAME",),
+                "STREQUAL", ("Linux",))))
+        host_reasons = (
+            "unmodeled unquoted CMake conditional operand: "
+            "CMAKE_HOST_SYSTEM_NAME",
+            "unsupported comparison of symbolic CMake boolean",
+        )
+        if name == "leopard2_build_provenance_compiler_replay":
+            return ((
+                bool_and(
+                    benchmark, host_linux,
+                    bool_atom("predicate:EXISTS:/usr/bin/cmake"),
+                    bool_atom("predicate:EXISTS:/usr/bin/cc"),
+                    bool_atom("predicate:EXISTS:/usr/bin/c++")),
+                host_reasons +
+                ("unsupported CMake conditional predicate: EXISTS",)),)
+        if name in self._benchmark_python_test_registrations:
+            return ((benchmark, ()),)
+        if name == "leopard2_benchmark_json_regression":
+            allk = bool_atom("predicate:TARGET:bench_leopard2_allk")
+            target_reason = (
+                "unsupported CMake conditional predicate: TARGET",)
+            return (
+                (bool_and(benchmark, allk), target_reason),
+                (bool_and(benchmark, bool_not(allk)), target_reason),
+            )
+        if name in self._linux_python_test_registrations:
+            return ((bool_and(base, host_linux), host_reasons),)
+        if name == "leopard2_high_decode_copy_benchmark_smoke":
+            target = bool_atom(
+                "predicate:TARGET:"
+                "bench_leopard2_high_decode_copy_attribution")
+            return ((bool_and(base, target), (
+                "unsupported CMake conditional predicate: TARGET",)),)
+        if name == "leopard2_high_decode_copy_build_identity":
+            target = bool_atom(
+                "predicate:TARGET:"
+                "bench_leopard2_high_decode_copy_attribution")
+            generator = bool_atom(
+                "comparison:" + repr((
+                    (BOOL_SYMBOL_PREFIX + "external:CMAKE_GENERATOR",),
+                    "STREQUAL", ("Unix Makefiles",))))
+            return ((bool_and(
+                base, target,
+                bool_atom("external:CMAKE_EXPORT_COMPILE_COMMANDS"),
+                self._cmake_release_build_type_guard(),
+                generator), (
+                    "unsupported CMake conditional predicate: TARGET",
+                    "unmodeled CMake conditional variable: "
+                    "CMAKE_EXPORT_COMPILE_COMMANDS",
+                    "unmodeled CMake conditional variable: CMAKE_BUILD_TYPE",
+                    "unsupported comparison of symbolic CMake boolean",
+                    "unmodeled unquoted CMake conditional operand: "
+                    "CMAKE_GENERATOR",
+                )),)
+        return ((base, ()),)
+
+    def _record_python_test_registration(
+            self, tokens, guard, reasons, inside_registration_gate):
+        try:
+            name_index = tokens.index("NAME")
+            command_index = tokens.index("COMMAND")
+        except ValueError:
+            name_index = command_index = -1
+        name = (
+            tokens[name_index + 1]
+            if 0 <= name_index < len(tokens) - 1 else None)
+        selected_python = "${LEO2_PYTHON_EXECUTABLE}" in tokens
+        known_name = name in self._required_python_test_registrations
+        if not (selected_python or known_name or inside_registration_gate):
+            return
+        if (not inside_registration_gate or not known_name or
+                name_index != 0 or command_index != 2 or
+                len(tokens) <= 3 or
+                tokens[3] != "${LEO2_PYTHON_EXECUTABLE}"):
+            raise ContractError(
+                "Python test registration escaped its exact gate: " +
+                repr(tuple(tokens)))
+        approved_generators = {
+            "$<TARGET_FILE:bench_leopard2>",
+            "$<TARGET_FILE:bench_leopard2_allk>",
+            "$<TARGET_FILE:bench_leopard2_high_decode_copy_attribution>",
+            "$<TARGET_FILE:bench_leopard2_locator>",
+            "$<TARGET_FILE:bench_leopard2_pruned_transform>",
+            "$<TARGET_FILE:bench_leopard2_sparse_encode>",
+            "$<TARGET_FILE:leopard2_decode_scratch_probe>",
+            "$<TARGET_FILE:leopard_test_hooks>",
+        }
+        if any("$<" in token and token not in approved_generators
+               for token in tokens):
+            raise ContractError(
+                "unmodeled Python test generator expression")
+        if any(self._cuda_graph_marker.search(token) for token in tokens):
+            raise ContractError(
+                "CUDA Python test command is reachable in the CPU-only graph")
+        candidates = self._expected_python_test_guards(name)
+        matches = [
+            index for index, (expected_guard, expected_reasons)
+            in enumerate(candidates)
+            if (tuple(reasons) == expected_reasons and
+                self._formula_equivalent(guard, expected_guard))
+        ]
+        if len(matches) != 1:
+            raise ContractError(
+                "Python test registration guard drift: " + name)
+        self.python_test_guard_counts[(name, matches[0])] += 1
+        self.python_test_registration_counts[name] += 1
+        self.python_test_commands.append(tuple(tokens))
+
+    def _record_python_test_property(
+            self, command, tokens, guard, reasons):
+        if command == "set_tests_properties":
+            try:
+                properties_index = tokens.index("PROPERTIES")
+            except ValueError:
+                properties_index = -1
+            if properties_index <= 0:
+                raise ContractError(
+                    "set_tests_properties has no exact test/property split")
+            raw_names = tokens[:properties_index]
+        elif (command == "set_property" and tokens and
+                tokens[0].upper() == "TEST"):
+            try:
+                properties_index = tokens.index("PROPERTY")
+            except ValueError:
+                properties_index = -1
+            if properties_index <= 1:
+                raise ContractError(
+                    "set_property(TEST) has no exact test/property split")
+            raw_names = tokens[1:properties_index]
+        else:
+            return False
+
+        names = []
+        for raw_name in raw_names:
+            if "${" in raw_name or "$ENV{" in raw_name or "$<" in raw_name:
+                raise ContractError(
+                    "computed test-property destination is unsupported: " +
+                    raw_name)
+            names.append(raw_name)
+        required_names = [
+            name for name in names
+            if name in self._required_python_test_registrations]
+        if not required_names:
+            return False
+        if command != "set_tests_properties":
+            raise ContractError(
+                "unapproved property mutation of required Python test: " +
+                ", ".join(required_names))
+
+        key = (command, tuple(tokens))
+        if key not in self._required_python_test_property_commands:
+            raise ContractError(
+                "unapproved required Python test properties: " +
+                repr(tuple(tokens)))
+        if len(required_names) != 1 or len(names) != 1:
+            raise ContractError(
+                "required Python test property target drift")
+        name = required_names[0]
+        if name == "leopard2_benchmark_json_regression":
+            expected_guard = bool_and(
+                bool_atom("option:LEO2_BUILD_TESTS"),
+                bool_atom("option:LEOPARD_ENABLE_GF8"),
+                bool_atom("option:LEOPARD_ENABLE_GF16"),
+                bool_atom("python-interpreter-selected"),
+                bool_atom("option:LEO2_BUILD_BENCHMARKS"))
+            expected_reasons = ()
+        else:
+            candidates = self._expected_python_test_guards(name)
+            if len(candidates) != 1:
+                raise ContractError(
+                    "ambiguous required Python test property guard: " + name)
+            expected_guard, expected_reasons = candidates[0]
+        if (tuple(reasons) != expected_reasons or
+                not self._formula_equivalent(guard, expected_guard)):
+            raise ContractError(
+                "required Python test property guard drift: " + name)
+        self.python_test_property_counts[key] += 1
+        return True
+
     def _record_locator_provenance_command(
             self, command, tokens, guard, reasons):
         key = (command, tuple(tokens))
@@ -1215,6 +1730,19 @@ class CMakeProductionGraph(object):
     @classmethod
     def _is_protected_variable(cls, name):
         return cls._protected_variable.match(name) is not None
+
+    @classmethod
+    def _is_python_discovery_variable(cls, name):
+        # FindPython3 has a broad and evolving set of caller-controlled hints
+        # (ROOT_DIR, FIND_STRATEGY, FIND_IMPLEMENTATIONS, virtualenv policy,
+        # artifact overrides, and others).  Source-authored mutations of any
+        # such variable can redirect or suppress the interpreter while every
+        # downstream add_test token remains unchanged.  Protect the namespace
+        # rather than maintaining a brittle partial list.
+        return (
+            name in cls._python_discovery_variables or
+            name.startswith(("Python3_", "PythonInterp_", "PYTHON_")) or
+            name == "Python_ADDITIONAL_VERSIONS")
 
     @classmethod
     def _is_dangerous_build_property(cls, name):
@@ -1323,7 +1851,10 @@ class CMakeProductionGraph(object):
                 "OpenMP" in value):
             return bool_atom("dependent-option:ENABLE_OPENMP")
         if name == "CMAKE_BUILD_TYPE":
-            return bool_not(bool_atom("external:CMAKE_BUILD_TYPE"))
+            return bool_atom(
+                "comparison:" + repr((
+                    (BOOL_SYMBOL_PREFIX + "external:CMAKE_BUILD_TYPE",),
+                    "STREQUAL", ("",))))
         return BOOL_TRUE
 
     def _validate_required_protected_assignments(self):
@@ -1344,7 +1875,9 @@ class CMakeProductionGraph(object):
             allowed_reasons = ()
             if name == "CMAKE_BUILD_TYPE":
                 allowed_reasons = (
-                    "unmodeled CMake conditional variable: CMAKE_BUILD_TYPE",)
+                    "unmodeled CMake conditional variable: CMAKE_BUILD_TYPE",
+                    "unsupported comparison of symbolic CMake boolean",
+                )
             if reasons != allowed_reasons:
                 raise ContractError(
                     "unsupported condition guards protected CMake assignment: " +
@@ -1438,12 +1971,24 @@ class CMakeProductionGraph(object):
             reason = "unmodeled CMake conditional variable: " + name
             return [(BOOL_TRUE,
                      (BOOL_SYMBOL_PREFIX + "external:" + name,), (reason,))]
-        return [
-            (guard, value, tuple(
+        result = []
+        for guard, value, reasons in variants:
+            filtered_reasons = tuple(
                 reason for reason in reasons
-                if not reason.startswith(CONDITIONAL_ASSIGNMENT_PREFIX)))
-            for guard, value, reasons in variants
-        ]
+                if not reason.startswith(CONDITIONAL_ASSIGNMENT_PREFIX))
+            # The repository's default assignment does not erase a caller's
+            # pre-existing cache string on the retained branch.  Keep that
+            # branch symbolic so exact comparisons remain distinguishable from
+            # simple truth tests and from comparisons against another literal.
+            if value is None and name == "CMAKE_BUILD_TYPE":
+                value = (
+                    BOOL_SYMBOL_PREFIX + "external:CMAKE_BUILD_TYPE",)
+                filtered_reasons = self._merge_reasons(
+                    filtered_reasons,
+                    ("unmodeled CMake conditional variable: "
+                     "CMAKE_BUILD_TYPE",))
+            result.append((guard, value, filtered_reasons))
+        return result
 
     def _compare_condition_values(self, left, operation, right):
         left_symbol = (len(left) == 1 and
@@ -1452,13 +1997,6 @@ class CMakeProductionGraph(object):
                         right[0].startswith(BOOL_SYMBOL_PREFIX))
         if left_symbol or right_symbol:
             atom = "comparison:" + repr((left, operation, right))
-            if operation == "STREQUAL" and left_symbol != right_symbol:
-                symbol = left[0] if left_symbol else right[0]
-                literal = right if left_symbol else left
-                truth = self._cmake_truth(literal)
-                if truth in (BOOL_TRUE, BOOL_FALSE):
-                    formula = bool_atom(symbol[len(BOOL_SYMBOL_PREFIX):])
-                    return formula if truth == BOOL_TRUE else bool_not(formula)
             return bool_atom(atom)
         left_text = ";".join(left)
         right_text = ";".join(right)
@@ -1638,12 +2176,13 @@ class CMakeProductionGraph(object):
         approved_includes = {
             "CMakeDependentOption", "CheckCXXCompilerFlag",
             "CMakePackageConfigHelpers", "GNUInstallDirs",
-            "cmake/Leopard2BenchmarkAttestation.cmake"}
+            "cmake/Leopard2BenchmarkAttestation.cmake",
+            "cmake/Leopard2SanitizerClassification.cmake"}
         approved_packages = {
             ("OpenMP",),
             ("Threads", "REQUIRED"),
-            ("PythonInterp", "QUIET"),
-            ("Python3", "COMPONENTS", "Interpreter", "QUIET"),
+            ("PythonInterp", "3.10", "QUIET"),
+            ("Python3", "3.10", "COMPONENTS", "Interpreter", "QUIET"),
         }
         for command, body in self.raw_commands:
             tokens = cmake_tokens(body)
@@ -1665,12 +2204,25 @@ class CMakeProductionGraph(object):
                 if unsupported_depth:
                     stack.append({"type": "skipped-if"})
                     continue
-                condition, condition_reasons = self._eval_condition(body, guard)
+                python_registration_gate = self._record_python_registration_gate(
+                    body, guard, reasons)
+                if python_registration_gate:
+                    # Guard/assignment order is proven explicitly above.
+                    # Keep the selected-interpreter state as one reachability
+                    # atom so every registration is inspected without
+                    # expanding the mutually exclusive legacy/modern
+                    # discovery formulas into each nested test guard.
+                    condition = bool_atom("python-interpreter-selected")
+                    condition_reasons = ()
+                else:
+                    condition, condition_reasons = self._eval_condition(
+                        body, guard)
                 branch = bool_and(guard, condition)
                 stack.append({
                     "type": "if", "parent_guard": guard,
                     "parent_reasons": reasons, "taken": branch,
-                    "decision_reasons": condition_reasons})
+                    "decision_reasons": condition_reasons,
+                    "python_registration_gate": python_registration_gate})
                 guard = branch
                 reasons = self._merge_reasons(reasons, condition_reasons)
                 continue
@@ -1768,6 +2320,23 @@ class CMakeProductionGraph(object):
                         "build extension in unsupported CMake block: " + command)
                 continue
 
+            inside_python_registration_gate = any(
+                frame.get("python_registration_gate", False)
+                for frame in stack)
+            if command == "enable_testing":
+                self._record_test_enablement(tokens, guard, reasons)
+                continue
+            if (command in {"set_tests_properties", "set_property"} and
+                    self._record_python_test_property(
+                        command, tokens, guard, reasons)):
+                continue
+            if command == "add_test":
+                self._record_python_test_registration(
+                    tokens, guard, reasons,
+                    inside_python_registration_gate)
+                if inside_python_registration_gate:
+                    continue
+
             cuda_guard = bool_atom("option:LEO2_ENABLE_CUDA")
             default_reachable = bool_satisfiable(
                 bool_and(guard, bool_not(cuda_guard)))
@@ -1793,12 +2362,20 @@ class CMakeProductionGraph(object):
                 (command == "set_property" and tokens and
                  tokens[0].upper() == "SOURCE"))
             if default_reachable and is_source_property:
-                try:
-                    source_property_tokens = self._expand(tokens, guard)
-                except ContractError as error:
-                    raise ContractError(
-                        "unresolved source property is reachable in the "
-                        "CPU-only graph: " + str(error))
+                small_direct_source_property = (
+                    command == "set_property" and
+                    (tuple(tokens) == self._small_direct_source_property or
+                     tuple(tokens) in
+                        self._small_direct_test_source_properties))
+                if small_direct_source_property:
+                    source_property_tokens = list(tokens)
+                else:
+                    try:
+                        source_property_tokens = self._expand(tokens, guard)
+                    except ContractError as error:
+                        raise ContractError(
+                            "unresolved source property is reachable in the "
+                            "CPU-only graph: " + str(error))
                 upper_source_properties = {
                     token.upper() for token in source_property_tokens}
                 if any("$<" in token for token in source_property_tokens):
@@ -1812,7 +2389,8 @@ class CMakeProductionGraph(object):
                     raise ContractError(
                         "CUDA source property is reachable in the CPU-only "
                         "graph")
-            if default_reachable and command == "add_test":
+            if (default_reachable and command == "add_test" and
+                    not inside_python_registration_gate):
                 approved_cuda_optional_test = (
                     "NAME", "leopard2_cuda_optional", "COMMAND",
                     "${CMAKE_COMMAND}",
@@ -1840,7 +2418,10 @@ class CMakeProductionGraph(object):
                     test_tokens = tokens[command_index + 1:]
                 expanded_test_tokens = []
                 for token in test_tokens:
-                    if self._variable.fullmatch(token):
+                    if (inside_python_registration_gate and
+                            token == "${LEO2_PYTHON_EXECUTABLE}"):
+                        expanded_test_tokens.append(token)
+                    elif self._variable.fullmatch(token):
                         try:
                             expanded_test_tokens.extend(
                                 self._expand([token], guard))
@@ -1981,6 +2562,8 @@ class CMakeProductionGraph(object):
                     raise ContractError(
                         "unapproved CMake package graph import: " +
                         " ".join(tokens))
+                self._record_python_package_command(
+                    tokens, guard, reasons)
                 if (bool_satisfiable(guard) and tuple(tokens) in {
                         ("OpenMP",), ("Threads", "REQUIRED")}):
                     self._record_trusted_command(
@@ -2083,7 +2666,15 @@ class CMakeProductionGraph(object):
                     continue
 
             if command == "set" and tokens:
+                self._record_python_executable_assignment(
+                    tokens, guard, reasons)
                 variable = self._mutation_variable(tokens[0], guard, command)
+                if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable) and
+                        variable != "LEO2_PYTHON_EXECUTABLE"):
+                    raise ContractError(
+                        "unapproved Python discovery state mutation: " +
+                        variable)
                 if variable == "CMAKE_MODULE_PATH":
                     raise ContractError(
                         "CMAKE_MODULE_PATH can redirect approved graph includes")
@@ -2135,6 +2726,11 @@ class CMakeProductionGraph(object):
             if command == "unset" and tokens:
                 variable = self._mutation_variable(tokens[0], guard, command)
                 if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable)):
+                    raise ContractError(
+                        "unapproved Python discovery state mutation: " +
+                        variable)
+                if (bool_satisfiable(guard) and
                         self._is_protected_variable(variable)):
                     raise ContractError(
                         "unapproved production compiler-control variable "
@@ -2151,6 +2747,12 @@ class CMakeProductionGraph(object):
                 variable = self._mutation_variable(tokens[0], guard, command)
                 trusted_option = (
                     command, tuple(tokens)) in self._required_trusted_commands
+                if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable) and
+                        not trusted_option):
+                    raise ContractError(
+                        "unapproved Python discovery state mutation: " +
+                        variable)
                 if (bool_satisfiable(guard) and
                         self._is_protected_variable(variable) and
                         not trusted_option):
@@ -2186,6 +2788,12 @@ class CMakeProductionGraph(object):
                         "unapproved production compiler probe: " + command +
                         " " + " ".join(tokens))
                 if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable) and
+                        not trusted_probe):
+                    raise ContractError(
+                        "compiler probe may not overwrite Python discovery "
+                        "state: " + variable)
+                if (bool_satisfiable(guard) and
                         self._is_protected_variable(variable) and
                         not trusted_probe):
                     raise ContractError(
@@ -2206,6 +2814,12 @@ class CMakeProductionGraph(object):
                         "unapproved production dependent option: " +
                         " ".join(tokens))
                 if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable) and
+                        not trusted_option):
+                    raise ContractError(
+                        "dependent option may not overwrite Python discovery "
+                        "state: " + variable)
+                if (bool_satisfiable(guard) and
                         self._is_protected_variable(variable) and
                         not trusted_option):
                     raise ContractError(
@@ -2220,6 +2834,11 @@ class CMakeProductionGraph(object):
             if command == "list" and len(tokens) >= 2:
                 operation = tokens[0].upper()
                 variable = self._mutation_variable(tokens[1], guard, command)
+                if (bool_satisfiable(guard) and
+                        self._is_python_discovery_variable(variable)):
+                    raise ContractError(
+                        "unapproved Python discovery state mutation: " +
+                        variable)
                 if (bool_satisfiable(guard) and
                         self._is_protected_variable(variable)):
                     raise ContractError(
@@ -2292,12 +2911,15 @@ class CMakeProductionGraph(object):
             for token in tokens:
                 try:
                     expanded_token = self._expand_embedded_token(token, guard)
-                except ContractError:
+                except ContractError as error:
                     if command in variable_writers:
-                        # An unknown computed writer destination may name any
-                        # production source variable.  Poison each until its
-                        # next explicit assignment rather than accepting it.
-                        expanded_identifiers.update(self.source_variables)
+                        # Command-specific writer grammars put destinations in
+                        # different positions. Until each is modeled exactly,
+                        # an unresolved token may itself expand to any
+                        # protected destination and must fail closed.
+                        raise ContractError(
+                            "unresolved variable-writer token: " + command +
+                            " " + token + ": " + str(error))
                 else:
                     if re.match(
                             r"^[A-Za-z_][A-Za-z0-9_]*$", expanded_token):
@@ -2316,12 +2938,19 @@ class CMakeProductionGraph(object):
                 raise ContractError(
                     "CMAKE_MODULE_PATH mutation can redirect package graph "
                     "imports")
+            python_state_identifiers = sorted(
+                identifier for identifier in expanded_identifiers
+                if self._is_python_discovery_variable(identifier))
             protected_identifiers = sorted(
                 identifier for identifier in expanded_identifiers
                 if self._is_protected_variable(identifier))
             property_commands = {
                 "set_property", "set_source_files_properties",
                 "set_target_properties", "set_directory_properties"}
+            if python_state_identifiers:
+                raise ContractError(
+                    "unmodeled command may mutate Python discovery state: " +
+                    command + " " + ", ".join(python_state_identifiers))
             if protected_identifiers and command not in property_commands:
                 raise ContractError(
                     "unmodeled command may mutate production compiler-control "
@@ -2352,6 +2981,89 @@ class CMakeProductionGraph(object):
 
         if stack:
             raise ContractError("unbalanced CMake block: " + stack[-1]["type"])
+        if (self.require_mutation_contract and
+                self.python_package_counts !=
+                self._required_python_package_commands):
+            missing = (self._required_python_package_commands -
+                       self.python_package_counts)
+            extra = (self.python_package_counts -
+                     self._required_python_package_commands)
+            raise ContractError(
+                "missing or duplicate Python package discovery command: "
+                "missing=" + repr(sorted(missing.elements(), key=repr)) +
+                " extra=" + repr(sorted(extra.elements(), key=repr)))
+        if (self.require_mutation_contract and
+                self.python_executable_assignment_counts !=
+                self._required_python_executable_assignments):
+            missing = (self._required_python_executable_assignments -
+                       self.python_executable_assignment_counts)
+            extra = (self.python_executable_assignment_counts -
+                     self._required_python_executable_assignments)
+            raise ContractError(
+                "missing or duplicate Python executable assignment: "
+                "missing=" + repr(sorted(missing.elements(), key=repr)) +
+                " extra=" + repr(sorted(extra.elements(), key=repr)))
+        if (self.require_mutation_contract and
+                tuple(self.python_discovery_events) !=
+                self._required_python_discovery_event_order):
+            raise ContractError(
+                "Python discovery/registration order drift: " +
+                repr(tuple(self.python_discovery_events)))
+        if (self.require_mutation_contract and
+                self.python_test_registration_counts !=
+                self._required_python_test_registrations):
+            missing = (self._required_python_test_registrations -
+                       self.python_test_registration_counts)
+            extra = (self.python_test_registration_counts -
+                     self._required_python_test_registrations)
+            raise ContractError(
+                "missing or duplicate Python test registration: missing=" +
+                repr(sorted(missing.elements())) + " extra=" +
+                repr(sorted(extra.elements())))
+        expected_python_test_guards = Counter(
+            (name, index)
+            for name in self._required_python_test_registrations
+            for index in range(len(self._expected_python_test_guards(name))))
+        if (self.require_mutation_contract and
+                self.python_test_guard_counts !=
+                expected_python_test_guards):
+            missing = (
+                expected_python_test_guards -
+                self.python_test_guard_counts)
+            extra = (
+                self.python_test_guard_counts -
+                expected_python_test_guards)
+            raise ContractError(
+                "missing or duplicate Python test guard: missing=" +
+                repr(sorted(missing.elements())) + " extra=" +
+                repr(sorted(extra.elements())))
+        python_test_command_bytes = json.dumps(
+            sorted(self.python_test_commands), ensure_ascii=True,
+            separators=(",", ":")).encode("utf-8")
+        python_test_command_sha256 = hashlib.sha256(
+            python_test_command_bytes).hexdigest()
+        if (self.require_mutation_contract and
+                python_test_command_sha256 !=
+                self._required_python_test_command_sha256):
+            raise ContractError(
+                "required Python test command identity drift: " +
+                python_test_command_sha256)
+        if (self.require_mutation_contract and
+                self.python_test_property_counts !=
+                self._required_python_test_property_commands):
+            missing = (
+                self._required_python_test_property_commands -
+                self.python_test_property_counts)
+            extra = (
+                self.python_test_property_counts -
+                self._required_python_test_property_commands)
+            raise ContractError(
+                "missing or duplicate required Python test properties: "
+                "missing=" + repr(sorted(missing.elements(), key=repr)) +
+                " extra=" + repr(sorted(extra.elements(), key=repr)))
+        if self.require_mutation_contract and self.test_enablement_count != 1:
+            raise ContractError(
+                "missing or duplicate reachable CTest enablement")
         if (self.require_mutation_contract and
                 self.trusted_command_counts != self._required_trusted_commands):
             missing = self._required_trusted_commands - self.trusted_command_counts
@@ -2497,6 +3209,42 @@ class CMakeProductionGraph(object):
             self._reject_link_property(command, raw_tokens, guard)
 
     def _record_source_properties(self, command, raw_tokens, guard, reasons):
+        key = (command, tuple(raw_tokens))
+        expected_key = (
+            "set_property", self._small_direct_source_property)
+        approved_test_key = (
+            command == "set_property" and
+            tuple(raw_tokens) in self._small_direct_test_source_properties)
+        if key == expected_key or approved_test_key:
+            experiment_guard = bool_not(bool_atom(
+                "comparison:" + repr((
+                    (BOOL_SYMBOL_PREFIX +
+                     "external-cache:LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",),
+                    "STREQUAL", ("0",)))))
+            expected_guard = experiment_guard
+            if approved_test_key:
+                expected_guard = bool_and(
+                    expected_guard,
+                    bool_atom("option:LEO2_BUILD_TESTS"),
+                    bool_atom("option:LEOPARD_ENABLE_GF8"))
+                if (raw_tokens[1] ==
+                        "tests/leopard2/test_small_direct_exhaustive.cpp"):
+                    expected_guard = bool_and(
+                        expected_guard,
+                        bool_atom("probe:LEO2_FLAG_ARCH_AVX2"))
+                else:
+                    expected_guard = bool_and(
+                        expected_guard,
+                        bool_atom("option:LEOPARD_ENABLE_GF16"))
+            expected_reasons = (
+                "unsupported comparison of symbolic CMake boolean",)
+            if (reasons != expected_reasons or
+                    not self._formula_equivalent(guard, expected_guard)):
+                raise ContractError(
+                    "small-direct source definition guard drift")
+            if key == expected_key:
+                self.contract_events.append(("source-mutation", key))
+            return
         if reasons:
             raise ContractError(
                 "unsupported conditional CMake source properties: " + reasons[0])
@@ -4082,6 +4830,19 @@ class CMakeGraphMutationTest(unittest.TestCase):
             text, require_files=False,
             require_mutation_contract=require_mutation_contract)
 
+    def test_small_direct_exhaustive_target_remains_gf8_only_reachable(self):
+        condition = (
+            "if(LEOPARD_ENABLE_GF8 AND LEO2_HAVE_AVX2_BACKEND)")
+        dual_field_condition = (
+            "if(LEOPARD_ENABLE_GF8 AND LEOPARD_ENABLE_GF16 AND "
+            "LEO2_HAVE_AVX2_BACKEND)")
+        self.assertEqual(1, self.cmake.count(condition))
+        text = self.cmake.replace(condition, dual_field_condition, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "small-direct source definition guard drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
     def test_portable_release_audit_is_opt_in_and_platform_scoped(self):
         option = (
             'option(LEO2_PORTABLE_ISA_RELEASE_AUDIT\n'
@@ -4328,6 +5089,398 @@ set(LIB_SOURCE_FILES ${SAVED_LIB_SOURCE_FILES})"""
                             ContractError,
                             "unsupported CMake block"):
                         self.resolve(mutation)
+
+    def test_python_discovery_minimum_version_is_exact(self):
+        approved_commands = (
+            "find_package(PythonInterp 3.10 QUIET)",
+            "find_package(Python3 3.10 COMPONENTS Interpreter QUIET)",
+        )
+        mutations = (
+            "find_package(PythonInterp QUIET)",
+            "find_package(PythonInterp 3.9 QUIET)",
+            "find_package(PythonInterp 3.11 QUIET)",
+            "find_package(Python3 COMPONENTS Interpreter QUIET)",
+            "find_package(Python3 3.9 COMPONENTS Interpreter QUIET)",
+            "find_package(Python3 3.11 COMPONENTS Interpreter QUIET)",
+        )
+        for command in approved_commands:
+            self.assertEqual(1, self.cmake.count(command))
+        for mutation in mutations:
+            approved = approved_commands[
+                0 if "PythonInterp" in mutation else 1]
+            with self.subTest(command=mutation):
+                text = self.cmake.replace(approved, mutation, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved CMake package graph import"):
+                    self.resolve_text(text)
+
+    def test_python_discovery_guards_and_cardinality_are_exact(self):
+        commands = (
+            "find_package(PythonInterp 3.10 QUIET)",
+            "find_package(Python3 3.10 COMPONENTS Interpreter QUIET)",
+        )
+        wrappers = (
+            "if(FALSE)\n{command}\nendif()",
+            "if(LEO2_BUILD_BENCHMARKS)\n{command}\nendif()",
+        )
+        for command in commands:
+            for wrapper in wrappers:
+                with self.subTest(command=command, wrapper=wrapper):
+                    text = self.cmake.replace(
+                        command, wrapper.format(command=command), 1)
+                    with self.assertRaisesRegex(
+                            ContractError,
+                            "Python package discovery guard drift"):
+                        self.resolve_text(
+                            text, require_mutation_contract=True)
+            with self.subTest(command=command, cardinality="missing"):
+                text = self.cmake.replace(command, "", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate Python package discovery"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+            with self.subTest(command=command, cardinality="duplicate"):
+                text = self.cmake.replace(
+                    command, command + "\n" + command, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "missing or duplicate Python package discovery"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_python_executable_assignment_requires_found_result(self):
+        clear = 'set(LEO2_PYTHON_EXECUTABLE "")'
+        guarded_assignments = (
+            (
+                "if(PYTHONINTERP_FOUND)\n"
+                "            set(LEO2_PYTHON_EXECUTABLE "
+                "${PYTHON_EXECUTABLE})\n"
+                "        endif()",
+                "set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})",
+                "PYTHONINTERP_FOUND"),
+            (
+                "if(Python3_Interpreter_FOUND)\n"
+                "            set(LEO2_PYTHON_EXECUTABLE "
+                "${Python3_EXECUTABLE})\n"
+                "        endif()",
+                "set(LEO2_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})",
+                "Python3_Interpreter_FOUND"),
+        )
+        self.assertEqual(1, self.cmake.count(clear))
+        for block, assignment, found_name in guarded_assignments:
+            self.assertEqual(1, self.cmake.count(block))
+            with self.subTest(found=found_name, mutation="unguarded"):
+                text = self.cmake.replace(block, assignment, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python executable assignment guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+            with self.subTest(found=found_name, mutation="wrong-result"):
+                text = self.cmake.replace(
+                    "if(" + found_name + ")",
+                    "if(LEO2_BUILD_BENCHMARKS)", 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python executable assignment guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+        for mutation in (
+                "",
+                "if(FALSE)\n" + clear + "\nendif()",
+                "set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})"):
+            with self.subTest(clear=mutation or "missing"):
+                text = self.cmake.replace(clear, mutation, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python executable assignment|missing or duplicate "
+                        "Python executable assignment"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_python_discovery_and_registration_order_is_exact(self):
+        branches = (
+            (
+                "find_package(PythonInterp 3.10 QUIET)",
+                "if(PYTHONINTERP_FOUND)\n"
+                "            set(LEO2_PYTHON_EXECUTABLE "
+                "${PYTHON_EXECUTABLE})\n"
+                "        endif()"),
+            (
+                "find_package(Python3 3.10 COMPONENTS Interpreter QUIET)",
+                "if(Python3_Interpreter_FOUND)\n"
+                "            set(LEO2_PYTHON_EXECUTABLE "
+                "${Python3_EXECUTABLE})\n"
+                "        endif()"),
+        )
+        for package, assignment_block in branches:
+            sequence = package + "\n        " + assignment_block
+            reordered = assignment_block + "\n        " + package
+            self.assertEqual(1, self.cmake.count(sequence))
+            with self.subTest(package=package):
+                text = self.cmake.replace(sequence, reordered, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python discovery/registration order drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        clear = 'set(LEO2_PYTHON_EXECUTABLE "")'
+        gate = "if(LEO2_PYTHON_EXECUTABLE)"
+        moved_clear = self.cmake.replace(clear, "", 1)
+        moved_clear = moved_clear.replace(
+            gate, clear + "\n    " + gate, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "Python discovery/registration order drift|"
+                "Python test registration escaped|"
+                "unmodeled test generator expression"):
+            self.resolve_text(
+                moved_clear, require_mutation_contract=True)
+
+        early_gate = self.cmake.replace(gate, "if(TRUE)", 1)
+        early_gate = early_gate.replace(
+            clear, gate + "\n    endif()\n    " + clear, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "Python discovery/registration order drift|"
+                "Python test registration escaped|"
+                "unmodeled test generator expression"):
+            self.resolve_text(
+                early_gate, require_mutation_contract=True)
+
+    def test_python_registration_gate_condition_is_exact(self):
+        gate = "if(LEO2_PYTHON_EXECUTABLE)"
+        self.assertEqual(1, self.cmake.count(gate))
+        for replacement in (
+                "if(TRUE)",
+                "if(LEO2_PYTHON_EXECUTABLE AND LEO2_BUILD_BENCHMARKS)",
+                "if(${LEO2_PYTHON_EXECUTABLE})",
+                "if(NOT LEO2_PYTHON_EXECUTABLE)"):
+            with self.subTest(gate=replacement):
+                text = self.cmake.replace(gate, replacement, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python registration gate|Python discovery/"
+                        "registration order drift|"
+                        "Python test registration escaped|"
+                        "unmodeled test generator expression"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_python_registrations_remain_inside_the_exact_gate(self):
+        gate = "if(LEO2_PYTHON_EXECUTABLE)"
+        split_gate = (
+            "if(LEO2_PYTHON_EXECUTABLE)\n"
+            "    endif()\n"
+            "    if(FALSE)")
+        text = self.cmake.replace(gate, split_gate, 1)
+        self.assertNotEqual(text, self.cmake)
+        with self.assertRaisesRegex(
+                ContractError,
+                "Python test registration escaped its exact gate"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+        registration = (
+            "add_test(\n"
+            "            NAME leopard2_visual_studio_project_self_test\n"
+            "            COMMAND ${LEO2_PYTHON_EXECUTABLE}\n"
+            "                ${CMAKE_CURRENT_SOURCE_DIR}/tests/proj/"
+            "test_leopard_vcxproj.py)")
+        self.assertEqual(1, self.cmake.count(registration))
+        guarded = "if(FALSE)\n        " + registration + "\n        endif()"
+        text = self.cmake.replace(registration, guarded, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "Python test registration guard drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+        text = self.cmake.replace(registration, "", 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "missing or duplicate Python test registration"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+        no_op = (
+            "add_test(\n"
+            "            NAME leopard2_visual_studio_project_self_test\n"
+            "            COMMAND ${LEO2_PYTHON_EXECUTABLE} -c pass)")
+        text = self.cmake.replace(registration, no_op, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "required Python test command identity drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+        release_condition = (
+            "if(CMAKE_EXPORT_COMPILE_COMMANDS AND\n"
+            "               CMAKE_BUILD_TYPE STREQUAL \"Release\" AND\n"
+            "               CMAKE_GENERATOR STREQUAL \"Unix Makefiles\")")
+        self.assertEqual(1, self.cmake.count(release_condition))
+        release_guard_replacements = (
+            release_condition.replace(
+                'CMAKE_BUILD_TYPE STREQUAL "Release"',
+                'CMAKE_BUILD_TYPE STREQUAL "Debug"'),
+            release_condition.replace(
+                'CMAKE_BUILD_TYPE STREQUAL "Release"',
+                "CMAKE_BUILD_TYPE"),
+            release_condition.replace(
+                'CMAKE_BUILD_TYPE STREQUAL "Release"',
+                "NOT CMAKE_BUILD_TYPE"),
+            release_condition.replace(
+                'CMAKE_BUILD_TYPE STREQUAL "Release"',
+                '"Release" STREQUAL CMAKE_BUILD_TYPE'),
+            release_condition.replace(
+                'CMAKE_BUILD_TYPE STREQUAL "Release"',
+                'CMAKE_BUILD_TYPE MATCHES "Release"'),
+        )
+        for replacement in release_guard_replacements:
+            with self.subTest(condition=replacement.splitlines()[1].strip()):
+                text = self.cmake.replace(
+                    release_condition, replacement, 1)
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python test registration guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        restricted = registration[:-1] + "\n            CONFIGURATIONS Never)"
+        text = self.cmake.replace(registration, restricted, 1)
+        with self.assertRaisesRegex(
+                ContractError,
+                "required Python test command identity drift"):
+            self.resolve_text(text, require_mutation_contract=True)
+
+    def test_ctest_enablement_is_exact_and_reachable(self):
+        command = "enable_testing()"
+        self.assertEqual(1, self.cmake.count(command))
+        for replacement in (
+                "",
+                "if(FALSE)\n        enable_testing()\n    endif()",
+                command + "\n    " + command):
+            with self.subTest(replacement=replacement or "removed"):
+                text = self.cmake.replace(command, replacement, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "CTest enablement|security-sensitive CMake command "
+                        "order"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+    def test_required_python_test_properties_cannot_suppress_execution(self):
+        registration = (
+            "add_test(\n"
+            "            NAME leopard2_cost_model_self_test\n"
+            "            COMMAND ${LEO2_PYTHON_EXECUTABLE}\n"
+            "                ${CMAKE_CURRENT_SOURCE_DIR}/experiments/"
+            "leopard2/cost_model.py\n"
+            "                self-test)")
+        self.assertEqual(1, self.cmake.count(registration))
+        mutations = (
+            "set_tests_properties(leopard2_cost_model_self_test "
+            "PROPERTIES DISABLED TRUE)",
+            "set_tests_properties(leopard2_cost_model_self_test "
+            "PROPERTIES SKIP_RETURN_CODE 0)",
+            "set_property(TEST leopard2_cost_model_self_test "
+            "PROPERTY DISABLED TRUE)",
+        )
+        for mutation in mutations:
+            with self.subTest(mutation=mutation):
+                text = self.cmake.replace(
+                    registration, registration + "\n        " + mutation, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "unapproved (?:required Python test properties|"
+                        "property mutation of required Python test)"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        for mutation in (
+                "set_tests_properties(${DEST} PROPERTIES DISABLED TRUE)",
+                "set_property(TEST ${DEST} PROPERTY DISABLED TRUE)"):
+            with self.subTest(computed=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "computed test-property destination"):
+                    self.resolve(mutation)
+
+    def test_python_discovery_state_cannot_be_substituted(self):
+        legacy_package = "find_package(PythonInterp 3.10 QUIET)"
+        modern_package = (
+            "find_package(Python3 3.10 COMPONENTS Interpreter QUIET)")
+        inserted = (
+            (
+                legacy_package,
+                "set(PYTHON_EXECUTABLE /tmp/python2)"),
+            (
+                legacy_package,
+                "set(PYTHONINTERP_FOUND TRUE)"),
+            (
+                modern_package,
+                "set(Python3_EXECUTABLE /tmp/python2)"),
+            (
+                modern_package,
+                "set(Python3_Interpreter_FOUND TRUE)"),
+        )
+        for package, mutation in inserted:
+            with self.subTest(mutation=mutation):
+                text = self.cmake.replace(
+                    package, package + "\n        " + mutation, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python discovery state mutation"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
+
+        for mutation in (
+                "list(APPEND LEO2_PYTHON_EXECUTABLE --injected)",
+                "string(APPEND Python3_EXECUTABLE injected)",
+                "unset(PYTHON_EXECUTABLE)",
+                "set(Python3_Interpreter_FOUND TRUE)",
+                "set_property(CACHE Python3_EXECUTABLE PROPERTY VALUE "
+                "/tmp/python2)"):
+            with self.subTest(mutation=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python discovery state|unapproved CMake non-target "
+                        "property"):
+                    self.resolve(mutation)
+
+        discovery_controls = (
+            "set(Python3_ROOT_DIR /tmp/evil-python)\n"
+            "set(Python3_FIND_STRATEGY LOCATION)",
+            "set(Python3_FIND_IMPLEMENTATIONS IronPython)",
+            "set(Python3_FIND_VIRTUALENV ONLY)",
+            "set(Python3_ARTIFACTS_INTERACTIVE TRUE)",
+            "set(Python_ADDITIONAL_VERSIONS 2.7)",
+            "list(APPEND Python3_FIND_IMPLEMENTATIONS IronPython)",
+            "set(DEST Python3_FIND_IMPLEMENTATIONS)\n"
+            "set(${DEST} IronPython)",
+        )
+        for mutation in discovery_controls:
+            with self.subTest(discovery_control=mutation):
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "Python discovery state mutation"):
+                    self.resolve(mutation)
+
+    def test_computed_writer_destination_cannot_retarget_python_state(self):
+        mutations = (
+            "if(NOT LEO2_BUILD_FUZZERS)\n"
+            "    string(CONCAT ${DEST} /tmp/python2)\n"
+            "endif()",
+            "if(NOT LEO2_BUILD_FUZZERS)\n"
+            "    math(EXPR ${DEST} \"1\")\n"
+            "endif()",
+        )
+        for mutation in mutations:
+            with self.subTest(command=mutation.splitlines()[1].strip()):
+                with self.assertRaisesRegex(
+                        ContractError, "unresolved variable-writer token"):
+                    self.resolve(mutation)
 
     def test_object_library_link_attachment_is_rejected(self):
         mutations = (
@@ -5242,6 +6395,7 @@ endif()'''
             "include(CheckCXXCompilerFlag)",
             "include(CMakePackageConfigHelpers)",
             "include(GNUInstallDirs)",
+            "include(cmake/Leopard2SanitizerClassification.cmake)",
             "find_package(OpenMP)",
             "find_package(Threads REQUIRED)",
             'option(LEO2_BUILD_TESTS "Build Leopard2 correctness tests" ON)',
@@ -5295,6 +6449,7 @@ endif()'''
                         "benchmark attestation target guard drift|"
                         "unsupported conditional CMake source graph|"
                         "reachable CMake language enablement|"
+                        "CTest enablement guard or arguments drift|"
                         "CMake bootstrap must begin"):
                     self.resolve_text(
                         text, require_mutation_contract=True)
@@ -5349,13 +6504,15 @@ endif()""",
 
     def test_security_sensitive_cmake_command_order_is_exact(self):
         discovery = "find_package(OpenMP)\n"
-        insertion = "endif(ENABLE_OPENMP)\n\nset(LEO2_X86_TARGET OFF)"
+        insertion = (
+            "endif(ENABLE_OPENMP)\n\n"
+            "# This data-only classifier is configuration-aware.")
         self.assertEqual(1, self.cmake.count(discovery))
         self.assertEqual(1, self.cmake.count(insertion))
         text = self.cmake.replace(discovery, "", 1).replace(
             insertion,
             "endif(ENABLE_OPENMP)\nfind_package(OpenMP)\n\n"
-            "set(LEO2_X86_TARGET OFF)", 1)
+            "# This data-only classifier is configuration-aware.", 1)
         with self.assertRaisesRegex(
                 ContractError, "security-sensitive CMake command order"):
             self.resolve_text(text, require_mutation_contract=True)
@@ -5388,6 +6545,7 @@ endif()""",
                 with self.assertRaisesRegex(
                         ContractError,
                         "missing or duplicate protected CMake assignment|"
+                        "Python test registration guard drift|"
                         "may mutate source variable|"
                         "unresolved CMake source variable"):
                     self.resolve_text(
@@ -5409,6 +6567,21 @@ endif()""",
                 "guards protected CMake assignment|"
                 "protected CMake assignment guard drift"):
             self.resolve_text(text, require_mutation_contract=True)
+
+        exact_empty = 'if("${CMAKE_BUILD_TYPE}" STREQUAL "")'
+        self.assertEqual(1, self.cmake.count(exact_empty))
+        for inexact_guard in (
+                "if(NOT CMAKE_BUILD_TYPE)",
+                'if("${CMAKE_BUILD_TYPE}" STREQUAL "OFF")'):
+            with self.subTest(build_type_guard=inexact_guard):
+                text = self.cmake.replace(exact_empty, inexact_guard, 1)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "guards protected CMake assignment|"
+                        "protected CMake assignment guard drift|"
+                        "Python test registration guard drift"):
+                    self.resolve_text(
+                        text, require_mutation_contract=True)
 
     def test_protected_assignment_cache_and_scope_modifiers_are_exact(self):
         replacements = (

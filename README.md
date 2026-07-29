@@ -30,13 +30,19 @@ Do not add `-march=native` when producing binaries for other machines: it can
 allow the compiler to emit unsupported instructions anywhere in the program.
 For cross-compilation, select the destination architecture in a CMake toolchain
 file and keep its baseline compatible with every deployment CPU.  The
-`LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a qualified
-backend during testing; accepted values are `auto`, `scalar`, `ssse3`, `avx2`,
-and `avx512`.  Lower forced variants cap explicit contexts at the selected
-backend, while `avx512` retains access to qualified lower tables.  This setting
-is not a portability target or a wire-format choice.  `auto` continues to
-report AVX2 as its context baseline even when one bounded encode operation is
-eligible for the model-scoped AVX-512VL policy above.
+Apple build specifically treats a single `CMAKE_OSX_ARCHITECTURES` entry as the
+target architecture rather than trusting the build host's processor.  Universal
+Apple archives deliberately omit the optional x86 SSSE3/AVX object libraries:
+one object-library compile option cannot safely describe both its x86 and Arm
+slices, so those builds retain the portable scalar/native-Arm graph.
+
+The `LEO2_BACKEND_VARIANT` setting is a diagnostic control for forcing a
+qualified backend during testing; accepted values are `auto`, `scalar`,
+`ssse3`, `avx2`, and `avx512`.  Lower forced variants cap explicit contexts at
+the selected backend, while `avx512` retains access to qualified lower tables.
+This setting is not a portability target or a wire-format choice.  `auto`
+continues to report AVX2 as its context baseline even when one bounded encode
+operation is eligible for the model-scoped AVX-512VL policy above.
 When its POSIX shell and disassembly tools are available, the normal test build
 registers `leopard2_portable_isa` to audit the x86-64 archive and any available
 build metadata.  Missing audit tools remain non-fatal for ordinary developer,
@@ -47,8 +53,15 @@ ASan/UBSan helpers may use instructions outside the codec object's declared
 floor.  A sanitizer-instrumented build therefore registers
 `leopard2_portable_isa_checker_self_test` to retain all adversarial classifier
 controls, while the archive audit remains exclusive to a clean build.  The
-strict release-audit option below rejects sanitizer flags instead of silently
-substituting the weaker mode.
+classification follows the active custom build type and its
+`CMAKE_CXX_FLAGS_<CONFIG>` variable.  Multi-configuration generators classify
+each configuration independently: sanitized configurations run the checker
+self-test, while clean configurations retain the archive audit (select one with
+CTest's `-C` option).  An empty single-config build type remains valid and is
+classified from the general C++ flags.
+
+The strict release-audit option below rejects sanitizer flags instead of
+silently substituting the weaker mode.
 
 ```sh
 ctest --test-dir build -R '^leopard2_portable_isa$' --output-on-failure

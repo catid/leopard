@@ -47,6 +47,14 @@ option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
     "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
     OFF)
+set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
+    "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
+set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
+    0 1 2)
+if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE MATCHES "^[012]$")
+    message(FATAL_ERROR
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2")
+endif()
 
 if(LEO2_BUILD_ALLK_DIAGNOSTIC AND NOT LEO2_BUILD_BENCHMARKS)
     message(FATAL_ERROR
@@ -89,7 +97,7 @@ if(LEO2_ENABLE_CUDA)
     enable_language(CUDA)
 endif()
 
-if(NOT CMAKE_BUILD_TYPE)
+if("${CMAKE_BUILD_TYPE}" STREQUAL "")
     set(CMAKE_BUILD_TYPE Release)
 endif()
 
@@ -179,18 +187,51 @@ if(ENABLE_OPENMP)
     set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif(ENABLE_OPENMP)
 
+# This data-only classifier is configuration-aware.  It is loaded after all
+# project-wide C++ flags are finalized so a later CTest registration can select
+# the archive audit independently for each active configuration.
+include(cmake/Leopard2SanitizerClassification.cmake)
+
+# BEGIN LEO2_TARGET_ARCHITECTURE_MODEL
+set(LEO2_TARGET_PROCESSOR "${CMAKE_SYSTEM_PROCESSOR}")
+set(LEO2_APPLE_UNIVERSAL_TARGET OFF)
+if(APPLE AND CMAKE_OSX_ARCHITECTURES)
+    # CMAKE_SYSTEM_PROCESSOR describes the host in common Apple cross-build
+    # workflows.  CMAKE_OSX_ARCHITECTURES is the actual target contract.  A
+    # multi-slice archive cannot safely consume an OBJECT library whose
+    # -mssse3/-mavx2 option is valid for only its x86 slice, so universal builds
+    # deliberately retain the portable scalar/native-ARM graph.
+    if("${CMAKE_OSX_ARCHITECTURES}" MATCHES ";")
+        set(LEO2_APPLE_UNIVERSAL_TARGET ON)
+        set(LEO2_TARGET_PROCESSOR "")
+        message(STATUS
+            "Leopard2 Apple universal build: optional x86 ISA objects disabled")
+    else()
+        set(LEO2_TARGET_PROCESSOR "${CMAKE_OSX_ARCHITECTURES}")
+    endif()
+endif()
+
 set(LEO2_X86_TARGET OFF)
-if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "X86" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "i386" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "i486" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "i586" OR
-   CMAKE_SYSTEM_PROCESSOR STREQUAL "i686")
+set(LEO2_X86_64_TARGET OFF)
+if(LEO2_TARGET_PROCESSOR STREQUAL "x86" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "X86" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "x86_64" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "x86_64h" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "amd64" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "AMD64" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "i386" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "i486" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "i586" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "i686")
     set(LEO2_X86_TARGET ON)
 endif()
+if(LEO2_TARGET_PROCESSOR STREQUAL "x86_64" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "x86_64h" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "amd64" OR
+   LEO2_TARGET_PROCESSOR STREQUAL "AMD64")
+    set(LEO2_X86_64_TARGET ON)
+endif()
+# END LEO2_TARGET_ARCHITECTURE_MODEL
 
 # This opt-in gate is intentionally narrower than ordinary portable builds.
 # It is a release/CI evidence mode for single-config, native x86-64 builds with
@@ -208,9 +249,7 @@ if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT currently requires a native "
             "non-Apple Unix build")
     endif()
-    if(NOT (CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
-            CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
-            CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64"))
+    if(NOT LEO2_X86_64_TARGET)
         message(FATAL_ERROR
             "LEO2_PORTABLE_ISA_RELEASE_AUDIT currently supports x86-64 only")
     endif()
@@ -260,6 +299,14 @@ endif()
 if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
     target_compile_definitions(leopard PRIVATE
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+endif()
+if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
+    # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
+    # trusted compile-command delta source-scoped for both the production and
+    # test-hook archives; unrelated library objects must remain byte-for-byte
+    # reproducible across modes.
+    set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
 endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
@@ -491,7 +538,7 @@ if(NOT LEO2_BACKEND_VARIANT STREQUAL "auto")
     if(NOT LEO2_X86_TARGET)
         message(FATAL_ERROR
             "LEO2_BACKEND_VARIANT=${LEO2_BACKEND_VARIANT} is unavailable on "
-            "processor '${CMAKE_SYSTEM_PROCESSOR}'; use auto")
+            "target processor '${LEO2_TARGET_PROCESSOR}'; use auto")
     endif()
 
     if(LEO2_BACKEND_VARIANT STREQUAL "scalar")
@@ -928,6 +975,15 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_release_flags.cmake)
+    add_test(NAME leopard2_sanitizer_classification
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_sanitizer_classification.cmake)
+    add_test(NAME leopard2_target_architecture_model
+        COMMAND ${CMAKE_COMMAND}
+            -DLEO2_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}/target-architecture-model
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_target_architecture_model.cmake)
 
     # The installed archive keeps optional ISAs in isolated object files, but
     # historical/manual whole-translation-unit SSSE3 builds remain supported.
@@ -974,24 +1030,6 @@ if(LEO2_BUILD_TESTS)
     # leak.  Keep this classification in the test-registration scope so it
     # cannot affect the production target/source graph audited by the Visual
     # Studio project verifier.
-    set(LEO2_PRODUCTION_ARCHIVE_SANITIZED OFF)
-    set(LEO2_SANITIZER_FLAG_PATTERN
-        "(^|[ \t;])-fsanitize=[^ \t;]+")
-    if("${CMAKE_CXX_FLAGS}" MATCHES "${LEO2_SANITIZER_FLAG_PATTERN}" OR
-       (CMAKE_BUILD_TYPE STREQUAL "Debug" AND
-        "${CMAKE_CXX_FLAGS_DEBUG}" MATCHES
-            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
-       (CMAKE_BUILD_TYPE STREQUAL "Release" AND
-        "${CMAKE_CXX_FLAGS_RELEASE}" MATCHES
-            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
-       (CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo" AND
-        "${CMAKE_CXX_FLAGS_RELWITHDEBINFO}" MATCHES
-            "${LEO2_SANITIZER_FLAG_PATTERN}") OR
-       (CMAKE_BUILD_TYPE STREQUAL "MinSizeRel" AND
-        "${CMAKE_CXX_FLAGS_MINSIZEREL}" MATCHES
-            "${LEO2_SANITIZER_FLAG_PATTERN}"))
-        set(LEO2_PRODUCTION_ARCHIVE_SANITIZED ON)
-    endif()
     if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
        LEO2_PRODUCTION_ARCHIVE_SANITIZED)
         message(FATAL_ERROR
@@ -1002,9 +1040,7 @@ if(LEO2_BUILD_TESTS)
 
     # The portable archive audit is useful for reduced-field archives too, so
     # keep it outside the dual-field-only exhaustive-test graph below.
-    if(CMAKE_SYSTEM_PROCESSOR STREQUAL "x86_64" OR
-       CMAKE_SYSTEM_PROCESSOR STREQUAL "amd64" OR
-       CMAKE_SYSTEM_PROCESSOR STREQUAL "AMD64")
+    if(LEO2_X86_64_TARGET)
         find_program(LEO2_OBJDUMP_EXECUTABLE NAMES objdump llvm-objdump)
         find_program(LEO2_SH_EXECUTABLE NAMES sh)
         if(LEO2_PORTABLE_ISA_RELEASE_AUDIT AND
@@ -1056,34 +1092,64 @@ if(LEO2_BUILD_TESTS)
             if(LEO2_PORTABLE_ISA_RELEASE_AUDIT)
                 list(APPEND LEO2_PORTABLE_ISA_METADATA_ARGS required)
             endif()
-            if(LEO2_PRODUCTION_ARCHIVE_SANITIZED)
+            if(LEO2_SANITIZED_CONFIGURATION_COUNT GREATER 0)
                 # Keep the checker executable and its adversarial fixtures in
                 # sanitizer CTest matrices, but do not mislabel sanitizer-
                 # generated instructions as production archive evidence.
-                add_test(NAME leopard2_portable_isa_checker_self_test
-                    COMMAND "${LEO2_SH_EXECUTABLE}"
-                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
-                        --self-test-only
-                        "${LEO2_OBJDUMP_EXECUTABLE}"
-                        "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
-                set(LEO2_PORTABLE_ISA_EXPECTED_TEST controls)
-            else()
-                add_test(NAME leopard2_portable_isa
-                    COMMAND "${LEO2_SH_EXECUTABLE}"
-                        "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
-                        "${LEO2_OBJDUMP_EXECUTABLE}"
-                        "$<TARGET_FILE:leopard>"
-                        "${CMAKE_CURRENT_BINARY_DIR}"
-                        ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
-                        "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
-                        ${LEO2_PORTABLE_ISA_METADATA_ARGS})
-                set(LEO2_PORTABLE_ISA_EXPECTED_TEST archive)
+                if(LEO2_MULTI_CONFIG)
+                    add_test(NAME leopard2_portable_isa_checker_self_test
+                        COMMAND "${LEO2_SH_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                            --self-test-only
+                            "${LEO2_OBJDUMP_EXECUTABLE}"
+                            "${CMAKE_C_COMPILER}" "${CMAKE_AR}"
+                        CONFIGURATIONS ${LEO2_SANITIZED_CONFIGURATIONS})
+                else()
+                    add_test(NAME leopard2_portable_isa_checker_self_test
+                        COMMAND "${LEO2_SH_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                            --self-test-only
+                            "${LEO2_OBJDUMP_EXECUTABLE}"
+                            "${CMAKE_C_COMPILER}" "${CMAKE_AR}")
+                endif()
             endif()
+            if(LEO2_UNSANITIZED_CONFIGURATION_COUNT GREATER 0)
+                if(LEO2_MULTI_CONFIG)
+                    add_test(NAME leopard2_portable_isa
+                        COMMAND "${LEO2_SH_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                            "${LEO2_OBJDUMP_EXECUTABLE}"
+                            "$<TARGET_FILE:leopard>"
+                            "${CMAKE_CURRENT_BINARY_DIR}"
+                            ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
+                            "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
+                            ${LEO2_PORTABLE_ISA_METADATA_ARGS}
+                        CONFIGURATIONS ${LEO2_UNSANITIZED_CONFIGURATIONS})
+                else()
+                    add_test(NAME leopard2_portable_isa
+                        COMMAND "${LEO2_SH_EXECUTABLE}"
+                            "${CMAKE_CURRENT_SOURCE_DIR}/tools/check_leopard2_portable_isa.sh"
+                            "${LEO2_OBJDUMP_EXECUTABLE}"
+                            "$<TARGET_FILE:leopard>"
+                            "${CMAKE_CURRENT_BINARY_DIR}"
+                            ${LEO2_PORTABLE_ISA_SELF_TEST_ARGS}
+                            "${LEO2_PORTABLE_ISA_EXPECTED_CLASSES_ARG}"
+                            ${LEO2_PORTABLE_ISA_METADATA_ARGS})
+                endif()
+            endif()
+            string(REPLACE ";" ","
+                LEO2_SANITIZED_CONFIGURATIONS_ARG
+                "${LEO2_SANITIZED_CONFIGURATIONS}")
+            string(REPLACE ";" ","
+                LEO2_UNSANITIZED_CONFIGURATIONS_ARG
+                "${LEO2_UNSANITIZED_CONFIGURATIONS}")
             add_test(NAME leopard2_portable_isa_registration
                 COMMAND ${CMAKE_COMMAND}
                     -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
                     -DLEO2_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
-                    -DLEO2_EXPECTED_TEST=${LEO2_PORTABLE_ISA_EXPECTED_TEST}
+                    -DLEO2_MULTI_CONFIG=${LEO2_MULTI_CONFIG}
+                    -DLEO2_SANITIZED_CONFIGURATIONS=${LEO2_SANITIZED_CONFIGURATIONS_ARG}
+                    -DLEO2_UNSANITIZED_CONFIGURATIONS=${LEO2_UNSANITIZED_CONFIGURATIONS_ARG}
                     -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_portable_isa_registration.cmake)
         endif()
     endif()
@@ -1113,6 +1179,27 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_high_direct_production PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
+    # Bounded experiment-only verifier for the AVX2 loss-5-through-8 direct
+    # repair screen. It is intentionally excluded from ordinary builds and
+    # CTest: the campaign launches deterministic shards and verifies every
+    # selected coefficient matrix against the independent direct-RS oracle.
+    # This target only exercises GF8 and must remain available to reduced
+    # GF8-only configurations.
+    if(LEOPARD_ENABLE_GF8 AND LEO2_HAVE_AVX2_BACKEND)
+        add_executable(leopard2_small_direct_exhaustive_test EXCLUDE_FROM_ALL
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_small_direct_exhaustive.cpp)
+        target_include_directories(leopard2_small_direct_exhaustive_test
+            PRIVATE tests/leopard2)
+        if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
+            set_property(
+                SOURCE tests/leopard2/test_small_direct_exhaustive.cpp
+                APPEND PROPERTY COMPILE_DEFINITIONS
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+        endif()
+        target_link_libraries(leopard2_small_direct_exhaustive_test leopard)
     endif()
 
     # The exhaustive internal suite intentionally cross-checks both concrete
@@ -1336,6 +1423,11 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_api_test PRIVATE
             LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=1)
     endif()
+    if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
+        set_property(SOURCE tests/leopard2/test_api.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+    endif()
     target_include_directories(leopard2_api_test PRIVATE tests/leopard2)
     target_link_libraries(leopard2_api_test leopard_test_hooks)
     add_test(NAME leopard2_api COMMAND leopard2_api_test)
@@ -1398,6 +1490,11 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_dense_plan_policy.cpp)
     target_include_directories(leopard2_dense_plan_policy_test
         PRIVATE tests/leopard2)
+    if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
+        set_property(SOURCE tests/leopard2/test_dense_plan_policy.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+    endif()
     target_link_libraries(leopard2_dense_plan_policy_test leopard)
     add_test(NAME leopard2_dense_plan_policy
         COMMAND leopard2_dense_plan_policy_test)
@@ -1490,6 +1587,11 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_high_low_duality.cpp)
     target_compile_definitions(leopard2_high_low_duality_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)
+    if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
+        set_property(SOURCE tests/leopard2/test_high_low_duality.cpp
+            APPEND PROPERTY COMPILE_DEFINITIONS
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+    endif()
     target_link_libraries(leopard2_high_low_duality_test leopard_test_hooks)
     add_test(NAME leopard2_high_low_duality
         COMMAND leopard2_high_low_duality_test)
@@ -1629,6 +1731,7 @@ if(LEO2_BUILD_TESTS)
             -DLEO2_GENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}
             -DLEO2_CTEST_COMMAND=${CMAKE_CTEST_COMMAND}
             -DLEO2_ARCHIVE_SYMBOL_CHECKS=${LEO2_ARCHIVE_SYMBOL_CHECKS}
+            -DLEO2_EXPECT_SMALL_DIRECT_EXHAUSTIVE_TARGET=${LEO2_HAVE_AVX2_BACKEND}
             -DLEO2_AR_COMMAND=${CMAKE_AR}
             -DLEO2_NM_COMMAND=${CMAKE_NM}
             -DLEO2_STATIC_LIBRARY_PREFIX=${CMAKE_STATIC_LIBRARY_PREFIX}
@@ -1681,14 +1784,47 @@ if(LEO2_BUILD_TESTS)
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cmake/test_sparse_encode_benchmark_registration.cmake)
     endif()
 
+    # The registered Python tools use postponed annotations, PEP 585
+    # collections, PEP 604 unions, and Path.is_relative_to().  Do not
+    # accidentally register them with Python 2 (possible with old
+    # FindPythonInterp defaults) or an older Python 3 that cannot parse them.
+    set(LEO2_PYTHON_EXECUTABLE "")
     if(CMAKE_VERSION VERSION_LESS 3.12)
-        find_package(PythonInterp QUIET)
-        set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+        find_package(PythonInterp 3.10 QUIET)
+        if(PYTHONINTERP_FOUND)
+            set(LEO2_PYTHON_EXECUTABLE ${PYTHON_EXECUTABLE})
+        endif()
     else()
-        find_package(Python3 COMPONENTS Interpreter QUIET)
-        set(LEO2_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+        find_package(Python3 3.10 COMPONENTS Interpreter QUIET)
+        if(Python3_Interpreter_FOUND)
+            set(LEO2_PYTHON_EXECUTABLE ${Python3_EXECUTABLE})
+        endif()
     endif()
     if(LEO2_PYTHON_EXECUTABLE)
+        # This is a regression for the Linux-only authoritative benchmark
+        # evidence helper, which deliberately relies on POSIX descriptor
+        # inheritance and canonical /usr/bin tools.  Keep it out of ordinary
+        # codec-only builds and non-FHS/non-Linux CTest inventories.
+        if(LEO2_BUILD_BENCHMARKS AND
+           CMAKE_HOST_SYSTEM_NAME STREQUAL "Linux" AND
+           EXISTS "/usr/bin/cmake" AND EXISTS "/usr/bin/cc" AND
+           EXISTS "/usr/bin/c++")
+            add_test(
+                NAME leopard2_build_provenance_compiler_replay
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_build_provenance_test.py
+                    ${CMAKE_CURRENT_SOURCE_DIR})
+            # This test deliberately retains an inotify history for the
+            # checkout's Git metadata.  Other CTests exercise Git and may
+            # legitimately create index.lock, so concurrent execution would
+            # look exactly like the mutation this test must reject.
+            set_tests_properties(
+                leopard2_build_provenance_compiler_replay PROPERTIES
+                RUN_SERIAL TRUE
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                TIMEOUT 300)
+        endif()
         if(LEO2_BUILD_BENCHMARKS)
             add_test(
                 NAME leopard2_locator_benchmark_smoke
@@ -1791,6 +1927,47 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_direct_encode_crossover.py
                     self-test)
+            add_test(
+                NAME leopard2_small_direct_abba_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/test_run_small_direct_abba.py)
+            set_tests_properties(
+                leopard2_small_direct_abba_self_test PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+            add_test(
+                NAME leopard2_small_direct_abba_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/test_run_small_direct_abba.py)
+            set_tests_properties(
+                leopard2_small_direct_abba_optimized_self_test PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+            add_test(
+                NAME leopard2_small_direct_exhaustive_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/test_run_small_direct_exhaustive.py)
+            set_tests_properties(
+                leopard2_small_direct_exhaustive_self_test PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+            add_test(
+                NAME leopard2_small_direct_exhaustive_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/test_run_small_direct_exhaustive.py)
+            set_tests_properties(
+                leopard2_small_direct_exhaustive_optimized_self_test
+                PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
         endif()
         add_test(
             NAME leopard2_benchmark_matrix_self_test

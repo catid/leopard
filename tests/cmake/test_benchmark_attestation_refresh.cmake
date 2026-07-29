@@ -63,7 +63,7 @@ function(leo2_read_effective_configuration
     endif()
     file(READ "${configuration_file}" configuration)
     string(REGEX MATCH
-        "^schema=leopard2-benchmark-build-configuration/v1\nsha256=([0-9a-f]+)\n"
+        "^schema=leopard2-benchmark-build-configuration/v2\nsha256=([0-9a-f]+)\n"
         header "${configuration}")
     set(declared_digest "${CMAKE_MATCH_1}")
     string(LENGTH "${declared_digest}" declared_digest_length)
@@ -83,14 +83,35 @@ function(leo2_read_effective_configuration
     endif()
     file(STRINGS "${configuration_file}" build_type_lines
         REGEX "^CMAKE_BUILD_TYPE=")
+    file(STRINGS "${configuration_file}" direct_source_plan_lines
+        REGEX "^LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=")
+    file(STRINGS "${configuration_file}" high_direct_encode_lines
+        REGEX "^LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=")
+    file(STRINGS "${configuration_file}" small_direct_mode_lines
+        REGEX "^LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=")
     list(LENGTH build_type_lines build_type_line_count)
-    if(NOT build_type_line_count EQUAL 1)
+    list(LENGTH direct_source_plan_lines direct_source_plan_line_count)
+    list(LENGTH high_direct_encode_lines high_direct_encode_line_count)
+    list(LENGTH small_direct_mode_lines small_direct_mode_line_count)
+    if(NOT build_type_line_count EQUAL 1 OR
+       NOT direct_source_plan_line_count EQUAL 1 OR
+       NOT high_direct_encode_line_count EQUAL 1 OR
+       NOT small_direct_mode_line_count EQUAL 1)
         message(FATAL_ERROR
-            "Effective build configuration omits CMAKE_BUILD_TYPE")
+            "Effective build configuration omits CMAKE_BUILD_TYPE or has "
+            "an invalid direct-selector record count")
     endif()
     list(GET build_type_lines 0 effective_build_type)
     string(REGEX REPLACE "^CMAKE_BUILD_TYPE=" ""
         effective_build_type "${effective_build_type}")
+    list(GET small_direct_mode_lines 0 small_direct_mode)
+    string(REGEX REPLACE
+        "^LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=" ""
+        small_direct_mode "${small_direct_mode}")
+    if(NOT small_direct_mode MATCHES "^[012]$")
+        message(FATAL_ERROR
+            "Effective build configuration has an invalid small-direct mode")
+    endif()
 
     file(STRINGS "${build_directory}/CMakeCache.txt" cached_digest_lines
         REGEX
@@ -110,7 +131,7 @@ function(leo2_read_effective_configuration
     string(REGEX REPLACE "^[^=]+=" "" cached_schema "${cached_schema}")
     if(NOT cached_digest STREQUAL declared_digest OR
        NOT cached_schema STREQUAL
-           "leopard2-benchmark-build-configuration/v1")
+           "leopard2-benchmark-build-configuration/v2")
         message(FATAL_ERROR
             "Effective build configuration differs from its cache binding")
     endif()
@@ -246,7 +267,9 @@ leo2_read_effective_configuration(
     initial_configuration_material)
 if(NOT initial_build_type STREQUAL "Release" OR
    NOT initial_configuration_material MATCHES
-       "CMAKE_CXX_FLAGS=[^\n]*LEO2_EFFECTIVE_ONE=1")
+       "CMAKE_CXX_FLAGS=[^\n]*LEO2_EFFECTIVE_ONE=1" OR
+   NOT initial_configuration_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Initial sidecar omitted the effective non-cache CXX flag:\n"
         "${initial_configuration_material}")
@@ -254,21 +277,41 @@ endif()
 
 set(attestation_header
     "${fixture_build}/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h")
+set(build_configuration_sidecar
+    "${fixture_build}/generated/leopard2-benchmark-attestation/leopard2_benchmark_build_configuration.txt")
 if(NOT EXISTS "${attestation_header}")
     message(FATAL_ERROR "Fixture did not generate its attestation header")
 endif()
+if(NOT EXISTS "${build_configuration_sidecar}")
+    message(FATAL_ERROR
+        "Fixture did not generate its effective-configuration sidecar")
+endif()
+file(GLOB build_configuration_temporaries
+    "${build_configuration_sidecar}.*.tmp")
+if(build_configuration_temporaries)
+    message(FATAL_ERROR
+        "Effective-configuration publication left temporary files: "
+        "${build_configuration_temporaries}")
+endif()
 
-# An unchanged refresh must not touch the generated header or relink either
-# benchmark.
+# A no-op reconfigure and unchanged refresh must not touch either generated
+# identity input or relink either benchmark.  Exact-main freshness requires
+# the benchmark object to remain at least as new as this sidecar.
 file(TIMESTAMP "${attestation_header}" stable_header_time "%s" UTC)
+file(TIMESTAMP "${build_configuration_sidecar}"
+    stable_configuration_time "%s" UTC)
 file(TIMESTAMP "${standard_executable}" stable_standard_time "%s" UTC)
 file(TIMESTAMP "${allk_executable}" stable_allk_time "%s" UTC)
 leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command})
 leo2_build_and_check()
 file(TIMESTAMP "${attestation_header}" repeat_header_time "%s" UTC)
+file(TIMESTAMP "${build_configuration_sidecar}"
+    repeat_configuration_time "%s" UTC)
 file(TIMESTAMP "${standard_executable}" repeat_standard_time "%s" UTC)
 file(TIMESTAMP "${allk_executable}" repeat_allk_time "%s" UTC)
 if(NOT stable_header_time STREQUAL repeat_header_time OR
+   NOT stable_configuration_time STREQUAL repeat_configuration_time OR
    NOT stable_standard_time STREQUAL repeat_standard_time OR
    NOT stable_allk_time STREQUAL repeat_allk_time)
     message(FATAL_ERROR
@@ -298,6 +341,105 @@ if(changed_standard_time STREQUAL repeat_standard_time OR
     message(FATAL_ERROR
         "Effective build-configuration change did not relink benchmarks")
 endif()
+
+# Each Boolean direct-repair experiment changes production code and therefore
+# must independently change the attested digest and relink both benchmarks.
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
+leo2_read_effective_configuration(
+    "${fixture_build}" direct_source_configuration
+    direct_source_build_type direct_source_material)
+if(direct_source_configuration STREQUAL changed_configuration OR
+   NOT direct_source_build_type STREQUAL "Release" OR
+   NOT direct_source_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+    message(FATAL_ERROR
+        "Direct-source-plan selector was not uniquely and positionally "
+        "attested")
+endif()
+leo2_build_and_check()
+file(TIMESTAMP "${standard_executable}"
+    direct_source_standard_time "%s" UTC)
+file(TIMESTAMP "${allk_executable}"
+    direct_source_allk_time "%s" UTC)
+if(direct_source_standard_time STREQUAL changed_standard_time OR
+   direct_source_allk_time STREQUAL changed_allk_time)
+    message(FATAL_ERROR
+        "Direct-source-plan change did not relink benchmarks")
+endif()
+
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
+leo2_read_effective_configuration(
+    "${fixture_build}" high_direct_configuration
+    high_direct_build_type high_direct_material)
+if(high_direct_configuration STREQUAL changed_configuration OR
+   high_direct_configuration STREQUAL direct_source_configuration OR
+   NOT high_direct_build_type STREQUAL "Release" OR
+   NOT high_direct_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+    message(FATAL_ERROR
+        "High-direct-encode selector was not uniquely and positionally "
+        "attested")
+endif()
+leo2_build_and_check()
+file(TIMESTAMP "${standard_executable}"
+    high_direct_standard_time "%s" UTC)
+file(TIMESTAMP "${allk_executable}"
+    high_direct_allk_time "%s" UTC)
+if(high_direct_standard_time STREQUAL direct_source_standard_time OR
+   high_direct_allk_time STREQUAL direct_source_allk_time)
+    message(FATAL_ERROR
+        "High-direct-encode change did not relink benchmarks")
+endif()
+
+# The default-off direct-repair selectors are part of the code identity.  Keep
+# every prior v1 material record in order and append the v2 selector records so
+# small-direct modes 0/1/2 differ only where intended.
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1)
+leo2_read_effective_configuration(
+    "${fixture_build}" mode_one_configuration mode_one_build_type
+    mode_one_configuration_material)
+if(mode_one_configuration STREQUAL changed_configuration OR
+   NOT mode_one_build_type STREQUAL "Release" OR
+   NOT mode_one_configuration_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1\n$")
+    message(FATAL_ERROR
+        "Small-direct mode 1 was not uniquely and positionally attested")
+endif()
+leo2_build_and_check()
+
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2)
+leo2_read_effective_configuration(
+    "${fixture_build}" mode_two_configuration mode_two_build_type
+    mode_two_configuration_material)
+if(mode_two_configuration STREQUAL changed_configuration OR
+   mode_two_configuration STREQUAL mode_one_configuration OR
+   NOT mode_two_build_type STREQUAL "Release" OR
+   NOT mode_two_configuration_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2\n$")
+    message(FATAL_ERROR
+        "Small-direct mode 2 was not uniquely and positionally attested")
+endif()
+leo2_build_and_check()
 
 # Unstaged and staged tracked changes are dirty.
 file(APPEND "${fixture_source}/identity_input.txt" "unstaged\n")
@@ -468,7 +610,7 @@ leo2_check_probe(
     "${super_build}"
     "${inner_commit}" "${inner_tree}" 0)
 
-# The line-oriented v1 sidecar cannot represent embedded line delimiters.
+# The line-oriented v2 sidecar cannot represent embedded line delimiters.
 # Reject both controls before writing rather than allowing an ambiguous digest
 # material stream.
 foreach(control_escape n r)
@@ -521,6 +663,228 @@ foreach(control_escape n r)
             "${invalid_log}")
     endif()
 endforeach()
+
+# Reject a syntactically well-framed but unsupported mode before it can be
+# hashed into a seemingly valid sidecar.
+set(invalid_mode_source "${LEO2_BINARY_DIR}/invalid-mode-source")
+set(invalid_mode_build "${LEO2_BINARY_DIR}/invalid-mode-build")
+file(MAKE_DIRECTORY "${invalid_mode_source}" "${invalid_mode_build}")
+file(WRITE "${invalid_mode_source}/CMakeLists.txt"
+    "cmake_minimum_required(VERSION 3.7)\n"
+    "project(leopard2_invalid_mode_attestation_fixture CXX)\n"
+    "include(\"${attestation_module}\")\n"
+    "set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE \"3\")\n"
+    "add_executable(bench_leopard2 probe.cpp)\n"
+    "leopard2_enable_benchmark_source_attestation(bench_leopard2)\n")
+file(WRITE "${invalid_mode_source}/probe.cpp"
+    "int main() { return 0; }\n")
+set(invalid_mode_configure_command
+    "${CMAKE_COMMAND}" -E chdir "${invalid_mode_build}" "${CMAKE_COMMAND}"
+    -G "${LEO2_GENERATOR}")
+if(DEFINED LEO2_GENERATOR_PLATFORM AND
+   NOT LEO2_GENERATOR_PLATFORM STREQUAL "")
+    list(APPEND invalid_mode_configure_command
+        -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(DEFINED LEO2_GENERATOR_TOOLSET AND
+   NOT LEO2_GENERATOR_TOOLSET STREQUAL "")
+    list(APPEND invalid_mode_configure_command
+        -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+if(DEFINED LEO2_CXX_COMPILER AND
+   NOT LEO2_CXX_COMPILER STREQUAL "")
+    list(APPEND invalid_mode_configure_command
+        "-DCMAKE_CXX_COMPILER=${LEO2_CXX_COMPILER}")
+endif()
+list(APPEND invalid_mode_configure_command "${invalid_mode_source}")
+execute_process(
+    COMMAND ${invalid_mode_configure_command}
+    RESULT_VARIABLE invalid_mode_result
+    OUTPUT_VARIABLE invalid_mode_output
+    ERROR_VARIABLE invalid_mode_error)
+if(invalid_mode_result EQUAL 0)
+    message(FATAL_ERROR
+        "Attestation accepted unsupported small-direct mode 3")
+endif()
+set(invalid_mode_log "${invalid_mode_output}\n${invalid_mode_error}")
+if(NOT invalid_mode_log MATCHES
+       "Cannot attest LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:" OR
+   NOT invalid_mode_log MATCHES "expected exactly 0, 1,")
+    message(FATAL_ERROR
+        "Unsupported small-direct mode failed for an unexpected reason:\n"
+        "${invalid_mode_log}")
+endif()
+
+# One build tree cannot silently reuse the first target's source attestation
+# for a target that requests a different source root.
+set(conflicting_source "${LEO2_BINARY_DIR}/conflicting-source-root-source")
+set(conflicting_build "${LEO2_BINARY_DIR}/conflicting-source-root-build")
+file(MAKE_DIRECTORY
+    "${conflicting_source}/first" "${conflicting_source}/second"
+    "${conflicting_build}")
+file(WRITE "${conflicting_source}/CMakeLists.txt"
+    "cmake_minimum_required(VERSION 3.7)\n"
+    "project(leopard2_conflicting_attestation_fixture CXX)\n"
+    "include(\"${attestation_module}\")\n"
+    "file(WRITE \"\${CMAKE_CURRENT_BINARY_DIR}/probe.cpp\" \"int main() { return 0; }\\n\")\n"
+    "add_executable(first_benchmark \"\${CMAKE_CURRENT_BINARY_DIR}/probe.cpp\")\n"
+    "leopard2_enable_benchmark_source_attestation(first_benchmark \"\${CMAKE_CURRENT_SOURCE_DIR}/first\")\n"
+    "add_executable(second_benchmark \"\${CMAKE_CURRENT_BINARY_DIR}/probe.cpp\")\n"
+    "leopard2_enable_benchmark_source_attestation(second_benchmark \"\${CMAKE_CURRENT_SOURCE_DIR}/second\")\n")
+set(conflicting_configure_command
+    "${CMAKE_COMMAND}" -E chdir "${conflicting_build}" "${CMAKE_COMMAND}"
+    -G "${LEO2_GENERATOR}")
+if(DEFINED LEO2_GENERATOR_PLATFORM AND
+   NOT LEO2_GENERATOR_PLATFORM STREQUAL "")
+    list(APPEND conflicting_configure_command
+        -A "${LEO2_GENERATOR_PLATFORM}")
+endif()
+if(DEFINED LEO2_GENERATOR_TOOLSET AND
+   NOT LEO2_GENERATOR_TOOLSET STREQUAL "")
+    list(APPEND conflicting_configure_command
+        -T "${LEO2_GENERATOR_TOOLSET}")
+endif()
+if(DEFINED LEO2_CXX_COMPILER AND
+   NOT LEO2_CXX_COMPILER STREQUAL "")
+    list(APPEND conflicting_configure_command
+        "-DCMAKE_CXX_COMPILER=${LEO2_CXX_COMPILER}")
+endif()
+list(APPEND conflicting_configure_command "${conflicting_source}")
+execute_process(
+    COMMAND ${conflicting_configure_command}
+    RESULT_VARIABLE conflicting_result
+    OUTPUT_VARIABLE conflicting_output
+    ERROR_VARIABLE conflicting_error)
+if(conflicting_result EQUAL 0)
+    message(FATAL_ERROR
+        "Attestation accepted inconsistent target source roots")
+endif()
+set(conflicting_log "${conflicting_output}\n${conflicting_error}")
+if(NOT conflicting_log MATCHES
+       "requested inconsistent attested source roots")
+    message(FATAL_ERROR
+        "Inconsistent source roots failed for an unexpected reason:\n"
+        "${conflicting_log}")
+endif()
+
+if(UNIX)
+    # Reject an ancestor symlink before MAKE_DIRECTORY can follow it and
+    # create the attestation directory under an unrelated victim.
+    set(ancestor_symlink_source
+        "${LEO2_BINARY_DIR}/ancestor-symlink-source")
+    set(ancestor_symlink_build
+        "${LEO2_BINARY_DIR}/ancestor-symlink-build")
+    set(ancestor_symlink_victim
+        "${LEO2_BINARY_DIR}/ancestor-symlink-victim")
+    file(MAKE_DIRECTORY
+        "${ancestor_symlink_source}" "${ancestor_symlink_build}"
+        "${ancestor_symlink_victim}")
+    file(WRITE "${ancestor_symlink_source}/CMakeLists.txt"
+        "cmake_minimum_required(VERSION 3.7)\n"
+        "project(leopard2_ancestor_symlink_fixture CXX)\n"
+        "include(\"${attestation_module}\")\n"
+        "add_executable(bench_leopard2 probe.cpp)\n"
+        "leopard2_enable_benchmark_source_attestation(bench_leopard2)\n")
+    file(WRITE "${ancestor_symlink_source}/probe.cpp"
+        "int main() { return 0; }\n")
+    leo2_run("${CMAKE_COMMAND}" -E create_symlink
+        "${ancestor_symlink_victim}"
+        "${ancestor_symlink_build}/generated")
+    set(ancestor_symlink_configure_command
+        "${CMAKE_COMMAND}" -E chdir "${ancestor_symlink_build}"
+        "${CMAKE_COMMAND}" -G "${LEO2_GENERATOR}")
+    if(DEFINED LEO2_GENERATOR_PLATFORM AND
+       NOT LEO2_GENERATOR_PLATFORM STREQUAL "")
+        list(APPEND ancestor_symlink_configure_command
+            -A "${LEO2_GENERATOR_PLATFORM}")
+    endif()
+    if(DEFINED LEO2_GENERATOR_TOOLSET AND
+       NOT LEO2_GENERATOR_TOOLSET STREQUAL "")
+        list(APPEND ancestor_symlink_configure_command
+            -T "${LEO2_GENERATOR_TOOLSET}")
+    endif()
+    if(DEFINED LEO2_CXX_COMPILER AND
+       NOT LEO2_CXX_COMPILER STREQUAL "")
+        list(APPEND ancestor_symlink_configure_command
+            "-DCMAKE_CXX_COMPILER=${LEO2_CXX_COMPILER}")
+    endif()
+    list(APPEND ancestor_symlink_configure_command
+        "${ancestor_symlink_source}")
+    execute_process(
+        COMMAND ${ancestor_symlink_configure_command}
+        RESULT_VARIABLE ancestor_symlink_result
+        OUTPUT_VARIABLE ancestor_symlink_output
+        ERROR_VARIABLE ancestor_symlink_error)
+    if(ancestor_symlink_result EQUAL 0)
+        message(FATAL_ERROR
+            "Attestation accepted a generated-directory symbolic link")
+    endif()
+    set(ancestor_symlink_log
+        "${ancestor_symlink_output}\n${ancestor_symlink_error}")
+    if(NOT ancestor_symlink_log MATCHES
+           "attestation directory must not traverse a symbolic link" OR
+       EXISTS
+           "${ancestor_symlink_victim}/leopard2-benchmark-attestation")
+        message(FATAL_ERROR
+            "Ancestor symlink rejection had an external side effect or "
+            "failed unexpectedly:\n${ancestor_symlink_log}")
+    endif()
+
+    # A pre-existing sidecar symlink must neither be followed nor replaced.
+    set(symlink_source "${LEO2_BINARY_DIR}/sidecar-symlink-source")
+    set(symlink_build "${LEO2_BINARY_DIR}/sidecar-symlink-build")
+    set(symlink_generated
+        "${symlink_build}/generated/leopard2-benchmark-attestation")
+    set(symlink_victim "${LEO2_BINARY_DIR}/sidecar-symlink-victim.txt")
+    file(MAKE_DIRECTORY "${symlink_source}" "${symlink_generated}")
+    file(WRITE "${symlink_victim}" "unchanged\n")
+    file(WRITE "${symlink_source}/CMakeLists.txt"
+        "cmake_minimum_required(VERSION 3.7)\n"
+        "project(leopard2_sidecar_symlink_fixture CXX)\n"
+        "include(\"${attestation_module}\")\n"
+        "add_executable(bench_leopard2 probe.cpp)\n"
+        "leopard2_enable_benchmark_source_attestation(bench_leopard2)\n")
+    file(WRITE "${symlink_source}/probe.cpp" "int main() { return 0; }\n")
+    leo2_run("${CMAKE_COMMAND}" -E create_symlink
+        "${symlink_victim}"
+        "${symlink_generated}/leopard2_benchmark_build_configuration.txt")
+    set(symlink_configure_command
+        "${CMAKE_COMMAND}" -E chdir "${symlink_build}" "${CMAKE_COMMAND}"
+        -G "${LEO2_GENERATOR}")
+    if(DEFINED LEO2_GENERATOR_PLATFORM AND
+       NOT LEO2_GENERATOR_PLATFORM STREQUAL "")
+        list(APPEND symlink_configure_command
+            -A "${LEO2_GENERATOR_PLATFORM}")
+    endif()
+    if(DEFINED LEO2_GENERATOR_TOOLSET AND
+       NOT LEO2_GENERATOR_TOOLSET STREQUAL "")
+        list(APPEND symlink_configure_command
+            -T "${LEO2_GENERATOR_TOOLSET}")
+    endif()
+    if(DEFINED LEO2_CXX_COMPILER AND
+       NOT LEO2_CXX_COMPILER STREQUAL "")
+        list(APPEND symlink_configure_command
+            "-DCMAKE_CXX_COMPILER=${LEO2_CXX_COMPILER}")
+    endif()
+    list(APPEND symlink_configure_command "${symlink_source}")
+    execute_process(
+        COMMAND ${symlink_configure_command}
+        RESULT_VARIABLE symlink_result
+        OUTPUT_VARIABLE symlink_output
+        ERROR_VARIABLE symlink_error)
+    if(symlink_result EQUAL 0)
+        message(FATAL_ERROR "Attestation accepted a sidecar symbolic link")
+    endif()
+    set(symlink_log "${symlink_output}\n${symlink_error}")
+    file(READ "${symlink_victim}" symlink_victim_content)
+    if(NOT symlink_log MATCHES
+           "effective-configuration sidecar must not be a symbolic" OR
+       NOT symlink_victim_content STREQUAL "unchanged\n")
+        message(FATAL_ERROR
+            "Sidecar symlink rejection was unsafe or failed unexpectedly:\n"
+            "${symlink_log}")
+    endif()
+endif()
 
 # Exercise the generator classification itself with real Ninja single- and
 # multi-config builds.  CMAKE_CONFIGURATION_TYPES may be populated manually in
@@ -576,7 +940,9 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
         single_configuration_material)
     if(NOT single_build_type STREQUAL "Release" OR
        NOT single_configuration_material MATCHES
-           "CMAKE_GENERATOR=Ninja\nCMAKE_CONFIGURATION_TYPES=Debug;Release\n")
+           "CMAKE_GENERATOR=Ninja\nCMAKE_CONFIGURATION_TYPES=Debug;Release\n" OR
+       NOT single_configuration_material MATCHES
+           "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
         message(FATAL_ERROR
             "Ninja single-config sidecar was misclassified:\n"
             "${single_configuration_material}")
@@ -612,6 +978,8 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
         if(NOT multi_build_type STREQUAL "" OR
            NOT multi_configuration_material MATCHES
                "CMAKE_GENERATOR=Ninja Multi-Config\n" OR
+           NOT multi_configuration_material MATCHES
+               "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$" OR
            multi_debug_index EQUAL -1 OR multi_release_index EQUAL -1)
             message(FATAL_ERROR
                 "Multi-config sidecar did not declare an empty "
