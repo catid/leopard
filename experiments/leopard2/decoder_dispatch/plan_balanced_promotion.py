@@ -9,13 +9,13 @@ import binascii
 import hashlib
 import importlib.util
 import json
+import math
 import os
 from pathlib import Path
 import re
 import shlex
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 from typing import Any, Iterable, Mapping
@@ -28,11 +28,16 @@ MAIN_CELL_SCHEMA = "leopard2-main-compare-cell-list/v2"
 SURVIVOR_SCHEMA = "leopard2-balanced-promotion-survivors/v4"
 STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v5"
 ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v5"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v4"
+ATTESTATION_RESULT_SCHEMA_V5 = "leopard2-balanced-auto-path-result/v5"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v6"
+PROMOTION_TIMING_SCHEMA = "leopard2-balanced-promotion-timing-evidence/v1"
 EXACT_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
-EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
+EXACT_MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
+EXACT_MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
+EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v8"
 EXACT_MANIFEST_SCHEMAS = frozenset((
-    EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA,
+    EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA_V6,
+    EXACT_MANIFEST_SCHEMA_V7, EXACT_MANIFEST_SCHEMA,
 ))
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 EXACT_MAIN_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
@@ -63,6 +68,8 @@ EXACT_MAIN_COMMIT_BASE64 = (
     "TWVyZ2UgcHVsbCByZXF1ZXN0ICMyMyBmcm9tIGdibGV0cjQyL21hc3RlcgoKSGFuZGxlIHRo"
     "ZSBjYXNlIHdoZW4gbm8gb3JpZ2luYWwgZGF0YSB3YXMgbG9zdA==")
 PROMOTION_GATE = 1.05
+NEIGHBOR_MAXIMUM_REGRESSION = 0.02
+FORCED_SURVIVOR_MAXIMUM_RATIO = 1.0 + NEIGHBOR_MAXIMUM_REGRESSION
 BOUNDARY_K = (
     5, 7, 8, 9, 14, 15, 16, 17, 29, 30, 31, 32, 33, 62, 63, 64,
     65, 96, 112, 120, 124, 125, 126, 127, 128,
@@ -86,13 +93,30 @@ FORCED_ORDERS = (
 CAMPAIGN_BACKENDS = ("scalar", "ssse3", "avx2")
 AUTO_BACKENDS = CAMPAIGN_BACKENDS
 EXACT_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
-EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v6"
-EXACT_RAW_SCHEMAS = frozenset((EXACT_RAW_SCHEMA_V5, EXACT_RAW_SCHEMA))
+EXACT_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
+EXACT_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v8"
+EXACT_RAW_SCHEMAS = frozenset((
+    EXACT_RAW_SCHEMA_V5, EXACT_RAW_SCHEMA_V6, EXACT_RAW_SCHEMA_V7,
+    EXACT_RAW_SCHEMA,
+))
+EXACT_SCHEMA_PAIRS = frozenset((
+    (EXACT_MANIFEST_SCHEMA_V5, EXACT_RAW_SCHEMA_V5),
+    (EXACT_MANIFEST_SCHEMA_V6, EXACT_RAW_SCHEMA_V6),
+    (EXACT_MANIFEST_SCHEMA_V7, EXACT_RAW_SCHEMA_V7),
+    (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA),
+))
 CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
 CANONICAL_LDD_NORMALIZATION = "terminal-aslr-load-address/v1"
 CANONICAL_LDD_ADDRESS = "<ASLR_LOAD_ADDRESS>"
 MAX_GIT_COMMIT_BYTES = 1024 * 1024
 MAX_RETAINED_TEXT_BYTES = 1024 * 1024
+MAX_BUILD_CONFIGURATION_BYTES = 64 * 1024
+MAX_BUILD_TOOL_VERSION_BYTES = 64 * 1024
+MAX_NINJA_GRAPH_FILES = 64
+MAX_NINJA_GRAPH_TOTAL_BYTES = 8 * 1024 * 1024
+MAX_JSON_DOCUMENT_BYTES = 64 * 1024 * 1024
+NINJA_GRAPH_CLOSURE_SCHEMA = "leopard2-ninja-graph-closure/v1"
 MAX_CPU_ID = 1_048_575
 MAX_CPU_LIST_ENTRIES = 4096
 BASELINE_LIBRARY_SOURCES = (
@@ -109,13 +133,63 @@ CANDIDATE_LIBRARY_SOURCES = (
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 22
 COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v3"
+COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v4"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
-REQUIRED_CANDIDATE_CACHE = {
-    "CMAKE_BUILD_TYPE": "Release",
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v2"
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v2"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v2"
+BUILD_CONFIGURATION_RELATIVE_PATH = (
+    "generated/leopard2-benchmark-attestation/"
+    "leopard2_benchmark_build_configuration.txt"
+)
+BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH = \
+    "cmake/Leopard2BenchmarkAttestation.cmake"
+EVIDENCE_HELPER_RELATIVE_PATH = \
+    "experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
+BALANCED_ANALYZER_RELATIVE_PATH = \
+    "experiments/leopard2/decoder_dispatch/analyze_balanced.py"
+EVIDENCE_SCOPE_SCHEMA_V3 = "leopard2-balanced-evidence-scope/v3"
+EVIDENCE_SCOPE_SCHEMA = "leopard2-balanced-evidence-scope/v4"
+CANONICAL_BUILD_VALIDATOR = \
+    "exact-main/run_abba.py build_provenance schema v8"
+CANONICAL_PRODUCTION_BUILD_SCHEMA = \
+    "leopard2-canonical-production-build/v2"
+BUILD_CONFIGURATION_VARIABLES = (
+    "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_DEBUG",
+    "CMAKE_CXX_FLAGS_RELEASE", "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
+    "CMAKE_CXX_FLAGS_MINSIZEREL", "ENABLE_OPENMP", "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16", "LEO2_BACKEND_VARIANT",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE", "LEO2_BUILD_BENCHMARKS",
+    "LEO2_BUILD_TESTS", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+)
+REQUIRED_BUILD_CONFIGURATION_ENTRIES = {
+    "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
+    "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
+    "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+    "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+    "ENABLE_OPENMP": "ON",
+    "LEOPARD_ENABLE_GF8": "ON",
+    "LEOPARD_ENABLE_GF16": "ON",
+    "LEO2_BACKEND_VARIANT": "auto",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
+    "LEO2_BUILD_BENCHMARKS": "ON",
+    "LEO2_BUILD_TESTS": "OFF",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+}
+REQUIRED_LEGACY_CANDIDATE_CACHE = {
     "ENABLE_OPENMP": "ON",
     "LEO2_BACKEND_VARIANT": "auto",
     "LEO2_BUILD_BENCHMARKS": "ON",
@@ -123,8 +197,14 @@ REQUIRED_CANDIDATE_CACHE = {
     "LEO2_BUILD_TESTS": "OFF",
     "LEO2_ENABLE_CUDA": "OFF",
 }
+REQUIRED_CANDIDATE_CACHE = {
+    **REQUIRED_LEGACY_CANDIDATE_CACHE,
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+}
+CANONICAL_NINJA_PATH = "/usr/bin/ninja"
 REQUIRED_BASELINE_CACHE = {
-    "CMAKE_BUILD_TYPE": "Release",
     "LEO_MAIN_HAS_MARCH_NATIVE": "1",
 }
 EXCLUDED_CAMPAIGN_BACKENDS = {
@@ -165,10 +245,36 @@ def require(condition: bool, message: str) -> None:
         raise PlanError(message)
 
 
+def finite_real(value: object, label: str) -> float:
+    require(isinstance(value, (int, float)) and not isinstance(value, bool),
+            f"{label} is not numeric")
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as error:
+        raise PlanError(f"{label} is outside the finite float range") from error
+    require(math.isfinite(result), f"{label} is not finite")
+    return result
+
+
+def finite_number(value: object, label: str, *, positive: bool = False) -> float:
+    result = finite_real(value, label)
+    require((result > 0 if positive else result >= 0),
+            f"{label} is not finite and "
+            f"{'positive' if positive else 'nonnegative'}")
+    return result
+
+
 def canonical_bytes(value: object) -> bytes:
-    return json.dumps(
-        value, sort_keys=True, separators=(",", ":"), allow_nan=False
-    ).encode("utf-8")
+    try:
+        rendered = json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False
+        )
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ensure_ascii=False).encode("utf-8", errors="strict")
+        return rendered.encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise PlanError(f"value is not canonical JSON: {error}") from error
 
 
 def canonical_sha256(value: object) -> str:
@@ -176,13 +282,65 @@ def canonical_sha256(value: object) -> str:
 
 
 def file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        while True:
-            block = stream.read(1024 * 1024)
-            if not block:
-                return digest.hexdigest()
-            digest.update(block)
+    return hashlib.sha256(
+        stable_regular_file_bytes(path, MAX_JSON_DOCUMENT_BYTES, str(path))
+    ).hexdigest()
+
+
+def _stable_stat_identity(value: os.stat_result) -> tuple[int, ...]:
+    return (
+        value.st_mode, value.st_nlink, value.st_size, value.st_mtime_ns,
+        value.st_ctime_ns, value.st_dev, value.st_ino,
+    )
+
+
+def stable_regular_file_bytes(path: Path, maximum: int, label: str) -> bytes:
+    """Read one bounded, single-link regular file without following symlinks."""
+    require(type(maximum) is int and maximum > 0,
+            f"{label} byte bound is invalid")
+    try:
+        path = path.absolute()
+        parent = path.parent
+        require(parent.resolve(strict=True) == parent and
+                stat.S_ISDIR(os.lstat(parent).st_mode),
+                f"{label} parent traverses a symbolic link")
+        before = os.lstat(path)
+        require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1 and
+                0 < before.st_size <= maximum,
+                f"{label} is not a bounded single-link regular file")
+        descriptor = os.open(
+            path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        try:
+            initial = os.fstat(descriptor)
+            path_initial = os.lstat(path)
+            require(_stable_stat_identity(initial) ==
+                    _stable_stat_identity(before) ==
+                    _stable_stat_identity(path_initial),
+                    f"{label} changed before its identity read")
+            blocks: list[bytes] = []
+            retained = 0
+            while True:
+                block = os.read(descriptor, min(1024 * 1024, maximum + 1 - retained))
+                if not block:
+                    break
+                blocks.append(block)
+                retained += len(block)
+                require(retained <= maximum, f"{label} exceeds its byte bound")
+            final = os.fstat(descriptor)
+            path_final = os.lstat(path)
+            require(_stable_stat_identity(initial) ==
+                    _stable_stat_identity(final) ==
+                    _stable_stat_identity(path_final) and
+                    retained == final.st_size,
+                    f"{label} changed during its identity read")
+            return b"".join(blocks)
+        finally:
+            os.close(descriptor)
+    except (OSError, ValueError) as error:
+        if isinstance(error, PlanError):
+            raise
+        raise PlanError(f"cannot snapshot {label}: {error}") from error
 
 
 def deterministic_seed(namespace: str, *values: int) -> int:
@@ -209,16 +367,268 @@ def unsigned(value: object, schema: str, label: str) -> dict[str, Any]:
     return result
 
 
+def _open_directory_chain(path: Path, *, create: bool) -> tuple[int, Path]:
+    """Open one absolute directory component-by-component without symlinks."""
+    require(os.name == "posix",
+            "secure balanced-evidence publication requires POSIX dirfds")
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    require(absolute.is_absolute() and absolute.name not in {".", ".."},
+            f"invalid JSON output directory {path}")
+    flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+             getattr(os, "O_DIRECTORY", 0) |
+             getattr(os, "O_NOFOLLOW", 0))
+    descriptor = -1
+    try:
+        descriptor = os.open(absolute.anchor, flags)
+        for component in absolute.parts[1:]:
+            require(component not in {"", ".", ".."},
+                    f"invalid JSON output directory component {component!r}")
+            created = False
+            if create:
+                try:
+                    os.mkdir(component, 0o700, dir_fd=descriptor)
+                    created = True
+                except FileExistsError:
+                    pass
+            child = os.open(component, flags, dir_fd=descriptor)
+            try:
+                identity = os.fstat(child)
+                require(stat.S_ISDIR(identity.st_mode),
+                        f"JSON output component is not a directory: "
+                        f"{absolute}")
+                if created:
+                    os.fchmod(child, 0o700)
+            except BaseException:
+                os.close(child)
+                raise
+            os.close(descriptor)
+            descriptor = child
+        return descriptor, absolute
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        raise
+
+
+def _directory_fd_matches_path(descriptor: int, path: Path) -> bool:
+    """Confirm that a lexical no-symlink path still names a retained dirfd."""
+    reopened = -1
+    try:
+        reopened, _ = _open_directory_chain(path, create=False)
+        held = os.fstat(descriptor)
+        current = os.fstat(reopened)
+        return (
+            stat.S_ISDIR(held.st_mode) and stat.S_ISDIR(current.st_mode) and
+            (held.st_dev, held.st_ino) == (current.st_dev, current.st_ino)
+        )
+    except (OSError, PlanError):
+        return False
+    finally:
+        if reopened >= 0:
+            os.close(reopened)
+
+
+def _write_fd_all(descriptor: int, payload: bytes) -> None:
+    offset = 0
+    while offset < len(payload):
+        written = os.write(descriptor, payload[offset:])
+        require(written > 0, "JSON output write made no progress")
+        offset += written
+
+
+def _read_fd_all(descriptor: int, maximum: int) -> bytes:
+    os.lseek(descriptor, 0, os.SEEK_SET)
+    blocks: list[bytes] = []
+    retained = 0
+    while True:
+        block = os.read(descriptor, min(1024 * 1024, maximum + 1 - retained))
+        if not block:
+            break
+        blocks.append(block)
+        retained += len(block)
+        require(retained <= maximum, "published JSON exceeds its byte bound")
+    return b"".join(blocks)
+
+
 def write_json(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("x", encoding="utf-8") as output:
-        json.dump(value, output, indent=2, sort_keys=True, allow_nan=False)
-        output.write("\n")
+    try:
+        payload = (
+            json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        ).encode("utf-8", errors="strict")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
+        raise PlanError(f"cannot encode canonical JSON for {path}: {error}") from error
+    absolute = Path(os.path.abspath(os.fspath(path)))
+    require(absolute.name not in {"", ".", ".."},
+            f"invalid JSON output name {path}")
+    parent_descriptor = -1
+    temporary_descriptor = -1
+    final_descriptor = -1
+    temporary_name: str | None = None
+    final_created = False
+    completed = False
+    primary_error: BaseException | None = None
+    cleanup_errors: list[BaseException] = []
+    try:
+        parent_descriptor, parent = _open_directory_chain(
+            absolute.parent, create=True)
+        require(_directory_fd_matches_path(parent_descriptor, parent),
+                f"JSON output parent changed before publication: {parent}")
+        for _ in range(128):
+            candidate = (
+                f".{absolute.name}.{os.getpid()}."
+                f"{os.urandom(16).hex()}.tmp"
+            )
+            try:
+                temporary_descriptor = os.open(
+                    candidate,
+                    os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                    getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_NOFOLLOW", 0),
+                    0o600, dir_fd=parent_descriptor)
+                temporary_name = candidate
+                break
+            except FileExistsError:
+                continue
+        require(temporary_descriptor >= 0 and temporary_name is not None,
+                f"cannot allocate temporary JSON output for {absolute}")
+        os.fchmod(temporary_descriptor, 0o600)
+        _write_fd_all(temporary_descriptor, payload)
+        os.fsync(temporary_descriptor)
+        staged = os.fstat(temporary_descriptor)
+        require(stat.S_ISREG(staged.st_mode) and
+                stat.S_IMODE(staged.st_mode) == 0o600 and
+                staged.st_nlink == 1 and staged.st_size == len(payload),
+                f"temporary JSON output has unsafe identity: {absolute}")
+        require(_directory_fd_matches_path(parent_descriptor, parent),
+                f"JSON output parent changed before commit: {parent}")
+        try:
+            os.link(
+                temporary_name, absolute.name,
+                src_dir_fd=parent_descriptor, dst_dir_fd=parent_descriptor,
+                follow_symlinks=False)
+        except FileExistsError as error:
+            raise PlanError(
+                f"refusing to replace existing output {absolute}") from error
+        final_created = True
+        final_descriptor = os.open(
+            absolute.name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0) |
+            getattr(os, "O_NONBLOCK", 0),
+            dir_fd=parent_descriptor)
+        published_before = os.fstat(final_descriptor)
+        require(
+            stat.S_ISREG(published_before.st_mode) and
+            stat.S_IMODE(published_before.st_mode) == 0o600 and
+            published_before.st_nlink == 2 and
+            published_before.st_size == len(payload) and
+            (published_before.st_dev, published_before.st_ino) ==
+                (staged.st_dev, staged.st_ino),
+            f"published JSON output has unsafe identity: {absolute}")
+        require(_read_fd_all(final_descriptor, len(payload)) == payload,
+                f"published JSON bytes differ: {absolute}")
+        published_after = os.fstat(final_descriptor)
+        require(_stable_stat_identity(published_before) ==
+                _stable_stat_identity(published_after),
+                f"published JSON changed during readback: {absolute}")
+        os.unlink(temporary_name, dir_fd=parent_descriptor)
+        temporary_name = None
+        os.fsync(parent_descriptor)
+        linked = os.fstat(final_descriptor)
+        require(linked.st_nlink == 1 and
+                _read_fd_all(final_descriptor, len(payload)) == payload,
+                f"published JSON changed after commit: {absolute}")
+        require(_directory_fd_matches_path(parent_descriptor, parent),
+                f"JSON output parent changed during publication: {parent}")
+        completed = True
+    except BaseException as error:
+        if isinstance(error, (OSError, ValueError)) and \
+                not isinstance(error, PlanError):
+            primary_error = PlanError(
+                f"cannot publish JSON output {absolute}: {error}")
+        else:
+            primary_error = error
+
+    if final_descriptor >= 0:
+        try:
+            os.close(final_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if temporary_descriptor >= 0:
+        try:
+            os.close(temporary_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if temporary_name is not None and parent_descriptor >= 0:
+        try:
+            os.unlink(temporary_name, dir_fd=parent_descriptor)
+        except FileNotFoundError:
+            pass
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if final_created and not completed and parent_descriptor >= 0:
+        try:
+            os.unlink(absolute.name, dir_fd=parent_descriptor)
+            os.fsync(parent_descriptor)
+        except FileNotFoundError:
+            pass
+        except BaseException as error:
+            cleanup_errors.append(error)
+    if parent_descriptor >= 0:
+        try:
+            os.close(parent_descriptor)
+        except BaseException as error:
+            cleanup_errors.append(error)
+
+    if primary_error is not None:
+        if cleanup_errors:
+            details = "; ".join(str(error) for error in cleanup_errors)
+            raise PlanError(
+                f"{primary_error}; JSON publication cleanup failed: {details}"
+            ) from primary_error
+        raise primary_error
+    if cleanup_errors:
+        details = "; ".join(str(error) for error in cleanup_errors)
+        raise PlanError(
+            f"JSON publication cleanup failed for {absolute}: {details}")
+
+
+def decode_json_bytes(payload: bytes, label: str) -> object:
+    def reject_duplicate_keys(
+            pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise PlanError(
+                    f"{label} contains duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_constant(value: str) -> object:
+        raise PlanError(
+            f"{label} contains non-standard JSON constant {value!r}")
+
+    def finite_float(value: str) -> float:
+        result = float(value)
+        if not math.isfinite(result):
+            raise PlanError(
+                f"{label} contains non-finite JSON number {value!r}")
+        return result
+
+    try:
+        text = payload.decode("utf-8", errors="strict")
+        return json.loads(
+            text, object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_constant, parse_float=finite_float)
+    except (OSError, UnicodeDecodeError, ValueError, OverflowError,
+            RecursionError) as error:
+        raise PlanError(f"cannot decode strict JSON {label}: {error}") from error
 
 
 def load_json(path: Path) -> object:
-    with path.open(encoding="utf-8") as stream:
-        return json.load(stream)
+    payload = stable_regular_file_bytes(
+        path, MAX_JSON_DOCUMENT_BYTES, f"JSON document {path}")
+    return decode_json_bytes(payload, str(path))
 
 
 def main_cell(identifier: str, k: int, r: int, shard_bytes: int,
@@ -276,12 +686,16 @@ def validate_main_document(value: object, label: str) -> dict[str, Any]:
         "schema", "name", "candidate_mode", "exact_main_commit", "reuse",
         "iterations", "warmup", "purpose", "run_condition", "cells",
     }, f"{label} fields differ")
-    require(result["candidate_mode"] in CONFIRM_MODES and
+    require(type(result["candidate_mode"]) is str and
+            result["candidate_mode"] in CONFIRM_MODES and
             result["exact_main_commit"] == EXACT_MAIN_COMMIT and
-            result["reuse"] == 8 and result["iterations"] == 9 and
-            result["warmup"] == 2 and isinstance(result["name"], str) and
-            isinstance(result["purpose"], str) and
-            isinstance(result["run_condition"], str),
+            type(result["reuse"]) is int and result["reuse"] == 8 and
+            type(result["iterations"]) is int and result["iterations"] == 9 and
+            type(result["warmup"]) is int and result["warmup"] == 2 and
+            isinstance(result["name"], str) and bool(result["name"]) and
+            isinstance(result["purpose"], str) and bool(result["purpose"]) and
+            isinstance(result["run_condition"], str) and
+            bool(result["run_condition"]),
             f"{label} semantics differ")
     cells = result["cells"]
     require(isinstance(cells, list) and cells, f"{label} has no cells")
@@ -301,10 +715,12 @@ def transform_groups(counts: Iterable[int]) -> dict[int, list[int]]:
 
 def artifact(path: Path, root: Path, case_count: int, child_count: int,
              kind: str) -> dict[str, Any]:
+    snapshot = stable_regular_file_bytes(
+        path, MAX_JSON_DOCUMENT_BYTES, f"generated artifact {path}")
     return {
         "path": str(path.relative_to(root)), "kind": kind,
         "case_count": case_count, "timed_child_count": child_count,
-        "size": path.stat().st_size, "sha256": file_sha256(path),
+        "size": len(snapshot), "sha256": hashlib.sha256(snapshot).hexdigest(),
     }
 
 
@@ -332,7 +748,7 @@ def generate_plan(root: Path) -> dict[str, Any]:
         "promotion_gate": {
             "metrics": ["decode_first_use", "decode_reuse_amortized"],
             "minimum_ci95_lower": PROMOTION_GATE,
-            "neighbor_maximum_regression": 0.02,
+            "neighbor_maximum_regression": NEIGHBOR_MAXIMUM_REGRESSION,
         },
         "runner_ordering": {
             "exact_main": {
@@ -377,7 +793,12 @@ def compare_trees(actual: Path, expected: Path, label: str) -> None:
     expected_files = json_tree(expected)
     require(actual_files == expected_files, f"{label} file set differs")
     for relative in expected_files:
-        require((actual / relative).read_bytes() == (expected / relative).read_bytes(),
+        require(stable_regular_file_bytes(
+                    actual / relative, MAX_JSON_DOCUMENT_BYTES,
+                    f"{label} actual {relative}") ==
+                stable_regular_file_bytes(
+                    expected / relative, MAX_JSON_DOCUMENT_BYTES,
+                    f"{label} expected {relative}"),
                 f"{label} canonical bytes differ: {relative}")
 
 
@@ -392,7 +813,7 @@ def structural_plan(root: Path) -> dict[str, Any]:
             plan["promotion_gate"] == {
                 "metrics": ["decode_first_use", "decode_reuse_amortized"],
                 "minimum_ci95_lower": PROMOTION_GATE,
-                "neighbor_maximum_regression": 0.02,
+                "neighbor_maximum_regression": NEIGHBOR_MAXIMUM_REGRESSION,
             }, "plan gate semantics differ")
     total_cases = 0
     total_children = 0
@@ -401,9 +822,13 @@ def structural_plan(root: Path) -> dict[str, Any]:
             "path", "kind", "case_count", "timed_child_count", "size", "sha256",
         } and item["kind"] == "exact_main_gate", "plan artifact differs")
         path = root / item["path"]
-        require(path.is_file() and path.stat().st_size == item["size"] and
-                file_sha256(path) == item["sha256"], "plan artifact bytes differ")
-        document = validate_main_document(load_json(path), str(path))
+        snapshot = stable_regular_file_bytes(
+            path, MAX_JSON_DOCUMENT_BYTES, f"plan artifact {item['path']}")
+        require(len(snapshot) == item["size"] and
+                hashlib.sha256(snapshot).hexdigest() == item["sha256"],
+                "plan artifact bytes differ")
+        document = validate_main_document(
+            decode_json_bytes(snapshot, str(path)), str(path))
         require(document["candidate_mode"] == "generic" and
                 len(document["cells"]) == item["case_count"] and
                 item["timed_child_count"] == item["case_count"] * 12,
@@ -455,7 +880,7 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
     token_prefix_delimiters = frozenset(" \t\r\n\"'`=(:,;[{")
     token_suffix_delimiters = frozenset(" \t\r\n\"'`,:;)]}")
     cmake_external_object_suffix = re.compile(
-        r"CMakeFiles/[^/\s\"'`]+\.dir$")
+        r"CMakeFiles/[^/\s\"'`]+\.dir(?:/[^/\s\"'`]+)?$")
 
     def replace_root_tokens(text: str, original: str, marker: str) -> str:
         """Replace an absolute root only at a standalone path-token boundary."""
@@ -507,14 +932,53 @@ def _normalize_bound_paths(value: object, replacements: tuple[tuple[str, str], .
                 encoded = result["text"].encode("utf-8")
                 result["size"] = len(encoded)
                 result["sha256"] = hashlib.sha256(encoded).hexdigest()
-            for prefix in ("archive", "executable"):
-                content = result.get(f"{prefix}_link_recipe_content")
-                identity = result.get(f"{prefix}_link_recipe")
-                if isinstance(content, dict) and isinstance(identity, dict) and \
+            ninja_graph = result.get("multi_config_ninja_graph")
+            if ninja_graph is None:
+                for prefix in ("archive", "executable"):
+                    content = result.get(f"{prefix}_link_recipe_content")
+                    identity = result.get(f"{prefix}_link_recipe")
+                    if isinstance(content, dict) and \
+                            isinstance(identity, dict) and \
+                            type(content.get("size")) is int and \
+                            isinstance(content.get("sha256"), str):
+                        identity["size"] = content["size"]
+                        identity["sha256"] = content["sha256"]
+            elif isinstance(ninja_graph, dict):
+                entrypoint = ninja_graph.get("entrypoint")
+                match = (re.fullmatch(r"build-([A-Za-z0-9_.+-]+)\.ninja",
+                                      entrypoint)
+                         if isinstance(entrypoint, str) else None)
+                files = ninja_graph.get("files")
+                require(match is not None and isinstance(files, list),
+                        "normalized multi-config Ninja graph is malformed")
+                link_relative = \
+                    f"CMakeFiles/impl-{match.group(1)}.ninja"
+                link_records = [
+                    record for record in files
+                    if isinstance(record, dict) and
+                    record.get("relative_path") == link_relative
+                ]
+                require(len(link_records) == 1 and
+                        isinstance(link_records[0].get("artifact"), dict),
+                        "normalized multi-config Ninja link graph is absent")
+                graph_identity = link_records[0]["artifact"]
+                for prefix in ("archive", "executable"):
+                    identity = result.get(f"{prefix}_link_recipe")
+                    require(isinstance(identity, dict),
+                            f"normalized {prefix} link identity is absent")
+                    for field in ("path", "size", "mode", "sha256"):
+                        require(field in graph_identity,
+                                "normalized multi-config Ninja link graph "
+                                f"omits {field}")
+                        identity[field] = graph_identity[field]
+            if set(result) == {"relative_path", "artifact", "content"}:
+                content = result.get("content")
+                artifact = result.get("artifact")
+                if isinstance(content, dict) and isinstance(artifact, dict) and \
                         type(content.get("size")) is int and \
                         isinstance(content.get("sha256"), str):
-                    identity["size"] = content["size"]
-                    identity["sha256"] = content["sha256"]
+                    artifact["size"] = content["size"]
+                    artifact["sha256"] = content["sha256"]
             return result
         if isinstance(item, list):
             return [visit(child) for child in item]
@@ -562,6 +1026,112 @@ def _validate_scope_artifact(
             isinstance(value.get("sha256"), str) and
             re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None,
             f"{label} normalized artifact is invalid")
+    if expected_kind == "build_tool":
+        require(value["mode"] & 0o111,
+                f"{label} normalized artifact is not executable")
+    return value
+
+
+def _validate_scope_build_tool_version(
+    value: object, label: str,
+) -> dict[str, str]:
+    require(isinstance(value, dict) and set(value) == {"sha256", "text"} and
+            isinstance(value.get("text"), str) and value["text"] and
+            "\0" not in value["text"] and "\r" not in value["text"] and
+            isinstance(value.get("sha256"), str),
+            f"{label} shape differs")
+    try:
+        encoded = value["text"].encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise PlanError(f"{label} is not strict UTF-8") from error
+    require(len(encoded) <= MAX_BUILD_TOOL_VERSION_BYTES and
+            value["sha256"] == hashlib.sha256(encoded).hexdigest(),
+            f"{label} identity differs")
+    return value
+
+
+def _canonical_ninja_graph_relative_path(value: object, label: str) -> str:
+    require(isinstance(value, str) and value and
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/+@=-]*", value)
+            is not None,
+            f"{label} is not a literal Ninja graph path")
+    path = Path(value)
+    require(not path.is_absolute() and
+            all(component not in {"", ".", ".."} for component in path.parts) and
+            path.as_posix() == value,
+            f"{label} is not a canonical relative Ninja graph path")
+    return value
+
+
+def _ninja_graph_includes(text: object, label: str) -> tuple[str, ...]:
+    require(isinstance(text, str) and text.endswith("\n") and
+            "\0" not in text and "\r" not in text,
+            f"{label} is not canonical LF-terminated Ninja text")
+    result: list[str] = []
+    for line_number, line in enumerate(text[:-1].split("\n"), 1):
+        match = re.match(r"^(include|subninja)(?:[ \t]|$)", line)
+        if match is None:
+            continue
+        directive = re.fullmatch(
+            r"(?:include|subninja)[ \t]+([^ \t]+)[ \t]*", line)
+        require(directive is not None,
+                f"{label}:{line_number} has a non-literal Ninja include")
+        result.append(_canonical_ninja_graph_relative_path(
+            directive.group(1), f"{label}:{line_number} include"))
+    return tuple(result)
+
+
+def _validate_scope_ninja_graph_closure(
+    value: object, build_root: str, selected_configuration: str, label: str,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "schema", "entrypoint", "files"} and
+            value.get("schema") == NINJA_GRAPH_CLOSURE_SCHEMA and
+            value.get("entrypoint") ==
+                f"build-{selected_configuration}.ninja" and
+            isinstance(value.get("files"), list) and
+            0 < len(value["files"]) <= MAX_NINJA_GRAPH_FILES,
+            f"{label} shape differs")
+    records: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    for record in value["files"]:
+        require(isinstance(record, dict) and set(record) == {
+                    "relative_path", "artifact", "content"},
+                f"{label} record shape differs")
+        relative = _canonical_ninja_graph_relative_path(
+            record.get("relative_path"), f"{label} record path")
+        require(relative not in records,
+                f"{label} contains a duplicate graph path")
+        artifact = _validate_scope_artifact(
+            record.get("artifact"), f"{label} {relative}",
+            "ninja_graph_input")
+        content = _validate_scope_text(
+            record.get("content"), f"{label} {relative} content")
+        total_bytes += content["size"]
+        require(
+            artifact["path"] ==
+                f"{build_root}/{relative}" and
+            artifact["size"] == content["size"] and
+            artifact["sha256"] == content["sha256"] and
+            total_bytes <= MAX_NINJA_GRAPH_TOTAL_BYTES,
+            f"{label} {relative} artifact/content identity differs")
+        records[relative] = record
+    require(list(records) == sorted(records),
+            f"{label} records are not canonically ordered")
+    pending = [value["entrypoint"]]
+    visited: set[str] = set()
+    while pending:
+        relative = pending.pop()
+        require(relative in records,
+                f"{label} references an unretained graph input: {relative}")
+        if relative in visited:
+            continue
+        visited.add(relative)
+        pending.extend(_ninja_graph_includes(
+            records[relative]["content"]["text"],
+            f"{label} {relative} content"))
+    require(visited == set(records),
+            f"{label} contains inputs outside its entrypoint closure")
     return value
 
 
@@ -571,7 +1141,10 @@ def _validate_scope_text(value: object, label: str) -> dict[str, Any]:
             value.get("encoding") == "utf-8" and
             isinstance(value.get("text"), str),
             f"{label} normalized retained text shape differs")
-    encoded = value["text"].encode("utf-8")
+    try:
+        encoded = value["text"].encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise PlanError(f"{label} is not strict UTF-8 text") from error
     require(type(value.get("size")) is int and
             0 < value["size"] <= MAX_RETAINED_TEXT_BYTES and
             value["size"] == len(encoded) and "\x00" not in value["text"] and
@@ -579,6 +1152,128 @@ def _validate_scope_text(value: object, label: str) -> dict[str, Any]:
             value["sha256"] == hashlib.sha256(encoded).hexdigest(),
             f"{label} normalized retained text identity differs")
     return value
+
+
+def _build_configuration_material(entries: Mapping[str, str]) -> bytes:
+    require(set(entries) == set(BUILD_CONFIGURATION_VARIABLES),
+            "candidate normalized effective-configuration variables differ")
+    lines: list[str] = []
+    for name in BUILD_CONFIGURATION_VARIABLES:
+        value = entries.get(name)
+        require(isinstance(value, str) and
+                not any(character in value for character in ("\0", "\r", "\n")),
+                f"candidate normalized effective-configuration {name} is invalid")
+        lines.append(f"{name}={value}\n")
+    try:
+        return "".join(lines).encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise PlanError(
+            "candidate normalized effective configuration is not strict UTF-8") \
+            from error
+
+
+def _parse_build_configuration_bytes(retained: bytes) -> dict[str, Any]:
+    require(isinstance(retained, bytes) and
+            0 < len(retained) <= MAX_BUILD_CONFIGURATION_BYTES and
+            b"\0" not in retained and b"\r" not in retained and
+            retained.endswith(b"\n"),
+            "candidate normalized effective-configuration bytes are invalid")
+    try:
+        text = retained.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise PlanError(
+            "candidate normalized effective configuration is not strict UTF-8") \
+            from error
+    lines = text[:-1].split("\n")
+    require(len(lines) == len(BUILD_CONFIGURATION_VARIABLES) + 2 and
+            lines[0] == f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}" and
+            lines[1].startswith("sha256="),
+            "candidate normalized effective-configuration framing differs")
+    digest = lines[1][len("sha256="):]
+    require(re.fullmatch(r"[0-9a-f]{64}", digest) is not None,
+            "candidate normalized effective-configuration digest is invalid")
+    entries: dict[str, str] = {}
+    for expected, line in zip(BUILD_CONFIGURATION_VARIABLES, lines[2:]):
+        name, separator, value = line.partition("=")
+        require(separator == "=" and name == expected and name not in entries,
+                "candidate normalized effective-configuration order differs")
+        entries[name] = value
+    material = _build_configuration_material(entries)
+    require(retained == (
+                f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"sha256={digest}\n").encode("ascii") + material and
+            hashlib.sha256(material).hexdigest() == digest,
+            "candidate normalized effective-configuration digest differs")
+    return {
+        "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "configuration_sha256": digest,
+        "entries": entries,
+    }
+
+
+def _validate_embedded_build_type(
+    entries: Mapping[str, str], embedded_build_type: object,
+) -> str:
+    require(isinstance(embedded_build_type, str) and embedded_build_type and
+            isinstance(entries, Mapping),
+            "candidate normalized embedded build type is invalid")
+    generator = entries.get("CMAKE_GENERATOR")
+    configured = entries.get("CMAKE_BUILD_TYPE")
+    encoded_types = entries.get("CMAKE_CONFIGURATION_TYPES")
+    require(all(isinstance(value, str)
+                for value in (generator, configured, encoded_types)) and
+            generator,
+            "candidate normalized configuration omits generator semantics")
+    multi = _cmake_generator_is_multi_config(generator)
+    configuration_types: tuple[str, ...] = ()
+    if encoded_types:
+        configuration_types = tuple(encoded_types.split(";"))
+        require(all(configuration_types) and
+                len(configuration_types) == len(set(configuration_types)),
+                "candidate normalized CMAKE_CONFIGURATION_TYPES is malformed")
+    if multi:
+        require(configuration_types and
+                embedded_build_type in configuration_types,
+                "candidate normalized multi-config build type is outside "
+                "CMAKE_CONFIGURATION_TYPES")
+    else:
+        require(embedded_build_type == configured,
+                "candidate normalized single-config build type differs from "
+                "CMAKE_BUILD_TYPE")
+    require(embedded_build_type == "Release",
+            "candidate normalized authoritative benchmark is not Release")
+    return embedded_build_type
+
+
+def _cmake_generator_is_multi_config(generator: object) -> bool:
+    require(isinstance(generator, str) and generator,
+            "normalized CMake generator identity is invalid")
+    return (generator == "Xcode" or
+            generator.startswith("Visual Studio") or
+            "Multi-Config" in generator)
+
+
+def _cmake_build_layout(
+    entries: Mapping[str, Any],
+) -> tuple[bool, tuple[str, ...], str | None]:
+    require(isinstance(entries, Mapping),
+            "normalized CMake build-layout identity is invalid")
+    generator = entries.get("CMAKE_GENERATOR")
+    encoded_types = entries.get("CMAKE_CONFIGURATION_TYPES", "")
+    build_type = entries.get("CMAKE_BUILD_TYPE", "")
+    require(isinstance(encoded_types, str) and isinstance(build_type, str),
+            "normalized CMake configuration values are invalid")
+    multi = _cmake_generator_is_multi_config(generator)
+    if multi:
+        types = tuple(encoded_types.split(";")) if encoded_types else ()
+        require(types == ("Debug", "Release") and
+                generator == "Ninja Multi-Config",
+                "normalized multi-config build lacks the canonical "
+                "Debug/Release closure")
+        return True, types, "Release"
+    require(build_type == "Release",
+            "normalized single-config build is not Release")
+    return False, ("Release",), None
 
 
 def _benchmark_attestation_text(commit: str, tree: str) -> str:
@@ -680,6 +1375,64 @@ def _validate_normalized_benchmark_attestation(
     return attestation
 
 
+def _validate_normalized_build_configuration(
+    semantics: Mapping[str, Any], cache: Mapping[str, Any],
+    build_root: str, source_root: str,
+) -> dict[str, Any]:
+    value = semantics.get("effective_build_configuration")
+    require(isinstance(value, dict) and set(value) == {
+                "schema", "artifact", "content", "configuration_schema",
+                "configuration_sha256", "entries", "embedded_build_type",
+                "helper_source"} and
+            value.get("schema") == BUILD_CONFIGURATION_RECORD_SCHEMA,
+            "candidate normalized effective-configuration shape differs")
+    artifact = _validate_scope_artifact(
+        value.get("artifact"), "candidate normalized effective configuration",
+        "generated_build_configuration")
+    expected_path = f"{build_root}/{BUILD_CONFIGURATION_RELATIVE_PATH}"
+    require(artifact["path"] == expected_path,
+            "candidate normalized effective-configuration path differs")
+    content = _validate_scope_text(
+        value.get("content"),
+        "candidate normalized effective configuration")
+    parsed = _parse_build_configuration_bytes(
+        content["text"].encode("utf-8"))
+    _validate_embedded_build_type(
+        parsed["entries"], value.get("embedded_build_type"))
+    multi, _, _ = _cmake_build_layout(parsed["entries"])
+    require(content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"] and
+            value.get("configuration_schema") ==
+                parsed["configuration_schema"] and
+            value.get("configuration_sha256") ==
+                parsed["configuration_sha256"] and
+            value.get("entries") == parsed["entries"] and
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                parsed["configuration_schema"] and
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256") ==
+                parsed["configuration_sha256"] and
+            cache.get("CMAKE_GENERATOR") ==
+                parsed["entries"]["CMAKE_GENERATOR"] and
+            cache.get("CMAKE_CONFIGURATION_TYPES") ==
+                parsed["entries"]["CMAKE_CONFIGURATION_TYPES"] and
+            (multi or cache.get("CMAKE_BUILD_TYPE") ==
+                parsed["entries"]["CMAKE_BUILD_TYPE"]) and
+            parsed["entries"]["CMAKE_CXX_COMPILER"] ==
+                cache.get("CMAKE_CXX_COMPILER") and
+            all(parsed["entries"].get(name) == expected
+                for name, expected in
+                REQUIRED_BUILD_CONFIGURATION_ENTRIES.items()),
+            "candidate normalized effective configuration differs from "
+            "cache/sidecar")
+    helper = _validate_scope_artifact(
+        value.get("helper_source"),
+        "candidate normalized benchmark attestation helper", "source_file")
+    require(helper["path"] ==
+                f"{source_root}/{BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH}",
+            "candidate normalized benchmark attestation helper path differs")
+    return value
+
+
 def _validate_scope_numeric_directory_inventory(
     value: object, prefix: str, label: str,
 ) -> list[str]:
@@ -761,24 +1514,35 @@ def _validate_scope_source(value: object, role: str) -> dict[str, Any]:
     return value
 
 
-def _normalized_compile_output(role: str, source: str) -> str:
+def _normalized_compile_output(
+    role: str, source: str, selected_configuration: str | None = None,
+) -> str:
     baseline = role == "baseline"
     if baseline:
         if source == ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
                       "legacy_main_benchmark.cpp"):
-            return ("CMakeFiles/leopard_main_benchmark.dir/"
+            return ("CMakeFiles/leopard_main_benchmark.dir/" +
+                    (f"{selected_configuration}/"
+                     if selected_configuration else "") +
                     "legacy_main_benchmark.cpp.o")
         require(source.startswith("$BASELINE_SOURCE/"),
                 "baseline normalized compiler source escapes its root")
         relative = source[len("$BASELINE_SOURCE/"):]
-        return ("CMakeFiles/leopard_main_exact.dir/$BASELINE_SOURCE/" +
+        return ("CMakeFiles/leopard_main_exact.dir/" +
+                (f"{selected_configuration}/"
+                 if selected_configuration else "") +
+                "$BASELINE_SOURCE/" +
                 relative + ".o")
     require(role == "candidate" and
             source.startswith("$CANDIDATE_SOURCE/"),
             "candidate normalized compiler source escapes its root")
     relative = source[len("$CANDIDATE_SOURCE/"):]
     if relative == "bench/leopard2/benchmark.cpp":
-        return "CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o"
+        configuration = (
+            f"{selected_configuration}/" if selected_configuration else "")
+        return (
+            f"CMakeFiles/bench_leopard2.dir/{configuration}"
+            "bench/leopard2/benchmark.cpp.o")
     backend_targets = {
         "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
         "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
@@ -786,7 +1550,11 @@ def _normalized_compile_output(role: str, source: str) -> str:
         "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
         "Leopard2BackendGFNI.cpp": "leopard2_backend_gfni.dir",
     }
-    return f"CMakeFiles/{backend_targets.get(relative, 'leopard.dir')}/{relative}.o"
+    configuration = (
+        f"{selected_configuration}/" if selected_configuration else "")
+    return (
+        f"CMakeFiles/{backend_targets.get(relative, 'leopard.dir')}/"
+        f"{configuration}{relative}.o")
 
 
 def _normalized_compile_argv(
@@ -794,19 +1562,27 @@ def _normalized_compile_argv(
     compile_schema: str = COMPILE_COMMANDS_SCHEMA,
     candidate_commit: str | None = None,
     candidate_tree: str | None = None,
+    build_configuration: Mapping[str, Any] | None = None,
+    selected_configuration: str | None = None,
 ) -> list[str]:
     require(compile_schema in {
-                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA},
+                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3,
+                COMPILE_COMMANDS_SCHEMA},
             "normalized compile argv schema differs")
-    output = _normalized_compile_output(role, source)
+    output = _normalized_compile_output(
+        role, source, selected_configuration)
     if role == "baseline":
         adapter = ("$CANDIDATE_SOURCE/experiments/leopard2/main_compare/"
                    "legacy_main_benchmark.cpp")
         definitions = ([] if source != adapter else [
             f'-DLEOPARD_MAIN_SOURCE_COMMIT="{EXACT_MAIN_COMMIT}"',
         ])
+        configuration_definition = (
+            [f'-DCMAKE_INTDIR="{selected_configuration}"']
+            if selected_configuration else [])
         return [
-            compiler_invocation, *definitions, "-I$BASELINE_SOURCE",
+            compiler_invocation, *definitions, *configuration_definition,
+            "-I$BASELINE_SOURCE",
             "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
             "-Wall", "-Wextra", "-fopenmp",
             "-o", output, "-c", source,
@@ -843,8 +1619,26 @@ def _normalized_compile_argv(
                 "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
                 f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
             ]
-        else:
+        elif compile_schema == COMPILE_COMMANDS_SCHEMA_V3:
             definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+                '"$CANDIDATE_BUILD/generated/leopard2-benchmark-attestation/'
+                'leopard2_benchmark_source_attestation.h"',
+            ]
+        else:
+            require(isinstance(build_configuration, Mapping) and
+                    build_configuration.get("schema") ==
+                        BUILD_CONFIGURATION_RECORD_SCHEMA and
+                    re.fullmatch(r"[0-9a-f]{64}", str(
+                        build_configuration.get(
+                            "configuration_sha256"))) is not None and
+                    build_configuration.get("embedded_build_type") == "Release",
+                    "normalized compile profile lacks effective configuration")
+            definitions = [
+                "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="
+                f'"{build_configuration["configuration_sha256"]}"',
+                '-DLEO2_BENCHMARK_BUILD_TYPE="Release"',
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
                 '"$CANDIDATE_BUILD/generated/leopard2-benchmark-attestation/'
@@ -862,8 +1656,11 @@ def _normalized_compile_argv(
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
     includes = ["-I$CANDIDATE_SOURCE"]
+    configuration_definition = (
+        [f'-DCMAKE_INTDIR="{selected_configuration}"']
+        if selected_configuration else [])
     return [
-        compiler_invocation, *definitions, *includes,
+        compiler_invocation, *definitions, *configuration_definition, *includes,
         "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
         "-std=gnu++11", *isolated_flags.get(relative, []),
         *([] if relative in isolated_flags else ["-fopenmp"]),
@@ -874,8 +1671,18 @@ def _normalized_compile_argv(
 def _validate_scope_build(
     build: object, role: str, source_identity: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    require(role in {"baseline", "candidate"} and isinstance(build, dict) and
-            set(build) == {
+    require(role in {"baseline", "candidate"} and isinstance(build, dict),
+            f"{role} normalized build identity is invalid")
+    semantics = build.get("validated_compile_commands")
+    require(isinstance(semantics, dict),
+            f"{role} normalized compile-command identity is absent")
+    compile_schema = semantics.get("schema")
+    require(compile_schema in {
+                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3,
+                COMPILE_COMMANDS_SCHEMA},
+            f"{role} normalized compile-command schema differs")
+    current_build = compile_schema == COMPILE_COMMANDS_SCHEMA
+    expected_build_keys = {
                 "build_dir", "cmake_cache", "compile_commands",
                 "executable_link_recipe", "archive_link_recipe", "compiler",
                 "compiler_version_stdout", "archiver", "ranlib",
@@ -884,12 +1691,65 @@ def _validate_scope_build(
                 "validated_compile_commands", "archive_link_recipe_content",
                 "executable_link_recipe_content",
                 "archive_link_tool_invocations", "compiler_invocation",
-                "validated_external_link_inputs"},
+                "validated_external_link_inputs"}
+    if current_build:
+        expected_build_keys.update({
+            "multi_config_build_tool",
+            "multi_config_build_tool_version_stdout",
+            "multi_config_ninja_graph",
+        })
+    require(set(build) == expected_build_keys,
             f"{role} normalized build identity shape differs")
     expected_root = "$BASELINE_BUILD" if role == "baseline" else "$CANDIDATE_BUILD"
     require(build.get("build_dir") == expected_root,
             f"{role} normalized build directory differs")
     baseline = role == "baseline"
+    cache = build.get("validated_cache")
+    require(isinstance(cache, dict),
+            f"{role} validated CMake cache is absent")
+    required_cache = (
+        REQUIRED_BASELINE_CACHE if baseline else
+        REQUIRED_CANDIDATE_CACHE if current_build else
+        REQUIRED_LEGACY_CANDIDATE_CACHE)
+    expected_cache_keys = {
+        "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS_RELEASE",
+        *required_cache,
+    }
+    selected_configuration: str | None = None
+    configured_variant_count = 1
+    if current_build:
+        expected_cache_keys.update({
+            "CMAKE_CONFIGURATION_TYPES", "CMAKE_GENERATOR",
+        })
+        _, configuration_types, selected_configuration = \
+            _cmake_build_layout(cache)
+        configured_variant_count = (
+            len(configuration_types) if selected_configuration else 1)
+        if selected_configuration:
+            expected_cache_keys.add("CMAKE_MAKE_PROGRAM")
+        if not baseline:
+            expected_cache_keys.update({
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA",
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256",
+            })
+    require(set(cache) == expected_cache_keys and
+            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
+            cache["CMAKE_CXX_COMPILER"] and
+            isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
+            all(cache.get(key) == expected
+                for key, expected in required_cache.items()) and
+            (current_build or cache.get("CMAKE_BUILD_TYPE") == "Release") and
+            (not selected_configuration or
+             isinstance(cache.get("CMAKE_MAKE_PROGRAM"), str) and
+             bool(cache["CMAKE_MAKE_PROGRAM"])) and
+            (baseline or not current_build or
+             cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                BUILD_CONFIGURATION_FILE_SCHEMA) and
+            (baseline or not current_build or re.fullmatch(
+                r"[0-9a-f]{64}", str(cache.get(
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256")))
+                is not None),
+            f"{role} validated CMake cache differs")
     archive_name = "libleopard_main_exact.a" if baseline else "libleopard.a"
     executable_name = "leopard_main_benchmark" if baseline else "bench_leopard2"
     archive_target = "leopard_main_exact.dir" if baseline else "leopard.dir"
@@ -897,15 +1757,20 @@ def _validate_scope_build(
         BASELINE_LIBRARY_SOURCES if baseline else CANDIDATE_LIBRARY_SOURCES)
     expected_entry_count = (
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
-        CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
-    expected_compile_profile = (
-        BASELINE_COMPILE_PROFILE if baseline else CANDIDATE_COMPILE_PROFILE)
+        CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT) * configured_variant_count
+    output_prefix = (
+        f"{selected_configuration}/" if selected_configuration else "")
+    link_metadata = (
+        f"{expected_root}/CMakeFiles/impl-{selected_configuration}.ninja"
+        if selected_configuration else None)
     metadata_paths = {
         "cmake_cache": f"{expected_root}/CMakeCache.txt",
         "compile_commands": f"{expected_root}/compile_commands.json",
         "executable_link_recipe": (
+            link_metadata or
             f"{expected_root}/CMakeFiles/{executable_name}.dir/link.txt"),
         "archive_link_recipe": (
+            link_metadata or
             f"{expected_root}/CMakeFiles/{archive_target}/link.txt"),
     }
     for name in ("cmake_cache", "compile_commands", "executable_link_recipe",
@@ -924,8 +1789,10 @@ def _validate_scope_build(
         build.get("validated_archive"), f"{role} archive", "archive")
     executable = _validate_scope_artifact(
         build.get("validated_executable"), f"{role} executable", "executable")
-    require(archive["path"] == f"{expected_root}/{archive_name}" and
-            executable["path"] == f"{expected_root}/{executable_name}",
+    require(archive["path"] ==
+                f"{expected_root}/{output_prefix}{archive_name}" and
+            executable["path"] ==
+                f"{expected_root}/{output_prefix}{executable_name}",
             f"{role} normalized output paths differ")
     version = build.get("compiler_version_stdout")
     require(isinstance(version, dict) and set(version) == {"sha256", "text"} and
@@ -934,20 +1801,45 @@ def _validate_scope_build(
             version["sha256"] == hashlib.sha256(
                 version["text"].encode("utf-8")).hexdigest(),
             f"{role} compiler version identity differs")
-    cache = build.get("validated_cache")
-    required_cache = (REQUIRED_BASELINE_CACHE if role == "baseline"
-                      else REQUIRED_CANDIDATE_CACHE)
-    expected_cache_keys = {
-        "CMAKE_BUILD_TYPE", "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS_RELEASE",
-        *required_cache,
-    }
-    require(isinstance(cache, dict) and set(cache) == expected_cache_keys and
-            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
-            cache["CMAKE_CXX_COMPILER"] and
-            isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
-            all(cache.get(key) == expected
-                for key, expected in required_cache.items()),
-            f"{role} validated CMake cache differs")
+    if current_build:
+        build_tool = build.get("multi_config_build_tool")
+        build_tool_version = build.get(
+            "multi_config_build_tool_version_stdout")
+        ninja_graph = build.get("multi_config_ninja_graph")
+        if selected_configuration:
+            tool = _validate_scope_artifact(
+                build_tool, f"{role} normalized multi-config build tool",
+                "build_tool")
+            validated_tool_version = _validate_scope_build_tool_version(
+                build_tool_version,
+                f"{role} normalized multi-config build-tool version")
+            require(
+                cache.get("CMAKE_MAKE_PROGRAM") == CANONICAL_NINJA_PATH and
+                tool["path"] == CANONICAL_NINJA_PATH and
+                validated_tool_version is build_tool_version,
+                f"{role} normalized multi-config Ninja identity/version "
+                "differs")
+            graph = _validate_scope_ninja_graph_closure(
+                ninja_graph, expected_root, selected_configuration,
+                f"{role} normalized multi-config Ninja graph")
+            graph_by_path = {
+                record["relative_path"]: record["artifact"]
+                for record in graph["files"]
+            }
+            link_graph = graph_by_path.get(
+                f"CMakeFiles/impl-{selected_configuration}.ninja")
+            require(isinstance(link_graph, dict) and all(
+                        link_graph[key] ==
+                            build["archive_link_recipe"][key] ==
+                            build["executable_link_recipe"][key]
+                        for key in ("path", "size", "mode", "sha256")),
+                    f"{role} normalized link metadata differs from its "
+                    "retained Ninja graph")
+        else:
+            require(build_tool is None and build_tool_version is None and
+                    ninja_graph is None,
+                    f"{role} normalized single-config build retained a "
+                    "multi-config build tool/graph")
     try:
         release_flags = shlex.split(
             cache["CMAKE_CXX_FLAGS_RELEASE"], posix=True)
@@ -968,24 +1860,24 @@ def _validate_scope_build(
                 cache["CMAKE_CXX_COMPILER"] and
             compiler_invocation.get("resolved_path") == compiler["path"],
             f"{role} normalized compiler invocation differs")
-    semantics = build.get("validated_compile_commands")
-    require(isinstance(semantics, dict),
-            f"{role} normalized compile-command identity is absent")
-    compile_schema = semantics.get("schema")
-    require(compile_schema in {
-                COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA},
-            f"{role} normalized compile-command schema differs")
     expected_semantics_keys = {
                 "entry_count", "required_sources", "validated_optimization",
                 "validated_openmp", "required_source_object_pairs", "isa_policy",
                 "schema", "implementation", "profile", "required_entries"}
-    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+    if compile_schema in (COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA):
         expected_semantics_keys.add("generated_attestation_header")
+    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+        expected_semantics_keys.add("effective_build_configuration")
+    expected_profile = (
+        BASELINE_COMPILE_PROFILE if baseline else
+        CANDIDATE_COMPILE_PROFILE if
+            compile_schema == COMPILE_COMMANDS_SCHEMA else
+        CANDIDATE_COMPILE_PROFILE_V1)
     require(set(semantics) == expected_semantics_keys and
             type(semantics.get("entry_count")) is int and
             semantics["entry_count"] == expected_entry_count and
             semantics.get("implementation") == role and
-            semantics.get("profile") == expected_compile_profile and
+            semantics.get("profile") == expected_profile and
             semantics.get("validated_optimization") == "-O3" and
             semantics.get("validated_openmp") is True and
             isinstance(semantics.get("isa_policy"), str) and
@@ -1023,7 +1915,8 @@ def _validate_scope_build(
         obj = _validate_scope_artifact(
             pair["object"], f"{role} object {index}", "object_file")
         entry = entries_by_source.get(source["path"])
-        expected_output = _normalized_compile_output(role, source["path"])
+        expected_output = _normalized_compile_output(
+            role, source["path"], selected_configuration)
         require(entry == {
                     "directory": expected_root,
                     "file": source["path"],
@@ -1036,7 +1929,9 @@ def _validate_scope_build(
                          isinstance(source_identity, Mapping) else None),
                         (source_identity.get("tree")
                          if role == "candidate" and
-                         isinstance(source_identity, Mapping) else None)),
+                         isinstance(source_identity, Mapping) else None),
+                        semantics.get("effective_build_configuration"),
+                        selected_configuration),
                 } and
                 obj["path"] == f"{expected_root}/{expected_output}",
                 f"{role} normalized compiler argv/output {index} differs")
@@ -1065,7 +1960,7 @@ def _validate_scope_build(
     require(len(benchmark_pairs) == 1 and
             all(path.startswith(expected_root + "/") for path in objects),
             f"{role} normalized benchmark/build object closure differs")
-    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+    if compile_schema in (COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA):
         if baseline:
             require(semantics.get("generated_attestation_header") is None,
                     "baseline normalized build unexpectedly has an attestation")
@@ -1076,6 +1971,13 @@ def _validate_scope_build(
                 semantics, source_identity.get("head"),
                 source_identity.get("tree"),
                 "$CANDIDATE_BUILD", "$CANDIDATE_SOURCE")
+    if compile_schema == COMPILE_COMMANDS_SCHEMA:
+        if baseline:
+            require(semantics.get("effective_build_configuration") is None,
+                    "baseline normalized build has candidate configuration")
+        else:
+            _validate_normalized_build_configuration(
+                semantics, cache, "$CANDIDATE_BUILD", "$CANDIDATE_SOURCE")
     archive_pairs = [pair for pair in semantics["required_source_object_pairs"]
                      if pair not in benchmark_pairs]
     require(archive_pairs and
@@ -1085,7 +1987,22 @@ def _validate_scope_build(
                 for pair in archive_pairs),
             f"{role} normalized compile sources escape their source roots")
     members = build.get("validated_archive_members")
-    expected_members = [Path(name).name + ".o" for name in library_sources]
+    archive_source_order = library_sources
+    if selected_configuration and not baseline:
+        object_library_sources = (
+            "Leopard2BackendSSSE3.cpp",
+            "Leopard2BackendAVX2.cpp",
+            "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX512.cpp",
+            "Leopard2BackendGFNI.cpp",
+        )
+        archive_source_order = (
+            *object_library_sources,
+            *(name for name in library_sources
+              if name not in object_library_sources),
+        )
+    expected_members = [
+        Path(name).name + ".o" for name in archive_source_order]
     require(isinstance(members, list) and members == expected_members and
             len(members) == len(set(members)) and
             all(isinstance(member, str) and member and "/" not in member
@@ -1104,9 +2021,13 @@ def _validate_scope_build(
     executable_text = _validate_scope_text(
         build.get("executable_link_recipe_content"),
         f"{role} executable link recipe")
-    require(archive_text["size"] == build["archive_link_recipe"]["size"] and
-            archive_text["sha256"] == build["archive_link_recipe"]["sha256"] and
-            executable_text["size"] == build["executable_link_recipe"]["size"] and
+    if not selected_configuration:
+        require(
+            archive_text["size"] == build["archive_link_recipe"]["size"] and
+            archive_text["sha256"] ==
+                build["archive_link_recipe"]["sha256"] and
+            executable_text["size"] ==
+                build["executable_link_recipe"]["size"] and
             executable_text["sha256"] ==
                 build["executable_link_recipe"]["sha256"],
             f"{role} normalized retained link bytes differ from file identity")
@@ -1133,9 +2054,10 @@ def _validate_scope_build(
             len(archive_commands[0]) >= 4 and
             archive_commands[0][0] == tools["archiver"]["invocation"] and
             archive_commands[0][1] in {"qc", "rc", "rcs"} and
-            archive_commands[0][2] == archive_name and
+            archive_commands[0][2] == output_prefix + archive_name and
             archive_commands[0][3:] == expected_archive_objects and
-            archive_commands[1] == [tools["ranlib"]["invocation"], archive_name],
+            archive_commands[1] == [
+                tools["ranlib"]["invocation"], output_prefix + archive_name],
             f"{role} normalized archive recipe semantics differ")
     try:
         executable_tokens = common.parse_single_executable_recipe(
@@ -1155,11 +2077,23 @@ def _validate_scope_build(
         _validate_scope_artifact(
             record["artifact"],
             f"{role} normalized external-link artifact {index}")
+    semantic_archive_name = output_prefix + archive_name
+    semantic_executable_name = output_prefix + executable_name
+    semantic_tokens = executable_tokens
+    if selected_configuration:
+        semantic_tokens = [
+            archive_name if token == semantic_archive_name else
+            executable_name if token == semantic_executable_name else token
+            for token in executable_tokens
+        ]
+        semantic_archive_name = archive_name
+        semantic_executable_name = executable_name
     try:
         common.validate_executable_link_semantics(
-            executable_tokens,
+            semantic_tokens,
             compiler_invocation=compiler_invocation["invocation"],
-            archive_name=archive_name, executable_name=executable_name,
+            archive_name=semantic_archive_name,
+            executable_name=semantic_executable_name,
             benchmark_object=expected_benchmark_object,
             external_link_inputs=external_link_inputs,
             label=f"{role} normalized executable link recipe")
@@ -1513,15 +2447,37 @@ def selection_scope_from_verified_bundle(
         (baseline_build_root, "$BASELINE_BUILD"),
         (candidate_build_root, "$CANDIDATE_BUILD"),
     )
+    rich_scope = raw.get("schema") in {
+        EXACT_RAW_SCHEMA_V7, EXACT_RAW_SCHEMA}
+    tool_names = ["runner", "taskset", "ldd"]
+    if rich_scope:
+        tool_names.append("evidence_helper")
+    source_scope_keys = (
+        "path", "head", "tree", "detached",
+        "tracked_tree_listing_sha256", "tracked_status", "commit_object",
+    )
+    # v8 carries the complete recursive Git/tree proof.  The producer verifies
+    # that proof before returning the bundle; the selection scope intentionally
+    # projects only its mathematical source identity so path-local Git metadata
+    # and guard implementation details do not make otherwise identical gate
+    # campaigns incomparable.  The complete manifest snapshot remains retained.
+    baseline_source_scope = {
+        key: baseline_source[key] for key in source_scope_keys}
+    candidate_source_scope = {
+        key: candidate_source[key] for key in source_scope_keys}
     scope = {
-        "schema": "leopard2-balanced-evidence-scope/v3",
+        "schema": (
+            EVIDENCE_SCOPE_SCHEMA if rich_scope
+            else EVIDENCE_SCOPE_SCHEMA_V3),
         # Retain the exact pinned CPU pair.  This is intentionally stricter than
         # topology cardinality: the current evidence format lacks cache/NUMA and
         # heterogeneous-core descriptors needed to equate different pairs.
         "host": _normalize_bound_paths(host, replacements),
         "sources": {
-            "baseline": _normalize_bound_paths(baseline_source, replacements),
-            "candidate": _normalize_bound_paths(candidate_source, replacements),
+            "baseline": _normalize_bound_paths(
+                baseline_source_scope, replacements),
+            "candidate": _normalize_bound_paths(
+                candidate_source_scope, replacements),
         },
         "builds": {
             "baseline": _normalize_bound_paths(baseline_build, replacements),
@@ -1541,7 +2497,7 @@ def selection_scope_from_verified_bundle(
         },
         "tools": {
             key: _normalize_bound_paths(identities.get(key), replacements)
-            for key in ("runner", "taskset", "ldd")
+            for key in tool_names
         },
         "resolved_auto_backend": resolved_backend,
         "forced_confirmation_backends": list(
@@ -1552,12 +2508,13 @@ def selection_scope_from_verified_bundle(
 
 
 def validate_evidence_scope(scope: object) -> dict[str, Any]:
+    scope_schema = scope.get("schema") if isinstance(scope, dict) else None
     require(isinstance(scope, dict) and set(scope) == {
         "schema", "host", "sources", "builds", "artifacts",
         "runtime_closures", "tools",
         "resolved_auto_backend", "forced_confirmation_backends",
         "excluded_backends",
-    } and scope.get("schema") == "leopard2-balanced-evidence-scope/v3",
+    } and scope_schema in {EVIDENCE_SCOPE_SCHEMA_V3, EVIDENCE_SCOPE_SCHEMA},
             "gate evidence scope shape differs")
     backend = scope.get("resolved_auto_backend")
     require(backend in CAMPAIGN_BACKENDS and
@@ -1585,7 +2542,13 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
     candidate_compile = builds["candidate"]["validated_compile_commands"]
     require(baseline_compile["schema"] == candidate_compile["schema"],
             "gate evidence compile-command schema differs between roles")
-    if candidate_compile["schema"] == COMPILE_COMMANDS_SCHEMA:
+    require(
+        (scope_schema == EVIDENCE_SCOPE_SCHEMA) ==
+            (candidate_compile["schema"] == COMPILE_COMMANDS_SCHEMA),
+        "gate evidence scope schema differs from its compile-command schema")
+    if candidate_compile["schema"] in (
+        COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA,
+    ):
         attestation = candidate_compile["generated_attestation_header"]
         require(attestation["source_commit"] == sources["candidate"]["head"] and
                 attestation["source_tree"] == sources["candidate"]["tree"] and
@@ -1596,6 +2559,16 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             builds["baseline"]["compiler_version_stdout"] ==
                 builds["candidate"]["compiler_version_stdout"],
             "gate evidence baseline/candidate compiler identity differs")
+    if scope_schema == EVIDENCE_SCOPE_SCHEMA:
+        require(
+            builds["baseline"]["multi_config_build_tool"] ==
+                builds["candidate"]["multi_config_build_tool"] and
+            builds["baseline"][
+                "multi_config_build_tool_version_stdout"] ==
+                builds["candidate"][
+                    "multi_config_build_tool_version_stdout"],
+            "gate evidence baseline/candidate multi-config build-tool "
+            "identity differs")
     require(builds["baseline"]["validated_external_link_inputs"] ==
                 builds["candidate"]["validated_external_link_inputs"],
             "gate evidence baseline/candidate external link inputs differ")
@@ -1626,12 +2599,31 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             closures["candidate"]["executable"] ==
                 artifacts["candidate_executable"].get("path"),
             "gate evidence runtime closure names a different executable")
-    require(isinstance(tools, dict) and set(tools) == {"runner", "taskset", "ldd"},
+    expected_tools = {"runner", "taskset", "ldd"}
+    if scope_schema == EVIDENCE_SCOPE_SCHEMA:
+        expected_tools.add("evidence_helper")
+    require(isinstance(tools, dict) and set(tools) == expected_tools,
             "gate evidence tool scope shape differs")
     for key, tool in tools.items():
         _validate_scope_artifact(
-            tool, key, "file" if key == "runner" else "executable")
+            tool, key,
+            "file" if key in {"runner", "evidence_helper"} else "executable")
+    if scope_schema == EVIDENCE_SCOPE_SCHEMA:
+        require(
+            tools["evidence_helper"]["path"] ==
+                f"$CANDIDATE_SOURCE/{EVIDENCE_HELPER_RELATIVE_PATH}",
+            "gate evidence helper is not bound to the candidate source")
     return scope
+
+
+def _validate_exact_schema_pair(
+    manifest: Mapping[str, Any], raw: Mapping[str, Any],
+) -> None:
+    """Reject coherent-looking cross-version or downgraded evidence pairs."""
+    pair = (manifest.get("schema"), raw.get("schema"))
+    require(pair in EXACT_SCHEMA_PAIRS,
+            "exact-main manifest/raw schema versions do not form one "
+            "supported evidence contract")
 
 
 def verify_exact_manifest(
@@ -1647,6 +2639,9 @@ def verify_exact_manifest(
             document.get("schema") in EXACT_MANIFEST_SCHEMAS and
             document.get("valid") is True,
             f"exact-main manifest is not a supported complete schema: {path}")
+    require(isinstance(raw, dict),
+            f"exact-main raw bundle is not an object: {path}")
+    _validate_exact_schema_pair(document, raw)
     require(isinstance(snapshot, dict) and set(snapshot) == {"size", "sha256"} and
             type(snapshot.get("size")) is int and snapshot["size"] > 0 and
             isinstance(snapshot.get("sha256"), str) and
@@ -1758,7 +2753,9 @@ def derive_survivors(plan_root: Path, manifests: list[dict[str, Any]],
                         result.get("ratio_orientation") ==
                             "baseline_time_over_candidate_time",
                         "gate analysis metric is invalid")
-                lower[metric] = float(result["ci95_lower"])
+                lower[metric] = finite_number(
+                    result["ci95_lower"],
+                    f"gate analysis {cell['identifier']} {metric} CI lower")
             evaluated.append({
                 **cell, "ci95_lower": lower,
                 "passes_gate": all(value >= PROMOTION_GATE for value in lower.values()),
@@ -2191,7 +3188,7 @@ def load_exact_main_runner() -> Any:
 def canonical_candidate_build_identity(
     source_root: Path, candidate_commit: str, binary_relative: str
 ) -> dict[str, Any]:
-    """Run the exact-main schema-v5+ compile/archive/link semantic validator."""
+    """Run the current exact-main compile/archive/link semantic validator."""
     source_root = source_root.resolve(strict=True)
     relative = Path(binary_relative)
     require(not relative.is_absolute() and ".." not in relative.parts,
@@ -2237,8 +3234,8 @@ def canonical_candidate_build_identity(
     )
     require(isinstance(normalized, dict), "canonical build scope is invalid")
     return {
-        "schema": "leopard2-canonical-production-build/v1",
-        "validator": "exact-main/run_abba.py build_provenance schema v5",
+        "schema": CANONICAL_PRODUCTION_BUILD_SCHEMA,
+        "validator": CANONICAL_BUILD_VALIDATOR,
         "provenance": normalized,
         "provenance_sha256": canonical_sha256(normalized),
     }
@@ -2459,7 +3456,8 @@ def validate_attestation_output(document: object, case: dict[str, Any],
     require(isinstance(digests, dict) and set(digests) == {
         "algorithm", "original_data", "transmitted_parity", "recovered_originals",
     } and digests.get("algorithm") == "fnv1a64" and all(
-        re.fullmatch(r"[0-9a-f]{16}", str(digests.get(key))) is not None
+        type(digests.get(key)) is str and
+        re.fullmatch(r"[0-9a-f]{16}", digests[key]) is not None
         for key in ("original_data", "transmitted_parity", "recovered_originals")),
         f"attestation workload digests differ for {cell['identifier']}")
     memory = document.get("memory")
@@ -2539,10 +3537,419 @@ def attestation_identities(source_root: Path, candidate_commit: str,
     return source, build, collector
 
 
+def load_balanced_analyzer() -> Any:
+    path = Path(__file__).resolve().parents[3] / BALANCED_ANALYZER_RELATIVE_PATH
+    specification = importlib.util.spec_from_file_location(
+        "leopard2_balanced_promotion_analyzer", path)
+    require(specification is not None and specification.loader is not None,
+            "cannot load balanced evidence analyzer")
+    module = importlib.util.module_from_spec(specification)
+    sys.modules[specification.name] = module
+    specification.loader.exec_module(module)
+    return module
+
+
+def _timing_manifest_reference(
+    path: Path, snapshot: bytes, payload_digest: str,
+) -> dict[str, Any]:
+    require(re.fullmatch(r"[0-9a-f]{64}", payload_digest) is not None,
+            "timing evidence payload digest is invalid")
+    return {
+        "path": str(path), "size": len(snapshot),
+        "sha256": hashlib.sha256(snapshot).hexdigest(),
+        "payload_digest": payload_digest,
+    }
+
+
+def _exact_campaign_matches(
+    document: dict[str, Any], campaign: Mapping[str, Any],
+) -> bool:
+    expected_cells = [{
+        "identifier": cell["identifier"], "k": cell["K"], "r": cell["R"],
+        "shard_bytes": cell["shard_bytes"], "losses": cell["loss_count"],
+        "seed": cell["seed"],
+    } for cell in document["cells"]]
+    return (
+        campaign.get("candidate_mode") == document["candidate_mode"] and
+        campaign.get("batch") == 1 and
+        campaign.get("reuse") == document["reuse"] and
+        campaign.get("iterations") == document["iterations"] and
+        campaign.get("warmup") == document["warmup"] and
+        campaign.get("threads") == 1 and campaign.get("rounds") == 3 and
+        campaign.get("order") == list(EXACT_ORDER) and
+        campaign.get("cells") == expected_cells
+    )
+
+
+def derive_promotion_timing_evidence(
+    stage_root: Path,
+    forced_manifest_paths: list[Path],
+    exact_manifest_paths: list[Path],
+    source: Mapping[str, Any],
+    build: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Authenticate every timing artifact required by one promotion stage."""
+    stage = unsigned(load_json(stage_root / "stage.json"), STAGE_SCHEMA, "stage")
+    survivor = unsigned(
+        load_json(stage_root / "survivors.json"), SURVIVOR_SCHEMA,
+        "survivor set")
+    require(source.get("head") == stage["candidate_commit"] and
+            source.get("tree") == survivor["evidence_scope"]["sources"][
+                "candidate"]["tree"],
+            "promotion timing source differs from the attested candidate")
+    artifact_closure = build.get("artifact_closure")
+    require(isinstance(artifact_closure, Mapping),
+            "promotion timing build closure is absent")
+
+    forced_expected: dict[str, dict[str, Any]] = {}
+    exact_expected: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    for artifact_value in stage["artifacts"]:
+        kind = artifact_value["kind"]
+        if kind in {"forced_surviving_cells", "forced_non_aligned_tail"}:
+            require(artifact_value["sha256"] not in forced_expected,
+                    "forced timing stage artifact digest is duplicated")
+            forced_expected[artifact_value["sha256"]] = artifact_value
+        elif kind in {
+            "exact_main_aligned_confirmation",
+            "exact_main_rejection_timing",
+        }:
+            document = validate_main_document(
+                load_json(stage_root / artifact_value["path"]),
+                artifact_value["path"])
+            exact_expected.append((artifact_value, document))
+
+    require(len(forced_manifest_paths) == len(forced_expected) and
+            len(exact_manifest_paths) == len(exact_expected),
+            "promotion timing manifest count does not cover the stage")
+    analyzer = load_balanced_analyzer()
+    forced_records: list[dict[str, Any]] = []
+    seen_forced: set[str] = set()
+    for supplied in forced_manifest_paths:
+        path = supplied.absolute()
+        before = stable_regular_file_bytes(
+            path, MAX_JSON_DOCUMENT_BYTES, f"forced timing manifest {path}")
+        try:
+            summary = analyzer.analyze(path)
+        except Exception as error:
+            raise PlanError(
+                f"forced timing analyzer rejected {path}: {error}") from error
+        after = stable_regular_file_bytes(
+            path, MAX_JSON_DOCUMENT_BYTES, f"forced timing manifest {path}")
+        require(before == after and isinstance(summary, dict) and
+                summary.get("schema") == common.SUMMARY_SCHEMA,
+                f"forced timing manifest changed or has wrong schema: {path}")
+        summary_unsigned = dict(summary)
+        summary_digest = summary_unsigned.pop("content_sha256", None)
+        require(isinstance(summary_digest, str) and
+                canonical_sha256(summary_unsigned) == summary_digest and
+                summary.get("source_manifest_sha256") ==
+                    hashlib.sha256(before).hexdigest(),
+                f"forced timing summary identity differs: {path}")
+        matrix = summary.get("matrix")
+        require(isinstance(matrix, dict) and
+                type(matrix.get("size")) is int and
+                isinstance(matrix.get("sha256"), str),
+                f"forced timing matrix identity differs: {path}")
+        expected = forced_expected.get(matrix["sha256"])
+        require(expected is not None and
+                matrix["size"] == expected["size"] and
+                matrix["sha256"] not in seen_forced,
+                f"forced timing matrix is missing, duplicated, or extra: {path}")
+        seen_forced.add(matrix["sha256"])
+        summary_source = summary.get("source")
+        summary_build = summary.get("build")
+        require(isinstance(summary_source, Mapping) and
+                summary_source.get("head") == source["head"] and
+                summary_source.get("tree") == source["tree"] and
+                summary_source.get("status") == "clean" and
+                isinstance(summary_build, Mapping) and all(
+                    isinstance(summary_build.get(name), Mapping) and
+                    summary_build[name].get("sha256") ==
+                        artifact_closure[name]["sha256"]
+                    for name in ("archive", "binary")),
+                f"forced timing source/build differs from attestation: {path}")
+        cells = summary.get("cells")
+        require(isinstance(cells, list) and
+                len(cells) == expected["case_count"],
+                f"forced timing cell set differs: {path}")
+        maximum_upper = -math.inf
+        for cell_index, cell in enumerate(cells):
+            require(isinstance(cell, Mapping) and
+                    isinstance(cell.get("decode_execution"), Mapping),
+                    f"forced timing cell {cell_index} differs: {path}")
+            decode = cell["decode_execution"]
+            finite_number(
+                decode.get("geometric_control_over_candidate"),
+                f"forced timing {path} cell {cell_index} decode ratio",
+                positive=True)
+            upper_percent = finite_real(
+                decode.get("ci95_upper_percent"),
+                f"forced timing {path} cell {cell_index} upper CI percent")
+            upper = 1.0 + upper_percent / 100.0
+            require(math.isfinite(upper) and upper > 0,
+                    f"forced timing {path} cell {cell_index} upper CI is invalid")
+            maximum_upper = max(maximum_upper, upper)
+        if expected["kind"] == "forced_surviving_cells":
+            require(maximum_upper <= FORCED_SURVIVOR_MAXIMUM_RATIO,
+                    f"forced survivor generic path exceeds the 2% "
+                    f"same-binary regression limit: {path}")
+        forced_records.append({
+            "stage_artifact": {
+                "path": expected["path"], "kind": expected["kind"],
+                "size": expected["size"], "sha256": expected["sha256"],
+            },
+            "manifest": _timing_manifest_reference(
+                path, before, hashlib.sha256(before).hexdigest()),
+            "summary_content_sha256": summary_digest,
+            "maximum_decode_ci95_upper": maximum_upper,
+        })
+    require(seen_forced == set(forced_expected),
+            "forced timing evidence does not cover every stage artifact")
+
+    exact_records: list[dict[str, Any]] = []
+    seen_exact: set[str] = set()
+    minimum_lower = math.inf
+    for supplied in exact_manifest_paths:
+        path = supplied.absolute()
+        snapshot_bytes = stable_regular_file_bytes(
+            path, MAX_JSON_DOCUMENT_BYTES, f"exact timing manifest {path}")
+        manifest, scope, snapshot = verify_exact_manifest(path)
+        require(snapshot == {
+                    "size": len(snapshot_bytes),
+                    "sha256": hashlib.sha256(snapshot_bytes).hexdigest(),
+                } and scope == survivor["evidence_scope"],
+                f"exact timing scope/snapshot differs: {path}")
+        campaign = manifest.get("campaign")
+        require(isinstance(campaign, Mapping),
+                f"exact timing campaign is absent: {path}")
+        matches = [
+            (artifact_value, document)
+            for artifact_value, document in exact_expected
+            if artifact_value["sha256"] not in seen_exact and
+               _exact_campaign_matches(document, campaign)
+        ]
+        require(len(matches) == 1,
+                f"exact timing manifest is missing, duplicated, or extra: {path}")
+        artifact_value, document = matches[0]
+        seen_exact.add(artifact_value["sha256"])
+        identities = manifest.get("identities")
+        require(isinstance(identities, Mapping) and
+                identities.get("candidate_source", {}).get("head") ==
+                    source["head"] and all(
+                    isinstance(identities.get(name), Mapping) and
+                    identities[name].get("sha256") ==
+                        artifact_closure[closure_name]["sha256"]
+                    for name, closure_name in (
+                        ("candidate_archive", "archive"),
+                        ("candidate_executable", "binary"))),
+                f"exact timing candidate source/build differs: {path}")
+        analysis = manifest.get("analysis")
+        require(isinstance(analysis, Mapping) and
+                set(analysis) == {
+                    cell["identifier"] for cell in document["cells"]},
+                f"exact timing analysis cell set differs: {path}")
+        artifact_minimum = math.inf
+        for cell in document["cells"]:
+            metrics = analysis[cell["identifier"]]
+            require(isinstance(metrics, Mapping),
+                    f"exact timing metrics are absent: {path}")
+            for metric in ("decode_first_use", "decode_reuse_amortized"):
+                value = metrics.get(metric)
+                require(isinstance(value, Mapping) and
+                        value.get("ratio_orientation") ==
+                            "baseline_time_over_candidate_time",
+                        f"exact timing metric orientation differs: {path}")
+                lower = finite_number(
+                    value.get("ci95_lower"),
+                    f"exact timing {cell['identifier']} {metric} CI lower",
+                    positive=True)
+                artifact_minimum = min(artifact_minimum, lower)
+        require(artifact_minimum >= 1.0 - NEIGHBOR_MAXIMUM_REGRESSION,
+                f"exact timing exceeds the 2% neighbor regression limit: {path}")
+        minimum_lower = min(minimum_lower, artifact_minimum)
+        payload_digest = manifest.get("digest")
+        require(isinstance(payload_digest, str),
+                f"exact timing payload digest is absent: {path}")
+        exact_records.append({
+            "stage_artifact": {
+                "path": artifact_value["path"], "kind": artifact_value["kind"],
+                "size": artifact_value["size"],
+                "sha256": artifact_value["sha256"],
+            },
+            "manifest": _timing_manifest_reference(
+                path, snapshot_bytes, payload_digest),
+            "minimum_decode_ci95_lower": artifact_minimum,
+        })
+    require(seen_exact == {
+                artifact_value["sha256"]
+                for artifact_value, _document in exact_expected},
+            "exact timing evidence does not cover every stage artifact")
+    survivor_forced_uppers = [
+        record["maximum_decode_ci95_upper"] for record in forced_records
+        if record["stage_artifact"]["kind"] == "forced_surviving_cells"
+    ]
+    require(survivor_forced_uppers,
+            "promotion stage has no same-binary survivor timing evidence")
+    return signed({
+        "schema": PROMOTION_TIMING_SCHEMA,
+        "candidate_commit": stage["candidate_commit"],
+        "stage_content_sha256": (
+            load_json(stage_root / "stage.json"))["content_sha256"],
+        "neighbor_maximum_regression": NEIGHBOR_MAXIMUM_REGRESSION,
+        "maximum_forced_survivor_decode_ci95_upper":
+            max(survivor_forced_uppers),
+        "minimum_exact_decode_ci95_lower": minimum_lower,
+        "forced_results": sorted(
+            forced_records, key=lambda item: item["stage_artifact"]["path"]),
+        "exact_main_results": sorted(
+            exact_records, key=lambda item: item["stage_artifact"]["path"]),
+    })
+
+
+def validate_promotion_timing_shape(
+    stage_root: Path,
+    retained: object,
+) -> dict[str, Any]:
+    value = unsigned(retained, PROMOTION_TIMING_SCHEMA, "promotion timing")
+    require(set(value) == {
+        "schema", "candidate_commit", "stage_content_sha256",
+        "neighbor_maximum_regression",
+        "maximum_forced_survivor_decode_ci95_upper",
+        "minimum_exact_decode_ci95_lower",
+        "forced_results", "exact_main_results",
+    }, "promotion timing fields differ")
+    stage_signed = load_json(stage_root / "stage.json")
+    stage = unsigned(stage_signed, STAGE_SCHEMA, "stage")
+    require(value["candidate_commit"] == stage["candidate_commit"] and
+            value["stage_content_sha256"] == stage_signed["content_sha256"] and
+            type(value["neighbor_maximum_regression"]) is float and
+            value["neighbor_maximum_regression"] ==
+                NEIGHBOR_MAXIMUM_REGRESSION,
+            "promotion timing stage/threshold identity differs")
+    forced = value.get("forced_results")
+    exact = value.get("exact_main_results")
+    require(isinstance(forced, list) and isinstance(exact, list),
+            "promotion timing result lists are invalid")
+    expected = {
+        (item["path"], item["kind"], item["size"], item["sha256"])
+        for item in stage["artifacts"]
+        if item["kind"] in {
+            "forced_surviving_cells", "forced_non_aligned_tail",
+            "exact_main_aligned_confirmation",
+            "exact_main_rejection_timing",
+        }
+    }
+    observed: set[tuple[object, ...]] = set()
+    exact_lowers: list[float] = []
+    forced_survivor_uppers: list[float] = []
+    for label, records, exact_records in (
+        ("forced", forced, False), ("exact", exact, True),
+    ):
+        for index, item in enumerate(records):
+            required = {
+                "stage_artifact", "manifest",
+                ("minimum_decode_ci95_lower" if exact_records else
+                 "summary_content_sha256"),
+            }
+            if not exact_records:
+                required.add("maximum_decode_ci95_upper")
+            require(isinstance(item, Mapping) and set(item) == required and
+                    isinstance(item.get("stage_artifact"), Mapping) and
+                    set(item["stage_artifact"]) ==
+                        {"path", "kind", "size", "sha256"} and
+                    isinstance(item.get("manifest"), Mapping) and
+                    set(item["manifest"]) ==
+                        {"path", "size", "sha256", "payload_digest"},
+                    f"promotion {label} timing record {index} differs")
+            artifact_key = tuple(item["stage_artifact"][name] for name in (
+                "path", "kind", "size", "sha256"))
+            require(artifact_key in expected and artifact_key not in observed,
+                    f"promotion {label} timing artifact is extra or duplicated")
+            expected_kinds = (
+                {"exact_main_aligned_confirmation",
+                 "exact_main_rejection_timing"} if exact_records else
+                {"forced_surviving_cells", "forced_non_aligned_tail"})
+            require(item["stage_artifact"]["kind"] in expected_kinds,
+                    f"promotion {label} timing artifact has the wrong kind")
+            observed.add(artifact_key)
+            reference = item["manifest"]
+            require(isinstance(reference["path"], str) and
+                    Path(reference["path"]).is_absolute() and
+                    type(reference["size"]) is int and reference["size"] > 0 and
+                    all(isinstance(reference[name], str) and
+                        re.fullmatch(r"[0-9a-f]{64}", reference[name]) is not None
+                        for name in ("sha256", "payload_digest")),
+                    f"promotion {label} timing manifest reference differs")
+            if exact_records:
+                lower = finite_number(
+                    item["minimum_decode_ci95_lower"],
+                    f"promotion exact timing record {index} minimum",
+                    positive=True)
+                require(lower >= 0.98,
+                        "promotion exact timing exceeds the 2% regression limit")
+                exact_lowers.append(lower)
+            else:
+                require(isinstance(item["summary_content_sha256"], str) and
+                        re.fullmatch(
+                            r"[0-9a-f]{64}",
+                            item["summary_content_sha256"]) is not None,
+                        "promotion forced timing summary digest differs")
+                upper = finite_number(
+                    item["maximum_decode_ci95_upper"],
+                    f"promotion forced timing record {index} maximum",
+                    positive=True)
+                if item["stage_artifact"]["kind"] == \
+                        "forced_surviving_cells":
+                    require(upper <= FORCED_SURVIVOR_MAXIMUM_RATIO,
+                            "promotion forced survivor timing exceeds the 2% "
+                            "same-binary regression limit")
+                    forced_survivor_uppers.append(upper)
+    require(observed == expected and exact_lowers and
+            forced_survivor_uppers and
+            finite_number(
+                value["maximum_forced_survivor_decode_ci95_upper"],
+                "promotion maximum forced survivor timing", positive=True) ==
+                max(forced_survivor_uppers) and
+            finite_number(
+                value["minimum_exact_decode_ci95_lower"],
+                "promotion minimum exact timing", positive=True) ==
+                min(exact_lowers),
+            "promotion timing evidence does not exactly cover the stage")
+    return value
+
+
+def validate_promotion_timing_evidence(
+    stage_root: Path,
+    retained: object,
+    source: Mapping[str, Any],
+    build: Mapping[str, Any],
+) -> dict[str, Any]:
+    value = validate_promotion_timing_shape(stage_root, retained)
+    forced = value["forced_results"]
+    exact = value["exact_main_results"]
+    forced_paths = [
+        Path(item["manifest"]["path"]) for item in forced
+        if isinstance(item, Mapping) and isinstance(item.get("manifest"), Mapping)
+    ]
+    exact_paths = [
+        Path(item["manifest"]["path"]) for item in exact
+        if isinstance(item, Mapping) and isinstance(item.get("manifest"), Mapping)
+    ]
+    require(len(forced_paths) == len(forced) and len(exact_paths) == len(exact),
+            "promotion timing manifest references are malformed")
+    expected = derive_promotion_timing_evidence(
+        stage_root, forced_paths, exact_paths, source, build)
+    require(canonical_bytes(retained) == canonical_bytes(expected),
+            "promotion timing evidence is not the deterministic verified result")
+    return value
+
+
 def derive_attestation_result(
     stage_root: Path, source: dict[str, Any], build: dict[str, Any],
     collector: dict[str, Any], raw_documents: dict[str, object],
     raw_artifacts: dict[str, dict[str, Any]],
+    timing_evidence: dict[str, Any] | None,
+    *, result_schema: str = ATTESTATION_RESULT_SCHEMA,
 ) -> dict[str, Any]:
     stage_signed = load_json(stage_root / "stage.json")
     stage = unsigned(stage_signed, STAGE_SCHEMA, "stage")
@@ -2567,6 +3974,16 @@ def derive_attestation_result(
             source.get("status") == "clean" and
             source.get("status_sha256") == common.EMPTY_SHA256,
             "attestation source is not the exact clean candidate commit")
+    require(isinstance(result_schema, str) and result_schema in {
+                ATTESTATION_RESULT_SCHEMA_V5, ATTESTATION_RESULT_SCHEMA},
+            "attestation result schema is unsupported")
+    if result_schema == ATTESTATION_RESULT_SCHEMA:
+        require(timing_evidence is not None,
+                "current attestation result requires promotion timing evidence")
+        validate_promotion_timing_shape(stage_root, timing_evidence)
+    else:
+        require(timing_evidence is None,
+                "historical attestation result cannot contain current timing evidence")
     require(isinstance(build, dict) and set(build) == {
         "artifact_closure", "canonical_production",
     }, "attestation benchmark build identity shape differs")
@@ -2580,9 +3997,8 @@ def derive_attestation_result(
             set(artifacts["objects"]) == {"benchmark", "decoder"} and
             isinstance(canonical, dict) and set(canonical) == {
                 "schema", "validator", "provenance", "provenance_sha256",
-            } and canonical["schema"] == "leopard2-canonical-production-build/v1" and
-            canonical["validator"] ==
-                "exact-main/run_abba.py build_provenance schema v5" and
+            } and canonical["schema"] == CANONICAL_PRODUCTION_BUILD_SCHEMA and
+            canonical["validator"] == CANONICAL_BUILD_VALIDATOR and
             isinstance(canonical["provenance"], dict) and
             canonical_sha256(canonical["provenance"]) ==
                 canonical["provenance_sha256"] and
@@ -2611,6 +4027,9 @@ def derive_attestation_result(
     _validate_normalized_benchmark_attestation(
         canonical["provenance"]["validated_compile_commands"],
         source["head"], source["tree"], "$BUILD", "$SOURCE")
+    _validate_normalized_build_configuration(
+        canonical["provenance"]["validated_compile_commands"],
+        canonical["provenance"]["validated_cache"], "$BUILD", "$SOURCE")
     for label, identity in [
         ("CMake cache", artifacts["cache"]),
         ("build graph", artifacts["graph"]),
@@ -2624,7 +4043,8 @@ def derive_attestation_result(
             "relative_path", "sha256", "size", "mode",
         } and (identity["relative_path"] is None or
                isinstance(identity["relative_path"], str)) and
-                re.fullmatch(r"[0-9a-f]{64}", str(identity["sha256"])) is not None and
+                isinstance(identity["sha256"], str) and
+                re.fullmatch(r"[0-9a-f]{64}", identity["sha256"]) is not None and
                 type(identity["size"]) is int and identity["size"] >= 0 and
                 type(identity["mode"]) is int and identity["mode"] >= 0,
                 f"attestation {label} identity differs")
@@ -2647,14 +4067,15 @@ def derive_attestation_result(
             "path", "size", "sha256",
         } and isinstance(artifact_value["path"], str) and
                 type(artifact_value["size"]) is int and artifact_value["size"] > 0 and
+                isinstance(artifact_value["sha256"], str) and
                 re.fullmatch(r"[0-9a-f]{64}",
-                             str(artifact_value["sha256"])) is not None,
+                             artifact_value["sha256"]) is not None,
                 f"attestation raw artifact differs for {identifier}")
         records.append({
             "identifier": identifier, "raw": artifact_value, **observed,
         })
-    return signed({
-        "schema": ATTESTATION_RESULT_SCHEMA, "status": "complete", "valid": True,
+    payload = {
+        "schema": result_schema, "status": "complete", "valid": True,
         "plan_content_sha256": stage["plan_content_sha256"],
         "stage_content_sha256": stage_signed["content_sha256"],
         "survivor_content_sha256": stage["survivor_content_sha256"],
@@ -2662,8 +4083,12 @@ def derive_attestation_result(
         "candidate_commit": stage["candidate_commit"],
         "resolved_backend": resolved_backend,
         "source_identity": source, "build_identity": build,
-        "collector_identity": collector, "records": records,
-    })
+        "collector_identity": collector,
+        "records": records,
+    }
+    if result_schema == ATTESTATION_RESULT_SCHEMA:
+        payload["promotion_timing_evidence"] = timing_evidence
+    return signed(payload)
 
 
 def output_is_ignored(path: Path, source_root: Path) -> None:
@@ -2671,15 +4096,22 @@ def output_is_ignored(path: Path, source_root: Path) -> None:
         path.resolve().relative_to(source_root.resolve())
     except ValueError:
         return
-    completed = subprocess.run(
-        ["git", "-C", str(source_root), "check-ignore", "-q", str(path)],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    try:
+        completed = load_exact_main_runner().run_process_bounded(
+            ["git", "-C", str(source_root), "check-ignore", "-q", str(path)],
+            timeout=30.0, max_stdout=64 * 1024, max_stderr=64 * 1024)
+    except Exception as error:
+        raise PlanError(
+            f"cannot verify whether attestation output is ignored: {error}") \
+            from error
     require(completed.returncode == 0,
             "attestation output inside source root must be ignored by Git")
 
 
 def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
-                        binary_relative: str, output: Path) -> dict[str, Any]:
+                        binary_relative: str, output: Path,
+                        forced_manifest_paths: list[Path],
+                        exact_manifest_paths: list[Path]) -> dict[str, Any]:
     stage = validate_stage(plan_root, stage_root)
     candidate_commit = stage["candidate_commit"]
     relative = Path(binary_relative)
@@ -2690,9 +4122,21 @@ def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
     require(not output.exists(), f"refusing to replace attestation output {output}")
     output_is_ignored(output, source_root)
     binary = source_root / relative
-    common.refresh_build(binary)
+    try:
+        build_root = common.find_build_root(binary)
+        refresh = load_exact_main_runner().run_process_bounded(
+            ["cmake", "--build", str(build_root), "--target",
+             "bench_leopard2", "-j", "1"],
+            timeout=600.0, max_stdout=8 * 1024 * 1024,
+            max_stderr=8 * 1024 * 1024)
+    except Exception as error:
+        raise PlanError(f"attestation benchmark refresh failed: {error}") from error
+    require(refresh.returncode == 0,
+            "attestation benchmark refresh returned failure")
     source, build, collector = attestation_identities(
         source_root, candidate_commit, binary_relative)
+    timing_evidence = derive_promotion_timing_evidence(
+        stage_root, forced_manifest_paths, exact_manifest_paths, source, build)
     output.mkdir(parents=True)
     raw_root = output / "raw"
     raw_root.mkdir()
@@ -2707,18 +4151,29 @@ def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
             str(result_path) if item == "OUTPUT" else item
             for item in case["benchmark_arguments"]
         ]
-        completed = subprocess.run(
-            arguments, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        try:
+            completed = load_exact_main_runner().run_process_bounded(
+                arguments, timeout=300.0, max_stdout=1024 * 1024,
+                max_stderr=1024 * 1024)
+        except Exception as error:
+            raise PlanError(
+                f"attestation benchmark supervision failed for "
+                f"{identifier}: {error}") from error
         require(completed.returncode == 0 and not completed.stdout and
-                not completed.stderr and result_path.is_file(),
+                not completed.stderr,
                 f"attestation benchmark failed for {identifier}")
-        document = load_json(result_path)
+        snapshot = stable_regular_file_bytes(
+            result_path, MAX_JSON_DOCUMENT_BYTES,
+            f"attestation benchmark result {identifier}")
+        document = decode_json_bytes(
+            snapshot, f"attestation benchmark result {identifier}")
         validate_attestation_output(
             document, case, spec["expected_resolved_backend"])
         raw_documents[identifier] = document
         raw_artifacts[identifier] = {
             "path": str(result_path.relative_to(output)),
-            "size": result_path.stat().st_size, "sha256": file_sha256(result_path),
+            "size": len(snapshot),
+            "sha256": hashlib.sha256(snapshot).hexdigest(),
         }
     final_source, final_build, final_collector = attestation_identities(
         source_root, candidate_commit, binary_relative)
@@ -2726,7 +4181,8 @@ def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
             (final_source, final_build, final_collector),
             "attestation source or benchmark identity changed during collection")
     result = derive_attestation_result(
-        stage_root, source, build, collector, raw_documents, raw_artifacts)
+        stage_root, source, build, collector, raw_documents, raw_artifacts,
+        timing_evidence)
     write_json(output / "manifest.json", result)
     return result
 
@@ -2734,23 +4190,54 @@ def collect_attestation(plan_root: Path, stage_root: Path, source_root: Path,
 def validate_attestation_result_files(
     stage_root: Path, manifest_path: Path, source: dict[str, Any],
     build: dict[str, Any], collector: dict[str, Any],
+    *, verified_timing_evidence: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     stage = unsigned(load_json(stage_root / "stage.json"), STAGE_SCHEMA, "stage")
-    root = manifest_path.resolve(strict=True).parent
+    manifest_path = manifest_path.absolute()
     retained = load_json(manifest_path)
-    value = unsigned(retained, ATTESTATION_RESULT_SCHEMA, "attestation result")
-    require(set(value) == {
+    require(isinstance(retained, dict), "attestation result is not an object")
+    result_schema = retained.get("schema")
+    require(isinstance(result_schema, str) and result_schema in {
+                ATTESTATION_RESULT_SCHEMA_V5, ATTESTATION_RESULT_SCHEMA},
+            "attestation result schema differs")
+    value = unsigned(retained, result_schema, "attestation result")
+    expected_fields = {
         "schema", "status", "valid", "plan_content_sha256",
         "stage_content_sha256", "survivor_content_sha256",
         "attestation_content_sha256", "candidate_commit", "resolved_backend",
-        "source_identity", "build_identity", "collector_identity", "records",
-    } and value["status"] == "complete" and value["valid"] is True and
+        "source_identity", "build_identity", "collector_identity",
+        "records",
+    }
+    if result_schema == ATTESTATION_RESULT_SCHEMA:
+        expected_fields.add("promotion_timing_evidence")
+    require(set(value) == expected_fields and
+            value["status"] == "complete" and value["valid"] is True and
             value["candidate_commit"] == stage["candidate_commit"],
             "attestation result identity differs")
     require(value["source_identity"] == source and
             value["build_identity"] == build and
             value["collector_identity"] == collector,
             "attestation live source or benchmark identity differs")
+    timing_evidence: dict[str, Any] | None = None
+    if result_schema == ATTESTATION_RESULT_SCHEMA:
+        if verified_timing_evidence is None:
+            validate_promotion_timing_evidence(
+                stage_root, value["promotion_timing_evidence"], source, build)
+        else:
+            validate_promotion_timing_shape(
+                stage_root, verified_timing_evidence)
+            require(canonical_bytes(value["promotion_timing_evidence"]) ==
+                    canonical_bytes(verified_timing_evidence),
+                    "attestation timing evidence differs from verified fixture")
+        timing_evidence = value["promotion_timing_evidence"]
+    else:
+        require(verified_timing_evidence is None,
+                "historical attestation cannot use current timing evidence")
+
+    root = manifest_path.parent
+    require(root.resolve(strict=True) == root and
+            stat.S_ISDIR(os.lstat(root).st_mode),
+            "attestation output root traverses a symbolic link")
     records = value["records"]
     require(isinstance(records, list), "attestation records are not a list")
     raw_documents = {}
@@ -2767,26 +4254,38 @@ def validate_attestation_result_files(
         require(set(artifact_value) == {"path", "size", "sha256"} and
                 isinstance(artifact_value["path"], str) and
                 type(artifact_value["size"]) is int and artifact_value["size"] > 0 and
+                isinstance(artifact_value["sha256"], str) and
                 re.fullmatch(r"[0-9a-f]{64}",
-                             str(artifact_value["sha256"])) is not None,
+                             artifact_value["sha256"]) is not None,
                 f"attestation artifact shape differs for {identifier}")
         relative = Path(artifact_value["path"])
         require(not relative.is_absolute() and ".." not in relative.parts,
                 f"attestation artifact path escapes output for {identifier}")
         path = root / relative
-        require(path.is_file() and path.stat().st_size == artifact_value["size"] and
-                file_sha256(path) == artifact_value["sha256"],
+        snapshot = stable_regular_file_bytes(
+            path, MAX_JSON_DOCUMENT_BYTES,
+            f"attestation artifact {identifier}")
+        require(len(snapshot) == artifact_value["size"] and
+                hashlib.sha256(snapshot).hexdigest() == artifact_value["sha256"],
                 f"attestation artifact bytes changed for {identifier}")
-        raw_documents[identifier] = load_json(path)
+        raw_documents[identifier] = decode_json_bytes(
+            snapshot, f"attestation artifact {identifier}")
         raw_artifacts[identifier] = artifact_value
         expected_files.add(relative)
-    actual_files = {
-        path.relative_to(root) for path in root.rglob("*") if path.is_file()
-    }
+    actual_files = set()
+    for path in root.rglob("*"):
+        metadata = os.lstat(path)
+        require(not stat.S_ISLNK(metadata.st_mode) and
+                (stat.S_ISDIR(metadata.st_mode) or
+                 stat.S_ISREG(metadata.st_mode)),
+                f"attestation output contains an unsafe filesystem object: {path}")
+        if stat.S_ISREG(metadata.st_mode):
+            actual_files.add(path.relative_to(root))
     require(actual_files == expected_files,
             "attestation output contains a missing or extra file")
     expected = derive_attestation_result(
-        stage_root, source, build, collector, raw_documents, raw_artifacts)
+        stage_root, source, build, collector, raw_documents, raw_artifacts,
+        timing_evidence, result_schema=result_schema)
     require(canonical_bytes(retained) == canonical_bytes(expected),
             "attestation result is not the deterministic authenticated result")
     return value
@@ -2848,6 +4347,44 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "base64": base64.b64encode(raw).decode("ascii"),
         }
 
+    def fixture_build_configuration(
+        root: str, source_root: str,
+    ) -> dict[str, Any]:
+        entries = {
+            variable: "" for variable in BUILD_CONFIGURATION_VARIABLES
+        }
+        entries.update(REQUIRED_BUILD_CONFIGURATION_ENTRIES)
+        entries.update({
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "CMAKE_CONFIGURATION_TYPES": "",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+        })
+        material = _build_configuration_material(entries)
+        digest = hashlib.sha256(material).hexdigest()
+        text = (
+            f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+            f"sha256={digest}\n").encode("ascii") + material
+        content = fixture_text(text.decode("utf-8"))
+        artifact = fixture_artifact(
+            f"{root}/{BUILD_CONFIGURATION_RELATIVE_PATH}",
+            "generated_build_configuration", "8")
+        artifact.update({
+            "size": content["size"], "sha256": content["sha256"],
+        })
+        return {
+            "schema": BUILD_CONFIGURATION_RECORD_SCHEMA,
+            "artifact": artifact,
+            "content": content,
+            "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "configuration_sha256": digest,
+            "entries": entries,
+            "embedded_build_type": "Release",
+            "helper_source": fixture_artifact(
+                f"{source_root}/{BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH}",
+                "source_file", "9"),
+        }
+
     compiler = fixture_artifact(
         "/usr/bin/compiler", "compiler", "a", 0o755)
     compiler_text = "fixture compiler 1.0\n"
@@ -2889,12 +4426,25 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         pairs = sorted([*library_pairs,
             {"source": benchmark_source, "object": benchmark_object},
         ], key=lambda pair: pair["source"]["path"])
+        build_configuration = (
+            None if baseline else
+            fixture_build_configuration(root, source_root))
         cache = {
             "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CONFIGURATION_TYPES": "",
             "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
-            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+            "CMAKE_CXX_FLAGS_RELEASE": (
+                "-O3 -DNDEBUG" if baseline else "-O3 -DNDEBUG -O3"),
+            "CMAKE_GENERATOR": "Unix Makefiles",
             **(REQUIRED_BASELINE_CACHE if baseline else REQUIRED_CANDIDATE_CACHE),
         }
+        if not baseline:
+            cache.update({
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                    build_configuration["configuration_sha256"],
+            })
         benchmark_relative = benchmark_object["path"][len(root) + 1:]
         objects_by_member = {
             pair["object"]["path"].rsplit("/", 1)[-1]:
@@ -2930,6 +4480,9 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 "resolved_path": "/usr/bin/compiler",
             },
             "compiler_version_stdout": dict(compiler_version),
+            "multi_config_build_tool": None,
+            "multi_config_build_tool_version_stdout": None,
+            "multi_config_ninja_graph": None,
             "cmake_cache": fixture_artifact(
                 f"{root}/CMakeCache.txt", "build_metadata", character),
             "compile_commands": fixture_artifact(
@@ -2978,12 +4531,16 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                     "output": _normalized_compile_output(
                         role, pair["source"]["path"]),
                     "arguments": _normalized_compile_argv(
-                        role, pair["source"]["path"], "/usr/bin/compiler"),
+                        role, pair["source"]["path"], "/usr/bin/compiler",
+                        COMPILE_COMMANDS_SCHEMA,
+                        build_configuration=build_configuration),
                 } for pair in pairs], key=lambda entry: entry["file"]),
                 "isa_policy": (
                     "whole-build -march=native" if baseline else
                     "portable core with ISA flags only on SSSE3, AVX2, and "
                     "AVX-512VL translation units"),
+                "generated_attestation_header": None,
+                "effective_build_configuration": build_configuration,
             },
         }
 
@@ -3083,8 +4640,6 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         "committer Fixture <fixture@example.com> 1 +0000\n\nfixture\n"
     ).encode("utf-8")
     candidate_head, candidate_commit_object = fixture_commit_object(candidate_raw)
-    baseline_build["validated_compile_commands"][
-        "generated_attestation_header"] = None
     attestation_text = _benchmark_attestation_text(
         candidate_head, candidate_tree)
     attestation_content = fixture_text(attestation_text)
@@ -3105,7 +4660,7 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "source_tracked_dirty": False,
         }
     return {
-        "schema": "leopard2-balanced-evidence-scope/v3",
+        "schema": EVIDENCE_SCOPE_SCHEMA,
         "host": {
             "system": {
                 "system": "Linux", "node": "fixture", "release": "fixture",
@@ -3156,6 +4711,9 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 "/usr/bin/taskset", "executable", "4", 0o755),
             "ldd": fixture_artifact(
                 "/usr/bin/ldd", "executable", "5", 0o755),
+            "evidence_helper": fixture_artifact(
+                f"$CANDIDATE_SOURCE/{EVIDENCE_HELPER_RELATIVE_PATH}",
+                "file", "6"),
         },
         "resolved_auto_backend": backend,
         "forced_confirmation_backends": list(
@@ -3314,8 +4872,37 @@ def self_test() -> None:
             exact_runner.BASELINE_EXPECTED_COMPILE_COMMAND_COUNT ==
                 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT and
             exact_runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT ==
-                CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT,
+                CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT and
+            tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES) ==
+                BUILD_CONFIGURATION_VARIABLES and
+            exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA ==
+                BUILD_CONFIGURATION_FILE_SCHEMA and
+            exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA ==
+                BUILD_CONFIGURATION_RECORD_SCHEMA and
+            exact_runner.BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH ==
+                BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH and
+            exact_runner.EVIDENCE_HELPER_RELATIVE_PATH ==
+                EVIDENCE_HELPER_RELATIVE_PATH,
             "balanced scope translation-unit contract drifted from its producer")
+    require(exact_runner.MANIFEST_SCHEMA == EXACT_MANIFEST_SCHEMA and
+            exact_runner.RAW_SCHEMA == EXACT_RAW_SCHEMA,
+            "balanced exact-main current schema drifted from its producer")
+    _validate_exact_schema_pair(
+        {"schema": EXACT_MANIFEST_SCHEMA},
+        {"schema": EXACT_RAW_SCHEMA})
+    for manifest_schema, raw_schema in (
+        (EXACT_MANIFEST_SCHEMA_V7, EXACT_RAW_SCHEMA),
+        (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V7),
+        (EXACT_MANIFEST_SCHEMA_V6, EXACT_RAW_SCHEMA_V5),
+    ):
+        try:
+            _validate_exact_schema_pair(
+                {"schema": manifest_schema}, {"schema": raw_schema})
+        except PlanError:
+            pass
+        else:
+            raise PlanError(
+                "cross-version exact-main schema downgrade was accepted")
     with tempfile.TemporaryDirectory(prefix="leopard2-balanced-plan-") as temporary:
         root = Path(temporary)
         first = root / "first"
@@ -3326,6 +4913,150 @@ def self_test() -> None:
         validate_plan(second)
         require(canonical_bytes(plan_a) == canonical_bytes(plan_b),
                 "two canonical plans differ")
+
+        exact_type_gate = load_json(
+            first / "exact-main-gate" / "t128.json")
+        require(isinstance(exact_type_gate, dict),
+                "self-test exact-main gate is not an object")
+        exact_type_gate["reuse"] = 8.0
+        exact_type_gate["content_sha256"] = canonical_sha256({
+            key: value for key, value in exact_type_gate.items()
+            if key != "content_sha256"
+        })
+        try:
+            validate_main_document(exact_type_gate, "type-coerced gate")
+        except PlanError:
+            pass
+        else:
+            raise PlanError(
+                "balanced plan accepted float substitution for integer reuse")
+
+        for name, payload in (
+            ("duplicate.json", b'{"value":1,"value":2}'),
+            ("overflow.json", b'{"value":1e9999}'),
+            ("constant.json", b'{"value":NaN}'),
+            ("huge-integer.json", (
+                b'{"value":' + b"9" * 5000 + b"}")),
+        ):
+            path = root / name
+            path.write_bytes(payload)
+            try:
+                load_json(path)
+            except PlanError:
+                continue
+            raise PlanError(
+                f"balanced plan accepted ambiguous JSON fixture {name}")
+
+        ordinary_json = root / "ordinary.json"
+        ordinary_json.write_bytes(b'{"value":1}\n')
+        symbolic_json = root / "symbolic.json"
+        symbolic_json.symlink_to(ordinary_json)
+        try:
+            load_json(symbolic_json)
+        except PlanError:
+            pass
+        else:
+            raise PlanError("balanced plan followed a JSON symbolic link")
+        hard_link_json = root / "hard-link.json"
+        os.link(ordinary_json, hard_link_json)
+        try:
+            load_json(hard_link_json)
+        except PlanError:
+            pass
+        else:
+            raise PlanError("balanced plan accepted a hard-linked JSON file")
+        real_parent = root / "real-json-parent"
+        real_parent.mkdir()
+        nested_json = real_parent / "nested.json"
+        nested_json.write_bytes(b'{"value":1}\n')
+        parent_link = root / "json-parent-link"
+        parent_link.symlink_to(real_parent, target_is_directory=True)
+        try:
+            load_json(parent_link / "nested.json")
+        except PlanError:
+            pass
+        else:
+            raise PlanError(
+                "balanced plan followed a symbolic-link JSON parent")
+
+        secure_output = root / "secure-output" / "nested" / "result.json"
+        secure_document = {"schema": "secure-write-fixture/v1", "value": 7}
+        write_json(secure_output, secure_document)
+        require(load_json(secure_output) == secure_document,
+                "secure JSON publication changed its payload")
+        require(stat.S_IMODE(os.lstat(secure_output).st_mode) == 0o600 and
+                stat.S_IMODE(os.lstat(secure_output.parent).st_mode) == 0o700,
+                "secure JSON publication used permissive new-file modes")
+        original_secure_bytes = secure_output.read_bytes()
+        try:
+            write_json(secure_output, {"value": 8})
+        except PlanError:
+            pass
+        else:
+            raise PlanError("secure JSON publication replaced existing output")
+        require(secure_output.read_bytes() == original_secure_bytes,
+                "failed duplicate JSON publication changed existing output")
+
+        symlink_victim = root / "json-symlink-victim"
+        symlink_victim.write_bytes(b"victim\n")
+        symlink_output = root / "json-symlink-output"
+        symlink_output.symlink_to(symlink_victim)
+        try:
+            write_json(symlink_output, {"value": 9})
+        except PlanError:
+            pass
+        else:
+            raise PlanError("JSON publication replaced a final symlink")
+        require(symlink_victim.read_bytes() == b"victim\n",
+                "JSON publication changed a symlink victim")
+
+        linked_output = root / "linked-json-parent" / "result.json"
+        linked_parent = linked_output.parent
+        linked_parent.symlink_to(real_parent, target_is_directory=True)
+        try:
+            write_json(linked_output, {"value": 10})
+        except PlanError:
+            pass
+        else:
+            raise PlanError("JSON publication followed a parent symlink")
+        require(not (real_parent / "result.json").exists(),
+                "parent-symlink JSON publication changed its target")
+
+        trusted_parent = root / "trusted-json-parent"
+        trusted_parent.mkdir()
+        saved_parent = root / "saved-json-parent"
+        hostile_parent = root / "hostile-json-parent"
+        hostile_parent.mkdir()
+        swapped_output = trusted_parent / "result.json"
+        original_link = os.link
+        swap_performed = False
+
+        def swap_parent_before_link(
+                source, destination, *args, **kwargs):
+            nonlocal swap_performed
+            if not swap_performed:
+                trusted_parent.rename(saved_parent)
+                trusted_parent.symlink_to(
+                    hostile_parent, target_is_directory=True)
+                swap_performed = True
+            return original_link(source, destination, *args, **kwargs)
+
+        os.link = swap_parent_before_link
+        try:
+            try:
+                write_json(swapped_output, {"value": 11})
+            except PlanError:
+                pass
+            else:
+                raise PlanError(
+                    "JSON publication accepted a parent-directory swap")
+        finally:
+            os.link = original_link
+        require(swap_performed and
+                not (hostile_parent / "result.json").exists() and
+                not (saved_parent / "result.json").exists() and
+                not tuple(saved_parent.glob(".result.json.*.tmp")),
+                "parent-swap JSON publication changed a victim or leaked state")
 
         forged = root / "forged"
         shutil.copytree(first, forged)
@@ -3384,6 +5115,31 @@ def self_test() -> None:
         baseline_semantics["required_sources"] = [
             pair["source"]["path"] for pair in baseline_pairs]
         validate_evidence_scope(reordered_scope)
+        embedded_entries = reordered_scope["builds"]["candidate"][
+            "validated_compile_commands"]["effective_build_configuration"][
+                "entries"]
+        _validate_embedded_build_type(embedded_entries, "Release")
+        multi_entries = dict(embedded_entries)
+        multi_entries.update({
+            "CMAKE_BUILD_TYPE": "",
+            "CMAKE_GENERATOR": "Ninja Multi-Config",
+            "CMAKE_CONFIGURATION_TYPES": "Debug;Release;RelWithDebInfo",
+        })
+        _validate_embedded_build_type(multi_entries, "Release")
+        for encoded_types, embedded in (
+            ("Debug;RelWithDebInfo", "Release"),
+            ("Debug;Release;Release", "Release"),
+            ("Debug;Release", "Debug"),
+        ):
+            invalid = dict(multi_entries)
+            invalid["CMAKE_CONFIGURATION_TYPES"] = encoded_types
+            try:
+                _validate_embedded_build_type(invalid, embedded)
+            except PlanError:
+                pass
+            else:
+                raise PlanError(
+                    "invalid normalized multi-config build type was accepted")
 
         def reject_scope_mutation(label: str, mutate) -> None:
             forged_scopes = json.loads(json.dumps(scopes))
@@ -3424,8 +5180,66 @@ def self_test() -> None:
         reject_scope_mutation("uniform noncanonical candidate CMake", lambda values:
                               [value["builds"]["candidate"][
                                   "validated_cache"].update({
-                                      "LEO2_BACKEND_VARIANT": "scalar"})
+                                  "LEO2_BACKEND_VARIANT": "scalar"})
                                for value in values])
+        reject_scope_mutation(
+            "candidate evidence helper path",
+            lambda values: values[-1]["tools"]["evidence_helper"].update({
+                "path": "$CANDIDATE_SOURCE/experiments/leopard2/"
+                        "main_compare/run_abba.py"}))
+        def downgrade_scope_and_drop_helper(values) -> None:
+            values[-1]["schema"] = EVIDENCE_SCOPE_SCHEMA_V3
+            values[-1]["tools"].pop("evidence_helper")
+        reject_scope_mutation(
+            "scope downgrade drops evidence helper",
+            downgrade_scope_and_drop_helper)
+        reject_scope_mutation(
+            "candidate configuration helper path",
+            lambda values: values[-1]["builds"]["candidate"][
+                "validated_compile_commands"][
+                    "effective_build_configuration"]["helper_source"].update({
+                        "path": "$CANDIDATE_SOURCE/cmake/foreign.cmake"}))
+        reject_scope_mutation(
+            "candidate embedded build type",
+            lambda values: values[-1]["builds"]["candidate"][
+                "validated_compile_commands"][
+                    "effective_build_configuration"].update({
+                        "embedded_build_type": "Debug"}))
+
+        def coherently_enable_small_direct(values) -> None:
+            value = values[-1]
+            build = value["builds"]["candidate"]
+            semantics = build["validated_compile_commands"]
+            configuration = semantics["effective_build_configuration"]
+            configuration["entries"][
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] = "1"
+            material = _build_configuration_material(configuration["entries"])
+            digest = hashlib.sha256(material).hexdigest()
+            text = (
+                f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"sha256={digest}\n").encode("ascii") + material
+            content = retained_text(text.decode("utf-8"))
+            configuration["content"] = content
+            configuration["artifact"].update({
+                "size": content["size"], "sha256": content["sha256"],
+            })
+            configuration["configuration_sha256"] = digest
+            build["validated_cache"][
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"] = digest
+            benchmark = next(
+                entry for entry in semantics["required_entries"]
+                if entry["file"].endswith("/bench/leopard2/benchmark.cpp"))
+            benchmark["arguments"] = [
+                (f'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="{digest}"'
+                 if token.startswith(
+                     "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=") else
+                 token)
+                for token in benchmark["arguments"]
+            ]
+
+        reject_scope_mutation(
+            "coherent noncanonical small-direct configuration",
+            coherently_enable_small_direct)
         for label, flags in (
             ("final optimization downgrade", "-O3 -O0"),
             ("bare optimization downgrade", "-O3 -O"),
@@ -4269,7 +6083,9 @@ def self_test() -> None:
 
         source = {
             "head": survivor_signed["candidate_commit"],
-            "tree": "4" * 40, "status": "clean",
+            "tree": survivor_signed["evidence_scope"]["sources"][
+                "candidate"]["tree"],
+            "status": "clean",
             "status_sha256": common.EMPTY_SHA256,
         }
         identity = {
@@ -4302,8 +6118,53 @@ def self_test() -> None:
             "mode": 0o644,
             "sha256": canonical_header_content["sha256"],
         }
+        canonical_configuration_entries = {
+            variable: "" for variable in BUILD_CONFIGURATION_VARIABLES
+        }
+        canonical_configuration_entries.update(
+            REQUIRED_BUILD_CONFIGURATION_ENTRIES)
+        canonical_configuration_entries.update({
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "CMAKE_CONFIGURATION_TYPES": "",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+        })
+        canonical_configuration_material = _build_configuration_material(
+            canonical_configuration_entries)
+        canonical_configuration_digest = hashlib.sha256(
+            canonical_configuration_material).hexdigest()
+        canonical_configuration_text = (
+            f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+            f"sha256={canonical_configuration_digest}\n"
+        ).encode("ascii") + canonical_configuration_material
+        canonical_configuration_content = retained_text(
+            canonical_configuration_text.decode("utf-8"))
+        canonical_configuration = {
+            "schema": BUILD_CONFIGURATION_RECORD_SCHEMA,
+            "artifact": {
+                "path": f"$BUILD/{BUILD_CONFIGURATION_RELATIVE_PATH}",
+                "kind": "generated_build_configuration",
+                "size": canonical_configuration_content["size"],
+                "mode": 0o644,
+                "sha256": canonical_configuration_content["sha256"],
+            },
+            "content": canonical_configuration_content,
+            "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "configuration_sha256": canonical_configuration_digest,
+            "entries": canonical_configuration_entries,
+            "embedded_build_type": "Release",
+            "helper_source": {
+                "path":
+                    f"$SOURCE/{BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH}",
+                "kind": "source_file", "size": 1, "mode": 0o644,
+                "sha256": "7" * 64,
+            },
+        }
         canonical_benchmark_arguments = [
             "/usr/bin/compiler",
+            "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="
+            f'"{canonical_configuration_digest}"',
+            '-DLEO2_BENCHMARK_BUILD_TYPE="Release"',
             "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
             "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
             f'"{canonical_header_path}"',
@@ -4315,7 +6176,18 @@ def self_test() -> None:
             "-c", "$SOURCE/bench/leopard2/benchmark.cpp",
         ]
         canonical_provenance = {
-            "validated_cache": dict(REQUIRED_CANDIDATE_CACHE),
+            "validated_cache": {
+                **REQUIRED_CANDIDATE_CACHE,
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+                "CMAKE_CONFIGURATION_TYPES": "",
+                "CMAKE_GENERATOR": "Unix Makefiles",
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                    canonical_configuration_digest,
+            },
             "validated_compile_commands": {
                 "schema": COMPILE_COMMANDS_SCHEMA,
                 "implementation": "candidate",
@@ -4337,15 +6209,15 @@ def self_test() -> None:
                     "source_tree": source["tree"],
                     "source_tracked_dirty": False,
                 },
+                "effective_build_configuration": canonical_configuration,
             },
             "archive_link_recipe_content": {"sha256": "6" * 64},
         }
         build = {
             "artifact_closure": artifact_closure,
             "canonical_production": {
-                "schema": "leopard2-canonical-production-build/v1",
-                "validator":
-                    "exact-main/run_abba.py build_provenance schema v5",
+                "schema": CANONICAL_PRODUCTION_BUILD_SCHEMA,
+                "validator": CANONICAL_BUILD_VALIDATOR,
                 "provenance": canonical_provenance,
                 "provenance_sha256": canonical_sha256(canonical_provenance),
             },
@@ -4354,6 +6226,102 @@ def self_test() -> None:
             **identity, "relative_path":
                 "experiments/leopard2/decoder_dispatch/plan_balanced_promotion.py",
         }
+
+        stage_signed = load_json(stage_root / "stage.json")
+        stage_unsigned = unsigned(stage_signed, STAGE_SCHEMA, "fixture stage")
+        forced_timing = []
+        exact_timing = []
+        for index, stage_artifact in enumerate(stage_unsigned["artifacts"]):
+            kind = stage_artifact["kind"]
+            if kind not in {
+                    "forced_surviving_cells", "forced_non_aligned_tail",
+                    "exact_main_aligned_confirmation",
+                    "exact_main_rejection_timing"}:
+                continue
+            manifest_reference = {
+                "path": str(
+                    (root / "fixture-timing" /
+                     f"{index:04d}-{stage_artifact['sha256']}.json").absolute()),
+                "size": 1,
+                "sha256": hashlib.sha256(
+                    f"fixture-{index}".encode("ascii")).hexdigest(),
+                "payload_digest": hashlib.sha256(
+                    f"payload-{index}".encode("ascii")).hexdigest(),
+            }
+            record = {
+                "stage_artifact": {
+                    key: stage_artifact[key]
+                    for key in ("path", "kind", "size", "sha256")
+                },
+                "manifest": manifest_reference,
+            }
+            if kind.startswith("forced_"):
+                record["summary_content_sha256"] = hashlib.sha256(
+                    f"summary-{index}".encode("ascii")).hexdigest()
+                record["maximum_decode_ci95_upper"] = 1.0
+                forced_timing.append(record)
+            else:
+                record["minimum_decode_ci95_lower"] = 1.0
+                exact_timing.append(record)
+        timing_evidence = signed({
+            "schema": PROMOTION_TIMING_SCHEMA,
+            "candidate_commit": stage_unsigned["candidate_commit"],
+            "stage_content_sha256": stage_signed["content_sha256"],
+            "neighbor_maximum_regression": NEIGHBOR_MAXIMUM_REGRESSION,
+            "maximum_forced_survivor_decode_ci95_upper": 1.0,
+            "minimum_exact_decode_ci95_lower": 1.0,
+            "forced_results": sorted(
+                forced_timing,
+                key=lambda item: item["stage_artifact"]["path"]),
+            "exact_main_results": sorted(
+                exact_timing,
+                key=lambda item: item["stage_artifact"]["path"]),
+        })
+        validate_promotion_timing_shape(stage_root, timing_evidence)
+
+        def reject_timing_mutation(label: str, mutate) -> None:
+            forged_timing = json.loads(json.dumps(timing_evidence))
+            forged_timing.pop("content_sha256")
+            mutate(forged_timing)
+            forged_timing = signed(forged_timing)
+            try:
+                validate_promotion_timing_shape(stage_root, forged_timing)
+            except PlanError:
+                return
+            raise PlanError(
+                f"adversarial promotion timing {label} was accepted")
+
+        reject_timing_mutation(
+            "missing-forced",
+            lambda value: value["forced_results"].pop())
+        reject_timing_mutation(
+            "missing-exact",
+            lambda value: value["exact_main_results"].pop())
+        reject_timing_mutation(
+            "regression",
+            lambda value: (
+                value["exact_main_results"][0].update({
+                    "minimum_decode_ci95_lower": 0.979}),
+                value.update({"minimum_exact_decode_ci95_lower": 0.979})))
+        reject_timing_mutation(
+            "same-binary-regression",
+            lambda value: (
+                next(
+                    item for item in value["forced_results"]
+                    if item["stage_artifact"]["kind"] ==
+                        "forced_surviving_cells").update({
+                            "maximum_decode_ci95_upper": 1.021}),
+                value.update({
+                    "maximum_forced_survivor_decode_ci95_upper": 1.021})))
+        reject_timing_mutation(
+            "duplicate",
+            lambda value: value["exact_main_results"].append(
+                value["exact_main_results"][0]))
+        reject_timing_mutation(
+            "wrong-stage-artifact",
+            lambda value: value["exact_main_results"][0][
+                "stage_artifact"].update({"sha256": "0" * 64}))
+
         result_root = root / "attestation-result"
         raw_root = result_root / "raw"
         raw_root.mkdir(parents=True)
@@ -4370,7 +6338,8 @@ def self_test() -> None:
                 "size": path.stat().st_size, "sha256": file_sha256(path),
             }
         result = derive_attestation_result(
-            stage_root, source, build, collector, raw_documents, raw_artifacts)
+            stage_root, source, build, collector, raw_documents, raw_artifacts,
+            timing_evidence)
         header_mutations = {}
 
         missing_header = json.loads(json.dumps(build))
@@ -4469,7 +6438,7 @@ def self_test() -> None:
             try:
                 derive_attestation_result(
                     stage_root, source, mutated, collector,
-                    raw_documents, raw_artifacts)
+                    raw_documents, raw_artifacts, timing_evidence)
             except PlanError:
                 pass
             else:
@@ -4484,7 +6453,7 @@ def self_test() -> None:
         try:
             derive_attestation_result(
                 stage_root, source, noncanonical_build, collector,
-                raw_documents, raw_artifacts)
+                raw_documents, raw_artifacts, timing_evidence)
         except PlanError:
             pass
         else:
@@ -4492,7 +6461,20 @@ def self_test() -> None:
         manifest_path = result_root / "manifest.json"
         write_json(manifest_path, result)
         validate_attestation_result_files(
-            stage_root, manifest_path, source, build, collector)
+            stage_root, manifest_path, source, build, collector,
+            verified_timing_evidence=timing_evidence)
+        historical_root = root / "historical-attestation-result"
+        shutil.copytree(raw_root, historical_root / "raw")
+        historical = derive_attestation_result(
+            stage_root, source, build, collector, raw_documents, raw_artifacts,
+            None, result_schema=ATTESTATION_RESULT_SCHEMA_V5)
+        historical_manifest = historical_root / "manifest.json"
+        write_json(historical_manifest, historical)
+        validated_historical = validate_attestation_result_files(
+            stage_root, historical_manifest, source, build, collector)
+        require(validated_historical["schema"] ==
+                ATTESTATION_RESULT_SCHEMA_V5,
+                "historical attestation schema did not replay strictly")
 
         probe_case = attestation["cases"][0]
         probe = fake_attestation_output(probe_case)
@@ -4527,6 +6509,17 @@ def self_test() -> None:
                 continue
             raise PlanError(f"attestation accepted wrong {label}")
 
+        numeric_digest_output = json.loads(json.dumps(probe))
+        numeric_digest_output["workload_digests"]["original_data"] = \
+            int("1" * 16)
+        try:
+            validate_attestation_output(numeric_digest_output, probe_case)
+        except PlanError:
+            pass
+        else:
+            raise PlanError(
+                "attestation accepted a numeric 16-digit FNV digest")
+
         for excluded_backend in ("avx512", "neon"):
             forged_output = fake_attestation_output(
                 probe_case, backend="scalar")
@@ -4545,7 +6538,8 @@ def self_test() -> None:
             mutate(fixture)
             try:
                 validate_attestation_result_files(
-                    stage_root, fixture / "manifest.json", source, build, collector)
+                    stage_root, fixture / "manifest.json", source, build, collector,
+                    verified_timing_evidence=timing_evidence)
             except PlanError:
                 return
             raise PlanError(f"adversarial attestation {label} was accepted")
@@ -4584,11 +6578,23 @@ def self_test() -> None:
                                wrong_raw(path, "selected_decode_rule", wrong_rule))
         reject_output_mutation("missing", lambda path:
                                (path / first_raw).unlink())
+        def symbolic_raw(path: Path) -> None:
+            outside = root / "outside-raw.json"
+            if not outside.exists():
+                shutil.copy2(path / first_raw, outside)
+            (path / first_raw).unlink()
+            (path / first_raw).symlink_to(outside)
+        reject_output_mutation("symbolic-raw", symbolic_raw)
         def duplicate(path: Path) -> None:
             def mutate(value):
                 value["records"].append(value["records"][0])
             adversarial_resign(path / "manifest.json", mutate)
         reject_output_mutation("duplicate", duplicate)
+        def missing_timing(path: Path) -> None:
+            adversarial_resign(
+                path / "manifest.json",
+                lambda value: value.pop("promotion_timing_evidence"))
+        reject_output_mutation("missing-timing", missing_timing)
         reject_output_mutation("extra", lambda path:
                                (path / "extra.json").write_text("{}\n", encoding="utf-8"))
         def wrong_commit(path: Path) -> None:
@@ -4666,6 +6672,14 @@ def parse_args() -> argparse.Namespace:
     collect_parser.add_argument("--stage", required=True, type=Path)
     collect_parser.add_argument("--source-root", required=True, type=Path)
     collect_parser.add_argument("--binary", default="build-release/bench_leopard2")
+    collect_parser.add_argument(
+        "--forced-manifest", action="append", required=True, type=Path,
+        help="complete same-binary forced-run manifest; repeat for every "
+             "forced stage artifact")
+    collect_parser.add_argument(
+        "--exact-manifest", action="append", required=True, type=Path,
+        help="complete exact-main confirmation/rejection manifest; repeat "
+             "for every exact-main stage artifact")
     collect_parser.add_argument("--output", required=True, type=Path)
     verify_parser = commands.add_parser("verify-attestation")
     verify_parser.add_argument("--plan", required=True, type=Path)
@@ -4712,7 +6726,8 @@ def main() -> int:
     elif args.command == "collect-attestation":
         attestation = collect_attestation(
             args.plan.absolute(), args.stage.absolute(),
-            args.source_root.absolute(), args.binary, args.output.absolute())
+            args.source_root.absolute(), args.binary, args.output.absolute(),
+            args.forced_manifest, args.exact_manifest)
         result = {
             "content_sha256": attestation["content_sha256"],
             "record_count": len(attestation["records"]),
@@ -4727,6 +6742,8 @@ def main() -> int:
                 "content_sha256"],
             "record_count": len(attestation["records"]),
             "resolved_backend": attestation["resolved_backend"],
+            "promotion_timing_complete":
+                attestation["schema"] == ATTESTATION_RESULT_SCHEMA,
         }
     else:
         self_test()
