@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import argparse
 import base64
+from contextlib import ExitStack
 import copy
+import errno
+import fcntl
 import hashlib
 import importlib.util
 import json
 import math
 import os
+import shutil
+import signal
 import stat
 import subprocess
 import sys
@@ -57,6 +62,23 @@ def load_plan_runner():
 
 
 BASELINE_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
+BASELINE_TREE_BASE64 = (
+    "MTAwNjQ0IC5naXRpZ25vcmUAd4ZzgeN0hGZMvhC3SNIlEZKrNxwxMDA2NDQgLmdpdG1v"
+    "ZHVsZXMAoR0P8aCA8DMN4ErrDW1SZUrZ7gkxMDA2NDQgLnRyYXZpcy55bWwAe2QAdEdU"
+    "NkTzN2pl35FU2Znb8OMxMDA2NDQgQmVuY2htYXJrcy5tZAAy22E4N5ZlfvNeS/jjtv5b"
+    "RRRoMDEwMDY0NCBDTWFrZUxpc3RzLnR4dABe9Z2BR/FnaxWoF0pFeZG0oty+DjEwMDY0"
+    "NCBMZW9wYXJkQ29tbW9uLmNwcACWMpFU4u8AMsbBmIJ84vzZ+EZfxzEwMDY0NCBMZW9w"
+    "YXJkQ29tbW9uLmgARbrD1dirgtfN8BKjfnZzqBSp0IYxMDA2NDQgTGVvcGFyZEZGMTYu"
+    "Y3BwADJBxm+Ilm/icdojn1SlGjwYKEEWMTAwNjQ0IExlb3BhcmRGRjE2LmgAb4umwORH"
+    "9+eWxuwkMXY6R0VeWXsxMDA2NDQgTGVvcGFyZEZGOC5jcHAAL5Qfg/tbWzOL9zJBr89n"
+    "WYPGSIcxMDA2NDQgTGVvcGFyZEZGOC5oAP4Z7VXYbeW4HWdOTIx865F/JKNCMTAwNjQ0"
+    "IExpY2Vuc2UubWQAd9VDahPkRvTJTSvq02FqlNLYnoIxMDA2NDQgUkVBRE1FLm1kAKBF"
+    "mPF6SZtcTi19PM8bHB90tEZ2MTAwNjQ0IGFwcHZleW9yLnltbAC7Sa/AtwInE9m6HIdg"
+    "ztpNYm7mRzQwMDAwIGRvY3MApWTCpdc70ujVI5sIb1+E9J9u38YxMDA2NDQgbGVvcGFy"
+    "ZC5jcHAADAhH8XYqtMLMBvNUyHhUc5uy1UUxMDA2NDQgbGVvcGFyZC5oACqPp5kbKTIE"
+    "bw5nnrWLqOFlbLkZNDAwMDAgcHJvagDi+Iv1XmaaeUq1e8tkoeJBkViXgDE2MDAwMCBz"
+    "c2UybmVvbgDK1RipOzJvD2RLeXLUiNBOqisEdTQwMDAwIHRlc3RzAEStx5PlLFmpccsI"
+    "T+QhDlDeAC7e")
 BASELINE_COMMIT_BASE64 = (
     "dHJlZSBiN2M4ODMwZDk2YTk3OGY2ZWMxNGZlNzQ3MDk1ZjA2NmUzNTFhZTcyCnBhcmVudCAy"
     "MmRkYzc4MDQ5OThkMzFjOGYxYTI2MTdlZTcyMGUwNjNiMWZhNmNkCnBhcmVudCAzNjQyN2Rk"
@@ -80,7 +102,68 @@ BASELINE_COMMIT_BASE64 = (
     "dGU3VFVvRnVMTE53c1YKID00MTBSCiAtLS0tLUVORCBQR1AgU0lHTkFUVVJFLS0tLS0KIAoK"
     "TWVyZ2UgcHVsbCByZXF1ZXN0ICMyMyBmcm9tIGdibGV0cjQyL21hc3RlcgoKSGFuZGxlIHRo"
     "ZSBjYXNlIHdoZW4gbm8gb3JpZ2luYWwgZGF0YSB3YXMgbG9zdA==")
-CANDIDATE_TREE = "8" * 40
+BASELINE_TREE_OBJECTS_BASE64 = {
+    "44adc793e52c59a971cb084fe4210e50de002ede": (
+        "MTAwNjQ0IGJlbmNobWFyay5jcHAA8/MtWl7o7Bdvt5BBzp3e8MnZso8xMDA2NDQg"
+        "ZXhwZXJpbWVudHMuY3BwANpEfrpL5nWbdjkbETceAS2Zfe2MNDAwMDAgcHJvagDH"
+        "GQZEGb/M9gs9CA8VILkuUuImZw=="),
+    "a564c2a5d73bd2e8d5239b086f5f84f49f6edfc6": (
+        "MTAwNjQ0IEhpZ2hSYXRlRGVjb2Rlci5wZGYAbOUFRKRKJQRMcXPJeirIKJ3xtTkx"
+        "MDA2NDQgTG93UmF0ZURlY29kZXIucGRmAJO6Zey0wawNQZu5uKeEJzPIKeJtMTAw"
+        "NjQ0IE5vdmVsUG9seW5vbWlhbEJhc2lzRkZUMjAxNi5wZGYARCnf9d5bbKTOwgWl"
+        "skYv3s+YW3MxMDA2NDQgcGxhbmstZmFzdDEzLnBkZgCll+moGI1Ke5iDLwrlqsQv"
+        "Rrr4azEwMDY0NCB2ZWN0b3JfZndodF80LnR4dABMrTpvJY4Ip+BsCuyWAPerCc5d"
+        "Ew=="),
+    "b7c8830d96a978f6ec14fe747095f066e351ae72": BASELINE_TREE_BASE64,
+    "c719064419bfccf60b3d080f1520b92e52e22667": (
+        "MTAwNjQ0IEJlbmNobWFyay52Y3hwcm9qAEFYP/u2S3vdPw/ORCj4lXwVuC3eMTAw"
+        "NjQ0IEJlbmNobWFyay52Y3hwcm9qLmZpbHRlcnMAUKBd1CCxdNe8IEDFjKmkk4JN"
+        "3LgxMDA2NDQgRXhwZXJpbWVudHMuZmlsdGVycwBQoF3UILF017wgQMWMqaSTgk3c"
+        "uDEwMDY0NCBFeHBlcmltZW50cy52Y3hwcm9qABh9gEr0hJWl9kijPSYnpI97x8Po"),
+    "e2f88bf55e669a794ab57bcb64a1e24191589780": (
+        "MTAwNjQ0IExlb3BhcmQuc2xuANqp9YiW4MOj8tOJnz2jikBjEnvXMTAwNjQ0IExl"
+        "b3BhcmQudmN4cHJvagCM+38iiyYCY9Fr/p3w6R/Wnzz6ajEwMDY0NCBMZW9wYXJk"
+        "LnZjeHByb2ouZmlsdGVycwCQ3j+mbqr7xNmN4YBs3wtHtOkyrw=="),
+}
+SSE2NEON_COMMIT = "cad518a93b326f0f644b7972d488d04eaa2b0475"
+SSE2NEON_COMMIT_BASE64 = (
+    "dHJlZSA2ODEyZmJlYTE1ZTY5OTU0ZmU1OWFlZjJiMWNkNTc3MjYyNjZlMjcyCnBh"
+    "cmVudCAxMGYxMzU3MzcxYjI1MzFjM2JkYTViN2VhYTlmNmI4YTZkMTc1MjNkCmF1"
+    "dGhvciBKaW0gSHVhbmcgPGpzZXJ2QGJpaWxhYnMuaW8+IDE2NTI2NzU1MjUgKzA4"
+    "MDAKY29tbWl0dGVyIEppbSBIdWFuZyA8anNlcnZAYmlpbGFicy5pbz4gMTY1MjY3"
+    "NTUyNSArMDgwMAoKUmVmZXIgdG8gdGhlIGFydGljbGVzIGF0IEFybSB3ZWIgc2l0"
+    "ZQo=")
+SSE2NEON_TREE_OBJECTS_BASE64 = {
+    "4b448767151979de0ef817e2026ba5a016634cdd": (
+        "MTAwNjQ0IENPREVPV05FUlMAWMrhK58Gr6ty4fodJyBlLFmN7Zg0MDAwMCB3b3Jr"
+        "Zmxvd3MAfWoEvyNBMGScZvrvPsnjETqFX4I="),
+    "6812fbea15e69954fe59aef2b1cd57726266e272": (
+        "NDAwMDAgLmNpAH7KmO0VXKQe+D8/RRccPsfv15Q9MTAwNjQ0IC5jbGFuZy1mb3Jt"
+        "YXQATnzbSQ1fdF7CsKCtW4btqOiJ+48xMDA2NDQgLmdpdGF0dHJpYnV0ZXMAkHZ3"
+        "Sd+BUchIeD+9V6ZK6GQXUS80MDAwMCAuZ2l0aHViAEtEh2cVGXneDvgX4gJrpaAW"
+        "Y0zdMTAwNjQ0IC5naXRpZ25vcmUAZNPdmM/1yeABFZEbrRrIcBniF1ExMDA2NDQg"
+        "Q09OVFJJQlVUSU5HLm1kAHz/2CGl6uU4IROqipur9gXCqf7IMTAwNjQ0IExJQ0VO"
+        "U0UAnPEGJyrDtWsMTIAhjo/BCmZMpfQxMDA2NDQgTWFrZWZpbGUAmkNEh+9h8uNA"
+        "TRGbDeDBwGvrpmwxMDA2NDQgUkVBRE1FLm1kALhGuXRZw1/Pr8G1Jioz2ovZhBGE"
+        "MTAwNjQ0IHNzZTJuZW9uLmgAK98k8nat31DZJNyGEZwCbSkMVZU0MDAwMCB0ZXN0"
+        "cwDGTMDmzMETNLVGz+gUXjRFw9eJKQ=="),
+    "7d6a04bf234130649c66faef3ec9e3113a855f82": (
+        "MTAwNjQ0IGdpdGh1Yl9hY3Rpb25zLnltbAA+TRnw73FLSp1KGKo/gGxfgx7qvg=="),
+    "7eca98ed155ca41ef83f3f45171c3ec7efd7943d": (
+        "MTAwNzU1IGNoZWNrLWZvcm1hdC5zaACm/cHJIWVjjxXsT5QPk0kvo1d/fTEwMDY0"
+        "NCBjb21tb24uc2gAwDlgYrqgjZEhaRwVXoBtPzJX4BgxMDA3NTUgY3Jvc3MtY2hl"
+        "Y2suc2gAXvuf786rNckEX+0mOwUlNWSOMjMxMDA3NTUgY3Jvc3MtdG9vbC5zaADx"
+        "SeprMfpfcQOTKacmEew5kmIHRw=="),
+    "c64cc0e6ccc11334b546cfe8145e3445c3d78929": (
+        "MTAwNjQ0IFJFQURNRS5tZACvsfn4CLTf3rC1J6V8ZknMO7NNYzEwMDY0NCBiaW5k"
+        "aW5nLmNwcABOnq3bo9AY1OuKRoNQmpCXxFYTGjEwMDY0NCBiaW5kaW5nLmgAZKn6"
+        "UG3AS9RE1nzoRDPURTqYjrsxMDA2NDQgY29tbW9uLmNwcADQ26UD3ExXR6VaQp4p"
+        "sYOcoDmfXDEwMDY0NCBjb21tb24uaACI+gFnWIAR+k2eDBcafOOynHq/xDEwMDY0"
+        "NCBpbXBsLmNwcAAbGU+kfkn7tBPzNd2+Lcun0dN0NTEwMDY0NCBpbXBsLmgADneU"
+        "9+bwCeGKb1LI5e8NyFMNSXsxMDA2NDQgbWFpbi5jcHAAlT1MNrURJCYPKuV8PcWD"
+        "SPQioUk="),
+}
+CANDIDATE_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904"
 CANDIDATE_COMMIT_RAW = (
     f"tree {CANDIDATE_TREE}\nauthor Fixture <fixture@example.com> 1 +0000\n"
     "committer Fixture <fixture@example.com> 1 +0000\n\nfixture\n"
@@ -126,7 +209,7 @@ DIGESTS = {
     "algorithm": "fnv1a64",
     "original_data": "0123456789abcdef",
     "transmitted_parity": "1111111111111111",
-    "recovered_originals": "fedcba9876543210",
+    "recovered_originals": "0123456789abcdef",
 }
 RESERVATION_PAYLOAD = {
     "benchmark_cpu": 0,
@@ -142,6 +225,21 @@ RESERVATION = {
     "payload": RESERVATION_PAYLOAD,
     "lock": "exclusive_nonblocking",
 }
+
+
+def initialize_git_fixture(root: Path, content: str = "one\n") -> str:
+    subprocess.run(["/usr/bin/git", "init", "-q", str(root)], check=True)
+    subprocess.run(["/usr/bin/git", "-C", str(root), "config",
+                    "user.name", "Leopard2 Test"], check=True)
+    subprocess.run(["/usr/bin/git", "-C", str(root), "config",
+                    "user.email", "test@example.invalid"], check=True)
+    (root / "tracked.txt").write_text(content, encoding="utf-8")
+    subprocess.run(["/usr/bin/git", "-C", str(root), "add", "."], check=True)
+    subprocess.run(["/usr/bin/git", "-C", str(root), "commit", "-qm",
+                    "fixture"], check=True)
+    return subprocess.check_output(
+        ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD"],
+        text=True).strip()
 
 
 def host_cpu(cpu: int) -> dict:
@@ -372,11 +470,59 @@ def complete_artifact(path: str, kind: str, character: str,
         "kind": kind,
         "size": 1 if encoded is None else len(encoded),
         "mode": 0o755 if kind in {"executable", "compiler", "archiver",
-                                   "ranlib"} else 0o644,
+                                   "ranlib", "build_tool"} else 0o644,
         "mtime_ns": 1,
         "sha256": (character * 64 if encoded is None else
                    runner.sha256_bytes(encoded)),
     }
+
+
+def complete_ninja_graph_fixture(build_dir: str) -> dict:
+    contents = {
+        "build-Release.ninja":
+            "include CMakeFiles/impl-Release.ninja\n",
+        "CMakeFiles/impl-Release.ninja":
+            "include CMakeFiles/common.ninja\n"
+            "build Release/libleopard.a: phony\n"
+            "build Release/bench_leopard2: phony Release/libleopard.a\n",
+        "CMakeFiles/common.ninja":
+            "rule fixture_noop\n"
+            "  command = :\n",
+    }
+    files = []
+    for index, relative in enumerate(sorted(contents)):
+        content = runner.exact_text_content(
+            contents[relative], f"fixture Ninja graph {relative}")
+        files.append({
+            "relative_path": relative,
+            "artifact": complete_artifact(
+                f"{build_dir}/{relative}", "ninja_graph_input",
+                format(index + 1, "x"), content=contents[relative]),
+            "content": content,
+        })
+    return {
+        "schema": runner.NINJA_GRAPH_CLOSURE_SCHEMA,
+        "entrypoint": "build-Release.ninja",
+        "files": files,
+    }
+
+
+def replace_ninja_graph_fixture_text(
+    build: dict, relative_path: str, text: str,
+) -> None:
+    graph = build["multi_config_ninja_graph"]
+    record = next(
+        item for item in graph["files"]
+        if item["relative_path"] == relative_path)
+    content = runner.exact_text_content(
+        text, f"mutated Ninja graph {relative_path}")
+    record["content"] = content
+    record["artifact"]["size"] = content["size"]
+    record["artifact"]["sha256"] = content["sha256"]
+    if relative_path == "CMakeFiles/impl-Release.ninja":
+        for name in ("archive_link_recipe", "executable_link_recipe"):
+            build[name]["size"] = content["size"]
+            build[name]["sha256"] = content["sha256"]
 
 
 def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
@@ -395,6 +541,63 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         "candidate_commit": CANDIDATE_COMMIT,
         f"{role}_build_dir": str(build),
     }
+    build_configuration = None
+    if role == "candidate":
+        configuration_entries = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "CMAKE_CONFIGURATION_TYPES": "",
+            "CMAKE_CXX_COMPILER": str(compiler),
+            "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
+            "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
+            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+            "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+            "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+            "ENABLE_OPENMP": "ON",
+            "LEOPARD_ENABLE_GF8": "ON",
+            "LEOPARD_ENABLE_GF16": "ON",
+            "LEO2_BACKEND_VARIANT": "auto",
+            "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_TESTS": "OFF",
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+        }
+        material = runner.build_configuration_material(configuration_entries)
+        digest = runner.sha256_bytes(material)
+        sidecar = build / runner.BUILD_CONFIGURATION_RELATIVE_PATH
+        sidecar.parent.mkdir(parents=True, exist_ok=True)
+        sidecar.write_bytes(
+            (f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+             f"sha256={digest}\n").encode("ascii") + material)
+        helper = candidate_root / \
+            runner.BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH
+        helper.parent.mkdir(parents=True, exist_ok=True)
+        helper.write_text("# fixture helper\n", encoding="utf-8")
+        cache_values = {
+            **configuration_entries,
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                runner.BUILD_CONFIGURATION_FILE_SCHEMA,
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+        }
+        (build / "CMakeCache.txt").write_text("".join(
+            f"{name}:{next(iter(runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES[name]))}"
+            f"={value}\n"
+            for name, value in cache_values.items()), encoding="utf-8")
+        build_configuration = runner.capture_candidate_build_configuration(
+            specification, cache_values)
+    else:
+        cache_values = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "CMAKE_CONFIGURATION_TYPES": "",
+            "CMAKE_CXX_COMPILER": str(compiler),
+        }
+        (build / "CMakeCache.txt").write_text("".join(
+            f"{name}:{next(iter(runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES[name]))}"
+            f"={value}\n"
+            for name, value in cache_values.items()), encoding="utf-8")
     if role == "baseline":
         sources = [baseline_root / name for name in runner.BASELINE_LIBRARY_SOURCES]
         adapter = candidate_root / \
@@ -413,7 +616,8 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fixture object\n")
         arguments = runner.expected_compile_argv(
-            role, source, specification, str(compiler))
+            role, source, specification, str(compiler),
+            build_configuration=build_configuration)
         entry = {
             "directory": str(build), "file": str(source), "output": output,
         }
@@ -429,21 +633,25 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
 
 
 def complete_build_fixture(
-    role: str, raw_schema: str = runner.RAW_SCHEMA,
+    role: str, raw_schema: str = runner.RAW_SCHEMA, *,
+    multi_config: bool = False,
 ) -> dict:
+    if multi_config and raw_schema not in runner.BUILD_CLOSURE_V7_SCHEMAS:
+        raise ValueError("multi-config fixture requires the current schema")
     baseline = role == "baseline"
     build_dir = SPECIFICATION[f"{role}_build_dir"]
     source_root = SPECIFICATION[f"{role}_source_root"]
+    selected_configuration = "Release" if multi_config else None
+    configuration_types = "Debug;Release" if multi_config else ""
+    generator = "Ninja Multi-Config" if multi_config else "Unix Makefiles"
     if baseline:
         archive_name = "libleopard_main_exact.a"
         executable_name = "leopard_main_benchmark"
         target_directory = "leopard_main_exact.dir"
         benchmark_source = (SPECIFICATION["candidate_source_root"] +
             "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp")
-        benchmark_object = (build_dir +
-            "/CMakeFiles/leopard_main_benchmark.dir/legacy_main_benchmark.cpp.o")
         cache = {
-            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_BUILD_TYPE": "" if multi_config else "Release",
             "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
             "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
@@ -456,10 +664,8 @@ def complete_build_fixture(
         executable_name = "bench_leopard2"
         target_directory = runner.CANONICAL_CMAKE_IDENTITY["target_directory"]
         benchmark_source = source_root + "/bench/leopard2/benchmark.cpp"
-        benchmark_object = (build_dir +
-            "/CMakeFiles/bench_leopard2.dir/bench/leopard2/benchmark.cpp.o")
         cache = {
-            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_BUILD_TYPE": "" if multi_config else "Release",
             "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
             "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
             "ENABLE_OPENMP": "ON",
@@ -469,17 +675,107 @@ def complete_build_fixture(
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
         }
+        if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+            cache.update({
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+            })
+            configuration_entries = {
+                "CMAKE_BUILD_TYPE": "" if multi_config else "Release",
+                "CMAKE_GENERATOR": generator,
+                "CMAKE_CONFIGURATION_TYPES": configuration_types,
+                "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+                "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
+                "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+                "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+                "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+                "ENABLE_OPENMP": "ON",
+                "LEOPARD_ENABLE_GF8": "ON",
+                "LEOPARD_ENABLE_GF16": "ON",
+                "LEO2_BACKEND_VARIANT": "auto",
+                "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
+                "LEO2_BUILD_BENCHMARKS": "ON",
+                "LEO2_BUILD_TESTS": "OFF",
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+            }
+            configuration_material = runner.build_configuration_material(
+                configuration_entries)
+            configuration_digest = runner.sha256_bytes(
+                configuration_material)
+            configuration_text = (
+                f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"sha256={configuration_digest}\n").encode("ascii") + \
+                configuration_material
+            configuration_text_value = configuration_text.decode("utf-8")
+            effective_configuration = {
+                "schema": runner.BUILD_CONFIGURATION_RECORD_SCHEMA,
+                "artifact": complete_artifact(
+                    build_dir + "/" +
+                    runner.BUILD_CONFIGURATION_RELATIVE_PATH,
+                    "generated_build_configuration", "4",
+                    content=configuration_text_value),
+                "content": runner.exact_text_content(
+                    configuration_text_value,
+                    "fixture effective build configuration"),
+                "configuration_schema":
+                    runner.BUILD_CONFIGURATION_FILE_SCHEMA,
+                "configuration_sha256": configuration_digest,
+                "entries": configuration_entries,
+                "embedded_build_type": "Release",
+                "helper_source": complete_artifact(
+                    source_root + "/" +
+                    runner.BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH,
+                    "source_file", "5"),
+            }
+            cache.update({
+                "CMAKE_CONFIGURATION_TYPES": configuration_types,
+                "CMAKE_GENERATOR": generator,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    runner.BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                    configuration_digest,
+            })
+        else:
+            effective_configuration = None
         isa_policy = (
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
         library_names = runner.CANDIDATE_LIBRARY_SOURCES
         entry_count = runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
+    if multi_config and not baseline:
+        object_library_sources = (
+            "Leopard2BackendSSSE3.cpp",
+            "Leopard2BackendAVX2.cpp",
+            "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX512.cpp",
+            "Leopard2BackendGFNI.cpp",
+        )
+        library_names = (
+            *object_library_sources,
+            *(name for name in library_names
+              if name not in object_library_sources),
+        )
+    if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+        cache.update({
+            "CMAKE_CONFIGURATION_TYPES": configuration_types,
+            "CMAKE_GENERATOR": generator,
+        })
+        if multi_config:
+            cache["CMAKE_MAKE_PROGRAM"] = "/usr/bin/ninja"
+    entry_count *= 2 if multi_config else 1
+    benchmark_object_relative = runner.expected_compile_output(
+        role, Path(benchmark_source), SPECIFICATION, selected_configuration)
+    benchmark_object = build_dir + "/" + benchmark_object_relative
     library_pairs = []
     archive_objects = []
     for index, name in enumerate(library_names):
         source_path = source_root + "/" + name
         object_relative = runner.expected_compile_output(
-            role, Path(source_path), SPECIFICATION)
+            role, Path(source_path), SPECIFICATION, selected_configuration)
         archive_objects.append(object_relative)
         library_pairs.append({
             "source": complete_artifact(
@@ -498,26 +794,52 @@ def complete_build_fixture(
                 benchmark_object, "object_file", "7" if baseline else "8"),
         },
     ], key=lambda record: record["source"]["path"])
+    output_prefix = (
+        f"{selected_configuration}/" if selected_configuration else "")
+    archive_recipe_name = output_prefix + archive_name
+    executable_recipe_name = output_prefix + executable_name
     archive_recipe_text = (
-        f"/usr/bin/ar qc {archive_name} "
+        f"/usr/bin/ar qc {archive_recipe_name} "
         + " ".join(archive_objects) + "\n"
-        + f"/usr/bin/ranlib {archive_name}\n")
+        + f"/usr/bin/ranlib {archive_recipe_name}\n")
     archive_recipe_content = runner.exact_text_content(
         archive_recipe_text, f"fixture {role} archive recipe")
     executable_recipe_text = (
-        f"/usr/bin/compiler -O3 -fopenmp {archive_name} "
+        f"/usr/bin/compiler -O3 -fopenmp {archive_recipe_name} "
         f"{Path(benchmark_object).relative_to(Path(build_dir)).as_posix()} "
-        f"-o {executable_name} "
+        f"-o {executable_recipe_name} "
         "/usr/lib/gcc/x86_64-linux-gnu/13/libgomp.so "
         "/usr/lib/x86_64-linux-gnu/libpthread.a\n")
     executable_recipe_content = runner.exact_text_content(
         executable_recipe_text, f"fixture {role} executable recipe")
-    archive_path = build_dir + "/" + archive_name
-    executable_path = build_dir + "/" + executable_name
-    executable_recipe_path = (
-        build_dir + f"/CMakeFiles/{executable_name}.dir/link.txt")
-    archive_recipe_path = (
-        build_dir + f"/CMakeFiles/{target_directory}/link.txt")
+    archive_path = build_dir + "/" + archive_recipe_name
+    executable_path = build_dir + "/" + executable_recipe_name
+    if selected_configuration:
+        executable_recipe_path = (
+            build_dir + f"/CMakeFiles/impl-{selected_configuration}.ninja")
+        archive_recipe_path = executable_recipe_path
+    else:
+        executable_recipe_path = (
+            build_dir + f"/CMakeFiles/{executable_name}.dir/link.txt")
+        archive_recipe_path = (
+            build_dir + f"/CMakeFiles/{target_directory}/link.txt")
+    ninja_graph = (
+        complete_ninja_graph_fixture(build_dir) if multi_config else None)
+    if ninja_graph is not None:
+        impl_artifact = copy.deepcopy(next(
+            record["artifact"] for record in ninja_graph["files"]
+            if record["relative_path"] ==
+                "CMakeFiles/impl-Release.ninja"))
+        impl_artifact["kind"] = "build_metadata"
+        executable_recipe_artifact = copy.deepcopy(impl_artifact)
+        archive_recipe_artifact = copy.deepcopy(impl_artifact)
+    else:
+        executable_recipe_artifact = complete_artifact(
+            executable_recipe_path, "build_metadata", "b",
+            content=executable_recipe_text)
+        archive_recipe_artifact = complete_artifact(
+            archive_recipe_path, "build_metadata", "c",
+            content=archive_recipe_text)
     compiler_text = "fixture compiler 1.0\n"
     external_link_inputs = runner.capture_external_link_inputs(
         runner.shlex.split(executable_recipe_text),
@@ -529,7 +851,7 @@ def complete_build_fixture(
     compile_identity = {
         "schema": runner.compile_commands_schema_for_raw_schema(raw_schema),
         "implementation": role,
-        "profile": runner.compile_profile_for_implementation(role),
+        "profile": runner.compile_profile_for_implementation(role, raw_schema),
         "entry_count": entry_count,
         "required_sources": sorted(pair["source"]["path"] for pair in pairs),
         "validated_optimization": "-O3",
@@ -539,15 +861,19 @@ def complete_build_fixture(
             "directory": build_dir,
             "file": pair["source"]["path"],
             "output": runner.expected_compile_output(
-                role, Path(pair["source"]["path"]), SPECIFICATION),
+                role, Path(pair["source"]["path"]), SPECIFICATION,
+                selected_configuration),
             "arguments": runner.expected_compile_argv(
                 role, Path(pair["source"]["path"]), SPECIFICATION,
                 "/usr/bin/compiler", raw_schema,
-                CANDIDATE_TREE if role == "candidate" else None),
+                CANDIDATE_TREE if role == "candidate" else None,
+                effective_configuration if not baseline else None,
+                selected_configuration),
         } for pair in pairs], key=lambda entry: entry["file"]),
         "isa_policy": isa_policy,
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in (
+            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7, runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -568,18 +894,17 @@ def complete_build_fixture(
                 "source_tree": CANDIDATE_TREE,
                 "source_tracked_dirty": False,
             }
-    return {
+    if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+        compile_identity["effective_build_configuration"] = (
+            None if baseline else effective_configuration)
+    result = {
         "build_dir": build_dir,
         "cmake_cache": complete_artifact(
             build_dir + "/CMakeCache.txt", "build_metadata", "9"),
         "compile_commands": complete_artifact(
             build_dir + "/compile_commands.json", "build_metadata", "a"),
-        "executable_link_recipe": complete_artifact(
-            executable_recipe_path, "build_metadata", "b",
-            content=executable_recipe_text),
-        "archive_link_recipe": complete_artifact(
-            archive_recipe_path, "build_metadata", "c",
-            content=archive_recipe_text),
+        "executable_link_recipe": executable_recipe_artifact,
+        "archive_link_recipe": archive_recipe_artifact,
         "compiler": complete_artifact("/usr/bin/compiler", "compiler", "d"),
         "compiler_invocation": {
             "invocation": "/usr/bin/compiler",
@@ -608,6 +933,19 @@ def complete_build_fixture(
         },
         "validated_external_link_inputs": external_link_inputs,
     }
+    if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+        ninja_text = "1.11.1\n"
+        result["multi_config_build_tool"] = (
+            complete_artifact(
+                runner.CANONICAL_NINJA_PATH, "build_tool", "7")
+            if multi_config else None)
+        result["multi_config_build_tool_version_stdout"] = (
+            {
+                "sha256": runner.sha256_bytes(ninja_text.encode("utf-8")),
+                "text": ninja_text,
+            } if multi_config else None)
+        result["multi_config_ninja_graph"] = ninja_graph
+    return result
 
 
 def complete_runtime_fixture(
@@ -648,11 +986,12 @@ def complete_runtime_fixture(
     if raw_schema == runner.RAW_SCHEMA_V5:
         result["raw_ldd_output"] = runner.exact_text_content(
             raw, "fixture raw ldd output")
-    elif raw_schema == runner.RAW_SCHEMA:
+    elif raw_schema in (
+            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7, runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
-        raise ValueError("complete runtime fixture requires schema v5 or v6")
+        raise ValueError("complete runtime fixture requires schema v5, v6, or v7")
     return result
 
 
@@ -674,7 +1013,130 @@ def replace_retained_ldd_text(closure: dict, text: str, label: str) -> None:
         closure["raw_ldd_output"] = runner.exact_text_content(text, label)
 
 
-def complete_source_fixture(role: str) -> dict:
+def git_object_fixture(kind: str, raw: bytes) -> dict:
+    object_id = hashlib.sha1(
+        f"{kind} {len(raw)}\0".encode("ascii") + raw).hexdigest()
+    return {
+        "encoding": "base64", "size": len(raw),
+        "sha256": hashlib.sha256(raw).hexdigest(),
+        "object_id": object_id,
+        "base64": base64.b64encode(raw).decode("ascii"),
+    }
+
+
+def rich_git_source_fixture(
+    path: str,
+    head: str,
+    commit_raw: bytes,
+    tree_objects_base64: Mapping[str, str],
+    *,
+    detached: bool,
+    nested: Mapping[str, dict] | None = None,
+) -> dict:
+    nested = {} if nested is None else dict(nested)
+    commit_object = git_object_fixture("commit", commit_raw)
+    if commit_object["object_id"] != head:
+        raise AssertionError("fixture commit bytes do not match HEAD")
+    tree = commit_raw.split(b"\n", 1)[0].decode("ascii").split(" ", 1)[1]
+    tree_objects = []
+    decoded_trees = {}
+    for object_id, encoded in sorted(tree_objects_base64.items()):
+        raw = base64.b64decode(encoded, validate=True)
+        identity = git_object_fixture("tree", raw)
+        if identity["object_id"] != object_id:
+            raise AssertionError("fixture tree bytes do not match object ID")
+        tree_objects.append(identity)
+        decoded_trees[object_id] = raw
+    leaves = runner.git_capture._flatten_tree_objects(tree, decoded_trees)
+    records = []
+    submodules = []
+    for entry in leaves:
+        if entry["git_type"] == "blob":
+            records.append({**entry, "kind": "regular"})
+            continue
+        identity = nested.get(entry["path"])
+        if identity is None:
+            raise AssertionError("fixture submodule identity is absent")
+        identity_sha256 = runner.git_capture._digest(identity)
+        records.append({
+            **entry, "kind": "submodule",
+            "identity_sha256": identity_sha256,
+        })
+        submodules.append({
+            "path": entry["path"],
+            "object_id": entry["object_id"],
+            "identity_sha256": identity_sha256,
+            "identity": identity,
+        })
+    tree_listing = b"".join(
+        (
+            f"{record['git_mode']} {record['git_type']} "
+            f"{record['object_id']}\t{record['path']}\0"
+        ).encode("utf-8")
+        for record in records)
+    index_stage = b"".join(
+        (
+            f"{record['git_mode']} {record['object_id']} 0\t"
+            f"{record['path']}\0"
+        ).encode("utf-8")
+        for record in records)
+    default_flags = b"".join(
+        f"H {record['path']}\0".encode("utf-8")
+        for record in records)
+    empty_bytes = {
+        "size": 0, "sha256": hashlib.sha256(b"").hexdigest()}
+    git_sha = "a" * 64
+    gitdir = path + "/.git"
+    return {
+        "schema": runner.git_capture.SCHEMA,
+        "path": path,
+        "head": head,
+        "tree": tree,
+        "detached": detached,
+        "head_ref": None if detached else "refs/heads/fixture",
+        "superproject_worktree": None,
+        "tracked_tree_listing_sha256":
+            hashlib.sha256(tree_listing).hexdigest(),
+        "tracked_status": "clean",
+        "commit_object": commit_object,
+        "tree_objects": tree_objects,
+        "git_executable": {
+            "source": {
+                "path": "/usr/bin/git", "size": 1, "mode": 0o755,
+                "sha256": git_sha,
+            },
+            "sealed": {
+                "protocol": runner.git_capture.GIT_EXECUTABLE_PROTOCOL,
+                "size": 1, "mode": 0o755, "sha256": git_sha,
+                "seals": runner.git_capture.REQUIRED_SEALS,
+                "source_sha256": git_sha,
+            },
+        },
+        "git_metadata": {
+            "layout": "ordinary", "gitdir": gitdir, "commondir": gitdir,
+            "guarded_components": [gitdir],
+            "guard_policy": runner.git_capture.METADATA_GUARD_POLICY,
+            "guarded_file_count": 0,
+            "guarded_files_sha256": hashlib.sha256(
+                runner.canonical_bytes([])).hexdigest(),
+        },
+        "worktree_guard_policy":
+            runner.git_capture.WORKTREE_GUARD_POLICY,
+        "config": copy.deepcopy(empty_bytes),
+        "index": {
+            "entry_count": len(records),
+            "stage": runner.git_capture._byte_identity(index_stage),
+            "flags_v": runner.git_capture._byte_identity(default_flags),
+            "flags_f": runner.git_capture._byte_identity(default_flags),
+        },
+        "tracked_files": records,
+        "tracked_files_sha256": runner.git_capture._digest(records),
+        "submodules": submodules,
+    }
+
+
+def complete_source_fixture(
+        role: str, raw_schema: str = runner.RAW_SCHEMA) -> dict:
     baseline = role == "baseline"
     raw = (base64.b64decode(BASELINE_COMMIT_BASE64)
            if baseline else CANDIDATE_COMMIT_RAW)
@@ -683,18 +1145,37 @@ def complete_source_fixture(role: str) -> dict:
     commit_object = runner.git_commit_object_identity(raw, head)
     runner.validate_git_commit_object_identity(
         commit_object, head, tree, f"fixture {role}")
-    return {
+    legacy = {
         "path": SPECIFICATION[f"{role}_source_root"],
         "head": head, "tree": tree, "detached": baseline,
         "tracked_tree_listing_sha256": "7" * 64 if baseline else "9" * 64,
         "tracked_status": "clean", "commit_object": commit_object,
     }
+    if raw_schema != runner.RAW_SCHEMA:
+        return legacy
+    source_root = SPECIFICATION[f"{role}_source_root"]
+    if not baseline:
+        return rich_git_source_fixture(
+            source_root, head, raw, {CANDIDATE_TREE: ""},
+            detached=False)
+    nested_path = source_root + "/sse2neon"
+    nested = rich_git_source_fixture(
+        nested_path, SSE2NEON_COMMIT,
+        base64.b64decode(SSE2NEON_COMMIT_BASE64, validate=True),
+        SSE2NEON_TREE_OBJECTS_BASE64, detached=True)
+    return rich_git_source_fixture(
+        source_root, head, raw, BASELINE_TREE_OBJECTS_BASE64,
+        detached=True, nested={"sse2neon": nested})
 
 
-def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
+def cmake_fixture_identity(
+    raw_schema: str, *, multi_config: bool = False,
+) -> tuple[dict, dict]:
     if raw_schema in runner.COMPLETE_EVIDENCE_SCHEMAS:
-        baseline_build = complete_build_fixture("baseline", raw_schema)
-        candidate_build = complete_build_fixture("candidate", raw_schema)
+        baseline_build = complete_build_fixture(
+            "baseline", raw_schema, multi_config=multi_config)
+        candidate_build = complete_build_fixture(
+            "candidate", raw_schema, multi_config=multi_config)
         baseline_executable = baseline_build["validated_executable"]
         candidate_executable = candidate_build["validated_executable"]
         baseline_archive = baseline_build["validated_archive"]
@@ -720,9 +1201,15 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
                 baseline_executable["path"], "4", raw_schema),
             "candidate_runtime_closure": complete_runtime_fixture(
                 candidate_executable["path"], "5", raw_schema),
-            "baseline_source": complete_source_fixture("baseline"),
-            "candidate_source": complete_source_fixture("candidate"),
+            "baseline_source": complete_source_fixture(
+                "baseline", raw_schema),
+            "candidate_source": complete_source_fixture(
+                "candidate", raw_schema),
         }
+        if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+            identity["evidence_helper"] = complete_artifact(
+                SPECIFICATION["candidate_source_root"] + "/" +
+                runner.EVIDENCE_HELPER_RELATIVE_PATH, "file", "6")
         specification = copy.deepcopy(SPECIFICATION)
         specification.update({
             "baseline_executable": baseline_executable["path"],
@@ -786,11 +1273,37 @@ def cmake_fixture_identity(raw_schema: str) -> tuple[dict, dict]:
     return identity, specification
 
 
+def sealed_executable_fixtures(identity: Mapping[str, object]) -> dict:
+    result = {}
+    for role in ("baseline", "candidate"):
+        source = copy.deepcopy(identity[f"{role}_executable"])
+        closure = copy.deepcopy(identity[f"{role}_runtime_closure"])
+        closure["executable"] = runner.SEALED_EXECUTABLE_COMMAND[role]
+        result[role] = {
+            "source": source,
+            "snapshot": {
+                "protocol": runner.SEALED_EXECUTABLE_PROTOCOL,
+                "size": source["size"],
+                "mode": source["mode"],
+                "sha256": source["sha256"],
+                "seals": runner.LINUX_REQUIRED_EXECUTABLE_SEALS,
+                "elf": True,
+            },
+            "runtime_closure": closure,
+        }
+    return result
+
+
 def synthetic_raw(
     candidate_scale: float = 0.8, raw_schema: str = runner.RAW_SCHEMA,
     candidate_mode: str = "auto",
+    *, multi_config: bool = False,
 ) -> dict:
-    identity, specification = cmake_fixture_identity(raw_schema)
+    identity, specification = cmake_fixture_identity(
+        raw_schema, multi_config=multi_config)
+    executable_snapshots = (
+        sealed_executable_fixtures(identity)
+        if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS else None)
     campaign = copy.deepcopy(CAMPAIGN)
     if raw_schema in runner.CANDIDATE_MODE_SCHEMAS:
         campaign["candidate_mode"] = candidate_mode
@@ -813,7 +1326,9 @@ def synthetic_raw(
                     specification["taskset"], "-c", "0",
                     *runner.benchmark_arguments(
                         implementation,
-                        Path(specification[f"{implementation}_executable"]),
+                        (Path(runner.SEALED_EXECUTABLE_COMMAND[implementation])
+                         if executable_snapshots is not None else
+                         Path(specification[f"{implementation}_executable"])),
                         CELL, campaign),
                 ],
                 "environment": copy.deepcopy(runner.CHILD_ENVIRONMENT),
@@ -830,6 +1345,11 @@ def synthetic_raw(
                 "reservation_before": RESERVATION,
                 "reservation_after": RESERVATION,
             })
+            if executable_snapshots is not None:
+                invocations[-1]["execution_protocol"] = \
+                    runner.SEALED_EXECUTABLE_PROTOCOL
+                invocations[-1]["executable_snapshot"] = copy.deepcopy(
+                    executable_snapshots[implementation])
     analysis = runner.analyze(invocations, campaign)
     payload = {
         "schema": raw_schema,
@@ -849,6 +1369,8 @@ def synthetic_raw(
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = runner.supervision_record(
             "ab" * 32, 900, 2_100, campaign, RESERVATION, ISOLATION)
+    if executable_snapshots is not None:
+        payload["executable_snapshots"] = executable_snapshots
     return runner.signed(payload)
 
 
@@ -874,6 +1396,10 @@ def write_complete_evidence_bundle(
         stderr_path = root / f"{index}.stderr"
         stdout_path.write_bytes(stdout)
         stderr_path.write_bytes(b"")
+        if manifest_schema in (
+                runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA):
+            stdout_path.chmod(0o600)
+            stderr_path.chmod(0o600)
         invocation["stdout"] = {
             "path": stdout_path.name,
             "size": len(stdout),
@@ -905,8 +1431,14 @@ def write_complete_evidence_bundle(
         "identities": value["identities_initial"],
         "analysis": value["analysis"],
     }
-    if manifest_schema in (runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA):
+    if manifest_schema in (
+        runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA_V6,
+        runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA,
+    ):
         manifest_payload["supervision"] = value["supervision"]
+    if manifest_schema == runner.MANIFEST_SCHEMA:
+        manifest_payload["executable_snapshots"] = \
+            value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
     manifest_path = root / "manifest.json"
     runner.write_json_exclusive(manifest_path, manifest)
@@ -982,6 +1514,8 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V3: runner.FAILURE_SCHEMA_V3,
         runner.RAW_SCHEMA_V4: runner.FAILURE_SCHEMA_V4,
         runner.RAW_SCHEMA_V5: runner.FAILURE_SCHEMA_V5,
+        runner.RAW_SCHEMA_V6: runner.FAILURE_SCHEMA_V6,
+        runner.RAW_SCHEMA_V7: runner.FAILURE_SCHEMA_V7,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1004,6 +1538,9 @@ def synthetic_failure(raw_schema: str) -> dict:
     }
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
+    if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS:
+        payload["executable_snapshots"] = copy.deepcopy(
+            raw["executable_snapshots"])
     return runner.signed(payload)
 
 
@@ -1012,6 +1549,293 @@ class MainCompareRunnerTests(unittest.TestCase):
         with self.assertRaises(runner.EvidenceError):
             runner.validate_raw(
                 resign(value), None, check_files=False, check_current_inputs=False)
+
+    def test_direct_script_help_loads_shared_git_capture(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-direct-script-") as directory:
+            completed = subprocess.run(
+                [sys.executable, str(MODULE_PATH), "--help"],
+                cwd=directory, stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env={**os.environ, "PYTHONWARNINGS":
+                     "error::ResourceWarning"},
+                timeout=30, check=False)
+        self.assertEqual(
+            completed.returncode, 0,
+            completed.stderr.decode("utf-8", errors="replace"))
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
+                         "descriptor-count regression needs procfs")
+    def test_git_symlink_type_failure_closes_untransferred_descriptor(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-symlink-fd-") as directory, \
+                ExitStack() as stack:
+            root = Path(directory)
+            (root / "victim").write_text("regular", encoding="ascii")
+            tree = runner.git_capture._OpenDirectoryTree(
+                root, stack, "symlink descriptor fixture")
+            before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                    runner.git_capture.os, "readlink",
+                    return_value="forged-target"), \
+                 self.assertRaisesRegex(
+                        runner.git_capture.GitCaptureError,
+                        "not a symlink"):
+                runner.git_capture._open_symlink(tree, "victim", stack)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
+                         "descriptor-count regression needs procfs")
+    def test_git_capture_symlink_return_trace_cannot_strand_descriptor(
+            self) -> None:
+        class InjectedTraceFailure(BaseException):
+            pass
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-symlink-trace-") as directory:
+            root = Path(directory)
+            initialize_git_fixture(root)
+            (root / "tracked-link").symlink_to("tracked.txt")
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "add", "tracked-link"],
+                check=True)
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "commit", "-qm",
+                 "tracked symlink"], check=True)
+            commit = subprocess.check_output(
+                ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD"],
+                text=True).strip()
+            before = len(os.listdir("/proc/self/fd"))
+            triggered = False
+
+            def fail_at_symlink_return(frame, event, argument):
+                nonlocal triggered
+                del argument
+                if event == "return" and frame.f_code is \
+                        runner.git_capture._open_symlink.__code__ and \
+                        frame.f_locals.get("relative") == "tracked-link":
+                    triggered = True
+                    sys.settrace(None)
+                    raise InjectedTraceFailure(
+                        "injected symlink-return interruption")
+                return fail_at_symlink_return
+
+            sys.settrace(fail_at_symlink_return)
+            try:
+                with self.assertRaises(InjectedTraceFailure):
+                    runner.git_identity(
+                        root, commit, False, include_commit_object=True,
+                        rich=True)
+            finally:
+                sys.settrace(None)
+            self.assertTrue(triggered)
+            self.assertEqual(len(os.listdir("/proc/self/fd")), before)
+
+    def test_git_capture_accepts_detached_main_and_attached_candidate(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-clean-") as directory:
+            root = Path(directory)
+            main = root / "main"
+            candidate = root / "candidate"
+            main.mkdir()
+            candidate.mkdir()
+            main_commit = initialize_git_fixture(main, "main\n")
+            candidate_commit = initialize_git_fixture(
+                candidate, "candidate\n")
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(main), "checkout", "-q",
+                 "--detach", main_commit], check=True)
+            main_identity = runner.git_identity(
+                main, main_commit, True, include_commit_object=True,
+                rich=True)
+            candidate_identity = runner.git_identity(
+                candidate, candidate_commit, False,
+                include_commit_object=True, rich=True)
+            self.assertTrue(main_identity["detached"])
+            self.assertFalse(candidate_identity["detached"])
+            self.assertEqual(
+                main_identity["git_executable"],
+                candidate_identity["git_executable"])
+            runner.git_capture.validate_git_capture(
+                main_identity, str(main.resolve()), main_commit,
+                require_detached=True)
+            runner.git_capture.validate_git_capture(
+                candidate_identity, str(candidate.resolve()),
+                candidate_commit, require_detached=False)
+
+    def test_git_capture_tree_closure_rejects_coherent_transcript_forgery(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-tree-proof-") as directory:
+            root = Path(directory)
+            (root / "nested").mkdir()
+            commit = initialize_git_fixture(root)
+            (root / "nested" / "second.txt").write_text(
+                "second\n", encoding="utf-8")
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "add", "."], check=True)
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "commit", "-qm",
+                 "nested"], check=True)
+            commit = subprocess.check_output(
+                ["/usr/bin/git", "-C", str(root), "rev-parse", "HEAD"],
+                text=True).strip()
+            identity = runner.git_identity(
+                root, commit, False, include_commit_object=True, rich=True)
+            self.assertGreater(len(identity["tree_objects"]), 1)
+            self.assertTrue(all(
+                set(record) == {
+                    "path", "git_mode", "git_type", "object_id", "kind"}
+                for record in identity["tracked_files"]))
+
+            def reseal_transcripts(value: dict) -> None:
+                records = value["tracked_files"]
+                value["tracked_files_sha256"] = \
+                    runner.git_capture._digest(records)
+                tree_listing = b"".join(
+                    (
+                        f"{record['git_mode']} {record['git_type']} "
+                        f"{record['object_id']}\t{record['path']}\0"
+                    ).encode("utf-8")
+                    for record in records)
+                index_stage = b"".join(
+                    (
+                        f"{record['git_mode']} {record['object_id']} 0\t"
+                        f"{record['path']}\0"
+                    ).encode("utf-8")
+                    for record in records)
+                default_flags = b"".join(
+                    f"H {record['path']}\0".encode("utf-8")
+                    for record in records)
+                value["tracked_tree_listing_sha256"] = \
+                    hashlib.sha256(tree_listing).hexdigest()
+                value["index"]["entry_count"] = len(records)
+                value["index"]["stage"] = \
+                    runner.git_capture._byte_identity(index_stage)
+                value["index"]["flags_v"] = \
+                    runner.git_capture._byte_identity(default_flags)
+                value["index"]["flags_f"] = \
+                    runner.git_capture._byte_identity(default_flags)
+
+            forged_record = copy.deepcopy(identity)
+            forged_record["tracked_files"][0]["object_id"] = "0" * 40
+            reseal_transcripts(forged_record)
+            with self.assertRaisesRegex(
+                    runner.git_capture.GitCaptureError,
+                    "differs from recursive tree objects"):
+                runner.git_capture.validate_git_capture(
+                    forged_record, str(root.resolve()), commit,
+                    require_detached=False)
+
+            omitted_record = copy.deepcopy(identity)
+            omitted_record["tracked_files"].pop()
+            reseal_transcripts(omitted_record)
+            with self.assertRaises(runner.git_capture.GitCaptureError):
+                runner.git_capture.validate_git_capture(
+                    omitted_record, str(root.resolve()), commit,
+                    require_detached=False)
+
+            forged_tree = copy.deepcopy(identity)
+            subtree = next(
+                record for record in forged_tree["tree_objects"]
+                if record["object_id"] != forged_tree["tree"])
+            content = bytearray(base64.b64decode(
+                subtree["base64"], validate=True))
+            content[-1] ^= 1
+            replacement = git_object_fixture("tree", bytes(content))
+            forged_tree["tree_objects"][
+                forged_tree["tree_objects"].index(subtree)] = replacement
+            forged_tree["tree_objects"].sort(
+                key=lambda record: record["object_id"])
+            with self.assertRaises(runner.git_capture.GitCaptureError):
+                runner.git_capture.validate_git_capture(
+                    forged_tree, str(root.resolve()), commit,
+                    require_detached=False)
+
+            extra_field = copy.deepcopy(identity)
+            extra_field["tracked_files"][0]["sha256"] = "f" * 64
+            reseal_transcripts(extra_field)
+            with self.assertRaisesRegex(
+                    runner.git_capture.GitCaptureError,
+                    "record shape differs"):
+                runner.git_capture.validate_git_capture(
+                    extra_field, str(root.resolve()), commit,
+                    require_detached=False)
+
+    def test_git_tree_object_rejects_blob_tree_duplicate_basename(self) -> None:
+        raw = (
+            b"100644 foo\0" + b"\x11" * 20 +
+            b"40000 foo\0" + b"\x22" * 20
+        )
+        with self.assertRaisesRegex(
+                runner.git_capture.GitCaptureError,
+                "duplicate entry names"):
+            runner.git_capture._parse_tree_object(raw, "fixture tree")
+
+    def test_git_capture_rejects_deterministic_mixed_command_state(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-mixed-") as directory:
+            root = Path(directory)
+            first = initialize_git_fixture(root)
+            (root / "tracked.txt").write_text("two\n", encoding="utf-8")
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "commit", "-qam",
+                 "second"], check=True)
+            alternate_tree = subprocess.check_output(
+                ["/usr/bin/git", "-C", str(root), "rev-parse",
+                 "HEAD^{tree}"], text=True).strip()
+            subprocess.run(
+                ["/usr/bin/git", "-C", str(root), "reset", "--hard", "-q",
+                 first], check=True)
+            invoke = runner.git_capture._invoke_git
+
+            def mixed(*args, **kwargs):
+                arguments = args[3]
+                if tuple(arguments) == (
+                        "rev-parse", "--verify", "HEAD^{tree}"):
+                    return (alternate_tree + "\n").encode("ascii")
+                return invoke(*args, **kwargs)
+
+            with mock.patch.object(
+                    runner.git_capture, "_invoke_git", side_effect=mixed), \
+                    self.assertRaises(runner.EvidenceError):
+                runner.git_identity(
+                    root, first, False, include_commit_object=True, rich=True)
+
+    def test_git_capture_rejects_actual_git_directory_aba(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-main-git-aba-") as directory:
+            parent = Path(directory)
+            root = parent / "source"
+            root.mkdir()
+            commit = initialize_git_fixture(root)
+            alternate = parent / "alternate.git"
+            saved = parent / "saved.git"
+            shutil.copytree(root / ".git", alternate)
+            invoke = runner.git_capture._invoke_git
+            triggered = False
+
+            def aba(*args, **kwargs):
+                nonlocal triggered
+                output = invoke(*args, **kwargs)
+                if not triggered:
+                    triggered = True
+                    (root / ".git").rename(saved)
+                    alternate.rename(root / ".git")
+                    (root / ".git").rename(alternate)
+                    saved.rename(root / ".git")
+                return output
+
+            with mock.patch.object(
+                    runner.git_capture, "_invoke_git", side_effect=aba), \
+                    self.assertRaises(runner.EvidenceError):
+                runner.git_identity(
+                    root, commit, False,
+                    include_commit_object=True, rich=True)
+            self.assertTrue(triggered)
 
     def test_valid_fixture_and_analysis(self) -> None:
         value = synthetic_raw()
@@ -1024,6 +1848,186 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertEqual(result["degrees_of_freedom"], 2)
             self.assertTrue(math.isfinite(result["ci95_lower"]))
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
+
+    def test_v8_exact_shapes_and_timestamps_fail_closed(self) -> None:
+        mutations = []
+
+        def add_raw_field(value: dict) -> None:
+            value["unbound"] = True
+
+        def remove_raw_time(value: dict) -> None:
+            value.pop("created_utc")
+
+        def noncanonical_raw_time(value: dict) -> None:
+            value["created_utc"] = "2026-07-16T00:00:00.1Z"
+
+        def invalid_raw_time(value: dict) -> None:
+            value["created_utc"] = "2026-02-30T00:00:00.000000Z"
+
+        def add_invocation_field(value: dict) -> None:
+            value["invocations"][0]["unbound"] = True
+
+        def add_campaign_field(value: dict) -> None:
+            value["campaign"]["unversioned_claim"] = {"speedup": 999}
+
+        def add_reservation_field_everywhere(value: dict) -> None:
+            reservation = copy.deepcopy(value["reservation"])
+            reservation["unversioned_claim"] = {"lease": "forged"}
+            value["reservation"] = copy.deepcopy(reservation)
+            for invocation in value["invocations"]:
+                invocation["reservation_before"] = copy.deepcopy(reservation)
+                invocation["reservation_after"] = copy.deepcopy(reservation)
+
+        def add_invocation_reservation_field(value: dict) -> None:
+            reservation = copy.deepcopy(
+                value["invocations"][0]["reservation_before"])
+            reservation["unversioned_claim"] = {"lease": "forged"}
+            value["invocations"][0]["reservation_before"] = reservation
+
+        def remove_invocation_time(value: dict) -> None:
+            value["invocations"][0].pop("started_utc")
+
+        def noncanonical_invocation_time(value: dict) -> None:
+            value["invocations"][0]["started_utc"] = \
+                "2026-07-16T00:00:00+00:00"
+
+        def add_stream_field(value: dict) -> None:
+            value["invocations"][0]["stdout"]["unbound"] = True
+
+        def remove_stream_digest(value: dict) -> None:
+            value["invocations"][0]["stdout"].pop("sha256")
+
+        mutations.extend((
+            add_raw_field, remove_raw_time, noncanonical_raw_time,
+            invalid_raw_time,
+            add_invocation_field, add_campaign_field,
+            add_reservation_field_everywhere,
+            add_invocation_reservation_field, remove_invocation_time,
+            noncanonical_invocation_time, add_stream_field,
+            remove_stream_digest,
+        ))
+        for mutate in mutations:
+            with self.subTest(mutation=mutate.__name__):
+                value = synthetic_raw()
+                mutate(value)
+                self.assert_rejected(value)
+
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
+        historical["unbound_historical_field"] = True
+        historical["campaign"]["unbound_historical_field"] = True
+        historical["invocations"][0]["unbound_historical_field"] = True
+        supervision = historical["supervision"]
+        historical["supervision"] = runner.supervision_record(
+            supervision["execution_nonce"],
+            supervision["runner_started_monotonic_ns"],
+            supervision["runner_finished_monotonic_ns"],
+            historical["campaign"], historical["reservation"],
+            historical["isolation"])
+        historical["supervision"]["runner_pid"] = supervision["runner_pid"]
+        runner.validate_raw(
+            resign(historical), None, check_files=False,
+            check_current_inputs=False)
+
+    def test_v8_manifest_and_raw_identity_shapes_fail_closed(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            original_path = write_complete_evidence_bundle(
+                root, synthetic_raw())
+            original = json.loads(original_path.read_text(encoding="utf-8"))
+            mutations = (
+                ("manifest-extra",
+                 lambda value: value.__setitem__("unbound", True)),
+                ("manifest-missing-time",
+                 lambda value: value.pop("created_utc")),
+                ("manifest-noncanonical-time",
+                 lambda value: value.__setitem__(
+                     "created_utc", "2026-07-16T00:00:00.1Z")),
+                ("manifest-invalid-time",
+                 lambda value: value.__setitem__(
+                     "created_utc", "2026-02-30T00:00:00.000000Z")),
+                ("raw-info-extra",
+                 lambda value: value["raw"].__setitem__("unbound", True)),
+                ("raw-info-missing-digest",
+                 lambda value: value["raw"].pop("payload_digest")),
+            )
+            for label, mutate in mutations:
+                with self.subTest(label=label):
+                    changed = copy.deepcopy(original)
+                    mutate(changed)
+                    changed = resign(changed)
+                    original_path.unlink()
+                    runner.write_json_exclusive(original_path, changed)
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.verify_campaign(argparse.Namespace(
+                            manifest=original_path,
+                            no_current_input_check=True))
+            original_path.unlink()
+            runner.write_json_exclusive(original_path, original)
+
+    def test_failure_input_specification_is_exact_and_never_keyerrors(
+        self,
+    ) -> None:
+        keys = sorted(runner.INPUT_SPECIFICATION_KEYS)
+        for key in keys:
+            with self.subTest(missing=key):
+                failure = synthetic_failure(runner.RAW_SCHEMA)
+                failure["input_specification"].pop(key)
+                with self.assertRaises(runner.EvidenceError) as captured:
+                    runner.validate_failure(
+                        resign(failure), Path("/unused"), check_files=False)
+                self.assertNotIsInstance(captured.exception, KeyError)
+        failure = synthetic_failure(runner.RAW_SCHEMA)
+        failure["input_specification"]["unbound"] = "/tmp/unbound"
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+        failure = synthetic_failure(runner.RAW_SCHEMA)
+        failure["created_utc"] = "2026-07-16T00:00:00.1Z"
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+        failure = synthetic_failure(runner.RAW_SCHEMA)
+        failure["campaign"]["unversioned_claim"] = {"speedup": 999}
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+        failure = synthetic_failure(runner.RAW_SCHEMA)
+        failure["reservation"]["unversioned_claim"] = {"lease": "forged"}
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+
+    def test_v8_failed_invocation_and_stream_shapes_fail_closed(self) -> None:
+        raw = synthetic_raw()
+        original_invocation = copy.deepcopy(raw["invocations"][0])
+
+        def failure_with_invocation() -> dict:
+            failure = synthetic_failure(runner.RAW_SCHEMA)
+            invocation = copy.deepcopy(original_invocation)
+            invocation["stdout"]["path"] = "unused.stdout"
+            invocation["stderr"]["path"] = "unused.stderr"
+            failure["invocations"] = [invocation]
+            failure["retained_files"] = [
+                copy.deepcopy(invocation["stdout"]),
+                copy.deepcopy(invocation["stderr"]),
+            ]
+            return failure
+
+        failure = failure_with_invocation()
+        runner.validate_failure(
+            resign(failure), Path("/unused"), check_files=False)
+
+        failure = failure_with_invocation()
+        failure["invocations"][0]["unbound"] = True
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
+
+        failure = failure_with_invocation()
+        failure["invocations"][0]["stderr"].pop("sha256")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
 
     def test_count_and_cpu_fields_require_bounded_non_boolean_integers(self) -> None:
         for key, replacement in (
@@ -1123,14 +2127,16 @@ class MainCompareRunnerTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             valid_manifest = write_complete_evidence_bundle(
-                Path(directory), synthetic_raw())
+                Path(directory),
+                synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7),
+                runner.MANIFEST_SCHEMA_V7)
             runner.verify_campaign(argparse.Namespace(
                 manifest=valid_manifest, no_current_input_check=True))
             document, scope, _ = plan.verify_exact_manifest(valid_manifest)
-            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V7)
             self.assertEqual(
                 plan.validate_evidence_scope(scope)["schema"],
-                "leopard2-balanced-evidence-scope/v3")
+                plan.EVIDENCE_SCOPE_SCHEMA)
 
         def missing_sources(value: dict) -> None:
             for role in ("baseline", "candidate"):
@@ -1306,11 +2312,32 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(plan.PlanError):
                     plan.verify_exact_manifest(manifest_path)
 
+    def test_promotion_accepts_v8_and_rejects_schema_downgrades(self) -> None:
+        plan = load_plan_runner()
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), synthetic_raw())
+            document, scope, _ = plan.verify_exact_manifest(manifest_path)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            self.assertEqual(
+                plan.validate_evidence_scope(scope)["schema"],
+                plan.EVIDENCE_SCOPE_SCHEMA)
+        for manifest_schema, raw_schema in (
+            (runner.MANIFEST_SCHEMA_V7, runner.RAW_SCHEMA),
+            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V7),
+            (runner.MANIFEST_SCHEMA_V6, runner.RAW_SCHEMA_V5),
+        ):
+            with self.subTest(
+                    manifest_schema=manifest_schema,
+                    raw_schema=raw_schema), self.assertRaises(plan.PlanError):
+                plan._validate_exact_schema_pair(
+                    {"schema": manifest_schema}, {"schema": raw_schema})
+
     def test_coherent_ordinary_runtime_rewrite_is_internal_consistency_only(
         self,
     ) -> None:
         plan = load_plan_runner()
-        value = synthetic_raw()
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
         for role in ("baseline", "candidate"):
             closure = value["identities_initial"][f"{role}_runtime_closure"]
             closure["dependencies"] = [
@@ -1324,18 +2351,18 @@ class MainCompareRunnerTests(unittest.TestCase):
         synchronize_identity(value)
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = write_complete_evidence_bundle(
-                Path(directory), value)
+                Path(directory), value, runner.MANIFEST_SCHEMA_V7)
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest_path, no_current_input_check=True)), 0)
             document, scope, _ = plan.verify_exact_manifest(manifest_path)
-            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V7)
             plan.validate_evidence_scope(scope)
 
     def test_coherent_cache_inventory_rewrite_is_internal_consistency_only(
         self,
     ) -> None:
         plan = load_plan_runner()
-        value = synthetic_raw()
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
         for name in ("benchmark_cpu", "reserved_sibling"):
             record = value["host_initial"][name]
             record["cache_hierarchy"].pop()
@@ -1348,11 +2375,11 @@ class MainCompareRunnerTests(unittest.TestCase):
         value["host_final"] = copy.deepcopy(value["host_initial"])
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = write_complete_evidence_bundle(
-                Path(directory), value)
+                Path(directory), value, runner.MANIFEST_SCHEMA_V7)
             self.assertEqual(runner.verify_campaign(argparse.Namespace(
                 manifest=manifest_path, no_current_input_check=True)), 0)
             document, scope, _ = plan.verify_exact_manifest(manifest_path)
-            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V7)
             plan.validate_evidence_scope(scope)
 
     def test_promotion_consumes_the_exact_verified_manifest_and_raw_snapshots(
@@ -1362,7 +2389,8 @@ class MainCompareRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest_path = write_complete_evidence_bundle(
-                root, synthetic_raw())
+                root, synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7),
+                runner.MANIFEST_SCHEMA_V7)
             raw_path = root / "raw.json"
             exact_runner = plan.load_exact_main_runner()
 
@@ -1397,7 +2425,8 @@ class MainCompareRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             manifest_path = write_complete_evidence_bundle(
-                root, synthetic_raw())
+                root, synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7),
+                runner.MANIFEST_SCHEMA_V7)
             exact_runner = plan.load_exact_main_runner()
 
             class InterleavingRunner:
@@ -1865,6 +2894,607 @@ class MainCompareRunnerTests(unittest.TestCase):
         synchronize_identity(value)
         self.assert_rejected(value)
 
+    def test_effective_build_configuration_is_a_canonical_compile_input(
+        self,
+    ) -> None:
+        def candidate_build(value: dict) -> dict:
+            return value["identities_initial"]["candidate_build"]
+
+        def retained(value: dict) -> dict:
+            return candidate_build(value)["validated_compile_commands"][
+                "effective_build_configuration"]
+
+        def benchmark_entry(value: dict) -> dict:
+            return next(
+                entry for entry in candidate_build(value)[
+                    "validated_compile_commands"]["required_entries"]
+                if entry["file"].endswith("/bench/leopard2/benchmark.cpp"))
+
+        value = synthetic_raw()
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+
+        for label, mutate in (
+            ("configuration path", lambda value: retained(value)["artifact"].update({
+                "path": SPECIFICATION["candidate_build_dir"] +
+                        "/foreign/build_configuration.txt"})),
+            ("helper path", lambda value: retained(value)["helper_source"].update({
+                "path": SPECIFICATION["candidate_source_root"] +
+                        "/cmake/foreign.cmake"})),
+            ("embedded type", lambda value: retained(value).update({
+                "embedded_build_type": "Debug"})),
+            ("missing record", lambda value: candidate_build(value)[
+                "validated_compile_commands"].pop(
+                    "effective_build_configuration")),
+            ("evidence helper path", lambda value: value[
+                "identities_initial"]["evidence_helper"].update({
+                    "path": SPECIFICATION["candidate_source_root"] +
+                            "/experiments/leopard2/main_compare/run_abba.py"})),
+            ("missing evidence helper", lambda value: value[
+                "identities_initial"].pop("evidence_helper")),
+        ):
+            with self.subTest(label=label):
+                edited = synthetic_raw()
+                mutate(edited)
+                synchronize_identity(edited)
+                self.assert_rejected(edited)
+
+        value = synthetic_raw()
+        entry = benchmark_entry(value)
+        entry["arguments"] = [
+            ('-DLEO2_BENCHMARK_BUILD_TYPE="Debug"'
+             if token == '-DLEO2_BENCHMARK_BUILD_TYPE="Release"' else token)
+            for token in entry["arguments"]]
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        value = synthetic_raw()
+        record = retained(value)
+        benchmark_pair = next(
+            pair for pair in candidate_build(value)[
+                "validated_compile_commands"]["required_source_object_pairs"]
+            if pair["source"]["path"].endswith("/bench/leopard2/benchmark.cpp"))
+        record["artifact"]["mtime_ns"] = \
+            benchmark_pair["object"]["mtime_ns"] + 1
+        synchronize_identity(value)
+        self.assert_rejected(value)
+
+        # Even a coherent digest/cache/compiler-argv rewrite cannot turn a
+        # noncanonical selector into acceptable Release/AUTO evidence.
+        for variable, invalid_value in (
+            ("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
+            ("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
+            ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "1"),
+        ):
+            with self.subTest(selector=variable):
+                value = synthetic_raw()
+                record = retained(value)
+                record["entries"][variable] = invalid_value
+                material = runner.build_configuration_material(
+                    record["entries"])
+                digest = runner.sha256_bytes(material)
+                text = (
+                    f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                    f"sha256={digest}\n").encode("ascii") + material
+                record["content"] = runner.exact_text_content(
+                    text.decode("utf-8"),
+                    "coherently rewritten configuration")
+                record["artifact"].update({
+                    "size": record["content"]["size"],
+                    "sha256": record["content"]["sha256"],
+                })
+                record["configuration_sha256"] = digest
+                build = candidate_build(value)
+                build["validated_cache"][variable] = invalid_value
+                build["validated_cache"][
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"] = digest
+                entry = benchmark_entry(value)
+                entry["arguments"] = [
+                    (f'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="{digest}"'
+                     if token.startswith(
+                         "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=")
+                     else token)
+                    for token in entry["arguments"]]
+                synchronize_identity(value)
+                self.assert_rejected(value)
+
+    def test_effective_build_type_single_and_multi_config_semantics(self) -> None:
+        entries = complete_build_fixture("candidate")[
+            "validated_compile_commands"]["effective_build_configuration"][
+                "entries"]
+        self.assertEqual(
+            runner.validate_embedded_build_type(
+                entries, "Release", authoritative=True),
+            "Release")
+
+        single_mismatch = copy.deepcopy(entries)
+        single_mismatch["CMAKE_BUILD_TYPE"] = "Debug"
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_embedded_build_type(
+                single_mismatch, "Release", authoritative=True)
+
+        multi = copy.deepcopy(entries)
+        multi.update({
+            "CMAKE_BUILD_TYPE": "",
+            "CMAKE_GENERATOR": "Ninja Multi-Config",
+            "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+        })
+        self.assertEqual(
+            runner.validate_embedded_build_type(
+                multi, "Release", authoritative=True),
+            "Release")
+        self.assertEqual(
+            runner.validate_canonical_build_configuration_entries(
+                multi, {
+                    "CMAKE_BUILD_TYPE": "",
+                    "CMAKE_GENERATOR": "Ninja Multi-Config",
+                    "CMAKE_CONFIGURATION_TYPES": "Debug;Release",
+                    "CMAKE_CXX_COMPILER": multi["CMAKE_CXX_COMPILER"],
+                }),
+            multi)
+        for encoded_types, embedded in (
+            ("Debug;RelWithDebInfo", "Release"),
+            ("Debug;Release;Release", "Release"),
+            ("Debug;Release", "Debug"),
+        ):
+            with self.subTest(types=encoded_types, embedded=embedded):
+                edited = copy.deepcopy(multi)
+                edited["CMAKE_CONFIGURATION_TYPES"] = encoded_types
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_embedded_build_type(
+                        edited, embedded, authoritative=True)
+
+    def test_cmake_cache_selected_keys_have_unique_canonical_types(self) -> None:
+        values = {
+            name: (
+                "Release" if name == "CMAKE_BUILD_TYPE" else
+                "Unix Makefiles" if name == "CMAKE_GENERATOR" else
+                "/tmp/value" if next(iter(types)) in {"FILEPATH", "PATH"} else
+                "ON" if next(iter(types)) == "BOOL" else "fixture")
+            for name, types in runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES.items()
+        }
+
+        def render(overrides: Mapping[str, str] | None = None) -> str:
+            selected = dict(overrides or {})
+            return "".join(
+                f"{name}:{selected.get(name, next(iter(types)))}="
+                f"{values[name]}\n"
+                for name, types in
+                runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES.items())
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "CMakeCache.txt"
+            path.write_text(render(), encoding="utf-8")
+            parsed = runner.parse_cmake_cache(path)
+            self.assertEqual(
+                set(parsed), set(runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES))
+
+            for name, types in runner.CMAKE_CACHE_REQUIRED_ENTRY_TYPES.items():
+                canonical_type = next(iter(types))
+                wrong_type = next(
+                    item for item in sorted(runner.CMAKE_CACHE_ENTRY_TYPES)
+                    if item != canonical_type)
+                with self.subTest(key=name, wrong_type=wrong_type):
+                    path.write_text(
+                        render({name: wrong_type}), encoding="utf-8")
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.parse_cmake_cache(path)
+
+            duplicate = render() + "CMAKE_GENERATOR:INTERNAL=Ninja\n"
+            path.write_text(duplicate, encoding="utf-8")
+            with self.assertRaises(runner.EvidenceError):
+                runner.parse_cmake_cache(path)
+
+            path.write_text(
+                render().replace(
+                    "CMAKE_GENERATOR:INTERNAL=",
+                    "CMAKE_GENERATOR=", 1),
+                encoding="utf-8")
+            with self.assertRaises(runner.EvidenceError):
+                runner.parse_cmake_cache(path)
+
+            path.write_text(
+                render().replace(
+                    "CMAKE_GENERATOR:INTERNAL=",
+                    "CMAKE_GENERATOR:FOREIGN=", 1),
+                encoding="utf-8")
+            with self.assertRaises(runner.EvidenceError):
+                runner.parse_cmake_cache(path)
+
+    def test_exact_lf_and_strict_utf8_text_boundaries(self) -> None:
+        entries = complete_build_fixture("candidate")[
+            "validated_compile_commands"]["effective_build_configuration"][
+                "entries"]
+        entries = copy.deepcopy(entries)
+        entries["CMAKE_CXX_COMPILER"] = "/usr/bin/c++\u2028fixture"
+        material = runner.build_configuration_material(entries)
+        digest = runner.sha256_bytes(material)
+        retained = (
+            f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+            f"sha256={digest}\n").encode("ascii") + material
+        self.assertEqual(
+            runner.parse_build_configuration_bytes(retained)["entries"],
+            entries)
+        plan = load_plan_runner()
+        self.assertEqual(
+            plan._parse_build_configuration_bytes(retained)["entries"],
+            entries)
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "CMakeCache.txt"
+            path.write_text(
+                "CMAKE_CXX_FLAGS:STRING=-O3\u2028-fno-omit-frame-pointer\n",
+                encoding="utf-8")
+            self.assertEqual(
+                runner.parse_cmake_cache(path)["CMAKE_CXX_FLAGS"],
+                "-O3\u2028-fno-omit-frame-pointer")
+
+        with self.assertRaises(runner.EvidenceError):
+            runner.exact_text_content("\ud800", "lone surrogate")
+        with self.assertRaises(runner.EvidenceError):
+            runner.canonical_bytes({"text": "\ud800"})
+        with self.assertRaises(runner.EvidenceError):
+            runner.build_configuration_material({
+                **entries, "CMAKE_CXX_FLAGS": "\ud800"})
+        with self.assertRaises(plan.PlanError):
+            plan.canonical_bytes({"text": "\ud800"})
+        with self.assertRaises(plan.PlanError):
+            plan._validate_scope_text({
+                "encoding": "utf-8", "text": "\ud800",
+                "size": 1, "sha256": "0" * 64,
+            }, "lone surrogate")
+
+    def test_single_and_multi_config_complete_closures_are_accepted(self) -> None:
+        runner.validate_raw(
+            synthetic_raw(), None,
+            check_files=False, check_current_inputs=False)
+        multi = synthetic_raw(multi_config=True)
+        runner.validate_raw(
+            multi, None, check_files=False, check_current_inputs=False)
+        for role in ("baseline", "candidate"):
+            build = multi["identities_initial"][f"{role}_build"]
+            self.assertEqual(
+                build["validated_compile_commands"]["entry_count"],
+                (runner.BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
+                 if role == "baseline" else
+                 runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT) * 2)
+            self.assertIn(
+                "/Release/",
+                build["validated_compile_commands"]["required_entries"][0][
+                    "output"])
+            self.assertTrue(
+                build["validated_executable"]["path"].endswith(
+                    "/Release/" + (
+                        "leopard_main_benchmark" if role == "baseline"
+                        else "bench_leopard2")))
+            self.assertEqual(
+                build["multi_config_build_tool"]["path"],
+                runner.CANONICAL_NINJA_PATH)
+            self.assertEqual(
+                build["multi_config_build_tool_version_stdout"]["text"],
+                "1.11.1\n")
+            self.assertEqual(
+                [record["relative_path"]
+                 for record in build["multi_config_ninja_graph"]["files"]],
+                [
+                    "CMakeFiles/common.ninja",
+                    "CMakeFiles/impl-Release.ninja",
+                    "build-Release.ninja",
+                ])
+
+        plan = load_plan_runner()
+        identities = multi["identities_initial"]
+        replacements = (
+            (SPECIFICATION["baseline_source_root"], "$BASELINE_SOURCE"),
+            (SPECIFICATION["candidate_source_root"], "$CANDIDATE_SOURCE"),
+            (SPECIFICATION["baseline_build_dir"], "$BASELINE_BUILD"),
+            (SPECIFICATION["candidate_build_dir"], "$CANDIDATE_BUILD"),
+        )
+        for role in ("baseline", "candidate"):
+            source = plan._normalize_bound_paths(
+                identities[f"{role}_source"], replacements)
+            build = plan._normalize_bound_paths(
+                identities[f"{role}_build"], replacements)
+            plan._validate_scope_build(build, role, source)
+
+        def mutate_top_level_include(value: dict) -> None:
+            replace_ninja_graph_fixture_text(
+                value["identities_initial"]["candidate_build"],
+                "build-Release.ninja",
+                "include CMakeFiles/substituted.ninja\n")
+
+        def mutate_transitive_include(value: dict) -> None:
+            replace_ninja_graph_fixture_text(
+                value["identities_initial"]["candidate_build"],
+                "CMakeFiles/impl-Release.ninja",
+                "include CMakeFiles/common.ninja\n"
+                "include CMakeFiles/late.ninja\n"
+                "build Release/libleopard.a: phony\n"
+                "build Release/bench_leopard2: phony "
+                "Release/libleopard.a\n")
+
+        for label, mutate in (
+            ("configuration inventory", lambda value:
+                value["identities_initial"]["baseline_build"][
+                    "validated_cache"].update({
+                        "CMAKE_CONFIGURATION_TYPES":
+                            "Debug;Release;RelWithDebInfo"})),
+            ("missing make program", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "validated_cache"].pop("CMAKE_MAKE_PROGRAM")),
+            ("substituted Ninja", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "multi_config_build_tool"].update({
+                        "path": "/tmp/ninja"})),
+            ("Ninja version", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "multi_config_build_tool_version_stdout"].update({
+                        "text": "9.9.9\n",
+                        "sha256": runner.sha256_bytes(b"9.9.9\n"),
+                    })),
+            ("top-level Ninja include substitution", mutate_top_level_include),
+            ("transitive Ninja include mutation", mutate_transitive_include),
+            ("Ninja graph artifact substitution", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "multi_config_ninja_graph"]["files"][0]["artifact"].update({
+                        "path":
+                            f"{SPECIFICATION['candidate_build_dir']}/"
+                            "CMakeFiles/substituted.ninja"})),
+            ("entry count", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "validated_compile_commands"].update({
+                        "entry_count":
+                            runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT})),
+            ("selected compiler output", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "validated_compile_commands"]["required_entries"][0].update({
+                        "output": value["identities_initial"]["candidate_build"][
+                            "validated_compile_commands"]["required_entries"][0][
+                                "output"].replace(
+                                    "/Release/", "/Debug/", 1)})),
+            ("selected executable", lambda value:
+                value["identities_initial"]["candidate_build"][
+                    "validated_executable"].update({
+                        "path":
+                            f"{SPECIFICATION['candidate_build_dir']}/"
+                            "Debug/bench_leopard2"})),
+        ):
+            with self.subTest(mutation=label):
+                edited = synthetic_raw(multi_config=True)
+                mutate(edited)
+                synchronize_identity(edited)
+                self.assert_rejected(edited)
+
+    def test_ninja_graph_capture_rejects_substitution_and_extraction_race(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leopard2-ninja-graph-race-") as directory:
+            build = Path(directory).resolve()
+            (build / "CMakeFiles").mkdir()
+            (build / "build-Release.ninja").write_text(
+                "include CMakeFiles/impl-Release.ninja\n",
+                encoding="utf-8")
+            (build / "CMakeFiles/impl-Release.ninja").write_text(
+                "include CMakeFiles/common.ninja\n",
+                encoding="utf-8")
+            common = build / "CMakeFiles/common.ninja"
+            common.write_text(
+                "rule fixture_noop\n  command = :\n", encoding="utf-8")
+            runner.capture_ninja_graph_closure(build, "Release")
+
+            replacement = build / "replacement.ninja"
+            replacement.write_text(
+                "rule replacement\n  command = false\n", encoding="utf-8")
+            common.unlink()
+            common.symlink_to(replacement)
+            with self.assertRaises(runner.EvidenceError):
+                runner.capture_ninja_graph_closure(build, "Release")
+            common.unlink()
+            common.write_text(
+                "rule fixture_noop\n  command = :\n", encoding="utf-8")
+
+            tool_identity = complete_artifact(
+                runner.CANONICAL_NINJA_PATH, "build_tool", "a")
+            tool_version = {
+                "sha256": runner.sha256_bytes(b"1.11.1\n"),
+                "text": "1.11.1\n",
+            }
+
+            def mutate_during_extraction(*_args, **_kwargs):
+                common.write_text(
+                    "rule raced\n  command = false\n", encoding="utf-8")
+                return ("archive recipe\n", "executable recipe\n")
+
+            cache = {
+                "CMAKE_GENERATOR": "Ninja Multi-Config",
+                "CMAKE_MAKE_PROGRAM": runner.CANONICAL_NINJA_PATH,
+            }
+            with mock.patch.object(
+                    runner, "canonical_ninja_identity",
+                    return_value=(tool_identity, tool_version)), \
+                    mock.patch.object(
+                        runner, "ninja_multi_link_recipes",
+                        side_effect=mutate_during_extraction), \
+                    self.assertRaises(runner.EvidenceError):
+                runner.stable_ninja_multi_link_recipes(
+                    cache, build, "Release", "Release/bench_leopard2",
+                    "Release/libleopard.a", "Release/bench_leopard2")
+
+    def test_normalized_multi_config_ninja_link_identity_tracks_graph(
+            self) -> None:
+        build = complete_build_fixture("candidate", multi_config=True)
+        impl_relative = "CMakeFiles/impl-Release.ninja"
+        impl = next(
+            record for record in build["multi_config_ninja_graph"]["files"]
+            if record["relative_path"] == impl_relative)
+        replace_ninja_graph_fixture_text(
+            build, impl_relative,
+            impl["content"]["text"] +
+            "# absolute source " +
+            SPECIFICATION["candidate_source_root"] +
+            "/leopard2.cpp\n")
+        runner.validate_complete_build_identity(
+            build, "candidate", SPECIFICATION, runner.RAW_SCHEMA,
+            CANDIDATE_TREE)
+
+        plan = load_plan_runner()
+        replacements = (
+            (SPECIFICATION["baseline_source_root"], "$BASELINE_SOURCE"),
+            (SPECIFICATION["candidate_source_root"], "$CANDIDATE_SOURCE"),
+            (SPECIFICATION["baseline_build_dir"], "$BASELINE_BUILD"),
+            (SPECIFICATION["candidate_build_dir"], "$CANDIDATE_BUILD"),
+        )
+        normalized_build = plan._normalize_bound_paths(build, replacements)
+        normalized_source = plan._normalize_bound_paths(
+            complete_source_fixture("candidate"), replacements)
+        normalized_impl = next(
+            record for record in
+                normalized_build["multi_config_ninja_graph"]["files"]
+            if record["relative_path"] == impl_relative)
+        graph_artifact = normalized_impl["artifact"]
+        self.assertIn(
+            "$CANDIDATE_SOURCE/leopard2.cpp",
+            normalized_impl["content"]["text"])
+        self.assertNotEqual(
+            graph_artifact["sha256"], impl["artifact"]["sha256"])
+        for name in ("archive_link_recipe", "executable_link_recipe"):
+            with self.subTest(identity=name):
+                identity = normalized_build[name]
+                self.assertEqual(
+                    {key: identity[key]
+                     for key in ("path", "size", "mode", "sha256")},
+                    {key: graph_artifact[key]
+                     for key in ("path", "size", "mode", "sha256")})
+        self.assertNotEqual(
+            graph_artifact["sha256"],
+            normalized_build["archive_link_recipe_content"]["sha256"])
+        plan._validate_scope_build(
+            normalized_build, "candidate", normalized_source)
+
+    def test_real_single_and_ninja_multi_config_build_provenance(self) -> None:
+        if shutil.which("cmake") is None or shutil.which("ninja") is None or \
+                shutil.which("make") is None:
+            self.skipTest("CMake, Ninja, and Make are required")
+        source_checkout = MODULE_PATH.resolve().parents[3]
+        tracked = subprocess.run(
+            ["git", "-C", str(source_checkout), "ls-files", "-z"],
+            check=True, stdout=subprocess.PIPE).stdout.split(b"\0")
+        with tempfile.TemporaryDirectory(
+                prefix="leopard2-real-cmake-provenance-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            source.mkdir()
+            for encoded in tracked:
+                if not encoded:
+                    continue
+                relative = os.fsdecode(encoded)
+                original = source_checkout / relative
+                destination = source / relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                if original.is_dir():
+                    # A gitlink such as sse2neon is not a regular tracked file;
+                    # the x86 provenance fixtures do not consume its checkout.
+                    continue
+                if original.is_symlink():
+                    destination.symlink_to(os.readlink(original))
+                else:
+                    shutil.copy2(original, destination)
+            subprocess.run(["git", "init", "-q", str(source)], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "config", "user.email",
+                 "leopard2-fixture@example.invalid"], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "config", "user.name",
+                 "Leopard2 Fixture"], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "add", "-A"], check=True)
+            subprocess.run(
+                ["git", "-C", str(source), "commit", "-q", "-m",
+                 "fixture"], check=True)
+            commit = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "HEAD"],
+                check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+            tree = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "HEAD^{tree}"],
+                check=True, stdout=subprocess.PIPE, text=True).stdout.strip()
+
+            common = [
+                "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
+                "-DENABLE_OPENMP=ON",
+                "-DLEOPARD_ENABLE_GF8=ON",
+                "-DLEOPARD_ENABLE_GF16=ON",
+                "-DLEO2_BACKEND_VARIANT=auto",
+                "-DLEO2_BUILD_BENCHMARKS=ON",
+                "-DLEO2_BUILD_FUZZERS=OFF",
+                "-DLEO2_BUILD_TESTS=OFF",
+                "-DLEO2_ENABLE_CUDA=OFF",
+                "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
+                "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
+                "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
+            ]
+            for label, generator, configure_extra, output_prefix in (
+                ("single", "Unix Makefiles",
+                 ["-DCMAKE_BUILD_TYPE=Release"], Path()),
+                ("multi", "Ninja Multi-Config",
+                 ["-DCMAKE_CONFIGURATION_TYPES=Debug;Release"],
+                 Path("Release")),
+            ):
+                with self.subTest(layout=label):
+                    build = root / f"build-{label}"
+                    subprocess.run(
+                        ["cmake", "-S", str(source), "-B", str(build),
+                         "-G", generator, *configure_extra, *common],
+                        check=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, timeout=120)
+                    build_command = [
+                        "cmake", "--build", str(build), "--parallel", "16",
+                        "--target", "bench_leopard2",
+                    ]
+                    if label == "multi":
+                        build_command.extend(["--config", "Release"])
+                    subprocess.run(
+                        build_command, check=True, stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT, timeout=120)
+                    executable = build / output_prefix / "bench_leopard2"
+                    archive = build / output_prefix / "libleopard.a"
+                    specification = {
+                        "baseline_source_root": str(source),
+                        "candidate_source_root": str(source),
+                        "candidate_build_dir": str(build),
+                        "candidate_executable": str(executable),
+                        "candidate_archive": str(archive),
+                        "candidate_commit": commit,
+                    }
+                    provenance = runner.build_provenance(
+                        "candidate", specification, runner.RAW_SCHEMA)
+                    runner.validate_complete_build_identity(
+                        provenance, "candidate", specification,
+                        runner.RAW_SCHEMA, tree)
+                    self.assertEqual(
+                        provenance["validated_compile_commands"][
+                            "entry_count"],
+                        runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT *
+                        (2 if label == "multi" else 1))
+                    if label == "multi":
+                        self.assertEqual(
+                            provenance["multi_config_build_tool"]["path"],
+                            runner.CANONICAL_NINJA_PATH)
+                        self.assertTrue(
+                            provenance[
+                                "multi_config_build_tool_version_stdout"][
+                                    "text"])
+                        self.assertGreaterEqual(
+                            len(provenance[
+                                "multi_config_ninja_graph"]["files"]), 2)
+                    else:
+                        self.assertIsNone(
+                            provenance["multi_config_build_tool"])
+                        self.assertIsNone(
+                            provenance[
+                                "multi_config_build_tool_version_stdout"])
+                        self.assertIsNone(
+                            provenance["multi_config_ninja_graph"])
+
     def test_recipe_command_semantic_mutations_are_rejected(self) -> None:
         canonical = archive_recipe_fixture_text(
             runner.cmake_identity_for_raw_schema(runner.RAW_SCHEMA))
@@ -2217,6 +3847,19 @@ class MainCompareRunnerTests(unittest.TestCase):
                 self.assertEqual(
                     len(proof["required_entries"]),
                     len(proof["required_source_object_pairs"]))
+                path.write_bytes(
+                    b'[{"file":"first.cpp","file":"second.cpp"}]')
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "duplicate key"):
+                    runner.validate_compile_commands(
+                        path, role, specification, compiler,
+                        compiler_invocation=str(compiler))
+                path.write_bytes(
+                    b'[{"untrusted":' + b"9" * 5000 + b"}]")
+                with self.assertRaises(runner.EvidenceError):
+                    runner.validate_compile_commands(
+                        path, role, specification, compiler,
+                        compiler_invocation=str(compiler))
 
         compile_mutations = (
             ("response file", "candidate", "/leopard.cpp", "response"),
@@ -2460,6 +4103,87 @@ class MainCompareRunnerTests(unittest.TestCase):
                 value["invocations"][1]["result"]["parameters"][name] = replacement
                 self.assert_rejected(value)
 
+    def test_type_coerced_benchmark_evidence_is_rejected(self) -> None:
+        mutations = {
+            "integer-parameter-as-float": lambda value: value["invocations"][0]
+                ["result"]["parameters"].__setitem__("K", float(CELL.k)),
+            "boolean-option-as-integer": lambda value: value["invocations"][1]
+                ["result"]["parameters"].__setitem__("skip_legacy", 1),
+            "resolved-parent-as-float": lambda value: value["invocations"][0]
+                ["result"]["resolved"].__setitem__(
+                    "parent_count",
+                    float(value["invocations"][0]["result"]["resolved"]["parent_count"])),
+            "resolved-thread-as-boolean": lambda value: value["invocations"][0]
+                ["result"]["resolved"].__setitem__("thread_count", True),
+            "returncode-as-boolean": lambda value: value["invocations"][0]
+                .__setitem__("returncode", False),
+            "pinned-cpu-as-boolean": lambda value: value["invocations"][0]
+                .__setitem__("pinned_cpu", False),
+            "normalized-sample-as-integer": lambda value: value["invocations"][0]
+                ["normalized"]["encode"].__setitem__(
+                    0, int(value["invocations"][0]["normalized"]["encode"][0])),
+            "analysis-count-as-float": lambda value: value["analysis"][CELL.identifier]
+                ["encode"].__setitem__("independent_round_count", float(runner.ROUNDS)),
+            "statistics-count-as-float": lambda value: value["campaign"]["statistics"]
+                .__setitem__("degrees_of_freedom", float(runner.ROUNDS - 1)),
+        }
+        for name, mutation in mutations.items():
+            with self.subTest(name=name):
+                value = synthetic_raw()
+                mutation(value)
+                self.assert_rejected(value)
+
+    def test_type_coerced_retained_text_sizes_are_rejected(self) -> None:
+        for role, content_name in (
+                ("candidate", "archive_link_recipe_content"),
+                ("candidate", "executable_link_recipe_content"),
+                ("baseline", "archive_link_recipe_content"),
+                ("baseline", "executable_link_recipe_content")):
+            with self.subTest(role=role, content=content_name):
+                value = synthetic_raw()
+                content = value["identities_initial"][f"{role}_build"][content_name]
+                content["size"] = float(content["size"])
+                synchronize_identity(value)
+                self.assert_rejected(value)
+
+    def test_speed_independent_validity_requires_exact_true(self) -> None:
+        for replacement in (False, 0, 1, None):
+            with self.subTest(replacement=replacement):
+                value = synthetic_raw()
+                value["validity_is_independent_of_speed"] = replacement
+                self.assert_rejected(value)
+
+    def test_successful_round_trip_requires_matching_recovered_digest(self) -> None:
+        value = synthetic_raw()
+        value["invocations"][0]["result"]["workload_digests"][
+            "recovered_originals"] = "f" * 16
+        self.assert_rejected(value)
+
+    def test_strict_json_parser_rejects_ambiguous_or_nonfinite_values(self) -> None:
+        for data in (
+            b'{"duplicate":1,"duplicate":2}',
+            b'{"overflow":1e9999}',
+            b'{"extension":NaN}',
+            b'{"extension":Infinity}',
+            b'{"oversized_integer":' + b"9" * 5000 + b"}",
+        ):
+            with self.subTest(data=data):
+                with self.assertRaises(runner.EvidenceError):
+                    runner.strict_json_loads(data, "fixture")
+        self.assertEqual(
+            runner.strict_json_loads(b'{"exact":1,"finite":1.5}', "fixture"),
+            {"exact": 1, "finite": 1.5},
+        )
+
+    def test_1000_digit_json_number_has_bounded_evidence_error(self) -> None:
+        parsed = runner.strict_json_loads(
+            b'{"value":' + b"9" * 1000 + b"}", "1000-digit fixture")
+        self.assertIs(type(parsed["value"]), int)
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "outside the finite float range"):
+            runner.finite_number(
+                parsed["value"], "1000-digit fixture")
+
     def test_every_fnv_digest_mutation_rejected(self) -> None:
         for name in ("original_data", "transmitted_parity", "recovered_originals"):
             with self.subTest(name=name):
@@ -2634,8 +4358,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.validate_raw(
                     value, root, check_files=True, check_current_inputs=False)
 
-    def test_v6_manifest_binds_complete_identity_and_replays_portably(self) -> None:
-        value = synthetic_raw()
+    def test_v7_manifest_binds_complete_identity_and_replays_portably(self) -> None:
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for index, invocation in enumerate(value["invocations"]):
@@ -2644,6 +4368,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 stderr_path = root / f"{index}.stderr"
                 stdout_path.write_bytes(stdout)
                 stderr_path.write_bytes(b"")
+                stdout_path.chmod(0o600)
+                stderr_path.chmod(0o600)
                 invocation["stdout"] = {
                     "path": stdout_path.name,
                     "size": len(stdout),
@@ -2658,7 +4384,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             raw_path = root / "raw.json"
             runner.write_json_exclusive(raw_path, value)
             manifest = runner.signed({
-                "schema": runner.MANIFEST_SCHEMA,
+                "schema": runner.MANIFEST_SCHEMA_V7,
                 "created_utc": "2026-07-16T00:00:00Z",
                 "valid": True,
                 "validity_is_independent_of_speed": True,
@@ -2702,10 +4428,19 @@ class MainCompareRunnerTests(unittest.TestCase):
             options.affinity_binding = root / "missing-affinity-binding.json"
             with self.assertRaises(runner.EvidenceError):
                 runner.verify_campaign(options)
+
             options.affinity_binding = None
 
             edited = copy.deepcopy(manifest)
             edited["isolation"]["accepted"] = False
+            edited = resign(edited)
+            manifest_path.unlink()
+            runner.write_json_exclusive(manifest_path, edited)
+            with self.assertRaises(runner.EvidenceError):
+                runner.verify_campaign(options)
+
+            edited = copy.deepcopy(manifest)
+            edited["validity_is_independent_of_speed"] = 1
             edited = resign(edited)
             manifest_path.unlink()
             runner.write_json_exclusive(manifest_path, edited)
@@ -2720,6 +4455,49 @@ class MainCompareRunnerTests(unittest.TestCase):
             with self.assertRaises(runner.EvidenceError):
                 runner.verify_campaign(options)
 
+    def test_legacy_v6_raw_and_manifest_fixtures_remain_replayable(self) -> None:
+        plan = load_plan_runner()
+        value = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V6)
+        runner.validate_raw(
+            value, None, check_files=False, check_current_inputs=False)
+        runner.validate_failure(
+            synthetic_failure(runner.RAW_SCHEMA_V6), Path("."),
+            check_files=False)
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), value, runner.MANIFEST_SCHEMA_V6)
+            self.assertEqual(runner.verify_campaign(argparse.Namespace(
+                manifest=manifest_path, no_current_input_check=True)), 0)
+            document, scope, _ = plan.verify_exact_manifest(manifest_path)
+            self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V6)
+            self.assertEqual(
+                plan.validate_evidence_scope(scope)["schema"],
+                plan.EVIDENCE_SCOPE_SCHEMA_V3)
+
+    def test_literal_v5_v6_candidate_cache_shape_remains_replayable(
+            self) -> None:
+        historical_cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+            "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
+            "ENABLE_OPENMP": "ON",
+            "LEO2_BACKEND_VARIANT": "auto",
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_FUZZERS": "OFF",
+            "LEO2_BUILD_TESTS": "OFF",
+            "LEO2_ENABLE_CUDA": "OFF",
+        }
+        for raw_schema in (runner.RAW_SCHEMA_V5, runner.RAW_SCHEMA_V6):
+            with self.subTest(raw_schema=raw_schema):
+                value = synthetic_raw(raw_schema=raw_schema)
+                self.assertEqual(
+                    value["identities_initial"]["candidate_build"][
+                        "validated_cache"],
+                    historical_cache)
+                runner.validate_raw(
+                    value, None, check_files=False,
+                    check_current_inputs=False)
+
     def test_failed_bundle_binds_retained_invocation_files(self) -> None:
         value = synthetic_raw()
         invocation = copy.deepcopy(value["invocations"][0])
@@ -2729,6 +4507,8 @@ class MainCompareRunnerTests(unittest.TestCase):
             stderr = root / "first.stderr"
             stdout.write_text(json.dumps(invocation["result"]), encoding="utf-8")
             stderr.write_bytes(b"diagnostic")
+            stdout.chmod(0o600)
+            stderr.chmod(0o600)
             invocation["stdout"] = {
                 "path": stdout.name, "size": stdout.stat().st_size,
                 "sha256": runner.sha256_file(stdout),
@@ -2750,6 +4530,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "supervision": copy.deepcopy(value["supervision"]),
                 "input_specification": copy.deepcopy(value["input_specification"]),
                 "identities_initial": copy.deepcopy(invocation["identity_before"]),
+                "executable_snapshots": copy.deepcopy(
+                    value["executable_snapshots"]),
                 "invocations": [invocation],
                 "retained_files": runner.retained_file_records(root),
                 "traceback": "fixture traceback",
@@ -2759,6 +4541,21 @@ class MainCompareRunnerTests(unittest.TestCase):
             runner.validate_failure(failure, root, check_files=True)
             self.assertEqual(runner.verify_failed_campaign(
                 argparse.Namespace(failure=failure_path)), 0)
+
+            duplicate_path = root / "duplicate-failure.json"
+            duplicate_path.write_bytes(b'{"schema":"first","schema":"second"}')
+            duplicate_path.chmod(0o600)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "duplicate key"):
+                runner.verify_failed_campaign(
+                    argparse.Namespace(failure=duplicate_path))
+            huge_integer_path = root / "huge-integer-failure.json"
+            huge_integer_path.write_bytes(
+                b'{"untrusted":' + b"9" * 5000 + b"}")
+            huge_integer_path.chmod(0o600)
+            with self.assertRaises(runner.EvidenceError):
+                runner.verify_failed_campaign(
+                    argparse.Namespace(failure=huge_integer_path))
 
             stdout.write_bytes(b"{}")
             semantic_mismatch = copy.deepcopy(failure)
@@ -2782,6 +4579,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
             legacy["campaign"].pop("candidate_mode", None)
             legacy.pop("supervision", None)
+            legacy.pop("executable_snapshots", None)
             old_identity, old_specification = cmake_fixture_identity(
                 runner.RAW_SCHEMA_V2)
             legacy["input_specification"] = old_specification
@@ -2791,6 +4589,428 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy = resign(legacy)
             runner.validate_failure(legacy, root, check_files=True)
 
+    def test_sealed_executable_survives_same_inode_and_path_replacement(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "benchmark"
+            shutil.copyfile("/usr/bin/echo", source)
+            source.chmod(0o755)
+            expected = runner.artifact_identity(source, "executable")
+            descriptor, record = runner.capture_sealed_executable(
+                source, expected, "fixture benchmark")
+            duplicate = -1
+            try:
+                original = source.read_bytes()
+                with source.open("r+b", buffering=0) as mutable:
+                    first = mutable.read(1)
+                    mutable.seek(0)
+                    mutable.write(bytes((first[0] ^ 1,)))
+                    mutable.seek(0)
+                    mutable.write(first)
+                replacement = root / "replacement"
+                shutil.copyfile("/usr/bin/false", replacement)
+                replacement.chmod(0o755)
+                os.replace(replacement, source)
+
+                self.assertEqual(
+                    runner.sealed_executable_identity(
+                        descriptor, "fixture benchmark"),
+                    record["snapshot"])
+                duplicate = runner.duplicate_snapshot_for_execution(
+                    descriptor, "fixture benchmark")
+                completed = runner.run_process_bounded(
+                    [f"/proc/self/fd/{duplicate}", "sealed"],
+                    inherited_descriptors=(duplicate,))
+                self.assertEqual(completed.returncode, 0)
+                self.assertEqual(completed.stdout, b"sealed\n")
+                self.assertNotEqual(source.read_bytes(), original)
+            finally:
+                if duplicate >= 0:
+                    os.close(duplicate)
+                os.close(descriptor)
+
+    def test_sealed_capture_copy_seal_and_owner_cleanup_faults(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "benchmark"
+            shutil.copyfile("/usr/bin/true", source)
+            source.chmod(0o755)
+            expected = runner.artifact_identity(source, "executable")
+            native_create = runner.linux_executable_memfd
+
+            for operation in ("copy", "seal"):
+                created = []
+
+                def tracked_create(name: str) -> int:
+                    descriptor = native_create(name)
+                    created.append(descriptor)
+                    return descriptor
+
+                if operation == "copy":
+                    fault = mock.patch.object(
+                        runner.os, "write",
+                        side_effect=OSError(errno.EIO, "injected copy fault"))
+                else:
+                    native_fcntl = runner.fcntl.fcntl
+
+                    def seal_fault(descriptor, command, argument=0):
+                        if command == runner.LINUX_F_ADD_SEALS:
+                            raise OSError(errno.EIO, "injected seal fault")
+                        return native_fcntl(descriptor, command, argument)
+
+                    fault = mock.patch.object(
+                        runner.fcntl, "fcntl", side_effect=seal_fault)
+                with self.subTest(operation=operation), \
+                     mock.patch.object(
+                         runner, "linux_executable_memfd",
+                         side_effect=tracked_create), fault, \
+                     self.assertRaises(OSError):
+                    runner.capture_sealed_executable(
+                        source, expected, "faulted benchmark")
+                self.assertEqual(len(created), 1)
+                with self.assertRaises(OSError):
+                    os.fstat(created[0])
+
+        first = os.open("/dev/null", os.O_RDONLY)
+        second = os.open("/dev/null", os.O_RDONLY)
+        owner = runner.ExecutableSnapshotOwner()
+        owner.descriptors = {"baseline": first, "candidate": second}
+        native_close = runner.os.close
+        closed = []
+
+        def close_fault(descriptor: int) -> None:
+            closed.append(descriptor)
+            native_close(descriptor)
+            if descriptor == first:
+                raise OSError(errno.EIO, "injected close fault")
+
+        with mock.patch.object(runner.os, "close", side_effect=close_fault), \
+             self.assertRaisesRegex(
+                 runner.EvidenceError, "descriptor cleanup failed"):
+            owner.close()
+        self.assertCountEqual(closed, [first, second])
+        self.assertEqual(owner.descriptors, {})
+        for descriptor in (first, second):
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+
+    def test_snapshot_owner_close_retries_close_before_effect(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        owner = runner.ExecutableSnapshotOwner()
+        owner.descriptors = {"baseline": descriptor}
+        try:
+            with mock.patch.object(
+                    runner.os, "close",
+                    side_effect=KeyboardInterrupt("before close")), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError, "descriptor cleanup failed"):
+                owner.close()
+            self.assertEqual(owner.descriptors, {"baseline": descriptor})
+            os.fstat(descriptor)
+
+            owner.close()
+            self.assertEqual(owner.descriptors, {})
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        finally:
+            if owner.descriptors:
+                os.close(owner.descriptors.pop("baseline"))
+
+    def test_snapshot_owner_retry_refuses_recycled_descriptor(self) -> None:
+        descriptor = os.open("/dev/null", os.O_RDONLY)
+        replacement = -1
+        owner = runner.ExecutableSnapshotOwner()
+        owner.descriptors = {"baseline": descriptor}
+        native_close = runner.os.close
+        native_fstat = runner.os.fstat
+        fstat_calls = 0
+
+        def close_then_raise(value: int) -> None:
+            native_close(value)
+            raise OSError(errno.EIO, "close completed before diagnostic")
+
+        def interrupt_post_close_probe(value: int):
+            nonlocal fstat_calls
+            fstat_calls += 1
+            if fstat_calls == 2:
+                raise KeyboardInterrupt("post-close probe interrupted")
+            return native_fstat(value)
+
+        try:
+            with mock.patch.object(
+                    runner.os, "close", side_effect=close_then_raise), \
+                 mock.patch.object(
+                     runner.os, "fstat",
+                     side_effect=interrupt_post_close_probe), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError, "descriptor state probe failed"):
+                owner.close()
+            self.assertEqual(owner.descriptors, {"baseline": descriptor})
+            self.assertIn("baseline", owner.descriptor_identities)
+
+            replacement = os.open("/dev/zero", os.O_RDONLY)
+            self.assertEqual(replacement, descriptor)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "identity changed before cleanup"):
+                owner.close()
+            self.assertEqual(owner.descriptors, {})
+            self.assertEqual(owner.descriptor_identities, {})
+            os.fstat(replacement)
+        finally:
+            if replacement >= 0:
+                os.close(replacement)
+            elif owner.descriptors:
+                try:
+                    os.close(owner.descriptors.pop("baseline"))
+                except OSError:
+                    pass
+
+    def test_snapshot_capture_interrupt_after_owner_transfer_is_not_leaked(
+            self) -> None:
+        class InterruptAfterInsert(dict):
+            def __setitem__(self, key, value) -> None:
+                super().__setitem__(key, value)
+                raise KeyboardInterrupt("after ownership transfer")
+
+        source = Path("/usr/bin/true")
+        expected = runner.artifact_identity(source, "executable")
+        owner = runner.ExecutableSnapshotOwner()
+        owner.descriptors = InterruptAfterInsert()
+        descriptor = -1
+        try:
+            with self.assertRaisesRegex(
+                    KeyboardInterrupt, "after ownership transfer"):
+                owner.capture("baseline", source, expected)
+            descriptor = owner.descriptors["baseline"]
+            runner.sealed_executable_identity(
+                descriptor, "transferred benchmark")
+            owner.close()
+            self.assertEqual(owner.descriptors, {})
+            with self.assertRaises(OSError):
+                os.fstat(descriptor)
+        finally:
+            if owner.descriptors:
+                os.close(owner.descriptors.pop("baseline"))
+
+    def test_snapshot_capture_interrupt_after_source_open_is_not_leaked(
+            self) -> None:
+        source = Path("/usr/bin/true")
+        expected = runner.artifact_identity(source, "executable")
+        native_open = runner.os.open
+        native_fstat = runner.os.fstat
+        opened = []
+
+        def tracked_open(*arguments, **keywords):
+            descriptor = native_open(*arguments, **keywords)
+            opened.append(descriptor)
+            return descriptor
+
+        def interrupt_first_fstat(descriptor: int):
+            if opened and descriptor == opened[0]:
+                raise KeyboardInterrupt("after source open")
+            return native_fstat(descriptor)
+
+        try:
+            with mock.patch.object(
+                    runner.os, "open", side_effect=tracked_open), \
+                 mock.patch.object(
+                     runner.os, "fstat", side_effect=interrupt_first_fstat), \
+                 self.assertRaisesRegex(
+                     KeyboardInterrupt, "after source open"):
+                runner.capture_sealed_executable(
+                    source, expected, "interrupted benchmark")
+            self.assertEqual(len(opened), 1)
+            with self.assertRaises(OSError):
+                os.fstat(opened[0])
+        finally:
+            for descriptor in opened:
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
+
+    def test_run_child_closes_duplicate_when_argument_setup_interrupts(
+            self) -> None:
+        retained_descriptor = os.open("/dev/null", os.O_RDONLY)
+        execution_descriptor = os.open("/dev/null", os.O_RDONLY)
+        owner = runner.ExecutableSnapshotOwner()
+        owner.descriptors = {"baseline": retained_descriptor}
+        retained_snapshot = {"snapshot": {}}
+        try:
+            with mock.patch.object(
+                    runner, "validate_sealed_executable_record"), \
+                 mock.patch.object(owner, "inspect", return_value={}), \
+                 mock.patch.object(
+                     runner, "duplicate_snapshot_for_execution",
+                     return_value=execution_descriptor), \
+                 mock.patch.object(
+                     runner, "benchmark_arguments",
+                     side_effect=KeyboardInterrupt("argument setup")), \
+                 self.assertRaisesRegex(KeyboardInterrupt, "argument setup"):
+                runner.run_child(
+                    "baseline", CELL, 0, 0, CAMPAIGN,
+                    {"taskset": "/usr/bin/taskset"}, {}, RESERVATION,
+                    Path("/unused"), mock.Mock(), 0, 1.0,
+                    {"baseline": retained_snapshot}, owner)
+            with self.assertRaises(OSError):
+                os.fstat(execution_descriptor)
+            os.fstat(retained_descriptor)
+        finally:
+            try:
+                os.close(execution_descriptor)
+            except OSError:
+                pass
+            os.close(retained_descriptor)
+
+    def test_campaign_keyboard_interrupt_closes_both_snapshots_and_reports_cleanup(
+        self,
+    ) -> None:
+        class FakeContext:
+            def __init__(self, *args, **kwargs) -> None:
+                pass
+
+            def __enter__(self):
+                return copy.deepcopy(PAIR_LEASE)
+
+            def __exit__(self, exc_type, exc, traceback_value) -> bool:
+                return False
+
+            def validate_current(self) -> None:
+                pass
+
+        class FakeEvidence:
+            def __init__(self, path: Path) -> None:
+                self.path = path
+
+            def validate_current(self) -> None:
+                pass
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            options = argparse.Namespace(
+                taskset=Path("/usr/bin/taskset"),
+                ldd=Path("/usr/bin/ldd"),
+                baseline=Path("/usr/bin/true"),
+                candidate=Path("/usr/bin/true"),
+                baseline_archive=Path("/usr/bin/true"),
+                candidate_archive=Path("/usr/bin/true"),
+                baseline_build_dir=root,
+                candidate_build_dir=root,
+                baseline_source_root=root,
+                candidate_source_root=root,
+                candidate_commit="1" * 40,
+                candidate_mode="auto",
+                cpu=0,
+                reserved_sibling=1,
+                reservation_file=root / "reservation.json",
+                reuse=1,
+                iterations=3,
+                warmup=1,
+                timeout=1.0,
+                cell=None,
+                preset="smoke",
+            )
+            captured = []
+
+            def capture(_specification, _initial, owner):
+                for role in ("baseline", "candidate"):
+                    descriptor = os.open("/dev/null", os.O_RDONLY)
+                    captured.append(descriptor)
+                    owner.descriptors[role] = descriptor
+                return {"baseline": {}, "candidate": {}}
+
+            def close_with_diagnostic(owner) -> None:
+                for role in sorted(tuple(owner.descriptors), reverse=True):
+                    os.close(owner.descriptors.pop(role))
+                raise runner.EvidenceError("injected cleanup diagnostic")
+
+            with mock.patch.object(
+                    runner, "validate_topology",
+                    return_value=({0, 1, 2}, {2})), \
+                 mock.patch.object(runner, "host_identity", return_value={}), \
+                 mock.patch.object(runner, "PairLease", FakeContext), \
+                 mock.patch.object(runner, "Reservation", FakeContext), \
+                 mock.patch.object(runner.os, "sched_setaffinity"), \
+                 mock.patch.object(runner, "input_snapshot", return_value={}), \
+                 mock.patch.object(
+                     runner, "capture_campaign_executables",
+                     side_effect=capture), \
+                 mock.patch.object(
+                     runner, "cpu_stat_snapshot",
+                     side_effect=KeyboardInterrupt("primary interrupt")), \
+                 mock.patch.object(
+                     runner.ExecutableSnapshotOwner, "close",
+                     side_effect=close_with_diagnostic, autospec=True), \
+                 mock.patch.object(
+                     runner, "retained_file_records", return_value=[]), \
+                 mock.patch.object(runner, "publish_failure_record"), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError,
+                     "primary interrupt; sealed executable cleanup failed: "
+                     "injected cleanup diagnostic"):
+                runner._run_campaign_owned(options, FakeEvidence(root))
+            self.assertEqual(len(captured), 2)
+            for descriptor in captured:
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    def test_execution_descriptor_collision_is_fail_closed_and_high(self) -> None:
+        source = runner.artifact_identity(
+            Path("/usr/bin/true"), "executable")
+        descriptor, _ = runner.capture_sealed_executable(
+            Path("/usr/bin/true"), source, "collision benchmark")
+        duplicate = -1
+        try:
+            duplicate = runner.duplicate_snapshot_for_execution(
+                descriptor, "collision benchmark")
+            self.assertGreaterEqual(
+                duplicate, runner.EXECUTION_DESCRIPTOR_FLOOR)
+            self.assertNotEqual(duplicate, descriptor)
+            native_fcntl = runner.fcntl.fcntl
+
+            def collide(fd, command, argument=0):
+                if command == runner.LINUX_F_DUPFD_CLOEXEC:
+                    return fd
+                return native_fcntl(fd, command, argument)
+
+            with mock.patch.object(
+                    runner.fcntl, "fcntl", side_effect=collide), \
+                 self.assertRaisesRegex(
+                    runner.EvidenceError, "allocation collided"):
+                runner.duplicate_snapshot_for_execution(
+                    descriptor, "collision benchmark")
+            runner.sealed_executable_identity(
+                descriptor, "collision benchmark")
+        finally:
+            if duplicate >= 0:
+                os.close(duplicate)
+            os.close(descriptor)
+
+    def test_v8_sealed_evidence_is_bound_and_v7_has_old_shape(self) -> None:
+        value = synthetic_raw()
+        for path, replacement in (
+            (("executable_snapshots", "baseline", "snapshot", "sha256"),
+             "f" * 64),
+            (("executable_snapshots", "candidate", "snapshot", "seals"), 0),
+            (("invocations", 0, "execution_protocol"), "mutable-path"),
+        ):
+            changed = copy.deepcopy(value)
+            target = changed
+            for component in path[:-1]:
+                target = target[component]
+            target[path[-1]] = replacement
+            self.assert_rejected(changed)
+
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
+        self.assertNotIn("executable_snapshots", historical)
+        self.assertTrue(all(
+            "execution_protocol" not in invocation and
+            "executable_snapshot" not in invocation
+            for invocation in historical["invocations"]))
+        runner.validate_raw(
+            historical, None, check_files=False, check_current_inputs=False)
+
     def test_bounded_file_snapshot_rejects_fifo_without_open_block(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             fifo = Path(directory) / "identity.fifo"
@@ -2799,6 +5019,439 @@ class MainCompareRunnerTests(unittest.TestCase):
                 runner.bounded_file_snapshot(fifo)
             with self.assertRaises(runner.EvidenceError):
                 runner.bounded_file_contents_snapshot(fifo)
+
+    def test_evidence_directory_is_owner_only_and_inode_bound(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output = root / "evidence"
+            previous_umask = os.umask(0o777)
+            try:
+                evidence = runner.EvidenceDirectory.create_new(output)
+            finally:
+                os.umask(previous_umask)
+            try:
+                self.assertEqual(
+                    stat.S_IMODE(output.stat().st_mode), 0o700)
+                evidence.write_exclusive("nested/result.json", b"stable")
+                result = output / "nested/result.json"
+                self.assertEqual(
+                    stat.S_IMODE(result.parent.stat().st_mode), 0o700)
+                self.assertEqual(stat.S_IMODE(result.stat().st_mode), 0o600)
+                self.assertEqual(
+                    evidence.snapshot("nested/result.json", 64)[1],
+                    b"stable")
+                result.parent.chmod(0o755)
+                with self.assertRaisesRegex(
+                        runner.EvidenceError,
+                        "child directory is unsafe"):
+                    evidence.snapshot("nested/result.json", 64)
+                result.parent.chmod(0o700)
+
+                victim = root / "victim"
+                victim.write_bytes(b"untouched")
+                require_descriptor = evidence.descriptor
+                self.assertIsNotNone(require_descriptor)
+                os.symlink(
+                    "../../victim", "symlink.json",
+                    dir_fd=require_descriptor)
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "refusing to replace"):
+                    evidence.write_exclusive("symlink.json", b"overwrite")
+                self.assertEqual(victim.read_bytes(), b"untouched")
+            finally:
+                evidence.close()
+
+    def test_current_evidence_requires_exact_owner_only_modes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_complete_evidence_bundle(
+                root, synthetic_raw())
+            root.chmod(0o777)
+            try:
+                with self.assertRaisesRegex(
+                        runner.EvidenceError,
+                        "evidence directory is not safely owned"):
+                    runner.verified_campaign_bundle(
+                        manifest, no_current_input_check=True)
+            finally:
+                root.chmod(0o700)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_complete_evidence_bundle(
+                root, synthetic_raw())
+            manifest.chmod(0o666)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError,
+                    "bounded safe regular file"):
+                runner.verified_campaign_bundle(
+                    manifest, no_current_input_check=True)
+
+    def test_versioned_v6_replay_retains_legacy_mode_policy(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = write_complete_evidence_bundle(
+                root, synthetic_raw(raw_schema=runner.RAW_SCHEMA_V6),
+                runner.MANIFEST_SCHEMA_V6)
+            for path in root.iterdir():
+                if path.is_file():
+                    path.chmod(0o666)
+            root.chmod(0o777)
+            try:
+                verified, raw, _, _ = runner.verified_campaign_bundle(
+                    manifest, no_current_input_check=True)
+                self.assertEqual(
+                    verified["schema"], runner.MANIFEST_SCHEMA_V6)
+                self.assertEqual(raw["schema"], runner.RAW_SCHEMA_V6)
+            finally:
+                root.chmod(0o700)
+
+    def test_evidence_publication_recovers_from_partial_write(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            real_write = os.write
+            writes = 0
+
+            def partial_then_enospc(descriptor: int, value: bytes) -> int:
+                nonlocal writes
+                writes += 1
+                if writes == 1:
+                    return real_write(descriptor, value[:3])
+                raise OSError(errno.ENOSPC, os.strerror(errno.ENOSPC))
+
+            try:
+                with mock.patch.object(
+                        runner.os, "write",
+                        side_effect=partial_then_enospc):
+                    with self.assertRaisesRegex(
+                            runner.EvidenceError, "cannot publish"):
+                        evidence.write_exclusive(
+                            "artifact.json", b"complete-payload")
+                self.assertFalse((output / "artifact.json").exists())
+                self.assertFalse(any(
+                    name.startswith(".leopard2-evidence-pending-")
+                    for name in os.listdir(output)))
+
+                evidence.write_exclusive(
+                    "artifact.json", b"complete-payload")
+                self.assertEqual(
+                    evidence.snapshot("artifact.json", 64)[1],
+                    b"complete-payload")
+            finally:
+                evidence.close()
+
+    def test_evidence_publication_rollback_always_releases_descriptors_and_lock(
+            self) -> None:
+        for failed_operation in ("unlink", "fstat", "fsync"):
+            with self.subTest(failed_operation=failed_operation), \
+                    tempfile.TemporaryDirectory() as directory:
+                output = Path(directory) / "evidence"
+                evidence = runner.EvidenceDirectory.create_new(output)
+                descriptors_before = len(os.listdir("/proc/self/fd"))
+                real_unlink = os.unlink
+                real_fstat = os.fstat
+                real_fsync = os.fsync
+                regular_fstats = 0
+
+                def injected_unlink(*arguments, **keywords):
+                    if failed_operation == "unlink":
+                        raise OSError(
+                            errno.EIO, "injected rollback unlink EIO")
+                    return real_unlink(*arguments, **keywords)
+
+                def injected_fstat(descriptor):
+                    nonlocal regular_fstats
+                    metadata = real_fstat(descriptor)
+                    if stat.S_ISREG(metadata.st_mode):
+                        regular_fstats += 1
+                        if failed_operation == "fstat" and regular_fstats == 2:
+                            raise OSError(
+                                errno.EIO, "injected rollback fstat EIO")
+                    return metadata
+
+                def injected_fsync(descriptor):
+                    if failed_operation == "fsync":
+                        raise OSError(
+                            errno.EIO, "injected rollback fsync EIO")
+                    return real_fsync(descriptor)
+
+                try:
+                    with mock.patch.object(
+                            runner.os, "write",
+                            side_effect=OSError(
+                                errno.ENOSPC, "injected primary ENOSPC")), \
+                         mock.patch.object(
+                             runner.os, "unlink", new=injected_unlink), \
+                         mock.patch.object(
+                             runner.os, "fstat", new=injected_fstat), \
+                         mock.patch.object(
+                             runner.os, "fsync", new=injected_fsync), \
+                         self.assertRaises(runner.EvidenceError) as captured:
+                        evidence.write_exclusive("artifact.json", b"payload")
+                    message = str(captured.exception)
+                    self.assertIn("injected primary ENOSPC", message)
+                    self.assertIn(
+                        f"injected rollback {failed_operation} EIO", message)
+                    self.assertIn("cleanup also failed", message)
+                    self.assertEqual(
+                        len(os.listdir("/proc/self/fd")), descriptors_before)
+
+                    # Once the exception-domain and descriptor-count checks
+                    # pass, retry also proves the parent flock was released.
+                    evidence.write_exclusive("artifact.json", b"payload")
+                    self.assertEqual(
+                        evidence.snapshot("artifact.json", 64)[1], b"payload")
+                finally:
+                    evidence.close()
+
+    def test_evidence_publication_resumes_after_crash_staging_file(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            relative = "artifact.json"
+            pending = (
+                ".leopard2-evidence-pending-" +
+                hashlib.sha256(os.fsencode(relative)).hexdigest()
+            )
+            try:
+                staging = output / pending
+                staging.write_bytes(b"partial")
+                staging.chmod(0o600)
+                evidence.write_exclusive(relative, b"complete")
+                self.assertFalse(staging.exists())
+                self.assertEqual((output / relative).read_bytes(), b"complete")
+
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "refusing to replace"):
+                    evidence.write_exclusive(relative, b"replacement")
+                self.assertEqual((output / relative).read_bytes(), b"complete")
+            finally:
+                evidence.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            relative = "artifact.json"
+            pending = (
+                ".leopard2-evidence-pending-" +
+                hashlib.sha256(os.fsencode(relative)).hexdigest()
+            )
+            try:
+                staging = output / pending
+                staging.write_bytes(b"opened-before-fchmod")
+                staging.chmod(0o000)
+                evidence.write_exclusive(relative, b"complete")
+                self.assertFalse(staging.exists())
+                self.assertEqual((output / relative).read_bytes(), b"complete")
+            finally:
+                evidence.close()
+
+    def test_failure_publication_rejects_preexisting_entries_and_validates_storage(
+            self) -> None:
+        for kind in ("regular", "symlink", "fifo"):
+            with self.subTest(kind=kind), \
+                    tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                output = root / "evidence"
+                evidence = runner.EvidenceDirectory.create_new(output)
+                victim = root / "victim"
+                victim.write_bytes(b"untouched")
+                failure_path = output / "failure.json"
+                if kind == "regular":
+                    failure_path.write_bytes(b"stale")
+                    failure_path.chmod(0o600)
+                elif kind == "symlink":
+                    failure_path.symlink_to(victim)
+                else:
+                    os.mkfifo(failure_path, 0o600)
+                try:
+                    with self.assertRaisesRegex(
+                            runner.EvidenceError, "refusing to replace"):
+                        runner.publish_failure_record(
+                            evidence,
+                            synthetic_failure(runner.RAW_SCHEMA),
+                            output)
+                    self.assertEqual(victim.read_bytes(), b"untouched")
+                finally:
+                    evidence.close()
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            failure = synthetic_failure(runner.RAW_SCHEMA)
+            try:
+                stored = runner.publish_failure_record(
+                    evidence, failure, output)
+                self.assertEqual(stored, failure)
+                self.assertEqual(
+                    runner.strict_json_loads(
+                        evidence.snapshot("failure.json")[1],
+                        "stored failure"),
+                    failure)
+            finally:
+                evidence.close()
+
+    def test_failure_publication_rejects_postwrite_snapshot_mismatch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            real_snapshot = evidence.snapshot
+
+            def changed_snapshot(*arguments, **keywords):
+                metadata, value = real_snapshot(*arguments, **keywords)
+                return metadata, value + b" "
+
+            try:
+                with mock.patch.object(
+                        evidence, "snapshot",
+                        side_effect=changed_snapshot):
+                    with self.assertRaisesRegex(
+                            runner.EvidenceError,
+                            "stored failure record differs"):
+                        runner.publish_failure_record(
+                            evidence,
+                            synthetic_failure(runner.RAW_SCHEMA),
+                            output)
+            finally:
+                evidence.close()
+
+    def test_evidence_snapshot_rejects_nested_parent_replacement(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            try:
+                evidence.write_exclusive("nested/result.json", b"stable")
+
+                def replace_parent() -> None:
+                    (output / "nested").rename(output / "retained-nested")
+                    (output / "nested").mkdir(mode=0o700)
+                    (output / "nested/result.json").write_bytes(b"stable")
+
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "parent directory was replaced"):
+                    evidence.snapshot(
+                        "nested/result.json", 64,
+                        mutation_hook=replace_parent)
+            finally:
+                evidence.close()
+
+    def test_evidence_directory_validation_failures_do_not_leak_fds(
+        self,
+    ) -> None:
+        def fd_count() -> int:
+            return len(os.listdir("/proc/self/fd"))
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            child = root / "child"
+            child.mkdir(mode=0o700)
+            baseline = fd_count()
+            native_stat = runner.os.stat
+
+            def mismatched_child(path, *args, **kwargs):
+                result = native_stat(path, *args, **kwargs)
+                if path == "child" and \
+                        kwargs.get("follow_symlinks") is False:
+                    values = list(result)
+                    values[1] += 1
+                    return os.stat_result(values)
+                return result
+
+            with mock.patch.object(
+                    runner.os, "stat", side_effect=mismatched_child):
+                for _ in range(32):
+                    with self.assertRaises(runner.EvidenceError):
+                        runner.EvidenceDirectory._open_absolute_directory(child)
+                    self.assertEqual(fd_count(), baseline)
+
+            evidence = runner.EvidenceDirectory.open_existing(root)
+            try:
+                held_baseline = fd_count()
+                with mock.patch.object(
+                        runner.EvidenceDirectory,
+                        "_validate_child_directory",
+                        side_effect=runner.EvidenceError(
+                            "injected child validation failure")):
+                    for _ in range(32):
+                        with self.assertRaises(runner.EvidenceError):
+                            evidence._open_parent("child/result", create=False)
+                        self.assertEqual(fd_count(), held_baseline)
+            finally:
+                evidence.close()
+            self.assertEqual(fd_count(), baseline)
+
+            for index in range(32):
+                output = root / f"create-failure-{index}"
+                with mock.patch.object(
+                        runner.EvidenceDirectory, "validate_current",
+                        side_effect=runner.EvidenceError(
+                            "injected final validation failure")), \
+                     self.assertRaises(runner.EvidenceError):
+                    runner.EvidenceDirectory.create_new(output)
+                self.assertEqual(fd_count(), baseline)
+
+            for _ in range(32):
+                with mock.patch.object(
+                        runner.EvidenceDirectory, "validate_current",
+                        side_effect=runner.EvidenceError(
+                            "injected open validation failure")), \
+                     self.assertRaises(runner.EvidenceError):
+                    runner.EvidenceDirectory.open_existing(root)
+                self.assertEqual(fd_count(), baseline)
+
+    def test_evidence_directory_rejects_parent_and_lifetime_replacement(
+            self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            victim = root / "victim"
+            victim.mkdir(mode=0o700)
+            redirected = root / "redirected"
+            redirected.symlink_to(victim.name)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "symlinked ancestor"):
+                runner.EvidenceDirectory.create_new(
+                    redirected / "evidence")
+
+            output = root / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            retained = root / "retained-evidence"
+            output.rename(retained)
+            output.mkdir(mode=0o700)
+            try:
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "replaced"):
+                    evidence.write_exclusive("result.json", b"unsafe")
+                self.assertFalse((output / "result.json").exists())
+                self.assertFalse((retained / "result.json").exists())
+            finally:
+                evidence.close()
+
+    def test_evidence_snapshot_rejects_in_place_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory) / "evidence"
+            evidence = runner.EvidenceDirectory.create_new(output)
+            try:
+                evidence.write_exclusive(
+                    "result.json", b"A" * (2 * 1024 * 1024))
+
+                def mutate() -> None:
+                    descriptor = os.open(
+                        output / "result.json",
+                        os.O_WRONLY | getattr(os, "O_CLOEXEC", 0))
+                    try:
+                        os.pwrite(descriptor, b"B", 32)
+                        os.fsync(descriptor)
+                    finally:
+                        os.close(descriptor)
+
+                with self.assertRaisesRegex(
+                        runner.EvidenceError, "changed while reading"):
+                    evidence.snapshot(
+                        "result.json", 4 * 1024 * 1024,
+                        mutation_hook=mutate)
+            finally:
+                evidence.close()
 
     def test_process_group_reap_never_uses_unbounded_wait(self) -> None:
         class NeverReaps:
@@ -2821,6 +5474,219 @@ class MainCompareRunnerTests(unittest.TestCase):
         self.assertNotIn(None, process.calls)
 
     @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux retained pidfd test")
+    def test_pidfd_retention_rejects_same_tick_pid_reuse_by_proc_inode(
+            self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            first = Path(directory) / "first-task"
+            second = Path(directory) / "second-task"
+            first.mkdir()
+            second.mkdir()
+            first_fd = os.open(first, os.O_RDONLY | os.O_DIRECTORY)
+            second_fd = os.open(second, os.O_RDONLY | os.O_DIRECTORY)
+            pidfd = os.open("/dev/null", os.O_RDONLY)
+            record = (os.getpid(), 100, 100, 424242, "S")
+            first_metadata = os.fstat(first_fd)
+            expected = (
+                12345, 424242, first_metadata.st_dev, first_metadata.st_ino)
+            with mock.patch.object(
+                    runner, "_open_proc_task_directory",
+                    side_effect=(first_fd, second_fd)), \
+                 mock.patch.object(
+                     runner, "_proc_record_from_task_directory",
+                     return_value=record), \
+                 mock.patch.object(
+                     runner, "_linux_pidfd_open",
+                     return_value=pidfd), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError,
+                     "changed while retaining"):
+                runner._retain_linux_process(12345, expected)
+            for descriptor in (first_fd, second_fd, pidfd):
+                with self.assertRaises(OSError):
+                    os.fstat(descriptor)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux procfs inode snapshot test")
+    def test_proc_snapshots_bind_the_held_no_follow_directory_inode(self) -> None:
+        record = (os.getpid(), 100, 100, 424242, "S")
+        for emergency in (False, True):
+            with self.subTest(emergency=emergency), \
+                    tempfile.TemporaryDirectory() as directory:
+                first = Path(directory) / "first-task"
+                second = Path(directory) / "second-task"
+                first.mkdir()
+                second.mkdir()
+                first_fd = os.open(first, os.O_RDONLY | os.O_DIRECTORY)
+                first_metadata = os.fstat(first_fd)
+                second_metadata = os.stat(second)
+                open_name = (
+                    "_emergency_open_proc_task_directory"
+                    if emergency else "_open_proc_task_directory")
+                record_name = (
+                    "_emergency_proc_process_record"
+                    if emergency else "_proc_process_record")
+                with mock.patch.object(
+                        runner, open_name, return_value=first_fd), \
+                     mock.patch.object(
+                         runner, "_proc_record_from_task_directory",
+                         return_value=record), \
+                     mock.patch.object(
+                         runner.os, "stat", return_value=second_metadata):
+                    self.assertIsNone(getattr(runner, record_name)(12345))
+                with self.assertRaises(OSError):
+                    os.fstat(first_fd)
+
+                retained_fd = os.open(first, os.O_RDONLY | os.O_DIRECTORY)
+                with mock.patch.object(
+                        runner, open_name, return_value=retained_fd), \
+                     mock.patch.object(
+                         runner, "_proc_record_from_task_directory",
+                         return_value=record), \
+                     mock.patch.object(
+                         runner.os, "stat", return_value=first_metadata):
+                    self.assertEqual(
+                        getattr(runner, record_name)(12345),
+                        (*record, first_metadata.st_dev,
+                         first_metadata.st_ino))
+                with self.assertRaises(OSError):
+                    os.fstat(retained_fd)
+
+    def _check_post_retention_pid_reuse(
+            self, new_starttime: int, emergency: bool) -> None:
+        containment = runner.LinuxDescendantContainment()
+        pid = 12345
+        old_identity = (pid, 424242, 10, 20)
+        new_identity = (pid, new_starttime, 10, 21)
+        old_pidfd = os.open("/dev/null", os.O_RDONLY)
+        old_procfd = os.open("/dev/null", os.O_RDONLY)
+        new_pidfd = os.open("/dev/null", os.O_RDONLY)
+        new_procfd = os.open("/dev/null", os.O_RDONLY)
+        old_handle = runner._RetainedLinuxProcess(
+            identity=old_identity, pidfd=old_pidfd, procfd=old_procfd,
+            proc_identity=old_identity[2:],
+            record=(containment.runner_pid, pid, pid, old_identity[1], "Z"))
+        new_record = (
+            containment.runner_pid, pid, pid, new_identity[1], "S")
+        new_handle = runner._RetainedLinuxProcess(
+            identity=new_identity, pidfd=new_pidfd, procfd=new_procfd,
+            proc_identity=new_identity[2:], record=new_record)
+        containment.handles[old_identity] = old_handle
+        snapshot = {pid: (*new_record, *new_identity[2:])}
+        retain_name = (
+            "_emergency_retain_linux_process"
+            if emergency else "_retain_linux_process")
+        signal_name = (
+            "_emergency_pidfd_signal"
+            if emergency else "_linux_pidfd_signal")
+        try:
+            self.assertEqual(
+                containment._candidate_identities(snapshot), {new_identity})
+            with mock.patch.object(
+                    runner, retain_name, return_value=new_handle) as retain:
+                self.assertEqual(
+                    containment._discover(snapshot, emergency=emergency),
+                    {old_identity, new_identity})
+            retain.assert_called_once_with(pid, new_identity)
+            with mock.patch.object(
+                    runner, "_pidfd_exited",
+                    side_effect=lambda descriptor: descriptor == old_pidfd), \
+                 mock.patch.object(runner, signal_name) as retained_signal:
+                containment._signal_handles(emergency=emergency)
+            retained_signal.assert_called_once_with(
+                new_pidfd, signal.SIGKILL)
+        finally:
+            if new_identity not in containment.handles:
+                new_handle.close()
+            containment._close_handles()
+
+    def test_containment_tracks_different_tick_pid_reuse_as_new_lifetime(
+            self) -> None:
+        for emergency in (False, True):
+            with self.subTest(emergency=emergency):
+                self._check_post_retention_pid_reuse(424243, emergency)
+
+    def test_containment_tracks_same_tick_pid_reuse_by_proc_inode(self) -> None:
+        for emergency in (False, True):
+            with self.subTest(emergency=emergency):
+                self._check_post_retention_pid_reuse(424242, emergency)
+
+    def test_containment_signals_only_lifetime_retained_pidfds(self) -> None:
+        containment = runner.LinuxDescendantContainment()
+        identity = (12345, 67890, 1, 2)
+        containment.handles[identity] = runner._RetainedLinuxProcess(
+            identity=identity, pidfd=91, procfd=92,
+            proc_identity=(1, 2),
+            record=(containment.runner_pid, 12345, 12345, 67890, "S"))
+        with mock.patch.object(
+                runner, "_pidfd_exited", return_value=False), \
+             mock.patch.object(
+                 runner, "_linux_pidfd_signal") as retained_signal, \
+             mock.patch.object(
+                 runner, "_linux_pidfd_open",
+                 side_effect=AssertionError(
+                     "signal path reopened a numeric PID")):
+            containment._signal_handles(emergency=False)
+        retained_signal.assert_called_once_with(91, signal.SIGKILL)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux retained leader test")
+    def test_leader_is_not_reaped_before_pidfd_tree_quiescence(self) -> None:
+        real_wait = subprocess.Popen.wait
+        wait_observations: list[bool] = []
+
+        def observed_wait(
+            process: subprocess.Popen[bytes],
+            timeout: float | None = None,
+        ) -> int:
+            wait_observations.append(
+                Path("/proc", str(process.pid)).exists())
+            return real_wait(process, timeout=timeout)
+
+        with mock.patch.object(
+                runner.subprocess.Popen, "wait",
+                new=observed_wait), \
+             mock.patch.object(
+                 runner.subprocess.Popen, "poll",
+                 side_effect=AssertionError(
+                     "leader was polled/reaped before quiescence")):
+            completed = runner.run_process_bounded(
+                [sys.executable, "-c", "raise SystemExit(0)"],
+                timeout=2.0, max_stdout=1024, max_stderr=1024)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(wait_observations, [True])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux emergency retained-handle test")
+    def test_post_popen_attachment_fault_uses_retained_emergency_cleanup(
+            self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            marker = Path(directory) / "escaped-marker"
+            child = (
+                "import pathlib,sys,time\n"
+                "time.sleep(.6)\n"
+                "pathlib.Path(sys.argv[1]).write_text("
+                "'escaped',encoding='ascii')\n"
+            )
+            subreaper_before = runner._get_child_subreaper()
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            with mock.patch.object(
+                    runner.LinuxDescendantContainment, "attach",
+                    side_effect=runner.EvidenceError(
+                        "injected attachment fault")), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError, "injected attachment fault"):
+                runner.run_process_bounded(
+                    [sys.executable, "-c", child, str(marker)],
+                    timeout=2.0, max_stdout=1024, max_stderr=1024)
+            time.sleep(.7)
+            self.assertFalse(marker.exists())
+            self.assertEqual(
+                runner._get_child_subreaper(), subreaper_before)
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
                          "Linux descendant containment test")
     def test_timeout_kills_setsid_double_fork_descendant(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -2829,13 +5695,18 @@ class MainCompareRunnerTests(unittest.TestCase):
             ready = root / "escaped-ready"
             subreaper_before = runner._get_child_subreaper()
             child = (
-                "import os,sys,time\n"
+                "import os,pathlib,sys,time\n"
                 "pid=os.fork()\n"
                 "if pid == 0:\n"
                 " os.setsid()\n"
                 " daemon=os.fork()\n"
                 " if daemon != 0: os._exit(0)\n"
-                " open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+                " ready=pathlib.Path(sys.argv[2])\n"
+                " temporary=ready.with_name("
+                "ready.name+'.tmp-'+str(os.getpid()))\n"
+                " temporary.write_text("
+                "str(os.getpid()),encoding='ascii')\n"
+                " os.replace(temporary,ready)\n"
                 " time.sleep(1.5)\n"
                 " open(sys.argv[1], 'w').write('escaped')\n"
                 " os._exit(0)\n"
@@ -2862,7 +5733,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             marker = root / "daemon-marker"
             ready = root / "daemon-ready"
             child = (
-                "import os,sys,time\n"
+                "import os,pathlib,sys,time\n"
                 "pid=os.fork()\n"
                 "if pid == 0:\n"
                 " os.setsid()\n"
@@ -2870,7 +5741,12 @@ class MainCompareRunnerTests(unittest.TestCase):
                 " if daemon != 0: os._exit(0)\n"
                 " null=os.open('/dev/null', os.O_WRONLY)\n"
                 " os.dup2(null, 1);os.dup2(null, 2);os.close(null)\n"
-                " open(sys.argv[2], 'w').write(str(os.getpid()))\n"
+                " ready=pathlib.Path(sys.argv[2])\n"
+                " temporary=ready.with_name("
+                "ready.name+'.tmp-'+str(os.getpid()))\n"
+                " temporary.write_text("
+                "str(os.getpid()),encoding='ascii')\n"
+                " os.replace(temporary,ready)\n"
                 " time.sleep(1.0)\n"
                 " open(sys.argv[1], 'w').write('escaped')\n"
                 " os._exit(0)\n"
@@ -2886,6 +5762,90 @@ class MainCompareRunnerTests(unittest.TestCase):
             time.sleep(1.1)
             self.assertFalse(marker.exists())
             self.assertFalse(Path("/proc", str(escaped_pid)).exists())
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux descendant containment test")
+    def test_zero_exit_leader_with_retained_pipe_is_reaped_immediately(
+            self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            pid_path = Path(directory) / "retained-pipe.pid"
+            child = (
+                "import os,pathlib,sys,time\n"
+                "pid=os.fork()\n"
+                "if pid==0:\n"
+                " os.setsid()\n"
+                " ready=pathlib.Path(sys.argv[1])\n"
+                " temporary=ready.with_name("
+                "ready.name+'.tmp-'+str(os.getpid()))\n"
+                " temporary.write_text("
+                "str(os.getpid()),encoding='ascii')\n"
+                " os.replace(temporary,ready)\n"
+                " time.sleep(30)\n"
+                " os._exit(0)\n"
+                "deadline=time.monotonic()+5\n"
+                "while not os.path.exists(sys.argv[1]) and "
+                "time.monotonic()<deadline: time.sleep(.01)\n"
+                "sys.exit(0 if os.path.exists(sys.argv[1]) else 91)\n"
+            )
+            started = time.monotonic()
+            completed = runner.run_process_bounded(
+                [sys.executable, "-c", child, str(pid_path)],
+                timeout=4.0, max_stdout=1024, max_stderr=1024)
+            elapsed = time.monotonic() - started
+            retained_pid = int(pid_path.read_text(encoding="ascii"))
+            self.assertEqual(completed.returncode, 0)
+            self.assertLess(elapsed, 2.0)
+            self.assertFalse(Path("/proc", str(retained_pid)).exists())
+
+    @unittest.skipUnless(
+        sys.platform.startswith("linux") and hasattr(fcntl, "F_SETPIPE_SZ"),
+        "Linux small-pipe capture test",
+    )
+    def test_small_capture_pipes_are_drained_concurrently(self) -> None:
+        real_popen = subprocess.Popen
+
+        def small_pipe_popen(*arguments, **keywords):
+            process = real_popen(*arguments, **keywords)
+            self.assertIsNotNone(process.stdout)
+            self.assertIsNotNone(process.stderr)
+            fcntl.fcntl(process.stdout.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+            fcntl.fcntl(process.stderr.fileno(), fcntl.F_SETPIPE_SZ, 4096)
+            return process
+
+        payload_size = 256 * 1024
+        child = (
+            "import os\n"
+            f"value=b'x'*{payload_size}\n"
+            "offset=0\n"
+            "while offset<len(value): offset+=os.write(1,value[offset:])\n"
+            "value=b'y'*len(value)\n"
+            "offset=0\n"
+            "while offset<len(value): offset+=os.write(2,value[offset:])\n"
+        )
+        with mock.patch.object(
+                runner.subprocess, "Popen", side_effect=small_pipe_popen):
+            completed = runner.run_process_bounded(
+                [sys.executable, "-c", child], timeout=4.0,
+                max_stdout=payload_size, max_stderr=payload_size)
+        self.assertEqual(completed.returncode, 0)
+        self.assertEqual(completed.stdout, b"x" * payload_size)
+        self.assertEqual(completed.stderr, b"y" * payload_size)
+
+    @unittest.skipUnless(sys.platform.startswith("linux"),
+                         "Linux bounded capture test")
+    def test_closed_capture_pipes_do_not_extend_command_timeout(self) -> None:
+        child = (
+            "import os,time\n"
+            "os.close(1)\n"
+            "os.close(2)\n"
+            "time.sleep(30)\n"
+        )
+        started = time.monotonic()
+        with self.assertRaisesRegex(runner.EvidenceError, "exceeded"):
+            runner.run_process_bounded(
+                [sys.executable, "-c", child], timeout=0.2,
+                max_stdout=1024, max_stderr=1024)
+        self.assertLess(time.monotonic() - started, 1.0)
 
     def test_descendant_containment_fails_closed_before_spawn(self) -> None:
         with mock.patch.object(runner.sys, "platform", "not-linux"), \
@@ -2957,6 +5917,233 @@ class MainCompareRunnerTests(unittest.TestCase):
                         pass
                 with self.assertRaises(runner.EvidenceError):
                     first.validate_current()
+
+    def test_pair_lease_failed_enter_releases_kernel_lease(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            root.mkdir(mode=0o700)
+            lease = runner.PairLease(0, 1, root=root)
+            lease.path.mkdir(mode=0o700)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "not a regular file"):
+                lease.__enter__()
+            self.assertIsNone(lease.descriptor)
+            self.assertIsNone(lease.kernel_socket)
+            lease.path.rmdir()
+            with runner.PairLease(1, 0, root=root):
+                pass
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
+                         "descriptor-count regression needs procfs")
+    def test_pair_lease_enter_recovers_from_first_fstat_interrupt(
+            self) -> None:
+        real_fstat = os.fstat
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            lease = runner.PairLease(0, 1, root=root)
+            injected = False
+
+            def interrupt_first_lease_status(descriptor: int):
+                nonlocal injected
+                if descriptor == lease.descriptor and \
+                        lease.descriptor_identity is None and not injected:
+                    injected = True
+                    raise KeyboardInterrupt(
+                        "injected post-open fstat interruption")
+                return real_fstat(descriptor)
+
+            with mock.patch.object(
+                    runner.os, "fstat",
+                    side_effect=interrupt_first_lease_status), \
+                 self.assertRaisesRegex(
+                     KeyboardInterrupt, "post-open fstat interruption"):
+                lease.__enter__()
+            self.assertTrue(injected)
+            self.assertIsNone(lease.descriptor)
+            self.assertIsNone(lease.descriptor_identity)
+            self.assertIsNone(lease.kernel_socket)
+            with runner.PairLease(1, 0, root=root):
+                pass
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before)
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
+                         "descriptor-count regression needs procfs")
+    def test_pair_lease_failed_enter_retains_fd_after_close_failure(
+            self) -> None:
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            root.mkdir(mode=0o700)
+            path = root / runner.pair_lease_name(0, 1)
+            path.write_bytes(b"noncanonical")
+            path.chmod(0o600)
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            lease = runner.PairLease(0, 1, root=root)
+            injected = False
+
+            def fail_before_close(descriptor: int) -> None:
+                nonlocal injected
+                if descriptor == lease.descriptor and not injected:
+                    injected = True
+                    raise OSError(errno.EIO, "injected close failure")
+                real_close(descriptor)
+
+            with mock.patch.object(
+                    runner.os, "close", side_effect=fail_before_close), \
+                 self.assertRaisesRegex(
+                     runner.EvidenceError, "unexpected or noncanonical"):
+                lease.__enter__()
+            self.assertTrue(injected)
+            self.assertIsNotNone(lease.descriptor)
+            self.assertIsNotNone(lease.descriptor_identity)
+            os.fstat(lease.descriptor)
+            self.assertIsNone(lease.kernel_socket)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "already leased"):
+                with runner.PairLease(1, 0, root=root):
+                    pass
+            lease.__exit__(None, None, None)
+            self.assertIsNone(lease.descriptor)
+            self.assertIsNone(lease.descriptor_identity)
+            path.unlink()
+            with runner.PairLease(1, 0, root=root):
+                pass
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before)
+
+    @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
+                         "descriptor-count regression needs procfs")
+    def test_pair_lease_exit_retains_fd_after_close_failure(self) -> None:
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            descriptors_before = len(os.listdir("/proc/self/fd"))
+            lease = runner.PairLease(0, 1, root=root)
+            lease.__enter__()
+            retained_descriptor = lease.descriptor
+            injected = False
+
+            def fail_before_close(descriptor: int) -> None:
+                nonlocal injected
+                if descriptor == retained_descriptor and not injected:
+                    injected = True
+                    raise OSError(errno.EIO, "injected close failure")
+                real_close(descriptor)
+
+            with mock.patch.object(
+                    runner.os, "close", side_effect=fail_before_close), \
+                 self.assertRaisesRegex(OSError, "injected close failure"):
+                lease.__exit__(None, None, None)
+            self.assertTrue(injected)
+            self.assertEqual(lease.descriptor, retained_descriptor)
+            self.assertIsNotNone(lease.descriptor_identity)
+            os.fstat(retained_descriptor)
+            self.assertIsNone(lease.kernel_socket)
+            with self.assertRaisesRegex(
+                    runner.EvidenceError, "already leased"):
+                with runner.PairLease(1, 0, root=root):
+                    pass
+            lease.__exit__(None, None, None)
+            with runner.PairLease(1, 0, root=root):
+                pass
+            self.assertEqual(
+                len(os.listdir("/proc/self/fd")), descriptors_before)
+
+    def test_pair_lease_exit_clears_already_closed_ebadf(self) -> None:
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            lease = runner.PairLease(0, 1, root=root)
+            lease.__enter__()
+            retained_descriptor = lease.descriptor
+            injected = False
+
+            def close_then_report_ebadf(descriptor: int) -> None:
+                nonlocal injected
+                if descriptor == retained_descriptor and not injected:
+                    injected = True
+                    real_close(descriptor)
+                    raise OSError(errno.EBADF, "injected already-closed fd")
+                real_close(descriptor)
+
+            with mock.patch.object(
+                    runner.os, "close", side_effect=close_then_report_ebadf), \
+                 self.assertRaisesRegex(OSError, "already-closed"):
+                lease.__exit__(None, None, None)
+            self.assertTrue(injected)
+            self.assertIsNone(lease.descriptor)
+            self.assertIsNone(lease.descriptor_identity)
+            self.assertIsNone(lease.kernel_socket)
+            with runner.PairLease(1, 0, root=root):
+                pass
+
+    def test_pair_lease_exit_refuses_recycled_descriptor(self) -> None:
+        real_close = os.close
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            foreign = Path(directory) / "foreign"
+            foreign.write_bytes(b"foreign")
+            lease = runner.PairLease(0, 1, root=root)
+            lease.__enter__()
+            retained_descriptor = lease.descriptor
+            recycled: list[int] = []
+
+            def close_and_recycle(descriptor: int) -> None:
+                if descriptor == retained_descriptor and not recycled:
+                    real_close(descriptor)
+                    replacement = os.open(foreign, os.O_RDONLY)
+                    self.assertEqual(replacement, descriptor)
+                    recycled.append(replacement)
+                    raise OSError(errno.EIO, "injected post-close failure")
+                real_close(descriptor)
+
+            try:
+                with mock.patch.object(
+                        runner.os, "close",
+                        side_effect=close_and_recycle), \
+                     self.assertRaisesRegex(
+                         runner.EvidenceError, "descriptor number was recycled"):
+                    lease.__exit__(None, None, None)
+                self.assertEqual(recycled, [retained_descriptor])
+                self.assertIsNone(lease.descriptor)
+                self.assertIsNone(lease.descriptor_identity)
+                self.assertIsNone(lease.kernel_socket)
+                os.fstat(recycled[0])
+            finally:
+                for descriptor in recycled:
+                    real_close(descriptor)
+            with runner.PairLease(1, 0, root=root):
+                pass
+
+    def test_pair_lease_exit_releases_kernel_socket_on_status_interrupt(
+            self) -> None:
+        real_fstat = os.fstat
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / runner.pair_lease_directory().name
+            lease = runner.PairLease(0, 1, root=root)
+            lease.__enter__()
+            retained_descriptor = lease.descriptor
+
+            def interrupt_status(descriptor: int):
+                if descriptor == retained_descriptor:
+                    raise KeyboardInterrupt(
+                        "injected descriptor-status interruption")
+                return real_fstat(descriptor)
+
+            with mock.patch.object(
+                    runner.os, "fstat",
+                    side_effect=interrupt_status), \
+                 self.assertRaisesRegex(
+                     KeyboardInterrupt, "status interruption"):
+                lease.__exit__(None, None, None)
+            self.assertEqual(lease.descriptor, retained_descriptor)
+            self.assertIsNotNone(lease.descriptor_identity)
+            self.assertIsNone(lease.kernel_socket)
+            lease.__exit__(None, None, None)
+            with runner.PairLease(1, 0, root=root):
+                pass
 
     def test_pair_lease_interoperates_with_jerasure_runner(self) -> None:
         jerasure_path = MODULE_PATH.resolve().parents[3] / \

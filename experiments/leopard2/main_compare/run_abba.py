@@ -23,6 +23,7 @@ import math
 import os
 import platform
 import re
+import select
 import selectors
 import shlex
 import signal
@@ -31,11 +32,21 @@ import stat
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 import traceback
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
+
+_MAIN_COMPARE_DIR = Path(__file__).resolve().parent
+if str(_MAIN_COMPARE_DIR) not in sys.path:
+    sys.path.insert(0, str(_MAIN_COMPARE_DIR))
+import git_capture
+_GIT_CAPTURE_PATH = (_MAIN_COMPARE_DIR / "git_capture.py").resolve(strict=True)
+if Path(git_capture.__file__).resolve(strict=True) != _GIT_CAPTURE_PATH:
+    raise RuntimeError(
+        "main-comparison Git capture helper resolved outside this source tree")
 
 _DECODER_DISPATCH_DIR = Path(__file__).resolve().parents[1] / "decoder_dispatch"
 if str(_DECODER_DISPATCH_DIR) not in sys.path:
@@ -49,7 +60,9 @@ RAW_SCHEMA_V2 = "leopard2-main-compare-raw/v2"
 RAW_SCHEMA_V3 = "leopard2-main-compare-raw/v3"
 RAW_SCHEMA_V4 = "leopard2-main-compare-raw/v4"
 RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
-RAW_SCHEMA = "leopard2-main-compare-raw/v6"
+RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
+RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
+RAW_SCHEMA = "leopard2-main-compare-raw/v8"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
@@ -57,12 +70,16 @@ MANIFEST_SCHEMA_V2 = "leopard2-main-compare-manifest/v2"
 MANIFEST_SCHEMA_V3 = "leopard2-main-compare-manifest/v3"
 MANIFEST_SCHEMA_V4 = "leopard2-main-compare-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
+MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
+MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v8"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
 FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
 FAILURE_SCHEMA_V5 = "leopard2-main-compare-failure/v5"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v6"
+FAILURE_SCHEMA_V6 = "leopard2-main-compare-failure/v6"
+FAILURE_SCHEMA_V7 = "leopard2-main-compare-failure/v7"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v8"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
@@ -71,6 +88,26 @@ SUPERVISION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
 CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
 CANONICAL_LDD_NORMALIZATION = "terminal-aslr-load-address/v1"
 CANONICAL_LDD_ADDRESS = "<ASLR_LOAD_ADDRESS>"
+SEALED_EXECUTABLE_PROTOCOL = "linux-sealed-executable-memfd/v1"
+SEALED_EXECUTABLE_COMMAND = {
+    "baseline": "<sealed-baseline-executable>",
+    "candidate": "<sealed-candidate-executable>",
+}
+LINUX_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
+LINUX_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
+LINUX_F_DUPFD_CLOEXEC = getattr(fcntl, "F_DUPFD_CLOEXEC", 1030)
+LINUX_F_SEAL_SEAL = getattr(fcntl, "F_SEAL_SEAL", 0x0001)
+LINUX_F_SEAL_SHRINK = getattr(fcntl, "F_SEAL_SHRINK", 0x0002)
+LINUX_F_SEAL_GROW = getattr(fcntl, "F_SEAL_GROW", 0x0004)
+LINUX_F_SEAL_WRITE = getattr(fcntl, "F_SEAL_WRITE", 0x0008)
+LINUX_REQUIRED_EXECUTABLE_SEALS = (
+    LINUX_F_SEAL_WRITE | LINUX_F_SEAL_GROW |
+    LINUX_F_SEAL_SHRINK | LINUX_F_SEAL_SEAL
+)
+LINUX_MFD_CLOEXEC = getattr(os, "MFD_CLOEXEC", 0x0001)
+LINUX_MFD_ALLOW_SEALING = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+LINUX_MFD_EXEC = getattr(os, "MFD_EXEC", 0x0010)
+EXECUTION_DESCRIPTOR_FLOOR = 64
 
 # CMake target and archive identity is evidence, not an interchangeable build
 # detail.  Historical v1/v2 records predate the canonical target rename and
@@ -93,6 +130,8 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V3: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V4: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V5: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V6: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V7: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -107,6 +146,8 @@ HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V3,
     RAW_SCHEMA_V4,
     RAW_SCHEMA_V5,
+    RAW_SCHEMA_V6,
+    RAW_SCHEMA_V7,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
@@ -116,6 +157,8 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V3: RAW_SCHEMA_V3,
     MANIFEST_SCHEMA_V4: RAW_SCHEMA_V4,
     MANIFEST_SCHEMA_V5: RAW_SCHEMA_V5,
+    MANIFEST_SCHEMA_V6: RAW_SCHEMA_V6,
+    MANIFEST_SCHEMA_V7: RAW_SCHEMA_V7,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
@@ -123,17 +166,67 @@ FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V3: RAW_SCHEMA_V3,
     FAILURE_SCHEMA_V4: RAW_SCHEMA_V4,
     FAILURE_SCHEMA_V5: RAW_SCHEMA_V5,
+    FAILURE_SCHEMA_V6: RAW_SCHEMA_V6,
+    FAILURE_SCHEMA_V7: RAW_SCHEMA_V7,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
-CANDIDATE_MODE_SCHEMAS = frozenset((RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA))
+CANDIDATE_MODE_SCHEMAS = frozenset((
+    RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
+))
 WORKSPACE_SELECTOR_SCHEMAS = frozenset((
-    RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA,
+    RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6,
+    RAW_SCHEMA_V7, RAW_SCHEMA,
 ))
 ISOLATION_SCHEMAS = frozenset((
-    RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA,
+    RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5,
+    RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
 ))
-COMPLETE_EVIDENCE_SCHEMAS = frozenset((RAW_SCHEMA_V5, RAW_SCHEMA))
+COMPLETE_EVIDENCE_SCHEMAS = frozenset((
+    RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
+))
 SUPERVISION_SCHEMAS = COMPLETE_EVIDENCE_SCHEMAS
+BUILD_CLOSURE_V7_SCHEMAS = frozenset((RAW_SCHEMA_V7, RAW_SCHEMA))
+SEALED_EXECUTABLE_SCHEMAS = frozenset((RAW_SCHEMA,))
+INPUT_SPECIFICATION_KEYS = frozenset((
+    "runner", "taskset", "ldd", "baseline_executable",
+    "candidate_executable", "baseline_archive", "candidate_archive",
+    "baseline_build_dir", "candidate_build_dir", "baseline_source_root",
+    "candidate_source_root", "candidate_commit",
+))
+RAW_V8_KEYS = frozenset((
+    "schema", "created_utc", "validity_is_independent_of_speed", "campaign",
+    "host_initial", "isolation", "reservation", "supervision",
+    "input_specification", "identities_initial", "executable_snapshots",
+    "invocations", "identities_final", "host_final", "analysis", "digest",
+))
+CAMPAIGN_V8_KEYS = frozenset((
+    "rounds", "order", "cells", "candidate_mode", "batch", "reuse",
+    "iterations", "warmup", "threads", "child_environment", "benchmark_cpu",
+    "reserved_sibling", "timeout_seconds", "statistics",
+    "allowed_cpu_set_at_launch",
+))
+CAMPAIGN_V8_PRE_TOPOLOGY_KEYS = (
+    CAMPAIGN_V8_KEYS - frozenset(("allowed_cpu_set_at_launch",))
+)
+MANIFEST_V8_KEYS = frozenset((
+    "schema", "created_utc", "valid", "validity_is_independent_of_speed",
+    "raw", "campaign", "host", "isolation", "reservation", "supervision",
+    "identities", "executable_snapshots", "analysis", "digest",
+))
+INVOCATION_V8_KEYS = frozenset((
+    "cell_id", "round", "slot", "implementation", "command",
+    "execution_protocol", "executable_snapshot", "environment", "pinned_cpu",
+    "started_utc", "duration_ns", "returncode", "stdout", "stderr", "result",
+    "normalized", "identity_before", "identity_after", "reservation_before",
+    "reservation_after",
+))
+RESERVATION_IDENTITY_KEYS = frozenset((
+    "path", "sha256", "payload", "lock",
+))
+STREAM_IDENTITY_KEYS = frozenset(("path", "size", "sha256"))
+MANIFEST_RAW_IDENTITY_KEYS = frozenset((
+    "path", "size", "sha256", "payload_digest",
+))
 CPU_STAT_FIELDS = (
     "user", "nice", "system", "idle", "iowait", "irq", "softirq", "steal",
 )
@@ -166,6 +259,11 @@ MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
 MAX_IDENTITY_FILE_BYTES = 256 * 1024 * 1024
 MAX_LINK_RECIPE_BYTES = 1024 * 1024
 MAX_GENERATED_ATTESTATION_HEADER_BYTES = 64 * 1024
+MAX_BUILD_CONFIGURATION_BYTES = 64 * 1024
+MAX_BUILD_TOOL_VERSION_BYTES = 64 * 1024
+MAX_NINJA_GRAPH_FILES = 64
+MAX_NINJA_GRAPH_TOTAL_BYTES = 8 * 1024 * 1024
+NINJA_GRAPH_CLOSURE_SCHEMA = "leopard2-ninja-graph-closure/v1"
 MAX_GIT_COMMIT_BYTES = 1024 * 1024
 MAX_CAMPAIGN_COUNT = 1_000_000
 MAX_CAMPAIGN_CELLS = 4096
@@ -201,11 +299,89 @@ CANDIDATE_CONFIGURED_SOURCES = (
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = len(CANDIDATE_CONFIGURED_SOURCES)
 COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v3"
+COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v4"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v2"
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v2"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v2"
+BUILD_CONFIGURATION_RELATIVE_PATH = (
+    "generated/leopard2-benchmark-attestation/"
+    "leopard2_benchmark_build_configuration.txt"
+)
+BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH = \
+    "cmake/Leopard2BenchmarkAttestation.cmake"
+EVIDENCE_HELPER_RELATIVE_PATH = \
+    "experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
+CANONICAL_NINJA_PATH = "/usr/bin/ninja"
+BUILD_CONFIGURATION_VARIABLES = (
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_GENERATOR",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CXX_COMPILER",
+    "CMAKE_CXX_FLAGS",
+    "CMAKE_CXX_FLAGS_DEBUG",
+    "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
+    "CMAKE_CXX_FLAGS_MINSIZEREL",
+    "ENABLE_OPENMP",
+    "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16",
+    "LEO2_BACKEND_VARIANT",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE",
+    "LEO2_BUILD_BENCHMARKS",
+    "LEO2_BUILD_TESTS",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+)
+CMAKE_CACHE_ENTRY_TYPES = frozenset((
+    "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
+    "UNINITIALIZED",
+))
+CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
+    # Every cache entry that can affect the selected compiler, flags, build
+    # graph, wire/backend options, or retained provenance has one canonical
+    # CMake cache type.  Treating these merely as strings would allow a
+    # hand-edited cache to preserve the value while changing CMake's semantics.
+    "CMAKE_AR": frozenset(("FILEPATH",)),
+    "CMAKE_BUILD_TYPE": frozenset(("STRING",)),
+    "CMAKE_CONFIGURATION_TYPES": frozenset(("STRING",)),
+    "CMAKE_CXX_COMPILER": frozenset(("FILEPATH",)),
+    "CMAKE_CXX_FLAGS": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS_DEBUG": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS_RELEASE": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO": frozenset(("STRING",)),
+    "CMAKE_CXX_FLAGS_MINSIZEREL": frozenset(("STRING",)),
+    "CMAKE_GENERATOR": frozenset(("INTERNAL",)),
+    "CMAKE_HOME_DIRECTORY": frozenset(("INTERNAL",)),
+    "CMAKE_MAKE_PROGRAM": frozenset(("FILEPATH",)),
+    "CMAKE_RANLIB": frozenset(("FILEPATH",)),
+    "ENABLE_OPENMP": frozenset(("BOOL",)),
+    "LEOPARD_ENABLE_GF8": frozenset(("BOOL",)),
+    "LEOPARD_ENABLE_GF16": frozenset(("BOOL",)),
+    "LEOPARD_MAIN_SOURCE_DIR": frozenset(("PATH",)),
+    "LEO_MAIN_HAS_MARCH_NATIVE": frozenset(("INTERNAL",)),
+    "LEO2_BACKEND_VARIANT": frozenset(("STRING",)),
+    "LEO2_BENCHMARK_GIT_EXECUTABLE": frozenset(("FILEPATH",)),
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+        frozenset(("INTERNAL",)),
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+        frozenset(("INTERNAL",)),
+    "LEO2_BUILD_BENCHMARKS": frozenset(("BOOL",)),
+    "LEO2_BUILD_FUZZERS": frozenset(("BOOL",)),
+    "LEO2_BUILD_TESTS": frozenset(("BOOL",)),
+    "LEO2_ENABLE_CUDA": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+}
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
@@ -265,13 +441,85 @@ def utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def validate_utc_timestamp(value: object, label: str) -> str:
+    """Accept only the canonical UTC spelling emitted by utc_now()."""
+    require(isinstance(value, str) and re.fullmatch(
+                r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}"
+                r"(?:\.\d{6})?Z", value) is not None,
+            f"{label} is not a canonical UTC timestamp")
+    try:
+        parsed = dt.datetime.fromisoformat(value[:-1] + "+00:00")
+    except ValueError as error:
+        raise EvidenceError(
+            f"{label} is not a valid UTC timestamp: {error}") from error
+    require(parsed.tzinfo == dt.timezone.utc and
+            parsed.isoformat().replace("+00:00", "Z") == value,
+            f"{label} is not a canonical UTC timestamp")
+    return value
+
+
+def validate_input_specification(value: object) -> dict[str, Any]:
+    """Validate the shared raw/failure input schema before indexed access."""
+    require(isinstance(value, dict) and
+            set(value) == INPUT_SPECIFICATION_KEYS and
+            all(isinstance(item, str) and item for item in value.values()),
+            "input specification is incomplete or has unexpected fields")
+    require(re.fullmatch(
+                r"[0-9a-f]{40}", value.get("candidate_commit", "")) is not None,
+            "candidate commit is not a full lowercase SHA-1")
+    return value
+
+
 def canonical_bytes(value: object) -> bytes:
     try:
-        return json.dumps(
+        rendered = json.dumps(
             value, sort_keys=True, separators=(",", ":"), allow_nan=False
-        ).encode("utf-8")
-    except (TypeError, ValueError) as error:
+        )
+        # json.dumps escapes lone surrogates when ensure_ascii is left at its
+        # compatibility default.  Validate the unescaped spelling separately
+        # so malformed Unicode cannot bypass the evidence error domain.
+        json.dumps(
+            value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ensure_ascii=False).encode("utf-8", errors="strict")
+        return rendered.encode("utf-8")
+    except (TypeError, ValueError, UnicodeEncodeError) as error:
         raise EvidenceError(f"value is not canonical JSON: {error}") from error
+
+
+def exact_json_equal(left: object, right: object) -> bool:
+    """Compare JSON values without Python's bool/int/float coercions."""
+    return canonical_bytes(left) == canonical_bytes(right)
+
+
+def strict_json_loads(data: bytes, label: str) -> object:
+    """Decode one duplicate-free UTF-8 JSON value in the evidence domain."""
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in pairs:
+            if key in result:
+                raise EvidenceError(f"{label} contains duplicate key {key!r}")
+            result[key] = value
+        return result
+
+    def reject_nonstandard_constant(value: str) -> object:
+        raise EvidenceError(f"{label} contains non-standard JSON constant {value!r}")
+
+    def parse_finite_float(value: str) -> float:
+        result = float(value)
+        if not math.isfinite(result):
+            raise EvidenceError(f"{label} contains non-finite JSON number {value!r}")
+        return result
+
+    try:
+        text = data.decode("utf-8", errors="strict")
+        return json.loads(
+            text,
+            object_pairs_hook=reject_duplicate_keys,
+            parse_constant=reject_nonstandard_constant,
+            parse_float=parse_finite_float,
+        )
+    except (UnicodeDecodeError, ValueError, RecursionError) as error:
+        raise EvidenceError(f"{label} JSON is invalid: {error}") from error
 
 
 def sha256_bytes(value: bytes) -> str:
@@ -393,10 +641,7 @@ def bounded_file_contents_snapshot(
 def json_file_snapshot(path: Path, label: str) -> tuple[dict[str, Any], bytes]:
     """Parse JSON from exactly the bytes accepted by the bounded snapshot."""
     _, data = bounded_file_contents_snapshot(path)
-    try:
-        value = json.loads(data.decode("utf-8", errors="strict"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"{label} JSON is invalid: {error}") from error
+    value = strict_json_loads(data, label)
     require(isinstance(value, dict), f"{label} is not an object")
     return value, data
 
@@ -419,27 +664,687 @@ def verify_signature(value: object, what: str) -> dict[str, Any]:
     return value
 
 
-def write_json_exclusive(path: Path, value: object) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    data = canonical_bytes(value) + b"\n"
+def _linux_rename_noreplace(
+    old_directory: int, old_name: str, new_directory: int, new_name: str,
+) -> None:
+    """Atomically publish one same-filesystem name without replacement."""
+    require(sys.platform.startswith("linux"),
+            "crash-atomic evidence publication requires Linux renameat2")
     try:
-        with path.open("xb") as stream:
-            stream.write(data)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except FileExistsError as error:
-        raise EvidenceError(f"refusing to replace evidence file {path}") from error
+        function = ctypes.CDLL(None, use_errno=True).renameat2
+    except (AttributeError, OSError) as error:
+        raise EvidenceError(
+            f"Linux renameat2 is unavailable: {error}") from error
+    encoded_old = os.fsencode(old_name)
+    encoded_new = os.fsencode(new_name)
+    require(b"\0" not in encoded_old and b"\0" not in encoded_new,
+            "evidence publication name contains NUL")
+    ctypes.set_errno(0)
+    result = function(
+        ctypes.c_int(old_directory), ctypes.c_char_p(encoded_old),
+        ctypes.c_int(new_directory), ctypes.c_char_p(encoded_new),
+        ctypes.c_uint(1))
+    if result == 0:
+        return
+    number = ctypes.get_errno()
+    if number == errno.EEXIST:
+        raise FileExistsError(number, os.strerror(number), new_name)
+    raise OSError(
+        number or errno.EIO,
+        os.strerror(number or errno.EIO), new_name)
+
+
+class EvidenceDirectory:
+    """Hold and revalidate one canonical evidence directory by descriptor."""
+
+    def __init__(
+        self, path: Path, descriptor: int, identity: tuple[int, int],
+        owner_only: bool,
+    ) -> None:
+        self.path = path
+        self.descriptor: int | None = descriptor
+        self.identity = identity
+        self.owner_only = owner_only
+
+    @staticmethod
+    def _absolute(path: Path) -> Path:
+        try:
+            return Path(os.path.abspath(os.fspath(path)))
+        except (OSError, TypeError, ValueError) as error:
+            raise EvidenceError(f"invalid evidence directory path: {error}") from error
+
+    @staticmethod
+    def _directory_flags() -> int:
+        require(hasattr(os, "O_NOFOLLOW") and hasattr(os, "O_DIRECTORY"),
+                "secure evidence directories require O_NOFOLLOW and O_DIRECTORY")
+        return (os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+                getattr(os, "O_CLOEXEC", 0))
+
+    @staticmethod
+    def _validate_directory_metadata(
+        metadata: os.stat_result, label: Path, owner_only: bool,
+    ) -> tuple[int, int]:
+        mode = stat.S_IMODE(metadata.st_mode)
+        # v1-v6 evidence predates mode binding and remains replayable.  A
+        # current v7 schema explicitly promotes this descriptor to the exact
+        # owner-only policy before any evidence payload is accepted.
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and
+                (not owner_only or mode == 0o700),
+                f"evidence directory is not safely owned: {label}")
+        return metadata.st_dev, metadata.st_ino
+
+    @classmethod
+    def _open_absolute_directory(cls, path: Path) -> int:
+        """Open an absolute directory without following any path component."""
+        require(path.is_absolute() and path != path.parent,
+                f"evidence directory path is invalid: {path}")
+        flags = cls._directory_flags()
+        descriptor = os.open("/", flags)
+        child: int | None = None
+        try:
+            prefix = Path("/")
+            for component in path.parts[1:]:
+                require(component not in {"", ".", ".."} and
+                        "/" not in component,
+                        f"evidence directory contains an unsafe component: "
+                        f"{path}")
+                child = os.open(component, flags, dir_fd=descriptor)
+                metadata = os.fstat(child)
+                entry = os.stat(
+                    component, dir_fd=descriptor, follow_symlinks=False)
+                require(stat.S_ISDIR(metadata.st_mode) and
+                        (metadata.st_dev, metadata.st_ino) ==
+                        (entry.st_dev, entry.st_ino),
+                        f"evidence directory component changed: "
+                        f"{prefix / component}")
+                previous = descriptor
+                descriptor = child
+                child = None
+                os.close(previous)
+                prefix /= component
+            return descriptor
+        except BaseException:
+            if child is not None:
+                os.close(child)
+            os.close(descriptor)
+            raise
+
+    @classmethod
+    def create_new(cls, requested: Path) -> "EvidenceDirectory":
+        """Create a mode-0700 directory without following any path component."""
+        path = cls._absolute(requested)
+        flags = cls._directory_flags()
+        descriptor: int | None = None
+        child: int | None = None
+        try:
+            require(path.is_absolute() and path != path.parent,
+                    f"evidence output already exists: {path}")
+            descriptor = os.open("/", flags)
+            current_path = Path("/")
+            creating = False
+            for index, component in enumerate(path.parts[1:]):
+                require(component not in {"", ".", ".."} and
+                        "/" not in component,
+                        f"evidence directory contains an unsafe component: "
+                        f"{path}")
+                final_component = index == len(path.parts[1:]) - 1
+                created = False
+                if not creating:
+                    try:
+                        child = os.open(component, flags, dir_fd=descriptor)
+                    except FileNotFoundError:
+                        creating = True
+                    except OSError as error:
+                        if error.errno in (errno.ELOOP, errno.ENOTDIR):
+                            raise EvidenceError(
+                                f"evidence output has a symlinked ancestor: "
+                                f"{path}") from error
+                        raise
+                    else:
+                        require(not final_component,
+                                f"evidence output already exists: {path}")
+                if creating:
+                    created = True
+                    try:
+                        os.mkdir(component, 0o700, dir_fd=descriptor)
+                    except FileExistsError as error:
+                        raise EvidenceError(
+                            f"evidence directory appeared during creation: "
+                            f"{current_path / component}") from error
+                    created_entry = os.stat(
+                        component, dir_fd=descriptor,
+                        follow_symlinks=False)
+                    require(stat.S_ISDIR(created_entry.st_mode) and
+                            created_entry.st_uid == os.getuid(),
+                            f"new evidence directory entry is unsafe: "
+                            f"{current_path / component}")
+                    os.chmod(
+                        component, 0o700, dir_fd=descriptor,
+                        follow_symlinks=False)
+                    child = os.open(component, flags, dir_fd=descriptor)
+                require(created or not creating,
+                        "evidence directory creation state is inconsistent")
+                child_metadata = os.fstat(child)
+                entry_metadata = os.stat(
+                    component, dir_fd=descriptor, follow_symlinks=False)
+                if created:
+                    cls._validate_directory_metadata(
+                        child_metadata, current_path / component, True)
+                else:
+                    require(stat.S_ISDIR(child_metadata.st_mode),
+                            f"evidence ancestor is not a directory: "
+                            f"{current_path / component}")
+                require((child_metadata.st_dev, child_metadata.st_ino) ==
+                        (entry_metadata.st_dev, entry_metadata.st_ino),
+                        "evidence directory entry changed during creation")
+                if created:
+                    require((child_metadata.st_dev, child_metadata.st_ino) ==
+                            (created_entry.st_dev, created_entry.st_ino),
+                            "new evidence directory was replaced during creation")
+                if created:
+                    os.fsync(descriptor)
+                previous = descriptor
+                descriptor = child
+                child = None
+                os.close(previous)
+                current_path /= component
+            require(creating,
+                    f"evidence output already exists: {path}")
+            metadata = os.fstat(descriptor)
+            identity = cls._validate_directory_metadata(metadata, path, True)
+            result = cls(path, descriptor, identity, True)
+            result.validate_current()
+            descriptor = None
+            return result
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot create secure evidence directory {path}: {error}") from error
+        finally:
+            if child is not None:
+                os.close(child)
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def enable_owner_only(self) -> None:
+        """Promote a replay directory to the exact current 0700/0600 policy."""
+        require(not self.owner_only,
+                "evidence directory already uses the owner-only policy")
+        require(self.descriptor is not None,
+                "evidence directory descriptor is closed")
+        metadata = os.fstat(self.descriptor)
+        self._validate_directory_metadata(metadata, self.path, True)
+        self.owner_only = True
+        try:
+            self.validate_current()
+        except BaseException:
+            self.owner_only = False
+            raise
+
+    @classmethod
+    def open_existing(cls, requested: Path) -> "EvidenceDirectory":
+        """Open an existing replay directory without following symlinks."""
+        path = cls._absolute(requested)
+        descriptor: int | None = None
+        try:
+            descriptor = cls._open_absolute_directory(path)
+            metadata = os.fstat(descriptor)
+            current = os.lstat(path)
+            identity = cls._validate_directory_metadata(metadata, path, False)
+            require(identity == (current.st_dev, current.st_ino),
+                    f"evidence directory changed while opening: {path}")
+            result = cls(path, descriptor, identity, False)
+            result.validate_current()
+            descriptor = None
+            return result
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot open evidence directory {path}: {error}") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+
+    def validate_current(self) -> None:
+        require(self.descriptor is not None,
+                "evidence directory descriptor is closed")
+        rebound: int | None = None
+        try:
+            metadata = os.fstat(self.descriptor)
+            rebound = self._open_absolute_directory(self.path)
+            current = os.fstat(rebound)
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot revalidate evidence directory {self.path}: {error}") from error
+        finally:
+            if rebound is not None:
+                os.close(rebound)
+        identity = self._validate_directory_metadata(
+            metadata, self.path, self.owner_only)
+        require(identity == self.identity ==
+                (current.st_dev, current.st_ino),
+                f"evidence directory was replaced: {self.path}")
+
+    @staticmethod
+    def _parts(relative: object) -> tuple[str, ...]:
+        require(isinstance(relative, str) and relative and
+                not os.path.isabs(relative),
+                "evidence path is not a nonempty relative path")
+        parts = tuple(Path(relative).parts)
+        require(parts and all(
+            part not in {"", ".", ".."} and "/" not in part
+            for part in parts),
+            f"evidence path is unsafe: {relative!r}")
+        return parts
+
+    @classmethod
+    def _validate_child_directory(
+        cls, metadata: os.stat_result, label: str, owner_only: bool,
+    ) -> None:
+        mode = stat.S_IMODE(metadata.st_mode)
+        require(stat.S_ISDIR(metadata.st_mode) and
+                metadata.st_uid == os.getuid() and
+                (not owner_only or mode == 0o700),
+                f"evidence child directory is unsafe: {label}")
+
+    def _open_parent(
+        self, relative: str, create: bool,
+    ) -> tuple[int, str]:
+        self.validate_current()
+        parts = self._parts(relative)
+        require(self.descriptor is not None,
+                "evidence directory descriptor is closed")
+        descriptor = os.dup(self.descriptor)
+        flags = self._directory_flags()
+        child: int | None = None
+        try:
+            prefix: list[str] = []
+            for component in parts[:-1]:
+                prefix.append(component)
+                created = False
+                try:
+                    child = os.open(component, flags, dir_fd=descriptor)
+                except FileNotFoundError:
+                    require(create,
+                            f"evidence child directory does not exist: "
+                            f"{'/'.join(prefix)}")
+                    try:
+                        os.mkdir(component, 0o700, dir_fd=descriptor)
+                    except FileExistsError as error:
+                        raise EvidenceError(
+                            f"evidence child directory appeared during creation: "
+                            f"{'/'.join(prefix)}") from error
+                    created_entry = os.stat(
+                        component, dir_fd=descriptor,
+                        follow_symlinks=False)
+                    require(stat.S_ISDIR(created_entry.st_mode) and
+                            created_entry.st_uid == os.getuid(),
+                            f"new evidence child directory is unsafe: "
+                            f"{'/'.join(prefix)}")
+                    os.chmod(
+                        component, 0o700, dir_fd=descriptor,
+                        follow_symlinks=False)
+                    child = os.open(component, flags, dir_fd=descriptor)
+                    created = True
+                metadata = os.fstat(child)
+                entry = os.stat(
+                    component, dir_fd=descriptor, follow_symlinks=False)
+                self._validate_child_directory(
+                    metadata, "/".join(prefix),
+                    self.owner_only or created)
+                require((metadata.st_dev, metadata.st_ino) ==
+                        (entry.st_dev, entry.st_ino),
+                        f"evidence child directory changed: {'/'.join(prefix)}")
+                if created:
+                    require((metadata.st_dev, metadata.st_ino) ==
+                            (created_entry.st_dev, created_entry.st_ino),
+                            f"new evidence child directory was replaced: "
+                            f"{'/'.join(prefix)}")
+                if created:
+                    os.fsync(descriptor)
+                previous = descriptor
+                descriptor = child
+                child = None
+                os.close(previous)
+            return descriptor, parts[-1]
+        except BaseException:
+            if child is not None:
+                os.close(child)
+            os.close(descriptor)
+            raise
+
+    def _revalidate_parent(self, relative: str, descriptor: int) -> None:
+        rebound, _ = self._open_parent(relative, create=False)
+        try:
+            metadata = os.fstat(descriptor)
+            current = os.fstat(rebound)
+            require((metadata.st_dev, metadata.st_ino) ==
+                    (current.st_dev, current.st_ino),
+                    f"evidence parent directory was replaced: {relative}")
+        finally:
+            os.close(rebound)
+
+    def write_exclusive(self, relative: str, value: bytes) -> None:
+        require(isinstance(value, bytes), "evidence payload is not bytes")
+        parent, name = self._open_parent(relative, create=True)
+        descriptor: int | None = None
+        pending_identity: tuple[int, int] | None = None
+        published = False
+        parent_locked = False
+        pending = (
+            ".leopard2-evidence-pending-" +
+            hashlib.sha256(os.fsencode(relative)).hexdigest()
+        )
+        try:
+            fcntl.flock(parent, fcntl.LOCK_EX)
+            parent_locked = True
+            try:
+                existing = os.stat(
+                    name, dir_fd=parent, follow_symlinks=False)
+            except FileNotFoundError:
+                pass
+            else:
+                del existing
+                raise FileExistsError(
+                    errno.EEXIST, os.strerror(errno.EEXIST), name)
+
+            # A process crash before publication may leave this private,
+            # deterministic staging name.  The directory lock serializes
+            # cooperating resumptions; only the exact safe staging-file shape
+            # is eligible for cleanup.
+            try:
+                stale_descriptor = os.open(
+                    pending, getattr(os, "O_PATH", os.O_RDONLY) |
+                    os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=parent)
+            except FileNotFoundError:
+                pass
+            else:
+                try:
+                    stale = os.fstat(stale_descriptor)
+                    stale_current = os.stat(
+                        pending, dir_fd=parent, follow_symlinks=False)
+                    require(
+                        stat.S_ISREG(stale.st_mode) and
+                        stale.st_uid == os.getuid() and stale.st_nlink == 1 and
+                        not (stat.S_IMODE(stale.st_mode) & ~0o600) and
+                        (stale.st_dev, stale.st_ino) ==
+                        (stale_current.st_dev, stale_current.st_ino),
+                        f"stale evidence staging entry is unsafe: {relative}")
+                    os.unlink(pending, dir_fd=parent)
+                    unlinked = os.fstat(stale_descriptor)
+                    require(
+                        (unlinked.st_dev, unlinked.st_ino) ==
+                        (stale.st_dev, stale.st_ino) and
+                        unlinked.st_nlink == 0,
+                        f"stale evidence staging entry changed: {relative}")
+                    os.fsync(parent)
+                finally:
+                    os.close(stale_descriptor)
+
+            flags = (os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                     getattr(os, "O_CLOEXEC", 0) | os.O_NOFOLLOW)
+            descriptor = os.open(pending, flags, 0o600, dir_fd=parent)
+            initial = os.fstat(descriptor)
+            pending_identity = (initial.st_dev, initial.st_ino)
+            os.fchmod(descriptor, 0o600)
+            offset = 0
+            while offset < len(value):
+                try:
+                    written = os.write(descriptor, value[offset:])
+                except InterruptedError:
+                    continue
+                require(written > 0, "evidence write made no progress")
+                offset += written
+            os.fsync(descriptor)
+            metadata = os.fstat(descriptor)
+            current = os.stat(
+                pending, dir_fd=parent, follow_symlinks=False)
+            require(stat.S_ISREG(metadata.st_mode) and
+                    metadata.st_uid == os.getuid() and metadata.st_nlink == 1 and
+                    stat.S_IMODE(metadata.st_mode) == 0o600 and
+                    metadata.st_size == len(value) and
+                    pending_identity ==
+                    (metadata.st_dev, metadata.st_ino) and
+                    (metadata.st_dev, metadata.st_ino) ==
+                    (current.st_dev, current.st_ino),
+                    f"staged evidence file changed: {relative}")
+            _linux_rename_noreplace(parent, pending, parent, name)
+            published = True
+            final = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            require(stat.S_ISREG(final.st_mode) and
+                    final.st_uid == os.getuid() and final.st_nlink == 1 and
+                    stat.S_IMODE(final.st_mode) == 0o600 and
+                    final.st_size == len(value) and
+                    (final.st_dev, final.st_ino) == pending_identity,
+                    f"published evidence file changed: {relative}")
+            os.fsync(parent)
+            self._revalidate_parent(relative, parent)
+        except FileExistsError as error:
+            raise EvidenceError(
+                f"refusing to replace evidence file {self.path / relative}") from error
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot publish evidence file {self.path / relative}: "
+                f"{error}") from error
+        finally:
+            primary_error = sys.exc_info()[1]
+            cleanup_errors: list[tuple[str, BaseException]] = []
+            if (not published and pending_identity is not None and
+                    descriptor is not None):
+                try:
+                    current = os.stat(
+                        pending, dir_fd=parent, follow_symlinks=False)
+                    require(
+                        (current.st_dev, current.st_ino) == pending_identity,
+                        f"failed evidence staging entry changed: {relative}")
+                    os.unlink(pending, dir_fd=parent)
+                    unlinked = os.fstat(descriptor)
+                    require(
+                        (unlinked.st_dev, unlinked.st_ino) ==
+                        pending_identity and unlinked.st_nlink == 0,
+                        f"failed evidence staging entry changed: "
+                        f"{relative}")
+                    os.fsync(parent)
+                except FileNotFoundError:
+                    pass
+                except BaseException as error:
+                    cleanup_errors.append(("staging rollback", error))
+            if descriptor is not None:
+                try:
+                    os.close(descriptor)
+                except BaseException as error:
+                    cleanup_errors.append(("staging descriptor close", error))
+            if parent_locked:
+                try:
+                    fcntl.flock(parent, fcntl.LOCK_UN)
+                except BaseException as error:
+                    cleanup_errors.append(("parent lock release", error))
+            try:
+                os.close(parent)
+            except BaseException as error:
+                cleanup_errors.append(("parent descriptor close", error))
+            if cleanup_errors:
+                cleanup_detail = "; ".join(
+                    f"{label}: {type(error).__name__}: {error}"
+                    for label, error in cleanup_errors)
+                if primary_error is not None:
+                    raise EvidenceError(
+                        "evidence publication failed: "
+                        f"{type(primary_error).__name__}: {primary_error}; "
+                        f"cleanup also failed: {cleanup_detail}"
+                    ) from primary_error
+                raise EvidenceError(
+                    f"evidence publication cleanup failed: {cleanup_detail}"
+                ) from cleanup_errors[0][1]
+
+    @staticmethod
+    def _read_exact(descriptor: int, size: int, limit: int) -> bytes:
+        blocks: list[bytes] = []
+        retained = 0
+        while retained < size:
+            block = os.pread(
+                descriptor, min(1024 * 1024, size - retained), retained)
+            require(block, "evidence file was truncated while reading")
+            blocks.append(block)
+            retained += len(block)
+            require(retained <= limit, "evidence file exceeded its byte limit")
+        require(not os.pread(descriptor, 1, retained),
+                "evidence file grew while reading")
+        return b"".join(blocks)
+
+    def snapshot(
+        self, relative: str, limit: int = MAX_IDENTITY_FILE_BYTES,
+        mutation_hook: Callable[[], None] | None = None,
+    ) -> tuple[os.stat_result, bytes]:
+        require(type(limit) is int and 0 <= limit <= MAX_IDENTITY_FILE_BYTES,
+                "evidence snapshot limit is invalid")
+        parent, name = self._open_parent(relative, create=False)
+        descriptor: int | None = None
+        try:
+            flags = (os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                     os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0))
+            descriptor = os.open(name, flags, dir_fd=parent)
+            metadata = os.fstat(descriptor)
+            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+            mode = stat.S_IMODE(metadata.st_mode)
+            require(stat.S_ISREG(metadata.st_mode) and
+                    metadata.st_uid == os.getuid() and metadata.st_nlink == 1 and
+                    (not self.owner_only or mode == 0o600) and
+                    0 <= metadata.st_size <= limit and
+                    (metadata.st_dev, metadata.st_ino) ==
+                    (current.st_dev, current.st_ino),
+                    f"evidence file is not a bounded safe regular file: "
+                    f"{relative}")
+            identity = (
+                metadata.st_dev, metadata.st_ino, metadata.st_size,
+                metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_mode,
+                metadata.st_nlink,
+            )
+            retained = self._read_exact(descriptor, metadata.st_size, limit)
+            if mutation_hook is not None:
+                mutation_hook()
+            verification = self._read_exact(descriptor, metadata.st_size, limit)
+            final = os.fstat(descriptor)
+            final_current = os.stat(
+                name, dir_fd=parent, follow_symlinks=False)
+            final_identity = (
+                final.st_dev, final.st_ino, final.st_size,
+                final.st_mtime_ns, final.st_ctime_ns, final.st_mode,
+                final.st_nlink,
+            )
+            require(retained == verification and final_identity == identity and
+                    (final_current.st_dev, final_current.st_ino,
+                     final_current.st_size, final_current.st_mtime_ns,
+                     final_current.st_ctime_ns, final_current.st_mode,
+                     final_current.st_nlink) == identity,
+                    f"evidence file changed while reading: {relative}")
+            self._revalidate_parent(relative, parent)
+            return metadata, retained
+        except OSError as error:
+            raise EvidenceError(
+                f"cannot read evidence file {self.path / relative}: {error}") from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+            os.close(parent)
+
+    def file_records(self, exclude: frozenset[str] = frozenset()) \
+            -> list[dict[str, Any]]:
+        """Enumerate a stable, symlink-free retained-file tree."""
+        require(self.descriptor is not None,
+                "evidence directory descriptor is closed")
+        records: list[dict[str, Any]] = []
+        count = 0
+
+        def walk(directory: int, prefix: tuple[str, ...]) -> None:
+            nonlocal count
+            initial_directory = os.fstat(directory)
+            directory_identity = (
+                initial_directory.st_dev, initial_directory.st_ino,
+                initial_directory.st_mtime_ns, initial_directory.st_ctime_ns,
+                initial_directory.st_mode, initial_directory.st_nlink,
+            )
+            before_names = sorted(os.listdir(directory))
+            for name in before_names:
+                require(name not in {"", ".", ".."} and "/" not in name,
+                        "evidence directory contains an unsafe entry")
+                metadata = os.stat(
+                    name, dir_fd=directory, follow_symlinks=False)
+                relative = "/".join((*prefix, name))
+                if relative in exclude:
+                    count += 1
+                    require(count <= 100_000,
+                            "evidence tree contains too many files")
+                    continue
+                if stat.S_ISDIR(metadata.st_mode):
+                    child = os.open(
+                        name, self._directory_flags(), dir_fd=directory)
+                    try:
+                        child_metadata = os.fstat(child)
+                        self._validate_child_directory(
+                            child_metadata, relative, self.owner_only)
+                        require((child_metadata.st_dev, child_metadata.st_ino) ==
+                                (metadata.st_dev, metadata.st_ino),
+                                f"evidence directory entry changed: {relative}")
+                        walk(child, (*prefix, name))
+                    finally:
+                        os.close(child)
+                else:
+                    require(stat.S_ISREG(metadata.st_mode),
+                            f"evidence tree contains a non-file entry: {relative}")
+                    count += 1
+                    require(count <= 100_000,
+                            "evidence tree contains too many files")
+                    snapshot_metadata, data = self.snapshot(relative)
+                    require((snapshot_metadata.st_dev,
+                             snapshot_metadata.st_ino) ==
+                            (metadata.st_dev, metadata.st_ino),
+                            f"evidence file was replaced while enumerating: "
+                            f"{relative}")
+                    records.append({
+                        "path": relative,
+                        "size": len(data),
+                        "sha256": sha256_bytes(data),
+                    })
+            require(sorted(os.listdir(directory)) == before_names,
+                    "evidence directory changed while enumerating")
+            final_directory = os.fstat(directory)
+            require((
+                        final_directory.st_dev, final_directory.st_ino,
+                        final_directory.st_mtime_ns, final_directory.st_ctime_ns,
+                        final_directory.st_mode, final_directory.st_nlink,
+                    ) == directory_identity,
+                    "evidence directory metadata changed while enumerating")
+            binding_relative = "/".join((*prefix, ".__directory_binding__"))
+            self._revalidate_parent(binding_relative, directory)
+
+        self.validate_current()
+        walk(self.descriptor, ())
+        self.validate_current()
+        return sorted(records, key=lambda record: record["path"])
+
+    def close(self) -> None:
+        if self.descriptor is not None:
+            descriptor = self.descriptor
+            self.descriptor = None
+            os.close(descriptor)
+
+
+def write_json_exclusive(path: Path, value: object) -> None:
+    data = canonical_bytes(value) + b"\n"
+    directory = EvidenceDirectory.open_existing(path.parent)
+    try:
+        directory.write_exclusive(path.name, data)
+    finally:
+        directory.close()
 
 
 def write_bytes_exclusive(path: Path, value: bytes) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
+    directory = EvidenceDirectory.open_existing(path.parent)
     try:
-        with path.open("xb") as stream:
-            stream.write(value)
-            stream.flush()
-            os.fsync(stream.fileno())
-    except FileExistsError as error:
-        raise EvidenceError(f"refusing to replace evidence file {path}") from error
+        directory.write_exclusive(path.name, value)
+    finally:
+        directory.close()
 
 
 def _linux_prctl(option: int, argument: object) -> None:
@@ -515,7 +1420,31 @@ def _linux_pidfd_signal(descriptor: int, signal_number: int) -> None:
             os.strerror(error_number or errno.EPERM))
 
 
+def _pidfd_exited(descriptor: int) -> bool:
+    """Report pidfd exit readiness without reaping or numeric-PID lookup."""
+    poller = select.poll()
+    poller.register(
+        descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(0))
+
+
+def _wait_pidfd_exit(descriptor: int, timeout: float) -> bool:
+    require(isinstance(timeout, (int, float)) and
+            not isinstance(timeout, bool) and math.isfinite(float(timeout)) and
+            timeout >= 0,
+            "pidfd wait timeout is invalid")
+    if _pidfd_exited(descriptor):
+        return True
+    milliseconds = max(1, math.ceil(float(timeout) * 1000))
+    poller = select.poll()
+    poller.register(
+        descriptor, select.POLLIN | select.POLLHUP | select.POLLERR)
+    return bool(poller.poll(milliseconds))
+
+
 def _validate_linux_pidfd_support() -> None:
+    require(hasattr(os, "waitid"),
+            "Linux pidfd wait support is unavailable")
     descriptor = _linux_pidfd_open(os.getpid())
     require(descriptor is not None,
             "Linux pidfd support cannot identify the runner process")
@@ -525,22 +1454,16 @@ def _validate_linux_pidfd_support() -> None:
         os.close(descriptor)
 
 
-def _proc_process_record(pid: int) -> tuple[int, int, int, int, str] | None:
-    """Return (ppid, pgrp, session, starttime, state) from Linux procfs."""
-    try:
-        data = (Path("/proc") / str(pid) / "stat").read_bytes()
-    except (FileNotFoundError, ProcessLookupError):
-        return None
-    except OSError as error:
-        if error.errno in (errno.ENOENT, errno.ESRCH):
-            return None
-        raise EvidenceError(f"cannot inspect Linux process {pid}: {error}") from error
+def _parse_proc_stat_record(
+    data: bytes, pid: int, label: str,
+) -> tuple[int, int, int, int, str]:
     closing = data.rfind(b")")
-    require(closing > 0 and closing + 2 < len(data),
-            f"Linux process {pid} has malformed procfs stat data")
+    require(closing > 0 and closing + 2 < len(data) and
+            data[:data.find(b" ")] == str(pid).encode("ascii"),
+            f"{label} process {pid} has malformed procfs stat data")
     fields = data[closing + 2:].split()
     require(len(fields) >= 20,
-            f"Linux process {pid} has truncated procfs stat data")
+            f"{label} process {pid} has truncated procfs stat data")
     try:
         state = fields[0].decode("ascii")
         ppid = int(fields[1])
@@ -549,14 +1472,266 @@ def _proc_process_record(pid: int) -> tuple[int, int, int, int, str] | None:
         starttime = int(fields[19])
     except (UnicodeDecodeError, ValueError) as error:
         raise EvidenceError(
-            f"Linux process {pid} has invalid procfs stat fields") from error
+            f"{label} process {pid} has invalid procfs stat fields") from error
     require(len(state) == 1 and ppid >= 0 and pgrp >= 0 and
             session >= 0 and starttime >= 0,
-            f"Linux process {pid} has invalid procfs process identity")
+            f"{label} process {pid} has invalid procfs process identity")
     return ppid, pgrp, session, starttime, state
 
 
-def _proc_process_snapshot() -> dict[int, tuple[int, int, int, int, str]]:
+def _proc_record_from_task_directory(
+    directory: int, pid: int, label: str,
+) -> tuple[int, int, int, int, str]:
+    descriptor: int | None = None
+    try:
+        descriptor = os.open(
+            "stat", os.O_RDONLY | os.O_NOFOLLOW |
+            getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NONBLOCK", 0),
+            dir_fd=directory)
+        chunks = bytearray()
+        while len(chunks) <= 65536:
+            block = os.read(
+                descriptor, min(4096, 65537 - len(chunks)))
+            if not block:
+                break
+            chunks.extend(block)
+        require(len(chunks) <= 65536,
+                f"{label} process {pid} procfs stat is oversized")
+        return _parse_proc_stat_record(bytes(chunks), pid, label)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def _open_proc_task_directory(pid: int) -> int | None:
+    try:
+        return os.open(
+            f"/proc/{pid}",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+            getattr(os, "O_CLOEXEC", 0))
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(
+            f"cannot retain Linux process directory {pid}: {error}") from error
+
+
+def _emergency_open_proc_task_directory(pid: int) -> int | None:
+    try:
+        return os.open(
+            f"/proc/{pid}",
+            os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW |
+            getattr(os, "O_CLOEXEC", 0))
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(
+            f"cannot retain emergency process directory {pid}: {error}") from error
+
+
+@dataclass
+class _RetainedLinuxProcess:
+    identity: tuple[int, int, int, int]
+    pidfd: int
+    procfd: int
+    proc_identity: tuple[int, int]
+    record: tuple[int, int, int, int, str]
+
+    def close(self) -> None:
+        pidfd, procfd = self.pidfd, self.procfd
+        self.pidfd = -1
+        self.procfd = -1
+        first_error: OSError | None = None
+        for descriptor in (pidfd, procfd):
+            if descriptor < 0:
+                continue
+            try:
+                os.close(descriptor)
+            except OSError as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise EvidenceError(
+                f"cannot close retained Linux process handle: "
+                f"{first_error}") from first_error
+
+
+def _retain_linux_process(
+    pid: int, expected: tuple[int, int, int, int] | None = None,
+) -> _RetainedLinuxProcess | None:
+    """Bind one procfs task inode to a pidfd with before/open/after proof."""
+    before_directory = _open_proc_task_directory(pid)
+    if before_directory is None:
+        return None
+    pidfd: int | None = None
+    after_directory: int | None = None
+    try:
+        before_metadata = os.fstat(before_directory)
+        require(stat.S_ISDIR(before_metadata.st_mode) and
+                before_metadata.st_uid == os.getuid(),
+                f"Linux process directory {pid} is not safely owned")
+        before = _proc_record_from_task_directory(
+            before_directory, pid, "Linux retained")
+        proc_identity = (before_metadata.st_dev, before_metadata.st_ino)
+        identity = (pid, before[3], *proc_identity)
+        if expected is not None and identity != expected:
+            return None
+        pidfd = _linux_pidfd_open(pid)
+        if pidfd is None:
+            return None
+        after_directory = _open_proc_task_directory(pid)
+        if after_directory is None:
+            return None
+        after_metadata = os.fstat(after_directory)
+        after = _proc_record_from_task_directory(
+            after_directory, pid, "Linux retained")
+        require(
+            stat.S_ISDIR(after_metadata.st_mode) and
+            after_metadata.st_uid == os.getuid() and
+            proc_identity ==
+            (after_metadata.st_dev, after_metadata.st_ino) and
+            before[3] == after[3],
+            f"Linux process {pid} changed while retaining its pidfd")
+        result = _RetainedLinuxProcess(
+            identity, pidfd, before_directory, proc_identity, after)
+        pidfd = None
+        before_directory = -1
+        return result
+    finally:
+        if after_directory is not None:
+            os.close(after_directory)
+        if pidfd is not None:
+            os.close(pidfd)
+        if before_directory >= 0:
+            os.close(before_directory)
+
+
+def _emergency_retain_linux_process(
+    pid: int, expected: tuple[int, int, int, int] | None = None,
+) -> _RetainedLinuxProcess | None:
+    """Independent retained-handle path for faults after Popen."""
+    before_directory = _emergency_open_proc_task_directory(pid)
+    if before_directory is None:
+        return None
+    pidfd: int | None = None
+    after_directory: int | None = None
+    try:
+        before_metadata = os.fstat(before_directory)
+        if (not stat.S_ISDIR(before_metadata.st_mode) or
+                before_metadata.st_uid != os.getuid()):
+            raise EvidenceError(
+                f"emergency process directory {pid} is not safely owned")
+        before = _proc_record_from_task_directory(
+            before_directory, pid, "emergency retained")
+        proc_identity = (before_metadata.st_dev, before_metadata.st_ino)
+        identity = (pid, before[3], *proc_identity)
+        if expected is not None and identity != expected:
+            return None
+        pidfd = _emergency_pidfd_open(pid)
+        if pidfd is None:
+            return None
+        after_directory = _emergency_open_proc_task_directory(pid)
+        if after_directory is None:
+            return None
+        after_metadata = os.fstat(after_directory)
+        after = _proc_record_from_task_directory(
+            after_directory, pid, "emergency retained")
+        if (
+            not stat.S_ISDIR(after_metadata.st_mode) or
+            after_metadata.st_uid != os.getuid() or
+            proc_identity !=
+            (after_metadata.st_dev, after_metadata.st_ino) or
+            before[3] != after[3]
+        ):
+            raise EvidenceError(
+                f"emergency process {pid} changed while retaining its pidfd")
+        result = _RetainedLinuxProcess(
+            identity, pidfd, before_directory, proc_identity, after)
+        pidfd = None
+        before_directory = -1
+        return result
+    finally:
+        if after_directory is not None:
+            os.close(after_directory)
+        if pidfd is not None:
+            os.close(pidfd)
+        if before_directory >= 0:
+            os.close(before_directory)
+
+
+def _snapshot_proc_process_record(
+    pid: int, directory: int, label: str,
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Read one process and rebind its exact held proc-directory inode."""
+    try:
+        before = os.fstat(directory)
+        require(stat.S_ISDIR(before.st_mode),
+                f"{label} process {pid} procfs entry is not a directory")
+        record = _proc_record_from_task_directory(directory, pid, label)
+        current = os.stat(f"/proc/{pid}", follow_symlinks=False)
+        after = os.fstat(directory)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(
+            f"cannot inspect {label} process {pid}: {error}") from error
+    identity = (before.st_dev, before.st_ino)
+    if (
+        not stat.S_ISDIR(after.st_mode) or
+        not stat.S_ISDIR(current.st_mode) or
+        identity != (after.st_dev, after.st_ino) or
+        identity != (current.st_dev, current.st_ino)
+    ):
+        return None
+    return (*record, *identity)
+
+
+def _emergency_snapshot_proc_process_record(
+    pid: int, directory: int,
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Independent proc-inode binding for post-spawn emergency cleanup."""
+    try:
+        before = os.fstat(directory)
+        if not stat.S_ISDIR(before.st_mode):
+            raise EvidenceError(
+                f"emergency Linux snapshot process {pid} procfs entry "
+                "is not a directory")
+        record = _proc_record_from_task_directory(
+            directory, pid, "emergency Linux snapshot")
+        current = os.stat(f"/proc/{pid}", follow_symlinks=False)
+        after = os.fstat(directory)
+    except OSError as error:
+        if error.errno in (errno.ENOENT, errno.ESRCH):
+            return None
+        raise EvidenceError(
+            f"cannot inspect emergency Linux snapshot process {pid}: "
+            f"{error}") from error
+    identity = (before.st_dev, before.st_ino)
+    if (
+        not stat.S_ISDIR(after.st_mode) or
+        not stat.S_ISDIR(current.st_mode) or
+        identity != (after.st_dev, after.st_ino) or
+        identity != (current.st_dev, current.st_ino)
+    ):
+        return None
+    return (*record, *identity)
+
+
+def _proc_process_record(
+    pid: int,
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Return process fields plus an exact no-follow proc-directory identity."""
+    directory = _open_proc_task_directory(pid)
+    if directory is None:
+        return None
+    try:
+        return _snapshot_proc_process_record(pid, directory, "Linux snapshot")
+    finally:
+        os.close(directory)
+
+
+def _proc_process_snapshot(
+) -> dict[int, tuple[int, int, int, int, str, int, int]]:
     """Snapshot all procfs-visible processes, including every same-UID child."""
     proc = Path("/proc")
     require(proc.is_dir() and (proc / "self/stat").is_file(),
@@ -565,7 +1740,7 @@ def _proc_process_snapshot() -> dict[int, tuple[int, int, int, int, str]]:
         names = os.listdir(proc)
     except OSError as error:
         raise EvidenceError(f"cannot enumerate Linux procfs: {error}") from error
-    result: dict[int, tuple[int, int, int, int, str]] = {}
+    result: dict[int, tuple[int, int, int, int, str, int, int]] = {}
     for name in names:
         if not name.isascii() or not name.isdigit():
             continue
@@ -585,16 +1760,21 @@ def _proc_process_snapshot() -> dict[int, tuple[int, int, int, int, str]]:
         if record is not None:
             result[pid] = record
     self_record = _proc_process_record(os.getpid())
-    require(self_record is not None and os.getpid() in result,
-            "Linux procfs does not expose the runner process")
+    retained_self = result.get(os.getpid())
+    require(
+        self_record is not None and retained_self is not None and
+        (self_record[3], self_record[5], self_record[6]) ==
+        (retained_self[3], retained_self[5], retained_self[6]),
+        "Linux procfs does not expose the runner process")
     return result
 
 
 def _process_identity(
-    pid: int, snapshot: Mapping[int, tuple[int, int, int, int, str]]
-) -> tuple[int, int] | None:
+    pid: int,
+    snapshot: Mapping[int, tuple[int, int, int, int, str, int, int]],
+) -> tuple[int, int, int, int] | None:
     record = snapshot.get(pid)
-    return None if record is None else (pid, record[3])
+    return None if record is None else (pid, record[3], record[5], record[6])
 
 
 def _emergency_linux_prctl(option: int, argument: object) -> None:
@@ -635,57 +1815,25 @@ def _emergency_restore_child_subreaper(value: int) -> None:
 
 def _emergency_proc_process_record(
     pid: int,
-) -> tuple[int, int, int, int, str] | None:
-    """Read a Linux process identity without using the normal procfs helpers."""
-    path = f"/proc/{pid}/stat"
-    descriptor: int | None = None
+) -> tuple[int, int, int, int, str, int, int] | None:
+    """Read an exact process identity through an emergency-held proc dir."""
+    directory = _emergency_open_proc_task_directory(pid)
+    if directory is None:
+        return None
     try:
-        descriptor = os.open(
-            path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
-            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
-        chunks = bytearray()
-        while len(chunks) <= 65536:
-            block = os.read(descriptor, min(4096, 65537 - len(chunks)))
-            if not block:
-                break
-            chunks.extend(block)
-        if len(chunks) > 65536:
-            raise EvidenceError(f"emergency procfs record {pid} is oversized")
-        data = bytes(chunks)
-    except OSError as error:
-        if error.errno in (errno.ENOENT, errno.ESRCH):
-            return None
-        raise EvidenceError(
-            f"cannot inspect emergency Linux process {pid}: {error}") from error
+        return _emergency_snapshot_proc_process_record(pid, directory)
     finally:
-        if descriptor is not None:
-            os.close(descriptor)
-    closing = data.rfind(b")")
-    if closing <= 0 or closing + 2 >= len(data):
-        raise EvidenceError(f"emergency Linux process {pid} has malformed stat data")
-    fields = data[closing + 2:].split()
-    if len(fields) < 20:
-        raise EvidenceError(f"emergency Linux process {pid} has truncated stat data")
-    try:
-        state = fields[0].decode("ascii")
-        ppid, pgrp, session = int(fields[1]), int(fields[2]), int(fields[3])
-        starttime = int(fields[19])
-    except (UnicodeDecodeError, ValueError) as error:
-        raise EvidenceError(
-            f"emergency Linux process {pid} has invalid stat fields") from error
-    if (len(state) != 1 or min(ppid, pgrp, session, starttime) < 0):
-        raise EvidenceError(f"emergency Linux process {pid} identity is invalid")
-    return ppid, pgrp, session, starttime, state
+        os.close(directory)
 
 
 def _emergency_proc_process_snapshot(
-) -> dict[int, tuple[int, int, int, int, str]]:
+) -> dict[int, tuple[int, int, int, int, str, int, int]]:
     """Independent same-UID procfs snapshot for exception cleanup."""
     try:
         names = os.listdir("/proc")
     except OSError as error:
         raise EvidenceError(f"cannot enumerate emergency Linux procfs: {error}") from error
-    result: dict[int, tuple[int, int, int, int, str]] = {}
+    result: dict[int, tuple[int, int, int, int, str, int, int]] = {}
     for name in names:
         if not name.isascii() or not name.isdigit():
             continue
@@ -702,8 +1850,15 @@ def _emergency_proc_process_snapshot(
             continue
         if record is not None:
             result[pid] = record
-    if os.getpid() not in result:
-        raise EvidenceError("emergency procfs does not expose the runner")
+    self_record = _emergency_proc_process_record(os.getpid())
+    retained_self = result.get(os.getpid())
+    if (
+        self_record is None or retained_self is None or
+        (self_record[3], self_record[5], self_record[6]) !=
+        (retained_self[3], retained_self[5], retained_self[6])
+    ):
+        raise EvidenceError(
+            "emergency procfs does not expose the exact runner identity")
     return result
 
 
@@ -743,24 +1898,6 @@ def _emergency_pidfd_signal(descriptor: int, signal_number: int) -> None:
             os.strerror(number or errno.EPERM))
 
 
-def _emergency_signal_identity(identity: tuple[int, int]) -> None:
-    """SIGKILL exactly one still-matching process identity."""
-    pid, starttime = identity
-    record = _emergency_proc_process_record(pid)
-    if record is None or record[3] != starttime:
-        return
-    descriptor = _emergency_pidfd_open(pid)
-    if descriptor is None:
-        return
-    try:
-        record = _emergency_proc_process_record(pid)
-        if record is None or record[3] != starttime:
-            return
-        _emergency_pidfd_signal(descriptor, signal.SIGKILL)
-    finally:
-        os.close(descriptor)
-
-
 class LinuxDescendantContainment:
     """Own, kill, reap, and prove teardown of one complete Linux child tree.
 
@@ -773,19 +1910,27 @@ class LinuxDescendantContainment:
     def __init__(self) -> None:
         self.runner_pid = os.getpid()
         self.previous_subreaper: int | None = None
-        self.baseline_children: set[tuple[int, int]] = set()
-        self.leader: tuple[int, int] | None = None
-        self.known: set[tuple[int, int]] = set()
+        self.baseline_children: set[tuple[int, int, int, int]] = set()
+        self.leader: tuple[int, int, int, int] | None = None
+        self.handles: dict[
+            tuple[int, int, int, int], _RetainedLinuxProcess
+        ] = {}
         self.spawned_process: subprocess.Popen[bytes] | None = None
         self.active = False
         self.proven_empty = False
 
     @staticmethod
     def _direct_children(
-        snapshot: Mapping[int, tuple[int, int, int, int, str]], parent: int
-    ) -> set[tuple[int, int]]:
-        return {(pid, record[3]) for pid, record in snapshot.items()
-                if record[0] == parent}
+        snapshot: Mapping[
+            int, tuple[int, int, int, int, str, int, int]
+        ],
+        parent: int,
+    ) -> set[tuple[int, int, int, int]]:
+        return {
+            (pid, record[3], record[5], record[6])
+            for pid, record in snapshot.items()
+            if record[0] == parent
+        }
 
     def __enter__(self) -> "LinuxDescendantContainment":
         require(not self.active, "child descendant containment is already active")
@@ -822,31 +1967,66 @@ class LinuxDescendantContainment:
             raise
 
     def observe_spawn(self, process: subprocess.Popen[bytes]) -> None:
-        """Record the Popen handle before any injectable normal attachment."""
+        """Retain the child before any injectable normal attachment."""
         require(self.active and self.spawned_process is process and process.pid > 0,
                 "invalid emergency child observation")
-        record = _emergency_proc_process_record(process.pid)
-        if record is not None and record[0] == self.runner_pid:
-            identity = (process.pid, record[3])
-            self.known.add(identity)
+        handle = _emergency_retain_linux_process(process.pid)
+        if handle is None:
+            raise EvidenceError(
+                "spawned process could not be retained as an owned direct child")
+        if (handle.record[0] != self.runner_pid or
+                handle.identity in self.baseline_children):
+            handle.close()
+            raise EvidenceError(
+                "spawned process could not be retained as an owned direct child")
+        self._register_handle(handle)
 
     def attach(self, pid: int) -> None:
         require(self.active and self.leader is None and type(pid) is int and pid > 0,
                 "invalid child descendant containment attachment")
-        record = _proc_process_record(pid)
-        identity = None if record is None else (pid, record[3])
-        require(identity is not None and record is not None and
-                record[0] == self.runner_pid and
-                identity not in self.baseline_children,
+        retained = [
+            handle for identity, handle in self.handles.items()
+            if identity[0] == pid
+        ]
+        require(len(retained) == 1 and
+                retained[0].record[0] == self.runner_pid and
+                retained[0].identity not in self.baseline_children,
                 "spawned process is not an owned direct child")
-        self.leader = identity
-        self.known.add(identity)
+        self.leader = retained[0].identity
 
-    def _discover(
-        self, snapshot: Mapping[int, tuple[int, int, int, int, str]]
-    ) -> set[tuple[int, int]]:
-        targets = {identity for identity in self.known
-                   if _process_identity(identity[0], snapshot) == identity}
+    def _register_handle(
+        self, handle: _RetainedLinuxProcess,
+    ) -> _RetainedLinuxProcess:
+        existing = self.handles.get(handle.identity)
+        if existing is not None:
+            matches = existing.proc_identity == handle.proc_identity
+            handle.close()
+            require(matches, "retained process lifetime changed identity")
+            return existing
+        require(
+            handle.identity[2:] == handle.proc_identity,
+            "retained process lifetime omits its procfs identity")
+        self.handles[handle.identity] = handle
+        return handle
+
+    def leader_exited(self) -> bool:
+        require(self.leader is not None and self.leader in self.handles,
+                "child descendant containment has no retained leader")
+        return _pidfd_exited(self.handles[self.leader].pidfd)
+
+    def wait_for_leader_exit(self, timeout: float) -> bool:
+        require(self.leader is not None and self.leader in self.handles,
+                "child descendant containment has no retained leader")
+        return _wait_pidfd_exit(self.handles[self.leader].pidfd, timeout)
+
+    def _candidate_identities(
+        self,
+        snapshot: Mapping[int, tuple[int, int, int, int, str, int, int]],
+    ) -> set[tuple[int, int, int, int]]:
+        targets = {
+            identity for identity in self.handles
+            if _process_identity(identity[0], snapshot) == identity
+        }
         targets.update(
             identity for identity in self._direct_children(
                 snapshot, self.runner_pid)
@@ -854,100 +2034,141 @@ class LinuxDescendantContainment:
         changed = True
         while changed:
             changed = False
-            parent_pids = {pid for pid, _starttime in targets}
+            parent_pids = {identity[0] for identity in targets}
             for pid, record in snapshot.items():
-                identity = (pid, record[3])
+                identity = (pid, record[3], record[5], record[6])
                 if record[0] in parent_pids and identity not in targets:
                     targets.add(identity)
                     changed = True
-        self.known.update(targets)
         return targets
 
-    @staticmethod
-    def _signal_identity(identity: tuple[int, int]) -> None:
-        pid, starttime = identity
-        record = _proc_process_record(pid)
-        if record is None or record[3] != starttime:
-            return
-        descriptor = _linux_pidfd_open(pid)
-        if descriptor is None:
-            return
-        try:
-            record = _proc_process_record(pid)
-            if record is None or record[3] != starttime:
-                return
-            _linux_pidfd_signal(descriptor, signal.SIGKILL)
-        finally:
-            os.close(descriptor)
+    def _discover(
+        self,
+        snapshot: Mapping[int, tuple[int, int, int, int, str, int, int]],
+        emergency: bool = False,
+    ) -> set[tuple[int, int, int, int]]:
+        candidates = self._candidate_identities(snapshot)
+        allowed_parents = {self.runner_pid}
+        allowed_parents.update(identity[0] for identity in candidates)
+        retain = (
+            _emergency_retain_linux_process
+            if emergency else _retain_linux_process
+        )
+        for identity in sorted(candidates):
+            if identity in self.handles:
+                continue
+            handle = retain(identity[0], identity)
+            if handle is None:
+                continue
+            if (handle.record[0] not in allowed_parents or
+                    handle.identity in self.baseline_children):
+                handle.close()
+                continue
+            self._register_handle(handle)
+        return set(self.handles)
 
-    def terminate_and_reap(self, process: subprocess.Popen[bytes]) -> None:
+    def _signal_handles(self, emergency: bool) -> None:
+        send = _emergency_pidfd_signal if emergency else _linux_pidfd_signal
+        for handle in sorted(
+                self.handles.values(), key=lambda item: item.identity,
+                reverse=True):
+            if not _pidfd_exited(handle.pidfd):
+                send(handle.pidfd, signal.SIGKILL)
+
+    def _all_handles_exited(self) -> bool:
+        return bool(self.handles) and all(
+            _pidfd_exited(handle.pidfd)
+            for handle in self.handles.values())
+
+    @staticmethod
+    def _reap_pidfd(handle: _RetainedLinuxProcess, label: str) -> None:
+        try:
+            # Linux waitid's P_PIDFD selector is ABI value 3.  Some CPython
+            # builds omit the symbolic constant even though waitid and the
+            # kernel feature are available.
+            result = os.waitid(
+                getattr(os, "P_PIDFD", 3), handle.pidfd,
+                os.WEXITED | os.WNOHANG)
+        except (ChildProcessError, ProcessLookupError):
+            return
+        except OSError as error:
+            raise EvidenceError(
+                f"{label} child reap failed for {handle.identity[0]}: "
+                f"{error}") from error
+        require(result is not None,
+                f"{label} pidfd became unreadable before it was waitable")
+
+    def _finish_reaping(
+        self, process: subprocess.Popen[bytes], deadline: float,
+        emergency: bool,
+    ) -> None:
+        require(self.leader is not None and self.leader in self.handles,
+                "contained leader identity was lost before reaping")
+        for identity, handle in sorted(self.handles.items()):
+            if identity != self.leader:
+                self._reap_pidfd(
+                    handle, "emergency contained" if emergency
+                    else "contained")
+        remaining = deadline - time.monotonic()
+        require(remaining > 0,
+                "contained leader could not be reaped within the deadline")
+        try:
+            process.wait(timeout=remaining)
+        except subprocess.TimeoutExpired as error:
+            raise EvidenceError(
+                "contained leader could not be reaped after pidfd exit") from error
+        snapshot = (
+            _emergency_proc_process_snapshot()
+            if emergency else _proc_process_snapshot()
+        )
+        current = self._direct_children(snapshot, self.runner_pid)
+        require(current == self.baseline_children,
+                "contained child remained after exact pidfd reaping")
+        self.proven_empty = True
+
+    def _terminate_and_reap(
+        self, process: subprocess.Popen[bytes], emergency: bool,
+    ) -> None:
         require(self.active and self.leader is not None and
                 self.leader[0] == process.pid,
                 "child descendant containment is not attached to this process")
         deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
         empty_scans = 0
+        snapshot_function = (
+            _emergency_proc_process_snapshot
+            if emergency else _proc_process_snapshot
+        )
         while True:
-            snapshot = _proc_process_snapshot()
-            targets = self._discover(snapshot)
-            for identity in sorted(targets, reverse=True):
-                self._signal_identity(identity)
-
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=max(
-                        0.001, min(0.05, deadline - time.monotonic())))
-                except subprocess.TimeoutExpired:
-                    pass
-
-            # Subreaper adoption makes every orphan a waitable direct child.
-            for identity in sorted(self.known):
-                if identity == self.leader:
-                    continue
-                record = _proc_process_record(identity[0])
-                if record is None or record[3] != identity[1]:
-                    continue
-                try:
-                    os.waitpid(identity[0], os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass
-                except OSError as error:
-                    raise EvidenceError(
-                        f"cannot reap contained child {identity[0]}: {error}") from error
-
-            snapshot = _proc_process_snapshot()
-            live_targets = self._discover(snapshot)
-            if process.poll() is not None and not live_targets:
+            snapshot = snapshot_function()
+            before = len(self.handles)
+            self._discover(snapshot, emergency=emergency)
+            self._signal_handles(emergency)
+            snapshot = snapshot_function()
+            self._discover(snapshot, emergency=emergency)
+            if self._all_handles_exited() and len(self.handles) == before:
                 empty_scans += 1
                 if empty_scans >= 2:
-                    self.proven_empty = True
+                    self._finish_reaping(
+                        process, deadline, emergency)
                     return
             else:
                 empty_scans = 0
             remaining = deadline - time.monotonic()
-            require(remaining > 0,
-                    "contained child descendants remained after SIGKILL")
+            require(
+                remaining > 0,
+                ("emergency child descendants remained after bounded SIGKILL"
+                 if emergency else
+                 "contained child descendants remained after SIGKILL"))
             time.sleep(min(0.01, remaining))
 
+    def terminate_and_reap(self, process: subprocess.Popen[bytes]) -> None:
+        self._terminate_and_reap(process, emergency=False)
+
     def _emergency_discover(
-        self, snapshot: Mapping[int, tuple[int, int, int, int, str]]
-    ) -> set[tuple[int, int]]:
-        targets = {identity for identity in self.known
-                   if _process_identity(identity[0], snapshot) == identity}
-        targets.update(
-            identity for identity in self._direct_children(
-                snapshot, self.runner_pid)
-            if identity not in self.baseline_children)
-        changed = True
-        while changed:
-            changed = False
-            parents = {pid for pid, _starttime in targets}
-            for pid, record in snapshot.items():
-                identity = (pid, record[3])
-                if record[0] in parents and identity not in targets:
-                    targets.add(identity)
-                    changed = True
-        self.known.update(targets)
-        return targets
+        self,
+        snapshot: Mapping[int, tuple[int, int, int, int, str, int, int]],
+    ) -> set[tuple[int, int, int, int]]:
+        return self._discover(snapshot, emergency=True)
 
     def emergency_terminate_and_reap(self) -> None:
         """Exception-independent, bounded cleanup for every spawned child.
@@ -959,56 +2180,30 @@ class LinuxDescendantContainment:
         process = self.spawned_process
         if process is None:
             return
-        deadline = time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS
-        empty_scans = 0
-        while True:
+        if self.leader is None:
             snapshot = _emergency_proc_process_snapshot()
-            record = snapshot.get(process.pid)
-            if (record is not None and record[0] == self.runner_pid and
-                    process.poll() is None):
-                self.known.add((process.pid, record[3]))
-            targets = self._emergency_discover(snapshot)
-            for identity in sorted(targets, reverse=True):
-                _emergency_signal_identity(identity)
+            self._emergency_discover(snapshot)
+            leaders = [
+                identity for identity in self.handles
+                if identity[0] == process.pid
+            ]
+            require(len(leaders) == 1,
+                    "emergency cleanup could not retain the spawned leader")
+            self.leader = leaders[0]
+        self._terminate_and_reap(process, emergency=True)
 
-            if process.poll() is None:
-                try:
-                    process.wait(timeout=max(
-                        0.001, min(0.05, deadline - time.monotonic())))
-                except subprocess.TimeoutExpired:
-                    pass
-
-            # No pre-existing direct child is permitted at entry, so every
-            # adopted child identity discovered above is safe to reap here.
-            for identity in sorted(self.known):
-                if identity[0] == process.pid:
-                    continue
-                record = _emergency_proc_process_record(identity[0])
-                if record is None or record[3] != identity[1]:
-                    continue
-                try:
-                    os.waitpid(identity[0], os.WNOHANG)
-                except (ChildProcessError, ProcessLookupError):
-                    pass
-                except OSError as error:
-                    raise EvidenceError(
-                        f"emergency child reap failed for {identity[0]}: {error}") \
-                        from error
-
-            snapshot = _emergency_proc_process_snapshot()
-            live = self._emergency_discover(snapshot)
-            if process.poll() is not None and not live:
-                empty_scans += 1
-                if empty_scans >= 2:
-                    self.proven_empty = True
-                    return
-            else:
-                empty_scans = 0
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise EvidenceError(
-                    "emergency child descendants remained after bounded SIGKILL")
-            time.sleep(min(0.01, remaining))
+    def _close_handles(self) -> None:
+        handles = list(self.handles.values())
+        self.handles.clear()
+        first_error: BaseException | None = None
+        for handle in handles:
+            try:
+                handle.close()
+            except BaseException as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
+            raise first_error
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         del tb
@@ -1016,6 +2211,7 @@ class LinuxDescendantContainment:
             return
         cleanup_error: BaseException | None = None
         restore_error: BaseException | None = None
+        close_error: BaseException | None = None
         previous = self.previous_subreaper
         try:
             if (self.spawned_process is not None and
@@ -1036,6 +2232,10 @@ class LinuxDescendantContainment:
                 except BaseException as error:
                     cleanup_error = error
         finally:
+            try:
+                self._close_handles()
+            except BaseException as error:
+                close_error = error
             self.active = False
             self.previous_subreaper = None
             if previous is None:
@@ -1046,7 +2246,8 @@ class LinuxDescendantContainment:
                     _emergency_restore_child_subreaper(previous)
                 except BaseException as error:
                     restore_error = error
-        if cleanup_error is not None or restore_error is not None:
+        if (cleanup_error is not None or restore_error is not None or
+                close_error is not None):
             parts = []
             if cleanup_error is not None:
                 parts.append(
@@ -1056,10 +2257,14 @@ class LinuxDescendantContainment:
                 parts.append(
                     "subreaper restore failed: " +
                     f"{type(restore_error).__name__}: {restore_error}")
+            if close_error is not None:
+                parts.append(
+                    "retained-handle close failed: " +
+                    f"{type(close_error).__name__}: {close_error}")
             if exc is not None:
                 parts.append(f"primary failure: {type(exc).__name__}: {exc}")
             raise EvidenceError("; ".join(parts)) from (
-                cleanup_error or restore_error)
+                cleanup_error or restore_error or close_error)
 
 
 def terminate_process_group_bounded(
@@ -1086,6 +2291,7 @@ def run_process_bounded(
     timeout: float = 30.0,
     max_stdout: int = MAX_COMMAND_STDOUT_BYTES,
     max_stderr: int = MAX_COMMAND_STDERR_BYTES,
+    inherited_descriptors: Sequence[int] = (),
 ) -> subprocess.CompletedProcess[bytes]:
     require(isinstance(arguments, Sequence) and 1 <= len(arguments) <= 512 and
             all(isinstance(item, str) and item and
@@ -1097,6 +2303,18 @@ def run_process_bounded(
     require(type(max_stdout) is int and 0 <= max_stdout <= MAX_COMMAND_STDOUT_BYTES and
             type(max_stderr) is int and 0 <= max_stderr <= MAX_COMMAND_STDERR_BYTES,
             "subprocess output limits are invalid")
+    pass_fds = tuple(sorted(set(inherited_descriptors)))
+    require(
+        all(type(descriptor) is int and descriptor >= 0
+            for descriptor in pass_fds),
+        "subprocess inherited descriptor set is invalid")
+    for descriptor in pass_fds:
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            raise EvidenceError(
+                f"subprocess inherited descriptor {descriptor} is invalid: "
+                f"{error}") from error
     process: subprocess.Popen[bytes] | None = None
     selector = selectors.DefaultSelector()
     stdout_fd = -1
@@ -1110,7 +2328,8 @@ def run_process_bounded(
                 list(arguments), cwd=None if cwd is None else str(cwd),
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, start_new_session=True,
-                env=None if environment is None else dict(environment))
+                env=None if environment is None else dict(environment),
+                pass_fds=pass_fds)
             # Store the handle with no intervening injectable helper call.
             containment.spawned_process = process
             containment.observe_spawn(process)
@@ -1125,8 +2344,21 @@ def run_process_bounded(
                 os.set_blocking(stream.fileno(), False)
                 selector.register(stream, selectors.EVENT_READ)
             deadline = time.monotonic() + float(timeout)
+            descendants_reaped = False
             try:
                 while selector.get_map():
+                    if containment.leader_exited() and not descendants_reaped:
+                        # A successful leader can leave a double-forked child
+                        # holding either capture pipe.  Waiting for EOF before
+                        # observing leader exit converts that success into a
+                        # full-duration false timeout.  Tear down the exact
+                        # adopted tree immediately, then retain everything
+                        # already buffered until both pipes report EOF.
+                        containment.terminate_and_reap(process)
+                        descendants_reaped = True
+                        deadline = min(
+                            deadline,
+                            time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS)
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         failure = f"command exceeded {float(timeout):.3f} seconds"
@@ -1146,15 +2378,25 @@ def run_process_bounded(
                             break
                     if failure is not None:
                         break
+                    if containment.leader_exited() and not descendants_reaped:
+                        containment.terminate_and_reap(process)
+                        descendants_reaped = True
+                        deadline = min(
+                            deadline,
+                            time.monotonic() + CHILD_REAP_TIMEOUT_SECONDS)
                 if failure is None:
-                    try:
-                        returncode = process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        failure = "command closed its output but did not terminate"
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        failure = (
+                            f"command exceeded {float(timeout):.3f} seconds")
+                    elif not containment.wait_for_leader_exit(remaining):
+                        failure = (
+                            f"command exceeded {float(timeout):.3f} seconds")
             finally:
                 # This is required after successful commands too: a command may
                 # exit zero after daemonizing a descendant into a new session.
-                containment.terminate_and_reap(process)
+                if not containment.proven_empty:
+                    containment.terminate_and_reap(process)
                 if isinstance(process.returncode, int):
                     returncode = process.returncode
     finally:
@@ -1178,9 +2420,11 @@ def run_checked(
     timeout: float = 30.0,
     max_stdout: int = MAX_COMMAND_STDOUT_BYTES,
     max_stderr: int = MAX_COMMAND_STDERR_BYTES,
+    inherited_descriptors: Sequence[int] = (),
 ) -> bytes:
     completed = run_process_bounded(
-        arguments, cwd, environment, timeout, max_stdout, max_stderr)
+        arguments, cwd, environment, timeout, max_stdout, max_stderr,
+        inherited_descriptors)
     if completed.returncode != 0:
         detail = completed.stderr.decode("utf-8", errors="replace").strip()
         raise EvidenceError(
@@ -1241,51 +2485,24 @@ def validate_git_commit_object_identity(
 def git_identity(
     root: Path, expected_commit: str, detached: bool,
     include_commit_object: bool = False,
+    *, rich: bool = False,
 ) -> dict[str, Any]:
-    root = root.resolve(strict=True)
-    git = Path("/usr/bin/git").resolve(strict=True)
-    head = run_checked((str(git), "-C", str(root), "rev-parse", "HEAD")) \
-        .decode().strip()
-    require(head == expected_commit,
-            f"source {root} is {head}, expected {expected_commit}")
-    tree = run_checked((str(git), "-C", str(root), "rev-parse", "HEAD^{tree}")) \
-        .decode().strip()
-    status = run_checked((
-        str(git), "-C", str(root), "status", "--porcelain=v1",
-        "--untracked-files=normal")).decode()
-    require(status == "", f"source {root} is not clean: {status!r}")
-    symbolic = run_process_bounded(
-        (str(git), "-C", str(root), "symbolic-ref", "-q", "HEAD"),
-        max_stdout=65536, max_stderr=65536)
-    is_detached = symbolic.returncode != 0
-    if detached:
-        require(is_detached, f"exact-main source {root} is not detached")
-    tracked = run_checked((
-        str(git), "-C", str(root), "ls-tree", "-r", "-z", "HEAD"))
-    result = {
-        "path": str(root),
-        "head": head,
-        "tree": tree,
-        "detached": is_detached,
-        "tracked_tree_listing_sha256": sha256_bytes(tracked),
-        "tracked_status": "clean",
-    }
-    if include_commit_object:
-        commit_object = run_checked((
-            str(git), "-C", str(root), "cat-file", "commit", head),
-            max_stdout=MAX_GIT_COMMIT_BYTES, max_stderr=65536)
-        result["commit_object"] = git_commit_object_identity(
-            commit_object, head)
-        validate_git_commit_object_identity(
-            result["commit_object"], head, tree, f"source {root}")
-    return result
+    try:
+        captured = git_capture.capture_git_identity(
+            root, expected_commit, require_detached=detached)
+    except git_capture.GitCaptureError as error:
+        raise EvidenceError(str(error)) from error
+    if rich:
+        return captured
+    return git_capture.legacy_projection(
+        captured, include_commit_object=include_commit_object)
 
 
 def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
     path = path.resolve(strict=True)
     metadata, digest, prefix = bounded_file_snapshot(path)
-    if kind == "executable":
-        require(os.access(path, os.X_OK), f"benchmark is not executable: {path}")
+    if kind in {"executable", "build_tool"}:
+        require(os.access(path, os.X_OK), f"{kind} is not executable: {path}")
     if kind == "archive":
         require(prefix == b"!<arch>\n", f"not an ar archive: {path}")
     if kind == "shared_library":
@@ -1301,11 +2518,540 @@ def artifact_identity(path: Path, kind: str) -> dict[str, Any]:
     }
 
 
+def linux_executable_memfd(name: str) -> int:
+    """Create a sealable executable memfd, including on older Linux kernels."""
+    require(sys.platform.startswith("linux"),
+            "sealed executable snapshots require Linux")
+    flags = LINUX_MFD_CLOEXEC | LINUX_MFD_ALLOW_SEALING
+    creator = getattr(os, "memfd_create", None)
+    if creator is not None:
+        try:
+            return creator(name, flags | LINUX_MFD_EXEC)
+        except OSError as error:
+            if error.errno != errno.EINVAL:
+                raise
+        return creator(name, flags)
+    libc = ctypes.CDLL(None, use_errno=True)
+    native = getattr(libc, "memfd_create", None)
+    require(native is not None,
+            "sealed executable snapshots require memfd_create")
+    native.argtypes = (ctypes.c_char_p, ctypes.c_uint)
+    native.restype = ctypes.c_int
+    descriptor = native(name.encode("utf-8"), flags)
+    if descriptor < 0:
+        error_number = ctypes.get_errno()
+        raise OSError(error_number, os.strerror(error_number), name)
+    return descriptor
+
+
+def sealed_executable_identity(
+    descriptor: int, label: str,
+) -> dict[str, Any]:
+    """Inspect the exact retained memfd without reopening a mutable path."""
+    require(type(descriptor) is int and descriptor >= 0,
+            f"{label} sealed executable descriptor is invalid")
+    metadata = os.fstat(descriptor)
+    require(stat.S_ISREG(metadata.st_mode) and
+            0 < metadata.st_size <= MAX_IDENTITY_FILE_BYTES and
+            metadata.st_mode & 0o111,
+            f"{label} sealed executable is not a bounded executable file")
+    digest = hashlib.sha256()
+    offset = 0
+    prefix = b""
+    while offset < metadata.st_size:
+        block = os.pread(
+            descriptor, min(1024 * 1024, metadata.st_size - offset), offset)
+        require(block, f"{label} sealed executable read made no progress")
+        if not prefix:
+            prefix = block[:4]
+        digest.update(block)
+        offset += len(block)
+    require(prefix == b"\x7fELF",
+            f"{label} sealed executable is not ELF")
+    seals = fcntl.fcntl(descriptor, LINUX_F_GET_SEALS)
+    require(seals & LINUX_REQUIRED_EXECUTABLE_SEALS ==
+            LINUX_REQUIRED_EXECUTABLE_SEALS,
+            f"{label} executable snapshot lacks immutable seals")
+    return {
+        "protocol": SEALED_EXECUTABLE_PROTOCOL,
+        "size": metadata.st_size,
+        "mode": metadata.st_mode & 0o7777,
+        "sha256": digest.hexdigest(),
+        "seals": seals,
+        "elf": True,
+    }
+
+
+def capture_sealed_executable(
+    path: Path, expected_source: Mapping[str, Any], label: str,
+    *, descriptor_owner: dict[str, int] | None = None,
+    descriptor_identity_owner: dict[str, tuple[int, int, int, int]] | None = None,
+    descriptor_role: str | None = None,
+) -> tuple[int, dict[str, Any]]:
+    """Copy one A-B-A checked source inode into an immutable executable memfd."""
+    require(isinstance(expected_source, Mapping),
+            f"{label} expected executable identity is missing")
+    require((descriptor_owner is None and descriptor_identity_owner is None and
+             descriptor_role is None) or
+            (isinstance(descriptor_owner, dict) and
+             isinstance(descriptor_identity_owner, dict) and
+             isinstance(descriptor_role, str) and descriptor_role and
+             descriptor_role not in descriptor_owner and
+             descriptor_role not in descriptor_identity_owner),
+            f"{label} descriptor owner is invalid")
+
+    def snapshot_is_transferred() -> bool:
+        return (
+            snapshot >= 0 and descriptor_owner is not None and
+            descriptor_role is not None and
+            descriptor_owner.get(descriptor_role) == snapshot
+        )
+
+    resolved = path.resolve(strict=True)
+    require(expected_source.get("path") == str(resolved) and
+            expected_source.get("kind") == "executable",
+            f"{label} source path differs from the validated build closure")
+    before_path = os.lstat(resolved)
+    require(stat.S_ISREG(before_path.st_mode) and before_path.st_nlink == 1 and
+            0 < before_path.st_size <= MAX_IDENTITY_FILE_BYTES and
+            before_path.st_mode & 0o111,
+            f"{label} source is not a bounded single-link executable")
+    source = -1
+    snapshot = -1
+    primary: BaseException | None = None
+    try:
+        source = os.open(
+            resolved, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+        initial = os.fstat(source)
+        opened_path = os.lstat(resolved)
+        stable_fields = (
+            "st_dev", "st_ino", "st_mode", "st_nlink", "st_uid", "st_gid",
+            "st_size", "st_mtime_ns", "st_ctime_ns",
+        )
+        require(stat.S_ISREG(initial.st_mode) and initial.st_nlink == 1 and
+                all(getattr(before_path, field) == getattr(initial, field) ==
+                    getattr(opened_path, field) for field in stable_fields),
+                f"{label} source changed while it was opened")
+        snapshot = linux_executable_memfd(
+            "leopard2-main-compare-" + label.replace(" ", "-"))
+        digest = hashlib.sha256()
+        offset = 0
+        prefix = b""
+        while offset < initial.st_size:
+            block = os.pread(
+                source, min(1024 * 1024, initial.st_size - offset), offset)
+            require(block, f"{label} source copy made no progress")
+            if not prefix:
+                prefix = block[:4]
+            digest.update(block)
+            write_offset = 0
+            while write_offset < len(block):
+                written = os.write(snapshot, block[write_offset:])
+                require(written > 0, f"{label} snapshot write made no progress")
+                write_offset += written
+            offset += len(block)
+        require(not os.pread(source, 1, offset) and prefix == b"\x7fELF",
+                f"{label} source is not one stable ELF executable")
+        final = os.fstat(source)
+        final_path = os.lstat(resolved)
+        require(all(getattr(initial, field) == getattr(final, field) ==
+                    getattr(final_path, field) for field in stable_fields),
+                f"{label} source changed while its snapshot was copied")
+        source_digest = digest.hexdigest()
+        require(
+            expected_source.get("size") == initial.st_size and
+            expected_source.get("mode") == (initial.st_mode & 0o7777) and
+            expected_source.get("mtime_ns") == initial.st_mtime_ns and
+            expected_source.get("sha256") == source_digest,
+            f"{label} source bytes differ from the validated build closure")
+        os.fchmod(snapshot, initial.st_mode & 0o7777)
+        fcntl.fcntl(
+            snapshot, LINUX_F_ADD_SEALS, LINUX_REQUIRED_EXECUTABLE_SEALS)
+        retained = sealed_executable_identity(snapshot, label)
+        require(retained["size"] == expected_source["size"] and
+                retained["sha256"] == expected_source["sha256"] and
+                retained["mode"] == expected_source["mode"],
+                f"{label} sealed bytes differ from their source")
+        identity = {
+            "source": dict(expected_source),
+            "snapshot": retained,
+        }
+        if descriptor_owner is not None:
+            # Install ownership before returning.  The exception path probes
+            # the map, so interruption on either side of this assignment
+            # leaves exactly one side responsible for the open descriptor.
+            metadata = os.fstat(snapshot)
+            descriptor_identity_owner[descriptor_role] = (
+                metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                metadata.st_rdev,
+            )
+            descriptor_owner[descriptor_role] = snapshot
+        return snapshot, identity
+    except BaseException as error:
+        primary = error
+        if snapshot >= 0 and not snapshot_is_transferred():
+            if descriptor_identity_owner is not None and \
+                    descriptor_role is not None:
+                descriptor_identity_owner.pop(descriptor_role, None)
+            try:
+                os.close(snapshot)
+            except BaseException as cleanup:
+                raise EvidenceError(
+                    f"{label} snapshot failed: {error}; snapshot cleanup "
+                    f"failed: {cleanup}") from error
+        raise
+    finally:
+        if source >= 0:
+            try:
+                os.close(source)
+            except BaseException as cleanup:
+                if primary is not None:
+                    raise EvidenceError(
+                        f"{label} snapshot failed: {primary}; source descriptor "
+                        f"cleanup failed: {cleanup}") from primary
+                if snapshot >= 0 and not snapshot_is_transferred():
+                    try:
+                        os.close(snapshot)
+                    except BaseException:
+                        pass
+                raise EvidenceError(
+                    f"{label} source descriptor cleanup failed: {cleanup}") \
+                    from cleanup
+
+
+class ExecutableSnapshotOwner:
+    """Own campaign snapshots and close every descriptor on every exit."""
+
+    def __init__(self) -> None:
+        self.descriptors: dict[str, int] = {}
+        self.descriptor_identities: dict[
+            str, tuple[int, int, int, int]] = {}
+
+    def capture(
+        self, role: str, path: Path, expected_source: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        require(role in SEALED_EXECUTABLE_COMMAND and
+                role not in self.descriptors and
+                role not in self.descriptor_identities,
+                "sealed executable role is duplicate or invalid")
+        descriptor, identity = capture_sealed_executable(
+            path, expected_source, f"{role} benchmark",
+            descriptor_owner=self.descriptors,
+            descriptor_identity_owner=self.descriptor_identities,
+            descriptor_role=role)
+        require(self.descriptors.get(role) == descriptor and
+                role in self.descriptor_identities,
+                f"{role} sealed executable ownership transfer failed")
+        return identity
+
+    def inspect(self, role: str) -> dict[str, Any]:
+        require(role in self.descriptors,
+                f"{role} sealed executable is not retained")
+        return sealed_executable_identity(
+            self.descriptors[role], f"{role} benchmark")
+
+    def close(self) -> None:
+        errors: list[tuple[str, BaseException]] = []
+        for role in sorted(tuple(self.descriptors), reverse=True):
+            descriptor = self.descriptors[role]
+            try:
+                metadata = os.fstat(descriptor)
+            except OSError as error:
+                if error.errno == errno.EBADF:
+                    self.descriptors.pop(role, None)
+                    self.descriptor_identities.pop(role, None)
+                else:
+                    errors.append((role, error))
+                continue
+            except BaseException as error:
+                errors.append((role, error))
+                continue
+            current_identity = (
+                metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                metadata.st_rdev,
+            )
+            identity = self.descriptor_identities.get(role)
+            if identity is None:
+                identity = current_identity
+                self.descriptor_identities[role] = identity
+            elif current_identity != identity:
+                self.descriptors.pop(role, None)
+                self.descriptor_identities.pop(role, None)
+                errors.append((
+                    role,
+                    EvidenceError(
+                        "descriptor identity changed before cleanup; "
+                        "refusing to close a recycled descriptor"),
+                ))
+                continue
+            try:
+                os.close(descriptor)
+            except BaseException as error:
+                try:
+                    current = os.fstat(descriptor)
+                except OSError as probe:
+                    if probe.errno == errno.EBADF:
+                        self.descriptors.pop(role, None)
+                        self.descriptor_identities.pop(role, None)
+                    else:
+                        errors.append((
+                            role,
+                            EvidenceError(
+                                f"{type(error).__name__}: {error}; "
+                                f"descriptor state probe failed: "
+                                f"{type(probe).__name__}: {probe}"),
+                        ))
+                        continue
+                except BaseException as probe:
+                    errors.append((
+                        role,
+                        EvidenceError(
+                            f"{type(error).__name__}: {error}; "
+                            f"descriptor state probe failed: "
+                            f"{type(probe).__name__}: {probe}"),
+                    ))
+                    continue
+                else:
+                    current_identity = (
+                        current.st_dev, current.st_ino, current.st_mode,
+                        current.st_rdev,
+                    )
+                    if current_identity != identity:
+                        # The original descriptor was closed and this number
+                        # was recycled.  It is no longer ours to close.
+                        self.descriptors.pop(role, None)
+                        self.descriptor_identities.pop(role, None)
+                errors.append((role, error))
+            else:
+                self.descriptors.pop(role, None)
+                self.descriptor_identities.pop(role, None)
+        for role in tuple(self.descriptor_identities):
+            if role not in self.descriptors:
+                self.descriptor_identities.pop(role, None)
+        if errors:
+            detail = "; ".join(
+                f"{role}: {type(error).__name__}: {error}"
+                for role, error in errors)
+            raise EvidenceError(
+                f"sealed executable descriptor cleanup failed: {detail}") \
+                from errors[0][1]
+
+
+def duplicate_snapshot_for_execution(descriptor: int, label: str) -> int:
+    """Allocate a fresh high descriptor so child plumbing cannot collide."""
+    require(type(descriptor) is int and descriptor >= 0,
+            f"{label} retained snapshot descriptor is invalid")
+    duplicate = -1
+    try:
+        duplicate = fcntl.fcntl(
+            descriptor, LINUX_F_DUPFD_CLOEXEC, EXECUTION_DESCRIPTOR_FLOOR)
+        require(type(duplicate) is int and
+                duplicate >= EXECUTION_DESCRIPTOR_FLOOR and
+                duplicate != descriptor,
+                f"{label} execution descriptor allocation collided")
+        require(sealed_executable_identity(duplicate, label) ==
+                sealed_executable_identity(descriptor, label),
+                f"{label} execution descriptor names different bytes")
+    except BaseException:
+        if type(duplicate) is int and duplicate >= 0 and duplicate != descriptor:
+            os.close(duplicate)
+        raise
+    return duplicate
+
+
 def compile_commands_schema_for_raw_schema(raw_schema: str) -> str:
     require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
             "compile-command identity uses an unsupported evidence schema")
-    return (COMPILE_COMMANDS_SCHEMA_V2 if raw_schema == RAW_SCHEMA_V5 else
-            COMPILE_COMMANDS_SCHEMA)
+    if raw_schema == RAW_SCHEMA_V5:
+        return COMPILE_COMMANDS_SCHEMA_V2
+    if raw_schema == RAW_SCHEMA_V6:
+        return COMPILE_COMMANDS_SCHEMA_V3
+    return COMPILE_COMMANDS_SCHEMA
+
+
+def build_configuration_material(entries: Mapping[str, str]) -> bytes:
+    require(isinstance(entries, Mapping) and
+            set(entries) == set(BUILD_CONFIGURATION_VARIABLES),
+            "benchmark effective-configuration variables differ")
+    lines: list[str] = []
+    for variable in BUILD_CONFIGURATION_VARIABLES:
+        value = entries.get(variable)
+        require(isinstance(value, str) and
+                not any(character in value for character in ("\0", "\r", "\n")),
+                f"benchmark effective-configuration {variable} is invalid")
+        lines.append(f"{variable}={value}\n")
+    try:
+        return "".join(lines).encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError(
+            "benchmark effective-configuration is not strict UTF-8") from error
+
+
+def parse_build_configuration_bytes(retained: bytes) -> dict[str, Any]:
+    require(isinstance(retained, bytes) and
+            0 < len(retained) <= MAX_BUILD_CONFIGURATION_BYTES and
+            b"\0" not in retained and b"\r" not in retained and
+            retained.endswith(b"\n"),
+            "benchmark effective-configuration sidecar bytes are invalid")
+    try:
+        text = retained.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError(
+            "benchmark effective-configuration sidecar is not strict UTF-8") \
+            from error
+    # The producer's record separator is exactly LF.  str.splitlines() also
+    # treats several valid Unicode code points as line boundaries and would
+    # disagree with CMake for paths or flag values containing those code points.
+    lines = text[:-1].split("\n")
+    require(len(lines) == len(BUILD_CONFIGURATION_VARIABLES) + 2,
+            "benchmark effective-configuration sidecar line count differs")
+    require(lines[0] == f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}",
+            "benchmark effective-configuration sidecar schema differs")
+    digest_line = lines[1]
+    require(digest_line.startswith("sha256="),
+            "benchmark effective-configuration sidecar omits its digest")
+    digest = digest_line[len("sha256="):]
+    require(HEX256.fullmatch(digest) is not None,
+            "benchmark effective-configuration sidecar digest is invalid")
+    entries: dict[str, str] = {}
+    for expected, line in zip(BUILD_CONFIGURATION_VARIABLES, lines[2:]):
+        name, separator, value = line.partition("=")
+        require(separator == "=" and name == expected and name not in entries,
+                "benchmark effective-configuration variable order differs")
+        entries[name] = value
+    material = build_configuration_material(entries)
+    require(retained == (
+                f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"sha256={digest}\n").encode("ascii") + material and
+            sha256_bytes(material) == digest,
+            "benchmark effective-configuration sidecar digest differs")
+    return {
+        "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "configuration_sha256": digest,
+        "entries": entries,
+        "text": text,
+    }
+
+
+def validate_embedded_build_type(
+    entries: Mapping[str, str], embedded_build_type: str,
+    *, authoritative: bool,
+) -> str:
+    require(isinstance(embedded_build_type, str) and embedded_build_type and
+            isinstance(entries, Mapping),
+            "benchmark embedded build type is invalid")
+    generator = entries.get("CMAKE_GENERATOR")
+    configured = entries.get("CMAKE_BUILD_TYPE")
+    encoded_types = entries.get("CMAKE_CONFIGURATION_TYPES")
+    require(all(isinstance(value, str)
+                for value in (generator, configured, encoded_types)) and
+            generator,
+            "benchmark effective configuration omits CMake generator semantics")
+    multi = cmake_generator_is_multi_config(generator)
+    configuration_types: tuple[str, ...] = ()
+    if encoded_types:
+        configuration_types = tuple(encoded_types.split(";"))
+        require(all(configuration_types) and
+                len(configuration_types) == len(set(configuration_types)),
+                "benchmark CMAKE_CONFIGURATION_TYPES is malformed")
+    if multi:
+        require(configuration_types and
+                embedded_build_type in configuration_types,
+                "benchmark multi-config build type is outside "
+                "CMAKE_CONFIGURATION_TYPES")
+    else:
+        require(embedded_build_type == configured,
+                "benchmark single-config build type differs from "
+                "CMAKE_BUILD_TYPE")
+    if authoritative:
+        require(embedded_build_type == "Release",
+                "authoritative benchmark is not the Release configuration")
+    return embedded_build_type
+
+
+def cmake_generator_is_multi_config(generator: object) -> bool:
+    require(isinstance(generator, str) and generator,
+            "CMake generator identity is invalid")
+    return (generator == "Xcode" or
+            generator.startswith("Visual Studio") or
+            "Multi-Config" in generator)
+
+
+def cmake_build_layout(
+    entries: Mapping[str, str],
+) -> tuple[bool, tuple[str, ...], str | None]:
+    """Return (multi-config, configured variants, selected path component)."""
+    require(isinstance(entries, Mapping),
+            "CMake build-layout identity is invalid")
+    generator = entries.get("CMAKE_GENERATOR")
+    encoded_types = entries.get("CMAKE_CONFIGURATION_TYPES", "")
+    build_type = entries.get("CMAKE_BUILD_TYPE", "")
+    require(isinstance(encoded_types, str) and isinstance(build_type, str),
+            "CMake build-layout configuration values are invalid")
+    multi = cmake_generator_is_multi_config(generator)
+    if multi:
+        types = tuple(encoded_types.split(";")) if encoded_types else ()
+        require(types == ("Debug", "Release"),
+                "authoritative multi-config CMake build does not provide the "
+                "canonical Debug/Release closure")
+        # Exact ordered GNU-family command validation currently supports the
+        # one multi-config generator that emits compile_commands.json.
+        require(generator == "Ninja Multi-Config",
+                f"unsupported authoritative multi-config generator {generator}")
+        return True, types, "Release"
+    require(build_type == "Release",
+            "single-config CMake build is not Release")
+    return False, ("Release",), None
+
+
+def validate_canonical_build_configuration_entries(
+    entries: Mapping[str, str], cache: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    require(isinstance(entries, Mapping) and
+            set(entries) == set(BUILD_CONFIGURATION_VARIABLES),
+            "candidate benchmark effective configuration variables differ")
+    expected = {
+        "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
+        "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
+        "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+        "CMAKE_CXX_FLAGS_RELWITHDEBINFO": "-O2 -g -DNDEBUG",
+        "CMAKE_CXX_FLAGS_MINSIZEREL": "-Os -DNDEBUG",
+        "ENABLE_OPENMP": "ON",
+        "LEOPARD_ENABLE_GF8": "ON",
+        "LEOPARD_ENABLE_GF16": "ON",
+        "LEO2_BACKEND_VARIANT": "auto",
+        "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
+        "LEO2_BUILD_BENCHMARKS": "ON",
+        "LEO2_BUILD_TESTS": "OFF",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+    }
+    require(all(entries.get(name) == value for name, value in expected.items()) and
+            isinstance(entries.get("CMAKE_GENERATOR"), str) and
+            entries["CMAKE_GENERATOR"] and
+            isinstance(entries.get("CMAKE_CONFIGURATION_TYPES"), str) and
+            isinstance(entries.get("CMAKE_CXX_COMPILER"), str) and
+            entries["CMAKE_CXX_COMPILER"],
+            "candidate benchmark effective configuration is not the canonical "
+            "Release/AUTO profile")
+    if cache is not None:
+        require(isinstance(cache, Mapping) and
+                entries["CMAKE_GENERATOR"] == cache.get("CMAKE_GENERATOR") and
+                entries["CMAKE_CONFIGURATION_TYPES"] ==
+                    cache.get("CMAKE_CONFIGURATION_TYPES", "") and
+                entries["CMAKE_CXX_COMPILER"] ==
+                    cache.get("CMAKE_CXX_COMPILER"),
+                "candidate benchmark effective configuration differs from "
+                "its CMake cache")
+        multi, _, _ = cmake_build_layout(entries)
+        if not multi:
+            require(entries["CMAKE_BUILD_TYPE"] ==
+                        cache.get("CMAKE_BUILD_TYPE", ""),
+                    "candidate benchmark effective build type differs from "
+                    "its CMake cache")
+    return dict(entries)
 
 
 def benchmark_attestation_header_bytes(
@@ -1342,19 +3088,19 @@ def capture_candidate_benchmark_attestation(
     """
     source_root = Path(specification["candidate_source_root"]).resolve(strict=True)
     build_dir = Path(specification["candidate_build_dir"]).resolve(strict=True)
-    git = Path("/usr/bin/git").resolve(strict=True)
-    commit = run_checked((
-        str(git), "-C", str(source_root), "rev-parse", "--verify", "HEAD"
-    )).decode("ascii", errors="strict").strip()
-    tree = run_checked((
-        str(git), "-C", str(source_root), "rev-parse", "--verify", "HEAD^{tree}"
-    )).decode("ascii", errors="strict").strip()
-    status = run_checked((
-        str(git), "-C", str(source_root), "status", "--porcelain=v1",
-        "--untracked-files=normal", "--ignore-submodules=none",
-    )).decode("utf-8", errors="strict")
-    require(commit == specification["candidate_commit"] and status == "",
-            "candidate benchmark attestation source is not the declared clean commit")
+    try:
+        source = git_capture.capture_git_identity(
+            source_root, str(specification["candidate_commit"]),
+            require_detached=False)
+    except git_capture.GitCaptureError as error:
+        raise EvidenceError(
+            "candidate benchmark attestation source is not the declared "
+            f"clean commit: {error}") from error
+    commit = source["head"]
+    tree = source["tree"]
+    require(source["tracked_status"] == "clean",
+            "candidate benchmark attestation source is not the declared "
+            "clean commit")
     expected = benchmark_attestation_header_bytes(commit, tree, False)
     header = (
         build_dir / "generated" / "leopard2-benchmark-attestation" /
@@ -1395,15 +3141,95 @@ def capture_candidate_benchmark_attestation(
     }
 
 
+def capture_candidate_build_configuration(
+    specification: Mapping[str, Any], cache: Mapping[str, str],
+) -> dict[str, Any]:
+    """Bind the exact configure-time material embedded in benchmark.cpp."""
+    source_root = Path(specification["candidate_source_root"]).resolve(strict=True)
+    build_dir = Path(specification["candidate_build_dir"]).resolve(strict=True)
+    sidecar = (build_dir / BUILD_CONFIGURATION_RELATIVE_PATH).resolve(strict=True)
+    expected_sidecar = build_dir / BUILD_CONFIGURATION_RELATIVE_PATH
+    require(sidecar == expected_sidecar,
+            "candidate benchmark effective-configuration sidecar escapes "
+            "the build directory")
+    metadata, retained = bounded_file_contents_snapshot(
+        sidecar, MAX_BUILD_CONFIGURATION_BYTES)
+    parsed = parse_build_configuration_bytes(retained)
+    entries = parsed["entries"]
+    digest = parsed["configuration_sha256"]
+    require(cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                BUILD_CONFIGURATION_FILE_SCHEMA and
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256") ==
+                digest,
+            "candidate CMake cache differs from its effective-configuration "
+            "sidecar")
+    validate_canonical_build_configuration_entries(entries, cache)
+    git = Path(entries.get("LEO2_BENCHMARK_GIT_EXECUTABLE", "")).resolve(
+        strict=True)
+    require(git == Path("/usr/bin/git").resolve(strict=True),
+            "candidate benchmark effective configuration uses another Git")
+    validate_embedded_build_type(entries, "Release", authoritative=True)
+    helper_path = (
+        source_root / BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH
+    ).resolve(strict=True)
+    expected_helper = (
+        source_root / BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH)
+    require(helper_path == expected_helper,
+            "candidate benchmark attestation helper escapes the source root")
+    text = retained.decode("utf-8", errors="strict")
+    content = exact_text_content(
+        text, "candidate benchmark effective configuration")
+    artifact = {
+        "path": str(sidecar),
+        "kind": "generated_build_configuration",
+        "size": metadata.st_size,
+        "mode": metadata.st_mode & 0o7777,
+        "mtime_ns": metadata.st_mtime_ns,
+        "sha256": sha256_bytes(retained),
+    }
+    require(content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"],
+            "candidate benchmark effective-configuration bytes changed")
+    return {
+        "schema": BUILD_CONFIGURATION_RECORD_SCHEMA,
+        "artifact": artifact,
+        "content": content,
+        "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "configuration_sha256": digest,
+        "entries": dict(entries),
+        "embedded_build_type": "Release",
+        "helper_source": artifact_identity(helper_path, "source_file"),
+    }
+
+
 def parse_cmake_cache(path: Path) -> dict[str, str]:
+    try:
+        retained = path.read_bytes()
+        text = retained.decode("utf-8", errors="strict")
+    except (OSError, UnicodeError) as error:
+        raise EvidenceError(f"cannot read CMake cache {path}: {error}") from error
+    require("\0" not in text and "\r" not in text,
+            f"CMake cache {path} contains a forbidden delimiter")
     values: dict[str, str] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
+    for line in text.split("\n"):
         if not line or line.startswith(("#", "//")) or "=" not in line:
             continue
         name_and_type, value = line.split("=", 1)
         if ":" not in name_and_type:
+            require(name_and_type not in CMAKE_CACHE_REQUIRED_ENTRY_TYPES,
+                    f"CMake cache {path} selected key "
+                    f"{name_and_type!r} has no type")
             continue
-        name, _ = name_and_type.split(":", 1)
+        require(name_and_type.count(":") == 1,
+                f"CMake cache {path} has a malformed typed key")
+        name, entry_type = name_and_type.split(":", 1)
+        require(name and entry_type in CMAKE_CACHE_ENTRY_TYPES and
+                name not in values,
+                f"CMake cache {path} has a malformed or duplicate key {name!r}")
+        required_types = CMAKE_CACHE_REQUIRED_ENTRY_TYPES.get(name)
+        require(required_types is None or entry_type in required_types,
+                f"CMake cache {path} key {name} has type {entry_type}, "
+                f"expected one of {sorted(required_types or ())}")
         values[name] = value
     return values
 
@@ -1565,6 +3391,25 @@ def validate_executable_link_semantics(
     """
     external = validate_external_link_inputs(
         external_link_inputs, label, normalized=normalized_external_inputs)
+    archive_path = Path(archive_name)
+    executable_path = Path(executable_name)
+    if archive_path.parent != Path(".") or \
+            executable_path.parent != Path("."):
+        require(not archive_path.is_absolute() and
+                not executable_path.is_absolute() and
+                archive_path.parent == executable_path.parent and
+                len(archive_path.parts) == 2 and
+                len(executable_path.parts) == 2 and
+                archive_path.parts[0] not in {"", ".", ".."} and
+                "\\" not in archive_name and "\\" not in executable_name,
+                f"{label} configuration-selected output paths are invalid")
+        tokens = [
+            archive_path.name if token == archive_name else
+            executable_path.name if token == executable_name else token
+            for token in tokens
+        ]
+        archive_name = archive_path.name
+        executable_name = executable_path.name
     try:
         link_common.validate_executable_link_semantics(
             tokens, compiler_invocation=compiler_invocation,
@@ -1602,15 +3447,23 @@ def _validate_historical_declared_archive_operands(
             f"{label} historical static archive closure differs")
 
 
-def compile_profile_for_implementation(implementation: str) -> str:
+def compile_profile_for_implementation(
+    implementation: str, raw_schema: str = RAW_SCHEMA,
+) -> str:
     require(implementation in {"baseline", "candidate"},
             "compile profile implementation is invalid")
-    return (BASELINE_COMPILE_PROFILE if implementation == "baseline" else
-            CANDIDATE_COMPILE_PROFILE)
+    require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
+            "compile profile uses an unsupported evidence schema")
+    if implementation == "baseline":
+        return BASELINE_COMPILE_PROFILE
+    return (CANDIDATE_COMPILE_PROFILE
+            if raw_schema in BUILD_CLOSURE_V7_SCHEMAS else
+            CANDIDATE_COMPILE_PROFILE_V1)
 
 
 def expected_compile_output(
     implementation: str, source: Path, specification: Mapping[str, Any],
+    selected_configuration: str | None = None,
 ) -> str:
     """Return the one CMake object operand permitted for a configured source."""
     baseline_root = Path(specification["baseline_source_root"])
@@ -1619,11 +3472,15 @@ def expected_compile_output(
         adapter = candidate_root / \
             "experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
         if source == adapter:
-            return ("CMakeFiles/leopard_main_benchmark.dir/"
+            return ("CMakeFiles/leopard_main_benchmark.dir/" +
+                    (f"{selected_configuration}/"
+                     if selected_configuration else "") +
                     "legacy_main_benchmark.cpp.o")
         require(source.is_relative_to(baseline_root),
                 "baseline compile source escapes exact-main root")
         return ("CMakeFiles/leopard_main_exact.dir/" +
+                (f"{selected_configuration}/"
+                 if selected_configuration else "") +
                 source.as_posix().removeprefix("/") + ".o")
 
     require(implementation == "candidate" and
@@ -1643,18 +3500,23 @@ def expected_compile_output(
         target = CANDIDATE_NON_LIBRARY_COMPILE_TARGETS.get(relative)
         require(target is not None,
                 f"candidate compile source is not configured: {source}")
-    return f"CMakeFiles/{target}/{relative}.o"
+    configuration = (
+        f"{selected_configuration}/" if selected_configuration else "")
+    return f"CMakeFiles/{target}/{configuration}{relative}.o"
 
 
 def expected_compile_argv(
     implementation: str, source: Path, specification: Mapping[str, Any],
     compiler_invocation: str, raw_schema: str = RAW_SCHEMA,
     candidate_tree: str | None = None,
+    build_configuration: Mapping[str, Any] | None = None,
+    selected_configuration: str | None = None,
 ) -> list[str]:
     """Construct the complete ordered argv for one configured translation unit."""
     require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
             "exact compile argv uses an unsupported evidence schema")
-    output = expected_compile_output(implementation, source, specification)
+    output = expected_compile_output(
+        implementation, source, specification, selected_configuration)
     baseline_root = Path(specification["baseline_source_root"])
     candidate_root = Path(specification["candidate_source_root"])
     if implementation == "baseline":
@@ -1663,8 +3525,12 @@ def expected_compile_argv(
         definitions = ([] if source != adapter else [
             f'-DLEOPARD_MAIN_SOURCE_COMMIT="{MAIN_COMMIT}"',
         ])
+        configuration_definition = (
+            [f'-DCMAKE_INTDIR="{selected_configuration}"']
+            if selected_configuration else [])
         return [
-            compiler_invocation, *definitions, f"-I{baseline_root}",
+            compiler_invocation, *definitions, *configuration_definition,
+            f"-I{baseline_root}",
             "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
             "-Wall", "-Wextra", "-fopenmp",
             "-o", output, "-c", str(source),
@@ -1744,12 +3610,36 @@ def expected_compile_argv(
                 "-DLEO2_BENCHMARK_SOURCE_TRACKED_DIRTY=0",
                 f'-DLEO2_BENCHMARK_SOURCE_TREE="{candidate_tree}"',
             ]
-        else:
+        elif raw_schema == RAW_SCHEMA_V6:
             attestation_header = (
                 Path(specification["candidate_build_dir"]) / "generated" /
                 "leopard2-benchmark-attestation" /
                 "leopard2_benchmark_source_attestation.h")
             definitions = [
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
+                f'"{attestation_header}"',
+            ]
+        else:
+            require(isinstance(build_configuration, Mapping) and
+                    build_configuration.get("schema") ==
+                        BUILD_CONFIGURATION_RECORD_SCHEMA and
+                    HEX256.fullmatch(str(build_configuration.get(
+                        "configuration_sha256"))) is not None,
+                    "current candidate compile profile lacks its effective "
+                    "build configuration")
+            entries = build_configuration.get("entries")
+            build_type = validate_embedded_build_type(
+                entries, str(build_configuration.get("embedded_build_type")),
+                authoritative=True)
+            attestation_header = (
+                Path(specification["candidate_build_dir"]) / "generated" /
+                "leopard2-benchmark-attestation" /
+                "leopard2_benchmark_source_attestation.h")
+            definitions = [
+                "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="
+                f'"{build_configuration["configuration_sha256"]}"',
+                f'-DLEO2_BENCHMARK_BUILD_TYPE="{build_type}"',
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
                 f'"{attestation_header}"',
@@ -1781,8 +3671,11 @@ def expected_compile_argv(
         includes = [f"-I{candidate_root}"]
         propagated_openmp = ["-fopenmp"]
     isa = isolated_flags.get(relative, [])
+    configuration_definition = (
+        [f'-DCMAKE_INTDIR="{selected_configuration}"']
+        if selected_configuration else [])
     return [
-        compiler_invocation, *definitions, *includes,
+        compiler_invocation, *definitions, *configuration_definition, *includes,
         "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
         "-std=gnu++11", *isa, *propagated_openmp,
         "-o", output, "-c", str(source),
@@ -1846,11 +3739,12 @@ def validate_compile_commands(
     compiler: Path,
     raw_schema: str = RAW_SCHEMA,
     compiler_invocation: str | None = None,
+    build_configuration: Mapping[str, Any] | None = None,
+    cmake_cache: Mapping[str, str] | None = None,
 ) -> dict[str, Any]:
-    try:
-        entries = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        raise EvidenceError(f"invalid compile_commands.json: {error}") from error
+    _, compile_commands_bytes = bounded_file_contents_snapshot(path)
+    entries = strict_json_loads(
+        compile_commands_bytes, "compile_commands.json")
     require(isinstance(entries, list) and entries,
             f"{implementation} compile_commands.json is empty")
     build = Path(specification[f"{implementation}_build_dir"]).resolve(
@@ -1859,16 +3753,29 @@ def validate_compile_commands(
         compiler_invocation = str(compiler)
     require(isinstance(compiler_invocation, str) and compiler_invocation,
             f"{implementation} compiler invocation is invalid")
-    by_source: dict[Path, tuple[list[str], Mapping[str, Any], Path]] = {}
-    for entry in entries:
-        require(isinstance(entry, dict) and isinstance(entry.get("file"), str),
-                "compile command entry is malformed")
-        source = Path(entry["file"]).resolve(strict=True)
-        require(source not in by_source, f"duplicate compile command for {source}")
-        tokens = compile_command_tokens(entry)
-        output = validate_compile_entry_io(
-            entry, tokens, source, build, compiler, compiler_invocation)
-        by_source[source] = (tokens, entry, output)
+    if cmake_cache is None:
+        cmake_cache = (
+            parse_cmake_cache(build / "CMakeCache.txt")
+            if raw_schema in BUILD_CLOSURE_V7_SCHEMAS else {})
+    require(isinstance(cmake_cache, Mapping),
+            f"{implementation} CMake cache identity is invalid")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS and \
+            implementation == "candidate" and \
+            build_configuration is None:
+        build_configuration = capture_candidate_build_configuration(
+            specification, cmake_cache)
+
+    selected_configuration: str | None = None
+    configured_variants: tuple[str | None, ...] = (None,)
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        layout_entries = (
+            build_configuration["entries"]
+            if implementation == "candidate" and
+               isinstance(build_configuration, Mapping) else cmake_cache)
+        multi, configuration_types, selected_configuration = \
+            cmake_build_layout(layout_entries)
+        configured_variants = (
+            tuple(configuration_types) if multi else (None,))
 
     baseline_root = Path(specification["baseline_source_root"]).resolve(strict=True)
     candidate_root = Path(specification["candidate_source_root"]).resolve(strict=True)
@@ -1882,35 +3789,74 @@ def validate_compile_commands(
             *(candidate_root / name for name in CANDIDATE_LIBRARY_SOURCES),
             candidate_root / "bench/leopard2/benchmark.cpp",
         }
-    required = {path.resolve(strict=True) for path in required}
+    required = {item.resolve(strict=True) for item in required}
+    configured = (required if implementation == "baseline" else {
+        candidate_root / name for name in CANDIDATE_CONFIGURED_SOURCES
+    })
+    configured = {source.resolve(strict=True) for source in configured}
+
+    by_source: dict[
+        tuple[Path, str | None],
+        tuple[list[str], Mapping[str, Any], Path],
+    ] = {}
+    for entry in entries:
+        require(isinstance(entry, dict) and isinstance(entry.get("file"), str),
+                "compile command entry is malformed")
+        source = Path(entry["file"]).resolve(strict=True)
+        require(source in configured,
+                f"compile command source is not configured: {source}")
+        tokens = compile_command_tokens(entry)
+        output = validate_compile_entry_io(
+            entry, tokens, source, build, compiler, compiler_invocation)
+        matching_variants = [
+            configuration for configuration in configured_variants
+            if entry["output"] == expected_compile_output(
+                implementation, source, specification, configuration)]
+        require(len(matching_variants) == 1,
+                f"compile command output has no unique configured variant: "
+                f"{entry['output']}")
+        key = (source, matching_variants[0])
+        require(key not in by_source,
+                f"duplicate compile command for {source} "
+                f"configuration {matching_variants[0]}")
+        by_source[key] = (tokens, entry, output)
+
     expected_entry_count = (
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
         if implementation == "baseline" else
-        CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT)
+        CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT) * len(configured_variants)
     if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
-        configured = (required if implementation == "baseline" else {
-            candidate_root / name for name in CANDIDATE_CONFIGURED_SOURCES
-        })
-        configured = {source.resolve(strict=True) for source in configured}
+        expected_keys = {
+            (source, configuration)
+            for source in configured for configuration in configured_variants
+        }
         require(len(entries) == expected_entry_count and
-                set(by_source) == configured,
+                set(by_source) == expected_keys,
                 f"{implementation} compile-command entry closure differs")
         for source in configured:
-            tokens, entry, _ = by_source[source]
+            tokens, entry, _ = by_source[
+                (source, selected_configuration)]
             expected_tokens = expected_compile_argv(
                 implementation, source, specification, compiler_invocation,
-                raw_schema)
+                raw_schema, build_configuration=build_configuration,
+                selected_configuration=selected_configuration)
             require(tokens == expected_tokens and
                     entry["output"] == expected_compile_output(
-                        implementation, source, specification),
+                        implementation, source, specification,
+                        selected_configuration),
                     f"compile command for {source} differs from the exact "
-                    f"{compile_profile_for_implementation(implementation)} profile")
-    missing = sorted(str(path) for path in required - set(by_source))
+                    f"{compile_profile_for_implementation(implementation, raw_schema)} "
+                    "profile")
+    available_selected = {
+        source for source, configuration in by_source
+        if configuration == selected_configuration}
+    missing = sorted(str(item) for item in required - available_selected)
     require(not missing, f"{implementation} compile commands miss sources: {missing}")
     object_records: list[dict[str, Any]] = []
     required_entries: list[dict[str, Any]] = []
     for source in required:
-        tokens, entry, output = by_source[source]
+        tokens, entry, output = by_source[
+            (source, selected_configuration)]
         if raw_schema not in COMPLETE_EVIDENCE_SCHEMAS:
             # Historical/private build schemas predate the exact ordered argv
             # record.  Preserve replay without reintroducing broad -D/-I
@@ -1954,7 +3900,8 @@ def validate_compile_commands(
         result.update({
             "schema": compile_commands_schema_for_raw_schema(raw_schema),
             "implementation": implementation,
-            "profile": compile_profile_for_implementation(implementation),
+            "profile": compile_profile_for_implementation(
+                implementation, raw_schema),
             "required_entries": sorted(
                 required_entries, key=lambda entry: entry["file"]),
         })
@@ -1979,7 +3926,10 @@ def cmake_identity_for_build_schema(build_schema: str) -> Mapping[str, str]:
 
 def exact_text_content(text: str, label: str) -> dict[str, Any]:
     require(isinstance(text, str), f"{label} is not text")
-    encoded = text.encode("utf-8")
+    try:
+        encoded = text.encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError(f"{label} is not strict UTF-8 text") from error
     require(0 < len(encoded) <= MAX_LINK_RECIPE_BYTES and "\x00" not in text,
             f"{label} is outside the retained byte bound")
     return {"encoding": "utf-8", "size": len(encoded),
@@ -2012,12 +3962,13 @@ def validate_archive_link_recipe_content(
     text = content.get("text")
     require(isinstance(text, str), f"{label} retained content is not text")
     expected_content = exact_text_content(text, label)
-    require(content == expected_content,
+    require(exact_json_equal(content, expected_content),
             f"{label} retained content identity is invalid")
-    require(isinstance(recipe_identity, dict) and
-            recipe_identity.get("size") == expected_content["size"] and
-            recipe_identity.get("sha256") == expected_content["sha256"],
-            f"{label} retained bytes differ from the recipe file identity")
+    if recipe_identity is not None:
+        require(isinstance(recipe_identity, dict) and
+                recipe_identity.get("size") == expected_content["size"] and
+                recipe_identity.get("sha256") == expected_content["sha256"],
+                f"{label} retained bytes differ from the recipe file identity")
 
     commands: list[list[str]] = []
     for line in text.splitlines():
@@ -2071,12 +4022,275 @@ def validate_archive_link_recipe_content(
     return text
 
 
+def _shell_and_chain(tokens: Sequence[str], label: str) -> list[list[str]]:
+    require(tokens and all(isinstance(token, str) and token for token in tokens),
+            f"{label} token stream is invalid")
+    commands: list[list[str]] = []
+    current: list[str] = []
+    for token in tokens:
+        if token == "&&":
+            require(current, f"{label} contains an empty shell command")
+            commands.append(current)
+            current = []
+            continue
+        require(token not in {";", "||", "|", "&"},
+                f"{label} contains unsupported shell control {token}")
+        current.append(token)
+    require(current, f"{label} ends with an empty shell command")
+    commands.append(current)
+    return [command for command in commands if command != [":"]]
+
+
+def _render_recipe_command(tokens: Sequence[str]) -> str:
+    require(tokens and all(isinstance(token, str) and token and "@" not in token
+                           for token in tokens),
+            "extracted Ninja recipe command is invalid")
+    return " ".join(shlex.quote(token) for token in tokens)
+
+
+def canonical_ninja_identity(
+    cache: Mapping[str, str],
+) -> tuple[dict[str, Any], dict[str, str]]:
+    """Bind the only build tool permitted to interpret a Ninja graph."""
+    configured = cache.get("CMAKE_MAKE_PROGRAM")
+    require(configured == CANONICAL_NINJA_PATH,
+            "Ninja Multi-Config build does not use the canonical build tool")
+    ninja = Path(CANONICAL_NINJA_PATH).resolve(strict=True)
+    require(str(ninja) == CANONICAL_NINJA_PATH,
+            "canonical Ninja path resolves to another file")
+    identity = artifact_identity(ninja, "build_tool")
+    version_bytes = run_checked(
+        (str(ninja), "--version"), environment=CHILD_ENVIRONMENT,
+        max_stdout=MAX_BUILD_TOOL_VERSION_BYTES,
+        max_stderr=MAX_BUILD_TOOL_VERSION_BYTES)
+    try:
+        version_text = version_bytes.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("canonical Ninja version is not strict UTF-8") \
+            from error
+    require(version_text and "\0" not in version_text and
+            "\r" not in version_text,
+            "canonical Ninja version output is invalid")
+    return identity, {
+        "sha256": sha256_bytes(version_bytes),
+        "text": version_text,
+    }
+
+
+def canonical_ninja_graph_relative_path(value: object, label: str) -> str:
+    require(isinstance(value, str) and value and
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._/+@=-]*", value)
+            is not None,
+            f"{label} is not a literal Ninja graph path")
+    path = Path(value)
+    require(not path.is_absolute() and
+            all(component not in {"", ".", ".."} for component in path.parts) and
+            path.as_posix() == value,
+            f"{label} is not a canonical relative Ninja graph path")
+    return value
+
+
+def ninja_graph_includes(text: object, label: str) -> tuple[str, ...]:
+    """Return every literal include/subninja edge in one retained manifest."""
+    require(isinstance(text, str) and text.endswith("\n") and
+            "\0" not in text and "\r" not in text,
+            f"{label} is not canonical LF-terminated Ninja text")
+    result: list[str] = []
+    for line_number, line in enumerate(text[:-1].split("\n"), 1):
+        match = re.match(r"^(include|subninja)(?:[ \t]|$)", line)
+        if match is None:
+            continue
+        directive = re.fullmatch(
+            r"(?:include|subninja)[ \t]+([^ \t]+)[ \t]*", line)
+        require(directive is not None,
+                f"{label}:{line_number} has a non-literal Ninja include")
+        result.append(canonical_ninja_graph_relative_path(
+            directive.group(1), f"{label}:{line_number} include"))
+    return tuple(result)
+
+
+def capture_ninja_graph_closure(
+    build: Path, selected_configuration: str,
+) -> dict[str, Any]:
+    """Snapshot the closed, bounded manifest set read by Ninja tool mode."""
+    build = build.resolve(strict=True)
+    require(build.is_dir() and isinstance(selected_configuration, str) and
+            selected_configuration,
+            "Ninja graph capture has an invalid build/configuration")
+    entrypoint = canonical_ninja_graph_relative_path(
+        f"build-{selected_configuration}.ninja", "Ninja graph entrypoint")
+    pending = [entrypoint]
+    captured: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    while pending:
+        relative = pending.pop()
+        if relative in captured:
+            continue
+        require(len(captured) < MAX_NINJA_GRAPH_FILES,
+                "Ninja graph closure exceeds its file-count bound")
+        path = build.joinpath(*Path(relative).parts)
+        path_metadata = os.lstat(path)
+        require(stat.S_ISREG(path_metadata.st_mode) and
+                path_metadata.st_nlink == 1 and
+                path.resolve(strict=True) == path,
+                f"Ninja graph input is not a canonical single-link regular "
+                f"file: {path}")
+        metadata, data = bounded_file_contents_snapshot(
+            path, MAX_LINK_RECIPE_BYTES)
+        total_bytes += len(data)
+        require(total_bytes <= MAX_NINJA_GRAPH_TOTAL_BYTES,
+                "Ninja graph closure exceeds its retained-byte bound")
+        try:
+            text = data.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise EvidenceError(
+                f"Ninja graph input is not strict UTF-8: {path}") from error
+        content = exact_text_content(text, f"Ninja graph input {path}")
+        artifact = {
+            "path": str(path),
+            "kind": "ninja_graph_input",
+            "size": metadata.st_size,
+            "mode": metadata.st_mode & 0o7777,
+            "mtime_ns": metadata.st_mtime_ns,
+            "sha256": sha256_bytes(data),
+        }
+        require(artifact["size"] == content["size"] and
+                artifact["sha256"] == content["sha256"],
+                f"Ninja graph input changed while retained: {path}")
+        captured[relative] = {
+            "relative_path": relative,
+            "artifact": artifact,
+            "content": content,
+        }
+        pending.extend(ninja_graph_includes(
+            text, f"Ninja graph input {relative}"))
+    return {
+        "schema": NINJA_GRAPH_CLOSURE_SCHEMA,
+        "entrypoint": entrypoint,
+        "files": [captured[name] for name in sorted(captured)],
+    }
+
+
+def _materialize_frozen_ninja_graph(
+    graph: Mapping[str, Any], root: Path,
+) -> None:
+    files = graph.get("files")
+    require(isinstance(files, list) and files,
+            "frozen Ninja graph has no files")
+    for record in files:
+        require(isinstance(record, Mapping),
+                "frozen Ninja graph record is invalid")
+        relative = canonical_ninja_graph_relative_path(
+            record.get("relative_path"), "frozen Ninja graph path")
+        content = record.get("content")
+        require(isinstance(content, Mapping) and
+                isinstance(content.get("text"), str),
+                "frozen Ninja graph content is absent")
+        path = root.joinpath(*Path(relative).parts)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(content["text"].encode("utf-8", errors="strict"))
+
+
+def ninja_multi_link_recipes(
+    cache: Mapping[str, str], build: Path, target: str,
+    archive_operand: str, executable_operand: str,
+    ninja_graph: Mapping[str, Any], selected_configuration: str,
+) -> tuple[str, str]:
+    """Extract link commands from the exact frozen graph retained as evidence."""
+    require(cache.get("CMAKE_GENERATOR") == "Ninja Multi-Config" and
+            cache.get("CMAKE_MAKE_PROGRAM") == CANONICAL_NINJA_PATH,
+            "Ninja Multi-Config build omits its exact build tool")
+    ninja = Path(CANONICAL_NINJA_PATH).resolve(strict=True)
+    require(str(ninja) == CANONICAL_NINJA_PATH,
+            "canonical Ninja path resolves to another file")
+    require(ninja_graph.get("schema") == NINJA_GRAPH_CLOSURE_SCHEMA and
+            ninja_graph.get("entrypoint") ==
+                f"build-{selected_configuration}.ninja",
+            "Ninja Multi-Config graph entrypoint differs")
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-frozen-ninja-graph-") as temporary:
+        frozen = Path(temporary).resolve()
+        _materialize_frozen_ninja_graph(ninja_graph, frozen)
+        output = run_checked((
+            str(ninja), "-C", str(frozen), "-f",
+            str(ninja_graph["entrypoint"]), "-t", "commands", target,
+        ), environment=CHILD_ENVIRONMENT, max_stdout=MAX_LINK_RECIPE_BYTES,
+            max_stderr=MAX_LINK_RECIPE_BYTES)
+    try:
+        text = output.decode("utf-8", errors="strict")
+    except UnicodeDecodeError as error:
+        raise EvidenceError("Ninja command graph is not strict UTF-8") from error
+    require(text.endswith("\n"),
+            "Ninja command graph is not LF terminated")
+    archive_commands: list[list[str]] = []
+    ranlib_commands: list[list[str]] = []
+    executable_commands: list[list[str]] = []
+    for line in text[:-1].split("\n"):
+        require(line, "Ninja command graph contains an empty record")
+        try:
+            chain = _shell_and_chain(
+                shlex.split(line, posix=True), "Ninja command graph")
+        except ValueError as error:
+            raise EvidenceError(
+                f"cannot parse Ninja command graph: {error}") from error
+        for command in chain:
+            if command[0] == cache.get("CMAKE_AR") and \
+                    archive_operand in command:
+                archive_commands.append(command)
+            elif command[0] == cache.get("CMAKE_RANLIB") and \
+                    archive_operand in command:
+                ranlib_commands.append(command)
+            elif command[0] == cache.get("CMAKE_CXX_COMPILER") and \
+                    "-o" in command:
+                output_index = command.index("-o")
+                if output_index + 1 < len(command) and \
+                        command[output_index + 1] == executable_operand:
+                    executable_commands.append(command)
+    require(len(archive_commands) == len(ranlib_commands) ==
+                len(executable_commands) == 1,
+            "Ninja Release graph has no unique archive and executable link "
+            "commands")
+    archive_text = (
+        _render_recipe_command(archive_commands[0]) + "\n" +
+        _render_recipe_command(ranlib_commands[0]) + "\n")
+    executable_text = _render_recipe_command(executable_commands[0]) + "\n"
+    return archive_text, executable_text
+
+
+def stable_ninja_multi_link_recipes(
+    cache: Mapping[str, str], build: Path, selected_configuration: str,
+    target: str, archive_operand: str, executable_operand: str,
+) -> tuple[str, str, dict[str, Any], dict[str, str], dict[str, Any]]:
+    """Bind tool and graph before/after extraction from a frozen graph copy."""
+    ninja_identity, ninja_version = canonical_ninja_identity(cache)
+    ninja_graph = capture_ninja_graph_closure(
+        build, selected_configuration)
+    archive_link, executable_link = ninja_multi_link_recipes(
+        cache, build, target, archive_operand,
+        executable_operand, ninja_graph, selected_configuration)
+    require(
+        (ninja_identity, ninja_version) == canonical_ninja_identity(cache) and
+        ninja_graph == capture_ninja_graph_closure(
+            build, selected_configuration),
+        "canonical Ninja identity or graph changed while extracting link recipes")
+    return (archive_link, executable_link, ninja_identity, ninja_version,
+            ninja_graph)
+
+
 def build_provenance(
     implementation: str, specification: Mapping[str, Any],
     raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     build = Path(specification[f"{implementation}_build_dir"]).resolve(strict=True)
     require(build.is_dir(), f"{implementation} build path is not a directory: {build}")
+    cache_path = build / "CMakeCache.txt"
+    commands_path = build / "compile_commands.json"
+    cache = parse_cmake_cache(cache_path)
+    selected_configuration: str | None = None
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        _, _, selected_configuration = cmake_build_layout(cache)
+    output_prefix = (
+        Path(selected_configuration) if selected_configuration else Path())
     cmake_identity = cmake_identity_for_build_schema(raw_schema)
     names = ({
         "executable": "leopard_main_benchmark",
@@ -2090,8 +4304,10 @@ def build_provenance(
         "archive_link": "CMakeFiles/{}/link.txt".format(
             cmake_identity["target_directory"]),
     })
-    expected_executable = (build / names["executable"]).resolve(strict=True)
-    expected_archive = (build / names["archive"]).resolve(strict=True)
+    expected_executable = (
+        build / output_prefix / names["executable"]).resolve(strict=True)
+    expected_archive = (
+        build / output_prefix / names["archive"]).resolve(strict=True)
     require(expected_executable ==
             Path(specification[f"{implementation}_executable"]).resolve(strict=True),
             f"{implementation} executable is not the declared build artifact")
@@ -2099,13 +4315,16 @@ def build_provenance(
             Path(specification[f"{implementation}_archive"]).resolve(strict=True),
             f"{implementation} archive is not the declared build artifact")
 
-    cache_path = build / "CMakeCache.txt"
-    commands_path = build / "compile_commands.json"
-    executable_link_path = build / names["executable_link"]
-    archive_link_path = build / names["archive_link"]
-    cache = parse_cmake_cache(cache_path)
-    require(cache.get("CMAKE_BUILD_TYPE") == "Release",
-            f"{implementation} build is not CMake Release")
+    if selected_configuration:
+        executable_link_path = build / "CMakeFiles" / \
+            f"impl-{selected_configuration}.ninja"
+        archive_link_path = executable_link_path
+    else:
+        executable_link_path = build / names["executable_link"]
+        archive_link_path = build / names["archive_link"]
+    if raw_schema not in BUILD_CLOSURE_V7_SCHEMAS:
+        require(cache.get("CMAKE_BUILD_TYPE") == "Release",
+                f"{implementation} build is not CMake Release")
     validate_effective_flags(
         shlex.split(cache.get("CMAKE_CXX_FLAGS_RELEASE", "")),
         f"{implementation} CMake Release flags", "release")
@@ -2131,21 +4350,69 @@ def build_provenance(
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
         }
+        if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+            required_cache.update({
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+            })
         expected_archive_name = cmake_identity["archive"]
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        required_cache.update({
+            "CMAKE_CONFIGURATION_TYPES": None,
+            "CMAKE_GENERATOR": None,
+        })
+        if selected_configuration:
+            required_cache["CMAKE_MAKE_PROGRAM"] = None
+        if implementation == "candidate":
+            required_cache.update({
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": None,
+            })
     for name, expected in required_cache.items():
-        require(cache.get(name) == expected,
+        present = name in cache
+        actual = cache.get(
+            name, "" if name == "CMAKE_CONFIGURATION_TYPES" else None)
+        require((present or name == "CMAKE_CONFIGURATION_TYPES") and
+                (expected is None or actual == expected),
                 f"{implementation} CMake cache {name} is {cache.get(name)!r}, "
                 f"expected {expected!r}")
-    executable_link = executable_link_path.read_text(encoding="utf-8")
-    archive_link_bytes = archive_link_path.read_bytes()
-    require(0 < len(archive_link_bytes) <= MAX_LINK_RECIPE_BYTES,
-            f"{implementation} archive recipe is outside the retained byte bound")
-    try:
-        archive_link = archive_link_bytes.decode("utf-8", errors="strict")
-    except UnicodeDecodeError as error:
-        raise EvidenceError(
-            f"{implementation} archive recipe is not strict UTF-8") from error
-    require(names["archive"] in archive_link,
+    retained_required_cache = {
+        name: cache.get(
+            name, "" if name == "CMAKE_CONFIGURATION_TYPES" else None)
+        for name in required_cache
+    }
+    build_configuration = None
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS and \
+            implementation == "candidate":
+        build_configuration = capture_candidate_build_configuration(
+            specification, cache)
+    archive_recipe_name = (
+        f"{selected_configuration}/{names['archive']}"
+        if selected_configuration else names["archive"])
+    executable_recipe_name = (
+        f"{selected_configuration}/{names['executable']}"
+        if selected_configuration else names["executable"])
+    ninja_identity = None
+    ninja_version = None
+    ninja_graph = None
+    if selected_configuration:
+        (archive_link, executable_link, ninja_identity, ninja_version,
+         ninja_graph) = stable_ninja_multi_link_recipes(
+            cache, build, selected_configuration, executable_recipe_name,
+            archive_recipe_name, executable_recipe_name)
+    else:
+        executable_link = executable_link_path.read_text(encoding="utf-8")
+        archive_link_bytes = archive_link_path.read_bytes()
+        require(0 < len(archive_link_bytes) <= MAX_LINK_RECIPE_BYTES,
+                f"{implementation} archive recipe is outside the retained byte bound")
+        try:
+            archive_link = archive_link_bytes.decode("utf-8", errors="strict")
+        except UnicodeDecodeError as error:
+            raise EvidenceError(
+                f"{implementation} archive recipe is not strict UTF-8") from error
+    require(archive_recipe_name in archive_link,
             f"{implementation} archive recipe does not produce its declared archive")
     executable_link_tokens = parse_single_executable_recipe(
         executable_link, f"{implementation} benchmark link recipe")
@@ -2159,14 +4426,14 @@ def build_provenance(
             f"{implementation} benchmark link recipe")
     else:
         _validate_historical_declared_archive_operands(
-            executable_link_tokens, expected_archive_name,
+            executable_link_tokens, archive_recipe_name,
             f"{implementation} benchmark link recipe")
     validate_effective_flags(
         executable_link_tokens, f"{implementation} executable link recipe",
         "link")
     semantics = validate_compile_commands(
         commands_path, implementation, specification, compiler, raw_schema,
-        cache["CMAKE_CXX_COMPILER"])
+        cache["CMAKE_CXX_COMPILER"], build_configuration, cache)
     records = semantics["required_source_object_pairs"]
     benchmark_suffix = (
         "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
@@ -2178,11 +4445,22 @@ def build_provenance(
     require(len(benchmark_records) == 1,
             f"{implementation} has no unique benchmark object")
     archive_records = [record for record in records if record not in benchmark_records]
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
         semantics["generated_attestation_header"] = (
             capture_candidate_benchmark_attestation(
                 specification, benchmark_records[0]["object"])
             if implementation == "candidate" else None)
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        semantics["effective_build_configuration"] = (
+            build_configuration if implementation == "candidate" else None)
+        if implementation == "candidate":
+            require(isinstance(build_configuration, dict) and
+                    benchmark_records[0]["object"]["mtime_ns"] >=
+                        build_configuration["artifact"]["mtime_ns"] and
+                    benchmark_records[0]["object"]["mtime_ns"] >=
+                        build_configuration["helper_source"]["mtime_ns"],
+                    "candidate benchmark object predates its effective "
+                    "configuration/helper source")
 
     def linked_objects(recipe: str) -> list[Path]:
         result: list[Path] = []
@@ -2212,14 +4490,22 @@ def build_provenance(
         validate_executable_link_semantics(
             executable_link_tokens,
             compiler_invocation=cache["CMAKE_CXX_COMPILER"],
-            archive_name=expected_archive_name,
-            executable_name=names["executable"],
+            archive_name=archive_recipe_name,
+            executable_name=executable_recipe_name,
             benchmark_object=Path(expected_executable_objects[0]).relative_to(
                 build).as_posix(),
             external_link_inputs=external_link_inputs,
             label=f"{implementation} benchmark link recipe")
     archive_identity = artifact_identity(expected_archive, "archive")
     executable_identity = artifact_identity(expected_executable, "executable")
+    if ninja_graph is not None:
+        graph_mtimes = [
+            record["artifact"]["mtime_ns"] for record in ninja_graph["files"]
+        ]
+        require(graph_mtimes and
+                archive_identity["mtime_ns"] >= max(graph_mtimes) and
+                executable_identity["mtime_ns"] >= max(graph_mtimes),
+                f"{implementation} outputs predate the retained Ninja graph")
     require(all(archive_identity["mtime_ns"] >= record["object"]["mtime_ns"]
                 for record in archive_records),
             f"{implementation} archive predates one of its object files")
@@ -2243,12 +4529,25 @@ def build_provenance(
         (str(compiler), "--version"), environment=CHILD_ENVIRONMENT)
     archive_link_identity = artifact_identity(
         archive_link_path, "build_metadata")
+    executable_link_identity = artifact_identity(
+        executable_link_path, "build_metadata")
+    if ninja_graph is not None:
+        graph_by_path = {
+            record["relative_path"]: record["artifact"]
+            for record in ninja_graph["files"]
+        }
+        graph_link_identity = graph_by_path.get(
+            f"CMakeFiles/impl-{selected_configuration}.ninja")
+        require(isinstance(graph_link_identity, dict) and all(
+                    graph_link_identity[key] == archive_link_identity[key] ==
+                        executable_link_identity[key]
+                    for key in ("path", "size", "mode", "mtime_ns", "sha256")),
+                f"{implementation} retained link graph identity differs")
     result = {
         "build_dir": str(build),
         "cmake_cache": artifact_identity(cache_path, "build_metadata"),
         "compile_commands": artifact_identity(commands_path, "build_metadata"),
-        "executable_link_recipe": artifact_identity(
-            executable_link_path, "build_metadata"),
+        "executable_link_recipe": executable_link_identity,
         "archive_link_recipe": archive_link_identity,
         "compiler": artifact_identity(compiler, "compiler"),
         "compiler_version_stdout": {
@@ -2260,18 +4559,19 @@ def build_provenance(
         "validated_executable": executable_identity,
         "validated_archive": archive_identity,
         "validated_cache": {
-            "CMAKE_BUILD_TYPE": cache["CMAKE_BUILD_TYPE"],
+            "CMAKE_BUILD_TYPE": cache.get("CMAKE_BUILD_TYPE", ""),
             "CMAKE_CXX_COMPILER": cache.get("CMAKE_CXX_COMPILER"),
             "CMAKE_CXX_FLAGS_RELEASE": cache["CMAKE_CXX_FLAGS_RELEASE"],
-            **required_cache,
+            **retained_required_cache,
         },
         "validated_compile_commands": semantics,
     }
     if raw_schema in HARDENED_BUILD_SCHEMAS:
         content = exact_text_content(
             archive_link, f"{implementation} archive link recipe")
-        require(content["size"] == archive_link_identity["size"] and
-                content["sha256"] == archive_link_identity["sha256"],
+        require(selected_configuration or
+                (content["size"] == archive_link_identity["size"] and
+                 content["sha256"] == archive_link_identity["sha256"]),
                 f"{implementation} archive recipe changed between reads")
         result["archive_link_recipe_content"] = content
         result["ranlib"] = artifact_identity(ranlib, "ranlib")
@@ -2284,10 +4584,11 @@ def build_provenance(
     if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         executable_content = exact_text_content(
             executable_link, f"{implementation} executable link recipe")
-        require(executable_content["size"] ==
+        require(selected_configuration or
+                (executable_content["size"] ==
                     result["executable_link_recipe"]["size"] and
-                executable_content["sha256"] ==
-                    result["executable_link_recipe"]["sha256"],
+                 executable_content["sha256"] ==
+                    result["executable_link_recipe"]["sha256"]),
                 f"{implementation} executable recipe changed between reads")
         result["executable_link_recipe_content"] = executable_content
         result["compiler_invocation"] = {
@@ -2295,6 +4596,10 @@ def build_provenance(
             "resolved_path": str(compiler),
         }
         result["validated_external_link_inputs"] = external_link_inputs
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        result["multi_config_build_tool"] = ninja_identity
+        result["multi_config_build_tool_version_stdout"] = ninja_version
+        result["multi_config_ninja_graph"] = ninja_graph
     return result
 
 
@@ -2403,14 +4708,20 @@ def parse_canonical_ldd_output_text(
 
 def runtime_closure(
     ldd: Path, executable: Path, retained_output_schema: str | None = None,
+    *, inherited_descriptors: Sequence[int] = (),
+    retained_executable: str | None = None,
 ) -> dict[str, Any]:
     ldd = ldd.resolve(strict=True)
-    executable = executable.resolve(strict=True)
+    executable_argument = (
+        str(executable) if inherited_descriptors
+        else str(executable.resolve(strict=True)))
     output = run_checked(
-        (str(ldd), str(executable)), environment=CHILD_ENVIRONMENT,
+        (str(ldd), executable_argument), environment=CHILD_ENVIRONMENT,
         max_stdout=MAX_LINK_RECIPE_BYTES,
+        inherited_descriptors=inherited_descriptors,
     ).decode("utf-8", errors="strict")
-    parsed = parse_ldd_output_text(output, f"ldd output for {executable}")
+    parsed = parse_ldd_output_text(
+        output, f"ldd output for {executable_argument}")
     entries = []
     for entry in parsed:
         if entry.get("virtual") is True:
@@ -2430,18 +4741,51 @@ def runtime_closure(
         retained["file"] = file_identity
         entries.append(retained)
     result = {
-        "executable": str(executable),
+        "executable": (
+            retained_executable
+            if retained_executable is not None else executable_argument),
         "dependencies": entries,
     }
     if retained_output_schema == RAW_SCHEMA_V5:
         result["raw_ldd_output"] = exact_text_content(
-            output, f"ldd output for {executable}")
-    elif retained_output_schema == RAW_SCHEMA:
+            output, f"ldd output for {executable_argument}")
+    elif retained_output_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
         result["canonical_ldd_output"] = canonical_ldd_output(
-            output, f"ldd output for {executable}")
+            output, f"ldd output for {executable_argument}")
     else:
         require(retained_output_schema is None,
                 "unsupported retained ldd-output schema")
+    return result
+
+
+def capture_campaign_executables(
+    specification: Mapping[str, Any],
+    initial: Mapping[str, Any],
+    owner: ExecutableSnapshotOwner,
+) -> dict[str, Any]:
+    """Freeze both timed binaries and inspect each exact runtime closure."""
+    ldd = Path(specification["ldd"])
+    result: dict[str, Any] = {}
+    for role in ("baseline", "candidate"):
+        record = owner.capture(
+            role, Path(specification[f"{role}_executable"]),
+            initial[f"{role}_executable"])
+        descriptor = owner.descriptors[role]
+        closure = runtime_closure(
+            ldd, Path(f"/proc/self/fd/{descriptor}"), RAW_SCHEMA,
+            inherited_descriptors=(descriptor,),
+            retained_executable=SEALED_EXECUTABLE_COMMAND[role])
+        source_closure = initial[f"{role}_runtime_closure"]
+        require(
+            closure["dependencies"] == source_closure["dependencies"] and
+            closure["canonical_ldd_output"] ==
+                source_closure["canonical_ldd_output"],
+            f"{role} sealed executable runtime closure differs from source")
+        record["runtime_closure"] = closure
+        require(owner.inspect(role) == record["snapshot"],
+                f"{role} sealed executable changed during runtime inspection")
+        result[role] = record
     return result
 
 
@@ -2455,7 +4799,35 @@ def input_snapshot(
             baseline_build["compiler_version_stdout"] ==
             candidate_build["compiler_version_stdout"],
             "baseline and candidate use different compiler binaries or versions")
-    return {
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        require(
+            baseline_build["multi_config_build_tool"] ==
+                candidate_build["multi_config_build_tool"] and
+            baseline_build["multi_config_build_tool_version_stdout"] ==
+                candidate_build["multi_config_build_tool_version_stdout"],
+            "baseline and candidate use different multi-config build tools")
+    try:
+        source_captures = git_capture.capture_git_identities((
+            (
+                Path(specification["baseline_source_root"]),
+                MAIN_COMMIT, True,
+            ),
+            (
+                Path(specification["candidate_source_root"]),
+                str(specification["candidate_commit"]), False,
+            ),
+        ))
+    except git_capture.GitCaptureError as error:
+        raise EvidenceError(str(error)) from error
+    baseline_source, candidate_source = source_captures
+    include_commit = raw_schema in COMPLETE_EVIDENCE_SCHEMAS
+    rich_source = raw_schema == RAW_SCHEMA
+    if not rich_source:
+        baseline_source = git_capture.legacy_projection(
+            baseline_source, include_commit_object=include_commit)
+        candidate_source = git_capture.legacy_projection(
+            candidate_source, include_commit_object=include_commit)
+    result = {
         "runner": artifact_identity(Path(specification["runner"]), "file"),
         "taskset": artifact_identity(Path(specification["taskset"]), "executable"),
         "ldd": artifact_identity(ldd, "executable"),
@@ -2477,14 +4849,24 @@ def input_snapshot(
             ldd, Path(specification["candidate_executable"]),
             retained_output_schema=(raw_schema if raw_schema in
                                     COMPLETE_EVIDENCE_SCHEMAS else None)),
-        "baseline_source": git_identity(
-            Path(specification["baseline_source_root"]), MAIN_COMMIT, True,
-            include_commit_object=raw_schema in COMPLETE_EVIDENCE_SCHEMAS),
-        "candidate_source": git_identity(
-            Path(specification["candidate_source_root"]),
-            str(specification["candidate_commit"]), False,
-            include_commit_object=raw_schema in COMPLETE_EVIDENCE_SCHEMAS),
+        "baseline_source": baseline_source,
+        "candidate_source": candidate_source,
     }
+    if rich_source:
+        require(
+            baseline_source["git_executable"] ==
+                candidate_source["git_executable"],
+            "baseline and candidate source captures used different Git "
+            "executables")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        helper = Path(link_common.__file__).resolve(strict=True)
+        expected = (
+            Path(specification["candidate_source_root"]) /
+            EVIDENCE_HELPER_RELATIVE_PATH).resolve(strict=True)
+        require(helper == expected,
+                "exact-main evidence helper is not loaded from candidate source")
+        result["evidence_helper"] = artifact_identity(helper, "file")
+    return result
 
 
 def input_snapshots_equal(
@@ -2530,6 +4912,81 @@ def validate_complete_artifact_identity(
             isinstance(value["sha256"], str) and
             HEX256.fullmatch(value["sha256"]) is not None,
             f"{label} file identity is invalid")
+    if expected_kind == "build_tool":
+        require(value["mode"] & 0o111,
+                f"{label} file identity is not executable")
+    return value
+
+
+def validate_build_tool_version_identity(
+    value: object, label: str,
+) -> dict[str, str]:
+    require(isinstance(value, dict) and set(value) == {"sha256", "text"} and
+            isinstance(value.get("text"), str) and value["text"] and
+            "\0" not in value["text"] and "\r" not in value["text"] and
+            isinstance(value.get("sha256"), str),
+            f"{label} shape differs")
+    try:
+        encoded = value["text"].encode("utf-8", errors="strict")
+    except UnicodeEncodeError as error:
+        raise EvidenceError(f"{label} is not strict UTF-8") from error
+    require(len(encoded) <= MAX_BUILD_TOOL_VERSION_BYTES and
+            value["sha256"] == sha256_bytes(encoded),
+            f"{label} identity differs")
+    return value
+
+
+def validate_complete_ninja_graph_closure(
+    value: object, build_dir: str, selected_configuration: str, label: str,
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "schema", "entrypoint", "files"} and
+            value.get("schema") == NINJA_GRAPH_CLOSURE_SCHEMA and
+            value.get("entrypoint") ==
+                f"build-{selected_configuration}.ninja" and
+            isinstance(value.get("files"), list) and
+            0 < len(value["files"]) <= MAX_NINJA_GRAPH_FILES,
+            f"{label} shape differs")
+    records: dict[str, dict[str, Any]] = {}
+    total_bytes = 0
+    for record in value["files"]:
+        require(isinstance(record, dict) and set(record) == {
+                    "relative_path", "artifact", "content"},
+                f"{label} record shape differs")
+        relative = canonical_ninja_graph_relative_path(
+            record.get("relative_path"), f"{label} record path")
+        require(relative not in records,
+                f"{label} contains a duplicate graph path")
+        artifact = validate_complete_artifact_identity(
+            record.get("artifact"), f"{label} {relative}",
+            "ninja_graph_input")
+        content = validate_complete_text_identity(
+            record.get("content"), f"{label} {relative} content")
+        total_bytes += content["size"]
+        require(
+            artifact["path"] ==
+                str(Path(build_dir).joinpath(*Path(relative).parts)) and
+            artifact["size"] == content["size"] and
+            artifact["sha256"] == content["sha256"] and
+            total_bytes <= MAX_NINJA_GRAPH_TOTAL_BYTES,
+            f"{label} {relative} artifact/content identity differs")
+        records[relative] = record
+    require(list(records) == sorted(records),
+            f"{label} records are not canonically ordered")
+    pending = [value["entrypoint"]]
+    visited: set[str] = set()
+    while pending:
+        relative = pending.pop()
+        require(relative in records,
+                f"{label} references an unretained graph input: {relative}")
+        if relative in visited:
+            continue
+        visited.add(relative)
+        pending.extend(ninja_graph_includes(
+            records[relative]["content"]["text"],
+            f"{label} {relative} content"))
+    require(visited == set(records),
+            f"{label} contains inputs outside its entrypoint closure")
     return value
 
 
@@ -2540,7 +4997,7 @@ def validate_complete_text_identity(value: object, label: str) -> dict[str, Any]
     require(value.get("encoding") == "utf-8" and
             isinstance(value.get("text"), str),
             f"{label} retained text is invalid")
-    require(value == exact_text_content(value["text"], label),
+    require(exact_json_equal(value, exact_text_content(value["text"], label)),
             f"{label} retained text identity differs")
     return value
 
@@ -2564,8 +5021,16 @@ def validate_canonical_ldd_output(
 
 def validate_complete_git_identity(
     value: object, label: str, expected_path: str, expected_head: str,
-    *, require_detached: bool,
+    *, require_detached: bool, raw_schema: str,
 ) -> dict[str, Any]:
+    if raw_schema == RAW_SCHEMA:
+        try:
+            return git_capture.validate_git_capture(
+                value, expected_path, expected_head,
+                require_detached=require_detached)
+        except git_capture.GitCaptureError as error:
+            raise EvidenceError(f"{label} source identity is invalid: {error}") \
+                from error
     require(isinstance(value, dict) and set(value) == {
                 "path", "head", "tree", "detached",
                 "tracked_tree_listing_sha256", "tracked_status",
@@ -2592,7 +5057,8 @@ def validate_complete_runtime_closure(
 ) -> dict[str, Any]:
     output_key = (
         "raw_ldd_output" if raw_schema == RAW_SCHEMA_V5 else
-        "canonical_ldd_output" if raw_schema == RAW_SCHEMA else None)
+        "canonical_ldd_output" if raw_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA) else None)
     require(output_key is not None,
             f"{label} runtime closure uses an unsupported evidence schema")
     require(isinstance(value, dict) and set(value) == {
@@ -2656,17 +5122,75 @@ def validate_complete_runtime_closure(
     return value
 
 
+def validate_sealed_executable_record(
+    value: object, role: str, initial: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Cross-bind one v8 timed memfd to its source and build closure."""
+    require(role in SEALED_EXECUTABLE_COMMAND and
+            isinstance(value, dict) and
+            set(value) == {"source", "snapshot", "runtime_closure"},
+            f"{role} sealed executable record shape differs")
+    source = validate_complete_artifact_identity(
+        value.get("source"), f"{role} sealed executable source", "executable")
+    expected_source = initial.get(f"{role}_executable")
+    build = initial.get(f"{role}_build")
+    require(isinstance(build, Mapping) and
+            exact_json_equal(source, expected_source) and
+            exact_json_equal(source, build.get("validated_executable")),
+            f"{role} sealed executable source differs from build closure")
+    snapshot = value.get("snapshot")
+    require(isinstance(snapshot, dict) and set(snapshot) == {
+                "protocol", "size", "mode", "sha256", "seals", "elf"} and
+            snapshot.get("protocol") == SEALED_EXECUTABLE_PROTOCOL and
+            type(snapshot.get("size")) is int and
+            0 < snapshot["size"] <= MAX_IDENTITY_FILE_BYTES and
+            type(snapshot.get("mode")) is int and
+            bool(snapshot["mode"] & 0o111) and
+            isinstance(snapshot.get("sha256"), str) and
+            HEX256.fullmatch(snapshot["sha256"]) is not None and
+            type(snapshot.get("seals")) is int and
+            snapshot["seals"] & LINUX_REQUIRED_EXECUTABLE_SEALS ==
+                LINUX_REQUIRED_EXECUTABLE_SEALS and
+            snapshot.get("elf") is True and
+            snapshot["size"] == source["size"] and
+            snapshot["mode"] == source["mode"] and
+            snapshot["sha256"] == source["sha256"],
+            f"{role} sealed executable identity differs from source bytes")
+    closure = validate_complete_runtime_closure(
+        value.get("runtime_closure"), f"{role} sealed executable",
+        SEALED_EXECUTABLE_COMMAND[role], RAW_SCHEMA)
+    source_closure = initial.get(f"{role}_runtime_closure")
+    require(isinstance(source_closure, Mapping) and
+            closure["dependencies"] == source_closure.get("dependencies") and
+            closure["canonical_ldd_output"] ==
+                source_closure.get("canonical_ldd_output"),
+            f"{role} sealed executable runtime closure differs from source")
+    return value
+
+
+def validate_sealed_executables(
+    value: object, initial: Mapping[str, Any],
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and
+            set(value) == {"baseline", "candidate"},
+            "sealed executable set shape differs")
+    for role in ("baseline", "candidate"):
+        validate_sealed_executable_record(value.get(role), role, initial)
+    return value
+
+
 def validate_complete_executable_recipe(
     content: object, identity: object, compiler_invocation: str,
     archive_name: str, executable_name: str, benchmark_object: str, label: str,
     external_link_inputs: object,
 ) -> None:
     retained = validate_complete_text_identity(content, label)
-    recipe = validate_complete_artifact_identity(
-        identity, f"{label} file", "build_metadata")
-    require(recipe["size"] == retained["size"] and
-            recipe["sha256"] == retained["sha256"],
-            f"{label} bytes differ from its file identity")
+    if identity is not None:
+        recipe = validate_complete_artifact_identity(
+            identity, f"{label} file", "build_metadata")
+        require(recipe["size"] == retained["size"] and
+                recipe["sha256"] == retained["sha256"],
+                f"{label} bytes differ from its file identity")
     tokens = parse_single_executable_recipe(retained["text"], label)
     validate_executable_link_semantics(
         tokens, compiler_invocation=compiler_invocation,
@@ -2711,6 +5235,50 @@ def validate_complete_benchmark_attestation(
     return value
 
 
+def validate_complete_build_configuration(
+    value: object, build_dir: str, source_root: str,
+    benchmark_object: Mapping[str, Any], cache: Mapping[str, str],
+) -> dict[str, Any]:
+    require(isinstance(value, dict) and set(value) == {
+                "schema", "artifact", "content", "configuration_schema",
+                "configuration_sha256", "entries", "embedded_build_type",
+                "helper_source"} and
+            value.get("schema") == BUILD_CONFIGURATION_RECORD_SCHEMA,
+            "candidate effective build-configuration identity shape differs")
+    artifact = validate_complete_artifact_identity(
+        value.get("artifact"), "candidate effective build configuration",
+        "generated_build_configuration")
+    expected_path = str(Path(build_dir) / BUILD_CONFIGURATION_RELATIVE_PATH)
+    require(artifact["path"] == expected_path,
+            "candidate effective build-configuration path differs")
+    content = validate_complete_text_identity(
+        value.get("content"), "candidate effective build configuration")
+    parsed = parse_build_configuration_bytes(content["text"].encode("utf-8"))
+    require(content["size"] == artifact["size"] and
+            content["sha256"] == artifact["sha256"] and
+            value.get("configuration_schema") ==
+                parsed["configuration_schema"] and
+            value.get("configuration_sha256") ==
+                parsed["configuration_sha256"] and
+            value.get("entries") == parsed["entries"],
+            "candidate effective build-configuration bytes differ")
+    validate_embedded_build_type(
+        parsed["entries"], value.get("embedded_build_type"),
+        authoritative=True)
+    validate_canonical_build_configuration_entries(parsed["entries"], cache)
+    helper = validate_complete_artifact_identity(
+        value.get("helper_source"),
+        "candidate benchmark attestation helper", "source_file")
+    expected_helper = str(
+        Path(source_root) / BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH)
+    require(helper["path"] == expected_helper and
+            type(benchmark_object.get("mtime_ns")) is int and
+            benchmark_object["mtime_ns"] >= artifact["mtime_ns"] and
+            benchmark_object["mtime_ns"] >= helper["mtime_ns"],
+            "candidate benchmark object/configuration/helper freshness differs")
+    return value
+
+
 def validate_complete_build_identity(
     build: object, implementation: str, specification: Mapping[str, Any],
     raw_schema: str, candidate_tree: str | None = None,
@@ -2718,7 +5286,7 @@ def validate_complete_build_identity(
     require(implementation in {"baseline", "candidate"} and
             isinstance(build, dict),
             f"{implementation} build identity is not an object")
-    require(set(build) == {
+    expected_build_keys = {
                 "build_dir", "cmake_cache", "compile_commands",
                 "executable_link_recipe", "archive_link_recipe", "compiler",
                 "compiler_version_stdout", "archiver", "ranlib",
@@ -2727,12 +5295,32 @@ def validate_complete_build_identity(
                 "validated_compile_commands", "archive_link_recipe_content",
                 "executable_link_recipe_content",
                 "archive_link_tool_invocations", "compiler_invocation",
-                "validated_external_link_inputs"},
+                "validated_external_link_inputs"}
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        expected_build_keys.update({
+            "multi_config_build_tool",
+            "multi_config_build_tool_version_stdout",
+            "multi_config_ninja_graph",
+        })
+    require(set(build) == expected_build_keys,
             f"{implementation} build identity shape differs")
     build_dir = build.get("build_dir")
     require(isinstance(build_dir, str) and Path(build_dir).is_absolute() and
             build_dir == specification[f"{implementation}_build_dir"],
             f"{implementation} build directory identity differs")
+    retained_cache = build.get("validated_cache")
+    selected_configuration: str | None = None
+    configured_variant_count = 1
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        require(isinstance(retained_cache, Mapping),
+                f"{implementation} validated CMake cache is absent")
+        _, configuration_types, selected_configuration = \
+            cmake_build_layout(retained_cache)
+        configured_variant_count = (
+            len(configuration_types) if selected_configuration else 1)
+    output_root = (
+        Path(build_dir) / selected_configuration
+        if selected_configuration else Path(build_dir))
     cmake = CANONICAL_CMAKE_IDENTITY
     if implementation == "baseline":
         archive_name = "libleopard_main_exact.a"
@@ -2741,7 +5329,7 @@ def validate_complete_build_identity(
         executable_recipe_relative = \
             "CMakeFiles/leopard_main_benchmark.dir/link.txt"
         required_cache = {
-            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_BUILD_TYPE": None,
             "CMAKE_CXX_COMPILER": None,
             "CMAKE_CXX_FLAGS_RELEASE": None,
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
@@ -2758,7 +5346,7 @@ def validate_complete_build_identity(
         archive_target_directory = cmake["target_directory"]
         executable_recipe_relative = "CMakeFiles/bench_leopard2.dir/link.txt"
         required_cache = {
-            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_BUILD_TYPE": None,
             "CMAKE_CXX_COMPILER": None,
             "CMAKE_CXX_FLAGS_RELEASE": None,
             "ENABLE_OPENMP": "ON",
@@ -2768,21 +5356,48 @@ def validate_complete_build_identity(
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
         }
+        if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+            required_cache.update({
+                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+            })
         benchmark_suffix = "/bench/leopard2/benchmark.cpp"
         isa_policy = (
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units")
-        compile_profile = CANDIDATE_COMPILE_PROFILE
+        compile_profile = compile_profile_for_implementation(
+            "candidate", raw_schema)
         library_sources = CANDIDATE_LIBRARY_SOURCES
         expected_entry_count = CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
+
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        required_cache.update({
+            "CMAKE_CONFIGURATION_TYPES": None,
+            "CMAKE_GENERATOR": None,
+        })
+        if selected_configuration:
+            required_cache["CMAKE_MAKE_PROGRAM"] = None
+        if implementation == "candidate":
+            required_cache.update({
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": None,
+            })
+    expected_entry_count *= configured_variant_count
 
     expected_metadata = {
         "cmake_cache": str(Path(build_dir) / "CMakeCache.txt"),
         "compile_commands": str(Path(build_dir) / "compile_commands.json"),
         "executable_link_recipe": str(
-            Path(build_dir) / executable_recipe_relative),
+            Path(build_dir) / (
+                f"CMakeFiles/impl-{selected_configuration}.ninja"
+                if selected_configuration else executable_recipe_relative)),
         "archive_link_recipe": str(
-            Path(build_dir) / "CMakeFiles" / archive_target_directory / "link.txt"),
+            Path(build_dir) / (
+                f"CMakeFiles/impl-{selected_configuration}.ninja"
+                if selected_configuration else
+                f"CMakeFiles/{archive_target_directory}/link.txt")),
     }
     for name, expected_path in expected_metadata.items():
         record = validate_complete_artifact_identity(
@@ -2801,8 +5416,8 @@ def validate_complete_build_identity(
     archive = validate_complete_artifact_identity(
         build.get("validated_archive"),
         f"{implementation} validated archive", "archive")
-    require(executable["path"] == str(Path(build_dir) / executable_name) and
-            archive["path"] == str(Path(build_dir) / archive_name),
+    require(executable["path"] == str(output_root / executable_name) and
+            archive["path"] == str(output_root / archive_name),
             f"{implementation} validated output paths differ")
     external_link_inputs = validate_external_link_inputs(
         build.get("validated_external_link_inputs"),
@@ -2817,16 +5432,61 @@ def validate_complete_build_identity(
             isinstance(version.get("sha256"), str) and
             version["sha256"] == sha256_bytes(version["text"].encode("utf-8")),
             f"{implementation} compiler version identity differs")
-    cache = build.get("validated_cache")
+    cache = retained_cache
     require(isinstance(cache, dict) and set(cache) == set(required_cache),
             f"{implementation} validated CMake cache shape differs")
-    require(cache.get("CMAKE_BUILD_TYPE") == "Release" and
-            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
+    require(isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
             cache["CMAKE_CXX_COMPILER"] and
             isinstance(cache.get("CMAKE_CXX_FLAGS_RELEASE"), str) and
             all(cache.get(name) == expected for name, expected in
                 required_cache.items() if expected is not None),
             f"{implementation} validated CMake cache semantics differ")
+    if raw_schema not in BUILD_CLOSURE_V7_SCHEMAS:
+        require(cache.get("CMAKE_BUILD_TYPE") == "Release",
+                f"{implementation} validated build is not Release")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        build_tool = build.get("multi_config_build_tool")
+        build_tool_version = build.get(
+            "multi_config_build_tool_version_stdout")
+        ninja_graph = build.get("multi_config_ninja_graph")
+        if selected_configuration:
+            tool = validate_complete_artifact_identity(
+                build_tool, f"{implementation} multi-config build tool",
+                "build_tool")
+            validated_tool_version = validate_build_tool_version_identity(
+                build_tool_version,
+                f"{implementation} multi-config build-tool version")
+            require(
+                cache.get("CMAKE_MAKE_PROGRAM") == CANONICAL_NINJA_PATH and
+                tool["path"] == CANONICAL_NINJA_PATH and
+                validated_tool_version is build_tool_version,
+                f"{implementation} multi-config Ninja identity/version differs")
+            graph = validate_complete_ninja_graph_closure(
+                ninja_graph, build_dir, selected_configuration,
+                f"{implementation} multi-config Ninja graph")
+            graph_by_path = {
+                record["relative_path"]: record["artifact"]
+                for record in graph["files"]
+            }
+            link_graph = graph_by_path.get(
+                f"CMakeFiles/impl-{selected_configuration}.ninja")
+            require(isinstance(link_graph, dict) and all(
+                        link_graph[key] ==
+                            build["archive_link_recipe"][key] ==
+                            build["executable_link_recipe"][key]
+                        for key in (
+                            "path", "size", "mode", "mtime_ns", "sha256")) and
+                    all(
+                        archive["mtime_ns"] >= record["artifact"]["mtime_ns"] and
+                        executable["mtime_ns"] >= record["artifact"]["mtime_ns"]
+                        for record in graph["files"]),
+                    f"{implementation} outputs/link metadata differ from the "
+                    "retained Ninja graph")
+        else:
+            require(build_tool is None and build_tool_version is None and
+                    ninja_graph is None,
+                    f"{implementation} single-config build retained a "
+                    "multi-config build tool/graph")
     try:
         cache_flags = shlex.split(cache["CMAKE_CXX_FLAGS_RELEASE"], posix=True)
     except ValueError as error:
@@ -2848,8 +5508,10 @@ def validate_complete_build_identity(
                 "entry_count", "required_sources", "validated_optimization",
                 "validated_openmp", "required_source_object_pairs", "isa_policy",
                 "schema", "implementation", "profile", "required_entries"}
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
         expected_compile_keys.add("generated_attestation_header")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        expected_compile_keys.add("effective_build_configuration")
     require(isinstance(compile_record, dict) and
             set(compile_record) == expected_compile_keys,
             f"{implementation} compile-command identity shape differs")
@@ -2899,10 +5561,13 @@ def validate_complete_build_identity(
         require(retained_entry is not None,
                 f"{implementation} source {index} lacks its full compiler argv")
         expected_output = expected_compile_output(
-            implementation, Path(source["path"]), specification)
+            implementation, Path(source["path"]), specification,
+            selected_configuration)
         expected_arguments = expected_compile_argv(
             implementation, Path(source["path"]), specification,
-            cache["CMAKE_CXX_COMPILER"], raw_schema, candidate_tree)
+            cache["CMAKE_CXX_COMPILER"], raw_schema, candidate_tree,
+            compile_record.get("effective_build_configuration"),
+            selected_configuration)
         require(retained_entry == {
                     "directory": build_dir,
                     "file": source["path"],
@@ -2929,7 +5594,7 @@ def validate_complete_build_identity(
                        if pair["source"]["path"].endswith(benchmark_suffix)]
     require(len(benchmark_pairs) == 1,
             f"{implementation} benchmark object is not unique")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
         if implementation == "candidate":
             attestation = validate_complete_benchmark_attestation(
                 compile_record.get("generated_attestation_header"), build_dir,
@@ -2940,6 +5605,28 @@ def validate_complete_build_identity(
         else:
             require(compile_record.get("generated_attestation_header") is None,
                     "baseline build unexpectedly retains a generated attestation")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        if implementation == "candidate":
+            configuration = validate_complete_build_configuration(
+                compile_record.get("effective_build_configuration"),
+                build_dir, specification["candidate_source_root"],
+                benchmark_pairs[0]["object"], cache)
+            require(cache[
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] ==
+                        configuration["configuration_schema"] and
+                    cache[
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"] ==
+                        configuration["configuration_sha256"] and
+                    cache["CMAKE_GENERATOR"] ==
+                        configuration["entries"]["CMAKE_GENERATOR"] and
+                    cache["CMAKE_CONFIGURATION_TYPES"] ==
+                        configuration["entries"]["CMAKE_CONFIGURATION_TYPES"],
+                    "candidate retained cache differs from its effective "
+                    "build configuration")
+        else:
+            require(compile_record.get("effective_build_configuration") is None,
+                    "baseline build unexpectedly retains a candidate "
+                    "effective configuration")
     archive_pairs = [pair for pair in pairs if pair not in benchmark_pairs]
     require(archive_pairs,
             f"{implementation} archive compile closure is empty")
@@ -2954,7 +5641,22 @@ def validate_complete_build_identity(
                 for pair in archive_pairs),
             f"{implementation} compile sources escape their declared source roots")
     members = build.get("validated_archive_members")
-    expected_members = [Path(name).name + ".o" for name in library_sources]
+    archive_source_order = library_sources
+    if selected_configuration and implementation == "candidate":
+        object_library_sources = (
+            "Leopard2BackendSSSE3.cpp",
+            "Leopard2BackendAVX2.cpp",
+            "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX512.cpp",
+            "Leopard2BackendGFNI.cpp",
+        )
+        archive_source_order = (
+            *object_library_sources,
+            *(name for name in library_sources
+              if name not in object_library_sources),
+        )
+    expected_members = [
+        Path(name).name + ".o" for name in archive_source_order]
     require(isinstance(members, list) and members == expected_members and
             len(members) == len(set(members)),
             f"{implementation} archive member identity is invalid")
@@ -2988,15 +5690,22 @@ def validate_complete_build_identity(
                 f"{implementation} {name} invocation identity differs")
     validate_archive_link_recipe_content(
         build.get("archive_link_recipe_content"),
-        build["archive_link_recipe"], archive_name, archive_target_directory,
+        (None if selected_configuration else build["archive_link_recipe"]),
+        (f"{selected_configuration}/{archive_name}"
+         if selected_configuration else archive_name),
+        archive_target_directory,
         f"{implementation} archive link recipe",
         expected_objects=[objects_by_member[member] for member in members],
         expected_archiver=tools["archiver"]["invocation"],
         expected_ranlib=tools["ranlib"]["invocation"])
     validate_complete_executable_recipe(
         build.get("executable_link_recipe_content"),
-        build["executable_link_recipe"], cache["CMAKE_CXX_COMPILER"],
-        archive_name, executable_name,
+        (None if selected_configuration else build["executable_link_recipe"]),
+        cache["CMAKE_CXX_COMPILER"],
+        (f"{selected_configuration}/{archive_name}"
+         if selected_configuration else archive_name),
+        (f"{selected_configuration}/{executable_name}"
+         if selected_configuration else executable_name),
         Path(benchmark_pairs[0]["object"]["path"]).relative_to(
             Path(build_dir)).as_posix(),
         f"{implementation} executable link recipe",
@@ -3009,11 +5718,15 @@ def validate_complete_input_snapshot(
 ) -> dict[str, Any]:
     require(raw_schema in COMPLETE_EVIDENCE_SCHEMAS,
             "complete input snapshot uses an unsupported schema")
-    require(isinstance(snapshot, dict) and set(snapshot) == {
+    expected_snapshot_keys = {
                 "runner", "taskset", "ldd", "baseline_executable",
                 "candidate_executable", "baseline_archive", "candidate_archive",
                 "baseline_build", "candidate_build", "baseline_runtime_closure",
-                "candidate_runtime_closure", "baseline_source", "candidate_source"},
+                "candidate_runtime_closure", "baseline_source", "candidate_source"}
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        expected_snapshot_keys.add("evidence_helper")
+    require(isinstance(snapshot, dict) and
+            set(snapshot) == expected_snapshot_keys,
             "complete input identity shape differs")
     for name, kind in (("runner", "file"), ("taskset", "executable"),
                        ("ldd", "executable")):
@@ -3021,6 +5734,14 @@ def validate_complete_input_snapshot(
             snapshot.get(name), name, kind)
         require(record["path"] == specification[name],
                 f"{name} identity differs from the input specification")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        helper = validate_complete_artifact_identity(
+            snapshot.get("evidence_helper"), "evidence helper", "file")
+        expected_helper = str(
+            Path(specification["candidate_source_root"]) /
+            EVIDENCE_HELPER_RELATIVE_PATH)
+        require(helper["path"] == expected_helper,
+                "evidence helper path differs from candidate source")
     candidate_source = snapshot.get("candidate_source")
     candidate_tree = (candidate_source.get("tree")
                       if isinstance(candidate_source, Mapping) else None)
@@ -3044,12 +5765,12 @@ def validate_complete_input_snapshot(
     validate_complete_git_identity(
         snapshot.get("baseline_source"), "baseline",
         specification["baseline_source_root"], MAIN_COMMIT,
-        require_detached=True)
+        require_detached=True, raw_schema=raw_schema)
     validate_complete_git_identity(
         snapshot.get("candidate_source"), "candidate",
         specification["candidate_source_root"], specification["candidate_commit"],
-        require_detached=False)
-    if raw_schema == RAW_SCHEMA:
+        require_detached=False, raw_schema=raw_schema)
+    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
         attestation = snapshot["candidate_build"][
             "validated_compile_commands"]["generated_attestation_header"]
         require(attestation["source_commit"] ==
@@ -3064,6 +5785,15 @@ def validate_complete_input_snapshot(
             snapshot["baseline_build"]["compiler_version_stdout"] ==
                 snapshot["candidate_build"]["compiler_version_stdout"],
             "baseline and candidate compiler identities differ")
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
+        require(
+            snapshot["baseline_build"]["multi_config_build_tool"] ==
+                snapshot["candidate_build"]["multi_config_build_tool"] and
+            snapshot["baseline_build"][
+                "multi_config_build_tool_version_stdout"] ==
+                snapshot["candidate_build"][
+                    "multi_config_build_tool_version_stdout"],
+            "baseline and candidate multi-config build-tool identities differ")
     require(snapshot["baseline_build"]["validated_external_link_inputs"] ==
                 snapshot["candidate_build"]["validated_external_link_inputs"],
             "baseline and candidate external link-input identities differ")
@@ -3091,8 +5821,15 @@ def validate_candidate_cmake_identity(
             isinstance(archive_recipe, dict),
             "candidate CMake archive provenance is incomplete")
     expected_archive = identity["archive"]
-    expected_recipe_suffix = "/CMakeFiles/{}/link.txt".format(
-        identity["target_directory"])
+    retained_cache = build.get("validated_cache")
+    selected_configuration = None
+    if raw_schema in BUILD_CLOSURE_V7_SCHEMAS and \
+            isinstance(retained_cache, Mapping):
+        _, _, selected_configuration = cmake_build_layout(retained_cache)
+    expected_recipe_suffix = (
+        f"/CMakeFiles/impl-{selected_configuration}.ninja"
+        if selected_configuration else
+        "/CMakeFiles/{}/link.txt".format(identity["target_directory"]))
     paths = (
         specification.get("candidate_archive"),
         archive.get("path"),
@@ -3154,8 +5891,11 @@ def validate_candidate_cmake_identity(
         require(set(objects_by_member) == set(members),
                 "candidate archive members differ from compile-command closure")
         validate_archive_link_recipe_content(
-            build.get("archive_link_recipe_content"), archive_recipe,
-            expected_archive, identity["target_directory"],
+            build.get("archive_link_recipe_content"),
+            (None if selected_configuration else archive_recipe),
+            (f"{selected_configuration}/{expected_archive}"
+             if selected_configuration else expected_archive),
+            identity["target_directory"],
             "candidate archive link recipe",
             expected_objects=[objects_by_member[member] for member in members],
             expected_archiver=tool_invocations["archiver"]["invocation"],
@@ -3496,6 +6236,7 @@ class PairLease:
         self.path = self.root / \
             pair_lease_name(cpu, sibling)
         self.descriptor: int | None = None
+        self.descriptor_identity: tuple[int, int] | None = None
         self.identity: dict[str, Any] | None = None
         self.kernel_socket: socket.socket | None = None
         material = canonical_bytes({
@@ -3526,6 +6267,140 @@ class PairLease:
         if self.kernel_socket is not None:
             self.kernel_socket.close()
             self.kernel_socket = None
+
+    @staticmethod
+    def _lease_descriptor_identity(
+        metadata: os.stat_result,
+    ) -> tuple[int, int]:
+        return metadata.st_dev, metadata.st_ino
+
+    def _forget_descriptor(self) -> None:
+        self.descriptor = None
+        self.descriptor_identity = None
+        self.identity = None
+
+    def _bind_descriptor_identity(self) -> os.stat_result:
+        descriptor = self.descriptor
+        require(descriptor is not None,
+                "cannot bind an absent CPU pair lease descriptor")
+        try:
+            metadata = os.fstat(descriptor)
+        except OSError as error:
+            if error.errno == errno.EBADF:
+                self._forget_descriptor()
+            raise
+        self.descriptor_identity = self._lease_descriptor_identity(metadata)
+        return metadata
+
+    def _release_descriptor(self) -> BaseException | None:
+        """Release only the lease inode still owned by this object.
+
+        A close error is ambiguous: the descriptor can remain open, can have
+        been closed, or can already have been recycled by intervening code.
+        Keep ownership only when fstat proves that the original lease inode is
+        still bound to the descriptor number.  Never unlock or close a
+        descriptor that has been recycled for an unrelated file.
+        """
+        descriptor = self.descriptor
+        expected = self.descriptor_identity
+        if descriptor is None:
+            self._forget_descriptor()
+            return None
+        if expected is None:
+            # The first fstat after os.open may have been interrupted before
+            # the descriptor identity was published.  Recover ownership only
+            # when both the still-open descriptor and the no-follow pathname
+            # identify the same owned regular lease file.  If that proof
+            # cannot be established, retain the numeric descriptor without
+            # touching it rather than risking a recycled unrelated file.
+            try:
+                current = os.fstat(descriptor)
+            except OSError as error:
+                if error.errno == errno.EBADF:
+                    self._forget_descriptor()
+                    return None
+                return error
+            except BaseException as error:
+                return error
+            try:
+                path = os.lstat(self.path)
+            except BaseException as error:
+                return error
+            recovered = self._lease_descriptor_identity(current)
+            if not stat.S_ISREG(current.st_mode) or \
+                    current.st_uid != os.getuid() or \
+                    current.st_nlink != 1 or \
+                    not stat.S_ISREG(path.st_mode) or \
+                    recovered != self._lease_descriptor_identity(path):
+                return EvidenceError(
+                    "CPU pair lease descriptor identity could not be safely "
+                    "recovered after acquisition was interrupted")
+            self.descriptor_identity = recovered
+            expected = recovered
+
+        try:
+            current = os.fstat(descriptor)
+        except OSError as error:
+            if error.errno == errno.EBADF:
+                self._forget_descriptor()
+                return None
+            return error
+        if self._lease_descriptor_identity(current) != expected:
+            self._forget_descriptor()
+            return EvidenceError(
+                "CPU pair lease descriptor number was recycled; "
+                "refusing to release an unrelated file")
+
+        # Do not unlock before close.  If close fails before taking effect,
+        # retaining the descriptor must also retain the lease itself; a later
+        # owner must not enter while cleanup is still pending.  A successful
+        # close releases the flock with the open file description.
+        try:
+            os.close(descriptor)
+        except BaseException as close_error:
+            if isinstance(close_error, OSError) and \
+                    close_error.errno == errno.EBADF:
+                self._forget_descriptor()
+            else:
+                try:
+                    after = os.fstat(descriptor)
+                except OSError as status_error:
+                    if status_error.errno == errno.EBADF:
+                        self._forget_descriptor()
+                    elif hasattr(close_error, "add_note"):
+                        close_error.add_note(
+                            "CPU pair lease descriptor state could not be "
+                            f"revalidated after close failed: {status_error}")
+                else:
+                    if self._lease_descriptor_identity(after) != expected:
+                        self._forget_descriptor()
+                        recycled = EvidenceError(
+                            "CPU pair lease descriptor number was recycled "
+                            "after close failed; refusing to release an "
+                            "unrelated file")
+                        recycled.__cause__ = close_error
+                        return recycled
+                    # The original lease file remains open.  Retain both the
+                    # descriptor number and its inode identity so a later
+                    # cleanup attempt can safely finish releasing it.
+            return close_error
+        else:
+            self._forget_descriptor()
+        return None
+
+    def _abort_enter(self) -> BaseException | None:
+        """Release every partially acquired lease resource after failure."""
+        cleanup_error: BaseException | None = None
+        try:
+            cleanup_error = self._release_descriptor()
+        except BaseException as error:
+            cleanup_error = error
+        try:
+            self._release_kernel_lease()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+        return cleanup_error
 
     def _validate_directory(self) -> os.stat_result:
         if self.production_root:
@@ -3579,15 +6454,22 @@ class PairLease:
             created_directory = True
         except FileExistsError:
             pass
-        except OSError as error:
-            self._release_kernel_lease()
-            raise EvidenceError(f"cannot create CPU pair lease directory: {error}") from error
+        except BaseException as error:
+            cleanup_error = self._abort_enter()
+            if cleanup_error is not None and hasattr(error, "add_note"):
+                error.add_note(f"pair-lease cleanup also failed: {cleanup_error}")
+            if isinstance(error, OSError):
+                raise EvidenceError(
+                    f"cannot create CPU pair lease directory: {error}") from error
+            raise
         try:
             if created_directory:
                 os.chmod(self.root, 0o700)
             self._validate_directory()
-        except Exception:
-            self._release_kernel_lease()
+        except BaseException as error:
+            cleanup_error = self._abort_enter()
+            if cleanup_error is not None and hasattr(error, "add_note"):
+                error.add_note(f"pair-lease cleanup also failed: {cleanup_error}")
             raise
         flags = os.O_RDWR
         if hasattr(os, "O_CLOEXEC"):
@@ -3608,14 +6490,17 @@ class PairLease:
                 require(stat.S_ISREG(before.st_mode),
                         "CPU pair lease path is not a regular file")
                 self.descriptor = os.open(self.path, flags)
+            self._bind_descriptor_identity()
             if created_file:
                 os.fchmod(self.descriptor, 0o600)
-        except OSError as error:
-            if self.descriptor is not None:
-                os.close(self.descriptor)
-                self.descriptor = None
-            self._release_kernel_lease()
-            raise EvidenceError(f"cannot open CPU pair lease: {error}") from error
+        except BaseException as error:
+            cleanup_error = self._abort_enter()
+            if cleanup_error is not None and hasattr(error, "add_note"):
+                error.add_note(f"pair-lease cleanup also failed: {cleanup_error}")
+            if isinstance(error, OSError):
+                raise EvidenceError(
+                    f"cannot open CPU pair lease: {error}") from error
+            raise
         try:
             metadata = os.fstat(self.descriptor)
             path_metadata = os.lstat(self.path)
@@ -3654,27 +6539,28 @@ class PairLease:
             }
             self.validate_current()
             return self.identity
-        except Exception:
-            if self.descriptor is not None:
-                try:
-                    fcntl.flock(self.descriptor, fcntl.LOCK_UN)
-                finally:
-                    os.close(self.descriptor)
-                    self.descriptor = None
-            self._release_kernel_lease()
+        except BaseException as error:
+            cleanup_error = self._abort_enter()
+            if cleanup_error is not None and hasattr(error, "add_note"):
+                error.add_note(f"pair-lease cleanup also failed: {cleanup_error}")
             raise
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
-        descriptor = self.descriptor
-        self.descriptor = None
+        cleanup_error: BaseException | None = None
         try:
-            if descriptor is not None:
-                try:
-                    fcntl.flock(descriptor, fcntl.LOCK_UN)
-                finally:
-                    os.close(descriptor)
-        finally:
+            cleanup_error = self._release_descriptor()
+        except BaseException as error:
+            cleanup_error = error
+        try:
             self._release_kernel_lease()
+        except BaseException as error:
+            if cleanup_error is None:
+                cleanup_error = error
+            elif hasattr(cleanup_error, "add_note"):
+                cleanup_error.add_note(
+                    f"CPU pair kernel-lease cleanup also failed: {error}")
+        if cleanup_error is not None:
+            raise cleanup_error
 
 
 def validate_pair_lease_identity(
@@ -3816,7 +6702,8 @@ def validate_isolation(
         cpu, sibling, value["pair_lease"], before["monotonic_ns"],
         after["monotonic_ns"], before["benchmark_cpu"], after["benchmark_cpu"],
         before["reserved_sibling"], after["reserved_sibling"])
-    require(value == expected, "isolation deltas or acceptance were edited")
+    require(exact_json_equal(value, expected),
+            "isolation deltas or acceptance were edited")
     if require_accepted:
         require(value["accepted"] is True,
                 "reserved SMT sibling performed non-idle work during the campaign")
@@ -3883,7 +6770,8 @@ def validate_supervision(
         value["execution_nonce"], value["runner_started_monotonic_ns"],
         value["runner_finished_monotonic_ns"], campaign, reservation, isolation)
     expected["runner_pid"] = value["runner_pid"]
-    require(value == expected, "supervision handshake semantics were edited")
+    require(exact_json_equal(value, expected),
+            "supervision handshake semantics were edited")
     require(value["runner_started_monotonic_ns"] <=
             value["isolation_before_monotonic_ns"] <=
             value["isolation_after_monotonic_ns"] <=
@@ -4024,10 +6912,7 @@ def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
             0 <= cpu <= MAX_CPU_ID and 0 <= sibling <= MAX_CPU_ID and
             cpu != sibling,
             "CPU reservation request pair is invalid")
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"invalid CPU reservation JSON: {error}") from error
+    payload = strict_json_loads(raw, "CPU reservation")
     expected_keys = {
         "benchmark_cpu", "nonce", "owner", "reserved_sibling", "schema", "status",
     }
@@ -4052,15 +6937,48 @@ def parse_reservation(raw: bytes, cpu: int, sibling: int) -> dict[str, Any]:
     return payload
 
 
-def validate_reservation_current(identity: Mapping[str, Any]) -> None:
-    path = Path(str(identity.get("path", "")))
+def validate_reservation_identity(
+    identity: object, cpu: int, sibling: int, *, exact: bool,
+) -> dict[str, Any]:
+    """Validate the retained reservation's closed-world identity."""
+    require(isinstance(identity, dict) and
+            ((set(identity) == RESERVATION_IDENTITY_KEYS) if exact else
+             RESERVATION_IDENTITY_KEYS.issubset(identity)),
+            "retained CPU reservation identity has unexpected or missing fields")
+    path_value = identity.get("path")
+    digest = identity.get("sha256")
+    payload = identity.get("payload")
+    require(isinstance(path_value, str) and Path(path_value).is_absolute() and
+            isinstance(digest, str) and HEX256.fullmatch(digest) is not None and
+            identity.get("lock") == "exclusive_nonblocking" and
+            isinstance(payload, dict),
+            "retained CPU reservation identity is invalid")
+    canonical_payload = canonical_bytes(payload)
+    parsed = parse_reservation(canonical_payload, cpu, sibling)
+    require(exact_json_equal(parsed, payload) and
+            digest == sha256_bytes(canonical_payload),
+            "retained CPU reservation identity does not match its payload")
+    return identity
+
+
+def validate_reservation_current(
+    identity: Mapping[str, Any], *, exact: bool = True,
+) -> None:
+    payload = identity.get("payload")
+    require(isinstance(payload, dict) and
+            type(payload.get("benchmark_cpu")) is int and
+            type(payload.get("reserved_sibling")) is int,
+            "retained CPU reservation payload is invalid")
+    validated = validate_reservation_identity(
+        identity, payload["benchmark_cpu"], payload["reserved_sibling"],
+        exact=exact)
+    path = Path(validated["path"])
     require(path.is_file(), "CPU reservation disappeared during the campaign")
     raw = path.read_bytes()
-    payload = identity.get("payload")
-    require(isinstance(payload, dict), "retained CPU reservation payload is invalid")
     parsed = parse_reservation(
         raw, int(payload["benchmark_cpu"]), int(payload["reserved_sibling"]))
-    require(parsed == payload and sha256_bytes(raw) == identity.get("sha256"),
+    require(exact_json_equal(parsed, payload) and
+            sha256_bytes(raw) == validated["sha256"],
             "CPU reservation changed during the campaign")
 
 
@@ -4153,7 +7071,11 @@ def candidate_mode_arguments(mode: str) -> tuple[str, ...]:
 def finite_number(value: object, what: str, positive: bool = True) -> float:
     require(isinstance(value, (int, float)) and not isinstance(value, bool),
             f"{what} is not numeric")
-    result = float(value)
+    try:
+        result = float(value)
+    except (OverflowError, ValueError) as error:
+        raise EvidenceError(
+            f"{what} is outside the finite float range") from error
     require(math.isfinite(result), f"{what} is not finite")
     if positive:
         require(result > 0, f"{what} is not positive")
@@ -4246,7 +7168,7 @@ def validate_result(
     parameters = value.get("parameters")
     require(isinstance(parameters, dict), "parameters is not an object")
     for name, expected in expected_parameters(cell, campaign).items():
-        require(parameters.get(name) == expected,
+        require(exact_json_equal(parameters.get(name), expected),
                 f"{implementation} parameter {name} differs: "
                 f"{parameters.get(name)!r} != {expected!r}")
     resolved = value.get("resolved")
@@ -4258,10 +7180,11 @@ def validate_result(
         "profile": "legacy_high_v1", "field": field,
         "parent_count": parent, "padded_side": padded,
     }.items():
-        require(resolved.get(name) == expected,
+        require(exact_json_equal(resolved.get(name), expected),
                 f"{implementation} resolved {name} differs")
     if implementation == "baseline":
-        require(resolved.get("thread_count") == 1,
+        require(type(resolved.get("thread_count")) is int and
+                resolved["thread_count"] == 1,
                 "baseline resolved more than one thread")
         require(value.get("build", {}).get("main_source_commit") == MAIN_COMMIT,
                 "baseline did not attest the exact main commit")
@@ -4280,7 +7203,7 @@ def validate_result(
             "force_specialized_decode": mode_flags["force_specialized_decode"],
         }
         for name, expected in required_candidate.items():
-            require(parameters.get(name) == expected,
+            require(exact_json_equal(parameters.get(name), expected),
                     f"candidate option {name} is not comparison-safe")
         selector_names = (
             "force_tiled_decode", "force_materialized_decode")
@@ -4292,7 +7215,8 @@ def validate_result(
         else:
             require(all(name not in parameters for name in selector_names),
                     "historical candidate result contains unversioned workspace selectors")
-        require(resolved.get("thread_count") == 1,
+        require(type(resolved.get("thread_count")) is int and
+                resolved["thread_count"] == 1,
                 "candidate resolved more than one thread")
         require(resolved.get("backend") in {
                     "scalar", "ssse3", "avx2", "avx512", "neon"},
@@ -4304,6 +7228,8 @@ def validate_result(
                 legacy.get("unavailable_reason") == "disabled by --skip-legacy",
                 "candidate silently ran the in-tree legacy comparison")
     digests = validate_digest_object(value.get("workload_digests"))
+    require(digests["recovered_originals"] == digests["original_data"],
+            f"{implementation} recovered-original digest differs from its input")
     metrics = value.get("metrics")
     require(isinstance(metrics, dict), "metrics is not an object")
     iterations = int(campaign["iterations"])
@@ -4324,7 +7250,8 @@ def validate_result(
     decode = validate_summary(metrics.get("decode_execution"), iterations)
     amortized = metrics.get("decode_amortized_at_reuse")
     require(isinstance(amortized, dict) and
-            amortized.get("reuse_count") == campaign["reuse"],
+            type(amortized.get("reuse_count")) is int and
+            amortized["reuse_count"] == campaign["reuse"],
             "candidate amortized decode has wrong reuse")
     expected_amortized = median(decode) + median(plan_setup) / campaign["reuse"]
     actual_amortized = finite_number(
@@ -4434,6 +7361,28 @@ def safe_evidence_path(root: Path, relative: object) -> Path:
     except ValueError as error:
         raise EvidenceError(f"evidence path escapes output directory: {relative}") from error
     return path
+
+
+def evidence_file_snapshot(
+    root: Path,
+    relative: object,
+    limit: int,
+    directory: EvidenceDirectory | None = None,
+) -> tuple[os.stat_result, bytes]:
+    require(isinstance(relative, str),
+            "evidence file path is not text")
+    owned = directory
+    close_owned = False
+    if owned is None:
+        owned = EvidenceDirectory.open_existing(root)
+        close_owned = True
+    try:
+        require(owned.path == EvidenceDirectory._absolute(root),
+                "evidence directory does not match the requested output root")
+        return owned.snapshot(relative, limit)
+    finally:
+        if close_owned:
+            owned.close()
 
 
 def validate_complete_cpu_policy_record(
@@ -4633,23 +7582,34 @@ def validate_raw(
     output: Path | None,
     check_files: bool,
     check_current_inputs: bool,
+    evidence_directory: EvidenceDirectory | None = None,
 ) -> dict[str, Any]:
     raw = verify_signature(raw, "raw bundle")
     raw_schema = raw.get("schema")
     require(isinstance(raw_schema, str) and
             raw_schema in RAW_TO_CMAKE_IDENTITY,
             "wrong raw bundle schema")
+    if raw_schema == RAW_SCHEMA:
+        require(set(raw) == RAW_V8_KEYS,
+                "current raw bundle has unexpected or missing fields")
+        validate_utc_timestamp(
+            raw.get("created_utc"), "current raw bundle creation time")
+    require(raw.get("validity_is_independent_of_speed") is True,
+            "raw bundle does not bind speed-independent validity")
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
+    if raw_schema == RAW_SCHEMA:
+        require(set(campaign) == CAMPAIGN_V8_KEYS,
+                "current campaign has unexpected or missing fields")
     validate_candidate_mode_schema(campaign, raw_schema)
     require(type(campaign.get("rounds")) is int and
             campaign["rounds"] == ROUNDS and
-            tuple(campaign.get("order", ())) == ORDER,
+            exact_json_equal(campaign.get("order"), list(ORDER)),
             "campaign does not contain exactly three ABBA rounds")
     require(type(campaign.get("batch")) is int and campaign["batch"] == 1 and
             type(campaign.get("threads")) is int and campaign["threads"] == 1,
             "campaign is not a one-stripe, one-thread comparison")
-    require(campaign.get("child_environment") == CHILD_ENVIRONMENT,
+    require(exact_json_equal(campaign.get("child_environment"), CHILD_ENVIRONMENT),
             "campaign child environment is not the strict comparison environment")
     cpu = campaign.get("benchmark_cpu")
     sibling = campaign.get("reserved_sibling")
@@ -4670,7 +7630,7 @@ def validate_raw(
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
             math.isfinite(timeout) and 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
             "campaign timeout is invalid")
-    require(campaign.get("statistics") == statistics_policy(),
+    require(exact_json_equal(campaign.get("statistics"), statistics_policy()),
             "campaign statistics policy is not the authoritative clustered ABBA policy")
     allowed = campaign.get("allowed_cpu_set_at_launch")
     require(type(allowed) is list and allowed == sorted(set(allowed)) and
@@ -4680,7 +7640,8 @@ def validate_raw(
             "campaign launch affinity is invalid")
     host_initial = raw.get("host_initial")
     host_final = raw.get("host_final")
-    require(host_initial == host_final, "host policy/topology changed during campaign")
+    require(exact_json_equal(host_initial, host_final),
+            "host policy/topology changed during campaign")
     validate_host_record(host_initial, cpu, sibling, allowed, raw_schema)
     if raw_schema in ISOLATION_SCHEMAS:
         validate_isolation(raw.get("isolation"), cpu, sibling)
@@ -4704,37 +7665,20 @@ def validate_raw(
     final = raw.get("identities_final")
     require(isinstance(input_spec, dict) and isinstance(initial, dict) and
             isinstance(final, dict), "input identity is missing")
-    expected_specification_keys = {
-        "runner", "taskset", "ldd", "baseline_executable", "candidate_executable",
-        "baseline_archive", "candidate_archive", "baseline_build_dir",
-        "candidate_build_dir", "baseline_source_root", "candidate_source_root",
-        "candidate_commit",
-    }
-    require(set(input_spec) == expected_specification_keys and
-            all(isinstance(value, str) and value for value in input_spec.values()),
-            "input specification is incomplete or has unexpected fields")
-    require(re.fullmatch(r"[0-9a-f]{40}", input_spec["candidate_commit"]) is not None,
-            "candidate commit is not a full lowercase SHA-1")
-    require(initial == final, "input identities changed during the campaign")
+    input_spec = validate_input_specification(input_spec)
+    require(exact_json_equal(initial, final),
+            "input identities changed during the campaign")
     if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
         validate_complete_input_snapshot(input_spec, initial, raw_schema)
     validate_candidate_cmake_identity(input_spec, initial, raw_schema)
-    reservation = raw.get("reservation")
-    require(isinstance(reservation, dict) and
-            reservation.get("lock") == "exclusive_nonblocking" and
-            isinstance(reservation.get("path"), str) and
-            isinstance(reservation.get("sha256"), str) and
-            HEX256.fullmatch(reservation["sha256"]) is not None,
-            "retained CPU reservation identity is invalid")
-    reservation_payload = reservation.get("payload")
-    require(isinstance(reservation_payload, dict),
-            "retained CPU reservation payload is missing")
-    require(parse_reservation(canonical_bytes(reservation_payload), cpu, sibling) ==
-            reservation_payload,
-            "retained CPU reservation semantics differ from the campaign")
-    require(reservation["sha256"] ==
-            sha256_bytes(canonical_bytes(reservation_payload)),
-            "retained CPU reservation hash does not match its canonical payload")
+    executable_snapshots = raw.get("executable_snapshots")
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
+        validate_sealed_executables(executable_snapshots, initial)
+    else:
+        require("executable_snapshots" not in raw,
+                "historical raw bundle contains unversioned executable snapshots")
+    reservation = validate_reservation_identity(
+        raw.get("reservation"), cpu, sibling, exact=raw_schema == RAW_SCHEMA)
     if raw_schema in SUPERVISION_SCHEMAS:
         require("supervision" in raw,
                 "complete raw bundle omits its supervision handshake field")
@@ -4748,7 +7692,8 @@ def validate_raw(
         require(input_snapshots_equal(
                     input_snapshot(input_spec, raw_schema), initial, raw_schema),
                 "current executable/archive/source identity differs from retained evidence")
-        validate_reservation_current(reservation)
+        validate_reservation_current(
+            reservation, exact=raw_schema == RAW_SCHEMA)
     invocations = raw.get("invocations")
     expected_count = len(cells) * ROUNDS * len(ORDER)
     require(isinstance(invocations, list) and len(invocations) == expected_count,
@@ -4765,18 +7710,25 @@ def validate_raw(
     total_child_duration_ns = 0
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict), "invocation is not an object")
+        if raw_schema == RAW_SCHEMA:
+            require(set(invocation) == INVOCATION_V8_KEYS,
+                    "current invocation has unexpected or missing fields")
+            validate_utc_timestamp(
+                invocation.get("started_utc"),
+                "current invocation start time")
         observed = (
             invocation.get("cell_id"), invocation.get("round"),
             invocation.get("slot"), invocation.get("implementation"))
-        require(observed == expected,
+        require(exact_json_equal(list(observed), list(expected)),
                 f"invocation order/relabel mismatch: {observed!r} != {expected!r}")
-        require(invocation.get("identity_before") == initial and
-                invocation.get("identity_after") == initial,
+        require(exact_json_equal(invocation.get("identity_before"), initial) and
+                exact_json_equal(invocation.get("identity_after"), initial),
                 "an invocation observed a changed input identity")
-        require(invocation.get("reservation_before") == reservation and
-                invocation.get("reservation_after") == reservation,
+        require(exact_json_equal(invocation.get("reservation_before"), reservation) and
+                exact_json_equal(invocation.get("reservation_after"), reservation),
                 "an invocation observed a changed CPU reservation")
-        require(invocation.get("returncode") == 0,
+        require(type(invocation.get("returncode")) is int and
+                invocation["returncode"] == 0,
                 "benchmark child did not exit successfully")
         duration_ns = invocation.get("duration_ns")
         require(isinstance(duration_ns, int) and not isinstance(duration_ns, bool) and
@@ -4784,37 +7736,71 @@ def validate_raw(
                 "benchmark child duration is not a positive integer")
         total_child_duration_ns += duration_ns
         cell = cell_by_id[expected[0]]
+        expected_executable = (
+            Path(SEALED_EXECUTABLE_COMMAND[expected[3]])
+            if raw_schema in SEALED_EXECUTABLE_SCHEMAS else
+            Path(input_spec[f"{expected[3]}_executable"]))
         expected_command = [
             input_spec["taskset"], "-c", str(cpu),
-            *benchmark_arguments(expected[3], Path(input_spec[
-                f"{expected[3]}_executable"]), cell, campaign),
+            *benchmark_arguments(
+                expected[3], expected_executable, cell, campaign),
         ]
-        require(invocation.get("command") == expected_command and
-                invocation.get("pinned_cpu") == cpu,
+        require(exact_json_equal(invocation.get("command"), expected_command) and
+                type(invocation.get("pinned_cpu")) is int and
+                invocation["pinned_cpu"] == cpu,
                 "benchmark command or CPU pinning was edited")
-        require(invocation.get("environment") == CHILD_ENVIRONMENT,
+        if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
+            require(
+                invocation.get("execution_protocol") ==
+                    SEALED_EXECUTABLE_PROTOCOL and
+                exact_json_equal(
+                    invocation.get("executable_snapshot"),
+                    executable_snapshots[expected[3]]),
+                "benchmark invocation sealed executable identity was edited")
+        else:
+            require("execution_protocol" not in invocation and
+                    "executable_snapshot" not in invocation,
+                    "historical invocation contains unversioned sealed execution")
+        require(exact_json_equal(invocation.get("environment"), CHILD_ENVIRONMENT),
                 "benchmark invocation inherited or retained an unsafe environment")
+        if raw_schema == RAW_SCHEMA:
+            for stream_name, limit in (
+                    ("stdout", 8 * 1024 * 1024),
+                    ("stderr", 1024 * 1024)):
+                stream = invocation.get(stream_name)
+                require(isinstance(stream, dict) and
+                        set(stream) == STREAM_IDENTITY_KEYS and
+                        isinstance(stream.get("path"), str) and
+                        stream["path"] and
+                        type(stream.get("size")) is int and
+                        0 <= stream["size"] <= limit and
+                        isinstance(stream.get("sha256"), str) and
+                        HEX256.fullmatch(stream["sha256"]) is not None,
+                        f"current {stream_name} evidence identity is invalid")
         result = invocation.get("result")
         if check_files:
             require(output is not None, "output root is required for file verification")
             for stream_name in ("stdout", "stderr"):
                 stream = invocation.get(stream_name)
-                require(isinstance(stream, dict), f"missing {stream_name} evidence")
-                path = safe_evidence_path(output, stream.get("path"))
-                require(path.is_file(), f"missing retained {stream_name}: {path}")
-                data = path.read_bytes()
-                require(stream.get("size") == len(data) and
+                require(isinstance(stream, dict) and
+                        (raw_schema != RAW_SCHEMA or
+                         set(stream) == STREAM_IDENTITY_KEYS),
+                        f"missing or malformed {stream_name} evidence")
+                limit = (8 * 1024 * 1024 if stream_name == "stdout"
+                         else 1024 * 1024)
+                _, data = evidence_file_snapshot(
+                    output, stream.get("path"), limit, evidence_directory)
+                require(type(stream.get("size")) is int and
+                        stream["size"] == len(data) and
                         stream.get("sha256") == sha256_bytes(data),
                         f"retained {stream_name} identity mismatch")
                 if stream_name == "stdout":
-                    try:
-                        parsed = json.loads(data.decode("utf-8"))
-                    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                        raise EvidenceError(f"retained stdout is not JSON: {error}") from error
-                    require(parsed == result, "parsed retained stdout differs from raw result")
+                    parsed = strict_json_loads(data, "retained stdout")
+                    require(exact_json_equal(parsed, result),
+                            "parsed retained stdout differs from raw result")
         normalized = validate_result(
             expected[3], result, cell, campaign, raw_schema)
-        require(invocation.get("normalized") == normalized,
+        require(exact_json_equal(invocation.get("normalized"), normalized),
                 "retained normalized benchmark data was edited")
         digests = normalized["digests"]
         if expected[0] in digest_by_cell:
@@ -4836,7 +7822,8 @@ def validate_raw(
         require(elapsed_ns >= total_child_duration_ns,
                 "isolation interval does not cover all benchmark child durations")
     calculated = analyze(invocations, campaign)
-    require(raw.get("analysis") == calculated, "paired-log analysis was edited")
+    require(exact_json_equal(raw.get("analysis"), calculated),
+            "paired-log analysis was edited")
     return calculated
 
 
@@ -4872,36 +7859,91 @@ def run_child(
     initial_identity: Mapping[str, Any],
     reservation: Mapping[str, Any],
     output: Path,
+    evidence_directory: EvidenceDirectory,
     cpu: int,
     timeout: float,
+    executable_snapshots: Mapping[str, Any],
+    snapshot_owner: ExecutableSnapshotOwner,
 ) -> dict[str, Any]:
-    executable = Path(specification[f"{implementation}_executable"])
-    child_arguments = benchmark_arguments(implementation, executable, cell, campaign)
-    command = [specification["taskset"], "-c", str(cpu), *child_arguments]
-    before = input_snapshot(specification)
-    require(before == initial_identity, "input identity changed before benchmark launch")
-    validate_reservation_current(reservation)
+    retained_snapshot = executable_snapshots.get(implementation)
+    validate_sealed_executable_record(
+        retained_snapshot, implementation, initial_identity)
+    require(snapshot_owner.inspect(implementation) ==
+            retained_snapshot["snapshot"],
+            f"{implementation} sealed executable changed before launch")
+    completed: subprocess.CompletedProcess[bytes] | None = None
+    before: dict[str, Any] | None = None
+    after: dict[str, Any] | None = None
+    recorded_command: list[str] | None = None
+    duration_ns = 0
     environment = dict(CHILD_ENVIRONMENT)
     start_utc = utc_now()
-    start = time.monotonic_ns()
-    completed = run_process_bounded(
-        command, environment=environment, timeout=timeout,
-        max_stdout=8 * 1024 * 1024, max_stderr=1024 * 1024)
-    duration_ns = time.monotonic_ns() - start
+    primary: BaseException | None = None
+    execution_descriptor = -1
+    try:
+        execution_descriptor = duplicate_snapshot_for_execution(
+            snapshot_owner.descriptors[implementation],
+            f"{implementation} benchmark")
+        actual_executable = Path(f"/proc/self/fd/{execution_descriptor}")
+        recorded_executable = Path(SEALED_EXECUTABLE_COMMAND[implementation])
+        actual_child_arguments = benchmark_arguments(
+            implementation, actual_executable, cell, campaign)
+        recorded_child_arguments = benchmark_arguments(
+            implementation, recorded_executable, cell, campaign)
+        command = [
+            specification["taskset"], "-c", str(cpu), *actual_child_arguments]
+        recorded_command = [
+            specification["taskset"], "-c", str(cpu),
+            *recorded_child_arguments]
+        before = input_snapshot(specification)
+        require(before == initial_identity,
+                "input identity changed before benchmark launch")
+        validate_reservation_current(reservation)
+        start = time.monotonic_ns()
+        completed = run_process_bounded(
+            command, environment=environment, timeout=timeout,
+            max_stdout=8 * 1024 * 1024, max_stderr=1024 * 1024,
+            inherited_descriptors=(execution_descriptor,))
+        duration_ns = time.monotonic_ns() - start
+        require(sealed_executable_identity(
+                    execution_descriptor, f"{implementation} benchmark") ==
+                retained_snapshot["snapshot"] and
+                snapshot_owner.inspect(implementation) ==
+                retained_snapshot["snapshot"],
+                f"{implementation} sealed executable changed during launch")
+        after = input_snapshot(specification)
+        require(after == initial_identity,
+                "input identity changed after benchmark launch")
+        validate_reservation_current(reservation)
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        if execution_descriptor >= 0:
+            try:
+                os.close(execution_descriptor)
+            except BaseException as cleanup:
+                if primary is not None:
+                    raise EvidenceError(
+                        f"{implementation} benchmark launch failed: {primary}; "
+                        f"execution descriptor cleanup failed: {cleanup}") \
+                        from primary
+                raise EvidenceError(
+                    f"{implementation} execution descriptor cleanup failed: "
+                    f"{cleanup}") from cleanup
+    require(completed is not None and before is not None and after is not None and
+            recorded_command is not None,
+            "sealed benchmark launch produced no complete result")
     stem = f"invocations/{cell.identifier}/round-{round_index}/slot-{slot}-{implementation}"
-    stdout_path = output / f"{stem}.stdout"
-    stderr_path = output / f"{stem}.stderr"
-    write_bytes_exclusive(stdout_path, completed.stdout)
-    write_bytes_exclusive(stderr_path, completed.stderr)
-    after = input_snapshot(specification)
-    require(after == initial_identity, "input identity changed after benchmark launch")
-    validate_reservation_current(reservation)
+    stdout_relative = f"{stem}.stdout"
+    stderr_relative = f"{stem}.stderr"
+    stdout_path = output / stdout_relative
+    stderr_path = output / stderr_relative
+    evidence_directory.write_exclusive(stdout_relative, completed.stdout)
+    evidence_directory.write_exclusive(stderr_relative, completed.stderr)
     require(completed.returncode == 0,
             f"{implementation} exited {completed.returncode}; see {stderr_path}")
-    try:
-        result = json.loads(completed.stdout.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"{implementation} stdout is not one JSON value: {error}") from error
+    result = strict_json_loads(completed.stdout, f"{implementation} stdout")
     normalized = validate_result(
         implementation, result, cell, campaign, RAW_SCHEMA)
     return {
@@ -4909,7 +7951,9 @@ def run_child(
         "round": round_index,
         "slot": slot,
         "implementation": implementation,
-        "command": command,
+        "command": recorded_command,
+        "execution_protocol": SEALED_EXECUTABLE_PROTOCOL,
+        "executable_snapshot": copy.deepcopy(retained_snapshot),
         "environment": environment,
         "pinned_cpu": cpu,
         "started_utc": start_utc,
@@ -4957,21 +8001,27 @@ def cells_from_options(options: argparse.Namespace) -> tuple[Cell, ...]:
     return cells
 
 
-def retained_file_records(output: Path) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    failure_path = output / "failure.json"
-    for path in sorted(candidate for candidate in output.rglob("*")
-                       if candidate.is_file() and candidate != failure_path):
-        records.append({
-            "path": str(path.relative_to(output)),
-            "size": path.stat().st_size,
-            "sha256": sha256_file(path),
-        })
-    return records
+def retained_file_records(
+    output: Path,
+    evidence_directory: EvidenceDirectory | None = None,
+) -> list[dict[str, Any]]:
+    owned = evidence_directory
+    close_owned = False
+    if owned is None:
+        owned = EvidenceDirectory.open_existing(output)
+        close_owned = True
+    try:
+        require(owned.path == EvidenceDirectory._absolute(output),
+                "retained-file directory differs from the output root")
+        return owned.file_records(frozenset(("failure.json",)))
+    finally:
+        if close_owned:
+            owned.close()
 
 
 def validate_failure(
-    value: object, output: Path, check_files: bool = True
+    value: object, output: Path, check_files: bool = True,
+    evidence_directory: EvidenceDirectory | None = None,
 ) -> dict[str, Any]:
     failure = verify_signature(value, "failed campaign")
     failure_schema = failure.get("schema")
@@ -4980,8 +8030,12 @@ def validate_failure(
         "host_initial", "identities_initial", "input_specification",
         "invocations", "isolation", "pair_lease", "reservation",
         "retained_files", "schema", "status", "traceback", "valid"}
-    if failure_schema in (FAILURE_SCHEMA_V5, FAILURE_SCHEMA):
+    if failure_schema in (
+            FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
+            FAILURE_SCHEMA):
         expected_fields.add("supervision")
+    if failure_schema == FAILURE_SCHEMA:
+        expected_fields.add("executable_snapshots")
     require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
     require(isinstance(failure_schema, str) and
@@ -4991,13 +8045,24 @@ def validate_failure(
     require(all(isinstance(failure.get(name), str) and failure[name]
                 for name in ("created_utc", "error", "error_type", "traceback")),
             "failed campaign diagnostic fields are invalid")
+    if failure_schema == FAILURE_SCHEMA:
+        validate_utc_timestamp(
+            failure.get("created_utc"), "current failed campaign creation time")
     campaign = failure.get("campaign")
     require(isinstance(campaign, dict), "failed campaign metadata is missing")
     raw_schema = FAILURE_TO_RAW_SCHEMA[failure_schema]
+    if raw_schema == RAW_SCHEMA:
+        # A topology failure can occur before the producer adds the observed
+        # launch affinity.  Both producer states are exact and closed-world;
+        # no other optional campaign claims are accepted.
+        require(
+            set(campaign) in (
+                CAMPAIGN_V8_PRE_TOPOLOGY_KEYS, CAMPAIGN_V8_KEYS),
+            "current failed campaign has unexpected or missing fields")
     validate_candidate_mode_schema(campaign, raw_schema)
     require(type(campaign.get("rounds")) is int and
             campaign["rounds"] == ROUNDS and
-            tuple(campaign.get("order", ())) == ORDER and
+            exact_json_equal(campaign.get("order"), list(ORDER)) and
             type(campaign.get("batch")) is int and campaign["batch"] == 1 and
             type(campaign.get("threads")) is int and campaign["threads"] == 1 and
             type(campaign.get("iterations")) is int and
@@ -5007,6 +8072,10 @@ def validate_failure(
             type(campaign.get("warmup")) is int and
             1 <= campaign["warmup"] <= MAX_CAMPAIGN_COUNT,
             "failed campaign scalar counts are invalid")
+    require(exact_json_equal(
+                campaign.get("child_environment"), CHILD_ENVIRONMENT) and
+            exact_json_equal(campaign.get("statistics"), statistics_policy()),
+            "failed campaign comparison policy is invalid")
     timeout = campaign.get("timeout_seconds")
     require(isinstance(timeout, (int, float)) and not isinstance(timeout, bool) and
             math.isfinite(timeout) and 0 < timeout <= MAX_COMMAND_TIMEOUT_SECONDS,
@@ -5039,21 +8108,17 @@ def validate_failure(
         validate_pair_lease_identity(pair_lease, cpu, sibling)
     if isolation is not None:
         validate_isolation(isolation, cpu, sibling, require_accepted=False)
-        require(pair_lease == isolation["pair_lease"],
+        require(exact_json_equal(pair_lease, isolation["pair_lease"]),
                 "failed campaign isolation uses another pair lease")
     reservation = failure.get("reservation")
     if reservation is not None:
-        require(isinstance(reservation, dict) and
-                reservation.get("lock") == "exclusive_nonblocking" and
-                isinstance(reservation.get("payload"), dict),
-                "failed campaign reservation is invalid")
-        payload = reservation["payload"]
-        require(parse_reservation(canonical_bytes(payload), cpu, sibling) == payload and
-                reservation.get("sha256") == sha256_bytes(canonical_bytes(payload)),
-            "failed campaign reservation identity is invalid")
+        reservation = validate_reservation_identity(
+            reservation, cpu, sibling, exact=raw_schema == RAW_SCHEMA)
     supervision = failure.get("supervision")
     if supervision is not None:
-        require(failure_schema in (FAILURE_SCHEMA_V5, FAILURE_SCHEMA) and
+        require(failure_schema in (
+                    FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
+                    FAILURE_SCHEMA) and
                 reservation is not None and
                 isolation is not None and isinstance(campaign, dict),
                 "failed supervision handshake has no complete-schema context")
@@ -5077,15 +8142,23 @@ def validate_failure(
     ]
     require(len(invocations) <= len(expected_sequence),
             "failed invocation prefix is too long")
-    specification = failure.get("input_specification")
+    specification = validate_input_specification(
+        failure.get("input_specification"))
     initial = failure.get("identities_initial")
     if isinstance(initial, dict):
-        require(isinstance(specification, dict),
-                "failed campaign identity lacks input specification")
         if raw_schema in COMPLETE_EVIDENCE_SCHEMAS:
             validate_complete_input_snapshot(specification, initial, raw_schema)
         validate_candidate_cmake_identity(
             specification, initial, raw_schema)
+    executable_snapshots = failure.get("executable_snapshots")
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
+        require(executable_snapshots is None or isinstance(initial, dict),
+                "failed sealed snapshots lack their input identity")
+        if executable_snapshots is not None:
+            validate_sealed_executables(executable_snapshots, initial)
+    else:
+        require("executable_snapshots" not in failure,
+                "historical failure contains unversioned executable snapshots")
     if invocations:
         require(isinstance(specification, dict) and isinstance(initial, dict) and
                 reservation is not None,
@@ -5093,33 +8166,62 @@ def validate_failure(
     cell_by_id = {cell.identifier: cell for cell in cells}
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict) and
-                (invocation.get("cell_id"), invocation.get("round"),
-                 invocation.get("slot"), invocation.get("implementation")) == expected and
-                invocation.get("returncode") == 0,
+                exact_json_equal([
+                    invocation.get("cell_id"), invocation.get("round"),
+                    invocation.get("slot"), invocation.get("implementation")],
+                    list(expected)) and
+                type(invocation.get("returncode")) is int and
+                invocation["returncode"] == 0,
                 "failed campaign invocation prefix was edited")
+        if raw_schema == RAW_SCHEMA:
+            require(set(invocation) == INVOCATION_V8_KEYS,
+                    "current failed invocation has unexpected or missing fields")
+            validate_utc_timestamp(
+                invocation.get("started_utc"),
+                "current failed invocation start time")
         duration_ns = invocation.get("duration_ns")
         require(isinstance(duration_ns, int) and not isinstance(duration_ns, bool) and
                 duration_ns > 0,
                 "failed campaign invocation duration is invalid")
         implementation = expected[3]
         cell = cell_by_id[expected[0]]
+        expected_executable = (
+            Path(SEALED_EXECUTABLE_COMMAND[implementation])
+            if raw_schema in SEALED_EXECUTABLE_SCHEMAS else
+            Path(specification[f"{implementation}_executable"]))
         expected_command = [
             specification["taskset"], "-c", str(cpu),
-            *benchmark_arguments(implementation, Path(specification[
-                f"{implementation}_executable"]), cell, campaign),
+            *benchmark_arguments(
+                implementation, expected_executable, cell, campaign),
         ]
-        require(invocation.get("command") == expected_command and
-                invocation.get("environment") == CHILD_ENVIRONMENT and
-                invocation.get("pinned_cpu") == cpu and
-                invocation.get("identity_before") == initial and
-                invocation.get("identity_after") == initial and
-                invocation.get("reservation_before") == reservation and
-                invocation.get("reservation_after") == reservation,
+        require(exact_json_equal(invocation.get("command"), expected_command) and
+                exact_json_equal(
+                    invocation.get("environment"), CHILD_ENVIRONMENT) and
+                type(invocation.get("pinned_cpu")) is int and
+                invocation["pinned_cpu"] == cpu and
+                exact_json_equal(invocation.get("identity_before"), initial) and
+                exact_json_equal(invocation.get("identity_after"), initial) and
+                exact_json_equal(
+                    invocation.get("reservation_before"), reservation) and
+                exact_json_equal(
+                    invocation.get("reservation_after"), reservation),
                 "failed campaign invocation execution identity was edited")
+        if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
+            require(isinstance(executable_snapshots, Mapping) and
+                    invocation.get("execution_protocol") ==
+                        SEALED_EXECUTABLE_PROTOCOL and
+                    exact_json_equal(
+                        invocation.get("executable_snapshot"),
+                        executable_snapshots[implementation]),
+                    "failed invocation sealed executable identity was edited")
+        else:
+            require("execution_protocol" not in invocation and
+                    "executable_snapshot" not in invocation,
+                    "historical failed invocation contains sealed execution")
         normalized = validate_result(
             implementation, invocation.get("result"), cell, campaign,
             raw_schema)
-        require(invocation.get("normalized") == normalized,
+        require(exact_json_equal(invocation.get("normalized"), normalized),
                 "failed campaign invocation result was edited")
     retained = failure.get("retained_files")
     require(isinstance(retained, list), "failed retained-file list is invalid")
@@ -5137,40 +8239,71 @@ def validate_failure(
         retained_paths.add(record["path"])
         retained_by_path[record["path"]] = record
         if check_files:
-            path = safe_evidence_path(output, record["path"])
-            require(path.is_file() and path.stat().st_size == record["size"] and
-                    sha256_file(path) == record["sha256"],
+            _, data = evidence_file_snapshot(
+                output, record["path"], MAX_IDENTITY_FILE_BYTES,
+                evidence_directory)
+            require(len(data) == record["size"] and
+                    sha256_bytes(data) == record["sha256"],
                     "failed retained file is missing or changed")
     for invocation in invocations:
         for name in ("stdout", "stderr"):
             stream = invocation.get(name)
             require(isinstance(stream, dict) and
-                    retained_by_path.get(stream.get("path")) == stream,
+                    (raw_schema != RAW_SCHEMA or
+                     set(stream) == STREAM_IDENTITY_KEYS) and
+                    exact_json_equal(
+                        retained_by_path.get(stream.get("path")), stream),
                     "failed invocation stream is not retained")
             if check_files and name == "stdout":
-                path = safe_evidence_path(output, stream["path"])
-                try:
-                    parsed = json.loads(path.read_text(encoding="utf-8"))
-                except (UnicodeDecodeError, json.JSONDecodeError) as error:
-                    raise EvidenceError(
-                        f"failed invocation stdout is not JSON: {error}") from error
-                require(parsed == invocation.get("result"),
+                _, data = evidence_file_snapshot(
+                    output, stream["path"], 8 * 1024 * 1024,
+                    evidence_directory)
+                parsed = strict_json_loads(
+                    data, "failed invocation stdout")
+                require(exact_json_equal(parsed, invocation.get("result")),
                         "failed invocation stdout differs from embedded result")
     if check_files:
-        require(retained == retained_file_records(output),
+        require(exact_json_equal(
+                    retained,
+                    retained_file_records(output, evidence_directory)),
                 "failed output directory contains unbound or missing files")
     return failure
 
 
-def run_campaign(options: argparse.Namespace) -> int:
+def publish_failure_record(
+    evidence_directory: EvidenceDirectory,
+    failure: Mapping[str, Any],
+    output: Path,
+) -> dict[str, Any]:
+    """Publish and validate the exact stored failure record by held dirfd."""
+    encoded = canonical_bytes(failure) + b"\n"
+    evidence_directory.write_exclusive("failure.json", encoded)
+    _, stored = evidence_directory.snapshot(
+        "failure.json", MAX_IDENTITY_FILE_BYTES)
+    require(stored == encoded,
+            "stored failure record differs from the published bytes")
+    parsed = strict_json_loads(stored, "stored failed campaign")
+    require(isinstance(parsed, dict),
+            "stored failed campaign is not an object")
+    require(exact_json_equal(parsed, failure),
+            "stored failure record differs from the signed failure")
+    validate_failure(
+        parsed, output, check_files=True,
+        evidence_directory=evidence_directory)
+    return parsed
+
+
+def _run_campaign_owned(
+    options: argparse.Namespace,
+    evidence_directory: EvidenceDirectory,
+) -> int:
     runner_started_monotonic_ns = time.monotonic_ns()
     execution_nonce = os.environ.get(SUPERVISION_NONCE_ENV)
     if execution_nonce is not None:
         require(HEX256.fullmatch(execution_nonce) is not None,
                 "supervisor execution nonce is malformed")
-    output = options.output.resolve()
-    require(not output.exists(), f"output path already exists: {output}")
-    output.mkdir(parents=True)
+    output = evidence_directory.path
+    evidence_directory.validate_current()
     cells = cells_from_options(options)
     for cell in cells:
         validate_cell(cell)
@@ -5225,6 +8358,8 @@ def run_campaign(options: argparse.Namespace) -> int:
     before_cpu: dict[str, Any] | None = None
     before_sibling: dict[str, Any] | None = None
     supervision: dict[str, Any] | None = None
+    executable_snapshots: dict[str, Any] | None = None
+    snapshot_owner = ExecutableSnapshotOwner()
     try:
         allowed_at_launch, housekeeping = validate_topology(
             options.cpu, options.reserved_sibling)
@@ -5237,6 +8372,8 @@ def run_campaign(options: argparse.Namespace) -> int:
         ) as reservation, pair_guard as pair_lease:
             os.sched_setaffinity(0, housekeeping)
             initial = input_snapshot(specification)
+            executable_snapshots = capture_campaign_executables(
+                specification, initial, snapshot_owner)
             before_monotonic_ns = time.monotonic_ns()
             before_cpu = cpu_stat_snapshot(options.cpu)
             before_sibling = cpu_stat_snapshot(options.reserved_sibling)
@@ -5247,7 +8384,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                             invocation = run_child(
                                 implementation, cell, round_index, slot, campaign,
                                 specification, initial, reservation, output,
-                                options.cpu, options.timeout)
+                                evidence_directory, options.cpu, options.timeout,
+                                executable_snapshots, snapshot_owner)
                             pair_guard.validate_current()
                             invocations.append(invocation)
             finally:
@@ -5267,6 +8405,10 @@ def run_campaign(options: argparse.Namespace) -> int:
                     "reserved SMT sibling performed non-idle work during the campaign")
             final = input_snapshot(specification)
             require(final == initial, "input identity changed during campaign")
+            for role in ("baseline", "candidate"):
+                require(snapshot_owner.inspect(role) ==
+                        executable_snapshots[role]["snapshot"],
+                        f"{role} sealed executable changed during campaign")
             host_final = host_identity(
                 options.cpu, options.reserved_sibling, allowed_at_launch)
             require(host_final == host_initial,
@@ -5276,6 +8418,7 @@ def run_campaign(options: argparse.Namespace) -> int:
                 supervision = supervision_record(
                     execution_nonce, runner_started_monotonic_ns,
                     time.monotonic_ns(), campaign, reservation, isolation)
+            snapshot_owner.close()
             raw = signed({
                 "schema": RAW_SCHEMA,
                 "created_utc": utc_now(),
@@ -5287,14 +8430,19 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "supervision": supervision,
                 "input_specification": specification,
                 "identities_initial": initial,
+                "executable_snapshots": executable_snapshots,
                 "invocations": invocations,
                 "identities_final": final,
                 "host_final": host_final,
                 "analysis": analysis,
             })
-            validate_raw(raw, output, check_files=True, check_current_inputs=True)
-            raw_path = output / "raw.json"
-            write_json_exclusive(raw_path, raw)
+            validate_raw(
+                raw, output, check_files=True, check_current_inputs=True,
+                evidence_directory=evidence_directory)
+            evidence_directory.write_exclusive(
+                "raw.json", canonical_bytes(raw) + b"\n")
+            _, raw_bytes = evidence_directory.snapshot(
+                "raw.json", MAX_IDENTITY_FILE_BYTES)
             manifest = signed({
                 "schema": MANIFEST_SCHEMA,
                 "created_utc": utc_now(),
@@ -5302,8 +8450,8 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "validity_is_independent_of_speed": True,
                 "raw": {
                     "path": "raw.json",
-                    "size": raw_path.stat().st_size,
-                    "sha256": sha256_file(raw_path),
+                    "size": len(raw_bytes),
+                    "sha256": sha256_bytes(raw_bytes),
                     "payload_digest": raw["digest"],
                 },
                 "campaign": campaign,
@@ -5312,10 +8460,21 @@ def run_campaign(options: argparse.Namespace) -> int:
                 "reservation": reservation,
                 "supervision": supervision,
                 "identities": initial,
+                "executable_snapshots": executable_snapshots,
                 "analysis": analysis,
             })
-            write_json_exclusive(output / "manifest.json", manifest)
-    except Exception as error:
+            evidence_directory.write_exclusive(
+                "manifest.json", canonical_bytes(manifest) + b"\n")
+    except BaseException as error:
+        diagnostic_traceback = traceback.format_exc()
+        try:
+            snapshot_owner.close()
+        except BaseException as cleanup:
+            diagnostic_traceback += (
+                "\nSealed executable cleanup failure:\n" +
+                "".join(traceback.format_exception(cleanup)))
+            error = EvidenceError(
+                f"{error}; sealed executable cleanup failed: {cleanup}")
         failure = signed({
             "schema": FAILURE_SCHEMA,
             "created_utc": utc_now(),
@@ -5331,81 +8490,142 @@ def run_campaign(options: argparse.Namespace) -> int:
             "isolation": isolation,
             "input_specification": specification,
             "identities_initial": initial,
+            "executable_snapshots": executable_snapshots,
             "invocations": invocations,
-            "retained_files": retained_file_records(output),
-            "traceback": traceback.format_exc(),
+            "retained_files": retained_file_records(
+                output, evidence_directory),
+            "traceback": diagnostic_traceback,
         })
-        failure_path = output / "failure.json"
-        if not failure_path.exists():
-            write_json_exclusive(failure_path, failure)
-        validate_failure(failure, output, check_files=True)
-        raise
+        publish_failure_record(evidence_directory, failure, output)
+        raise error
     print(output / "manifest.json")
     return 0
+
+
+def run_campaign(options: argparse.Namespace) -> int:
+    evidence_directory = EvidenceDirectory.create_new(options.output)
+    try:
+        return _run_campaign_owned(options, evidence_directory)
+    finally:
+        evidence_directory.close()
 
 
 def verified_campaign_bundle(
     manifest_path: Path, no_current_input_check: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Verify and return exact evidence plus the accepted manifest identity."""
-    manifest_path = manifest_path.resolve(strict=True)
-    manifest, manifest_bytes = json_file_snapshot(manifest_path, "manifest")
-    manifest_snapshot = {
-        "size": len(manifest_bytes),
-        "sha256": sha256_bytes(manifest_bytes),
-    }
-    verify_signature(manifest, "manifest")
-    manifest_schema = manifest.get("schema")
-    require(isinstance(manifest_schema, str) and
-            manifest_schema in MANIFEST_TO_RAW_SCHEMA and
-            manifest.get("valid") is True,
-            "manifest is not valid main-comparison evidence")
+    manifest_path = EvidenceDirectory._absolute(manifest_path)
     output = manifest_path.parent
-    raw_info = manifest.get("raw")
-    require(isinstance(raw_info, dict), "manifest has no raw bundle identity")
-    raw_path = safe_evidence_path(output, raw_info.get("path"))
-    require(raw_path.is_file(), "retained raw bundle is missing")
-    raw, raw_bytes = json_file_snapshot(raw_path, "retained raw bundle")
-    require(raw_info.get("size") == len(raw_bytes) and
-            raw_info.get("sha256") == sha256_bytes(raw_bytes),
-            "raw bundle file identity mismatch")
-    expected_raw_schema = MANIFEST_TO_RAW_SCHEMA[manifest_schema]
-    require(raw.get("schema") == expected_raw_schema,
-            "manifest/raw schema versions do not match")
-    analysis = validate_raw(
-        raw, output, check_files=True,
-        check_current_inputs=not no_current_input_check)
-    require(raw_info.get("payload_digest") == raw.get("digest"),
-            "manifest/raw payload identity mismatch")
-    names = ["campaign", "host", "reservation", "identities", "analysis"]
-    if manifest_schema in (
-        MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
-        MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA
-    ):
-        names.append("isolation")
-    else:
-        require("isolation" not in manifest,
-                "legacy manifest contains unversioned isolation evidence")
-    if manifest_schema in (MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA):
-        names.append("supervision")
-    else:
-        require("supervision" not in manifest,
-                "historical manifest contains unversioned supervision data")
-    for name in names:
-        if name == "identities":
-            expected = raw["identities_initial"]
-        elif name == "host":
-            expected = raw["host_initial"]
+    directory = EvidenceDirectory.open_existing(output)
+    try:
+        _, manifest_bytes = directory.snapshot(
+            manifest_path.name, MAX_IDENTITY_FILE_BYTES)
+        manifest_value = strict_json_loads(manifest_bytes, "manifest")
+        require(isinstance(manifest_value, dict), "manifest is not an object")
+        manifest = manifest_value
+        manifest_snapshot = {
+            "size": len(manifest_bytes),
+            "sha256": sha256_bytes(manifest_bytes),
+        }
+        verify_signature(manifest, "manifest")
+        manifest_schema = manifest.get("schema")
+        require(isinstance(manifest_schema, str) and
+                manifest_schema in MANIFEST_TO_RAW_SCHEMA and
+                manifest.get("valid") is True and
+                manifest.get("validity_is_independent_of_speed") is True,
+                "manifest is not valid main-comparison evidence")
+        if manifest_schema == MANIFEST_SCHEMA:
+            require(set(manifest) == MANIFEST_V8_KEYS,
+                    "current manifest has unexpected or missing fields")
+            validate_utc_timestamp(
+                manifest.get("created_utc"),
+                "current manifest creation time")
+        if manifest_schema in (MANIFEST_SCHEMA_V7, MANIFEST_SCHEMA):
+            directory.enable_owner_only()
+            _, strict_manifest_bytes = directory.snapshot(
+                manifest_path.name, MAX_IDENTITY_FILE_BYTES)
+            require(strict_manifest_bytes == manifest_bytes,
+                    "manifest changed while enabling the current mode policy")
+            strict_manifest = strict_json_loads(
+                strict_manifest_bytes, "manifest")
+            require(isinstance(strict_manifest, dict),
+                    "manifest is not an object")
+            verify_signature(strict_manifest, "manifest")
+            require(exact_json_equal(strict_manifest, manifest),
+                    "manifest changed while enabling the current mode policy")
+            manifest = strict_manifest
+            manifest_bytes = strict_manifest_bytes
+        raw_info = manifest.get("raw")
+        require(isinstance(raw_info, dict), "manifest has no raw bundle identity")
+        if manifest_schema == MANIFEST_SCHEMA:
+            require(set(raw_info) == MANIFEST_RAW_IDENTITY_KEYS,
+                    "current manifest raw identity has unexpected or missing fields")
+        raw_relative = raw_info.get("path")
+        require(isinstance(raw_relative, str) and raw_relative,
+                "retained raw bundle path is invalid")
+        _, raw_bytes = directory.snapshot(
+            raw_relative, MAX_IDENTITY_FILE_BYTES)
+        raw_value = strict_json_loads(raw_bytes, "retained raw bundle")
+        require(isinstance(raw_value, dict),
+                "retained raw bundle is not an object")
+        raw = raw_value
+        require(type(raw_info.get("size")) is int and
+                raw_info["size"] == len(raw_bytes) and
+                isinstance(raw_info.get("sha256"), str) and
+                HEX256.fullmatch(raw_info["sha256"]) is not None and
+                raw_info["sha256"] == sha256_bytes(raw_bytes) and
+                isinstance(raw_info.get("payload_digest"), str) and
+                HEX256.fullmatch(raw_info["payload_digest"]) is not None,
+                "raw bundle file identity mismatch")
+        expected_raw_schema = MANIFEST_TO_RAW_SCHEMA[manifest_schema]
+        require(raw.get("schema") == expected_raw_schema,
+                "manifest/raw schema versions do not match")
+        analysis = validate_raw(
+            raw, output, check_files=True,
+            check_current_inputs=not no_current_input_check,
+            evidence_directory=directory)
+        require(raw_info.get("payload_digest") == raw.get("digest"),
+                "manifest/raw payload identity mismatch")
+        names = ["campaign", "host", "reservation", "identities", "analysis"]
+        if manifest_schema in (
+            MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
+            MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
+            MANIFEST_SCHEMA
+        ):
+            names.append("isolation")
         else:
-            expected = raw[name]
-        require(manifest.get(name) == expected,
-                f"manifest {name} differs from retained raw bundle")
-    require(manifest.get("analysis") == analysis, "manifest analysis was edited")
-    return manifest, raw, analysis, manifest_snapshot
+            require("isolation" not in manifest,
+                    "legacy manifest contains unversioned isolation evidence")
+        if manifest_schema in (
+                MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
+                MANIFEST_SCHEMA):
+            names.append("supervision")
+        else:
+            require("supervision" not in manifest,
+                    "historical manifest contains unversioned supervision data")
+        if manifest_schema == MANIFEST_SCHEMA:
+            names.append("executable_snapshots")
+        else:
+            require("executable_snapshots" not in manifest,
+                    "historical manifest contains unversioned executable snapshots")
+        for name in names:
+            if name == "identities":
+                expected = raw["identities_initial"]
+            elif name == "host":
+                expected = raw["host_initial"]
+            else:
+                expected = raw[name]
+            require(exact_json_equal(manifest.get(name), expected),
+                    f"manifest {name} differs from retained raw bundle")
+        require(exact_json_equal(manifest.get("analysis"), analysis),
+                "manifest analysis was edited")
+        return manifest, raw, analysis, manifest_snapshot
+    finally:
+        directory.close()
 
 
 def verify_campaign(options: argparse.Namespace) -> int:
-    manifest_path = options.manifest.resolve(strict=True)
+    manifest_path = EvidenceDirectory._absolute(options.manifest)
     manifest, _, _, manifest_snapshot = verified_campaign_bundle(
         manifest_path, options.no_current_input_check)
     manifest_schema = manifest["schema"]
@@ -5436,12 +8656,38 @@ def verify_campaign(options: argparse.Namespace) -> int:
 
 
 def verify_failed_campaign(options: argparse.Namespace) -> int:
-    failure_path = options.failure.resolve(strict=True)
+    failure_path = EvidenceDirectory._absolute(options.failure)
+    directory = EvidenceDirectory.open_existing(failure_path.parent)
     try:
-        failure = json.loads(failure_path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise EvidenceError(f"failed campaign JSON is invalid: {error}") from error
-    validate_failure(failure, failure_path.parent, check_files=True)
+        _, failure_bytes = directory.snapshot(
+            failure_path.name, MAX_IDENTITY_FILE_BYTES)
+        failure_value = strict_json_loads(failure_bytes, "failed campaign")
+        require(isinstance(failure_value, dict),
+                "failed campaign is not an object")
+        failure_schema = failure_value.get("schema")
+        require(isinstance(failure_schema, str) and
+                failure_schema in FAILURE_TO_RAW_SCHEMA,
+                "failed campaign schema is invalid")
+        if failure_schema in (FAILURE_SCHEMA_V7, FAILURE_SCHEMA):
+            directory.enable_owner_only()
+            _, strict_failure_bytes = directory.snapshot(
+                failure_path.name, MAX_IDENTITY_FILE_BYTES)
+            require(strict_failure_bytes == failure_bytes,
+                    "failed campaign changed while enabling the current "
+                    "mode policy")
+            strict_failure = strict_json_loads(
+                strict_failure_bytes, "failed campaign")
+            require(isinstance(strict_failure, dict),
+                    "failed campaign is not an object")
+            require(exact_json_equal(strict_failure, failure_value),
+                    "failed campaign changed while enabling the current "
+                    "mode policy")
+            failure_value = strict_failure
+        validate_failure(
+            failure_value, failure_path.parent, check_files=True,
+            evidence_directory=directory)
+    finally:
+        directory.close()
     print("failed exact-main campaign diagnostics and retained files verified; "
           "this is not valid performance evidence")
     return 0
