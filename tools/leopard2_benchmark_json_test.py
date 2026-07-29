@@ -3,14 +3,35 @@
 
 from __future__ import annotations
 
+import itertools
+import importlib.util
 import json
+import math
 import os
 import re
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 from typing import Any
+
+MAX_JSON_BYTES = 64 * 1024 * 1024
+PRODUCTION_DECODE_PATH_RULE_PAIRS = frozenset({
+    ("no_op", "no_op"),
+    ("direct", "direct"),
+    ("generic", "forced_generic"),
+    ("materialized", "forced_materialized"),
+    ("tiled", "forced_tiled"),
+    ("generic", "balanced_generic"),
+    ("tiled", "measured_batch_tiled"),
+    ("materialized", "measured_materialized"),
+    ("tiled", "workspace_tiled"),
+    ("materialized", "workspace_materialized"),
+    ("materialized", "unsupported_profile"),
+})
+_PROCESS_RUNNER: Any = None
 
 
 def require(condition: bool, message: str) -> None:
@@ -18,18 +39,280 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def process_runner() -> Any:
+    global _PROCESS_RUNNER
+    if _PROCESS_RUNNER is None:
+        path = (
+            Path(__file__).resolve().parents[1] / "experiments" / "leopard2" /
+            "main_compare" / "run_abba.py")
+        spec = importlib.util.spec_from_file_location(
+            "leopard2_benchmark_json_process_runner", path)
+        require(spec is not None and spec.loader is not None,
+                "cannot load bounded benchmark process runner")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        _PROCESS_RUNNER = module
+    return _PROCESS_RUNNER
+
+
+def run_process(command: list[str], timeout: float = 120.0) -> Any:
+    if not sys.platform.startswith("linux"):
+        process = subprocess.Popen(
+            command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=(os.name == "posix"),
+            creationflags=(
+                subprocess.CREATE_NEW_PROCESS_GROUP
+                if os.name == "nt" else 0))
+        try:
+            stdout, stderr = process.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired as error:
+            if os.name == "posix":
+                os.killpg(process.pid, signal.SIGKILL)
+            else:
+                process.kill()
+            process.communicate()
+            raise RuntimeError(
+                f"bounded benchmark command exceeded {timeout:.3f} seconds") \
+                from error
+        require(len(stdout) <= 1024 * 1024 and len(stderr) <= 1024 * 1024,
+                "bounded benchmark command exceeded its output limit")
+        return subprocess.CompletedProcess(
+            command, process.returncode, stdout, stderr)
+    try:
+        return process_runner().run_process_bounded(
+            command, timeout=timeout, max_stdout=1024 * 1024,
+            max_stderr=1024 * 1024)
+    except Exception as error:
+        raise RuntimeError(f"bounded benchmark command failed: {error}") from error
+
+
+def load_json(path: Path) -> dict[str, Any]:
+    def pairs(items: list[tuple[str, object]]) -> dict[str, object]:
+        result: dict[str, object] = {}
+        for key, value in items:
+            require(key not in result, f"duplicate JSON key {key!r}")
+            result[key] = value
+        return result
+
+    def constant(value: str) -> object:
+        raise RuntimeError(f"non-standard JSON constant {value!r}")
+
+    def floating(value: str) -> float:
+        result = float(value)
+        require(math.isfinite(result), f"non-finite JSON number {value!r}")
+        return result
+
+    path = path.absolute()
+    require(path.parent.resolve(strict=True) == path.parent and
+            stat.S_ISDIR(os.lstat(path.parent).st_mode),
+            "benchmark JSON parent traverses a symbolic link")
+    metadata = os.lstat(path)
+    require(stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1 and
+            0 < metadata.st_size <= MAX_JSON_BYTES,
+            "benchmark JSON is not a bounded single-link regular file")
+    descriptor = os.open(
+        path, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+        getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    try:
+        initial = os.fstat(descriptor)
+        require((initial.st_mode, initial.st_nlink, initial.st_size,
+                 initial.st_mtime_ns, initial.st_ctime_ns, initial.st_dev,
+                 initial.st_ino) ==
+                (metadata.st_mode, metadata.st_nlink, metadata.st_size,
+                 metadata.st_mtime_ns, metadata.st_ctime_ns, metadata.st_dev,
+                 metadata.st_ino),
+                "benchmark JSON changed before its read")
+        payload = bytearray()
+        while True:
+            block = os.read(descriptor, min(
+                1024 * 1024, MAX_JSON_BYTES + 1 - len(payload)))
+            if not block:
+                break
+            payload.extend(block)
+            require(len(payload) <= MAX_JSON_BYTES,
+                    "benchmark JSON exceeds its byte bound")
+        final = os.fstat(descriptor)
+        path_final = os.lstat(path)
+        identity = lambda value: (
+            value.st_mode, value.st_nlink, value.st_size, value.st_mtime_ns,
+            value.st_ctime_ns, value.st_dev, value.st_ino)
+        require(identity(initial) == identity(final) == identity(path_final) and
+                len(payload) == final.st_size,
+                "benchmark JSON changed during its read")
+    finally:
+        os.close(descriptor)
+    try:
+        value = json.loads(
+            bytes(payload).decode("utf-8", errors="strict"),
+            object_pairs_hook=pairs, parse_constant=constant,
+            parse_float=floating)
+    except (UnicodeDecodeError, ValueError, OverflowError,
+            RecursionError) as error:
+        raise RuntimeError(f"invalid strict benchmark JSON: {error}") from error
+    require(isinstance(value, dict), "benchmark JSON is not an object")
+    return value
+
+
+def require_finite_numbers(value: object, label: str) -> None:
+    if isinstance(value, bool) or value is None or isinstance(value, str):
+        return
+    if isinstance(value, (int, float)):
+        try:
+            converted = float(value)
+        except (OverflowError, ValueError) as error:
+            raise RuntimeError(f"{label} is outside finite range") from error
+        require(math.isfinite(converted), f"{label} is not finite")
+        return
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            require_finite_numbers(item, f"{label}[{index}]")
+        return
+    if isinstance(value, dict):
+        for key, item in value.items():
+            require_finite_numbers(item, f"{label}.{key}")
+        return
+    raise RuntimeError(f"{label} has an unsupported JSON value")
+
+
+def finite_metric(
+    value: object,
+    label: str,
+    *,
+    positive: bool = False,
+) -> float:
+    require(type(value) in {int, float}, f"{label} is not numeric")
+    result = float(value)
+    require(math.isfinite(result) and
+            (result > 0.0 if positive else result >= 0.0),
+            f"{label} is not "
+            f"{'positive' if positive else 'nonnegative and finite'}")
+    return result
+
+
+def median(values: list[float]) -> float:
+    ordered = sorted(values)
+    middle = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[middle]
+    return (ordered[middle - 1] + ordered[middle]) * 0.5
+
+
+def approximately_equal(left: float, right: float) -> bool:
+    return abs(left - right) <= max(
+        0.000003, 0.0000005 * max(abs(left), abs(right)))
+
+
+def validate_timing_summary(
+    summary: object,
+    label: str,
+    *,
+    retain_samples: bool,
+    iterations: int,
+    execution: bool,
+    input_rate_name: str | None = None,
+    output_rate_name: str | None = None,
+    input_bytes: int = 0,
+    output_bytes: int = 0,
+) -> None:
+    require(isinstance(summary, dict), f"{label} is not an object")
+    suffix = "_us_per_batch_call" if execution else "_us"
+    fields = {
+        f"median{suffix}", f"mad{suffix}",
+        f"minimum{suffix}", f"maximum{suffix}",
+    }
+    sample_name = (
+        "samples_us_per_batch_call" if execution else "samples_us")
+    if retain_samples:
+        fields.add(sample_name)
+    if execution:
+        require(input_rate_name is not None and output_rate_name is not None,
+                f"{label} rate names are absent")
+        fields.update({input_rate_name, output_rate_name})
+    require(set(summary) == fields, f"{label} fields changed")
+
+    minimum = finite_metric(
+        summary[f"minimum{suffix}"], f"{label} minimum",
+        positive=execution)
+    maximum = finite_metric(
+        summary[f"maximum{suffix}"], f"{label} maximum",
+        positive=execution)
+    central = finite_metric(
+        summary[f"median{suffix}"], f"{label} median",
+        positive=execution)
+    deviation = finite_metric(summary[f"mad{suffix}"], f"{label} MAD")
+    require(minimum <= central <= maximum and
+            deviation <= maximum - minimum + 0.000003,
+            f"{label} summary ordering is inconsistent")
+
+    samples = summary.get(sample_name)
+    require((isinstance(samples, list) and
+             len(samples) == iterations) == retain_samples,
+            f"{label} raw-sample cardinality changed")
+    if retain_samples:
+        observed = [
+            finite_metric(item, f"{label} sample {index}",
+                          positive=execution)
+            for index, item in enumerate(samples)
+        ]
+        observed_median = median(observed)
+        observed_mad = median([
+            abs(item - observed_median) for item in observed])
+        require(
+            approximately_equal(minimum, min(observed)) and
+            approximately_equal(maximum, max(observed)) and
+            approximately_equal(central, observed_median) and
+            approximately_equal(deviation, observed_mad),
+            f"{label} summary is not derived from retained samples")
+
+    if execution:
+        for rate_name, byte_count in (
+                (input_rate_name, input_bytes),
+                (output_rate_name, output_bytes)):
+            rate = summary[rate_name]
+            if byte_count == 0:
+                require(rate is None,
+                        f"{label} {rate_name} is non-null for zero bytes")
+            else:
+                finite_metric(rate, f"{label} {rate_name}", positive=True)
+
+
+def require_schema_modes_rejected(
+    executable: Path,
+    arguments: tuple[str, ...],
+    expected_diagnostic: str,
+) -> None:
+    completed = run_process([str(executable), *arguments], timeout=30.0)
+    require(completed.returncode == 1,
+            f"benchmark accepted incompatible schema modes {arguments!r}")
+    stdout = completed.stdout.decode("utf-8", errors="strict")
+    stderr = completed.stderr.decode("utf-8", errors="strict")
+    require(stdout == "",
+            "schema-mode rejection unexpectedly wrote stdout")
+    require(stderr ==
+            f"leopard2 benchmark: {expected_diagnostic}\n",
+            "schema-mode rejection diagnostic changed: "
+            f"{stderr!r}")
+
+
 def run(
     executable: Path,
     external_evidence: bool,
     report_decode_path: bool = False,
     attest_source: bool = False,
+    report_direct_executor: bool = False,
+    *,
+    k: int = 3,
+    r: int = 2,
+    losses: int = 1,
 ) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
         command = [
-            str(executable), "--k", "3", "--r", "2", "--profile", "high",
+            str(executable), "--k", str(k), "--r", str(r), "--profile", "high",
             "--field", "auto", "--backend", "auto", "--bytes", "64",
-            "--loss", "1", "--batch", "1", "--reuse", "1",
+            "--loss", str(losses), "--batch", "1", "--reuse", "1",
             "--iterations", "1", "--warmup", "0", "--threads", "1",
             "--seed", "7",
         ]
@@ -39,32 +322,53 @@ def run(
             command.append("--report-decode-path")
         if attest_source:
             command.append("--attest-source")
+        if report_direct_executor:
+            command.append("--report-direct-executor")
         command.extend(("--json", str(output)))
-        completed = subprocess.run(
-            command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, check=False)
+        completed = run_process(command)
         require(completed.returncode == 0,
-                f"benchmark failed: {completed.stdout}\n{completed.stderr}")
+                "benchmark failed: " +
+                completed.stdout.decode("utf-8", errors="replace") + "\n" +
+                completed.stderr.decode("utf-8", errors="replace"))
         require(not completed.stdout and not completed.stderr,
                 "benchmark emitted output while writing JSON")
-        return json.loads(output.read_text())
+        return load_json(output)
 
 
 def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
+    require(isinstance(document, dict) and type(retain_samples) is bool,
+            "benchmark document/retention mode is invalid")
+    require_finite_numbers(document, "benchmark")
+    require(type(document.get("schema")) is str and
+            document["schema"] in {
+                "leopard2-benchmark-v1", "leopard2-benchmark-v2",
+                "leopard2-benchmark-v3", "leopard2-benchmark-v5",
+                "leopard2-benchmark-v6",
+            }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
         "memory", "metrics", "legacy"}
     if document["schema"] in {
         "leopard2-benchmark-v2", "leopard2-benchmark-v3",
-        "leopard2-benchmark-v5"
+        "leopard2-benchmark-v5", "leopard2-benchmark-v6",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
+    for section in (
+            "build", "parameters", "resolved", "correctness", "memory",
+            "metrics", "legacy"):
+        require(isinstance(document[section], dict),
+                f"benchmark {section} is not an object")
     expected_build = {"compiler", "compiler_version", "cplusplus"}
     if document["schema"] == "leopard2-benchmark-v5":
         expected_build.update({
             "source_commit", "source_tree", "source_tracked_dirty"})
     require(set(document["build"]) == expected_build, "build keys changed")
+    require(type(document["build"]["compiler"]) is str and
+            type(document["build"]["compiler_version"]) is str and
+            type(document["build"]["cplusplus"]) is int and
+            document["build"]["cplusplus"] > 0,
+            "benchmark build value types changed")
     if document["schema"] == "leopard2-benchmark-v5":
         for name in ("source_commit", "source_tree"):
             value = document["build"][name]
@@ -77,21 +381,71 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     expected_resolved = {
         "profile", "field", "backend", "thread_count", "parent_count",
         "padded_side"}
-    if document["schema"] == "leopard2-benchmark-v3":
+    if document["schema"] in {
+        "leopard2-benchmark-v3", "leopard2-benchmark-v6",
+    }:
         expected_resolved.update({
             "selected_decode_path", "selected_decode_rule",
             "decode_required_work_slots", "decode_aligned_prefix_bytes",
             "decode_tail_bytes", "decode_rounded_bytes",
             "decode_multi_item_batch",
         })
+    if document["schema"] == "leopard2-benchmark-v6":
+        expected_resolved.add("selected_direct_executor")
     require(set(document["resolved"]) == expected_resolved,
             "resolved keys changed")
+    parameters = document["parameters"]
+    for name in ("K", "R", "shard_bytes", "batch", "reuse", "iterations",
+                 "thread_count"):
+        require(type(parameters.get(name)) is int and parameters[name] > 0,
+                f"benchmark parameter {name} is invalid")
+    require(type(parameters.get("loss_count")) is int and
+            0 <= parameters["loss_count"] <=
+                min(parameters["K"], parameters["R"]) and
+            isinstance(parameters.get("missing_original_indices"), list) and
+            len(parameters["missing_original_indices"]) ==
+                parameters["loss_count"] and
+            all(type(index) is int and 0 <= index < parameters["K"]
+                for index in parameters["missing_original_indices"]) and
+            len(set(parameters["missing_original_indices"])) ==
+                parameters["loss_count"],
+            "benchmark loss parameters are invalid")
+    require(type(document["resolved"]["thread_count"]) is int and
+            document["resolved"]["thread_count"] > 0 and
+            type(document["resolved"]["parent_count"]) is int and
+            document["resolved"]["parent_count"] > 0 and
+            type(document["resolved"]["padded_side"]) is int and
+            document["resolved"]["padded_side"] > 0,
+            "resolved numeric codec identity is invalid")
+    if document["schema"] in {
+        "leopard2-benchmark-v3", "leopard2-benchmark-v6",
+    }:
+        pair = (
+            document["resolved"]["selected_decode_path"],
+            document["resolved"]["selected_decode_rule"])
+        require(all(type(item) is str for item in pair) and
+                pair in PRODUCTION_DECODE_PATH_RULE_PAIRS,
+                "resolved decode path/rule pair is not a production pair")
+    if document["schema"] == "leopard2-benchmark-v6":
+        executor = document["resolved"]["selected_direct_executor"]
+        require(type(executor) is str and
+                executor in {"none", "output_major", "source_major"} and
+                (executor == "none" or pair == ("direct", "direct")),
+                "resolved direct executor is inconsistent with decode path")
     require(set(document["correctness"]) == {
         "leopard2_round_trip", "legacy_comparison"}, "correctness keys changed")
+    require(document["correctness"]["leopard2_round_trip"] is True and
+            (document["correctness"]["legacy_comparison"] is None or
+             document["correctness"]["legacy_comparison"] == "matched"),
+            "correctness results are invalid")
     require(set(document["memory"]) == {
         "scratch_alignment", "encode_scratch_bytes_per_stripe",
         "decode_scratch_bytes_per_stripe", "encode_scratch_bytes_batch",
         "decode_scratch_bytes_batch"}, "memory keys changed")
+    require(all(type(value) is int and value >= 0
+                for value in document["memory"].values()) and
+            document["memory"]["scratch_alignment"] > 0,
+            "memory values are invalid")
     require(set(document["metrics"]) == {
         "codec_setup", "encode_execution", "decode_plan_setup",
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"},
@@ -100,31 +454,95 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "available", "unavailable_reason", "codec_setup",
         "decode_timing_includes_setup", "encode_execution",
         "decode_including_setup"}, "legacy keys changed")
-    for metric in ("codec_setup", "decode_plan_setup"):
-        expected = {
-            "median_us", "mad_us", "minimum_us", "maximum_us"}
-        if retain_samples:
-            expected.add("samples_us")
-        require(set(document["metrics"][metric]) == expected,
-                f"{metric} raw-sample structure changed")
-        samples = document["metrics"][metric].get("samples_us")
-        require((isinstance(samples, list) and len(samples) == 1) == retain_samples,
-                f"{metric} raw-sample cardinality changed")
-    for metric in ("encode_execution", "decode_execution"):
-        expected = {
-            "median_us_per_batch_call", "mad_us_per_batch_call",
-            "minimum_us_per_batch_call", "maximum_us_per_batch_call",
-            ("input_GB_per_s" if metric == "encode_execution" else
-             "offered_received_GB_per_s"),
-            ("parity_output_GB_per_s" if metric == "encode_execution" else
-             "repaired_output_GB_per_s")}
-        if retain_samples:
-            expected.add("samples_us_per_batch_call")
-        require(set(document["metrics"][metric]) == expected,
-                f"{metric} structure changed")
-        samples = document["metrics"][metric].get("samples_us_per_batch_call")
-        require((isinstance(samples, list) and len(samples) == 1) == retain_samples,
-                f"{metric} raw-sample cardinality changed")
+    iterations = parameters["iterations"]
+    batch = parameters["batch"]
+    k = parameters["K"]
+    r = parameters["R"]
+    shard_bytes = parameters["shard_bytes"]
+    losses = parameters["loss_count"]
+    encode_input_bytes = k * shard_bytes * batch
+    encode_output_bytes = r * shard_bytes * batch
+    decode_input_bytes = (k - losses + r) * shard_bytes * batch
+    decode_output_bytes = losses * shard_bytes * batch
+
+    validate_timing_summary(
+        document["metrics"]["codec_setup"], "codec_setup",
+        retain_samples=retain_samples, iterations=iterations, execution=False)
+    validate_timing_summary(
+        document["metrics"]["decode_plan_setup"], "decode_plan_setup",
+        retain_samples=retain_samples, iterations=iterations, execution=False)
+    validate_timing_summary(
+        document["metrics"]["encode_execution"], "encode_execution",
+        retain_samples=retain_samples, iterations=iterations, execution=True,
+        input_rate_name="input_GB_per_s",
+        output_rate_name="parity_output_GB_per_s",
+        input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
+    validate_timing_summary(
+        document["metrics"]["decode_execution"], "decode_execution",
+        retain_samples=retain_samples, iterations=iterations, execution=True,
+        input_rate_name="offered_received_GB_per_s",
+        output_rate_name="repaired_output_GB_per_s",
+        input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
+
+    amortized = document["metrics"]["decode_amortized_at_reuse"]
+    require(isinstance(amortized, dict) and set(amortized) == {
+        "reuse_count", "derived_median_us_per_batch_call",
+        "offered_received_GB_per_s", "repaired_output_GB_per_s",
+    } and type(amortized["reuse_count"]) is int and
+            amortized["reuse_count"] == parameters["reuse"],
+            "decode amortization structure changed")
+    derived = finite_metric(
+        amortized["derived_median_us_per_batch_call"],
+        "decode amortized median", positive=True)
+    expected_derived = (
+        float(document["metrics"]["decode_execution"][
+            "median_us_per_batch_call"]) +
+        float(document["metrics"]["decode_plan_setup"]["median_us"]) /
+            parameters["reuse"])
+    require(approximately_equal(derived, expected_derived),
+            "decode amortization is inconsistent with setup/execution medians")
+    for name, byte_count in (
+            ("offered_received_GB_per_s", decode_input_bytes),
+            ("repaired_output_GB_per_s", decode_output_bytes)):
+        if byte_count == 0:
+            require(amortized[name] is None,
+                    f"decode amortized {name} is non-null for zero bytes")
+        else:
+            finite_metric(
+                amortized[name], f"decode amortized {name}", positive=True)
+    require(document["metrics"]["rate_semantics"] ==
+            "offered_received counts all non-null shard pointers supplied; "
+            "a plan may read a deterministic subset",
+            "benchmark rate semantics changed")
+
+    legacy = document["legacy"]
+    require(type(legacy["available"]) is bool and
+            legacy["codec_setup"] is None and
+            legacy["decode_timing_includes_setup"] is True,
+            "legacy timing contract changed")
+    if legacy["available"]:
+        require(legacy["unavailable_reason"] is None and
+                document["correctness"]["legacy_comparison"] == "matched",
+                "available legacy comparison is inconsistent")
+        validate_timing_summary(
+            legacy["encode_execution"], "legacy encode_execution",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=True, input_rate_name="input_GB_per_s",
+            output_rate_name="parity_output_GB_per_s",
+            input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
+        validate_timing_summary(
+            legacy["decode_including_setup"], "legacy decode_including_setup",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=True, input_rate_name="offered_received_GB_per_s",
+            output_rate_name="repaired_output_GB_per_s",
+            input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
+    else:
+        require(type(legacy["unavailable_reason"]) is str and
+                bool(legacy["unavailable_reason"]) and
+                legacy["encode_execution"] is None and
+                legacy["decode_including_setup"] is None and
+                document["correctness"]["legacy_comparison"] is None,
+                "unavailable legacy comparison is inconsistent")
 
 
 def validate_workload_digests(document: dict[str, Any]) -> None:
@@ -138,6 +556,63 @@ def validate_workload_digests(document: dict[str, Any]) -> None:
         require(isinstance(value, str) and len(value) == 16 and
                 all(character in "0123456789abcdef" for character in value),
                 f"workload digest {name} is not lowercase FNV-1a hex")
+
+
+def validate_direct_executor_report(
+    document: dict[str, Any],
+    expected_executor: str,
+    *,
+    expect_direct_path: bool,
+) -> None:
+    require(document.get("schema") == "leopard2-benchmark-v6",
+            "direct-executor benchmark schema changed")
+    validate_common(document, True)
+    validate_workload_digests(document)
+    parameters = document["parameters"]
+    require(parameters.get("report_decode_path") is True and
+            parameters.get("report_direct_executor") is True,
+            "direct-executor opt-in was not completely recorded")
+    resolved = document["resolved"]
+    executor = resolved.get("selected_direct_executor")
+    require(executor in {"none", "output_major", "source_major"},
+            "direct-executor metadata is malformed")
+    require(executor == expected_executor,
+            "direct-executor metadata differs from the selected production path")
+    if expect_direct_path:
+        require(resolved.get("selected_decode_path") == "direct" and
+                resolved.get("selected_decode_rule") == "direct",
+                "direct-executor report did not observe direct repair")
+    else:
+        require(resolved.get("selected_decode_path") in {
+                    "generic", "materialized", "tiled"} and
+                resolved.get("selected_decode_rule") not in {
+                    "no_op", "direct", "unsupported_profile"} and
+                executor == "none",
+                "direct-executor report did not observe transform repair")
+
+
+def require_direct_executor_rejected(
+    document: dict[str, Any],
+    expected_executor: str,
+    *,
+    expect_direct_path: bool,
+    label: str,
+) -> None:
+    try:
+        validate_direct_executor_report(
+            document, expected_executor,
+            expect_direct_path=expect_direct_path)
+    except RuntimeError:
+        return
+    raise RuntimeError(f"direct-executor validator accepted {label}")
+
+
+def require_common_rejected(document: dict[str, Any], label: str) -> None:
+    try:
+        validate_common(document, True)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return
+    raise RuntimeError(f"benchmark validator accepted {label}")
 
 
 def validate_isal_comparison_contract(document: dict[str, Any]) -> None:
@@ -210,11 +685,27 @@ def main() -> int:
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
 
-    mixed_schema_rejection = subprocess.run(
-        [str(executable), "--attest-source", "--report-decode-path"],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=False)
-    require(mixed_schema_rejection.returncode != 0,
-            "source-attested benchmark accepted mixed JSON schema modes")
+    path_diagnostic = (
+        "--attest-source and --report-decode-path use distinct JSON schemas")
+    direct_diagnostic = (
+        "--attest-source and --report-direct-executor use distinct "
+        "JSON schemas")
+    for arguments in (
+            ("--attest-source", "--report-decode-path"),
+            ("--report-decode-path", "--attest-source")):
+        require_schema_modes_rejected(
+            executable, arguments, path_diagnostic)
+    for arguments in (
+            ("--attest-source", "--report-direct-executor"),
+            ("--report-direct-executor", "--attest-source")):
+        require_schema_modes_rejected(
+            executable, arguments, direct_diagnostic)
+    for arguments in itertools.permutations((
+            "--attest-source",
+            "--report-decode-path",
+            "--report-direct-executor")):
+        require_schema_modes_rejected(
+            executable, arguments, direct_diagnostic)
 
     standard_attested = run(executable, True, attest_source=True)
     require(standard_attested["schema"] == "leopard2-benchmark-v5",
@@ -291,6 +782,142 @@ def main() -> int:
             resolved["decode_rounded_bytes"] == 64 and
             resolved["decode_multi_item_batch"] is False,
             "path-report byte/batch geometry differs")
+
+    direct_executor = run(
+        executable, True, report_direct_executor=True,
+        k=3, r=2, losses=2)
+    validate_direct_executor_report(
+        direct_executor, "output_major", expect_direct_path=True)
+    require(set(direct_executor["parameters"]) ==
+            (expected_external_parameters |
+             {"report_decode_path", "report_direct_executor"}),
+            "direct-executor parameter structure changed")
+
+    direct_xor_executor = run(
+        executable, True, report_direct_executor=True,
+        k=1, r=1, losses=1)
+    validate_direct_executor_report(
+        direct_xor_executor, "none", expect_direct_path=True)
+    require(set(direct_xor_executor["parameters"]) ==
+            set(direct_executor["parameters"]),
+            "direct-XOR executor parameter structure changed")
+
+    transform_executor = run(
+        executable, True, report_direct_executor=True,
+        # K=5 is intentionally eligible in small-direct experiment modes.
+        # Keep this production smoke outside every current direct-repair
+        # family so modes 0, 1, and 2 all exercise a transform executor.
+        k=17, r=5, losses=5)
+    validate_direct_executor_report(
+        transform_executor, "none", expect_direct_path=False)
+    require(set(transform_executor["parameters"]) ==
+            set(direct_executor["parameters"]),
+            "transform direct-executor parameter structure changed")
+
+    missing_executor = json.loads(json.dumps(direct_executor))
+    del missing_executor["resolved"]["selected_direct_executor"]
+    require_direct_executor_rejected(
+        missing_executor, "output_major", expect_direct_path=True,
+        label="missing selected_direct_executor")
+
+    malformed_executor = json.loads(json.dumps(direct_executor))
+    malformed_executor["resolved"]["selected_direct_executor"] = "output-major"
+    require_direct_executor_rejected(
+        malformed_executor, "output_major", expect_direct_path=True,
+        label="malformed selected_direct_executor")
+
+    inconsistent_executor = json.loads(json.dumps(transform_executor))
+    inconsistent_executor["resolved"]["selected_direct_executor"] = \
+        "output_major"
+    require_direct_executor_rejected(
+        inconsistent_executor, "none", expect_direct_path=False,
+        label="transform path with a direct executor")
+
+    unknown_pair = json.loads(json.dumps(path_report))
+    unknown_pair["resolved"]["selected_decode_rule"] = "totally_bogus"
+    require_common_rejected(unknown_pair, "unknown decode path/rule pair")
+
+    cross_pair = json.loads(json.dumps(path_report))
+    cross_pair["resolved"]["selected_decode_path"] = "generic"
+    cross_pair["resolved"]["selected_decode_rule"] = "workspace_tiled"
+    require_common_rejected(cross_pair, "cross-paired decode path/rule")
+
+    nonfinite_metric = json.loads(json.dumps(external))
+    nonfinite_metric["metrics"]["decode_execution"][
+        "median_us_per_batch_call"] = float("nan")
+    require_common_rejected(nonfinite_metric, "NaN decode timing")
+
+    boolean_metric = json.loads(json.dumps(external))
+    boolean_metric["metrics"]["decode_execution"][
+        "minimum_us_per_batch_call"] = True
+    require_common_rejected(boolean_metric, "Boolean decode timing")
+
+    inconsistent_summary = json.loads(json.dumps(external))
+    inconsistent_summary["metrics"]["decode_execution"][
+        "median_us_per_batch_call"] += 1.0
+    require_common_rejected(
+        inconsistent_summary, "timing summary inconsistent with samples")
+
+    numeric_digest = json.loads(json.dumps(external))
+    numeric_digest["workload_digests"]["original_data"] = int("1" * 16)
+    try:
+        validate_workload_digests(numeric_digest)
+    except RuntimeError:
+        pass
+    else:
+        raise RuntimeError("benchmark validator accepted a numeric FNV digest")
+
+    with tempfile.TemporaryDirectory(
+            prefix="leo2-benchmark-json-adversarial-") as temporary:
+        root = Path(temporary)
+        ordinary = root / "ordinary.json"
+        ordinary.write_text('{"value":1}\n', encoding="utf-8")
+        require(load_json(ordinary) == {"value": 1},
+                "strict benchmark loader rejected an ordinary document")
+
+        symbolic = root / "symbolic.json"
+        symbolic.symlink_to(ordinary)
+        try:
+            load_json(symbolic)
+        except (OSError, RuntimeError):
+            pass
+        else:
+            raise RuntimeError("strict benchmark loader followed a symlink")
+
+        hard_link = root / "hard-link.json"
+        os.link(ordinary, hard_link)
+        try:
+            load_json(hard_link)
+        except (OSError, RuntimeError):
+            pass
+        else:
+            raise RuntimeError("strict benchmark loader accepted a hard link")
+
+        nonstandard = root / "nonstandard.json"
+        nonstandard.write_text('{"value":NaN}\n', encoding="utf-8")
+        try:
+            load_json(nonstandard)
+        except (OSError, RuntimeError):
+            pass
+        else:
+            raise RuntimeError(
+                "strict benchmark loader accepted non-standard NaN")
+
+    if sys.platform.startswith("linux"):
+        descendant_code = (
+            "import subprocess,sys,time;"
+            "subprocess.Popen([sys.executable,'-c','import time;time.sleep(60)'],"
+            "start_new_session=True);time.sleep(60)")
+        try:
+            run_process(
+                [sys.executable, "-c", descendant_code], timeout=0.2)
+        except RuntimeError as error:
+            require("exceeded" in str(error),
+                    f"bounded timeout failed for an unexpected reason: {error}")
+        else:
+            raise RuntimeError(
+                "bounded benchmark runner accepted an over-time descendant tree")
+
     print("leopard2 benchmark JSON regression passed")
     return 0
 

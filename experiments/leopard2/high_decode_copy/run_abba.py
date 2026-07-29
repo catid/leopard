@@ -266,6 +266,7 @@ def find_build_root(binary: Path) -> Path:
 
 def diagnostic_specifications(
     source_root: Path, build: Path, evidence_schema: str = RAW_SCHEMA,
+    include_gfni: bool = False,
 ) -> list[tuple[Path, Path, set[str]]]:
     require(type(evidence_schema) is str and evidence_schema in RAW_SCHEMAS,
             "unknown high-decode copy evidence schema")
@@ -289,6 +290,9 @@ def diagnostic_specifications(
     backends.append(
         ("Leopard2BackendAVX512.cpp", "leopard2_backend_avx512_test_hooks"),
     )
+    if include_gfni:
+        backends.append(
+            ("Leopard2BackendGFNI.cpp", "leopard2_backend_gfni_test_hooks"))
     specifications: list[tuple[Path, Path, set[str]]] = [
         (source_root / name,
          build / "CMakeFiles/leopard_test_hooks.dir" / f"{name}.o",
@@ -311,7 +315,7 @@ def diagnostic_specifications(
 
 def validate_diagnostic_compile_flags(
     tokens: Sequence[str], label: str, source_root: Path, output: Path,
-    required_definitions: set[str],
+    required_definitions: set[str], include_gfni: bool = False,
 ) -> None:
     """Validate the experiment-specific preprocessor/include closure.
 
@@ -327,8 +331,15 @@ def validate_diagnostic_compile_flags(
     expected_definitions = set(required_definitions)
     if output.parent.name == "leopard_test_hooks.dir":
         expected_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
+        if include_gfni:
+            expected_definitions.add("LEO2_HAVE_GFNI_BACKEND=1")
     elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
         expected_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
+    elif output.parent.name == "leopard2_backend_gfni_test_hooks.dir":
+        expected_definitions.update({
+            "LEO2_HAVE_AVX2_BACKEND=1",
+            "LEO2_HAVE_GFNI_BACKEND=1",
+        })
     require(len(private_definitions) == len(set(private_definitions)) and
             set(private_definitions) == expected_definitions,
             f"{label} private definitions differ")
@@ -340,9 +351,38 @@ def validate_diagnostic_compile_flags(
         "-fopenmp" if token == "-fopenmp=libomp" else token
         for token in tokens
         if not (token.startswith("-D") and token != "-DNDEBUG") and
-           not token.startswith("-I") and token != "-Werror"
+           not token.startswith("-I") and token != "-Werror" and
+           not (output.parent.name ==
+                "leopard2_backend_gfni_test_hooks.dir" and
+                token == "-mgfni")
     ]
+    if output.parent.name == "leopard2_backend_gfni_test_hooks.dir":
+        require(tokens.count("-mgfni") == 1,
+                f"{label} GFNI ISA flag differs")
     SUPPORT.validate_effective_flags(shared_tokens, label, "compile")
+
+
+def compile_entries_include_gfni(
+    entries: Sequence[Mapping[str, Any]], build: Path,
+) -> bool:
+    expected = (
+        build / "CMakeFiles/leopard2_backend_gfni_test_hooks.dir" /
+        "Leopard2BackendGFNI.cpp.o").resolve()
+    matches = 0
+    for entry in entries:
+        output_value = entry.get("output")
+        directory_value = entry.get("directory")
+        if not isinstance(output_value, str) or not isinstance(
+                directory_value, str):
+            continue
+        output = Path(output_value)
+        if not output.is_absolute():
+            output = Path(directory_value) / output
+        if output.resolve() == expected:
+            matches += 1
+    require(matches <= 1,
+            "diagnostic compile commands duplicate the optional GFNI object")
+    return matches == 1
 
 
 def diagnostic_compile_closure(
@@ -356,7 +396,9 @@ def diagnostic_compile_closure(
         raise EvidenceError(f"invalid diagnostic compile_commands.json: {error}") from error
     require(isinstance(entries, list) and entries,
             "diagnostic compile_commands.json is empty")
-    specifications = diagnostic_specifications(source_root, build)
+    include_gfni = compile_entries_include_gfni(entries, build)
+    specifications = diagnostic_specifications(
+        source_root, build, include_gfni=include_gfni)
     benchmark_object = specifications[-1][1]
     expected_outputs = {output.resolve(): (source.resolve(), definitions)
                         for source, output, definitions in specifications}
@@ -404,7 +446,7 @@ def diagnostic_compile_closure(
                 f"diagnostic compile action source/compiler differs for {output}")
         validate_diagnostic_compile_flags(
             tokens, f"diagnostic compile action {output}", source_root,
-            output, definitions)
+            output, definitions, include_gfni)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 f"diagnostic compile action lacks OpenMP: {output}")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -942,8 +984,9 @@ def validate_compile_snapshot(
     require(type(entries) is list and all(isinstance(item, dict) for item in entries),
             "retained compile commands are not an object array")
 
+    include_gfni = compile_entries_include_gfni(entries, build)
     specifications = diagnostic_specifications(
-        source_root, build, evidence_schema)
+        source_root, build, evidence_schema, include_gfni)
     records = build_value.get("validated_compile_closure")
     require(type(records) is list and len(records) == len(specifications) and
             all(isinstance(record, dict) for record in records),
@@ -989,7 +1032,7 @@ def validate_compile_snapshot(
                 "retained compile action source/output/compiler changed")
         validate_diagnostic_compile_flags(
             tokens, f"retained compile action {output}", source_root,
-            output, definitions)
+            output, definitions, include_gfni)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 "retained compile action lost OpenMP")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -2242,6 +2285,33 @@ def synthetic_snapshot_identity(
 
 
 def self_test() -> None:
+    fixture_build = Path("/fixture/build")
+    gfni_output = (
+        fixture_build /
+        "CMakeFiles/leopard2_backend_gfni_test_hooks.dir" /
+        "Leopard2BackendGFNI.cpp.o")
+    gfni_entry = {
+        "directory": str(fixture_build),
+        "output": str(gfni_output.relative_to(fixture_build)),
+    }
+    require(not compile_entries_include_gfni([], fixture_build) and
+            compile_entries_include_gfni([gfni_entry], fixture_build),
+            "optional GFNI compile-action detection differs")
+    gfni_specs = diagnostic_specifications(
+        Path("/fixture/source"), fixture_build, include_gfni=True)
+    require(sum(
+        output == gfni_output
+        for unused_source, output, unused_definitions in gfni_specs) == 1,
+        "optional GFNI compile specification differs")
+    try:
+        compile_entries_include_gfni(
+            [gfni_entry, copy.deepcopy(gfni_entry)], fixture_build)
+    except EvidenceError:
+        pass
+    else:
+        raise AssertionError(
+            "duplicate optional GFNI compile action was accepted")
+
     matrix = load_matrix(ROOT / MATRIX_RELATIVE)
     wrong_field = json.loads(json.dumps(matrix))
     tail = next(cell for cell in wrong_field["cells"]

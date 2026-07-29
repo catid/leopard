@@ -375,6 +375,66 @@ def linux_memfd_create(name, flags):
     return descriptor
 
 
+def _linux_libc_function(name):
+    """Return one Linux libc entry point, or None when it is unavailable."""
+    try:
+        return getattr(ctypes.CDLL(None, use_errno=True), name, None)
+    except OSError:
+        return None
+
+
+def linux_pidfd_open(pid, flags=0):
+    """Open a pidfd even when the running CPython omitted its wrapper."""
+    native = getattr(os, "pidfd_open", None)
+    if native is not None:
+        return native(pid, flags)
+    require(sys.platform == "linux",
+            "safe child/newcomer cleanup requires Linux pidfd_open")
+    function = _linux_libc_function("pidfd_open")
+    require(function is not None,
+            "safe child/newcomer cleanup requires pidfd_open")
+    function.argtypes = (ctypes.c_int, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    descriptor = function(pid, flags)
+    if descriptor < 0:
+        number = ctypes.get_errno()
+        raise OSError(number or errno.EPERM,
+                      os.strerror(number or errno.EPERM), str(pid))
+    return descriptor
+
+
+def linux_pidfd_send_signal(descriptor, signum, flags=0):
+    """Signal through a pidfd when CPython lacks pidfd_send_signal."""
+    native = getattr(signal, "pidfd_send_signal", None)
+    if native is not None:
+        return native(descriptor, signum, None, flags)
+    require(sys.platform == "linux",
+            "safe child/newcomer cleanup requires Linux pidfd_send_signal")
+    function = _linux_libc_function("pidfd_send_signal")
+    require(function is not None,
+            "safe child/newcomer cleanup requires pidfd_send_signal")
+    function.argtypes = (
+        ctypes.c_int, ctypes.c_int, ctypes.c_void_p, ctypes.c_uint)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    status = function(descriptor, signum, None, flags)
+    if status != 0:
+        number = ctypes.get_errno()
+        raise OSError(number or errno.EPERM,
+                      os.strerror(number or errno.EPERM), str(descriptor))
+
+
+def linux_pidfd_capabilities_available():
+    """Report whether either CPython or libc exposes both pidfd operations."""
+    return (
+        (getattr(os, "pidfd_open", None) is not None or
+         _linux_libc_function("pidfd_open") is not None) and
+        (getattr(signal, "pidfd_send_signal", None) is not None or
+         _linux_libc_function("pidfd_send_signal") is not None)
+    )
+
+
 def source_may_be_written_by_same_uid(descriptor, metadata):
     """Conservatively identify inputs needing an enforceable read lease."""
     current_uids = {os.getuid()}
@@ -1181,9 +1241,21 @@ class LinuxThreadBackend:
 
     @staticmethod
     def validate_capabilities():
-        require(hasattr(os, "pidfd_open") and hasattr(signal, "pidfd_send_signal"),
+        require(linux_pidfd_capabilities_available(),
                 "safe child/newcomer cleanup requires pidfd_open and "
                 "pidfd_send_signal")
+        descriptor = None
+        try:
+            descriptor = linux_pidfd_open(os.getpid(), 0)
+            linux_pidfd_send_signal(descriptor, 0)
+        except OSError as error:
+            raise IsolationError(
+                "safe child/newcomer cleanup cannot use pidfd operations: "
+                "{}".format(error)
+            ) from error
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
         require(hasattr(signal, "pthread_sigmask") and hasattr(signal, "sigpending"),
                 "signal-race closure requires pthread_sigmask and sigpending")
 
@@ -1428,11 +1500,12 @@ class LinuxThreadBackend:
         self.validate_capabilities()
         pidfd = None
         try:
-            pidfd = os.pidfd_open(identity.pid, 0)
+            pidfd = linux_pidfd_open(identity.pid, 0)
             current = self.process_identity(identity.pid)
-            if current.process_key() != identity.process_key():
+            if (current is None or
+                    current.process_key() != identity.process_key()):
                 raise ThreadReused()
-            signal.pidfd_send_signal(pidfd, signum)
+            linux_pidfd_send_signal(pidfd, signum)
         except ProcessLookupError as error:
             raise ThreadGone() from error
         finally:
@@ -4115,6 +4188,84 @@ def test_inode_bound_evidence_snapshot():
             os.close(descriptor)
 
 
+def test_pidfd_python_wrapper_fallback():
+    native_open = getattr(os, "pidfd_open", None)
+    native_send = getattr(signal, "pidfd_send_signal", None)
+    descriptor = None
+    try:
+        if native_open is not None:
+            delattr(os, "pidfd_open")
+        if native_send is not None:
+            delattr(signal, "pidfd_send_signal")
+        check(linux_pidfd_capabilities_available(),
+              "libc pidfd fallback was not detected")
+        descriptor = linux_pidfd_open(os.getpid(), 0)
+        linux_pidfd_send_signal(descriptor, 0)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+        if native_open is not None:
+            os.pidfd_open = native_open
+        if native_send is not None:
+            signal.pidfd_send_signal = native_send
+
+    original_open = globals()["linux_pidfd_open"]
+
+    def unavailable_pidfd(unused_pid, unused_flags=0):
+        raise OSError(errno.ENOSYS, "pidfd unavailable")
+
+    try:
+        globals()["linux_pidfd_open"] = unavailable_pidfd
+        expect_exception(
+            IsolationError, LinuxThreadBackend.validate_capabilities,
+            "symbol-only pidfd capability")
+    finally:
+        globals()["linux_pidfd_open"] = original_open
+
+
+def test_pidfd_signal_recheck_handles_identity_loss():
+    backend = LinuxThreadBackend()
+    identity = ThreadIdentity(
+        123, 123, 456, backend.uid, 123, 1, 456,
+        1, 2, 1, 3)
+    observations = iter((identity, None))
+    backend.process_identity = lambda unused_pid: next(observations)
+    backend.validate_capabilities = lambda: None
+    descriptor = os.open(
+        "/dev/null", os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    original_open = globals()["linux_pidfd_open"]
+    original_send = globals()["linux_pidfd_send_signal"]
+    signalled = []
+    try:
+        globals()["linux_pidfd_open"] = (
+            lambda unused_pid, unused_flags=0: descriptor)
+        globals()["linux_pidfd_send_signal"] = (
+            lambda unused_descriptor, unused_signum, unused_flags=0:
+            signalled.append(True))
+        expect_exception(
+            ThreadReused,
+            lambda: backend.signal_process(identity, signal.SIGTERM),
+            "identity loss after pidfd_open")
+        check(not signalled,
+              "pidfd signal was sent after process identity loss")
+        try:
+            os.fstat(descriptor)
+        except OSError as error:
+            check(error.errno == errno.EBADF,
+                  "identity-loss pidfd failed with the wrong close error")
+        else:
+            raise SelfTestError(
+                "identity-loss pidfd was not closed after rejection")
+    finally:
+        globals()["linux_pidfd_open"] = original_open
+        globals()["linux_pidfd_send_signal"] = original_send
+        try:
+            os.close(descriptor)
+        except OSError as error:
+            if error.errno != errno.EBADF:
+                raise
+
+
 def test_exact_restore_and_newcomer():
     with tempfile.TemporaryDirectory() as directory:
         backend = FakeBackend()
@@ -5406,6 +5557,8 @@ def self_test():
     tests = (
         test_global_lock_serialization,
         test_inode_bound_evidence_snapshot,
+        test_pidfd_python_wrapper_fallback,
+        test_pidfd_signal_recheck_handles_identity_loss,
         test_exact_restore_and_newcomer,
         test_late_inherited_restore_reconciliation,
         test_nonuniform_and_unsafe_newcomer,

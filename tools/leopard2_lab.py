@@ -3605,10 +3605,10 @@ def self_test():
                 "defaults": {"memory_mb": 0, "cpu_count": 1},
                 "jobs": [
                     {"id": "aggregate-a", "command": [
-                        python, "-c", "import time; time.sleep(0.08)"],
+                        python, "-c", "import time; time.sleep(2.0)"],
                      "minimum_memory_mb": per_job_mb},
                     {"id": "aggregate-b", "command": [
-                        python, "-c", "import time; time.sleep(0.08)"],
+                        python, "-c", "import time; time.sleep(2.0)"],
                      "minimum_memory_mb": per_job_mb},
                 ],
             })
