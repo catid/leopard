@@ -113,20 +113,25 @@ median microseconds, so smaller is better:
 
 | K,R | Batch | Leopard main | Leopard2 binding | main / binding |
 |---:|---:|---:|---:|---:|
-| 5,5 | 1 | 0.049145 | 0.042465 | 1.157x |
-| 5,5 | 8 | 0.413207 | 0.336215 | 1.229x |
-| 5,5 | 64 | 2.939488 | 2.560965 | 1.148x |
-| 5,5 | 1024 | 56.314828 | 45.698453 | 1.232x |
-| 8,8 | 1 | 0.046328 | 0.067578 | 0.686x |
-| 8,8 | 8 | 0.377621 | 0.533207 | 0.708x |
-| 8,8 | 64 | 3.013469 | 4.310516 | 0.699x |
-| 8,8 | 1024 | 60.508781 | 78.259438 | 0.773x |
+| 5,5 | 1 | 0.048008 | 0.044453 | 1.080x |
+| 5,5 | 8 | 0.394457 | 0.323598 | 1.219x |
+| 5,5 | 64 | 3.113941 | 2.480496 | 1.255x |
+| 5,5 | 1024 | 57.454859 | 44.790031 | 1.283x |
+| 8,8 | 1 | 0.050902 | 0.078203 | 0.651x |
+| 8,8 | 8 | 0.413559 | 0.554930 | 0.745x |
+| 8,8 | 64 | 3.087340 | 4.197547 | 0.736x |
+| 8,8 | 1024 | 59.896125 | 75.595359 | 0.792x |
 
 This establishes the setup/execution separation and a production-useful K=5
 win; it does not close the K=8 AVX2 kernel gap. An AUTO-disabled transform
 comparison was within roughly 2–9% of the K=8 direct path across these batch
 counts, so the remaining deficit is not explained by one dispatch threshold.
 It remains tracked as codec-kernel work rather than being hidden by API timing.
+The candidate was frozen from commit `02703fb` with SHA-256
+`9a96b259c8e273684e0b3eacc0ad224eee1d4e97077437bcb607da8fe4dd3cbd`;
+the exact-main executable SHA-256 was
+`be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
+Both hashes were verified after the serialized run.
 
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
