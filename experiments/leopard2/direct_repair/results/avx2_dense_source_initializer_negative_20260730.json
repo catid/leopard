@@ -1,0 +1,236 @@
+{
+  "schema": "leopard2-avx2-dense-source-initializer-negative/v1",
+  "date_utc": "2026-07-30",
+  "source_commit": "a06d0aa93587dfa59227d5a0a40fba88d9151de4",
+  "source_tree": "d780fe4b2e963049acd8f33e535a91694f5b4794",
+  "source_tracked_dirty": true,
+  "bead": "leopard-79h.38.5.10.41.1",
+  "hypothesis": "transpose every K-by-L coefficient at execution and initialize all L outputs from one dense source row, replacing L separate copy or multiply passes before the remaining K-1 source-major accumulations",
+  "candidate_option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON",
+  "default_option": "OFF",
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "numa_nodes": 1
+  },
+  "resource_policy": {
+    "controller_subworkers": 0,
+    "build_parallelism": 2,
+    "test_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "build_and_test_memory_limit_bytes": 2147483648,
+    "benchmark_memory_limit_bytes": 1073741824,
+    "benchmark_address_space_limit_bytes": 805306368,
+    "swap_allowed": false,
+    "controller_oom_events_after_campaign": 0,
+    "controller_oom_kills_after_campaign": 0
+  },
+  "frozen_binaries": {
+    "control": {
+      "option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
+      "sha256": "ebce88477ecea91290ed8b1540dc180f2745df1974d464dad25f016702ecae62"
+    },
+    "candidate": {
+      "option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON",
+      "sha256": "be82f94c9bea8acd746fa77a5ccc739742994e1ff78f1de25dc629a57491303d"
+    },
+    "source_attestation_equal": true,
+    "hashes_verified_after_timing": true
+  },
+  "candidate_cost": {
+    "control_leopard2_object_text_bytes": 134157,
+    "candidate_leopard2_object_text_bytes": 136168,
+    "leopard2_text_delta_bytes": 2011,
+    "control_avx2_object_text_bytes": 100445,
+    "candidate_avx2_object_text_bytes": 103349,
+    "avx2_text_delta_bytes": 2904,
+    "combined_text_delta_bytes": 4915,
+    "plan_payload_bytes_changed": false,
+    "decode_scratch_bytes_changed": false,
+    "hot_path_allocations_changed": false
+  },
+  "correctness": {
+    "control_release_tests_passed": 4,
+    "candidate_release_tests_passed": 4,
+    "tests": [
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_api",
+      "leopard2_direct_repair"
+    ],
+    "backend_kat_covered_output_counts": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8
+    ],
+    "backend_kat_byte_counts": [
+      0,
+      1,
+      31,
+      32,
+      33,
+      65,
+      257
+    ],
+    "workload_digests_equal": true,
+    "selected_path_both_variants": "direct/source_major"
+  },
+  "diagnostic_screen": {
+    "method": "pinned ABBA, 31 samples per process, two processes per variant",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "R": 65,
+    "loss_counts": [
+      2,
+      4,
+      8
+    ],
+    "shard_bytes": [
+      2048,
+      4096,
+      65536
+    ],
+    "plan_reuse": 8,
+    "unique_cells": 9,
+    "tentative_execution_speedup_range": [
+      0.991186,
+      1.071342
+    ]
+  },
+  "confirmation_screen": {
+    "method": "pinned ABBA, 127 samples per process, two processes per variant, paired log-speedup intervals",
+    "paired_samples_per_cell": 254,
+    "plan_reuse": 8,
+    "cells": [
+      {
+        "loss_count": 2,
+        "shard_bytes": 4096,
+        "execution_geomean_speedup": 0.996103,
+        "execution_ci95": [
+          0.993857,
+          0.998353
+        ]
+      },
+      {
+        "loss_count": 4,
+        "shard_bytes": 4096,
+        "execution_geomean_speedup": 0.995462,
+        "execution_ci95": [
+          0.994226,
+          0.996700
+        ]
+      },
+      {
+        "loss_count": 8,
+        "shard_bytes": 2048,
+        "execution_geomean_speedup": 1.057014,
+        "execution_ci95": [
+          1.054613,
+          1.059420
+        ]
+      },
+      {
+        "loss_count": 8,
+        "shard_bytes": 4096,
+        "execution_geomean_speedup": 1.005709,
+        "execution_ci95": [
+          1.003846,
+          1.007575
+        ]
+      },
+      {
+        "loss_count": 8,
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 1.001114,
+        "execution_ci95": [
+          1.000511,
+          1.001718
+        ]
+      }
+    ]
+  },
+  "erasure_pattern_screen": {
+    "method": "pinned ABBA, 63 samples per process, two processes per variant",
+    "K": 65,
+    "R": 65,
+    "loss_count": 8,
+    "shard_bytes": 2048,
+    "patterns": [
+      {
+        "seed": 47001,
+        "execution_geomean_speedup": 1.026374,
+        "execution_ci95": [
+          1.017754,
+          1.035068
+        ]
+      },
+      {
+        "seed": 47002,
+        "execution_geomean_speedup": 1.001743,
+        "execution_ci95": [
+          0.997028,
+          1.006480
+        ]
+      },
+      {
+        "seed": 47003,
+        "execution_geomean_speedup": 1.012560,
+        "execution_ci95": [
+          1.010235,
+          1.014891
+        ]
+      },
+      {
+        "seed": 47004,
+        "execution_geomean_speedup": 1.048366,
+        "execution_ci95": [
+          1.044933,
+          1.051810
+        ]
+      },
+      {
+        "seed": 47005,
+        "execution_geomean_speedup": 0.968710,
+        "execution_ci95": [
+          0.962588,
+          0.974870
+        ]
+      },
+      {
+        "seed": 47006,
+        "execution_geomean_speedup": 0.996373,
+        "execution_ci95": [
+          0.992984,
+          0.999773
+        ]
+      }
+    ],
+    "high_confidence_recheck": {
+      "seed": 47005,
+      "paired_samples": 254,
+      "execution_geomean_speedup": 0.982905,
+      "execution_ci95": [
+        0.981056,
+        0.984758
+      ]
+    },
+    "finding": "the isolated 2-KiB win did not generalize across deterministic erasure patterns; the high-confidence recheck reduced the apparent regression below two percent but remained a clear loss"
+  },
+  "disposition": {
+    "promoted": false,
+    "production_default_changed": false,
+    "experimental_code_retained": false,
+    "reason": "only one confirmed cell cleared the five-percent gate, the result was not stable across erasure patterns, neighboring sizes were mostly neutral, and the 4915-byte text increase was not justified by a safely dispatchable region",
+    "next_candidate": "reduce initializer cost without replacing all per-output unit initializers, for example identity-specialized or two-source fused initialization, and require pattern-robust evidence"
+  }
+}
