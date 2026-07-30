@@ -140,6 +140,7 @@ def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
             255, 256, 257, 320, 384, 512,
         ),
         256: (64, 65, 255, 257, 1024),
+        320: (256, 257, 288, 319, 321, 352, 384, 512),
     }
     require(target_bytes in byte_neighbors_by_target,
             f"unsupported target byte count: {target_bytes}")
@@ -216,6 +217,7 @@ def validate_result(
     source_tree: str,
     iterations: int,
     warmup: int,
+    target_bytes: int,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
     expected_parameters = {
@@ -259,10 +261,17 @@ def validate_result(
                 correctness.get("leopard2_round_trip") is True,
                 "Leopard2 benchmark identity or round trip failed")
         build = result.get("build")
+        expected_128_192 = (
+            implementation == "candidate" or target_bytes not in (128, 192)
+        )
+        expected_320 = (
+            implementation == "candidate" or target_bytes != 320
+        )
         require(isinstance(build, dict) and
                 build.get("prevalidated_batch_experiment") is True and
                 build.get("high_t8_two_block_128_192_enabled") is
-                    (implementation == "candidate") and
+                    expected_128_192 and
+                build.get("high_t8_two_block_320_enabled") is expected_320 and
                 build.get("source_commit") == source_commit and
                 build.get("source_tree") == source_tree and
                 build.get("source_tracked_dirty") is False,
@@ -282,6 +291,7 @@ def run_one(
     source_tree: str,
     iterations: int,
     warmup: int,
+    target_bytes: int,
 ) -> dict[str, Any]:
     executable = Path(str(identity["path"]))
     require(sha256(executable) == identity["sha256"],
@@ -310,7 +320,7 @@ def run_one(
         "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
         "normalized": validate_result(
             implementation, result, cell, source_commit, source_tree,
-            iterations, warmup),
+            iterations, warmup, target_bytes),
         "result": result,
     }
 
@@ -390,7 +400,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=9)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument(
-        "--target-bytes", type=int, choices=(64, 128, 192, 256), default=64,
+        "--target-bytes", type=int,
+        choices=(64, 128, 192, 256, 320), default=64,
         help="dense target shard size; default preserves the original campaign")
     return parser.parse_args()
 
@@ -465,7 +476,8 @@ def main() -> int:
                         run_one(
                             label, identities[label], cell, options.cpu,
                             options.source_commit, options.source_tree,
-                            options.iterations, options.warmup)
+                            options.iterations, options.warmup,
+                            options.target_bytes)
                         for label in order
                     ]
                     isolation = SUPPORT.isolation_record(

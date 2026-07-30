@@ -300,7 +300,7 @@ typedef void (*FF8HighEncodeOneBlock)(
 
 /*
     Complete dense encode for exactly two T=8 message blocks and a 64-, 128-,
-    192-, or 256-byte shard.  data has 16 readable rows, work has eight
+    192-, 256-, or 320-byte shard.  data has 16 readable rows, work has eight
     pairwise-disjoint output rows, and all input/output ranges are disjoint.
     The callback accumulates the two shifted inverse transforms and applies
     the final parity transform.

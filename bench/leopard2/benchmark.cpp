@@ -1456,6 +1456,9 @@ static int Run(const Options& options)
          << "    \"prevalidated_batch_experiment\": true,\n"
          << "    \"high_t8_two_block_128_192_enabled\": "
          << (leopard2_internal::HighT8TwoBlock128192Enabled() ?
+                "true" : "false") << ",\n"
+         << "    \"high_t8_two_block_320_enabled\": "
+         << (leopard2_internal::HighT8TwoBlock320Enabled() ?
                 "true" : "false");
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)

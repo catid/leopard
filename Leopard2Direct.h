@@ -210,6 +210,9 @@ bool OneShotNoLossShortCircuitExperimentEnabled();
 */
 bool HighT8TwoBlock128192Enabled();
 
+/* Equivalent text-layout-neutral marker for the 320-byte extension. */
+bool HighT8TwoBlock320Enabled();
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 /*
     Test-only storage accounting for presence-dependent no-op plan state.

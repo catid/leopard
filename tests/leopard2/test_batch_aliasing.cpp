@@ -63,6 +63,13 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 must be 0 or 1"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 must be 0 or 1"
+#endif
 
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
 static std::atomic<bool> g_track_allocations(false);
@@ -606,7 +613,7 @@ void TestT8TwoBlockBindingAllocation()
 {
     static const unsigned k = 9;
     static const unsigned r = 5;
-    static const size_t byte_counts[] = { 128, 192, 256 };
+    static const size_t byte_counts[] = { 128, 192, 256, 320 };
 
     leo2_context_options options;
     memset(&options, 0, sizeof(options));
@@ -637,9 +644,11 @@ void TestT8TwoBlockBindingAllocation()
         const bool expected_selection =
             LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0 &&
             (((bytes == 128 || bytes == 192) &&
-              !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192) ||
+             !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192) ||
              (bytes == 256 &&
-              !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256));
+              !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256) ||
+             (bytes == 320 &&
+              !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320));
         Require(path.high_t8_two_block_binding_selected ==
                 expected_selection,
             "two-block allocation selector differs from expectation");

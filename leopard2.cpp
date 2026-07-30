@@ -141,6 +141,19 @@
 #endif
 
 /*
+    Text-layout-neutral same-source timing control for the 320-byte extension.
+    As above, only a nonzero initialized data word differs between candidate
+    and control.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -528,6 +541,8 @@ static const size_t kScratchAlignment = 64;
 */
 static volatile uint32_t g_high_t8_two_block_128_192_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192;
+static volatile uint32_t g_high_t8_two_block_320_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320;
 
 static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 {
@@ -540,6 +555,8 @@ static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
     if (shard_bytes == 256)
         return true;
 #endif
+    if (shard_bytes == 320 && g_high_t8_two_block_320_mode == 1U)
+        return true;
     return false;
 }
 #endif
@@ -9670,6 +9687,15 @@ bool HighT8TwoBlock128192Enabled()
 #endif
 }
 
+bool HighT8TwoBlock320Enabled()
+{
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    return g_high_t8_two_block_320_mode == 1U;
+#else
+    return false;
+#endif
+}
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 bool GetDecodePlanPresenceStorageInfo(
     const leo2_decode_plan* plan,
@@ -9759,8 +9785,8 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
     void* const* recovery)
 {
     LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(shard_bytes));
-    alignas(32) static const uint8_t zero_shard[256] = {};
-    alignas(32) uint8_t discarded_recovery[3][256];
+    alignas(32) static const uint8_t zero_shard[320] = {};
+    alignas(32) uint8_t discarded_recovery[3][320];
     const void* padded_original[16];
     void* work[8];
     for (uint32_t i = 0; i < 16; ++i)
