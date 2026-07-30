@@ -1757,10 +1757,34 @@ void test_selection_and_bytes(
                 automatic_codec.get(), original, current.r, false);
             require(reference == widened && reference == automatic_result,
                 "GF8 coarse neighbor changed parity bytes");
-            require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                        whole_transform_calls ==
-                    (expected_auto == LEO2_BACKEND_AVX512 ? 2U : 1U),
-                "GF8 coarse neighbor executed the wrong AUTO callback route");
+            const uint64_t actual_whole_transform_calls =
+                leopard::ff8::TestOnlyGetHighEncodeCounts().
+                    whole_transform_calls;
+            /*
+                The explicit AVX-512 reference contributes one callback.
+                AUTO contributes another either when it selects AVX-512 for
+                the aligned body or when exact T=8 AVX2 encodes a staged
+                64-byte tail through its independently qualified callback.
+            */
+            const uint64_t expected_whole_transform_calls =
+                1U + (
+                    expected_auto == LEO2_BACKEND_AVX512 ||
+                    (current.k == 8 && current.r == 8 &&
+                     (bytes & 63U) != 0)
+                        ? 1U : 0U);
+            if (actual_whole_transform_calls !=
+                expected_whole_transform_calls)
+            {
+                throw std::runtime_error(
+                    "GF8 coarse neighbor executed the wrong AUTO callback "
+                    "route: K=" + std::to_string(current.k) +
+                    " R=" + std::to_string(current.r) +
+                    " bytes=" + std::to_string(bytes) +
+                    " expected=" +
+                    std::to_string(expected_whole_transform_calls) +
+                    " actual=" +
+                    std::to_string(actual_whole_transform_calls));
+            }
             if ((bytes & 63U) == 0 && current.r <= current.k)
                 require(reference == encode_legacy(original, current.r),
                     "GF8 coarse neighbor differs from legacy Leopard");
