@@ -1,0 +1,178 @@
+{
+  "schema": "leopard2.k1_terminal_dispatch.v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.33",
+  "decision": "retain_intermediate_and_continue",
+  "source": {
+    "implementation_commit": "26b9d596fea859b68d9953e4daa67c98093991dd",
+    "base_commit": "4fe92f845013301ec54a8725d2dd60307b44f285",
+    "base_tree": "5695aa3a1fbbe15a7f62dbff0068539e2f60a7a8",
+    "precommit_diff_sha256": "65a57f27356fe89b6e436a0e7ca9014fe989ab6f4f116d8260775eee9fdba48f"
+  },
+  "implementation": {
+    "summary": "Dispatch K=1,R=1 decode directly to an isolated terminal validator and copy path.",
+    "shared_direct_decoder_change": "Remove the duplicate K=1 validator branch from DecodeDirectXorValidated.",
+    "one_shot_change": "The legacy-high R=1 one-shot route calls the K=1 terminal directly after presence validation.",
+    "plan_change": "Non-prevalidated compact K=1 plan execution calls the same terminal directly; prevalidated batch execution retains its atomic preflight and copy.",
+    "layout_containment": "Place the K=1 terminal in a 64-byte-aligned ELF text section and explicitly preserve 64-byte alignment of ExecuteDirectRepair.",
+    "public_api_change": false,
+    "wire_format_change": false,
+    "backend_change": false
+  },
+  "memory_policy": {
+    "subworkers": 0,
+    "maximum_concurrent_substantial_processes": 1,
+    "maximum_build_jobs": 2,
+    "sanitizer_build_jobs": 1,
+    "swap_allowed_per_scope": false,
+    "release_build_memory_max_bytes": 2147483648,
+    "release_build_peak_kib": 282792,
+    "release_test_memory_max_bytes": 2147483648,
+    "release_test_peak_kib": 801600,
+    "asan_ubsan_memory_max_bytes": 3221225472,
+    "asan_ubsan_build_peak_kib": 797044,
+    "asan_ubsan_test_peak_kib": 1613648,
+    "pure_avx2_build_peak_kib": 260180,
+    "benchmark_memory_max_bytes": 268435456,
+    "benchmark_address_space_max_bytes": 201326592,
+    "new_cgroup_oom_events": 0,
+    "new_cgroup_oom_kills": 0,
+    "historical_user_cgroup_oom_kills_before_and_after": 2
+  },
+  "correctness": {
+    "release": {
+      "passed": 6,
+      "failed": 0,
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_r1_xor",
+        "leopard2_api",
+        "leopard2_public_api_contract",
+        "leopard2_batch_aliasing",
+        "leopard2_direct_repair"
+      ]
+    },
+    "clang_asan_ubsan_lsan": {
+      "passed": 6,
+      "failed": 0,
+      "asan_detect_leaks": true,
+      "asan_halt_on_error": true,
+      "ubsan_halt_on_error": true,
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_r1_xor",
+        "leopard2_api",
+        "leopard2_public_api_contract",
+        "leopard2_batch_aliasing",
+        "leopard2_direct_repair"
+      ]
+    },
+    "all_benchmark_round_trips_passed": true,
+    "all_compared_workload_digests_matched": true
+  },
+  "same_source_abba": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "pinned_cpu": 4,
+    "threads": 1,
+    "backend": "avx2",
+    "control_binary_sha256": "6abd3f390c6239347ca5d89d0e7e20eea06916c82b4c8dcb0759248619a989c6",
+    "candidate_binary_sha256": "d7dc9a986e1a9fd638edd656fbbaf9493ecc585966fbc1e0ae6855a05c8386b6",
+    "result_set_sha256": "a63044c12b21b976b1e26e4f77de828a4a5d131a4eb184db54a60b1cf500d78a",
+    "samples_per_variant_per_cell": 202,
+    "metric": "control_median_over_candidate_median",
+    "cells": [
+      {
+        "bytes": 1,
+        "ratio": 1.14430,
+        "bootstrap_95_percent": [1.13218, 1.14763]
+      },
+      {
+        "bytes": 17,
+        "ratio": 1.13974,
+        "bootstrap_95_percent": [1.12635, 1.15291]
+      },
+      {
+        "bytes": 64,
+        "ratio": 1.14110,
+        "bootstrap_95_percent": [1.13219, 1.14568]
+      },
+      {
+        "bytes": 65,
+        "ratio": 1.14850,
+        "bootstrap_95_percent": [1.12503, 1.15223]
+      },
+      {
+        "bytes": 257,
+        "ratio": 1.11076,
+        "bootstrap_95_percent": [1.06037, 1.11497]
+      },
+      {
+        "bytes": 1024,
+        "ratio": 1.02456,
+        "bootstrap_95_percent": [1.02212, 1.09675]
+      },
+      {
+        "bytes": 4096,
+        "ratio": 1.05063,
+        "bootstrap_95_percent": [1.01806, 1.05473]
+      },
+      {
+        "bytes": 65536,
+        "ratio": 1.00035,
+        "bootstrap_95_percent": [0.99936, 1.00147]
+      }
+    ]
+  },
+  "neighbor_gate": {
+    "result_set_sha256": "e8f633fd1d71cd04e6544ce9d1440d01096922692fc0a96d3060f01e18bddf6b",
+    "repeat_result_set_sha256": "0c5a8586051e9bb08b0892f19d9749fca8c3ee334d946cda815fcff202bc6d3e",
+    "shapes": ["K2_R1", "K8_R1", "K4_R4", "K9_R7"],
+    "bytes": [64, 4096, 65536],
+    "rounds_per_cell": 5,
+    "worst_pooled_control_over_candidate": 0.99598,
+    "k9_r7_65536_repeat_pooled_ratio": 0.99568,
+    "k9_r7_65536_repeat_bootstrap_95_percent": [0.99407, 0.99748],
+    "promotion_floor": 0.9803921569,
+    "passed": true
+  },
+  "exact_leopard_main_comparison": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "main_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "leopard2_binary_sha256": "3becd3766f2fbf4abbb83350b3c15e31b6678b99aab4dea064bfc68132b7bdd6",
+    "leopard2_archive_sha256": "b2c35ceb90562f9131b48916175e5aa128c56115b26207b2f5bdb9840db70489",
+    "benchmark_source_sha256": "014822ea7798560c011cdd8642e730e2a9fb228457207d717c0897022311dd06",
+    "result_set_sha256": "a97c790ae8aae3822f5f5cdd7a49ea0ca5701bc8251f0c0a58dddc9e3016d2dd",
+    "hashes_verified_after_run": true,
+    "pure_avx2_binaries": true,
+    "zmm_opmask_gfni_or_vpternlog_matches": 0,
+    "shape": "K1_R1_GF8_legacy_high_loss1",
+    "metric": "leopard_main_median_over_leopard2_median",
+    "note": "A value below one means Leopard2 remains slower.",
+    "cells": [
+      {"bytes": 64, "reuse": 1, "ratio": 1.00000, "bootstrap_95_percent": [0.66667, 1.00000]},
+      {"bytes": 64, "reuse": 8, "ratio": 0.44444, "bootstrap_95_percent": [0.44444, 0.44444]},
+      {"bytes": 64, "reuse": 64, "ratio": 0.46557, "bootstrap_95_percent": [0.46557, 0.46557]},
+      {"bytes": 1024, "reuse": 1, "ratio": 0.66667, "bootstrap_95_percent": [0.66667, 0.66667]},
+      {"bytes": 1024, "reuse": 8, "ratio": 0.63636, "bootstrap_95_percent": [0.54545, 0.63636]},
+      {"bytes": 1024, "reuse": 64, "ratio": 0.58976, "bootstrap_95_percent": [0.58976, 0.60256]},
+      {"bytes": 4096, "reuse": 1, "ratio": 0.75000, "bootstrap_95_percent": [0.75000, 0.75000]},
+      {"bytes": 4096, "reuse": 8, "ratio": 0.83333, "bootstrap_95_percent": [0.83333, 0.83333]},
+      {"bytes": 4096, "reuse": 64, "ratio": 0.86112, "bootstrap_95_percent": [0.84999, 0.86667]},
+      {"bytes": 65536, "reuse": 1, "ratio": 1.00000, "bootstrap_95_percent": [0.98485, 1.00000]},
+      {"bytes": 65536, "reuse": 8, "ratio": 1.00000, "bootstrap_95_percent": [0.99608, 1.00000]},
+      {"bytes": 65536, "reuse": 64, "ratio": 0.99292, "bootstrap_95_percent": [0.99263, 0.99335]}
+    ],
+    "conclusion": "The retained change improves Leopard2 itself, but robust public-wrapper validation still leaves a small-shard gap to Leopard main. Keep the Bead open and screen a dedicated top-level K=1 presence and validation path."
+  },
+  "code_layout": {
+    "leopard2_object_text_bytes_before": 141116,
+    "leopard2_object_text_bytes_after": 141439,
+    "text_growth_bytes": 323,
+    "k1_terminal_bytes": 929,
+    "direct_xor_validated_bytes_after": 1843,
+    "execute_direct_repair_alignment_bytes": 64,
+    "k1_terminal_alignment_bytes": 64
+  }
+}
