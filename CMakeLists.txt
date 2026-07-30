@@ -57,8 +57,8 @@ option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
     "Enable the promoted shortened/punctured AVX2 T=8 binding fast path"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
-    "Enable the candidate two-message-block AVX2 T=8 binding fast path"
-    OFF)
+    "Enable the promoted two-message-block AVX2 T=8 binding fast path"
+    ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)

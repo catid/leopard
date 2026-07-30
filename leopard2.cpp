@@ -100,9 +100,9 @@
 #endif
 
 /*
-    Default-off candidate for the adjacent two-message-block T=8 family.
-    Reusable binding setup may map public K=9..16,R=5..8 onto a padded
-    K=16,R=8 call to the mature transform core.
+    Promoted fast path for the adjacent two-message-block T=8 family.
+    Reusable binding setup maps public K=9..16,R=5..8 onto a padded
+    K=16,R=8 transform call.
 */
 #ifndef LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 #define LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING 0
