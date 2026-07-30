@@ -8123,7 +8123,19 @@ static leo2_result RunHighT8PartialBatchItem(void* context, size_t index)
     return LEO2_SUCCESS;
 }
 
-static leo2_result ExecuteHighT8PartialBatchPrevalidated(
+#if defined(_MSC_VER)
+#define LEO2_T8_PARTIAL_BATCH_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T8_PARTIAL_BATCH_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_t8_partial_binding")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T8_PARTIAL_BATCH_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_T8_PARTIAL_BATCH_NOINLINE
+#endif
+
+static LEO2_T8_PARTIAL_BATCH_NOINLINE leo2_result
+ExecuteHighT8PartialBatchPrevalidated(
     const leopard::backend::Ops* ops,
     const leo2_codec* codec,
     const leo2_encode_batch_item* items,
@@ -8139,6 +8151,8 @@ static leo2_result ExecuteHighT8PartialBatchPrevalidated(
         RunHighT8PartialBatchItem(&batch, i);
     return LEO2_SUCCESS;
 }
+
+#undef LEO2_T8_PARTIAL_BATCH_NOINLINE
 #endif
 
 static leo2_result ExecuteEncodeBatchPrevalidated(
@@ -9521,9 +9535,11 @@ bool GetDecodePlanPresenceStorageInfo(
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
 #if defined(_MSC_VER)
 #define LEO2_T8_PARTIAL_NOINLINE __declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
 #define LEO2_T8_PARTIAL_NOINLINE \
     __attribute__((noinline, section(".text.leo2_t8_partial_binding")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T8_PARTIAL_NOINLINE __attribute__((noinline))
 #else
 #define LEO2_T8_PARTIAL_NOINLINE
 #endif
