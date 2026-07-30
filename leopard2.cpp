@@ -506,6 +506,7 @@ namespace {
 
 static const size_t kScratchAlignment = 64;
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
 static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
@@ -516,6 +517,7 @@ static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 #endif
     return false;
 }
+#endif
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
