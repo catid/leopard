@@ -1,0 +1,140 @@
+{
+  "schema": "leopard2-gf8-t8-k5r5-1088-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "disposition": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 5,
+    "R": 5,
+    "T": 8,
+    "shard_bytes": 1088,
+    "batch": 64,
+    "reuse": 64
+  },
+  "source": {
+    "commit": "1c31e86f747776ebdee37f403637671589e29c74",
+    "tree": "ebd3e23cc16d5ec16c4b8c3bd41bfb82da7118d9",
+    "tracked_dirty": false
+  },
+  "frozen_binaries": {
+    "candidate_sha256": "4f6429684201f351c2a0b1f6458cf7ddf7e29809b1b4eae0147b07086a8182c2",
+    "same_source_control_sha256": "b443f2c22aee0fb75d93963c2ad968687ecf9d035b4ef359fbdc463d5c1a51ef",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_control_executable_sections_sha256": "fdfb9a4a192a8aa62fc56729f59cb2dec4c5de6c656955e9d6c5bf21127f94d5",
+    "candidate_control_executable_sections_identical": true
+  },
+  "correctness": {
+    "independent_systematic_generator_parity": "passed",
+    "backend_partial_contract_kat": "passed",
+    "unaligned_and_scalar_tail": "passed",
+    "heterogeneous_binding_64_1088": "passed",
+    "all_or_nothing_binding_64_513": "passed",
+    "changed_source_reexecution": "passed",
+    "sparse_output_fallback": "passed",
+    "thread_pool": "passed",
+    "discovery_workload_digests_matched": true,
+    "holdout_workload_digests_matched": true
+  },
+  "validation": {
+    "gcc_13_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend"
+      ],
+      "passed": 3,
+      "failed": 0
+    },
+    "clang_18_address_undefined_leak": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend"
+      ],
+      "passed": 3,
+      "failed": 0,
+      "auto_encode_max_rss_kib": 445292,
+      "auto_encode_memory_max_bytes": 536870912,
+      "asan_options": "detect_leaks=1:halt_on_error=1:quarantine_size_mb=16:thread_local_quarantine_size_kb=64",
+      "ubsan_options": "halt_on_error=1:print_stacktrace=1"
+    }
+  },
+  "performance": {
+    "ratio_orientation": "baseline_time_over_candidate_time",
+    "discovery": {
+      "seed": 23330824,
+      "same_source_control": {
+        "speedup": 1.3849093982285303,
+        "ci95": [
+          1.3791668886714488,
+          1.3906758181740384
+        ]
+      },
+      "exact_leopard_main": {
+        "speedup": 1.4299779274688569,
+        "ci95": [
+          1.40625362597421,
+          1.4541024714738253
+        ]
+      },
+      "raw_sha256": "ad44dad690543574121d0b991de3fc0d2e0c4aa84125407e32c20d4cbd74a3f7",
+      "summary_sha256": "29f9a1b782cec4ba6f0cb8ef591aab5861b269a9ff099421586ffcc7ce332ecb"
+    },
+    "holdout": {
+      "seed": 23396360,
+      "same_source_control": {
+        "speedup": 1.381483239579772,
+        "ci95": [
+          1.3339117187221898,
+          1.4307513116895396
+        ]
+      },
+      "exact_leopard_main": {
+        "speedup": 1.4336602823350288,
+        "ci95": [
+          1.4067583057137605,
+          1.4610767157348294
+        ]
+      },
+      "raw_sha256": "e36f5d78b3d6c24c47eba833f460c46ec15da6526520e7c45ebb28d38d856c36",
+      "summary_sha256": "829d236af859e155ed7655ab793a58d26cbca47b221f0ecd34c8da0472d8d1bf"
+    },
+    "campaign": {
+      "cpu": 4,
+      "reserved_sibling": 20,
+      "rounds": 3,
+      "iterations": 9,
+      "warmup": 2,
+      "processes_per_seed_family": 2988,
+      "all_rounds_zero_sibling_nonidle": true,
+      "neighbor_failures_discovery": [],
+      "neighbor_failures_holdout": [],
+      "aggregate_status": "rejected_by_unrelated_historical_cells",
+      "aggregate_status_explanation": "The v2 runner also requalified every previously promoted 576-through-1024 selector. Some unchanged historical target cells missed the five-percent gate in each repeat. The new K5/R5/1088 target passed every gate in both independent seed families, all candidate/control executable sections were identical, and no regression neighbor failed."
+    }
+  },
+  "implementation_footprint": {
+    "kernel_text_bytes_gcc_13": 1954,
+    "kernel_stack_frame_bytes_gcc_13": 256,
+    "caller_padded_fallback_stack_frame_bytes_gcc_13": 3232,
+    "hot_loop_ymm_spill_bytes_per_32_input_bytes_gcc_13": 128,
+    "wire_format_changed": false,
+    "public_api_changed": false
+  },
+  "reproduction": {
+    "candidate_build": "cmake -S . -B build/k5r5-candidate -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF && cmake --build build/k5r5-candidate -j 2 --target bench_leopard2_prevalidated_batch",
+    "control_build": "cmake -S . -B build/k5r5-control -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512=1 -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF && cmake --build build/k5r5-control -j 2 --target bench_leopard2_prevalidated_batch",
+    "runner": "taskset -c 4 python3 experiments/leopard2/gf8_high_encode/run_t8_one_block_extended_abba.py --candidate CANDIDATE --control CONTROL --main EXACT_MAIN --source-commit 1c31e86f747776ebdee37f403637671589e29c74 --source-tree ebd3e23cc16d5ec16c4b8c3bd41bfb82da7118d9 --output OUTPUT --cpu 4 --sibling 20 --iterations 9 --warmup 2 --beyond-512 --final-selector",
+    "holdout_additional_argument": "--holdout",
+    "coordination": "Run builds and campaigns serially under /tmp/leopard-gf8-authoritative.lock. Freeze binaries into a lane-owned read-only directory and verify their SHA-256 values before and after timing."
+  },
+  "next_optimization_candidates": [
+    "Remove three provably dead forward updates in the five-output kernel.",
+    "Shorten vector live ranges to remove the two YMM spills.",
+    "Split the padded fallback frame away from the K5/R5 entry.",
+    "Use a fixed-multiple-of-32 production entry while retaining scalar-tail backend qualification."
+  ]
+}

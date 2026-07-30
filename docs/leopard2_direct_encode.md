@@ -493,3 +493,49 @@ is intentionally not committed. The checked-in authoritative runner is
 immutable binary hashes, all executable ELF sections, per-cell dispatch,
 workload digests, CPU/sibling isolation, and failure-output persistence before
 accepting a result.
+
+## Promoted K=5,R=5, 1088-byte AVX2 T=8 tile
+
+The only remaining post-1-KiB T=8 Leopard1 loss was the legacy-high GF8
+`K=5,R=5`, 1088-byte cell. The padded one-block callback still loaded three
+shortened zero rows, stored three punctured parity rows, and required caller
+storage for those rows. The promoted fixed-profile kernel keeps the three
+zeros in registers, reads exactly five systematic rows, and stores exactly
+five parity rows. It performs the same complete parent-code arithmetic and
+therefore emits the existing legacy parity bytes.
+
+The backend KAT compares the callback with the generic transform using
+unaligned 65-byte rows, covering two AVX2 vectors and the scalar tail. The
+production suite compares every parity row with the independent direct
+systematic generator at 1088 bytes and covers changed-source reexecution,
+sparse-output fallback, unaligned guards, a heterogeneous `{64,1088}`
+binding, an all-or-nothing `{64,513}` binding, and four-worker execution.
+Focused GNU 13 Release and Clang 18 ASan+UBSan+LSan gates each passed all
+three backend, production, and AUTO-route tests.
+
+Two clean-source, independent-seed CPU-4 campaigns retained 5,976 raw
+process records in total. CPU 20, the SMT sibling, had zero non-idle jiffies
+in every accepted round. Ratios greater than one mean the new kernel is
+faster:
+
+| campaign | same-source control / candidate | exact Leopard main / candidate |
+| --- | ---: | ---: |
+| discovery | 1.385x `[1.379, 1.391]` | 1.430x `[1.406, 1.454]` |
+| holdout | 1.381x `[1.334, 1.431]` | 1.434x `[1.407, 1.461]` |
+
+Candidate and control had identical executable sections; a nonzero data
+selector disabled the bound path in the control. All workload digests matched,
+and neither seed family had a regression-neighbor failure. The broad runner
+also requalified every older 576-through-1024 selector, so its aggregate status
+was rejected when several unchanged historical targets missed the five-percent
+gate during these repeats. That aggregate result is retained rather than
+hidden, but it does not invalidate the independently gated new 1088-byte cell.
+
+The GCC 13 kernel is 1,954 bytes and uses a 256-byte stack frame. Assembly
+review found no out-of-bounds, aliasing, or ISA defect, but it did identify the
+next bounded avenue: three dead forward updates, two hot-loop YMM spills, and
+an avoidable 3,232-byte padded-fallback caller frame. The compact checkpoint,
+including frozen hashes, confidence intervals, test commands, and raw-result
+hashes, is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_k5r5_1088_checkpoint_20260730.json`.
