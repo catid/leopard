@@ -169,7 +169,32 @@ void Require(bool condition, const std::string& message)
         throw std::runtime_error(message);
 }
 
-bool IsExpectedT8TwoBlockByteCount(size_t bytes)
+bool IsExpectedT8TwoBlockExtendedShapeByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
+{
+    static const uint32_t shape_masks[] = {
+        UINT32_C(0xfffffff6), UINT32_C(0xfffffff6),
+        UINT32_C(0xfffffff4), UINT32_C(0xffff7ff0),
+        UINT32_C(0xffff3ff0), UINT32_C(0xffff6ff4),
+        UINT32_C(0xffff9ff0), UINT32_C(0xffffcff0),
+        UINT32_C(0xffff8ff0), UINT32_C(0xffff0de0),
+        UINT32_C(0x7fff4fc0)
+    };
+    if (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED != 0 ||
+        k < 9 || k > 16 || r < 5 || r > 8 ||
+        bytes < 384 || bytes > 1024 || (bytes & 63U) != 0)
+        return false;
+    const size_t byte_index = (bytes - 384) / 64;
+    const unsigned shape_bit = 4U * (k - 9U) + (r - 5U);
+    return (shape_masks[byte_index] & (UINT32_C(1) << shape_bit)) != 0;
+}
+
+bool IsExpectedT8TwoBlockByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
 {
     return bytes == 64 ||
         ((bytes == 128 || bytes == 192) &&
@@ -178,8 +203,7 @@ bool IsExpectedT8TwoBlockByteCount(size_t bytes)
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 == 0) ||
         (bytes == 320 &&
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 == 0) ||
-        (bytes >= 384 && bytes <= 1024 && (bytes & 63U) == 0 &&
-         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED == 0);
+        IsExpectedT8TwoBlockExtendedShapeByteCount(k, r, bytes);
 }
 
 void RequireResult(
@@ -631,7 +655,7 @@ void TestEncodeBinding(Fixture& fixture)
 
 void TestT8TwoBlockBindingAllocation()
 {
-    static const unsigned k = 9;
+    static const unsigned k = 13;
     static const unsigned r = 5;
     static const size_t byte_counts[] = {
         128, 192, 256, 320, 384, 448, 512, 576,
@@ -666,7 +690,7 @@ void TestT8TwoBlockBindingAllocation()
             "two-block allocation path introspection");
         const bool expected_selection =
             LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0 &&
-            IsExpectedT8TwoBlockByteCount(bytes);
+            IsExpectedT8TwoBlockByteCount(k, r, bytes);
         Require(path.high_t8_two_block_binding_selected ==
                 expected_selection,
             "two-block allocation selector differs from expectation");
@@ -2107,6 +2131,14 @@ int main()
 {
     try
     {
+        if (std::getenv("LEO2_TEST_T8_BINDING_ONLY"))
+        {
+            TestT8OneBlockBindingAllocation();
+            TestT8TwoBlockBindingAllocation();
+            std::cout << "leopard2 T8 binding allocation audit passed"
+                      << std::endl;
+            return 0;
+        }
         Run(1);
         Run(4);
         TestT8OneBlockBindingAllocation();

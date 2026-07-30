@@ -53,6 +53,19 @@ CHILD_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
     "TZ": "UTC",
 }
+EXTENDED_PRODUCTION_MASKS = {
+    384: 0xFFFFFFF6,
+    448: 0xFFFFFFF6,
+    512: 0xFFFFFFF4,
+    576: 0xFFFF7FF0,
+    640: 0xFFFF3FF0,
+    704: 0xFFFF6FF4,
+    768: 0xFFFF9FF0,
+    832: 0xFFFFCFF0,
+    896: 0xFFFF8FF0,
+    960: 0xFFFF0DE0,
+    1024: 0x7FFF4FC0,
+}
 
 
 class EvidenceError(RuntimeError):
@@ -123,17 +136,36 @@ def file_identity(path: Path) -> dict[str, Any]:
     }
 
 
-def target_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
+def production_selected(k: int, r: int, shard_bytes: int) -> bool:
+    if not (9 <= k <= 16 and 5 <= r <= 8):
+        return False
+    if shard_bytes in (64, 128, 192, 256, 320):
+        return True
+    mask = EXTENDED_PRODUCTION_MASKS.get(shard_bytes)
+    if mask is None:
+        return False
+    bit = 4 * (k - 9) + (r - 5)
+    return (mask & (1 << bit)) != 0
+
+
+def target_cells(
+    target_bytes: int = 64,
+    final_selector: bool = False,
+) -> list[dict[str, Any]]:
     cells = []
     index = 0
     for k in range(9, 17):
         for r in range(5, 9):
+            role = "target"
+            if final_selector and not production_selected(
+                    k, r, target_bytes):
+                role = "excluded_neighbor"
             cells.append({
                 "id": f"target-k{k}-r{r}-b{target_bytes}",
                 "K": k,
                 "R": r,
                 "bytes": target_bytes,
-                "role": "target",
+                "role": role,
                 "seed": 0x142E000 + index,
             })
             index += 1
@@ -236,6 +268,7 @@ def validate_result(
     warmup: int,
     target_bytes: int,
     campaign: str = "two-block",
+    final_selector: bool = False,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
     expected_parameters = {
@@ -298,14 +331,18 @@ def validate_result(
                 9 <= cell["K"] <= 16 and 5 <= cell["R"] <= 8
             )
             byte_count = int(cell["bytes"])
-            expected_selected = eligible_shape and (
-                byte_count == 64 or
-                (byte_count in (128, 192) and expected_128_192) or
-                byte_count == 256 or
-                (byte_count == 320 and expected_320) or
-                (384 <= byte_count <= 1024 and
-                 byte_count % 64 == 0 and expected_extended)
-            )
+            if final_selector and implementation == "candidate":
+                expected_selected = production_selected(
+                    int(cell["K"]), int(cell["R"]), byte_count)
+            else:
+                expected_selected = eligible_shape and (
+                    byte_count == 64 or
+                    (byte_count in (128, 192) and expected_128_192) or
+                    byte_count == 256 or
+                    (byte_count == 320 and expected_320) or
+                    (384 <= byte_count <= 1024 and
+                     byte_count % 64 == 0 and expected_extended)
+                )
             marker_valid = (
                 build.get("high_t8_two_block_128_192_enabled") is
                     expected_128_192 and
@@ -352,6 +389,7 @@ def run_one(
     warmup: int,
     target_bytes: int,
     campaign: str = "two-block",
+    final_selector: bool = False,
     failure_output: Path | None = None,
 ) -> dict[str, Any]:
     executable = Path(str(identity["path"]))
@@ -391,7 +429,7 @@ def run_one(
         result = json.loads(completed.stdout.decode("utf-8"))
         normalized = validate_result(
             implementation, result, cell, source_commit, source_tree,
-            iterations, warmup, target_bytes, campaign)
+            iterations, warmup, target_bytes, campaign, final_selector)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
         persist_failure(completed.stdout, completed.stderr)
         raise EvidenceError(
@@ -490,6 +528,12 @@ def parse_arguments() -> argparse.Namespace:
             576, 640, 704, 768, 832, 896, 960, 1024,
         ), default=64,
         help="dense target shard size; default preserves the original campaign")
+    parser.add_argument(
+        "--final-selector", action="store_true",
+        help=(
+            "validate the narrowed production selector: selected shapes are "
+            "targets and excluded shapes are same-source regression neighbors"
+        ))
     return parser.parse_args()
 
 
@@ -507,7 +551,8 @@ def main() -> int:
     }
     require(len({identity["sha256"] for identity in identities.values()}) == 3,
             "candidate, control, and main binaries are not distinct")
-    cells = target_cells(options.target_bytes) + \
+    cells = target_cells(
+        options.target_bytes, options.final_selector) + \
         neighbor_cells(options.target_bytes)
     raw: dict[str, Any] = {
         "schema": SCHEMA,
@@ -520,6 +565,7 @@ def main() -> int:
         "iterations": options.iterations,
         "warmup": options.warmup,
         "target_bytes": options.target_bytes,
+        "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
         "identities": identities,
@@ -566,6 +612,7 @@ def main() -> int:
                             options.source_commit, options.source_tree,
                             options.iterations, options.warmup,
                             options.target_bytes,
+                            final_selector=options.final_selector,
                             failure_output=options.output)
                         invocations.append(invocation)
                         write_exclusive(
@@ -616,8 +663,13 @@ def main() -> int:
             "main_commit": MAIN_COMMIT,
             "target_bytes": options.target_bytes,
             "cell_count": len(analyses),
-            "target_count": len(target_cells(options.target_bytes)),
-            "neighbor_count": len(neighbor_cells(options.target_bytes)),
+            "target_count": sum(
+                result["cell"]["role"] == "target"
+                for result in analyses),
+            "neighbor_count": sum(
+                result["cell"]["role"] != "target"
+                for result in analyses),
+            "final_selector": options.final_selector,
             "process_count": sum(
                 len(round_value["invocations"])
                 for item in raw["cells"] for round_value in item["rounds"]),

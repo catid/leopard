@@ -2924,6 +2924,17 @@ void ReedSolomonEncodeTwoBlocksT8(
 {
     LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
     LEO_DEBUG_ASSERT(ops.ff8_high_encode_two_blocks_t8 != NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    /*
+        Each fused callback replaces two eight-point inverse transforms,
+        containing two radix-four groups apiece, followed by one forward
+        transform.  Preserve the generic path's operation-count semantics so
+        route tests can distinguish this callback from a silent fallback.
+    */
+    TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
     ops.ff8_high_encode_two_blocks_t8(
         data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
         FFTSkewStorage, byte_count);

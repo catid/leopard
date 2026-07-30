@@ -587,7 +587,52 @@ static volatile uint32_t g_high_t8_two_block_320_mode =
 static volatile uint32_t g_high_t8_two_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED;
 
-static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
+static bool IsHighT8TwoBlockExtendedShapeByteCount(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
+{
+    /*
+        Offline-calibrated AVX2 crossover table.  Bit
+
+            4 * (K - 9) + (R - 5)
+
+        selects one K=9..16, R=5..8 shape.  Each retained bit passed three
+        independent same-source and exact-main ABBA rounds with a 95% lower
+        confidence bound of at least 1.05x and above 1.0x, respectively.
+        Keeping the table in setup-only dispatch avoids branches in byte
+        execution while retaining every qualified measured cell.
+    */
+    static const uint32_t kShapeMasks[] = {
+        UINT32_C(0xfffffff6), // 384
+        UINT32_C(0xfffffff6), // 448
+        UINT32_C(0xfffffff4), // 512
+        UINT32_C(0xffff7ff0), // 576
+        UINT32_C(0xffff3ff0), // 640
+        UINT32_C(0xffff6ff4), // 704
+        UINT32_C(0xffff9ff0), // 768
+        UINT32_C(0xffffcff0), // 832
+        UINT32_C(0xffff8ff0), // 896
+        UINT32_C(0xffff0de0), // 960
+        UINT32_C(0x7fff4fc0)  // 1024
+    };
+    if (g_high_t8_two_block_extended_mode != 1U ||
+        original_count < 9 || original_count > 16 ||
+        recovery_count < 5 || recovery_count > 8 ||
+        shard_bytes < 384 || shard_bytes > 1024 ||
+        (shard_bytes & 63U) != 0)
+        return false;
+    const size_t byte_index =
+        static_cast<size_t>((shard_bytes - 384) / 64);
+    const uint32_t shape_bit =
+        4U * (original_count - 9U) + (recovery_count - 5U);
+    return (kShapeMasks[byte_index] & (UINT32_C(1) << shape_bit)) != 0;
+}
+
+static bool IsHighT8TwoBlockByteCount(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
         return true;
@@ -600,11 +645,8 @@ static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 #endif
     if (shard_bytes == 320 && g_high_t8_two_block_320_mode == 1U)
         return true;
-    if (shard_bytes >= 384 && shard_bytes <= 1024 &&
-        (shard_bytes & 63U) == 0 &&
-        g_high_t8_two_block_extended_mode == 1U)
-        return true;
-    return false;
+    return IsHighT8TwoBlockExtendedShapeByteCount(
+        original_count, recovery_count, shard_bytes);
 }
 #endif
 static const uint32_t kGF8Order = 256;
@@ -9686,7 +9728,8 @@ bool GetCodecEncodePathInfo(
         codec->original_count >= 9 && codec->original_count <= 16 &&
         codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
         codec->padded_side == 8 &&
-        IsHighT8TwoBlockByteCount(shard_bytes) &&
+        IsHighT8TwoBlockByteCount(
+            codec->original_count, codec->recovery_count, shard_bytes) &&
         requested_recovery_count == codec->recovery_count)
     {
         const leopard::backend::Ops& transform_ops =
@@ -9853,7 +9896,8 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
     const void* const* original,
     void* const* recovery)
 {
-    LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(shard_bytes));
+    LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(
+        original_count, recovery_count, shard_bytes));
     alignas(32) static const uint8_t zero_shard[1024] = {};
     alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[16];
@@ -10722,7 +10766,9 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
             const leo2_encode_batch_item& item =
                 binding->items[item_index];
             all_dense_qualified = all_dense_qualified &&
-                IsHighT8TwoBlockByteCount(item.shard_bytes);
+                IsHighT8TwoBlockByteCount(
+                    codec->original_count, codec->recovery_count,
+                    item.shard_bytes);
             for (uint32_t parity = 0;
                  parity < codec->recovery_count; ++parity)
                 all_dense_qualified = all_dense_qualified &&

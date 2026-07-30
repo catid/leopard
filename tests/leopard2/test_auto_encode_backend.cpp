@@ -829,14 +829,15 @@ Shards encode(
     return recovery;
 }
 
-void run_t8_one_block_mixed_binding(
+void run_t8_mixed_binding(
     leo2_codec* codec,
+    uint32_t k,
+    uint32_t r,
     const size_t* byte_counts,
     size_t item_count,
-    uint64_t expected_whole_transform_calls)
+    uint64_t expected_whole_transform_calls,
+    uint64_t expected_ifft_groups_per_call)
 {
-    static const uint32_t k = 5;
-    static const uint32_t r = 5;
     std::vector<Shards> original(item_count);
     std::vector<Shards> expected(item_count);
     std::vector<Shards> actual(item_count);
@@ -885,7 +886,8 @@ void run_t8_one_block_mixed_binding(
         counts.forward_fused_calls != expected_whole_transform_calls ||
         (expected_whole_transform_calls != 0 &&
          counts.ifft_butterfly4_out_of_place !=
-            2 * expected_whole_transform_calls))
+            expected_ifft_groups_per_call *
+                expected_whole_transform_calls))
     {
         throw std::runtime_error(
             "mixed T8 binding executed the wrong transform route: whole=" +
@@ -913,10 +915,10 @@ void test_t8_one_block_mixed_binding(Context& avx2)
         "mixed T8 path query");
     const uint64_t expected_qualified_calls =
         path.high_t8_partial_binding_selected ? 4 : 0;
-    run_t8_one_block_mixed_binding(
-        codec.get(), qualified,
+    run_t8_mixed_binding(
+        codec.get(), 5, 5, qualified,
         sizeof(qualified) / sizeof(qualified[0]),
-        expected_qualified_calls);
+        expected_qualified_calls, 2);
 
     /*
         One unqualified item must disable the binding-level shortcut for the
@@ -924,9 +926,37 @@ void test_t8_one_block_mixed_binding(Context& avx2)
         identical parity for both items.
     */
     static const size_t boundary[] = { 64, 513 };
-    run_t8_one_block_mixed_binding(
-        codec.get(), boundary,
-        sizeof(boundary) / sizeof(boundary[0]), 0);
+    run_t8_mixed_binding(
+        codec.get(), 5, 5, boundary,
+        sizeof(boundary) / sizeof(boundary[0]), 0, 2);
+}
+
+void test_t8_two_block_mixed_binding(Context& avx2)
+{
+    if (avx2.result() != LEO2_SUCCESS)
+        return;
+    Codec codec(avx2.get(), 13, 5,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    static const size_t qualified[] = { 64, 128, 320, 512 };
+    leopard2_internal::CodecEncodePathInfo path = {};
+    require(leopard2_internal::GetCodecEncodePathInfo(
+            codec.get(), 512, 5, &path),
+        "mixed two-block T8 path query");
+    const uint64_t expected_qualified_calls =
+        path.high_t8_two_block_binding_selected ? 4 : 0;
+    run_t8_mixed_binding(
+        codec.get(), 13, 5, qualified,
+        sizeof(qualified) / sizeof(qualified[0]),
+        expected_qualified_calls, 4);
+
+    /*
+        As with the one-block route, a single unqualified item must disable
+        the binding-level callback for the whole heterogeneous batch.
+    */
+    static const size_t boundary[] = { 64, 513 };
+    run_t8_mixed_binding(
+        codec.get(), 13, 5, boundary,
+        sizeof(boundary) / sizeof(boundary[0]), 0, 4);
 }
 
 Shards encode_unaligned(
@@ -1901,6 +1931,7 @@ int main()
         if (std::getenv("LEO2_TEST_T8_ONE_BLOCK_ONLY"))
         {
             test_t8_one_block_mixed_binding(avx2);
+            test_t8_two_block_mixed_binding(avx2);
             std::puts("Leopard2 T8 mixed binding passed");
             return 0;
         }
@@ -1929,6 +1960,7 @@ int main()
         test_gf16_cache_policy(avx2);
         test_gf16_cache_policy_bytes(avx2);
         test_t8_one_block_mixed_binding(avx2);
+        test_t8_two_block_mixed_binding(avx2);
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);
 
