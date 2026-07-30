@@ -132,8 +132,18 @@ def target_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
 
 def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
     cells = []
-    byte_neighbors = (32, 33, 63, 65) if target_bytes == 64 \
-        else (64, 65, 255, 257, 1024)
+    byte_neighbors_by_target = {
+        64: (32, 33, 63, 65),
+        128: (64, 96, 127, 129, 160, 256, 320),
+        192: (
+            64, 128, 160, 191, 193, 224,
+            255, 256, 257, 320, 384, 512,
+        ),
+        256: (64, 65, 255, 257, 1024),
+    }
+    require(target_bytes in byte_neighbors_by_target,
+            f"unsupported target byte count: {target_bytes}")
+    byte_neighbors = byte_neighbors_by_target[target_bytes]
     for k, r in ((9, 5), (16, 8)):
         for shard_bytes in byte_neighbors:
             cells.append({
@@ -251,10 +261,12 @@ def validate_result(
         build = result.get("build")
         require(isinstance(build, dict) and
                 build.get("prevalidated_batch_experiment") is True and
+                build.get("high_t8_two_block_128_192_enabled") is
+                    (implementation == "candidate") and
                 build.get("source_commit") == source_commit and
                 build.get("source_tree") == source_tree and
                 build.get("source_tracked_dirty") is False,
-                "Leopard2 embedded source identity changed")
+                "Leopard2 build mode or embedded source identity changed")
     return {
         "encode_us": positive_metric(result, "encode_execution"),
         "digests": dict(digests),
@@ -378,7 +390,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=9)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument(
-        "--target-bytes", type=int, choices=(64, 256), default=64,
+        "--target-bytes", type=int, choices=(64, 128, 192, 256), default=64,
         help="dense target shard size; default preserves the original campaign")
     return parser.parse_args()
 

@@ -70,6 +70,14 @@
 #include <malloc.h>
 #endif
 
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 must be 0 or 1"
+#endif
+
 namespace {
 
 #define LEO2_STRINGIZE_DETAIL(value) #value
@@ -1452,7 +1460,10 @@ static int Run(const Options& options)
          << "    \"cplusplus\": " << __cplusplus;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     json << ",\n"
-         << "    \"prevalidated_batch_experiment\": true";
+         << "    \"prevalidated_batch_experiment\": true,\n"
+         << "    \"high_t8_two_block_128_192_enabled\": "
+         << (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 ?
+                "false" : "true");
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)

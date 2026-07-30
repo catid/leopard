@@ -126,6 +126,19 @@
 #endif
 
 /*
+    Internal same-source timing control for the 128- and 192-byte extension.
+    Like the 256-byte control, this is recorded through benchmark compiler
+    flags rather than exposed as a supported public build option.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -511,6 +524,10 @@ static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
         return true;
+#if !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
+    if (shard_bytes == 128 || shard_bytes == 192)
+        return true;
+#endif
 #if !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
     if (shard_bytes == 256)
         return true;
