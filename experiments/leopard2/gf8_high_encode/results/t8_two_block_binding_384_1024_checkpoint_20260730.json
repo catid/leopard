@@ -1,0 +1,211 @@
+{
+  "schema": "leopard2-gf8-t8-two-block-384-1024-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": [9, 16],
+    "R": [5, 8],
+    "shard_bytes": [384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
+    "batch": 64,
+    "reuse": 64,
+    "dense_full_parity_only": true,
+    "api": "reusable prevalidated encode-batch binding"
+  },
+  "source": {
+    "discovery_commit": "64b31212472dd8206d8d8b64d200f5441edd0604",
+    "discovery_tree": "d557c1b262f19c7bee7d8dfa9ac8586b80750aa8",
+    "independent_holdout_commit": "7100a90e5c3441ed8da0bcaadb3b0589826f40d7",
+    "independent_holdout_tree": "e020e59e2d7aab7ae78a2f5490985a2f68b14bb3",
+    "final_selector_commit": "49320aa4ef233b5948210e0ab3caf7fe93323dbd",
+    "final_selector_tree": "4f457bf92e3ac3507e1e598d46899c8247efdf71",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "selection": {
+    "bit_index": "4 * (K - 9) + (R - 5)",
+    "rule": "intersection of discovery and independent-seed holdout gates",
+    "discovery_selected_cells": 290,
+    "holdout_removed_cells": 38,
+    "final_selected_cells": 252,
+    "total_extended_cells": 352,
+    "per_byte": {
+      "384": {"mask": "0xfffffff6", "discovery_selected": 30, "holdout_removed": 0, "final_selected": 30},
+      "448": {"mask": "0xffff5ff4", "discovery_selected": 30, "holdout_removed": 3, "final_selected": 27},
+      "512": {"mask": "0xffffeff0", "discovery_selected": 29, "holdout_removed": 2, "final_selected": 27},
+      "576": {"mask": "0xffff3ff0", "discovery_selected": 27, "holdout_removed": 1, "final_selected": 26},
+      "640": {"mask": "0xffff1ff0", "discovery_selected": 26, "holdout_removed": 1, "final_selected": 25},
+      "704": {"mask": "0xffff2f60", "discovery_selected": 27, "holdout_removed": 4, "final_selected": 23},
+      "768": {"mask": "0x6fff0e70", "discovery_selected": 26, "holdout_removed": 6, "final_selected": 20},
+      "832": {"mask": "0x5fff0d80", "discovery_selected": 26, "holdout_removed": 8, "final_selected": 18},
+      "896": {"mask": "0xffff0fd0", "discovery_selected": 25, "holdout_removed": 2, "final_selected": 23},
+      "960": {"mask": "0x5fff0d40", "discovery_selected": 22, "holdout_removed": 4, "final_selected": 18},
+      "1024": {"mask": "0x6ff70c00", "discovery_selected": 22, "holdout_removed": 7, "final_selected": 15}
+    }
+  },
+  "promotion_policy": {
+    "target_control_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.0,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "one mean log contrast per independent round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "rounds_per_campaign": 3,
+    "discovery_seed_family": "0x142e000/0x142f000",
+    "holdout_seed_family": "0x152e000/0x152f000",
+    "order": "mirrored ABCCBA for targets; mirrored ABBA for neighbors",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "discovery_processes": 8688,
+    "holdout_processes": 8316,
+    "all_workload_digests_matched": true,
+    "all_accepted_rounds_zero_sibling_nonidle_jiffies": true,
+    "final_selected_discovery_control_speedup": {
+      "minimum": 1.060416712085257,
+      "median": 1.191313318180546,
+      "maximum": 1.3941521770494725,
+      "ci95_lower_minimum": 1.0546638177066916
+    },
+    "final_selected_discovery_exact_main_speedup": {
+      "minimum": 1.093206240454429,
+      "median": 1.2900811670663606,
+      "maximum": 1.3636211156939635,
+      "ci95_lower_minimum": 1.0604508538888149
+    },
+    "final_selected_holdout_control_speedup": {
+      "minimum": 1.059118479054505,
+      "median": 1.1668289527323683,
+      "maximum": 1.3265467007675869,
+      "ci95_lower_minimum": 1.050086285591599
+    },
+    "final_selected_holdout_exact_main_speedup": {
+      "minimum": 1.0871774306418396,
+      "median": 1.2878487873481632,
+      "maximum": 1.353645597090752,
+      "ci95_lower_minimum": 1.052814355806746
+    },
+    "final_selector_holdout_neighbor_cells": 258,
+    "final_selector_holdout_neighbor_failures": [],
+    "comparison_semantics": "Leopard2 uses one reusable prevalidated batch-binding call for 64 stripes; exact main performs 64 legacy encode calls. This is an end-to-end API comparison, not a kernel-only comparison."
+  },
+  "summary_hashes": {
+    "384": {
+      "discovery_summary_sha256": "2f6c9e977612e40a6f54ba03e35d7560df282fcf461f0fb5b7d8690cf14de413",
+      "discovery_raw_sha256": "b279d8a6f8efb0c2ecd06f1374f0275d0dcb24c44fa1da66621604275c90acbc",
+      "holdout_summary_sha256": "90f4835d8b22d44b0b5e49016dbfe2ac9ac9510903cbc98cb1127bf4a6b5cb3c",
+      "holdout_raw_sha256": "b71622e23675378ca785b1516aaea4f6288f59f474f4d0ade9d773ed7b9438d6"
+    },
+    "448": {
+      "discovery_summary_sha256": "9b9808d82dace097b3bd8b347d70b70f2de2eef11211e16b6276aa51864a3b88",
+      "discovery_raw_sha256": "b738126a0b060c7cad6a8c28f1d718208d98d854e96f3ac7b345c1d1b5f4e7fa",
+      "holdout_summary_sha256": "a25fef1ac7d211d0b140e98d42e97dc641ac5cacbce0e3f5ce98dd6805656b9a",
+      "holdout_raw_sha256": "07bd0bf1749dd4c4e0fbfe11831e354e8b75588d63f8a8d3fd3f2ce0d27e4b71"
+    },
+    "512": {
+      "discovery_summary_sha256": "cd6cf75e37bef391a74c45c9aaa48f836c068a83015ac1a907bcb9a11ea147f4",
+      "discovery_raw_sha256": "0fcc3e4de53195addcd573a2c188f1c14aa041c0a28e1a17fcc9f87e02ec0f51",
+      "holdout_summary_sha256": "e44e85183d1c99b3445a7fcdeacf63b741fbde3dc6be59c8482eedc265da8b67",
+      "holdout_raw_sha256": "8b26467fc6bc99e0ebb82a59466383a1d04d0b9ae7709dc4ea042d87b07f4151"
+    },
+    "576": {
+      "discovery_summary_sha256": "48b7b6f81410f772d9b69b5c1f03682e859157604ba565c2c1ea1cd7e55641e4",
+      "discovery_raw_sha256": "1f44b77c1546497b7d2639a50569085c80686c6c08cb253297ed8b3441c637c5",
+      "holdout_summary_sha256": "af36a8fe6a1950f3c8ea93ef58042e155f87d983ae99b6711b8cf23e3f5e7e80",
+      "holdout_raw_sha256": "d06e164ad2fbdaf8ab2df29a9438990b5e1813397703d4b7b8c91c42255c5c88"
+    },
+    "640": {
+      "discovery_summary_sha256": "de9677d10fc1f6f5ccf153ed21782c52a4b6ff85cf2d3fbd5063b8491d62293d",
+      "discovery_raw_sha256": "4e30465c14f33b1e8814a13e3d5a2d6691f406d87afa7e3bb38e4653c111ad52",
+      "holdout_summary_sha256": "dd3a3d96a42bc35389e8c6dd773665a5df87dc62672c017ac5b0e2157050919a",
+      "holdout_raw_sha256": "99479a483e878900d3cd55b4501b53a1420aed474476bc138c7eb8d7fadc05f2"
+    },
+    "704": {
+      "discovery_summary_sha256": "dda7ab7bb8ab9c9d99af30589ab8a4861607929bcf1f042b891c6423d25a4787",
+      "discovery_raw_sha256": "46b50404315902134ac35b1dd157935329ed4c2658fac3639180e29ca21093da",
+      "holdout_summary_sha256": "df0c209b927638baa32976dfe0796c18edddd5524931bc4d6d92bdb9f8b95aeb",
+      "holdout_raw_sha256": "8ca69ce98764cb7dc0f090bfaadc6e4d478e56d61cbeb90fb3f584004c16fcea"
+    },
+    "768": {
+      "discovery_summary_sha256": "12ca5f8d2390dce5f613676670038014927a631ba5f755aa1c30f4712c1c1c8e",
+      "discovery_raw_sha256": "93c743c567afc6aaa08e8c59740c09a92727ac89a5f041c42c87d361f6342b0c",
+      "holdout_summary_sha256": "dc826bbe7f21401324aa5c78c092e6f91773111e3454549da24f62dfa3496598",
+      "holdout_raw_sha256": "47e69b88926e495f4d7645bb7db5b5f0a5a29405fafa4e35ea64b93ee6af25b7"
+    },
+    "832": {
+      "discovery_summary_sha256": "d03e493a0ec5baceb4b4243c6be88b3bfcc65aaaf7b9c6f734c375106fd78c27",
+      "discovery_raw_sha256": "02d5d4ba7040df996ed8eaacab5ee11d527b85202ba037a1281151ceeecdca71",
+      "holdout_summary_sha256": "d460e4418f834b2db4fb04c95289a27a9811d7c32b0c48d6163b74d1b6a5e79c",
+      "holdout_raw_sha256": "a04184be985d8ace04e8a19997deda6a55b0f69afffeb87cb42d3f7441aec702"
+    },
+    "896": {
+      "discovery_summary_sha256": "e77ede7d47cd64c0e025ef06c248fbb0979626adb3900aa0d28e0e489d976595",
+      "discovery_raw_sha256": "8f6087caa808b1608a1d2f65bb17a80bc573aaf44116b6031c3255bcb445a113",
+      "holdout_summary_sha256": "f5a0a0d676dbb4dfcd54a0f1c703184ff6eafe69f8fbb19075f15235c620dd87",
+      "holdout_raw_sha256": "691798db4b8ed39e55c28a9f2098d44891c0ca3fd5a58164afae6bf4b35908d8"
+    },
+    "960": {
+      "discovery_summary_sha256": "fe4ff28b1460eec2d1299201fba3f55aec01e870bc67336ea962aec3e3472a73",
+      "discovery_raw_sha256": "c56e7dd5485db8ab2644cf6a9a3c01030bfbf1c37d7be9032a59f612d25fb042",
+      "holdout_summary_sha256": "4a65da26b399694daf35b43fe89fca2f43d691a91102dec0973790a8b2e9c846",
+      "holdout_raw_sha256": "bcc5be96e7527f7cf0ad2d1c54d548e4d3f59ae00e5d9837401db48db9a57479"
+    },
+    "1024": {
+      "discovery_summary_sha256": "e0e148d389d44b54d4df41ecf910d300f836c3c88d14ad48d79dea91eb443fcf",
+      "discovery_raw_sha256": "e0b2e6290a4fa7195993276bbc3c676da2879303597f8bd2e7517609c3fe6443",
+      "holdout_summary_sha256": "dc4c13c43d2314990b2c614cd1c203e5fe41317e9152bab2660cab0586f217d1",
+      "holdout_raw_sha256": "21adfeda410435815ba2fc601034e4c25e714e6eed29fde39c1b5ad1e98f5a40"
+    }
+  },
+  "binary_provenance": {
+    "candidate_control_executable_sections_sha256": "c05535d488cfc60bbd5df27072cc72c4ecaecd961042b8bd80b8b518034c8eb1",
+    "candidate_control_executable_sections_identical": true,
+    "final_candidate_sha256": "b40e2d50bcec7fb141a514a52161e7e53c5a639f0d111fa63eb56bf56b245e36",
+    "final_control_sha256": "2a7bcc700d771024bd050d3a4b33097841ac209a036e34360265ed57d8e11134",
+    "exact_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "final_selected_and_excluded_dispatch_spot_checks": "passed at 448 and 1024 bytes"
+  },
+  "validation": {
+    "release_high_direct_production": "passed",
+    "release_auto_mixed_binding": "passed",
+    "release_batch_aliasing": "passed",
+    "clang18_asan_ubsan_high_direct_production": "passed",
+    "clang18_asan_ubsan_auto_mixed_binding": "passed",
+    "clang18_asan_ubsan_batch_aliasing": "passed",
+    "direct_generator_t8_two_block_binding_checks": 3488,
+    "unaligned_guard_checks": 160,
+    "thread_pool_output_checks": 600,
+    "hot_execution_allocations": 0,
+    "changed_source_reuse": "passed",
+    "sparse_output_nonselection": "passed",
+    "runner_python_compilation": "passed",
+    "maximum_release_test_rss_kib": 32512,
+    "maximum_sanitizer_test_rss_kib": 165632
+  },
+  "assembly_audit": {
+    "kernel_symbol": "leopard::backend::AVX2FF8HighEncodeTwoBlocksT8",
+    "kernel_text_bytes": 2409,
+    "kernel_instruction_lines": 532,
+    "kernel_call_instructions": 0,
+    "kernel_zmm_or_mask_register_references": 0,
+    "kernel_explicit_rsp_subtractions": 0,
+    "wrapper_symbol": "ExecuteHighT8TwoBlockBinding",
+    "wrapper_text_bytes": 1075,
+    "wrapper_fixed_stack_frame_bytes": 3296,
+    "wrapper_zero_shard_bytes": 1024,
+    "stack_note": "The bounded wrapper frame contains three 1024-byte discard shards, pointer arrays, alignment, and canary state. It is used only by the selected prevalidated binding path.",
+    "code_size_note": "One unchanged 2409-byte AVX2 leaf loop handles all promoted sizes from 64 through 1024 bytes; the extended selector adds only a 44-byte setup-time mask table."
+  },
+  "memory_policy": {
+    "build_parallelism": 1,
+    "release_build_limit_bytes": 536870912,
+    "sanitizer_build_limit_bytes": 805306368,
+    "test_limit_bytes": 536870912,
+    "benchmark_child_address_space_limit_bytes": 201326592,
+    "subworkers": 0,
+    "campaigns_completed_without_oom": true
+  }
+}
