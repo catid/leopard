@@ -118,6 +118,19 @@
 #error "LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT must be 0 or 1"
 #endif
 
+/*
+    Default-on control for eliminating the temporary plan in the one-shot
+    no-loss wrapper.  Define this as zero for the same-source control.  The
+    reusable-plan shortcut above remains independent.
+*/
+#ifndef LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+#define LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT 1
+#endif
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT < 0 || \
+    LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT > 1
+#error "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -740,6 +753,21 @@ struct AddressRange
 {
     uintptr_t begin;
     uintptr_t end;
+};
+
+/*
+    Prefix metadata validated by the one-shot wrapper before it discovers the
+    first missing original.  Passing this into plan construction avoids
+    repeating the same address checks and prefix scan on the loss fallback.
+*/
+struct DecodePresencePrefix
+{
+    AddressRange original_range;
+    AddressRange recovery_range;
+    uint32_t original_scan_start;
+    uint32_t present_count;
+    uint32_t missing_original_count;
+    uint32_t single_missing_original;
 };
 
 struct BatchRangeRecord
@@ -9070,6 +9098,11 @@ bool GetDecodePlanPrunedScheduleInfo(
     return true;
 }
 
+bool OneShotNoLossShortCircuitExperimentEnabled()
+{
+    return LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT != 0;
+}
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 bool GetDecodePlanPresenceStorageInfo(
     const leo2_decode_plan* plan,
@@ -9337,6 +9370,209 @@ static leo2_result EncodeInternal(
     return LEO2_SUCCESS;
 }
 
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+/*
+    Return a no-loss verdict only after validating every presence byte.  Stop
+    at the first missing original and let the canonical plan constructor
+    validate the remainder.  Legacy-high R=1 is handled separately below so
+    its no-op and direct-XOR terminal paths share one complete scan.
+*/
+static leo2_result TryOneShotNoLoss(
+    const leo2_codec* codec,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    bool& no_loss_out,
+    bool& prefix_valid_out,
+    DecodePresencePrefix& prefix_out)
+{
+    no_loss_out = false;
+    prefix_valid_out = false;
+    if (!codec || !original_present || !recovery_present)
+        return LEO2_SUCCESS;
+
+    AddressRange original_range;
+    AddressRange recovery_range;
+    if (!MakeArrayRange(original_present, codec->original_count,
+            sizeof(*original_present), original_range) ||
+        !MakeArrayRange(recovery_present, codec->recovery_count,
+            sizeof(*recovery_present), recovery_range))
+        return LEO2_INVALID_ARGUMENT;
+
+    const size_t repeated_one = ~static_cast<size_t>(0) /
+        static_cast<size_t>(0xff);
+    uint32_t i = 0;
+    while (codec->original_count - i >= sizeof(size_t))
+    {
+        size_t packed_presence = 0;
+        memcpy(&packed_presence, original_present + i,
+            sizeof(packed_presence));
+        if (packed_presence == repeated_one)
+        {
+            i += static_cast<uint32_t>(sizeof(size_t));
+            continue;
+        }
+        const uint32_t end = i + static_cast<uint32_t>(sizeof(size_t));
+        for (; i < end; ++i)
+        {
+            if (original_present[i] > 1)
+                return LEO2_INVALID_ARGUMENT;
+            if (!original_present[i])
+            {
+                prefix_out.original_range = original_range;
+                prefix_out.recovery_range = recovery_range;
+                prefix_out.original_scan_start = i + 1;
+                prefix_out.present_count = i;
+                prefix_out.missing_original_count = 1;
+                prefix_out.single_missing_original = i;
+                prefix_valid_out = true;
+                return LEO2_SUCCESS;
+            }
+        }
+    }
+    for (; i < codec->original_count; ++i)
+    {
+        if (original_present[i] > 1)
+            return LEO2_INVALID_ARGUMENT;
+        if (!original_present[i])
+        {
+            prefix_out.original_range = original_range;
+            prefix_out.recovery_range = recovery_range;
+            prefix_out.original_scan_start = i + 1;
+            prefix_out.present_count = i;
+            prefix_out.missing_original_count = 1;
+            prefix_out.single_missing_original = i;
+            prefix_valid_out = true;
+            return LEO2_SUCCESS;
+        }
+    }
+
+    i = 0;
+    while (codec->recovery_count - i >= sizeof(size_t))
+    {
+        size_t packed_presence = 0;
+        memcpy(&packed_presence, recovery_present + i,
+            sizeof(packed_presence));
+        if ((packed_presence & ~repeated_one) != 0)
+            return LEO2_INVALID_ARGUMENT;
+        i += static_cast<uint32_t>(sizeof(size_t));
+    }
+    for (; i < codec->recovery_count; ++i)
+        if (recovery_present[i] > 1)
+            return LEO2_INVALID_ARGUMENT;
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return LEO2_SUCCESS;
+#endif
+    no_loss_out = true;
+    return LEO2_SUCCESS;
+}
+#endif
+
+/*
+    Share metadata-range construction and the complete original-presence scan
+    between legacy-high R=1 terminal paths.  Exactly one missing original with
+    parity available uses direct XOR in every build.  With the experiment
+    enabled, zero missing originals terminate here without a temporary plan.
+*/
+static LEO_FORCE_INLINE leo2_result TryOneShotLegacyHighR1Terminal(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes,
+    bool& metadata_checked_out,
+    bool& handled_out)
+{
+    metadata_checked_out = false;
+    handled_out = false;
+    if (!codec || codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->padded_side != 1 || !original_present || !recovery_present)
+        return LEO2_SUCCESS;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return LEO2_SUCCESS;
+#endif
+
+    AddressRange original_presence_range;
+    AddressRange recovery_presence_range;
+    if (!MakeArrayRange(original_present, codec->original_count,
+            sizeof(*original_present), original_presence_range) ||
+        !MakeArrayRange(recovery_present, codec->recovery_count,
+            sizeof(*recovery_present), recovery_presence_range))
+        return LEO2_INVALID_ARGUMENT;
+    metadata_checked_out = true;
+
+    const uint8_t recovery_state = recovery_present[0];
+#if !LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    if (recovery_state != 1)
+        return LEO2_SUCCESS;
+#endif
+
+    const size_t repeated_one = ~static_cast<size_t>(0) /
+        static_cast<size_t>(0xff);
+    uint32_t missing = std::numeric_limits<uint32_t>::max();
+    uint32_t missing_count = 0;
+    uint32_t i = 0;
+    while (codec->original_count - i >= sizeof(size_t))
+    {
+        size_t packed_presence = 0;
+        memcpy(&packed_presence, original_present + i,
+            sizeof(packed_presence));
+        if (packed_presence == repeated_one)
+        {
+            i += static_cast<uint32_t>(sizeof(size_t));
+            continue;
+        }
+        const uint32_t end = i + static_cast<uint32_t>(sizeof(size_t));
+        for (; i < end; ++i)
+        {
+            if (original_present[i] > 1)
+                return LEO2_INVALID_ARGUMENT;
+            if (!original_present[i])
+            {
+                missing = i;
+                ++missing_count;
+            }
+        }
+    }
+    for (; i < codec->original_count; ++i)
+    {
+        if (original_present[i] > 1)
+            return LEO2_INVALID_ARGUMENT;
+        if (!original_present[i])
+        {
+            missing = i;
+            ++missing_count;
+        }
+    }
+
+    if (recovery_state == 1 && missing_count == 1)
+    {
+        const AddressRange protected_ranges[2] = {
+            original_presence_range, recovery_presence_range
+        };
+        handled_out = true;
+        return DecodeDirectXorValidated(codec, missing, shard_bytes,
+            protected_ranges, 2, original, recovery, restored_original,
+            scratch, scratch_bytes);
+    }
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    if (missing_count == 0)
+    {
+        if (recovery_state > 1)
+            return LEO2_INVALID_ARGUMENT;
+        handled_out = true;
+        return LEO2_SUCCESS;
+    }
+#endif
+    return LEO2_SUCCESS;
+}
+
 extern "C" {
 
 LEO2_EXPORT leo2_result leo2_encode(
@@ -9468,11 +9704,12 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
     return LEO2_SUCCESS;
 }
 
-LEO2_EXPORT leo2_result leo2_decode_plan_create(
+static leo2_result DecodePlanCreateInternal(
     const leo2_codec* codec,
     const uint8_t* original_present,
     const uint8_t* recovery_present,
-    leo2_decode_plan** plan_out)
+    leo2_decode_plan** plan_out,
+    const DecodePresencePrefix* validated_prefix)
 {
     if (!plan_out)
         return LEO2_INVALID_ARGUMENT;
@@ -9487,23 +9724,56 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
 
     AddressRange original_range = { 0, 0 };
     AddressRange recovery_range = { 0, 0 };
-    if ((original_present &&
-         !MakeArrayRange(original_present, codec->original_count,
-             sizeof(*original_present), original_range)) ||
-        (recovery_present &&
-         !MakeArrayRange(recovery_present, codec->recovery_count,
-             sizeof(*recovery_present), recovery_range)))
+    if (validated_prefix)
+    {
+        const uint32_t prefix_present =
+            validated_prefix->present_count;
+        const uint32_t prefix_missing =
+            validated_prefix->missing_original_count;
+        const uint32_t prefix_scanned =
+            validated_prefix->original_scan_start;
+        if (!original_present || !recovery_present ||
+            prefix_scanned > codec->original_count ||
+            prefix_present > prefix_scanned ||
+            prefix_missing > prefix_scanned - prefix_present ||
+            prefix_present + prefix_missing != prefix_scanned ||
+            prefix_missing > 1 ||
+            (prefix_missing == 0) !=
+                (validated_prefix->single_missing_original ==
+                    std::numeric_limits<uint32_t>::max()) ||
+            (prefix_missing != 0 &&
+             validated_prefix->single_missing_original >=
+                prefix_scanned))
+            return LEO2_INTERNAL_ERROR;
+        original_range = validated_prefix->original_range;
+        recovery_range = validated_prefix->recovery_range;
+    }
+    else if ((original_present &&
+              !MakeArrayRange(original_present, codec->original_count,
+                  sizeof(*original_present), original_range)) ||
+             (recovery_present &&
+              !MakeArrayRange(recovery_present, codec->recovery_count,
+                  sizeof(*recovery_present), recovery_range)))
+    {
         return LEO2_INVALID_ARGUMENT;
+    }
     if ((original_present && RangesOverlap(output_range, original_range)) ||
         (recovery_present && RangesOverlap(output_range, recovery_range)))
         return LEO2_OVERLAP;
     *plan_out = NULL;
     if (!original_present || !recovery_present)
         return LEO2_INVALID_ARGUMENT;
-    uint32_t present_count = 0;
-    uint32_t missing_original_count = 0;
-    uint32_t single_missing_original = std::numeric_limits<uint32_t>::max();
-    for (uint32_t i = 0; i < codec->original_count; ++i)
+    uint32_t present_count =
+        validated_prefix ? validated_prefix->present_count : 0;
+    uint32_t missing_original_count =
+        validated_prefix ? validated_prefix->missing_original_count : 0;
+    uint32_t single_missing_original = validated_prefix
+        ? validated_prefix->single_missing_original
+        : std::numeric_limits<uint32_t>::max();
+    const uint32_t original_scan_start =
+        validated_prefix ? validated_prefix->original_scan_start : 0;
+    for (uint32_t i = original_scan_start;
+         i < codec->original_count; ++i)
     {
         if (original_present[i] > 1)
             return LEO2_INVALID_ARGUMENT;
@@ -9807,6 +10077,16 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     }
     *plan_out = plan;
     return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_decode_plan_create(
+    const leo2_codec* codec,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    leo2_decode_plan** plan_out)
+{
+    return DecodePlanCreateInternal(
+        codec, original_present, recovery_present, plan_out, NULL);
 }
 
 LEO2_EXPORT void leo2_decode_plan_destroy(leo2_decode_plan* plan)
@@ -10340,60 +10620,40 @@ LEO2_EXPORT leo2_result leo2_decode(
     void* scratch,
     size_t scratch_bytes)
 {
-    /*
-        In a legacy-high R=1 codeword, exactly one missing original implies
-        that the parity and every other original are present.  Validate and
-        execute that terminal operation directly in the one-shot API instead
-        of allocating and immediately destroying a plan.  Unsafe or
-        non-terminal presence metadata falls through to the canonical
-        constructor so established error and no-op semantics remain there.
-    */
-    AddressRange original_presence_range = { 0, 0 };
-    AddressRange recovery_presence_range = { 0, 0 };
-    bool direct_xor_one_shot = codec &&
-        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-        codec->padded_side == 1 && original_present && recovery_present &&
-        MakeArrayRange(original_present, codec->original_count,
-            sizeof(*original_present), original_presence_range) &&
-        MakeArrayRange(recovery_present, codec->recovery_count,
-            sizeof(*recovery_present), recovery_presence_range) &&
-        recovery_present[0] == 1;
-#ifdef LEO2_ENABLE_TEST_HOOKS
-    direct_xor_one_shot = direct_xor_one_shot &&
-        codec->test_decode_mode == LEO2_TEST_DECODE_AUTO;
+    bool r1_metadata_checked = false;
+    bool r1_terminal_handled = false;
+    const leo2_result r1_terminal_result =
+        TryOneShotLegacyHighR1Terminal(
+            codec, shard_bytes, original_present, recovery_present,
+            original, recovery, restored_original, scratch, scratch_bytes,
+            r1_metadata_checked, r1_terminal_handled);
+    if (r1_terminal_result != LEO2_SUCCESS || r1_terminal_handled)
+        return r1_terminal_result;
+
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    DecodePresencePrefix presence_prefix;
 #endif
-    if (direct_xor_one_shot)
+    const DecodePresencePrefix* validated_prefix = NULL;
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    if (!r1_metadata_checked)
     {
-        uint32_t missing = std::numeric_limits<uint32_t>::max();
-        uint32_t missing_count = 0;
-        bool valid = true;
-        for (uint32_t i = 0; i < codec->original_count; ++i)
-        {
-            if (original_present[i] > 1)
-            {
-                valid = false;
-                break;
-            }
-            if (!original_present[i])
-            {
-                missing = i;
-                ++missing_count;
-            }
-        }
-        if (valid && missing_count == 1)
-        {
-            const AddressRange protected_ranges[2] = {
-                original_presence_range, recovery_presence_range
-            };
-            return DecodeDirectXorValidated(codec, missing, shard_bytes,
-                protected_ranges, 2, original, recovery, restored_original,
-                scratch, scratch_bytes);
-        }
+        bool one_shot_no_loss = false;
+        bool prefix_valid = false;
+        const leo2_result no_loss_result = TryOneShotNoLoss(
+            codec, original_present, recovery_present, one_shot_no_loss,
+            prefix_valid, presence_prefix);
+        if (no_loss_result != LEO2_SUCCESS)
+            return no_loss_result;
+        if (one_shot_no_loss)
+            return LEO2_SUCCESS;
+        if (prefix_valid)
+            validated_prefix = &presence_prefix;
     }
+#endif
 
     leo2_decode_plan* plan = NULL;
-    leo2_result result = leo2_decode_plan_create(
-        codec, original_present, recovery_present, &plan);
+    leo2_result result = DecodePlanCreateInternal(
+        codec, original_present, recovery_present, &plan, validated_prefix);
     if (result != LEO2_SUCCESS)
         return result;
     const ProtectedMetadataSpan protected_metadata[2] = {

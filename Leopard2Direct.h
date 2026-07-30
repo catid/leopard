@@ -198,6 +198,9 @@ bool GetDecodePlanPrunedScheduleInfo(
     const leo2_decode_plan* plan,
     DecodePlanPrunedScheduleInfo* info_out);
 
+/* Fail-closed provenance marker for the one-shot no-loss experiment. */
+bool OneShotNoLossShortCircuitExperimentEnabled();
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 /*
     Test-only storage accounting for presence-dependent no-op plan state.

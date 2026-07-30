@@ -1,0 +1,307 @@
+{
+  "schema": "leopard2.one_shot_no_loss_short_circuit.v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.36.2",
+  "decision": "promote_default_on",
+  "source": {
+    "base_commit": "beb964c5a204addafedef1ea23f3ecd615fb6d91",
+    "branch": "codex/leopard2",
+    "control_define": "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=0",
+    "candidate_define": "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT=1",
+    "default_object_matches_forced_candidate": true,
+    "default_and_forced_candidate_leopard2_object_sha256": "3dda9fe8a2553bb1b53835d3b5ab2b049f671ff1d46eaa5b15c309faa17b6b92",
+    "focused_test_source_sha256": "86d16dda9e67eff6e5f25f4564ed4803bad68c5df3a5cc894c03bef180f9e4f5"
+  },
+  "implementation": {
+    "no_loss_result": "leo2_decode validates both presence spans and every presence byte, then returns success without constructing a temporary decode plan",
+    "allocation_change": "one allocation to zero allocations in the production-linked audit",
+    "r1_change": "legacy-high R=1 one-loss XOR and no-loss termination share one metadata scan",
+    "loss_fallback": "the first missing-original prefix is handed to canonical plan construction so validated address ranges and prefix bytes are not scanned twice",
+    "forced_test_modes": "fall through to canonical plan construction",
+    "no_loss_data_semantics": "no shard, restored-output, or scratch pointer is inspected or modified"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "gcc": "13.3.0",
+    "clang": "18.1.3"
+  },
+  "memory_policy": {
+    "parallel_workers": 0,
+    "maximum_build_jobs": 2,
+    "sanitizer_build_jobs": 1,
+    "swap_allowed_per_scope": false,
+    "release_build_memory_max_bytes": 2147483648,
+    "release_build_peak_kib": 282336,
+    "release_tests_memory_max_bytes": 2147483648,
+    "release_tests_peak_kib": 802224,
+    "asan_ubsan_memory_max_bytes": 3221225472,
+    "asan_ubsan_build_peak_kib": 797340,
+    "asan_ubsan_test_peak_kib": 1613168,
+    "benchmark_memory_max_bytes": 536870912,
+    "benchmark_address_space_max_bytes": 402653184,
+    "benchmark_peak_kib": 15872,
+    "cgroup_oom_events": 0,
+    "cgroup_oom_kills": 0
+  },
+  "correctness": {
+    "same_source_control_release": {
+      "passed": 2,
+      "failed": 0,
+      "tests": [
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks"
+      ]
+    },
+    "forced_candidate_release": {
+      "passed": 4,
+      "failed": 0,
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks"
+      ]
+    },
+    "promoted_default_release": {
+      "passed": 4,
+      "failed": 0,
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks"
+      ]
+    },
+    "clang_asan_ubsan_lsan": {
+      "passed": 4,
+      "failed": 0,
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks"
+      ],
+      "asan_detect_leaks": true,
+      "ubsan_halt_on_error": true
+    },
+    "focused_contracts": [
+      "GF8 and GF16",
+      "legacy-high and low profiles",
+      "legacy-high R=1",
+      "zero, odd, and UINT64_MAX shard-byte no-op calls",
+      "all, mixed, and missing recovery shards",
+      "late invalid original and recovery presence bytes",
+      "invalid bytes after an earlier loss",
+      "null and overflowing presence spans",
+      "alias-heavy no-op calls",
+      "failure atomicity",
+      "early and late real one-loss recovery",
+      "forced diagnostic decoder modes"
+    ],
+    "all_benchmark_round_trips_passed": true,
+    "all_compared_workload_digests_matched": true
+  },
+  "final_same_source_abba": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "pinned_cpu": 4,
+    "threads": 1,
+    "backend": "avx2",
+    "control_binary_sha256": "a3f2ee8d3b4472e5e145afbc868b19ff1ff3bb6fee33c2fb388036a5bfbd662d",
+    "candidate_binary_sha256": "a40c66f0361d3ee7d3c45b67109158782240fa64e5664a570cf73594fe4b2d6e",
+    "result_set_sha256": "df84aa0e97a193972c891c82d7bdbe65fe0115bd71952fb496ef607f1e2be39b",
+    "hashes_verified_after_run": true,
+    "samples_per_variant_per_cell": 202,
+    "bootstrap_resamples": 20000,
+    "cells": [
+      {
+        "shape": "K9_R7_GF8_high_no_loss_64B_reuse1",
+        "control_median_us": 0.030000,
+        "candidate_median_us": 0.020000,
+        "control_over_candidate": 1.500000,
+        "bootstrap_95_percent": [
+          1.500000,
+          1.500000
+        ]
+      },
+      {
+        "shape": "K240_R16_GF8_high_no_loss_4096B_reuse8",
+        "control_median_us": 0.108750,
+        "candidate_median_us": 0.017500,
+        "control_over_candidate": 6.214286,
+        "bootstrap_95_percent": [
+          5.928571,
+          6.214286
+        ]
+      },
+      {
+        "shape": "K9_R7_GF8_high_loss1_index0_4096B_reuse8",
+        "control_median_us": 0.658125,
+        "candidate_median_us": 0.663750,
+        "control_over_candidate": 0.991525,
+        "bootstrap_95_percent": [
+          0.981203,
+          0.996234
+        ]
+      },
+      {
+        "shape": "K9_R7_GF8_high_loss1_index8_4096B_reuse8",
+        "control_median_us": 0.683750,
+        "candidate_median_us": 0.695000,
+        "control_over_candidate": 0.983813,
+        "bootstrap_95_percent": [
+          0.982047,
+          0.987410
+        ]
+      }
+    ],
+    "neighbor_gate": "Both loss-one point estimates and lower confidence limits remain above the 1/1.02 promotion floor."
+  },
+  "prior_full_neighbor_matrix": {
+    "source_commit": "2ad3defd68ea36cd8f698634a67d144d5258bf14",
+    "cells": 61,
+    "abba_round_contrasts_per_cell": 15,
+    "point_gates_passed": 61,
+    "lower_confidence_gates_passed": 61,
+    "promotion_floor": 0.9803921569,
+    "minimum_point_ratio": 0.9914467002,
+    "minimum_lower_confidence_ratio": 0.9844288901,
+    "maximum_point_ratio": 1.0440204162,
+    "aggregate_sha256": "d51937058d93b32e7726c050fa81afbe526b2aaa0d775e22eac3b8f1c9a145d1",
+    "aggregate_internal_digest": "593b7486bca9ff6669d06ba371b87d32cc8d58fa442b00af6d067bc3650689d5"
+  },
+  "exact_leopard_main_comparison": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "main_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "leopard2_binary_sha256": "48ea9abe45c4b44078d0f2bb56b5ce956d90e286c41728288f338f8d10e683dd",
+    "result_set_sha256": "901610c92f10a8b095170e81d88b6c33bd22aedc2000997f83d735f25ada5931",
+    "pure_avx2_binaries": true,
+    "zmm_opmask_or_gfni_instruction_matches": 0,
+    "cells": 36,
+    "shapes": [
+      "K9_R7_GF8_high",
+      "K128_R128_GF8_high",
+      "K240_R16_GF8_high"
+    ],
+    "shard_bytes": [
+      64,
+      4096,
+      65536
+    ],
+    "reuse_counts": [
+      1,
+      2,
+      8,
+      64
+    ],
+    "speedup_leopard_main_over_leopard2": [
+      {
+        "k": 9,
+        "r": 7,
+        "bytes": 64,
+        "reuse_1_2_8_64": [
+          1.500,
+          1.600,
+          2.000,
+          2.316
+        ]
+      },
+      {
+        "k": 9,
+        "r": 7,
+        "bytes": 4096,
+        "reuse_1_2_8_64": [
+          20.000,
+          41.500,
+          55.000,
+          68.048
+        ]
+      },
+      {
+        "k": 9,
+        "r": 7,
+        "bytes": 65536,
+        "reuse_1_2_8_64": [
+          321.750,
+          414.833,
+          869.175,
+          1009.222
+        ]
+      },
+      {
+        "k": 128,
+        "r": 128,
+        "bytes": 64,
+        "reuse_1_2_8_64": [
+          6.667,
+          13.333,
+          17.722,
+          18.891
+        ]
+      },
+      {
+        "k": 128,
+        "r": 128,
+        "bytes": 4096,
+        "reuse_1_2_8_64": [
+          294.500,
+          375.167,
+          430.355,
+          506.499
+        ]
+      },
+      {
+        "k": 128,
+        "r": 128,
+        "bytes": 65536,
+        "reuse_1_2_8_64": [
+          4125.550,
+          7366.267,
+          8785.005,
+          9791.708
+        ]
+      },
+      {
+        "k": 240,
+        "r": 16,
+        "bytes": 64,
+        "reuse_1_2_8_64": [
+          10.667,
+          20.667,
+          23.255,
+          29.278
+        ]
+      },
+      {
+        "k": 240,
+        "r": 16,
+        "bytes": 4096,
+        "reuse_1_2_8_64": [
+          518.800,
+          861.350,
+          1057.660,
+          1242.169
+        ]
+      },
+      {
+        "k": 240,
+        "r": 16,
+        "bytes": 65536,
+        "reuse_1_2_8_64": [
+          6562.750,
+          9723.375,
+          15466.985,
+          17994.967
+        ]
+      }
+    ],
+    "interpretation": "Leopard main performs a full decode even when no original is missing; Leopard2 validates metadata and performs a true no-op. Ratios for sub-microsecond Leopard2 calls are approximate because clock quantization dominates."
+  },
+  "promotion_reason": "The default-on path removes an otherwise unused temporary plan allocation and gives 1.5x to 6.21x final-source same-source wins in the sampled GF8 no-loss cells. It passes production, forced-backend, API, ASan, UBSan, and leak checks. Its first-loss prefix handoff keeps the measured neighboring loss path within the explicit two-percent regression threshold, and exact pure-AVX2 comparisons show the intended structural advantage over Leopard main."
+}
