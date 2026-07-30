@@ -1,0 +1,179 @@
+{
+  "schema": "leopard2-gf8-t8-one-block-extended-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": [5, 8],
+    "R": [5, 8],
+    "shard_bytes": [128, 192, 256, 320, 384, 448, 512],
+    "previously_promoted_shard_bytes": [64],
+    "batch": 64,
+    "reuse": 64,
+    "dense_full_parity_only": true,
+    "api": "reusable prevalidated encode-batch binding",
+    "one_shot_behavior_changed": false
+  },
+  "source": {
+    "implementation_commit": "eba9d4b0d0bc77fcbc9a0721030f8619308cf533",
+    "test_correction_commit": "f51bccaf7a235778e13a64209b6426027cacbcba",
+    "measured_commit": "41c7802d5d113b4c7210ac6dd01c37044dcc3ef7",
+    "measured_tree": "26db08ac09663df973bdcfcbc0371e16b4b369a3",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "build": {
+    "type": "Release",
+    "compiler": "GCC 13.3.0",
+    "backend_variant": "auto",
+    "cuda": false,
+    "candidate_mode": "extended 128-through-512-byte selector enabled",
+    "control_mode": "extended selector disabled through a nonzero volatile data marker; previously promoted 64-byte selector retained",
+    "candidate_control_all_executable_sections_identical": true,
+    "candidate_control_executable_sections_sha256": "f0c4824a425fdf47222af1cc3fe786337d29a5c924dfb993d7259e3397d73feb",
+    "candidate_control_text_sha256": "5a54acdd6d628b7450ef1c43129907517f6f739d59d06cacc7ffc7abd70bf2fc",
+    "candidate_control_text_bytes": 798191
+  },
+  "binary_sha256": {
+    "candidate": "cb29167c972d086e9f71f4376bbac8ea8f081c34767631907c3a36a729e973f0",
+    "control": "9f0aa4ac4b198cae7b00b984df489dfe735e2171a797bdfc932f342809272287",
+    "exact_main": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "verified_unchanged_after_campaign": true
+  },
+  "promotion_policy": {
+    "target_control_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.0,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "one mean log contrast per independent round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "microcode": "0xb404023",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "numa_node": 0,
+    "rounds": 3,
+    "target_order": "mirrored ABCCBA",
+    "neighbor_order": "mirrored ABBA",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "target_main_cells": 70,
+    "target_control_only_cells": 42,
+    "neighbor_cells": 64,
+    "processes": 2532,
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle_jiffies": true,
+    "target_control_speedup_range": [
+      1.1209575114678767,
+      1.9988433280308595
+    ],
+    "target_control_ci95_lower_minimum": 1.1079454653679575,
+    "target_exact_main_speedup_range": [
+      1.0399443810811004,
+      1.5584282958590472
+    ],
+    "target_exact_main_ci95_lower_minimum": 1.0227844598694396,
+    "neighbor_control_speedup_range": [
+      0.9719024892652731,
+      1.0219805901595038
+    ],
+    "neighbor_ci95_upper_minimum": 0.9962679089238383,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "raw_sha256": "9ab92ac0267ac3e1444cdefc976e6af7dc2430a8c5b182e08793e0e6a7f132c5",
+    "summary_sha256": "7e00b71eeb706e9f5a513dbada28a8500469b9022e7d636b1866c6e99817b2a7"
+  },
+  "representative_exact_main_over_candidate": [
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 128,
+      "speedup": 1.383176288891754,
+      "ci95": [1.254049820814758, 1.5255985961621294]
+    },
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 320,
+      "speedup": 1.0904417178777244,
+      "ci95": [1.0755223196639292, 1.1055680745516019]
+    },
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 512,
+      "speedup": 1.112624811427534,
+      "ci95": [1.0911428679417208, 1.1345296820198576]
+    },
+    {
+      "K": 8,
+      "R": 8,
+      "shard_bytes": 128,
+      "speedup": 1.5584282958590472,
+      "ci95": [1.4912464357726667, 1.628636753170673]
+    },
+    {
+      "K": 8,
+      "R": 8,
+      "shard_bytes": 320,
+      "speedup": 1.1866883314598238,
+      "ci95": [1.180052342192847, 1.1933616380151757]
+    },
+    {
+      "K": 8,
+      "R": 8,
+      "shard_bytes": 512,
+      "speedup": 1.2117111160006901,
+      "ci95": [1.1709720622152928, 1.2538675140224558]
+    }
+  ],
+  "validation": {
+    "release_candidate_focused": "7/7 passed",
+    "release_control_focused": "7/7 passed",
+    "clang18_asan_ubsan_focused": "3/3 passed",
+    "runner_python_compilation": "passed",
+    "runner_matrix": "112 targets plus 64 neighbors",
+    "independent_generator_exact_k8_r8_parity_checks": 1088,
+    "independent_generator_partial_k5_to_k8_r5_to_r8_parity_checks": 912,
+    "changed_source_reuse": "passed at 64, 128, 192, 256, 320, 384, 448, and 512 bytes",
+    "partial_output_nonselection": "passed at every promoted byte count",
+    "mixed_qualified_binding": "passed for 64, 128, 320, and 512 bytes",
+    "mixed_unqualified_atomic_fallback": "passed for 64 and 513 bytes",
+    "partial_unaligned_guard_checks": 80,
+    "partial_thread_pool_outputs": 320,
+    "hot_execution_allocations": 0,
+    "legacy_golden_vectors": "passed"
+  },
+  "assembly_audit": {
+    "artifact_sha256": "cb29167c972d086e9f71f4376bbac8ea8f081c34767631907c3a36a729e973f0",
+    "kernel_symbol": "leopard::backend::AVX2FF8HighEncodeOneBlockT8Vector",
+    "kernel_text_bytes": 3811,
+    "kernel_instruction_lines": 908,
+    "kernel_evex_prefix_instructions": 0,
+    "kernel_zmm_or_mask_register_references": 0,
+    "kernel_fixed_stack_frame_bytes": 320,
+    "kernel_hot_path_calls": 0,
+    "kernel_cold_stack_canary_calls": 1,
+    "wrapper_symbol": "ExecuteHighT8PartialBinding",
+    "wrapper_text_bytes": 1219,
+    "wrapper_fixed_stack_frame_bytes": 1696,
+    "wrapper_zero_shard_bytes": 512,
+    "stack_note": "The bounded wrapper frame contains three 512-byte discarded-parity shards, pointer arrays, alignment, and canary state. The kernel is VEX-only AVX2; its sole call is the cold stack-canary failure edge.",
+    "code_size_note": "One unchanged 3811-byte transform kernel handles the existing 64-byte cell and every newly promoted 128-through-512-byte cell."
+  },
+  "comparison_semantics": {
+    "same_source_control": "candidate and control use one reusable prevalidated 64-item batch binding; only the initialized-data selector marker differs",
+    "exact_main": "Leopard2 uses one prevalidated batch-binding execution while exact Leopard main uses 64 individual legacy API encode calls",
+    "interpretation": "The main comparison is an end-to-end product/API comparison, not a pure inner-kernel comparison."
+  },
+  "memory_policy": {
+    "build_parallelism": 1,
+    "release_and_sanitizer_build_limit_bytes": 536870912,
+    "test_and_benchmark_limit_bytes": 268435456,
+    "benchmark_child_address_space_limit_bytes": 201326592,
+    "subworkers_during_build_and_timing": 0,
+    "campaign_processes_completed_without_memory_limit_or_oom_failure": true,
+    "parallelism_note": "Serial compilation and isolated single-core timing were intentional after prior host OOMs; independent review ran before the measurement phase."
+  }
+}

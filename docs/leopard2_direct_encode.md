@@ -438,3 +438,58 @@ code: a whole-T=8 callback, two- and three-output grouping, an XMM three-byte
 tail, forced source-loop unrolling, and a generated coefficient-major
 `K=5,R=5` circuit. Each either failed the five-percent whole-call gate or
 regressed through extra source loads, register pressure, or code size.
+
+## Promoted GF8/AVX2 T=8 one-block binding
+
+The reusable prevalidated encode-batch binding now enters the existing
+one-block AVX2 transform directly for dense legacy-high GF8 codes with
+`5 <= K <= 8`, `5 <= R <= 8`, and shard lengths 64, 128, 192, 256, 320, 384,
+448, or 512 bytes. Shortened inputs use an immutable zero shard and punctured
+outputs use three bounded stack shards. The shortcut is all-or-nothing across
+a heterogeneous binding: one unsupported byte count, backend, shape, or null
+parity output retains the mature per-item path for the whole binding. Ordinary
+one-shot encoding is unchanged.
+
+Correctness was checked against the independent direct systematic generator,
+not against the transform itself. The Release candidate and same-source
+control each passed seven focused suites. The candidate covered 1,088 exact
+`K=8,R=8` parity checks and 912 checks across the complete
+`K=5..8,R=5..8` shape grid, plus changed input bytes, sparse-output
+nonselection, unaligned guards, mixed-size bindings, allocation-free repeated
+execution, thread-pool execution, and legacy golden vectors. Three focused
+Clang 18 ASan+UBSan suites also passed under a 256 MiB process-group limit.
+
+The authoritative CPU-4 campaign used three mirrored rounds, 2,532 fresh
+processes, one stable seed per cell, and an idle SMT sibling. Candidate and
+control had byte-identical executable sections; only an initialized-data
+selector marker differed. All 112 target cells and 64 neighboring cells passed
+their gates. Same-source control/candidate speedups ranged from 1.121x to
+1.999x. Among the 70 shapes supported by exact Leopard main, Leopard
+main/candidate speedups ranged from 1.040x to 1.558x, and the smallest lower
+95-percent confidence bound was 1.023x.
+
+| K,R | bytes | same-source control / candidate | Leopard main / candidate |
+| --- | ---: | ---: | ---: |
+| 5,5 | 128 | 1.774x | 1.383x |
+| 5,5 | 320 | 1.245x | 1.090x |
+| 5,5 | 512 | 1.143x | 1.113x |
+| 8,8 | 128 | 1.999x | 1.558x |
+| 8,8 | 320 | 1.328x | 1.187x |
+| 8,8 | 512 | 1.177x | 1.212x |
+
+The Leopard-main numbers are an end-to-end API comparison: Leopard2 executes
+one prevalidated 64-item binding, while the exact main harness invokes the
+legacy API 64 times. They are not presented as a pure inner-kernel comparison.
+The promoted transform body is one 3,811-byte VEX-only AVX2 function with no
+hot-path calls. The partial-profile wrapper has a fixed 1,696-byte frame, of
+which 1,536 bytes are the three discarded-parity shards.
+
+The compact machine-readable checkpoint is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_one_block_extended_checkpoint_20260730.json`. The full generated raw tree
+is intentionally not committed. The checked-in authoritative runner is
+`experiments/leopard2/gf8_high_encode/`
+`run_t8_one_block_extended_abba.py`; it verifies clean source identity,
+immutable binary hashes, all executable ELF sections, per-cell dispatch,
+workload digests, CPU/sibling isolation, and failure-output persistence before
+accepting a result.
