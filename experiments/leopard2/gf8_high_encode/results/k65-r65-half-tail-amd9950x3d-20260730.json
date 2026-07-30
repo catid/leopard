@@ -1,0 +1,181 @@
+{
+  "schema": "leopard2-gf8-k65-r65-half-tail/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.42",
+  "source": {
+    "base_commit": "b06e546e2c567fe8082e6f24394cee41be51a7b4",
+    "candidate_diff_sha256": "2292fd2c4917533a93e8228a3a5b5558e5a3381304091cad1970f9f9f3e2daa9"
+  },
+  "host": {
+    "processor": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timing_cpu": 4,
+    "smt_sibling": 20
+  },
+  "algorithm": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "R": 65,
+    "T": 128,
+    "N": 256,
+    "description": "Encode the first 64 systematic shards with the mature T=128 transform and add systematic coordinate 192 through its independently derived Lagrange generator column at transmitted parity coordinates 0 through 64.",
+    "wire_change": false
+  },
+  "selector": {
+    "minimum_execution_pass_bytes": 8192,
+    "requires_all_outputs": true,
+    "requires_exact_K": 65,
+    "requires_exact_R": 65,
+    "requires_exact_T": 128,
+    "other_backends_unchanged": true
+  },
+  "executables": {
+    "source_identical_control_sha256": "46c9c76eb1a1d46adff61a0f26d1d2ffca7c310d0e3f53a86cfd11fffee730fd",
+    "candidate_sha256": "bb6cfea864020c7ae73aa765d3f1e1e780e286e016cecdcfa19dd0297ec341b3",
+    "pure_avx2_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "pure_avx2_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "all_sha256_verified_after_each_campaign": true
+  },
+  "timing_validity": {
+    "classification": "directional_non_authoritative",
+    "reason": "The canonical runner cannot yet prove persistent exclusion of late coordinator clones; leopard-79h.38.5.10.31 owns that containment prerequisite.",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "serialized": true,
+    "pinned": true,
+    "raw_artifact": "/tmp/leo2-half-tail-final-screen-20260730-v4",
+    "target_method": "Five ABBA rounds in both orders, 15 retained timing samples, five warmups, and 64 calls per sample.",
+    "neighbor_method": "Two ABBA rounds in both orders, 11 retained timing samples, three warmups, and 32 calls per sample."
+  },
+  "source_identical_encode_speedups": [
+    {
+      "bytes": 2048,
+      "selected": false,
+      "control_over_candidate_geomean": 1.010260252,
+      "ci95": [0.986473258, 1.034620826],
+      "median": 1.000769
+    },
+    {
+      "bytes": 4096,
+      "selected": false,
+      "control_over_candidate_geomean": 1.003260522,
+      "ci95": [0.999286772, 1.007250073],
+      "median": 1.002403
+    },
+    {
+      "bytes": 8192,
+      "selected": true,
+      "control_over_candidate_geomean": 1.072504274,
+      "ci95": [1.067414157, 1.077618665],
+      "minimum_pair_ratio": 1.059890,
+      "maximum_pair_ratio": 1.082208
+    },
+    {
+      "bytes": 65536,
+      "selected": true,
+      "control_over_candidate_geomean": 1.063627711,
+      "ci95": [1.058957227, 1.068318793],
+      "minimum_pair_ratio": 1.053000,
+      "maximum_pair_ratio": 1.075797
+    }
+  ],
+  "pure_avx2_main_encode_speedups": [
+    {
+      "bytes": 4096,
+      "main_over_leopard2_geomean": 1.056343,
+      "ci95": [1.025825, 1.087769]
+    },
+    {
+      "bytes": 8192,
+      "main_over_leopard2_geomean": 1.148863,
+      "ci95": [1.144196, 1.153549]
+    },
+    {
+      "bytes": 65536,
+      "main_over_leopard2_geomean": 1.142462,
+      "ci95": [1.137711, 1.147232]
+    }
+  ],
+  "neighbor_source_identical_geomeans": [
+    {"K": 64, "R": 64, "bytes": 2048, "ratio": 1.016279},
+    {"K": 64, "R": 64, "bytes": 4096, "ratio": 1.007065},
+    {"K": 64, "R": 64, "bytes": 65536, "ratio": 0.999288},
+    {"K": 64, "R": 65, "bytes": 2048, "ratio": 0.996022},
+    {"K": 64, "R": 65, "bytes": 4096, "ratio": 1.001415},
+    {"K": 64, "R": 65, "bytes": 65536, "ratio": 1.021293},
+    {"K": 64, "R": 66, "bytes": 2048, "ratio": 0.999050},
+    {"K": 64, "R": 66, "bytes": 4096, "ratio": 0.998466},
+    {"K": 64, "R": 66, "bytes": 65536, "ratio": 0.997659},
+    {"K": 65, "R": 64, "bytes": 2048, "ratio": 1.004871},
+    {"K": 65, "R": 64, "bytes": 4096, "ratio": 1.005048},
+    {"K": 65, "R": 64, "bytes": 65536, "ratio": 1.003338},
+    {"K": 65, "R": 66, "bytes": 2048, "ratio": 0.999847},
+    {"K": 65, "R": 66, "bytes": 4096, "ratio": 1.004843},
+    {"K": 65, "R": 66, "bytes": 65536, "ratio": 1.024125},
+    {"K": 66, "R": 64, "bytes": 2048, "ratio": 1.003124},
+    {"K": 66, "R": 64, "bytes": 4096, "ratio": 0.997490},
+    {"K": 66, "R": 64, "bytes": 65536, "ratio": 0.999424},
+    {"K": 66, "R": 65, "bytes": 2048, "ratio": 1.002404},
+    {"K": 66, "R": 65, "bytes": 4096, "ratio": 0.999921},
+    {"K": 66, "R": 65, "bytes": 65536, "ratio": 1.003678},
+    {"K": 66, "R": 66, "bytes": 2048, "ratio": 1.000952},
+    {"K": 66, "R": 66, "bytes": 4096, "ratio": 1.004469},
+    {"K": 66, "R": 66, "bytes": 65536, "ratio": 0.999501}
+  ],
+  "correctness": {
+    "all_benchmark_workload_digests_match": true,
+    "direct_oracle": {
+      "status": "passed",
+      "profiles": 1024,
+      "basis_messages": 8704,
+      "random_messages": 1024,
+      "parity_symbols": 48796669,
+      "mask_executions": 8192,
+      "unaligned_checks": 146,
+      "optimized_dense_route_observed": true,
+      "optimized_unaligned_route_observed": true,
+      "sparse_fallback_observed": true,
+      "maximum_rss_kib": 167476
+    },
+    "focused_release_tests": {
+      "status": "passed",
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_legacy_golden"
+      ],
+      "maximum_rss_kib": 801656
+    },
+    "clang18_asan_ubsan_lsan": {
+      "status": "passed",
+      "test": "leopard2_direct_encode_test",
+      "maximum_rss_kib": 1277136,
+      "leak_detection": true,
+      "undefined_behavior_recovery": false
+    }
+  },
+  "code_generation": {
+    "gcc13_evex_or_zmm_matches": 0,
+    "clang18_evex_or_zmm_matches": 0,
+    "gcc_main_encode_stack_bytes": 120,
+    "source_identical_control_main_encode_stack_bytes": 120,
+    "gcc_main_encode_text_growth_bytes": 152,
+    "gcc_out_of_line_helper_text_bytes": 500,
+    "comment_only_rebuild_preserved_candidate_binary": true,
+    "default_build_matches_explicit_candidate_object": true,
+    "default_and_explicit_object_sha256": "67397d6d44106b74f6b298ba96ccadf74ce7d0f98593d6221a7afe8988afcc48"
+  },
+  "memory_safety": {
+    "subagents": 0,
+    "maximum_build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "memory_swap_max": 0,
+    "largest_observed_rss_kib": 1277136,
+    "oom_events": 0
+  },
+  "decision": {
+    "status": "promoted",
+    "reason": "Both selected target cells clear the five-percent gate with every paired ratio above five percent; all 24 neighboring cells stay within 0.4 percent on the losing side; direct algebra, legacy goldens, API tests, sanitizer tests, and pure-AVX2 code-generation isolation pass.",
+    "authoritative_replay": "Repeat after leopard-79h.38.5.10.31 supplies persistent process containment; no current correctness or directional-performance evidence depends on that replay."
+  }
+}

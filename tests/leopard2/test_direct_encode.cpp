@@ -54,6 +54,10 @@
 #error "The direct-encode test requires LEO2_ENABLE_TEST_HOOKS"
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+#define LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN 1
+#endif
+
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
 static std::atomic<bool> g_track_allocations(false);
 static std::atomic<uint64_t> g_tracked_allocations(0);
@@ -1560,6 +1564,133 @@ void test_gf8_high_tail_generator_column(
     }
     leo2_context_destroy(context);
 }
+
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+void test_gf8_high_half_tail_generator_column(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options context_options = {};
+    context_options.struct_size = sizeof(context_options);
+    context_options.backend = LEO2_BACKEND_AVX2;
+    context_options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(
+        &context_options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(context_result,
+        "explicit AVX2 half-tail-column context");
+
+    static const unsigned k = 65;
+    static const unsigned r = 65;
+    static const size_t bytes = 8193;
+    CodecOwner* owner = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Shards original(k, Bytes(bytes, 0));
+    original[k - 1] = random_shards(
+        1, bytes, UINT64_C(0x48414c465441494c))[0];
+    const Shards original_before = original;
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, r);
+    const Matrix generator =
+        leopard2_test::direct_systematic_generator(gf8, layout);
+    const Shards expected =
+        oracle_parity(gf8, generator, original, r, LEO2_FIELD_GF8);
+
+    const std::vector<uint8_t> all(r, 1);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    const EncodeResult dense = encode(owner->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, all);
+    require_result(dense.result, "GF8 half-tail-column dense encode");
+    compare_requested(dense.recovery, expected, all, 0xa5,
+        "GF8 half-tail-column/direct generator", counts);
+    require(original == original_before,
+        "GF8 half-tail-column encode modified caller input");
+    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                half_tail_column_calls != 0,
+        "GF8 dense half-tail-column route was not exercised");
+
+    // A sparse public output mask deliberately falls back to the mature
+    // pruned transform; it must remain wire-identical to the same oracle.
+    std::vector<uint8_t> sparse(r, 0);
+    sparse[0] = 1;
+    sparse[r / 2] = 1;
+    sparse[r - 1] = 1;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    const EncodeResult partial = encode(owner->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, sparse);
+    require_result(partial.result, "GF8 half-tail-column sparse encode");
+    compare_requested(partial.recovery, expected, sparse, 0xa5,
+        "GF8 sparse half-tail-column/direct generator", counts);
+    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                half_tail_column_calls == 0,
+        "GF8 sparse output used the dense half-tail-column path");
+
+    static const size_t input_prefix = 3;
+    static const size_t output_prefix = 5;
+    static const size_t suffix = 11;
+    static const uint8_t canary = 0xd7;
+    Shards input_storage(
+        k, Bytes(input_prefix + bytes + suffix, canary));
+    Shards output_storage(
+        r, Bytes(output_prefix + bytes + suffix, canary));
+    std::vector<const void*> input(k, NULL);
+    std::vector<void*> output(r, NULL);
+    for (unsigned i = 0; i < k; ++i)
+    {
+        memcpy(&input_storage[i][input_prefix], &original[i][0], bytes);
+        input[i] = &input_storage[i][input_prefix];
+    }
+    for (unsigned i = 0; i < r; ++i)
+        output[i] = &output_storage[i][output_prefix];
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        owner->codec, bytes, &scratch_bytes),
+        "GF8 half-tail-column unaligned scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_test_codec_set_encode_mode(owner->codec,
+        LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+        "force GF8 half-tail-column unaligned transform");
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    require_result(leo2_encode(owner->codec, bytes, &input[0], &output[0],
+        scratch.data(), scratch.size()),
+        "GF8 half-tail-column unaligned encode");
+    require(leopard::ff8::TestOnlyGetHighEncodeCounts().
+                half_tail_column_calls != 0,
+        "unaligned GF8 half-tail-column route was not exercised");
+    for (unsigned i = 0; i < r; ++i)
+    {
+        require(memcmp(&output_storage[i][output_prefix],
+                    &expected[i][0], bytes) == 0,
+            "unaligned GF8 half-tail-column differs from oracle");
+        require(std::all_of(output_storage[i].begin(),
+                    output_storage[i].begin() + output_prefix,
+                    [](uint8_t value) { return value == canary; }) &&
+                std::all_of(
+                    output_storage[i].begin() + output_prefix + bytes,
+                    output_storage[i].end(),
+                    [](uint8_t value) { return value == canary; }),
+            "unaligned GF8 half-tail-column changed an output guard");
+    }
+    for (unsigned i = 0; i < k; ++i)
+    {
+        require(std::all_of(input_storage[i].begin(),
+                    input_storage[i].begin() + input_prefix,
+                    [](uint8_t value) { return value == canary; }) &&
+                std::all_of(
+                    input_storage[i].begin() + input_prefix + bytes,
+                    input_storage[i].end(),
+                    [](uint8_t value) { return value == canary; }),
+            "unaligned GF8 half-tail-column changed an input guard");
+    }
+    counts->unaligned_checks += k + r;
+
+    ++counts->high_tail_column_checks;
+    delete owner;
+    leo2_context_destroy(context);
+}
+#endif
 
 void test_high_gf8_byte_tiling(
     const BinaryField& gf8,
@@ -3089,6 +3220,9 @@ int main()
         test_high_small_coarse_kernel(context, gf8, &counts);
         test_high_gf16_byte_tiling(context, gf16, &counts);
         test_gf8_high_tail_generator_column(gf8, &counts);
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+        test_gf8_high_half_tail_generator_column(gf8, &counts);
+#endif
         test_gf8_high_two_tail_generator_columns(gf8, &counts);
         test_high_gf8_byte_tiling(gf8, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);

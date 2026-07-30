@@ -33,6 +33,10 @@
 
 #include <string.h>
 
+#ifndef LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+#define LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN 1
+#endif
+
 #if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
 #include <stdlib.h>
 #endif
@@ -63,6 +67,7 @@ static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
 static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
 static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
+static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -230,6 +235,9 @@ static ffe_t ExpLUT[kOrder];
 // systematic generator columns in parity-coordinate space.  Entries for each
 // supported T occupy [T,2T), so the dyadic ranges are disjoint.
 static ffe_t HighTailGeneratorLogs[2][kOrder / 2];
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+static uint16_t HighHalfTailGeneratorLogs[kOrder / 2];
+#endif
 
 
 // Returns a * Log(b)
@@ -625,6 +633,56 @@ static bool InitializeHighTailGeneratorLogs()
             }
         }
     }
+
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+    // Legacy-high K=65,R=65 has T=128 and parent [256,128].  The first
+    // 64 public sources occupy systematic coordinates 128..191, while the
+    // one source that activates the upper half is coordinate 192.  Retain
+    // the regular half-block transform and precompute that source's
+    // systematic Lagrange column at parity coordinates 0..127:
+    //
+    //   L_x(y) = Z(y) / ((y + x) Z'(x)),
+    //   Z(t) = product_{s=128}^{255} (t + s).
+    //
+    // This is an execution choice only; it evaluates the exact same legacy
+    // parent code and therefore must remain byte-identical.
+    static const unsigned kHalfSide = 64;
+    static const unsigned kTransformSize = 128;
+    static const unsigned kSourceCoordinate =
+        kTransformSize + kHalfSide;
+    ffe_t derivative = 1;
+    for (unsigned coordinate = kTransformSize;
+         coordinate < kOrder; ++coordinate)
+    {
+        if (coordinate != kSourceCoordinate)
+        {
+            derivative = MultiplyElements(derivative,
+                static_cast<ffe_t>(coordinate ^ kSourceCoordinate));
+        }
+    }
+    if (derivative == 0)
+        return false;
+    for (unsigned parity = 0; parity < kTransformSize; ++parity)
+    {
+        ffe_t vanishing = 1;
+        for (unsigned coordinate = kTransformSize;
+             coordinate < kOrder; ++coordinate)
+        {
+            vanishing = MultiplyElements(vanishing,
+                static_cast<ffe_t>(parity ^ coordinate));
+        }
+        const ffe_t denominator = MultiplyElements(derivative,
+            static_cast<ffe_t>(parity ^ kSourceCoordinate));
+        if (vanishing == 0 || denominator == 0)
+            return false;
+        const ffe_t coefficient = MultiplyElements(
+            vanishing, InverseElement(denominator));
+        if (coefficient == 0)
+            return false;
+        HighHalfTailGeneratorLogs[parity] = ElementLog(coefficient);
+    }
+#endif
+
     return true;
 }
 
@@ -2491,6 +2549,52 @@ static void FFT_DIT_FromCoefficients(
 //------------------------------------------------------------------------------
 // Reed-Solomon Encode
 
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+#if defined(_MSC_VER)
+#define LEO2_HIGH_HALF_TAIL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_HIGH_HALF_TAIL_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_HIGH_HALF_TAIL_NOINLINE
+#endif
+
+static LEO2_HIGH_HALF_TAIL_NOINLINE void AccumulateHighHalfTailColumn(
+    const backend::Ops& ops,
+    void** work,
+    unsigned output_count,
+    const void* source,
+    uint64_t buffer_bytes)
+{
+    unsigned output = 0;
+    if (ops.ff8_multiply_add_outputs)
+    {
+        for (; output + 1 < output_count;)
+        {
+            const unsigned remaining = output_count - output;
+            const unsigned group_count = remaining < 8 ? remaining : 8;
+            void* destinations[8];
+            uint16_t logs[8];
+            for (unsigned lane = 0; lane < group_count; ++lane)
+            {
+                destinations[lane] = work[output + lane];
+                logs[lane] = HighHalfTailGeneratorLogs[output + lane];
+            }
+            ops.ff8_multiply_add_outputs(
+                destinations, source, logs, group_count, buffer_bytes);
+            output += group_count;
+        }
+    }
+    for (; output < output_count; ++output)
+    {
+        MultiplyAddBytes(ops, work[output], source,
+            static_cast<ffe_t>(HighHalfTailGeneratorLogs[output]),
+            buffer_bytes);
+    }
+}
+
+#undef LEO2_HIGH_HALF_TAIL_NOINLINE
+#endif
+
 void ReedSolomonEncode(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
@@ -2548,6 +2652,35 @@ void ReedSolomonEncode(
             FFTSkewStorage, buffer_bytes);
         return;
     }
+#if LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
+    // Frozen same-source AVX2 ABBA screens selected the 8-KiB floor:
+    // 1.073x at 8 KiB and 1.064x at 64 KiB.  The 4-KiB cell was only
+    // 1.003x, so it deliberately retains the mature transform.  Every
+    // adjacent K/R shape remained within 0.4% of its control.
+    if (ops.kind == LEO2_BACKEND_AVX2 &&
+        ops.ff8_multiply_add_outputs &&
+        m == 128 && original_count == 65 &&
+        recovery_count == 65 &&
+        buffer_bytes >= 8192 &&
+        requested_output_count == recovery_count)
+    {
+        // The 65th source is the only dynamic input in the upper half of this
+        // T=128 systematic block.  Transform the regular 64-source component
+        // and add its independently derived generator column in source-major
+        // groups, loading the source once per group instead of activating the
+        // complete upper-half inverse-transform dependency tree.
+        ReedSolomonEncode(
+            ops, buffer_bytes, 64, recovery_count, requested_output_count,
+            m, data, work, NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighHalfTailColumnCalls.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
+        AccumulateHighHalfTailColumn(
+            ops, work, recovery_count, data[64], buffer_bytes);
+        return;
+    }
+#endif
     const bool direct_tail_column_size =
         m == 8 || m == 16 || m == 32 || m == 64;
     const bool direct_one_tail =
@@ -3590,6 +3723,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighWholeTransformCalls.store(0, std::memory_order_relaxed);
     TestHighSmallTransformCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
+    TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3608,6 +3742,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighSmallTransformCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =
         TestHighTailColumnCalls.load(std::memory_order_relaxed);
+    result.half_tail_column_calls =
+        TestHighHalfTailColumnCalls.load(std::memory_order_relaxed);
     return result;
 }
 
