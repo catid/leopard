@@ -6,6 +6,25 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-30 OOM-safe AVX2 four-source checkpoint
+
+The generalized GF8/AVX2 one-loss path now isolates its bounded direct-repair
+dispatcher out of line, preventing the four-source tiny-shard callback from
+changing unrelated decoder layout.  Frozen same-source screens cover 120
+selected cells and 102 inactive neighbors.  All selected execution cells won
+with a minimum 95-percent lower bound of 1.0595x; every plan-amortized geomean
+also won.  No inactive neighbor regressed by more than two percent after
+high-confidence confirmation, and the earlier two-source milestone retained
+its gains.  Evidence is in
+`experiments/leopard2/direct_repair/results/avx2_four_tiny_production_20260730.json`.
+
+Final bounded gates passed: Release 3/3, option-off Release 2/2, Clang 18
+ASan+UBSan+LSan 3/3, and GF16-only compilation.  Builds used `-j2` or sanitizer
+`-j1`; tests were serialized under one- to three-GiB cgroup ceilings.  Peak RSS
+was 1,559,272 KiB and the enclosing cgroup still reported zero OOM events.
+Keep the same policy: no subworkers, one native process at a time, and no broad
+16-MiB/reuse-64 or complete provenance campaign from the controller.
+
 ## 2026-07-30 OOM-safe AVX2 pair-fusion checkpoint
 
 The controlling session reset twice during allocation-heavy work.  Continue

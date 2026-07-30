@@ -148,6 +148,14 @@ out-of-range access, and either initializes or XOR-accumulates explicitly.
 The remaining zero through three sources retain their original term order.
 Seven-byte shards use the mature output-major executor.
 
+The bounded direct-repair dispatcher itself is kept out of line.  Without this
+boundary, GCC inlined the dispatcher into the general decode executor and made
+unselected paths inherit the layout cost of the four-source callback.  In the
+matched control and candidate, `DecodePlanExecuteInternal` is now exactly
+4,281 text bytes in both binaries; the separate direct-repair functions are
+1,634 and 1,613 bytes.  This is an execution-layout constraint only and does
+not change the plan, arithmetic, or wire profile.
+
 For larger generalized one-loss repairs, a separate pure-AVX2 callback groups
 two fixed-coefficient sources per output pass.  It uses YMM operations on each
 32-byte prefix, integrated XMM operations on 16- and 8-byte tails, and scalar
@@ -244,6 +252,24 @@ Focused Clang 18 ASan+UBSan+LSan backend/API tests passed serially under a
 3-GiB cgroup ceiling; their largest recorded RSS was 1,559,312 KiB.  A
 GF16-only production compile also passed, confirming that the optional Ops
 member does not break reduced-field builds.
+
+The four-source tiny-shard promotion used the same pinned CPU and frozen-binary
+discipline.  Across eight high/low shapes, five representative selected byte
+sizes, and plan reuse 1, 8, and 64, all 120 selected execution cells won.
+Execution geomeans ranged from 1.0723x to 2.5058x and the weakest 95-percent
+lower bound was 1.0595x.  Every plan-amortized geomean also won, from 1.0215x
+to 2.3906x.  Six reuse-one cells did not establish a five-percent
+plan-amortized lower bound because unchanged plan construction dominates a
+one- to six-byte execution; none regressed, and every execution interval
+cleared the five-percent gate.
+
+After two high-confidence confirmations, 102 unselected byte/count neighbors
+had no raw or credible regression greater than two percent.  The prior
+two-source milestone also retained at least a 1.0898x lower bound in all seven
+selected cells.  Release, option-off, Clang 18 ASan+UBSan+LSan, context-backend,
+and GF16-only gates passed under one- to three-GiB cgroup ceilings; the largest
+observed RSS was 1,559,272 KiB.  Machine-readable evidence is
+`experiments/leopard2/direct_repair/results/avx2_four_tiny_production_20260730.json`.
 
 Validation commands completed on 2026-07-16:
 

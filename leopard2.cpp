@@ -6068,7 +6068,23 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
     return leopard2_internal::kDirectRepairExecutorOutputMajor;
 }
 
-static leo2_result ExecuteDirectRepair(
+/*
+    Keep the bounded direct-repair executor out of its much larger caller.
+    Otherwise GCC may inline this dispatcher and make unrelated decode paths
+    inherit the code-layout cost of an enabled tiny-shard callback.
+*/
+#if defined(_MSC_VER)
+#define LEO2_DIRECT_REPAIR_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_DIRECT_REPAIR_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_direct_repair")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_DIRECT_REPAIR_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_DIRECT_REPAIR_NOINLINE
+#endif
+
+static LEO2_DIRECT_REPAIR_NOINLINE leo2_result ExecuteDirectRepair(
     const leo2_decode_plan* plan,
     size_t shard_bytes,
     const void* const* original,
@@ -6225,6 +6241,8 @@ static leo2_result ExecuteDirectRepair(
     }
     return LEO2_SUCCESS;
 }
+
+#undef LEO2_DIRECT_REPAIR_NOINLINE
 
 /*
     Batch execution must not start until every writable range is disjoint from

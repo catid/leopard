@@ -1,0 +1,261 @@
+{
+  "schema": "leopard2-avx2-four-source-one-loss-production/v1",
+  "date_utc": "2026-07-30",
+  "source_parent": "1be8e9eb6f6805208e0f8e8a655197c4fc45b2b4",
+  "bead": "leopard-79h.38.5.10.39.2.2",
+  "target": {
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "loss_count": 1,
+    "selected_shard_bytes": "1..6 and 8..63",
+    "operation": "one output reduced from four ordered fixed-coefficient sources"
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "numa_nodes": 1,
+    "timing_cpu": 4,
+    "smt_sibling": 20
+  },
+  "resource_policy": {
+    "controller_subworkers": 0,
+    "build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "benchmark_threads": 1,
+    "benchmark_memory_limit_bytes": 2147483648,
+    "release_test_memory_limit_bytes": 2147483648,
+    "sanitizer_memory_limit_bytes": 3221225472,
+    "large_campaigns_rerun": false,
+    "controller_memory_events_after_gates": {
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "frozen_binaries": {
+    "original_feature_off_control": {
+      "sha256": "b107c075ed72caa9e866939488551f19c345e3d31346775e8717d05a1ed22da4",
+      "description": "same-source generalized direct-L1 executor with the four-source selector disabled"
+    },
+    "layout_matched_noinline_control": {
+      "sha256": "c2bba696a0e5da79a2f5fe60ff5504b0dc97653051590a6483b1fd5124570fe2",
+      "description": "feature-off control with the same noinline/ELF-section boundary as the candidate"
+    },
+    "candidate": {
+      "sha256": "3afee9b92a98d4cb1f25fe6b1928ab9e7da79ce3b93a192e76d3a914779f3156",
+      "description": "four-source tiny repair plus isolated direct-repair dispatcher"
+    },
+    "digests_verified_before_and_after_timing": true
+  },
+  "layout_isolation": {
+    "reason": "prevent the optional tiny callback from perturbing unrelated decode paths through compiler inlining",
+    "before_noinline": {
+      "feature_off_decode_plan_execute_internal_text_bytes": 6228,
+      "candidate_decode_plan_execute_internal_text_bytes": 6380
+    },
+    "after_noinline": {
+      "feature_off_decode_plan_execute_internal_text_bytes": 4281,
+      "candidate_decode_plan_execute_internal_text_bytes": 4281,
+      "feature_off_execute_direct_repair_text_bytes": 1634,
+      "candidate_execute_direct_repair_text_bytes": 1613
+    }
+  },
+  "selected_screen": {
+    "method": "pinned single-core ABBA with two-sided t intervals over paired log speedups",
+    "profiles": [
+      "legacy_high_v1",
+      "low_v1"
+    ],
+    "shapes": [
+      "high:18/16",
+      "high:192/64",
+      "high:224/32",
+      "high:240/16",
+      "low:17/31",
+      "low:31/200",
+      "low:32/224",
+      "low:127/128"
+    ],
+    "sampled_shard_bytes": [
+      1,
+      6,
+      8,
+      31,
+      63
+    ],
+    "plan_reuse_counts": [
+      1,
+      8,
+      64
+    ],
+    "unique_cells": 120,
+    "ordinary_paired_samples_per_metric": 38,
+    "confirmed_cell": {
+      "shape": "low:32/224",
+      "shard_bytes": 6,
+      "plan_reuse": 8,
+      "paired_samples": 248,
+      "execution_geomean_speedup": 1.108911,
+      "execution_ci95": [
+        1.103859,
+        1.113987
+      ],
+      "plan_amortized_geomean_speedup": 1.097219,
+      "plan_amortized_ci95": [
+        1.092549,
+        1.101909
+      ]
+    },
+    "execution": {
+      "winning_cells": 120,
+      "geomean_speedup_range": [
+        1.072317,
+        2.505787
+      ],
+      "minimum_ci95_low": 1.059485
+    },
+    "plan_amortized": {
+      "winning_geomeans": 120,
+      "geomean_speedup_range": [
+        1.021545,
+        2.390597
+      ],
+      "setup_dominated_reuse_one_cells_below_1_05_ci_low": 6,
+      "setup_dominated_cells": [
+        {
+          "shape": "high:18/16",
+          "shard_bytes": 6,
+          "geomean_speedup": 1.021545,
+          "ci95_low": 1.002804
+        },
+        {
+          "shape": "low:17/31",
+          "shard_bytes": 6,
+          "geomean_speedup": 1.031390,
+          "ci95_low": 1.010642
+        },
+        {
+          "shape": "low:127/128",
+          "shard_bytes": 6,
+          "geomean_speedup": 1.032979,
+          "ci95_low": 1.025222
+        },
+        {
+          "shape": "low:32/224",
+          "shard_bytes": 6,
+          "geomean_speedup": 1.039683,
+          "ci95_low": 1.029219
+        },
+        {
+          "shape": "low:31/200",
+          "shard_bytes": 6,
+          "geomean_speedup": 1.039787,
+          "ci95_low": 1.031556
+        },
+        {
+          "shape": "low:17/31",
+          "shard_bytes": 1,
+          "geomean_speedup": 1.062900,
+          "ci95_low": 1.036058
+        }
+      ],
+      "disposition": "accepted because every complete-operation geomean improved, all execution lower bounds exceeded 1.05, and the cold exceptions are dominated by unchanged plan setup"
+    },
+    "all_workload_digests_equal": true
+  },
+  "inactive_neighbor_screen": {
+    "sampled_shard_bytes": [
+      7,
+      64,
+      65,
+      66
+    ],
+    "plan_reuse_counts": [
+      1,
+      8,
+      64
+    ],
+    "large_shard_bytes": 1048576,
+    "unique_cells": 102,
+    "ordinary_paired_samples_per_metric": 38,
+    "confirmation_paired_samples_per_metric": 248,
+    "raw_regressions_over_two_percent_after_confirmation": 0,
+    "credible_regressions_over_two_percent": 0,
+    "worst_execution": {
+      "shape": "high:240/16",
+      "shard_bytes": 65,
+      "plan_reuse": 1,
+      "geomean_speedup": 0.983455,
+      "ci95": [
+        0.936372,
+        1.032906
+      ]
+    },
+    "worst_plan_amortized": {
+      "shape": "high:18/16",
+      "shard_bytes": 65,
+      "plan_reuse": 1,
+      "geomean_speedup": 0.983179,
+      "ci95": [
+        0.967930,
+        0.998669
+      ]
+    },
+    "all_workload_digests_equal": true
+  },
+  "pair_fusion_preservation": {
+    "selected_cells": 7,
+    "minimum_execution_ci95_low": 1.089811,
+    "minimum_plan_amortized_ci95_low": 1.089806,
+    "inactive_neighbor_cells": 8,
+    "credible_regressions_over_two_percent": 0,
+    "confirmed_low_31_199_64b_neighbor_execution_geomean": 1.044826,
+    "confirmed_low_31_199_64b_neighbor_plan_amortized_geomean": 1.051552
+  },
+  "correctness": {
+    "release": {
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_api"
+      ],
+      "passed": 3,
+      "build_maximum_rss_kib": 205256,
+      "test_maximum_rss_kib": 801408
+    },
+    "asan_ubsan_lsan": {
+      "compiler": "Clang 18.1.3",
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_api"
+      ],
+      "passed": 3,
+      "build_maximum_rss_kib": 515936,
+      "test_maximum_rss_kib": 1559272
+    },
+    "feature_off_release": {
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_api"
+      ],
+      "passed": 2,
+      "build_maximum_rss_kib": 205064,
+      "test_maximum_rss_kib": 74360
+    },
+    "gf16_only_compile": {
+      "passed": true,
+      "maximum_rss_kib": 179612
+    }
+  },
+  "promotion": {
+    "promoted": true,
+    "wire_format_changed": false,
+    "repair_coefficients_changed": false,
+    "hot_path_allocation_added": false,
+    "neighbor_gate_passed": true,
+    "pair_fusion_gate_preserved": true
+  }
+}
