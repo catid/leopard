@@ -1,0 +1,156 @@
+{
+  "schema": "leopard2-small-direct-loss5-8-screen/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.38",
+  "status": "default-off experiment; directional screen pending canonical coordinator exclusion",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": "5..16",
+    "R": "5..8",
+    "loss_count": "5..min(K,R)",
+    "shard_bytes": [
+      64,
+      1024,
+      4096,
+      16384,
+      65536
+    ],
+    "plan_reuse": [
+      1,
+      8,
+      64
+    ],
+    "unique_K_R_loss_shapes": 110,
+    "paired_cells": 1650,
+    "benchmark_invocations": 6600,
+    "order": "transform, direct, direct, transform",
+    "iterations_per_invocation": 7,
+    "warmups_per_invocation": 3,
+    "timing_cpu": 4
+  },
+  "identity": {
+    "source_commit": "8b837754e00ce89b2ad47e8818eab241bb7d5426",
+    "transform_executable_sha256": "e91f27d2a92edfa6e7098ccdc74cc1246040cb4d6071c9ddc2738f371c98b76b",
+    "direct_executable_sha256": "2528737b5363e6ec6daba03a6621a5e74241768402cb302013b2d013173ca36a",
+    "result_hash_manifest_sha256": "5a7806e7cf24f02695256235a90b9337c4b090477867c7f895cf3c259750ff0a",
+    "raw_artifact_directory": "/tmp/leopard-small-direct-full-matrix-20260730",
+    "frozen_binary_hashes_verified_after_each_lane": true
+  },
+  "correctness": {
+    "round_trip_failures": 0,
+    "route_failures": 0,
+    "candidate_route": "direct/source_major",
+    "control_route": "paper-derived transform",
+    "paired_cell_failures": 0
+  },
+  "execution_summary": [
+    {
+      "shard_bytes": 64,
+      "reuse": 1,
+      "cells": 110,
+      "minimum_speedup": 1.000,
+      "geomean_speedup": 2.391,
+      "cells_below_1_05": 1
+    },
+    {
+      "shard_bytes": 64,
+      "reuse": 8,
+      "cells": 110,
+      "minimum_speedup": 0.989,
+      "geomean_speedup": 2.433,
+      "cells_below_1_05": 1
+    },
+    {
+      "shard_bytes": 64,
+      "reuse": 64,
+      "cells": 110,
+      "minimum_speedup": 1.002,
+      "geomean_speedup": 2.372,
+      "cells_below_1_05": 1
+    },
+    {
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "cells": 110,
+      "minimum_speedup": 1.139,
+      "geomean_speedup": 2.116,
+      "cells_below_1_05": 0
+    },
+    {
+      "shard_bytes": 4096,
+      "reuse": 1,
+      "cells": 110,
+      "minimum_speedup": 1.277,
+      "geomean_speedup": 2.185,
+      "cells_below_1_05": 0
+    },
+    {
+      "shard_bytes": 16384,
+      "reuse": 1,
+      "cells": 110,
+      "minimum_speedup": 1.210,
+      "geomean_speedup": 2.053,
+      "cells_below_1_05": 0
+    },
+    {
+      "shard_bytes": 65536,
+      "reuse": 1,
+      "cells": 110,
+      "minimum_speedup": 1.367,
+      "geomean_speedup": 2.519,
+      "cells_below_1_05": 0
+    }
+  ],
+  "execution_exception": {
+    "K": 8,
+    "R": 8,
+    "loss_count": 8,
+    "shard_bytes": 64,
+    "speedup_at_reuse_1": 1.0000,
+    "speedup_at_reuse_8": 0.9887,
+    "speedup_at_reuse_64": 1.0015,
+    "interpretation": "balanced full loss remains a transform-path cell at 64 bytes"
+  },
+  "amortized_summary": {
+    "all_cells_clear_1_05_from_shard_bytes": 4096,
+    "minimum_speedup_at_4096_bytes": 1.1007,
+    "minimum_speedup_at_16384_bytes": 1.1628,
+    "minimum_speedup_at_65536_bytes": 1.3407,
+    "64_byte_reuse_1_cells_below_1_05": 7,
+    "1024_byte_reuse_1_cells_below_1_05": 4,
+    "reason": "loss-7/8 direct coefficient setup dominates a one-use tiny shard even when byte execution wins"
+  },
+  "independent_algebra_gate": {
+    "executable": "leopard2_small_direct_exhaustive_test",
+    "mode": 2,
+    "total_patterns": 1982812,
+    "assigned_patterns": 1982812,
+    "recovered_shards": 11124698,
+    "verified_basis_symbols": 162888934,
+    "digest_fnv1a64": "18eee2c6af7de8c5",
+    "ordinal_digest_fnv1a64": "36c16011b561dba1",
+    "maximum_rss_kib": 13824,
+    "passed": true
+  },
+  "resource_policy": {
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "build_parallelism_max": 2,
+    "benchmark_processes_at_once": 1,
+    "benchmark_scope_memory_limit_bytes": 402653184,
+    "benchmark_process_address_space_limit_bytes": 201326592,
+    "new_benchmark_oom_events": 0
+  },
+  "decision": {
+    "byte_independent_direct_promotion": false,
+    "qualified_observation": "direct execution is a strong candidate for every measured cell at 1024 bytes and above, and for every 64-byte cell except K=R=loss=8",
+    "required_follow_up": [
+      "retain the paper transform for the K=R=loss=8 64-byte exception",
+      "account for plan construction in one-shot and low-reuse dispatch",
+      "rerun the final source against exact Leopard main after coordinator exclusion",
+      "do not infer a safe 1..63-byte path from this matrix"
+    ]
+  }
+}

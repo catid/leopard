@@ -1,0 +1,144 @@
+{
+  "schema": "leopard2-small-direct-row-cache-negative/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.38",
+  "status": "rejected experiment",
+  "hypothesis": "cache the complete K-by-R GF8 generator table in the immutable codec so loss-5-through-8 plans can reuse exact rows and the Cauchy inverse",
+  "candidate": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": "5..16",
+    "R": "5..8",
+    "maximum_cache_payload_bytes": 128,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "default_build_changed": false
+  },
+  "identity": {
+    "source_commit": "8b837754e00ce89b2ad47e8818eab241bb7d5426",
+    "uncached_control_executable_sha256": "03598cbab32c73ed9ca9e3e5436fc2dd8d514ba5573ca8c9f8ab62967e0452c7",
+    "unaligned_cache_candidate_executable_sha256": "2528737b5363e6ec6daba03a6621a5e74241768402cb302013b2d013173ca36a",
+    "aligned_cache_candidate_executable_sha256": "f42803199c297712b61ed117fcd26cb9a86a389a20dd36bb9f8e8e477bc33e11",
+    "raw_attribution_directory": "/tmp/leopard-small-direct-cache-attribution-20260730",
+    "raw_unaligned_confirmation_directory": "/tmp/leopard-small-direct-cache-confirm-20260730",
+    "raw_aligned_confirmation_directory": "/tmp/leopard-small-direct-aligned-cache-confirm-20260730"
+  },
+  "plan_setup_attribution": {
+    "unique_shapes": 110,
+    "order": "uncached, cached, cached, uncached",
+    "iterations_per_invocation": 15,
+    "all_shapes_improved_by_more_than_5_percent": true,
+    "overall_geomean_speedup": 1.6535,
+    "by_loss_count": [
+      {
+        "loss_count": 5,
+        "shapes": 48,
+        "geomean_speedup": 1.558
+      },
+      {
+        "loss_count": 6,
+        "shapes": 33,
+        "geomean_speedup": 1.665
+      },
+      {
+        "loss_count": 7,
+        "shapes": 20,
+        "geomean_speedup": 1.781
+      },
+      {
+        "loss_count": 8,
+        "shapes": 9,
+        "geomean_speedup": 1.878
+      }
+    ]
+  },
+  "codec_setup_cost": {
+    "candidate_over_control_slowdown_range": [
+      2.1538,
+      5.6107
+    ],
+    "candidate_absolute_us_range": [
+      0.28,
+      0.82
+    ],
+    "control_absolute_us_range": [
+      0.09,
+      0.23
+    ]
+  },
+  "hot_execution_confirmation": {
+    "method": "CPU-pinned ABBA, 127 samples per invocation, two invocations per variant",
+    "paired_samples_per_cell": 254,
+    "hot_executor_forced_to_64_byte_ELF_alignment": true,
+    "cells": [
+      {
+        "K": 8,
+        "R": 8,
+        "loss_count": 5,
+        "shard_bytes": 64,
+        "uncached_over_cached_geomean": 1.084856,
+        "ci95": [
+          1.079633,
+          1.090103
+        ]
+      },
+      {
+        "K": 8,
+        "R": 8,
+        "loss_count": 8,
+        "shard_bytes": 4096,
+        "uncached_over_cached_geomean": 1.001795,
+        "ci95": [
+          0.999157,
+          1.004440
+        ]
+      },
+      {
+        "K": 12,
+        "R": 8,
+        "loss_count": 8,
+        "shard_bytes": 4096,
+        "uncached_over_cached_geomean": 0.983119,
+        "ci95": [
+          0.981879,
+          0.984361
+        ]
+      },
+      {
+        "K": 16,
+        "R": 8,
+        "loss_count": 8,
+        "shard_bytes": 4096,
+        "uncached_over_cached_geomean": 0.980394,
+        "ci95": [
+          0.979775,
+          0.981014
+        ]
+      }
+    ],
+    "interpretation": "plan allocation and metadata-layout changes perturb sustained execution; the worst confirmed neighboring loss reaches the two-percent rejection boundary"
+  },
+  "correctness": {
+    "independent_exhaustive_patterns": 1982812,
+    "independent_basis_symbols": 162888934,
+    "direct_repair_plans": 2120,
+    "direct_repair_executions": 1113915,
+    "dense_plan_policy_cases": 19,
+    "high_low_decode_cases": 771,
+    "passed": true
+  },
+  "resource_incident": {
+    "valid_results_affected": false,
+    "description": "a later monolithic API test exceeded an incorrectly low 768 MiB cgroup cap and was killed before producing a result",
+    "memory_events_oom_kill_before": 2,
+    "memory_events_oom_kill_after": 3,
+    "response": "the test sequence stopped immediately; subsequent validation used narrow measured-memory gates only"
+  },
+  "decision": {
+    "promoted": false,
+    "reason": "the plan-setup win does not justify higher codec setup plus a credible sustained-throughput loss at plan reuse",
+    "production_code_retained": false,
+    "next_candidate": "reduce plan allocations without changing the hot schedule's storage and cache placement, or make setup policy explicit to the caller"
+  }
+}
