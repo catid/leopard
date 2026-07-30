@@ -757,7 +757,8 @@ void TestT8TwoBlockBindingAllocation()
 void TestT8OneBlockBindingAllocation()
 {
     static const size_t byte_counts[] = {
-        128, 192, 256, 320, 384, 448, 512
+        128, 192, 256, 320, 384, 448, 512,
+        576, 640, 704, 768, 832, 896, 960, 1024
     };
     static const unsigned shapes[][2] = {
         { 5, 5 },

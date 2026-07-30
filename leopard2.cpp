@@ -113,6 +113,19 @@
 #endif
 
 /*
+    Text-layout-neutral discovery control for extending the one-block T=8
+    binding above 512 bytes.  It changes only a nonzero initialized data word
+    so same-source candidate and control retain identical instruction bytes.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 must be 0 or 1"
+#endif
+
+/*
     Promoted fast path for the adjacent two-message-block T=8 family.
     Reusable binding setup maps public K=9..16,R=5..8 onto a padded
     K=16,R=8 transform call.
@@ -564,14 +577,20 @@ static const size_t kScratchAlignment = 64;
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
+static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512;
 
 static bool IsHighT8OneBlockByteCount(uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
         return true;
-    return shard_bytes >= 128 && shard_bytes <= 512 &&
+    if (shard_bytes >= 128 && shard_bytes <= 512 &&
         (shard_bytes & 63U) == 0 &&
-        g_high_t8_one_block_extended_mode == 1U;
+        g_high_t8_one_block_extended_mode == 1U)
+        return true;
+    return shard_bytes >= 576 && shard_bytes <= 1024 &&
+        (shard_bytes & 63U) == 0 &&
+        g_high_t8_one_block_beyond_512_mode == 1U;
 }
 #endif
 
@@ -9791,6 +9810,15 @@ bool HighT8OneBlockExtendedEnabled()
 #endif
 }
 
+bool HighT8OneBlockBeyond512Enabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_high_t8_one_block_beyond_512_mode == 1U;
+#else
+    return false;
+#endif
+}
+
 bool HighT8TwoBlock320Enabled()
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -9854,8 +9882,8 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
     void* const* recovery)
 {
     LEO_DEBUG_ASSERT(IsHighT8OneBlockByteCount(shard_bytes));
-    alignas(32) static const uint8_t zero_shard[512] = {};
-    alignas(32) uint8_t discarded_recovery[3][512];
+    alignas(32) static const uint8_t zero_shard[1024] = {};
+    alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[8];
     void* padded_recovery[8];
     for (uint32_t i = 0; i < 8; ++i)

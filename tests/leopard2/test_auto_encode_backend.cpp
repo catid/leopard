@@ -908,7 +908,7 @@ void test_t8_one_block_mixed_binding(Context& avx2)
         return;
     Codec codec(avx2.get(), 5, 5,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    static const size_t qualified[] = { 64, 128, 320, 512 };
+    static const size_t qualified[] = { 64, 128, 512, 1024 };
     leopard2_internal::CodecEncodePathInfo path = {};
     require(leopard2_internal::GetCodecEncodePathInfo(
             codec.get(), 128, 5, &path),
@@ -925,7 +925,7 @@ void test_t8_one_block_mixed_binding(Context& avx2)
         complete heterogeneous batch.  The mature per-item path still emits
         identical parity for both items.
     */
-    static const size_t boundary[] = { 64, 513 };
+    static const size_t boundary[] = { 64, 1025 };
     run_t8_mixed_binding(
         codec.get(), 5, 5, boundary,
         sizeof(boundary) / sizeof(boundary[0]), 0, 2);

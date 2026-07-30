@@ -36,6 +36,14 @@ BYTE_NEIGHBORS = (
     64, 65, 127, 129, 191, 193, 255, 257, 319,
     321, 383, 385, 447, 449, 511, 513, 576, 640,
 )
+BEYOND_SCHEMA = "leopard2-gf8-t8-one-block-beyond512-abba/v1"
+BEYOND_SUMMARY_SCHEMA = \
+    "leopard2-gf8-t8-one-block-beyond512-summary/v1"
+BEYOND_TARGET_BYTES = (576, 640, 704, 768, 832, 896, 960, 1024)
+BEYOND_BYTE_NEIGHBORS = (
+    512, 513, 575, 577, 639, 641, 703, 705, 767,
+    769, 831, 833, 895, 897, 959, 961, 1023, 1025, 1088,
+)
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
@@ -107,29 +115,36 @@ def executable_sections_identity(executable: Path) -> dict[str, Any]:
     }
 
 
-def target_cells() -> list[dict[str, Any]]:
+def target_cells(
+    target_bytes: Sequence[int] = TARGET_BYTES,
+    seed_base: int = 0x1540000,
+) -> list[dict[str, Any]]:
     cells: list[dict[str, Any]] = []
     index = 0
     for k in range(5, 9):
         for r in range(5, 9):
             role = "target_main" if r <= k else "target_control"
-            for shard_bytes in TARGET_BYTES:
+            for shard_bytes in target_bytes:
                 cells.append({
                     "id": f"{role}-k{k}-r{r}-b{shard_bytes}",
                     "K": k,
                     "R": r,
                     "bytes": shard_bytes,
                     "role": role,
-                    "seed": 0x1540000 + index,
+                    "seed": seed_base + index,
                 })
                 index += 1
     return cells
 
 
-def neighbor_cells() -> list[dict[str, Any]]:
+def neighbor_cells(
+    target_bytes: Sequence[int] = TARGET_BYTES,
+    byte_neighbors: Sequence[int] = BYTE_NEIGHBORS,
+    seed_base: int = 0x1550000,
+) -> list[dict[str, Any]]:
     cells: list[dict[str, Any]] = []
     for k, r in ((5, 5), (8, 8)):
-        for shard_bytes in BYTE_NEIGHBORS:
+        for shard_bytes in byte_neighbors:
             cells.append({
                 "id": f"bytes-k{k}-r{r}-b{shard_bytes}",
                 "K": k,
@@ -137,7 +152,7 @@ def neighbor_cells() -> list[dict[str, Any]]:
                 "bytes": shard_bytes,
                 "role": "neighbor",
             })
-    for shard_bytes in TARGET_BYTES:
+    for shard_bytes in target_bytes:
         for k, r in ((4, 4), (9, 5), (8, 4), (8, 9)):
             cells.append({
                 "id": f"shape-k{k}-r{r}-b{shard_bytes}",
@@ -147,7 +162,7 @@ def neighbor_cells() -> list[dict[str, Any]]:
                 "role": "neighbor",
             })
     for index, cell in enumerate(cells):
-        cell["seed"] = 0x1550000 + index
+        cell["seed"] = seed_base + index
     return cells
 
 
@@ -222,6 +237,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=9)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument(
+        "--beyond-512", action="store_true",
+        help="qualify the separate 576-through-1024-byte selector")
+    parser.add_argument(
+        "--holdout", action="store_true",
+        help="use an independent seed family for confirmation")
     return parser.parse_args()
 
 
@@ -247,7 +268,7 @@ def run_cell(
                 label, identities[label], cell, options.cpu,
                 options.source_commit, options.source_tree,
                 options.iterations, options.warmup, 0,
-                campaign="one-block-extended",
+                campaign=options.campaign,
                 failure_output=output)
             invocations.append(invocation)
             base.write_exclusive(
@@ -281,9 +302,29 @@ def main() -> int:
     base.require(not options.output.exists(),
                  "output path already exists")
     options.output.mkdir(parents=True)
-    cells = target_cells() + neighbor_cells()
+    if options.beyond_512:
+        options.campaign = "one-block-beyond512"
+        schema = BEYOND_SCHEMA
+        summary_schema = BEYOND_SUMMARY_SCHEMA
+        target_bytes = BEYOND_TARGET_BYTES
+        byte_neighbors = BEYOND_BYTE_NEIGHBORS
+        target_seed = 0x1640000
+        neighbor_seed = 0x1650000
+    else:
+        options.campaign = "one-block-extended"
+        schema = SCHEMA
+        summary_schema = SUMMARY_SCHEMA
+        target_bytes = TARGET_BYTES
+        byte_neighbors = BYTE_NEIGHBORS
+        target_seed = 0x1540000
+        neighbor_seed = 0x1550000
+    if options.holdout:
+        target_seed += 0x10000
+        neighbor_seed += 0x10000
+    cells = target_cells(target_bytes, target_seed) + \
+        neighbor_cells(target_bytes, byte_neighbors, neighbor_seed)
     raw: dict[str, Any] = {
-        "schema": SCHEMA,
+        "schema": schema,
         "created_utc": base.SUPPORT.utc_now(),
         "source_commit": options.source_commit,
         "source_tree": options.source_tree,
@@ -292,7 +333,9 @@ def main() -> int:
         "reserved_sibling": options.sibling,
         "iterations": options.iterations,
         "warmup": options.warmup,
-        "target_bytes": list(TARGET_BYTES),
+        "target_bytes": list(target_bytes),
+        "campaign": options.campaign,
+        "holdout": options.holdout,
         "batch": 64,
         "reuse": 64,
         "cells": [],
@@ -395,13 +438,15 @@ def main() -> int:
         raw["completed_utc"] = base.SUPPORT.utc_now()
         base.write_exclusive(options.output / "raw.json", raw)
         summary = {
-            "schema": SUMMARY_SCHEMA,
+            "schema": summary_schema,
             "status": "accepted" if not target_failures and
                 not neighbor_failures else "rejected",
             "source_commit": options.source_commit,
             "source_tree": options.source_tree,
             "main_commit": base.MAIN_COMMIT,
-            "target_bytes": list(TARGET_BYTES),
+            "target_bytes": list(target_bytes),
+            "campaign": options.campaign,
+            "holdout": options.holdout,
             "cell_count": len(analyses),
             "target_main_count": sum(
                 item["cell"]["role"] == "target_main"

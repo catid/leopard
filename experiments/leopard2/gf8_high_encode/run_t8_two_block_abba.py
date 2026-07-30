@@ -387,7 +387,11 @@ def validate_result(
                 correctness.get("leopard2_round_trip") is True,
                 "Leopard2 benchmark identity or round trip failed")
         build = result.get("build")
-        require(campaign in ("two-block", "one-block-extended"),
+        require(campaign in (
+                    "two-block",
+                    "one-block-extended",
+                    "one-block-beyond512",
+                ),
                 f"unsupported campaign identity: {campaign}")
         require(isinstance(build, dict),
                 "Leopard2 build identity is absent")
@@ -426,7 +430,7 @@ def validate_result(
                     expected_extended and
                 build.get("high_t8_two_block_selected") is expected_selected
             )
-        else:
+        elif campaign == "one-block-extended":
             expected_selected = (
                 (str(cell["role"]).startswith("target") and
                  implementation == "candidate") or
@@ -436,6 +440,28 @@ def validate_result(
             marker_valid = (
                 build.get("high_t8_one_block_extended_enabled") is
                     (implementation == "candidate") and
+                build.get("high_t8_one_block_selected") is
+                    expected_selected and
+                build.get("high_t8_two_block_128_192_enabled") is True and
+                build.get("high_t8_two_block_320_enabled") is True
+            )
+        else:
+            byte_count = int(cell["bytes"])
+            eligible_shape = (
+                5 <= cell["K"] <= 8 and 5 <= cell["R"] <= 8
+            )
+            expected_beyond = implementation == "candidate"
+            expected_selected = eligible_shape and (
+                byte_count == 64 or
+                (128 <= byte_count <= 512 and
+                 byte_count % 64 == 0) or
+                (576 <= byte_count <= 1024 and
+                 byte_count % 64 == 0 and expected_beyond)
+            )
+            marker_valid = (
+                build.get("high_t8_one_block_extended_enabled") is True and
+                build.get("high_t8_one_block_beyond_512_enabled") is
+                    expected_beyond and
                 build.get("high_t8_one_block_selected") is
                     expected_selected and
                 build.get("high_t8_two_block_128_192_enabled") is True and

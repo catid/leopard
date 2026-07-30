@@ -66,6 +66,13 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED must be 0 or 1"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 must be 0 or 1"
+#endif
 #ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
 #define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 0
 #endif
@@ -110,7 +117,9 @@ bool IsExpectedT8OneBlockByteCount(size_t bytes)
 {
     return bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
-         bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0);
+         bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
+        (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 == 0 &&
+         bytes >= 576 && bytes <= 1024 && (bytes & 63U) == 0);
 }
 
 bool IsExpectedT8TwoBlockExtendedShapeByteCount(
@@ -434,7 +443,8 @@ uint64_t ExerciseT8BatchBinding(
 uint64_t ExerciseT8PartialBindings(leo2_context* context)
 {
     static const size_t byte_counts[] = {
-        64, 128, 192, 256, 320, 384, 448, 512
+        64, 128, 192, 256, 320, 384, 448, 512,
+        576, 640, 704, 768, 832, 896, 960, 1024
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -1180,7 +1190,15 @@ int main()
             ExerciseT8BatchBinding(context, 320) +
             ExerciseT8BatchBinding(context, 384) +
             ExerciseT8BatchBinding(context, 448) +
-            ExerciseT8BatchBinding(context, 512);
+            ExerciseT8BatchBinding(context, 512) +
+            ExerciseT8BatchBinding(context, 576) +
+            ExerciseT8BatchBinding(context, 640) +
+            ExerciseT8BatchBinding(context, 704) +
+            ExerciseT8BatchBinding(context, 768) +
+            ExerciseT8BatchBinding(context, 832) +
+            ExerciseT8BatchBinding(context, 896) +
+            ExerciseT8BatchBinding(context, 960) +
+            ExerciseT8BatchBinding(context, 1024);
         const uint64_t t8_partial_binding_checks =
             ExerciseT8PartialBindings(context);
         const uint64_t t8_two_block_binding_checks =
@@ -1193,7 +1211,15 @@ int main()
             ExerciseT8PartialUnaligned(context, 320) +
             ExerciseT8PartialUnaligned(context, 384) +
             ExerciseT8PartialUnaligned(context, 448) +
-            ExerciseT8PartialUnaligned(context, 512);
+            ExerciseT8PartialUnaligned(context, 512) +
+            ExerciseT8PartialUnaligned(context, 576) +
+            ExerciseT8PartialUnaligned(context, 640) +
+            ExerciseT8PartialUnaligned(context, 704) +
+            ExerciseT8PartialUnaligned(context, 768) +
+            ExerciseT8PartialUnaligned(context, 832) +
+            ExerciseT8PartialUnaligned(context, 896) +
+            ExerciseT8PartialUnaligned(context, 960) +
+            ExerciseT8PartialUnaligned(context, 1024);
         const uint64_t t8_two_block_unaligned_checks =
             ExerciseT8TwoBlockUnaligned(context, 64) +
             ExerciseT8TwoBlockUnaligned(context, 128) +
@@ -1220,7 +1246,15 @@ int main()
             ExerciseT8PartialThreadPool(320) +
             ExerciseT8PartialThreadPool(384) +
             ExerciseT8PartialThreadPool(448) +
-            ExerciseT8PartialThreadPool(512);
+            ExerciseT8PartialThreadPool(512) +
+            ExerciseT8PartialThreadPool(576) +
+            ExerciseT8PartialThreadPool(640) +
+            ExerciseT8PartialThreadPool(704) +
+            ExerciseT8PartialThreadPool(768) +
+            ExerciseT8PartialThreadPool(832) +
+            ExerciseT8PartialThreadPool(896) +
+            ExerciseT8PartialThreadPool(960) +
+            ExerciseT8PartialThreadPool(1024);
         const uint64_t t8_two_block_thread_pool_checks =
             ExerciseT8TwoBlockThreadPool(128) +
             ExerciseT8TwoBlockThreadPool(192) +

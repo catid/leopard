@@ -210,6 +210,9 @@ bool OneShotNoLossShortCircuitExperimentEnabled();
 */
 bool HighT8OneBlockExtendedEnabled();
 
+/* Provisional marker for the measured one-block extension above 512 bytes. */
+bool HighT8OneBlockBeyond512Enabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */
