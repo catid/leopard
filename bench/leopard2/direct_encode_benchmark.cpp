@@ -596,6 +596,51 @@ static const char* ModeName(EncodeMode mode)
     return mode == MODE_DIRECT ? "force_direct" : "force_transform";
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+static bool ExpectedMeasuredHighFullDirect(const Options& options)
+{
+    const bool exact_k5_r5 = options.k == 5 && options.r == 5;
+    if (exact_k5_r5)
+    {
+        if (options.bytes <= 14)
+            return true;
+        if (options.bytes >= 16 && options.bytes <= 60 &&
+            options.bytes % 4 != 3)
+            return true;
+        if (options.bytes >= 64 && options.bytes <= 70)
+            return true;
+        if (options.bytes == 96)
+            return true;
+        return options.bytes >= 128 && options.bytes <= 4096 &&
+            (options.bytes & 63U) == 0;
+    }
+
+    switch (options.bytes)
+    {
+    case 1: case 2:
+    case 4: case 5: case 6:
+    case 8: case 9: case 10:
+    case 12: case 13: case 14:
+    case 16: case 17: case 18:
+    case 20: case 21: case 22:
+    case 24: case 25: case 26:
+    case 28:
+    case 32: case 33: case 34:
+    case 36: case 38:
+    case 40: case 41:
+    case 48:
+    case 65:
+        return true;
+    case 3:
+    case 64:
+        return options.k != 16 || options.r != 8;
+    default:
+        return false;
+    }
+}
+#endif
+
 static bool ExpectedAutoDirectPath(
     const Options& options,
     const leo2_codec* codec,
@@ -603,20 +648,30 @@ static bool ExpectedAutoDirectPath(
     bool direct_capable)
 {
     const leo2_profile profile = leo2_codec_profile(codec);
-    if (!direct_capable || options.k < 2 ||
-        options.q != 1 || options.bytes < 1024 ||
-        (options.bytes & 63U) != 0)
+    if (!direct_capable || options.k < 2)
         return false;
     const leo2_backend backend = leo2_context_backend(context);
     if (profile == LEO2_PROFILE_LEGACY_HIGH_V1)
     {
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
-        return leo2_codec_field(codec) == LEO2_FIELD_GF8 &&
-            backend == LEO2_BACKEND_AVX2 && options.r > 1;
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+        if (leo2_codec_field(codec) != LEO2_FIELD_GF8 ||
+            backend != LEO2_BACKEND_AVX2)
+            return false;
+        if (options.k >= 5 && options.k <= 16 &&
+            options.r >= 5 && options.r <= 8 &&
+            options.q == options.r &&
+            ExpectedMeasuredHighFullDirect(options))
+            return true;
+        return options.q == 1 && options.bytes >= 1024 &&
+            (options.bytes & 63U) == 0 && options.r > 1;
 #else
         return false;
 #endif
     }
+    if (options.q != 1 || options.bytes < 1024 ||
+        (options.bytes & 63U) != 0)
+        return false;
     if (profile != LEO2_PROFILE_LOW_V1)
         return false;
     if (backend == LEO2_BACKEND_SCALAR)

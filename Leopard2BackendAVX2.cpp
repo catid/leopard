@@ -4719,6 +4719,383 @@ static void AVX2FF8MultiplyAddOutputs(
     }
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+#if defined(_MSC_VER)
+# define LEO2_AVX2_TINY_GROUP_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+# define LEO2_AVX2_TINY_GROUP_NOINLINE __attribute__((noinline))
+#else
+# define LEO2_AVX2_TINY_GROUP_NOINLINE
+#endif
+
+template<uint32_t Width>
+static LEO_FORCE_INLINE __m128i
+AVX2FF8TinyLoadXMM(const uint8_t* source)
+{
+    static_assert(
+        Width == 1 || Width == 2 || Width == 4 ||
+            Width == 8 || Width == 16,
+        "tiny XMM load width must be 1, 2, 4, 8, or 16 bytes");
+    if (Width == 16)
+    {
+        return _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(source));
+    }
+    if (Width == 8)
+    {
+        return _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(source));
+    }
+    uint32_t value = 0;
+    memcpy(&value, source, Width);
+    return _mm_cvtsi32_si128(static_cast<int>(value));
+}
+
+template<uint32_t Width>
+static LEO_FORCE_INLINE void AVX2FF8TinyStoreXMM(
+    uint8_t* destination,
+    __m128i value)
+{
+    static_assert(
+        Width == 1 || Width == 2 || Width == 4 ||
+            Width == 8 || Width == 16,
+        "tiny XMM store width must be 1, 2, 4, 8, or 16 bytes");
+    if (Width == 16)
+    {
+        _mm_storeu_si128(
+            reinterpret_cast<__m128i*>(destination), value);
+        return;
+    }
+    if (Width == 8)
+    {
+        _mm_storel_epi64(
+            reinterpret_cast<__m128i*>(destination), value);
+        return;
+    }
+    const uint32_t word =
+        static_cast<uint32_t>(_mm_cvtsi128_si32(value));
+    memcpy(destination, &word, Width);
+}
+
+template<
+    uint32_t OutputCount,
+    uint32_t Width,
+    uint32_t StaticSourceCount = 0>
+static LEO_FORCE_INLINE void
+AVX2FF8EncodeOutputGroupTinyXMM(
+    const uint8_t* const* sources,
+    uint32_t source_count,
+    uint8_t* const* destinations,
+    const uint8_t* const* rows,
+    uint64_t offset)
+{
+    const uint32_t source_limit =
+        StaticSourceCount != 0 ? StaticSourceCount : source_count;
+    __m128i accumulators[OutputCount];
+    for (uint32_t output = 0; output < OutputCount; ++output)
+        accumulators[output] = _mm_setzero_si128();
+    const __m128i nibble_mask = _mm_set1_epi8(0x0f);
+
+    for (uint32_t source = 0; source < source_limit; ++source)
+    {
+        const __m128i data =
+            AVX2FF8TinyLoadXMM<Width>(sources[source] + offset);
+        const __m128i low_indices =
+            _mm_and_si128(data, nibble_mask);
+        const __m128i high_indices = _mm_and_si128(
+            _mm_srli_epi64(data, 4), nibble_mask);
+        for (uint32_t output = 0; output < OutputCount; ++output)
+        {
+            const uint16_t log = rows[output][source];
+            __m128i product = data;
+            if (log != 0)
+            {
+                const FF8NibbleTable& table = FF8Tables[log];
+                product = _mm_xor_si128(
+                    _mm_shuffle_epi8(
+                        _mm_loadu_si128(
+                            reinterpret_cast<const __m128i*>(table.low)),
+                        low_indices),
+                    _mm_shuffle_epi8(
+                        _mm_loadu_si128(
+                            reinterpret_cast<const __m128i*>(table.high)),
+                        high_indices));
+            }
+            accumulators[output] = _mm_xor_si128(
+                accumulators[output], product);
+        }
+    }
+    for (uint32_t output = 0; output < OutputCount; ++output)
+    {
+        AVX2FF8TinyStoreXMM<Width>(
+            destinations[output] + offset,
+            accumulators[output]);
+    }
+}
+
+template<uint32_t OutputCount, uint32_t StaticSourceCount = 0>
+static LEO2_AVX2_TINY_GROUP_NOINLINE void
+AVX2FF8EncodeOutputGroupTinyImpl(
+    const void* const* source_pointers,
+    uint32_t source_count,
+    void* const* destination_pointers,
+    const uint8_t* coefficient_logs,
+    uint64_t byte_count)
+{
+    static_assert(OutputCount >= 1 && OutputCount <= 5,
+        "tiny encode output group must contain one through five outputs");
+    const uint8_t* sources[16];
+    uint8_t* destinations[OutputCount];
+    const uint8_t* rows[OutputCount];
+    const uint32_t source_limit =
+        StaticSourceCount != 0 ? StaticSourceCount : source_count;
+    for (uint32_t source = 0; source < source_limit; ++source)
+        sources[source] =
+            static_cast<const uint8_t*>(source_pointers[source]);
+    for (uint32_t output = 0; output < OutputCount; ++output)
+    {
+        destinations[output] =
+            static_cast<uint8_t*>(destination_pointers[output]);
+        rows[output] = coefficient_logs +
+            static_cast<size_t>(output) * source_limit;
+    }
+
+    uint64_t offset = 0;
+    while (OutputCount <= 4 && byte_count - offset >= 64)
+    {
+        __m256i low_accumulators[OutputCount];
+        __m256i high_accumulators[OutputCount];
+        for (uint32_t output = 0; output < OutputCount; ++output)
+        {
+            low_accumulators[output] = _mm256_setzero_si256();
+            high_accumulators[output] = _mm256_setzero_si256();
+        }
+
+        for (uint32_t source = 0; source < source_limit; ++source)
+        {
+            const __m256i low_data = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    sources[source] + offset));
+            const __m256i high_data = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    sources[source] + offset + 32));
+            const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+            const __m256i low_low_indices =
+                _mm256_and_si256(low_data, nibble_mask);
+            const __m256i low_high_indices = _mm256_and_si256(
+                _mm256_srli_epi64(low_data, 4), nibble_mask);
+            const __m256i high_low_indices =
+                _mm256_and_si256(high_data, nibble_mask);
+            const __m256i high_high_indices = _mm256_and_si256(
+                _mm256_srli_epi64(high_data, 4), nibble_mask);
+            for (uint32_t output = 0; output < OutputCount; ++output)
+            {
+                const uint16_t log = rows[output][source];
+                if (log == 0)
+                {
+                    low_accumulators[output] = _mm256_xor_si256(
+                        low_accumulators[output], low_data);
+                    high_accumulators[output] = _mm256_xor_si256(
+                        high_accumulators[output], high_data);
+                }
+                else
+                {
+                    const FF8NibbleTable& table = FF8Tables[log];
+                    const __m256i low_table =
+                        BroadcastTable(table.low);
+                    const __m256i high_table =
+                        BroadcastTable(table.high);
+                    low_accumulators[output] = _mm256_xor_si256(
+                        low_accumulators[output],
+                        _mm256_xor_si256(
+                            _mm256_shuffle_epi8(
+                                low_table, low_low_indices),
+                            _mm256_shuffle_epi8(
+                                high_table, low_high_indices)));
+                    high_accumulators[output] = _mm256_xor_si256(
+                        high_accumulators[output],
+                        _mm256_xor_si256(
+                            _mm256_shuffle_epi8(
+                                low_table, high_low_indices),
+                            _mm256_shuffle_epi8(
+                                high_table, high_high_indices)));
+                }
+            }
+        }
+        for (uint32_t output = 0; output < OutputCount; ++output)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(
+                    destinations[output] + offset),
+                low_accumulators[output]);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(
+                    destinations[output] + offset + 32),
+                high_accumulators[output]);
+        }
+        offset += 64;
+    }
+
+    while (byte_count - offset >= 32)
+    {
+        __m256i accumulators[OutputCount];
+        for (uint32_t output = 0; output < OutputCount; ++output)
+            accumulators[output] = _mm256_setzero_si256();
+
+        const __m256i nibble_mask = _mm256_set1_epi8(0x0f);
+        for (uint32_t source = 0; source < source_limit; ++source)
+        {
+            const __m256i data = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(
+                    sources[source] + offset));
+            const __m256i low_indices =
+                _mm256_and_si256(data, nibble_mask);
+            const __m256i high_indices = _mm256_and_si256(
+                _mm256_srli_epi64(data, 4), nibble_mask);
+            for (uint32_t output = 0; output < OutputCount; ++output)
+            {
+                const uint16_t log = rows[output][source];
+                if (log == 0)
+                {
+                    accumulators[output] = _mm256_xor_si256(
+                        accumulators[output], data);
+                }
+                else
+                {
+                    const FF8NibbleTable& table = FF8Tables[log];
+                    const __m256i low_table =
+                        BroadcastTable(table.low);
+                    const __m256i high_table =
+                        BroadcastTable(table.high);
+                    accumulators[output] = _mm256_xor_si256(
+                        accumulators[output],
+                        _mm256_xor_si256(
+                            _mm256_shuffle_epi8(
+                                low_table, low_indices),
+                            _mm256_shuffle_epi8(
+                                high_table, high_indices)));
+                }
+            }
+        }
+        for (uint32_t output = 0; output < OutputCount; ++output)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(
+                    destinations[output] + offset),
+                accumulators[output]);
+        }
+        offset += 32;
+    }
+
+    if (byte_count - offset >= 16)
+    {
+        AVX2FF8EncodeOutputGroupTinyXMM<
+            OutputCount, 16, StaticSourceCount>(
+                sources, source_limit, destinations, rows, offset);
+        offset += 16;
+    }
+    if (byte_count - offset >= 8)
+    {
+        AVX2FF8EncodeOutputGroupTinyXMM<
+            OutputCount, 8, StaticSourceCount>(
+                sources, source_limit, destinations, rows, offset);
+        offset += 8;
+    }
+    if (byte_count - offset >= 4)
+    {
+        AVX2FF8EncodeOutputGroupTinyXMM<
+            OutputCount, 4, StaticSourceCount>(
+                sources, source_limit, destinations, rows, offset);
+        offset += 4;
+    }
+
+    switch (byte_count - offset)
+    {
+    case 1:
+        AVX2FF8EncodeOutputGroupTinyXMM<
+            OutputCount, 1, StaticSourceCount>(
+                sources, source_limit, destinations, rows, offset);
+        break;
+    case 2:
+        AVX2FF8EncodeOutputGroupTinyXMM<
+            OutputCount, 2, StaticSourceCount>(
+                sources, source_limit, destinations, rows, offset);
+        break;
+    case 3:
+        for (uint32_t tail = 0; tail < 3; ++tail)
+        {
+            for (uint32_t output = 0; output < OutputCount; ++output)
+            {
+                uint8_t value = 0;
+                for (uint32_t source = 0;
+                     source < source_limit;
+                     ++source)
+                {
+                    const uint16_t log = rows[output][source];
+                    value ^= log == 0
+                        ? sources[source][offset + tail]
+                        : FF8Product(
+                            log, sources[source][offset + tail]);
+                }
+                destinations[output][offset + tail] = value;
+            }
+        }
+        break;
+    }
+}
+
+#undef LEO2_AVX2_TINY_GROUP_NOINLINE
+
+void AVX2FF8EncodeOutputGroupTiny(
+    const void* const* sources,
+    uint32_t source_count,
+    void* const* destinations,
+    const uint8_t* coefficient_logs,
+    uint32_t output_count,
+    uint64_t byte_count)
+{
+    if (!sources || source_count == 0 || source_count > 16 ||
+        !destinations || !coefficient_logs || output_count == 0 ||
+        output_count > 5)
+        return;
+    switch (output_count)
+    {
+    case 1:
+        AVX2FF8EncodeOutputGroupTinyImpl<1>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 2:
+        AVX2FF8EncodeOutputGroupTinyImpl<2>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 3:
+        AVX2FF8EncodeOutputGroupTinyImpl<3>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 4:
+        AVX2FF8EncodeOutputGroupTinyImpl<4>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 5:
+        if (source_count == 5)
+            AVX2FF8EncodeOutputGroupTinyImpl<5, 5>(
+                sources, source_count, destinations,
+                coefficient_logs, byte_count);
+        else
+            AVX2FF8EncodeOutputGroupTinyImpl<5>(
+                sources, source_count, destinations,
+                coefficient_logs, byte_count);
+        break;
+    }
+}
+
+#endif
+
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
     !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
 template<bool Add, bool Identity0, bool Identity1>

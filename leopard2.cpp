@@ -78,6 +78,14 @@
 #error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+#define LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO 1
+#endif
+#if LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO < 0 || \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO > 1
+#error "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO must be 0 or 1"
+#endif
+
 /*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
@@ -2393,6 +2401,73 @@ static bool AutoDirectEncodePreferred(
         requested_recovery_count > codec->recovery_count ||
         shard_bytes == 0 || shard_bytes > std::numeric_limits<size_t>::max())
         return false;
+
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+#if !LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+        return false;
+#else
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->original_count >= 5 && codec->original_count <= 16 &&
+        codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
+        requested_recovery_count == codec->recovery_count)
+    {
+        /*
+            A production-archive ON/OFF sweep covered every valid K=5..16,
+            R=5..min(K,8) shape at each byte count through 70.  The switch
+            below contains only lengths whose weakest selected cell cleared
+            the five-percent gate.  This is intentionally an offline decision
+            table: nearby ragged lengths can reverse the result sharply.
+
+            K=5,R=5 retained a separate comfortable region.  Beyond the tiny
+            kernel, restrict it to complete 64-byte tiles through 4 KiB so
+            arbitrary tails cannot inherit the aligned conclusion.
+        */
+        const bool exact_k5_r5 =
+            codec->original_count == 5 && codec->recovery_count == 5;
+        if (exact_k5_r5)
+        {
+            if (shard_bytes <= 14)
+                return true;
+            if (shard_bytes >= 16 && shard_bytes <= 60 &&
+                shard_bytes % 4 != 3)
+                return true;
+            if (shard_bytes >= 64 && shard_bytes <= 70)
+                return true;
+            if (shard_bytes == 96)
+                return true;
+            return shard_bytes >= 128 && shard_bytes <= 4096 &&
+                shard_bytes % kDirectSimdTileBytes == 0;
+        }
+
+        switch (shard_bytes)
+        {
+        case 1: case 2:
+        case 4: case 5: case 6:
+        case 8: case 9: case 10:
+        case 12: case 13: case 14:
+        case 16: case 17: case 18:
+        case 20: case 21: case 22:
+        case 24: case 25: case 26:
+        case 28:
+        case 32: case 33: case 34:
+        case 36: case 38:
+        case 40: case 41:
+        case 48:
+        case 65:
+            return true;
+        case 3:
+        case 64:
+            return codec->original_count != 16 ||
+                codec->recovery_count != 8;
+        default:
+            return false;
+        }
+    }
+#endif
+#endif
 
     if (requested_recovery_count != 1 ||
         shard_bytes < kDirectMinimumMeasuredBytes ||
@@ -5710,6 +5785,118 @@ static leo2_result ExecuteDirectEncodeRows(
     return LEO2_SUCCESS;
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && defined(LEO_HAS_FF8)
+/*
+    Default-off source-major legacy-high experiment for the tiny full-parity
+    regime.  The established row-major executor dispatches one fixed multiply
+    for every K-by-R coefficient.  AVX2 can instead load each source once and
+    update two through eight outputs with distinct coefficients.
+
+    Keep the immutable generator table row-major for the mature direct paths
+    and gather at most eight logs into a bounded stack array per source.  This
+    avoids another codec allocation and makes the experiment incapable of
+    increasing hot-path scratch.  Partial-output calls retain the row-major
+    executor until their own crossover map is complete.
+*/
+static leo2_result ExecuteGF8DirectEncodeSourceMajor(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        ops.kind != LEO2_BACKEND_AVX2 ||
+        !ops.ff8_multiply_add_outputs ||
+        codec->original_count < 5 ||
+        codec->original_count > 16 ||
+        codec->recovery_count < 5 ||
+        codec->recovery_count > 8)
+        return LEO2_UNSUPPORTED;
+
+    void* outputs[8];
+    uint32_t recovery_indices[8];
+    uint32_t output_count = 0;
+    for (uint32_t recovery_index = 0;
+         recovery_index < codec->recovery_count;
+         ++recovery_index)
+    {
+        if (!recovery[recovery_index])
+            continue;
+        outputs[output_count] = recovery[recovery_index];
+        recovery_indices[output_count++] = recovery_index;
+    }
+    if (output_count != codec->recovery_count)
+        return LEO2_UNSUPPORTED;
+
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    if (shard_bytes <= 64)
+    {
+        const uint32_t output_group_width =
+            codec->original_count == 5 && output_count == 5 ? 5U : 4U;
+        for (uint32_t output_base = 0;
+             output_base < output_count;
+             output_base += output_group_width)
+        {
+            const uint32_t group_count = std::min(
+                output_group_width, output_count - output_base);
+            leopard::backend::AVX2FF8EncodeOutputGroupTiny(
+                original, codec->original_count, outputs + output_base,
+                codec->direct_generator_logs8.data() +
+                    static_cast<size_t>(output_base) *
+                        codec->original_count,
+                group_count, shard_bytes);
+        }
+        return LEO2_SUCCESS;
+    }
+#endif
+
+    for (uint32_t output_index = 0;
+         output_index < output_count;
+         ++output_index)
+    {
+        const size_t row_offset =
+            static_cast<size_t>(recovery_indices[output_index]) *
+                codec->original_count;
+        const uint8_t multiplier_log =
+            codec->direct_generator_logs8[row_offset];
+        if (multiplier_log == 0)
+        {
+            memcpy(outputs[output_index], original[0], shard_bytes);
+        }
+        else
+        {
+            DirectField8::MultiplyBytes(
+                ops, outputs[output_index], original[0],
+                multiplier_log, shard_bytes);
+        }
+    }
+
+    uint16_t multiplier_logs[8];
+    for (uint32_t original_index = 1;
+         original_index < codec->original_count;
+         ++original_index)
+    {
+        for (uint32_t output_index = 0;
+             output_index < output_count;
+             ++output_index)
+        {
+            const size_t row_offset =
+                static_cast<size_t>(recovery_indices[output_index]) *
+                    codec->original_count;
+            multiplier_logs[output_index] =
+                codec->direct_generator_logs8[
+                    row_offset + original_index];
+        }
+        ops.ff8_multiply_add_outputs(
+            outputs, original[original_index], multiplier_logs,
+            output_count, shard_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+#endif
+
 static leo2_result ExecuteDirectEncode(
     const leo2_codec* codec,
     size_t shard_bytes,
@@ -5720,9 +5907,18 @@ static leo2_result ExecuteDirectEncode(
         return LEO2_INTERNAL_ERROR;
 #ifdef LEO_HAS_FF8
     if (codec->field == LEO2_FIELD_GF8)
+    {
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+        const leo2_result source_major =
+            ExecuteGF8DirectEncodeSourceMajor(
+                codec, shard_bytes, original, recovery);
+        if (source_major != LEO2_UNSUPPORTED)
+            return source_major;
+#endif
         return ExecuteDirectEncodeRows<DirectField8>(
             codec, shard_bytes, original, recovery,
             codec->direct_generator_logs8);
+    }
 #endif
 #ifdef LEO_HAS_FF16
     return ExecuteDirectEncodeRows<DirectField16>(

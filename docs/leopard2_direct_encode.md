@@ -355,3 +355,86 @@ parameters. The compact, committed checkpoint at
 `experiments/leopard2/direct_encode/results/checkpoint.json` preserves the
 promotion evidence needed to resume on another machine, while the much larger
 raw result trees remain generated artifacts.
+
+## Legacy-high GF8/AVX2 full-output experiment
+
+The legacy-high full-output candidate remains disabled by default and does not
+change the ordinary production dispatcher. It is compiled with:
+
+```sh
+-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON
+```
+
+`LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO` defaults to `ON` only inside that
+default-off experiment. Setting it to `OFF` retains the same generator tables
+and AVX2 object code while forcing production AUTO back to the transform
+encoder. This supplies a same-layout timing control without changing the
+stable API or wire profile.
+
+The candidate is limited to legacy-high GF8, an explicit AVX2 backend,
+`5 <= K <= 16`, `5 <= R <= 8`, and all `R` output pointers present. For
+shards through 64 bytes, an AVX2 output-group kernel keeps one through five
+destinations in registers and evaluates exact-width 32-, 16-, 8-, 4-, 2-, and
+1-byte pieces. A three-byte remainder deliberately uses scalar products because
+the XMM form lost in the whole-call screen. The `K=5,R=5` kernel fixes both
+counts at compile time; other shapes use groups of four outputs. Larger
+eligible shards use the existing source-major multi-output multiply-add
+backend. Partial-output calls retain the mature row-major or transform paths.
+
+AUTO contains only the measured lengths that cleared the same-source
+five-percent discovery gate. `K=5,R=5` has a separate broader region; the
+other 41 shapes use a compact exact-length switch through 65 bytes. The
+`K=16,R=8` three- and 64-byte cells remain transform fallbacks. This irregular
+table is one reason the complete experiment remains default-off pending a
+stronger isolated campaign and a solution to the residual exact-main gap.
+
+Correctness does not depend on timing evidence. The Release direct-generator
+suite passed 1,024 profiles, 8,704 basis messages, 48,749,869 parity symbols,
+8,192 output masks, unaligned buffers, concurrency, allocation auditing, and
+AUTO boundaries. A production-only matrix then checked all 42 eligible `K,R`
+shapes at 16 tail and SIMD boundaries: AUTO-on executed 462 direct and 210
+transform cells, while the same-layout AUTO-off build executed all 672 through
+the transform path. Both matched the independent systematic generator oracle.
+The same 672-cell AUTO-on matrix passed Clang 18 ASan+UBSan at about 36 MiB
+RSS. The much broader sanitizer executable is not required for this candidate;
+it reached the session's 384 MiB safety ceiling and was replaced by this bounded
+gate rather than rerun with an unsafe memory allowance.
+
+The final frozen production executables had these SHA-256 values:
+
+- candidate: `1c61bbd0c5c39081769c31de3d9579850fbbfc758ae51be031068c84f6be40a2`
+- same-layout AUTO-off control:
+  `3db952c1149bf49894207ba561d3979e12835edff580836aca34a78ca0f05d71`
+- exact Leopard main:
+  `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`
+
+Candidate and control used byte-identical AVX2 backend objects. The compact
+CPU-4 run held the canonical benchmark lock, pinned every process, verified
+all three executable hashes before and after, and required identical original,
+parity, and recovered-output digests. It is directional rather than promotion
+authority while the coordinator-exclusion issue remains open. Ratios greater
+than one mean the candidate is faster:
+
+| K,R | bytes | exact main / candidate | AUTO-off / candidate |
+| --- | ---: | ---: | ---: |
+| 5,5 | 64 | 0.897 | 1.819 |
+| 5,5 | 256 | 0.832 | 1.244 |
+| 5,5 | 1,024 | 1.045 | 1.204 |
+| 5,5 | 4,096 | 1.288 | 1.060 |
+| 8,8 | 64 | 0.513 | 1.233 |
+| 8,8 | 256 | 0.661 | 1.020 |
+| 8,8 | 1,024 | 0.919 | 0.996 |
+| 8,8 | 4,096 | 1.115 | 1.020 |
+| 12,8 | 64 | 0.593 | 1.291 |
+| 16,8 | 64 | 0.545 | 1.047 |
+
+Thus the arithmetic kernel substantially improves Leopard2's own tiny
+full-output path, but fixed safe-API validation/setup and `K*R` direct
+arithmetic still leave 64-byte `K>=8` cells behind Leopard main. It is not
+promoted merely because it wins against Leopard2's transform fallback.
+
+Rejected variants are retained as negative results rather than production
+code: a whole-T=8 callback, two- and three-output grouping, an XMM three-byte
+tail, forced source-loop unrolling, and a generated coefficient-major
+`K=5,R=5` circuit. Each either failed the five-percent whole-call gate or
+regressed through extra source loads, register pressure, or code size.

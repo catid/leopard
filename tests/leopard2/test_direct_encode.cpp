@@ -525,7 +525,16 @@ void test_profile_matrix(
             int direct_path = -1;
             require_result(leo2_test_codec_encode_path(owner->codec,
                 random_bytes, r, &direct_path), "AUTO path query");
-            require(direct_path == 0,
+            int expected_auto_direct = 0;
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
+            if (profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                public_field == LEO2_FIELD_GF8 &&
+                leo2_context_backend(context) == LEO2_BACKEND_AVX2 &&
+                k == 5 && r == 5)
+                expected_auto_direct = 1;
+#endif
+            require(direct_path == expected_auto_direct,
                 "AUTO selected an uncalibrated tiny direct-encode threshold");
             ++counts->random_messages;
             ++counts->profiles;
@@ -2157,7 +2166,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     require_result(leo2_test_codec_encode_path(high->codec, 1024, 1, &direct),
         "AUTO high-profile path query");
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     const bool measured_high_backend = backend == LEO2_BACKEND_AVX2;
 #else
     const bool measured_high_backend = false;
@@ -2200,7 +2210,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     }
     delete historical;
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     leo2_context_options avx2_options = {};
     avx2_options.struct_size = sizeof(avx2_options);
     avx2_options.backend = LEO2_BACKEND_AVX2;
@@ -2308,7 +2319,8 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
         require_result(leo2_test_codec_encode_path(
             control->codec, 1024, 1, &direct),
             "high-selector backend control path query");
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
         const bool expected_high =
             high_control_backends[i] == LEO2_BACKEND_AVX2;
 #else

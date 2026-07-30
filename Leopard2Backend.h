@@ -502,6 +502,24 @@ void AVX2XorMemorySourcesFusedFinal(
     uint64_t byte_count);
 #endif
 
+#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
+    !defined(NO_LEO_HAS_FF8)
+/*
+    Default-off tiny legacy-high encoder experiment.  coefficient_logs stores
+    output_count contiguous source_count-element rows in Leopard GF8 log
+    representation.  One through five pairwise-disjoint destinations are
+    overwritten with their exact linear combinations.
+*/
+void AVX2FF8EncodeOutputGroupTiny(
+    const void* const* sources,
+    uint32_t source_count,
+    void* const* destinations,
+    const uint8_t* coefficient_logs,
+    uint32_t output_count,
+    uint64_t byte_count);
+
+#endif
+
 #if defined(LEO2_HAVE_AVX2_BACKEND)
 const Ops* InitializeAVX2(const InitializeArgs& args);
 // Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen
