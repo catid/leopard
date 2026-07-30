@@ -6,6 +6,44 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-30 restart-safe checkpoint
+
+Do **not** run the complete `tools/leopard2_build_provenance_test.py` suite
+from the controlling Codex session.  Two attempts immediately terminated and
+restarted that session.  The enclosing cgroup subsequently reported
+`memory.events` values `oom=0` and `oom_kill=0` with `memory.max=max`, so the
+failure is not proven to be host-memory exhaustion; process-containment fault
+injection may instead be affecting the controller.  The isolation work is
+tracked by `leopard-79h.40.36.12`.  Until that bead is complete, use a separate
+session/process boundary plus strict address-space, RSS, and time limits for
+individual provenance tests only.
+
+The current bug-first working tree contains:
+
+- a default-OFF generalized GF8/AVX2 one-loss direct-repair candidate and its
+  four-source tiny-shard callback;
+- exact v3 CMake selector attestation propagated through the benchmark/evidence
+  runners;
+- retained-descriptor and terminal-precedence fixes in the lab, fuzz, and
+  provenance tooling;
+- parallel fuzz campaign/audit v5 with a signed, closed-world probe execution
+  policy; and
+- regression coverage for recycled numeric file descriptors, process-tree
+  teardown, historical evidence contracts, and current schema closure.
+
+Safe validation completed after the restart:
+
+- `tools/leopard2_lab.py self-test`: PASS under normal and optimized Python,
+  peak RSS 58,368 and 58,112 KiB;
+- `tools/leopard2_fuzz_campaign.py self-test`: PASS under normal and optimized
+  Python, peak RSS 53,760 and 53,248 KiB;
+- Python compilation and `git diff --check`: PASS.
+
+The older statement below that the pre-optimization bug hunt is complete is
+historical.  The current gate remains open until the saved working tree is
+committed/pushed, memory-safe compiled correctness checks pass, and
+`leopard-79h.40.36.12` explains the unsafe provenance-suite launch.
+
 ## 2026-07-29 bug-first resume gate
 
 The pre-optimization bug hunt is complete.  Nine reviewable commits capture
