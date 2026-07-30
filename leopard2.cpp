@@ -5258,7 +5258,8 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
         leopard::xor_mem(ops, output, waiting, shard_bytes);
 }
 
-static leo2_result ValidateK1R1DecodeBuffers(
+static LEO_FORCE_INLINE leo2_result
+ValidateK1R1DecodeBuffers(
     uint64_t shard_bytes,
     const AddressRange& scratch_range,
     const AddressRange* protected_ranges,
@@ -5305,6 +5306,75 @@ static leo2_result ValidateK1R1DecodeBuffers(
     return LEO2_SUCCESS;
 }
 
+#if defined(_MSC_VER)
+#define LEO2_K1_TERMINAL_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_K1_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_k1_terminal"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K1_TERMINAL_NOINLINE __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K1_TERMINAL_NOINLINE
+#endif
+
+/*
+    Keep K=1 layout checks, buffer validation, and the terminal copy outside
+    the shared direct decoder.  The two public execution routes dispatch here
+    directly, eliminating an otherwise nested validator call without
+    perturbing instruction layout for every non-K1 repair.
+*/
+static LEO2_K1_TERMINAL_NOINLINE leo2_result
+DecodeK1R1TerminalValidated(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    size_t protected_count,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    if (!codec || codec->original_count != 1 ||
+        codec->recovery_count != 1 || shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange scratch_range = { 0, 0 };
+    leo2_result result = LEO2_SUCCESS;
+    if (IsLegacyHighK1R1Codec(codec))
+    {
+        size_t rounded_bytes = 0;
+        if (!RoundShardBytes(shard_bytes, rounded_bytes))
+            return LEO2_INVALID_ARGUMENT;
+        if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
+            return LEO2_UNSUPPORTED;
+        result = CheckOptionalScratch(
+            scratch, scratch_bytes, scratch_range);
+    }
+    else
+    {
+        ScratchLayout layout;
+        size_t rounded_bytes = 0;
+        result = DirectDecodeLayout(
+            codec, shard_bytes, layout, rounded_bytes);
+        if (result == LEO2_SUCCESS)
+            result = CheckScratch(
+                scratch, scratch_bytes, layout, scratch_range);
+    }
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    result = ValidateK1R1DecodeBuffers(
+        shard_bytes, scratch_range, protected_ranges, protected_count,
+        original, recovery, restored);
+    if (result != LEO2_SUCCESS)
+        return result;
+    memcpy(restored[0], recovery[0], static_cast<size_t>(shard_bytes));
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_K1_TERMINAL_NOINLINE
+
 static leo2_result DecodeDirectXorValidated(
     const leo2_codec* codec,
     uint32_t missing,
@@ -5319,26 +5389,11 @@ static leo2_result DecodeDirectXorValidated(
 {
     if (shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
-    if (IsLegacyHighK1R1Codec(codec) && missing == 0)
-    {
-        size_t rounded_bytes = 0;
-        if (!RoundShardBytes(shard_bytes, rounded_bytes))
-            return LEO2_INVALID_ARGUMENT;
-        if (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1u) != 0)
-            return LEO2_UNSUPPORTED;
-        AddressRange scratch_range;
-        leo2_result result = CheckOptionalScratch(
-            scratch, scratch_bytes, scratch_range);
-        if (result != LEO2_SUCCESS)
-            return result;
-        result = ValidateK1R1DecodeBuffers(
-            shard_bytes, scratch_range, protected_ranges, protected_count,
-            original, recovery, restored);
-        if (result != LEO2_SUCCESS)
-            return result;
-        memcpy(restored[0], recovery[0], static_cast<size_t>(shard_bytes));
-        return LEO2_SUCCESS;
-    }
+    if (codec && codec->original_count == 1 &&
+        codec->recovery_count == 1 && missing == 0)
+        return DecodeK1R1TerminalValidated(
+            codec, shard_bytes, protected_ranges, protected_count,
+            original, recovery, restored, scratch, scratch_bytes);
     ScratchLayout layout;
     size_t rounded_bytes = 0;
     leo2_result result = DirectDecodeLayout(
@@ -5350,17 +5405,6 @@ static leo2_result DecodeDirectXorValidated(
         scratch, scratch_bytes, layout, scratch_range);
     if (result != LEO2_SUCCESS)
         return result;
-    if (codec->original_count == 1 && codec->recovery_count == 1 &&
-        missing == 0)
-    {
-        result = ValidateK1R1DecodeBuffers(
-            shard_bytes, scratch_range, protected_ranges, protected_count,
-            original, recovery, restored);
-        if (result != LEO2_SUCCESS)
-            return result;
-        memcpy(restored[0], recovery[0], static_cast<size_t>(shard_bytes));
-        return LEO2_SUCCESS;
-    }
     if (!original || !recovery || !restored ||
         missing >= codec->original_count)
         return LEO2_INVALID_ARGUMENT;
@@ -6432,9 +6476,9 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
 #define LEO2_DIRECT_REPAIR_NOINLINE __declspec(noinline)
 #elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
 #define LEO2_DIRECT_REPAIR_NOINLINE \
-    __attribute__((noinline, section(".text.leo2_direct_repair")))
+    __attribute__((noinline, section(".text.leo2_direct_repair"), aligned(64)))
 #elif defined(__GNUC__) || defined(__clang__)
-#define LEO2_DIRECT_REPAIR_NOINLINE __attribute__((noinline))
+#define LEO2_DIRECT_REPAIR_NOINLINE __attribute__((noinline, aligned(64)))
 #else
 #define LEO2_DIRECT_REPAIR_NOINLINE
 #endif
@@ -9557,6 +9601,10 @@ static LEO_FORCE_INLINE leo2_result TryOneShotLegacyHighR1Terminal(
             original_presence_range, recovery_presence_range
         };
         handled_out = true;
+        if (IsLegacyHighK1R1Codec(codec) && missing == 0)
+            return DecodeK1R1TerminalValidated(
+                codec, shard_bytes, protected_ranges, 2, original, recovery,
+                restored_original, scratch, scratch_bytes);
         return DecodeDirectXorValidated(codec, missing, shard_bytes,
             protected_ranges, 2, original, recovery, restored_original,
             scratch, scratch_bytes);
@@ -10167,6 +10215,13 @@ static leo2_result DecodePlanExecuteInternal(
                         protected_ranges[i]))
                     return LEO2_INVALID_ARGUMENT;
             }
+            if (plan->codec->original_count == 1 &&
+                plan->codec->recovery_count == 1 &&
+                plan->direct_xor_original == 0)
+                return DecodeK1R1TerminalValidated(
+                    plan->codec, shard_bytes, protected_ranges,
+                    protected_metadata_count, original, recovery,
+                    restored_original, scratch, scratch_bytes);
             return DecodeDirectXorValidated(plan->codec,
                 plan->direct_xor_original, shard_bytes, protected_ranges,
                 protected_metadata_count, original, recovery,
