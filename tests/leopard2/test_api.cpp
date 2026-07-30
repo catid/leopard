@@ -1193,6 +1193,8 @@ void test_generalized_one_loss_direct_repair_execution(
         unsigned available_recovery;
     };
     const ParityRowCase parity_row_cases[] = {
+        { 254, 2, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 0 },
+        { 254, 2, LEO2_PROFILE_LEGACY_HIGH_V1, 253, 1 },
         { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 0 },
         { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 191, 63 },
         { 31, 200, LEO2_PROFILE_LOW_V1, 0, 0 },

@@ -1,0 +1,144 @@
+{
+  "schema": "leopard2-general-one-loss-promotion/v1",
+  "date_utc": "2026-07-30",
+  "source_parent": "619d9052789282878bad410bff6388777c099d71",
+  "target": {
+    "field": "gf8",
+    "backend": "avx2",
+    "loss_count": 1,
+    "profiles": [
+      "legacy_high_v1_unequal_parent",
+      "low_v1_redundancy_dominant"
+    ]
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "numa_nodes": 1,
+    "timing_cpu": 4,
+    "smt_sibling": 20
+  },
+  "build_policy": {
+    "build_parallelism": 2,
+    "benchmark_threads": 1,
+    "benchmark_child_address_space_limit_bytes": 2147483648,
+    "candidate_backend": "avx2",
+    "candidate_evex_allowed": false
+  },
+  "frozen_binaries": {
+    "same_source_transform_sha256": "8e78001a598a18e9d4fad4fb6e1d8782fb09a935b82a6f4ac5c5153c15590307",
+    "same_source_direct_sha256": "4df7a6f825f04719d17a8b4478369b56656477e1fa4aee77413613941041cfb9",
+    "exact_master_adapter_sha256": "1901c892a65ec9b9a416502cea978d7448672b0403053c43ff6d13c7cb7f6d5e",
+    "exact_master_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "correctness": {
+    "release_tests": [
+      "leopard2_direct_oracle",
+      "leopard2_backend_ops",
+      "leopard2_api"
+    ],
+    "release_tests_passed": 3,
+    "sanitizer": {
+      "compiler": "Clang 18.1.3",
+      "instrumentation": [
+        "AddressSanitizer",
+        "UndefinedBehaviorSanitizer",
+        "LeakSanitizer"
+      ],
+      "test": "leopard2_api",
+      "passed": true,
+      "memory_limit_bytes": 4294967296,
+      "build_parallelism": 1,
+      "build_maximum_rss_kib": 633716,
+      "test_maximum_rss_kib": 1362656
+    },
+    "new_r2_first_last_parity_cases": 2,
+    "all_compared_workload_digests_equal": true
+  },
+  "screens": {
+    "tiny_same_source": {
+      "cells": 168,
+      "byte_counts": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63],
+      "reuse_counts": [1, 8],
+      "minimum_execution_speedup": 1.4341,
+      "minimum_plan_amortized_speedup": 1.3034,
+      "losses": 0,
+      "summary_sha256": "67d72925bbae364ec3ca86efdb39244f5cd3885a5063e48f0c7448088c712cb2"
+    },
+    "broad_same_source": {
+      "shapes": 72,
+      "cells": 864,
+      "byte_counts": [1, 7, 63, 64, 4096, 65536],
+      "reuse_counts": [1, 8],
+      "execution_geomean_speedup": 4.2609,
+      "plan_amortized_geomean_speedup": 5.1139,
+      "minimum_raw_execution_speedup": 0.9947,
+      "minimum_plan_amortized_speedup": 1.0311,
+      "plan_amortized_losses": 0,
+      "summary_sha256": "d903d7bc77c1b0683339a537c8e0c53e540abebd8cda5d6afb970a3bfc316219"
+    },
+    "target_neighbor_abba": {
+      "cells": 110,
+      "minimum_execution_speedup": 1.2458,
+      "minimum_plan_amortized_speedup": 1.2168,
+      "execution_losses": 0,
+      "plan_amortized_losses": 0,
+      "summary_sha256": "c04bf51468f6a5c729c1af9b08f87078750c4acf0fbfed52ce6cf1eacd6ac259"
+    },
+    "near_boundary_abba": {
+      "cells": [
+        {
+          "K": 240,
+          "R": 2,
+          "shard_bytes": 63,
+          "reuse": 1,
+          "execution_speedup": 1.25214,
+          "plan_amortized_speedup": 1.21305
+        },
+        {
+          "K": 200,
+          "R": 2,
+          "shard_bytes": 4096,
+          "reuse": 8,
+          "execution_speedup": 1.07318,
+          "plan_amortized_speedup": 1.07493
+        }
+      ],
+      "rounds_per_cell": 17,
+      "summary_sha256": "3427ac6be34b99b600c6795c4dc5f0f57bf637f2703e6a12a564533d2be132d3"
+    },
+    "exact_master": {
+      "cells": 48,
+      "minimum_plan_amortized_speedup": 1.6951,
+      "plan_amortized_losses": 0,
+      "minimum_fully_cold_speedup": 0.9620,
+      "fully_cold_losses": 2,
+      "fully_cold_loss_scope": "K=254,R=2,64-byte shard with context, codec, plan, and one execution charged together",
+      "summary_sha256": "a1fd1bb40cd47cd2b7d6aedee49cc61c0c5a3cff3f0979376bb06cf54c845090"
+    }
+  },
+  "plan_setup_optimization": {
+    "extra_codec_bytes": "R GF8 logarithms",
+    "plan_setup_speedup_range": [1.5225, 1.7915],
+    "counterbalanced_execution_change_range": [0.9879, 1.0096],
+    "generic_solver_retained_as_fallback": true
+  },
+  "promotion": {
+    "passed": true,
+    "cmake_default": "ON",
+    "visual_studio_default": "ON",
+    "same_source_control": "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF",
+    "limitations": [
+      "The promotion is GF8 and effective AVX2 only.",
+      "It covers exactly one missing original.",
+      "GFNI, AVX-512, SSSE3, scalar, GF16, and multiple-loss regions retain their existing dispatch.",
+      "A completely cold K=254,R=2,64-byte operation remains slightly slower when context and codec construction are charged to one decode; reusable codec and plan execution is faster."
+    ]
+  },
+  "memory_safety_observation": {
+    "cgroup_oom_events": 0,
+    "cgroup_oom_kill_events": 0,
+    "maximum_recorded_focused_test_rss_kib": 1362656
+  }
+}

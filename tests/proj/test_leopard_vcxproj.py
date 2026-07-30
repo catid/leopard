@@ -57,6 +57,7 @@ BACKEND_DEFINITIONS = {
     "LEO2_DISABLE_AVX2_CODEGEN=1",
     "LEO2_HAVE_SSSE3_BACKEND=1",
     "LEO2_HAVE_AVX2_BACKEND=1",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
 }
 PROTECTED_MACRO_NAMES = {
     definition.split("=")[0] for definition in BACKEND_DEFINITIONS
@@ -774,8 +775,8 @@ class CMakeProductionGraph(object):
             "diagnostics", "OFF")): 1,
         ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
-            "Enable default-off generalized GF8/AVX2 one-loss direct repair",
-            "OFF")): 1,
+            "Enable promoted generalized GF8/AVX2 one-loss direct repair",
+            "ON")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -1011,8 +1012,8 @@ class CMakeProductionGraph(object):
             "diagnostics", "OFF"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
-            "Enable default-off generalized GF8/AVX2 one-loss direct repair",
-            "OFF"))),
+            "Enable promoted generalized GF8/AVX2 one-loss direct repair",
+            "ON"))),
         ("protected", (
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
             "Default-off small GF8 direct-repair experiment: 0=transform, "

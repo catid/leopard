@@ -120,7 +120,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -138,7 +138,7 @@
       <Optimization>Disabled</Optimization>
       <SDLCheck>true</SDLCheck>
       <RuntimeLibrary>MultiThreadedDebug</RuntimeLibrary>
-      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -162,7 +162,7 @@
       <OmitFramePointers>false</OmitFramePointers>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>true</BufferSecurityCheck>
-      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
     </ClCompile>
     <Link>
       <GenerateDebugInformation>true</GenerateDebugInformation>
@@ -188,7 +188,7 @@
       <OmitFramePointers>true</OmitFramePointers>
       <RuntimeLibrary>MultiThreaded</RuntimeLibrary>
       <BufferSecurityCheck>true</BufferSecurityCheck>
-      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <PreprocessorDefinitions>_MBCS;LEO2_DISABLE_SSSE3_CODEGEN=1;LEO2_DISABLE_AVX2_CODEGEN=1;LEO2_HAVE_SSSE3_BACKEND=1;LEO2_HAVE_AVX2_BACKEND=1;LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <OpenMPSupport>true</OpenMPSupport>
     </ClCompile>
     <Link>

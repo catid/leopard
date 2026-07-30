@@ -4,34 +4,30 @@
 
 Leopard2 retains the specialized low/high LCH decoders and the generic
 `O(N log N)` decoder.  An immutable direct-repair plan is selected by default
-in three measured regions:
+in four measured regions:
 
 - the original bounded region, `2 <= K <= 16`, for one through four missing
   originals and a parent systematic dimension no larger than 256;
 - a GF8/AVX2 legacy-high region for exactly one missing original when
   `17 <= K <= 128`, `P=T`, and the parent is `N=2P`; and
 - the separately measured GF8/AVX2 `K=65`, `P=T=128` region for one through
-  eight missing originals.
+  eight missing originals; and
+- generalized one-loss GF8/AVX2 repair for unequal legacy-high parents with
+  `K > 16`, `R > 1`, and for low-profile parents with `K > 16`, `R > K`,
+  provided the parent length is no larger than 256.
 
-Two broader one-loss candidates are available only when configured with
-`-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON`:
-
-- unequal legacy-high GF8/AVX2 parents with `K > 16`, `R > 1`, and parent
-  length no larger than 256; and
-- low-profile GF8/AVX2 parents with `K > 16`, `R > K`, and parent length no
-  larger than 256.
+The generalized selector is enabled in normal CMake and checked-in Visual
+Studio builds.  `-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF` retains the
+same-source transform control for reproducible comparisons.
 
 Forced generic, specialized, tiled, or materialized decoding disables direct
 repair.  The existing `R=1` XOR and `K=1` copy paths remain earlier dispatch
-choices.  Other cases use the locator and transform decoder.  The added
-experimental one-loss regions are deliberately tied to GF8 and the effective
-AVX2 operations table.  Diagnostic screens are not promotion evidence; the
-ordinary build keeps its established selector until the frozen same-source,
-exact-main, reuse, large-shard, and neighboring-shape gates pass.  They are not
-a claim that direct repair wins for multiple losses, GF16, GFNI, AVX-512,
-SSSE3, or scalar execution.  The historical global `LEO2_GFNI_VARIANT`
-diagnostic also leaves these selectors disabled even if the experiment option
-is set.
+choices.  Other cases use the locator and transform decoder.  The generalized
+one-loss regions are deliberately tied to GF8 and the effective AVX2 operations
+table.  They are not a claim that direct repair wins for multiple losses,
+GF16, GFNI, AVX-512, SSSE3, or scalar execution.  The historical global
+`LEO2_GFNI_VARIANT` diagnostic also leaves these selectors disabled even when
+the CMake option is enabled.
 
 ## Generator-row derivation
 
@@ -117,6 +113,20 @@ The MDS property makes any valid selected `L x L` parity submatrix invertible.
 The implementation nevertheless treats a zero pivot as a plan-preparation
 failure and safely falls back to the transform decoder.
 
+For the promoted `L=1` region, the generic matrix expression reduces exactly
+to one row normalization.  Codec setup evaluates `log Z_S(q)` once per aligned
+recovery block and stores its public `R`-entry prefix.  Plan setup then forms
+the selected row entirely in logarithmic form:
+
+    log G(q,j) = log Z_S(q) + log w_j - log(q xor x_j)
+    log inverse(G(q,m)) = -log G(q,m)
+
+for missing original `m`.  The recovery coefficient is the inverse above and
+each surviving-original coefficient is
+`log G(q,j) - log G(q,m)`.  This removes the temporary field-element row,
+generic 1-by-1 elimination, exponent-table conversion, and repeated vanishing
+product.  The generic solver remains the fallback and correctness oracle.
+
 ## Execution and memory
 
 Immutable codecs store the bounded barycentric weights.  Immutable decode plans
@@ -131,8 +141,7 @@ GF8/AVX2 regions zero-pad a trailing partial tile on the stack and run the same
 backend kernel; the original small region retains its scalar field-element
 tail.
 
-With the generalized one-loss experiment enabled, pure AVX2 additionally
-groups four
+For generalized one-loss repair, pure AVX2 additionally groups four
 fixed-coefficient sources per call for shard sizes 1 through 63 except 7 bytes.
 Each group loads the output once, uses XMM or scalar tails without padding or
 out-of-range access, and either initializes or XOR-accumulates explicitly.
@@ -170,13 +179,13 @@ The production API test now checks:
 - exact dispatch boundaries for the bounded region, the equal-rounded one-loss
   region, unequal legacy-high and redundancy-dominant low one-loss regions,
   and the `K=65` eight-loss exception; and
-- in an experiment-enabled build, targeted generalized one-loss execution
+- targeted generalized one-loss execution
   through high-profile
   `(K,R)=(240,16)` and low-profile `(31,200)`, including first and last
   systematic coordinates, first and last transmitted parity rows, arbitrary
   tails, and shards through 64 KiB plus one byte, with every result compared
   to the independent/generic oracle; and
-- in that build, the four-source callback at every selected boundary from 1
+- the four-source callback at every selected boundary from 1
   through 63 bytes,
   the 7- and 64-byte fallbacks, all four possible term-count remainders,
   unaligned inputs and outputs, guard bytes, repeated source pointers, every

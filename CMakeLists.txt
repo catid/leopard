@@ -48,8 +48,8 @@ option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
     "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
     OFF)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
-    "Enable default-off generalized GF8/AVX2 one-loss direct repair"
-    OFF)
+    "Enable promoted generalized GF8/AVX2 one-loss direct repair"
+    ON)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS

@@ -180,6 +180,14 @@ struct leo2_codec
     // populated only for the rigorously bounded direct-repair dispatch region.
     std::vector<uint8_t> direct_barycentric8;
     std::vector<uint16_t> direct_barycentric16;
+    /*
+        Logarithms of the parent-message vanishing polynomial at each public
+        GF8 recovery coordinate.  Generalized one-loss repair combines these
+        immutable values with the barycentric weights directly in log space,
+        avoiding a temporary field-element generator row and its round trip
+        through exponent/log tables for every decode plan.
+    */
+    std::vector<uint8_t> direct_vanishing_logs8;
     uint16_t direct_generator_numerator_log;
     bool direct_generator_numerator_valid;
     // Exact row-major generator coefficients, represented as Leopard field
@@ -2065,6 +2073,78 @@ static bool PrepareDirectGeneratorRow(
 }
 
 template<class Field>
+static bool PrepareDirectVanishingLogs(
+    const leo2_codec* codec,
+    std::vector<typename Field::Element>& vanishing_logs)
+{
+    typedef typename Field::Element Element;
+    if (!codec || codec->recovery_count == 0 ||
+        codec->padded_side == 0 ||
+        (codec->padded_side & (codec->padded_side - 1U)) != 0)
+        return false;
+
+    const uint32_t systematic_begin =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1
+            ? codec->padded_side : 0;
+    const uint32_t systematic_end =
+        systematic_begin + codec->parent_dimension;
+    if (systematic_end > codec->parent_count ||
+        systematic_begin % codec->padded_side != 0 ||
+        codec->parent_dimension % codec->padded_side != 0)
+        return false;
+
+    try
+    {
+        vanishing_logs.resize(codec->recovery_count);
+    }
+    catch (const std::bad_alloc&)
+    {
+        vanishing_logs.clear();
+        return false;
+    }
+    uint32_t cached_block = std::numeric_limits<uint32_t>::max();
+    Element cached_log = 0;
+    for (uint32_t recovery = 0;
+         recovery < codec->recovery_count; ++recovery)
+    {
+        const uint32_t coordinate =
+            CoordinateForRecovery(codec, recovery);
+        const uint32_t block =
+            coordinate & ~(codec->padded_side - 1U);
+        if (block != cached_block)
+        {
+            /*
+                The complete parent-message set is a union of aligned
+                padded-side additive cosets.  XOR by any element within the
+                recovery coordinate's coset merely permutes every systematic
+                coset, so Z_S(y) is constant across that recovery block.
+                Evaluate one representative per block and fill its public
+                prefix.  Across GF8 this performs at most N field-log adds,
+                instead of D work for every recovery coordinate.
+            */
+            Element value_log = 0;
+            for (uint32_t systematic = systematic_begin;
+                 systematic < systematic_end; ++systematic)
+            {
+                const Element difference = static_cast<Element>(
+                    block ^ systematic);
+                if (difference == 0)
+                {
+                    vanishing_logs.clear();
+                    return false;
+                }
+                value_log = Field::AddLogs(
+                    value_log, Field::Log(difference));
+            }
+            cached_block = block;
+            cached_log = value_log;
+        }
+        vanishing_logs[recovery] = cached_log;
+    }
+    return true;
+}
+
+template<class Field>
 static bool PrepareDirectGeneratorLogs(
     const leo2_codec* codec,
     const std::vector<typename Field::Element>& barycentric_weights,
@@ -2360,6 +2440,107 @@ static bool PrepareDirectRepairCauchyInverse(
             inverse[missing][equation] = Field::FromLog(inverse_log);
         }
     }
+    return true;
+}
+
+template<class Field>
+static bool PrepareDirectOneLossTerms(
+    leo2_decode_plan* plan,
+    const std::vector<typename Field::Element>& barycentric_weights,
+    const std::vector<typename Field::Element>& vanishing_logs)
+{
+    typedef typename Field::Element Element;
+    const leo2_codec* codec = plan ? plan->codec : NULL;
+    if (!codec || plan->missing_original_count != 1 ||
+        plan->missing_originals.size() != 1 ||
+        plan->original_present.size() != codec->original_count ||
+        plan->recovery_present.size() != codec->recovery_count ||
+        barycentric_weights.size() != codec->original_count ||
+        vanishing_logs.size() != codec->recovery_count)
+        return false;
+
+    uint32_t selected_parity = codec->recovery_count;
+    for (uint32_t parity = 0;
+         parity < codec->recovery_count; ++parity)
+    {
+        if (plan->recovery_present[parity])
+        {
+            selected_parity = parity;
+            break;
+        }
+    }
+    const uint32_t missing = plan->missing_originals[0];
+    if (selected_parity >= codec->recovery_count ||
+        missing >= codec->original_count ||
+        plan->original_present[missing])
+        return false;
+
+    const uint32_t systematic_begin =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1
+            ? codec->padded_side : 0;
+    const Element parity_coordinate = static_cast<Element>(
+        CoordinateForRecovery(codec, selected_parity));
+    const Element vanishing_log = vanishing_logs[selected_parity];
+    const auto generator_log = [&](uint32_t original, Element& result) {
+        const Element difference = static_cast<Element>(
+            parity_coordinate ^
+            static_cast<Element>(systematic_begin + original));
+        const Element weight = barycentric_weights[original];
+        if (difference == 0 || weight == 0)
+            return false;
+        result = Field::AddLogs(vanishing_log, Field::Log(weight));
+        result = Field::SubtractLogs(result, Field::Log(difference));
+        return true;
+    };
+
+    Element missing_generator_log = 0;
+    if (!generator_log(missing, missing_generator_log))
+        return false;
+    const Element inverse_missing_log =
+        Field::SubtractLogs(0, missing_generator_log);
+
+    plan->direct_term_offsets.clear();
+    plan->direct_terms.clear();
+    plan->direct_term_offsets.reserve(2);
+    plan->direct_terms.reserve(codec->original_count);
+    plan->direct_term_offsets.push_back(0);
+    leo2_direct_repair_term parity_term = {
+        kDirectRecoveryTag | selected_parity,
+        static_cast<uint16_t>(inverse_missing_log)
+    };
+    plan->direct_terms.push_back(parity_term);
+
+    for (uint32_t original = 0;
+         original < codec->original_count; ++original)
+    {
+        if (!plan->original_present[original])
+            continue;
+        Element coefficient_log = 0;
+        if (!generator_log(original, coefficient_log))
+            return false;
+        coefficient_log =
+            Field::AddLogs(coefficient_log, inverse_missing_log);
+        leo2_direct_repair_term term = {
+            original, static_cast<uint16_t>(coefficient_log)
+        };
+        plan->direct_terms.push_back(term);
+    }
+    if (plan->direct_terms.size() != codec->original_count)
+        return false;
+
+    /*
+        Preserve the generic planner's copy-first canonicalization.  It is an
+        execution optimization only; term order does not change the row.
+    */
+    for (size_t term = 1; term < plan->direct_terms.size(); ++term)
+    {
+        if (plan->direct_terms[term].multiplier_log == 0)
+        {
+            std::swap(plan->direct_terms[0], plan->direct_terms[term]);
+            break;
+        }
+    }
+    plan->direct_term_offsets.push_back(plan->direct_terms.size());
     return true;
 }
 
@@ -7811,6 +7992,16 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                             codec->direct_generator_logs8);
                     if (prepare_direct_repair)
                     {
+                        if (IsGeneralDirectOneLossCodec(codec))
+                        {
+                            /*
+                                Failure leaves the generic row builder intact;
+                                the cache is an immutable setup optimization,
+                                never a correctness dependency.
+                            */
+                            PrepareDirectVanishingLogs<DirectField8>(
+                                codec, codec->direct_vanishing_logs8);
+                        }
                         if (IsExpandedDirectRepairCodec(codec))
                         {
                             std::call_once(
@@ -8804,11 +8995,24 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
             if (codec->field == LEO2_FIELD_GF8 &&
                 !codec->direct_barycentric8.empty())
             {
-                plan->direct_repair = PrepareDirectRepairTerms<DirectField8>(
-                    plan, codec->direct_barycentric8,
-                    IsExpandedDirectRepairCodec(codec)
-                        ? &codec->context->direct_repair_generator_rows8
-                        : NULL);
+                if (IsGeneralDirectOneLossCodec(codec) &&
+                    !codec->direct_vanishing_logs8.empty())
+                {
+                    plan->direct_repair =
+                        PrepareDirectOneLossTerms<DirectField8>(
+                            plan, codec->direct_barycentric8,
+                            codec->direct_vanishing_logs8);
+                }
+                if (!plan->direct_repair)
+                {
+                    plan->direct_repair =
+                        PrepareDirectRepairTerms<DirectField8>(
+                            plan, codec->direct_barycentric8,
+                            IsExpandedDirectRepairCodec(codec)
+                                ? &codec->context->
+                                    direct_repair_generator_rows8
+                                : NULL);
+                }
             }
 #endif
 #ifdef LEO_HAS_FF16

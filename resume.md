@@ -1,10 +1,46 @@
-# Session resume state — 2026-07-29, branch `codex/leopard2`
+# Session resume state — 2026-07-30, branch `codex/leopard2`
 
 Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
     /home/catid/.nvm/versions/node/v24.1.0/bin/bd
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
+
+## 2026-07-30 low-memory AVX2 promotion checkpoint
+
+After two further controller restarts, keep this campaign in a strict
+low-memory lane even though the host currently reports about 88 GiB available
+and the enclosing cgroup still reports zero `oom` and `oom_kill` events:
+
+- do not launch subworkers from the controlling session;
+- build with `-j2` at most, or `-j1` for sanitizer builds;
+- run only one test or benchmark process at a time;
+- put native sanitizer/test children in a systemd scope with a 4 GiB
+  `MemoryMax`; and
+- do not run the complete provenance suite until
+  `leopard-79h.40.36.12` resolves its controller-restart behavior.
+
+The current working tree promotes generalized GF8/AVX2 one-loss repair and
+specializes plan construction in logarithmic form.  An immutable codec cache
+stores one vanishing-polynomial logarithm per transmitted parity coordinate;
+plan setup no longer materializes a generator row, performs a generic 1x1
+elimination, or converts that row from field elements back to logarithms.
+The generic solver remains the fallback.
+
+Frozen same-source evidence covers 864 broad cells and 110 counterbalanced
+neighbor cells.  Plan-amortized direct repair won every broad cell (minimum
+1.0311x, geomean 5.1139x); the 110-cell ABBA screen had a 1.2168x minimum.
+Against the exact Leopard `master` adapter, all 48 reusable-codec/plan cells
+won with a 1.6951x minimum.  Completely cold context+codec+plan+one-execution
+timing retains two slight K=254/R=2/64-byte losses, documented in
+`experiments/leopard2/direct_repair/results/general_one_loss_promotion_20260730.json`.
+
+Fresh default Release AVX2 tests passed the direct oracle, backend operations,
+and API suites.  A serial Clang 18.1.3 ASan+UBSan+LSan API build/test was
+bounded by a 4 GiB cgroup and passed; build peak RSS was 633,716 KiB and test
+peak RSS was 1,362,656 KiB.  The Visual Studio graph and benchmark-attestation
+refresh tests also passed.  Commit/push and Beads closure remain the immediate
+next steps.
 
 ## 2026-07-30 restart-safe checkpoint
 
