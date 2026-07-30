@@ -1,0 +1,327 @@
+{
+  "schema": "leopard2-avx2-direct-group35-promotion/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.26.1",
+  "parent_bead": "leopard-79h.38.5.10.26",
+  "hypothesis": "dedicated pure-AVX2 three- and five-output GF8 multiply-add kernels reduce source rereads for direct repair with 3, 5, and 7 missing originals",
+  "implementation": {
+    "candidate_commits": [
+      "9b0a702bd6260162cb248826272a61bb55adb677",
+      "4db672938145cd448d3b3e3b8b8481e531916d53"
+    ],
+    "candidate_tree": "be5f72f124d3855ef30ba4c52e99a0c49f639b24",
+    "control_commit": "1d8322d3509954aa182a79b61faa0095839a9da0",
+    "control_tree": "b27e4087bfeae0c03ded66fd69d333d15f446ccf",
+    "group3_source_passes": 1,
+    "group5_source_passes": 1,
+    "group7_source_passes": 2,
+    "inactive_coefficient_fallback": "established Group2, Group4, and single-output kernels",
+    "gfni_changed": false,
+    "avx512_changed": false,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "scratch_changed": false,
+    "hot_path_allocations_changed": false
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "numa_nodes": 1
+  },
+  "resource_policy": {
+    "controller_subworkers": 0,
+    "build_parallelism_max": 2,
+    "sanitizer_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "build_and_test_memory_limit_bytes": 3221225472,
+    "benchmark_memory_limit_bytes": 1073741824,
+    "benchmark_address_space_limit_bytes": 805306368,
+    "swap_allowed_in_scopes": false,
+    "enclosing_cgroup_memory_events_after_campaign": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "correctness": {
+    "release_focused_tests_passed": 4,
+    "asan_ubsan_lsan_focused_tests_passed": 4,
+    "sanitizer_replay_command": "systemd-run --user --scope --quiet -p MemoryMax=3G -p MemorySwapMax=0 -- ctest --test-dir /tmp/leopard2-group35-asan-20260730 -j 1 --output-on-failure -R ^(leopard2_backend_ops|leopard2_context_backends|leopard2_api|leopard2_direct_repair)$",
+    "tests": [
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_api",
+      "leopard2_direct_repair"
+    ],
+    "gf16_only_build_passed": true,
+    "backend_kat": {
+      "output_counts": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "multiplier_logs": [
+        0,
+        1,
+        254
+      ],
+      "inactive_log": 65535,
+      "byte_counts": [
+        0,
+        1,
+        7,
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        257
+      ],
+      "unaligned_buffers": true,
+      "guarded_buffers": true,
+      "source_preservation": true
+    },
+    "direct_and_generic_workload_digests_equal": true,
+    "legacy_main_parity_and_recovery_digests_equal": true
+  },
+  "code_generation": {
+    "control_pure_avx2_object_text_bytes": 100445,
+    "candidate_pure_avx2_object_text_bytes": 101741,
+    "text_delta_bytes": 1296,
+    "group35_elf_section": ".text.leo2_avx2_direct_group35",
+    "group35_elf_section_bytes": 1231,
+    "group5_ymm_spills": 0,
+    "evex_in_pure_avx2_object": false,
+    "gfni_object_byte_identical_to_control": true,
+    "avx512_object_byte_identical_to_control": true,
+    "dispatcher_control_address_preserved": true
+  },
+  "same_source_directional_screens": {
+    "status": "all target cells faster",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "R_values": [
+      65,
+      96,
+      128
+    ],
+    "loss_counts": [
+      3,
+      5,
+      7
+    ],
+    "shard_bytes": [
+      2048,
+      4095,
+      4096,
+      65536
+    ],
+    "reuse": 8,
+    "execution_speedup_range": [
+      1.0146,
+      1.2362
+    ],
+    "loss5_2049_recheck": {
+      "paired_samples": 254,
+      "execution_speedup": 1.0367,
+      "ci95": [
+        1.0184,
+        1.0554
+      ]
+    }
+  },
+  "clean_frozen_binary_confirmation": {
+    "method": "pinned CPU 4, serialized control-candidate-candidate-control process order, 127 samples per process, two processes per variant, paired log-speedup intervals",
+    "scope": "strong clean-source confirmation; coordinator processes were not affinity-excluded, so the final campaign-level isolation bead remains open",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "R": 65,
+    "reuse": 8,
+    "control_executable_sha256": "be17e476aca884ec080fe88128a2eed907bec558faf25d4ca802e9f869b96416",
+    "candidate_executable_sha256": "c9e41e09050b0686e4aec70f5100b6b4b8f11200f11ccdf7ddc098695e00ecbc",
+    "hashes_verified_after_timing": true,
+    "raw_json_bundle_sha256": "60a572c00f6342c9252dde6f28435da7d82f09877a385f5903968b29793135d3",
+    "cells": [
+      {
+        "loss_count": 3,
+        "shard_bytes": 2048,
+        "execution_speedup": 1.175779,
+        "execution_ci95": [
+          1.171661,
+          1.179911
+        ],
+        "amortized_at_reuse_speedup": 1.170702,
+        "amortized_at_reuse_ci95": [
+          1.166651,
+          1.174767
+        ]
+      },
+      {
+        "loss_count": 4,
+        "shard_bytes": 4096,
+        "neighbor": true,
+        "execution_speedup": 1.057198,
+        "execution_ci95": [
+          1.055340,
+          1.059059
+        ]
+      },
+      {
+        "loss_count": 5,
+        "shard_bytes": 4096,
+        "execution_speedup": 1.098675,
+        "execution_ci95": [
+          1.096952,
+          1.100401
+        ],
+        "amortized_at_reuse_speedup": 1.097238,
+        "amortized_at_reuse_ci95": [
+          1.095534,
+          1.098945
+        ]
+      },
+      {
+        "loss_count": 7,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.085532,
+        "execution_ci95": [
+          1.085045,
+          1.086019
+        ],
+        "amortized_at_reuse_speedup": 1.085440,
+        "amortized_at_reuse_ci95": [
+          1.084952,
+          1.085929
+        ]
+      },
+      {
+        "loss_count": 8,
+        "shard_bytes": 65536,
+        "neighbor": true,
+        "execution_speedup": 0.998730,
+        "execution_ci95": [
+          0.998403,
+          0.999057
+        ]
+      }
+    ]
+  },
+  "exact_leopard_main_diagnostic": {
+    "scope": "bounded pinned diagnostic rather than final authoritative isolation evidence",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_executable_sha256": "a0c3c58e24654f8afa9015af703af8200cd0f01ad8f1c3ad1ca1b68ba3dc2c63",
+    "baseline_archive_sha256": "cd20a842fee2379c18a9b918e3db1d9d6f147f43e62fe6f107f6be426bb938d8",
+    "candidate_commit": "4db672938145cd448d3b3e3b8b8481e531916d53",
+    "candidate_executable_sha256": "c9e41e09050b0686e4aec70f5100b6b4b8f11200f11ccdf7ddc098695e00ecbc",
+    "method": "three independent main-candidate-candidate-main rounds, 31 samples per child after two warmups, one mean log contrast per round, Student-t 95 percent interval with df=2",
+    "timing_cpu": 4,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "batch": 1,
+    "reuse": 8,
+    "thread_count": 1,
+    "main_decode_semantics": "locator and pattern setup included in every main decode call",
+    "candidate_decode_semantics": "immutable plan setup separated and amortized over eight executions",
+    "all_36_child_workload_identities_equal": true,
+    "candidate_selected_path": "direct/source_major",
+    "raw_json_bundle_sha256": "5b04fa828cec91d486053b5f22f58cefbdb781b40cd985c3d85fb878d7d8713d",
+    "cells": [
+      {
+        "loss_count": 3,
+        "shard_bytes": 4096,
+        "seeds": [
+          101,
+          102,
+          103
+        ],
+        "decode_main_over_leopard2_amortized": 13.9721,
+        "decode_ci95": [
+          13.4639,
+          14.4996
+        ],
+        "decode_round_ratios": [
+          14.0902,
+          13.7336,
+          14.0958
+        ],
+        "encode_main_over_leopard2": 0.9919,
+        "encode_ci95": [
+          0.8172,
+          1.2039
+        ]
+      },
+      {
+        "loss_count": 5,
+        "shard_bytes": 4096,
+        "seeds": [
+          201,
+          202,
+          203
+        ],
+        "decode_main_over_leopard2_amortized": 9.3276,
+        "decode_ci95": [
+          9.2149,
+          9.4417
+        ],
+        "decode_round_ratios": [
+          9.3675,
+          9.2779,
+          9.3378
+        ],
+        "encode_main_over_leopard2": 0.9742,
+        "encode_ci95": [
+          0.8103,
+          1.1713
+        ]
+      },
+      {
+        "loss_count": 7,
+        "shard_bytes": 65536,
+        "seeds": [
+          301,
+          302,
+          303
+        ],
+        "decode_main_over_leopard2_amortized": 6.9854,
+        "decode_ci95": [
+          6.7544,
+          7.2243
+        ],
+        "decode_round_ratios": [
+          6.9548,
+          7.0923,
+          6.9104
+        ],
+        "encode_main_over_leopard2": 0.9773,
+        "encode_ci95": [
+          0.9725,
+          0.9822
+        ]
+      }
+    ],
+    "out_of_scope_finding": "At K=R=65 and 64-KiB shards, Leopard2 legacy-high encode is 2.32 percent slower than exact main. This predates and is unaffected by the decoder-only Group3/Group5 implementation; the existing P0 high-encoder crossover bead leopard-79h.38.5 retains the gap."
+  },
+  "disposition": {
+    "promoted": true,
+    "production_default_changed": true,
+    "scope": "pure AVX2 GF8 direct source-major repair with 3, 5, or 7 outputs",
+    "reason": "clean frozen-binary target cells improve 8.55 to 17.58 percent in execution, the measured untouched eight-output neighbor regresses only 0.13 percent, code growth is 1296 text bytes, correctness and sanitizer gates pass, and exact-main decode remains 6.99 to 13.97 times faster in the bounded comparison",
+    "parent_bead_remains_open": true,
+    "parent_open_reason": "other K65 candidates, reuse 1 and 64, final affinity exclusion, and the all-K exact-main sweep remain separate acceptance work"
+  }
+}
