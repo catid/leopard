@@ -402,9 +402,9 @@ gate rather than rerun with an unsafe memory allowance.
 
 The final frozen production executables had these SHA-256 values:
 
-- candidate: `1c61bbd0c5c39081769c31de3d9579850fbbfc758ae51be031068c84f6be40a2`
+- candidate: `aadeca79b0df0d6207a9205102dc468e147c131d3ca8f2ab2d2dfa2fd559f150`
 - same-layout AUTO-off control:
-  `3db952c1149bf49894207ba561d3979e12835edff580836aca34a78ca0f05d71`
+  `04178d8a1a04e6f040572a73d149b1fe53cca9bbe3e9c87f45a7586c9bc92f1c`
 - exact Leopard main:
   `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`
 
@@ -417,16 +417,16 @@ than one mean the candidate is faster:
 
 | K,R | bytes | exact main / candidate | AUTO-off / candidate |
 | --- | ---: | ---: | ---: |
-| 5,5 | 64 | 0.897 | 1.819 |
-| 5,5 | 256 | 0.832 | 1.244 |
-| 5,5 | 1,024 | 1.045 | 1.204 |
-| 5,5 | 4,096 | 1.288 | 1.060 |
-| 8,8 | 64 | 0.513 | 1.233 |
-| 8,8 | 256 | 0.661 | 1.020 |
-| 8,8 | 1,024 | 0.919 | 0.996 |
-| 8,8 | 4,096 | 1.115 | 1.020 |
-| 12,8 | 64 | 0.593 | 1.291 |
-| 16,8 | 64 | 0.545 | 1.047 |
+| 5,5 | 64 | 0.874 | 1.803 |
+| 5,5 | 256 | 0.825 | 1.159 |
+| 5,5 | 1,024 | 1.036 | 1.172 |
+| 5,5 | 4,096 | 1.289 | 1.056 |
+| 8,8 | 64 | 0.503 | 1.288 |
+| 8,8 | 256 | 0.659 | 1.015 |
+| 8,8 | 1,024 | 0.915 | 1.019 |
+| 8,8 | 4,096 | 1.087 | 0.992 |
+| 12,8 | 64 | 0.624 | 1.338 |
+| 16,8 | 64 | 0.520 | 1.009 |
 
 Thus the arithmetic kernel substantially improves Leopard2's own tiny
 full-output path, but fixed safe-API validation/setup and `K*R` direct
