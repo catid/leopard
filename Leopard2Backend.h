@@ -118,6 +118,23 @@ typedef void (*FF8MultiplyAdd2Sources2Outputs)(
     const uint16_t* multiplier_logs1,
     uint64_t byte_count);
 
+// Form one GF8 linear combination from two scaled sources in one pass.
+// add=false replaces destination with source0*a ^ source1*b; add=true XORs
+// that combination into destination.  UINT16_MAX suppresses the corresponding
+// source (and permits its pointer to be null); log zero is multiplication by
+// one.  Destination must be disjoint from every live source, while the two
+// read-only sources may alias one another.  A zero-byte operation accesses no
+// pointer.  This optional callback is currently published only by the
+// qualified pure-AVX2 backend.
+typedef void (*FF8LinearCombination2)(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint16_t multiplier_log0,
+    uint16_t multiplier_log1,
+    bool add,
+    uint64_t byte_count);
+
 // Form one GF8 linear combination from exactly four scaled sources.  All four
 // sources and multiplier logs are live.  add=false initializes destination;
 // add=true XOR-accumulates into it.  Destination must be disjoint from every
@@ -405,6 +422,7 @@ struct Ops
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;
     FF8MultiplyAdd2Sources2Outputs ff8_multiply_add_2_sources_2_outputs;
+    FF8LinearCombination2 ff8_linear_combination2;
     // Optional remainder-specific source groups selected only by measured R=1
     // GF8 policies.  Keeping them separate preserves mature coarse codegen.
     XorMemorySources xor_memory_sources_fused_final;

@@ -1165,17 +1165,39 @@ void test_generalized_one_loss_direct_repair_execution(
         { 17, 31, LEO2_PROFILE_LOW_V1, 16, 7 },
         { 31, 200, LEO2_PROFILE_LOW_V1, 0, 33 },
         { 32, 224, LEO2_PROFILE_LOW_V1, 31, 1025 },
-        { 127, 128, LEO2_PROFILE_LOW_V1, 63, 64 * 1024 },
+        { 32, 224, LEO2_PROFILE_LOW_V1, 0, 4096 },
+        { 127, 128, LEO2_PROFILE_LOW_V1, 63, 1024 * 1024 },
         { 31, 200, LEO2_PROFILE_LOW_V1, 30, 64 * 1024 + 1 }
     };
     for (size_t i = 0;
          i < sizeof(general_cases) / sizeof(general_cases[0]); ++i)
     {
         const GeneralCase& test = general_cases[i];
+        leo2_test_reset_direct_pair_calls();
         run_decode_case(context, test.k, test.r, test.profile,
             LEO2_FIELD_GF8, test.bytes,
             std::vector<unsigned>{test.missing_original},
             std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
+        bool selected_pair = false;
+#if !defined(LEO2_GFNI_VARIANT)
+        selected_pair =
+            (test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+             ((test.k == 192 && test.r == 64 && test.bytes >= 64) ||
+              (test.k == 200 && test.r == 30 && test.bytes >= 64) ||
+              (test.k == 224 && test.r == 32 && test.bytes >= 64) ||
+              (test.k == 240 && test.r == 16 &&
+               test.bytes >= 64U * 1024U))) ||
+            (test.profile == LEO2_PROFILE_LOW_V1 &&
+             ((test.k == 17 && test.r == 31 &&
+               test.bytes >= 1024U * 1024U) ||
+              (test.k == 31 && test.r == 200 && test.bytes >= 64) ||
+              (test.k == 127 && test.r == 128 &&
+               test.bytes >= 1024U * 1024U)));
+#endif
+        const uint64_t expected_pair_calls =
+            selected_pair ? static_cast<uint64_t>(test.k / 2U) * 2U : 0;
+        require(leo2_test_direct_pair_calls() == expected_pair_calls,
+            "general pair callback count differs from selector");
     }
 
     /*

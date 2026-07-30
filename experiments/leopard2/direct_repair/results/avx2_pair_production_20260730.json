@@ -1,0 +1,435 @@
+{
+  "schema": "leopard2-avx2-two-source-one-loss-production/v1",
+  "date_utc": "2026-07-30",
+  "source_parent": "64e120f1d529d02f646073b366e58c90446e63cf",
+  "target": {
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "loss_count": 1,
+    "operation": "dst = or xor source0*a xor source1*b"
+  },
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "numa_nodes": 1,
+    "timing_cpu": 4,
+    "smt_sibling": 20
+  },
+  "resource_policy": {
+    "build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "benchmark_threads": 1,
+    "benchmark_child_address_space_limit_bytes": 2147483648,
+    "controller_subworkers": 0,
+    "large_shard_reuse64_campaign_deferred": true,
+    "deferred_issue": "leopard-79h.38.5.10.39.4"
+  },
+  "frozen_binaries": {
+    "control": {
+      "description": "same-source generalized direct-L1 executor before pair fusion",
+      "sha256": "4df7a6f825f04719d17a8b4478369b56656477e1fa4aee77413613941041cfb9"
+    },
+    "candidate": {
+      "description": "final same-source generalized direct-L1 executor with pair fusion and codec-cached policy",
+      "sha256": "86ed45605e2f2f5fa7061dc1dc43acd405882217c2d49ba7306baaed0ef48213"
+    },
+    "digests_verified_before_and_after_timing": true
+  },
+  "correctness": {
+    "release_tests": [
+      "leopard2_backend_ops",
+      "leopard2_api"
+    ],
+    "release_tests_passed": 2,
+    "option_off_release_tests": [
+      "leopard2_backend_ops",
+      "leopard2_api"
+    ],
+    "option_off_release_tests_passed": 2,
+    "backend_self_test": {
+      "byte_counts": [
+        0,
+        1,
+        2,
+        3,
+        7,
+        8,
+        15,
+        16,
+        17,
+        31,
+        32,
+        33,
+        63,
+        64,
+        65,
+        257
+      ],
+      "live_multiplier_pairs": 65025,
+      "suppression_and_identity_cases": true,
+      "replace_and_accumulate_modes": true,
+      "unaligned_guard_bytes": true,
+      "source_aliasing": true,
+      "zero_byte_null_pointers": true
+    },
+    "all_timing_workload_digests_equal": true,
+    "sanitizer": {
+      "status": "passed",
+      "compiler": "Clang 18.1.3",
+      "instrumentation": [
+        "AddressSanitizer",
+        "UndefinedBehaviorSanitizer",
+        "LeakSanitizer"
+      ],
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_api"
+      ],
+      "tests_passed": 2,
+      "build_parallelism": 1,
+      "memory_limit_bytes": 3221225472,
+      "campaign_full_rebuild_maximum_rss_kib": 634000,
+      "final_incremental_build_maximum_rss_kib": 245768,
+      "backend_test_maximum_rss_kib": 44800,
+      "api_test_maximum_rss_kib": 1559312
+    },
+    "gf16_only_compile": {
+      "passed": true,
+      "build_parallelism": 2,
+      "maximum_rss_kib": 178832,
+      "reason": "verify Ops aggregate and codec layout when GF8 is compiled out"
+    }
+  },
+  "code_generation": {
+    "control_avx2_object_text_bytes": 96981,
+    "candidate_avx2_object_text_bytes": 100445,
+    "text_delta_bytes": 3464,
+    "text_delta_percent": 3.571834,
+    "control_avx2_object_data_bytes": 336,
+    "candidate_avx2_object_data_bytes": 344,
+    "pair_function_symbol_bytes": 3357,
+    "evex_prefix_found": false,
+    "compile_isa": [
+      "-mavx2",
+      "-mno-avx512f"
+    ]
+  },
+  "active_threshold_screen": {
+    "method": "pinned single-core ABBA with two-sided t intervals over paired log speedups",
+    "iterations_per_process": 19,
+    "processes_per_variant": 2,
+    "paired_samples_per_metric": 38,
+    "plan_reuse": 8,
+    "cells": [
+      {
+        "profile": "legacy_high_v1",
+        "K": 192,
+        "R": 64,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 1.516241,
+        "execution_ci95_low": 1.510732,
+        "execution_ci95_high": 1.521770,
+        "plan_amortized_geomean_speedup": 1.434437,
+        "plan_amortized_ci95_low": 1.428932,
+        "plan_amortized_ci95_high": 1.439963
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 200,
+        "R": 30,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 1.556385,
+        "execution_ci95_low": 1.526288,
+        "execution_ci95_high": 1.587075,
+        "plan_amortized_geomean_speedup": 1.464651,
+        "plan_amortized_ci95_low": 1.438400,
+        "plan_amortized_ci95_high": 1.491381
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 224,
+        "R": 32,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 1.542209,
+        "execution_ci95_low": 1.521480,
+        "execution_ci95_high": 1.563221,
+        "plan_amortized_geomean_speedup": 1.448439,
+        "plan_amortized_ci95_low": 1.431097,
+        "plan_amortized_ci95_high": 1.465991
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 240,
+        "R": 16,
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 1.092597,
+        "execution_ci95_low": 1.086795,
+        "execution_ci95_high": 1.098430,
+        "plan_amortized_geomean_speedup": 1.092512,
+        "plan_amortized_ci95_low": 1.086715,
+        "plan_amortized_ci95_high": 1.098341
+      },
+      {
+        "profile": "low_v1",
+        "K": 17,
+        "R": 31,
+        "shard_bytes": 1048576,
+        "execution_geomean_speedup": 1.083099,
+        "execution_ci95_low": 1.079010,
+        "execution_ci95_high": 1.087204,
+        "plan_amortized_geomean_speedup": 1.083077,
+        "plan_amortized_ci95_low": 1.079004,
+        "plan_amortized_ci95_high": 1.087166
+      },
+      {
+        "profile": "low_v1",
+        "K": 31,
+        "R": 200,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 1.297954,
+        "execution_ci95_low": 1.292432,
+        "execution_ci95_high": 1.303500,
+        "plan_amortized_geomean_speedup": 1.262344,
+        "plan_amortized_ci95_low": 1.250368,
+        "plan_amortized_ci95_high": 1.274436
+      },
+      {
+        "profile": "low_v1",
+        "K": 127,
+        "R": 128,
+        "shard_bytes": 1048576,
+        "execution_geomean_speedup": 1.337356,
+        "execution_ci95_low": 1.325974,
+        "execution_ci95_high": 1.348836,
+        "plan_amortized_geomean_speedup": 1.337342,
+        "plan_amortized_ci95_low": 1.325958,
+        "plan_amortized_ci95_high": 1.348823
+      }
+    ],
+    "minimum_execution_geomean_speedup": 1.083099,
+    "minimum_execution_ci95_low": 1.079010,
+    "minimum_plan_amortized_geomean_speedup": 1.083077,
+    "minimum_plan_amortized_ci95_low": 1.079004,
+    "losses": 0
+  },
+  "inactive_neighbor_screen": {
+    "method": "pinned single-core ABBA with two-sided t intervals over paired log speedups",
+    "iterations_per_process": 19,
+    "processes_per_variant": 2,
+    "paired_samples_per_metric": 38,
+    "plan_reuse": 8,
+    "cells": [
+      {
+        "profile": "legacy_high_v1",
+        "K": 192,
+        "R": 63,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 0.994447,
+        "execution_ci95_low": 0.976656,
+        "execution_ci95_high": 1.012562,
+        "plan_amortized_geomean_speedup": 0.992712,
+        "plan_amortized_ci95_low": 0.976702,
+        "plan_amortized_ci95_high": 1.008985
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 191,
+        "R": 64,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 0.990087,
+        "execution_ci95_low": 0.989147,
+        "execution_ci95_high": 0.991029,
+        "plan_amortized_geomean_speedup": 0.993488,
+        "plan_amortized_ci95_low": 0.990438,
+        "plan_amortized_ci95_high": 0.996547
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 240,
+        "R": 16,
+        "shard_bytes": 65535,
+        "execution_geomean_speedup": 1.008934,
+        "execution_ci95_low": 1.002932,
+        "execution_ci95_high": 1.014973,
+        "plan_amortized_geomean_speedup": 1.008919,
+        "plan_amortized_ci95_low": 1.002919,
+        "plan_amortized_ci95_high": 1.014955
+      },
+      {
+        "profile": "low_v1",
+        "K": 17,
+        "R": 31,
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 1.008751,
+        "execution_ci95_low": 1.004707,
+        "execution_ci95_high": 1.012812,
+        "plan_amortized_geomean_speedup": 1.008743,
+        "plan_amortized_ci95_low": 1.004705,
+        "plan_amortized_ci95_high": 1.012797
+      },
+      {
+        "profile": "low_v1",
+        "K": 31,
+        "R": 199,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 1.016147,
+        "execution_ci95_low": 1.014232,
+        "execution_ci95_high": 1.018066,
+        "plan_amortized_geomean_speedup": 1.012515,
+        "plan_amortized_ci95_low": 1.009038,
+        "plan_amortized_ci95_high": 1.016004
+      },
+      {
+        "profile": "low_v1",
+        "K": 127,
+        "R": 128,
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 1.000814,
+        "execution_ci95_low": 0.996624,
+        "execution_ci95_high": 1.005021,
+        "plan_amortized_geomean_speedup": 1.000812,
+        "plan_amortized_ci95_low": 0.996626,
+        "plan_amortized_ci95_high": 1.005016
+      },
+      {
+        "profile": "legacy_high_v1",
+        "K": 254,
+        "R": 2,
+        "shard_bytes": 64,
+        "execution_geomean_speedup": 0.990734,
+        "execution_ci95_low": 0.979504,
+        "execution_ci95_high": 1.002092,
+        "plan_amortized_geomean_speedup": 0.994088,
+        "plan_amortized_ci95_low": 0.983847,
+        "plan_amortized_ci95_high": 1.004434
+      },
+      {
+        "profile": "low_v1",
+        "K": 32,
+        "R": 224,
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 0.999216,
+        "execution_ci95_low": 0.996508,
+        "execution_ci95_high": 1.001931,
+        "plan_amortized_geomean_speedup": 0.999189,
+        "plan_amortized_ci95_low": 0.996487,
+        "plan_amortized_ci95_high": 1.001899
+      }
+    ],
+    "maximum_geomean_regression_percent": 0.9913,
+    "regressions_over_two_percent": 0
+  },
+  "codec_cached_policy": {
+    "description": "derive the measured pair threshold once in immutable codec construction",
+    "codec_bytes_added": 8,
+    "hot_path_table_scan_removed": true,
+    "hot_path_policy_function_call_removed": true,
+    "diagnostic_neighbor": {
+      "profile": "low_v1",
+      "K": 31,
+      "R": 199,
+      "shard_bytes": 64,
+      "execution_geomean_before_cache": 0.972340,
+      "execution_geomean_after_cache": 1.016147
+    },
+    "selected_cell_after_cache": {
+      "profile": "low_v1",
+      "K": 31,
+      "R": 200,
+      "shard_bytes": 64,
+      "execution_geomean_speedup": 1.297954
+    }
+  },
+  "low_127_threshold_sweep": {
+    "profile": "low_v1",
+    "K": 127,
+    "R": 128,
+    "speedups_by_shard_bytes": {
+      "65536": [
+        1.046591,
+        1.041998,
+        1.060105
+      ],
+      "262144": [
+        1.022957,
+        1.036111,
+        1.009815
+      ],
+      "1048576": [
+        1.358130,
+        1.388277,
+        1.328904
+      ]
+    },
+    "selected_minimum_shard_bytes": 1048576,
+    "reason": "64-KiB and 256-KiB gains were too small; all measured 1-MiB rounds exceeded 1.32x"
+  },
+  "low_32_rejected_sweep": {
+    "profile": "low_v1",
+    "K": 32,
+    "R": 224,
+    "diagnostic_candidate_sha256": "e44533b12246769fd04f56d27f994d73eaddb475a55d13c01be6248ec2cd015d",
+    "paired_samples_per_metric": 38,
+    "confidence_method": "two-sided t interval over paired log speedups",
+    "cells": [
+      {
+        "shard_bytes": 8192,
+        "execution_geomean_speedup": 1.071508,
+        "execution_ci95_low": 1.040463
+      },
+      {
+        "shard_bytes": 16384,
+        "execution_geomean_speedup": 0.985008,
+        "execution_ci95_low": 0.980436
+      },
+      {
+        "shard_bytes": 65536,
+        "execution_geomean_speedup": 1.074767,
+        "execution_ci95_low": 1.066581
+      },
+      {
+        "shard_bytes": 131072,
+        "execution_geomean_speedup": 1.068951,
+        "execution_ci95_low": 1.057134
+      },
+      {
+        "shard_bytes": 262144,
+        "execution_geomean_speedup": 1.037183,
+        "execution_ci95_low": 1.025597
+      },
+      {
+        "shard_bytes": 524288,
+        "execution_geomean_speedup": 1.076478,
+        "execution_ci95_low": 1.061544
+      },
+      {
+        "shard_bytes": 1048576,
+        "execution_geomean_speedup": 1.076367,
+        "execution_ci95_low": 1.070950
+      }
+    ],
+    "promotion": "rejected",
+    "reason": "non-monotonic crossover, a credible 16-KiB regression, and sub-1.05 confidence bounds at 8 and 256 KiB"
+  },
+  "promotion": {
+    "status": "passed_for_seven_exact_shapes",
+    "selector": "codec-cached exact measured K/R/profile shapes with byte thresholds",
+    "wire_format_changed": false,
+    "repair_math_changed": false,
+    "scratch_bytes_added": 0,
+    "backends_unchanged": [
+      "scalar",
+      "ssse3",
+      "avx512",
+      "gfni"
+    ],
+    "limitations": [
+      "The pair executor is used only for exactly one missing original.",
+      "Only the seven recorded GF8/pure-AVX2 shape and byte regions select it.",
+      "Low (32,224) was measured and explicitly rejected.",
+      "The deferred isolated 16-MiB/reuse-64 guard remains open."
+    ]
+  }
+}

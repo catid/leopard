@@ -2041,6 +2041,8 @@ static const Ops SSSE3Ops = {
     , NULL
     , NULL
     , NULL
+    // ff8_linear_combination2
+    , NULL
     , NULL
     // ff8_ifft_butterfly8_out / ff8_fft_butterfly8_out: this backend keeps the
     // radix-four staging schedule and publishes no radix-eight round.

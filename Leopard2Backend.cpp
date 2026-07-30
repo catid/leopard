@@ -300,6 +300,121 @@ static bool TestFF8MultiplyAdd2Sources2Outputs(
 }
 
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+static bool TestFF8LinearCombination2(
+    FF8LinearCombination2 callback,
+    FF8MultiplyLog reference)
+{
+    if (!callback || !reference)
+        return false;
+    static const uint64_t byte_counts[] = {
+        0, 1, 2, 3, 7, 8, 15, 16, 17,
+        31, 32, 33, 63, 64, 65, 257
+    };
+    static const uint16_t logs[] = {
+        UINT16_MAX, 0, 1, 17, 193, 254, 255
+    };
+    uint8_t source0[260];
+    uint8_t source1[260];
+    uint8_t original0[260];
+    uint8_t original1[260];
+    uint8_t output[260];
+    uint8_t expected[260];
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        for (size_t i = 0; i < sizeof(source0); ++i)
+        {
+            source0[i] = original0[i] = static_cast<uint8_t>(
+                i * 73U + count_i * 19U + 11U);
+            source1[i] = original1[i] = static_cast<uint8_t>(
+                i * 37U + count_i * 23U + 7U);
+        }
+        for (unsigned alias_sources = 0; alias_sources < 2; ++alias_sources)
+        {
+            const uint8_t* second_source =
+                alias_sources ? source0 : source1;
+            for (size_t log0_i = 0;
+                 log0_i < sizeof(logs) / sizeof(logs[0]); ++log0_i)
+            {
+                for (size_t log1_i = 0;
+                     log1_i < sizeof(logs) / sizeof(logs[0]); ++log1_i)
+                {
+                    const uint16_t log0 = logs[log0_i];
+                    const uint16_t log1 = logs[log1_i];
+                    const uint64_t bytes = byte_counts[count_i];
+                    for (unsigned add = 0; add < 2; ++add)
+                    {
+                        for (size_t i = 0; i < sizeof(output); ++i)
+                        {
+                            output[i] = expected[i] = static_cast<uint8_t>(
+                                i * 29U + count_i * 13U + log0_i * 7U +
+                                log1_i * 3U + alias_sources + add);
+                        }
+                        for (uint64_t i = 0; i < bytes; ++i)
+                        {
+                            uint8_t value = 0;
+                            if (log0 != UINT16_MAX)
+                            {
+                                value ^= reference(source0[i + 1],
+                                    static_cast<uint8_t>(log0));
+                            }
+                            if (log1 != UINT16_MAX)
+                            {
+                                value ^= reference(second_source[i + 1],
+                                    static_cast<uint8_t>(log1));
+                            }
+                            if (add)
+                                expected[i + 1] ^= value;
+                            else
+                                expected[i + 1] = value;
+                        }
+                        callback(output + 1,
+                            log0 == UINT16_MAX ? NULL : source0 + 1,
+                            log1 == UINT16_MAX ? NULL : second_source + 1,
+                            log0, log1, add != 0, bytes);
+                        if (std::memcmp(output, expected, sizeof(output)) != 0 ||
+                            std::memcmp(source0, original0,
+                                sizeof(source0)) != 0 ||
+                            std::memcmp(source1, original1,
+                                sizeof(source1)) != 0)
+                            return false;
+                    }
+                }
+            }
+        }
+    }
+
+    // Exhaust every pair of live Leopard GF8 logarithms independently of the
+    // vector-tail/identity cases above.
+    for (unsigned log0 = 0; log0 < 255; ++log0)
+    {
+        for (unsigned log1 = 0; log1 < 255; ++log1)
+        {
+            source0[1] = static_cast<uint8_t>(
+                log0 * 17U + log1 * 3U + 1U);
+            source1[1] = static_cast<uint8_t>(
+                log0 * 5U + log1 * 29U + 7U);
+            const uint8_t combined = static_cast<uint8_t>(
+                reference(source0[1], static_cast<uint8_t>(log0)) ^
+                reference(source1[1], static_cast<uint8_t>(log1)));
+            output[1] = 0xa5;
+            callback(output + 1, source0 + 1, source1 + 1,
+                static_cast<uint16_t>(log0),
+                static_cast<uint16_t>(log1), false, 1);
+            if (output[1] != combined)
+                return false;
+            output[1] = 0xa5;
+            callback(output + 1, source0 + 1, source1 + 1,
+                static_cast<uint16_t>(log0),
+                static_cast<uint16_t>(log1), true, 1);
+            if (output[1] != static_cast<uint8_t>(0xa5 ^ combined))
+                return false;
+        }
+    }
+    callback(NULL, NULL, NULL, UINT16_MAX, UINT16_MAX, false, 0);
+    return true;
+}
+
 static bool TestFF8LinearCombination4Tiny(
     FF8LinearCombination4Tiny callback,
     FF8MultiplyLog reference)
@@ -2293,6 +2408,16 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         return false;
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     const bool four_tiny_backend = ops.kind == LEO2_BACKEND_AVX2;
+    if (ops.ff8_linear_combination2 && !four_tiny_backend)
+        return false;
+#if !defined(LEO2_GFNI_VARIANT)
+    if (four_tiny_backend && !ops.ff8_linear_combination2)
+        return false;
+#endif
+    if (ops.ff8_linear_combination2 &&
+        !TestFF8LinearCombination2(
+            ops.ff8_linear_combination2, args.ff8_multiply_log))
+        return false;
     if (ops.ff8_linear_combination4_tiny && !four_tiny_backend)
         return false;
 #if !defined(LEO2_GFNI_VARIANT)
@@ -2310,7 +2435,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
             ops.ff8_linear_combination4_tiny, args.ff8_multiply_log))
         return false;
 #else
-    if (ops.ff8_linear_combination4_tiny)
+    if (ops.ff8_linear_combination2 ||
+        ops.ff8_linear_combination4_tiny)
         return false;
 #endif
     if (ops.kind == LEO2_BACKEND_AVX2 ||
@@ -2353,6 +2479,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
         ops.ff8_multiply_add_2_sources_2_outputs ||
+        ops.ff8_linear_combination2 ||
         ops.ff8_ifft_butterfly8_out ||
         ops.ff8_fft_butterfly8_out ||
         ops.ff8_linear_combination4_tiny)

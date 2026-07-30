@@ -6,6 +6,37 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-30 OOM-safe AVX2 pair-fusion checkpoint
+
+The controlling session reset twice during allocation-heavy work.  Continue
+with no subworkers, `-j2` at most (`-j1` for sanitizers), one native process at
+a time, and an explicit cgroup memory ceiling for every test or benchmark.
+Do not rerun the full provenance suite or the 16-MiB/reuse-64 campaign from the
+controlling session.  The kernel still reports zero cgroup OOM/OOM-kill events,
+but that is not permission to run unbounded children.
+
+The current dirty tree adds a pure-AVX2 two-source/one-output callback for
+generalized GF8 one-loss repair.  It preserves term order and repair
+coefficients while halving output passes.  The selector is restricted to seven
+measured K/R/profile shapes and conservative byte thresholds.  Frozen
+same-source ABBA screens found 1.0831x to 1.5564x execution geomean speedups in
+selected cells; the weakest 95-percent lower bound is 1.0790x.  No unselected
+neighbor regressed by more than 1.0 percent.  All workload digests matched.
+The measured threshold is cached once in each immutable codec, removing a
+hot-path table scan that had caused a rejected 2.8-percent neighbor regression.
+LOW `(127,128)` was moved from 64 KiB to 1 MiB after a current-host threshold
+sweep.  LOW `(32,224)` was rejected after non-monotonic current-source results
+missed the confidence gate at 8 and 256 KiB and regressed at 16 KiB.  The
+pure-AVX2 object text delta is 3,464 bytes (3.57 percent) with no EVEX prefix.
+
+Release backend/API tests pass both with the generalized path enabled and
+disabled.  Focused Clang 18 ASan+UBSan+LSan backend/API tests also pass under
+a 3-GiB cgroup ceiling; the largest observed RSS was 1,559,312 KiB.  A
+GF16-only production build passed with 178,832 KiB peak RSS.  Evidence is
+staged in
+`experiments/leopard2/direct_repair/results/avx2_pair_production_20260730.json`.
+The immediate safe next step is review, Beads update, commit, and push.
+
 ## 2026-07-30 low-memory AVX2 promotion checkpoint
 
 After two further controller restarts, keep this campaign in a strict

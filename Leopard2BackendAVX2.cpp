@@ -4329,6 +4329,247 @@ static void AVX2FF8MultiplyAddOutputs(
 }
 
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+template<bool Add, bool Identity0, bool Identity1>
+static void AVX2FF8LinearCombination2Loop(
+    void* destination_pointer,
+    const void* source0_pointer,
+    const void* source1_pointer,
+    uint16_t multiplier_log0,
+    uint16_t multiplier_log1,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT((byte_count & 31U) == 0);
+    uint8_t* destination = static_cast<uint8_t*>(destination_pointer);
+    const uint8_t* source0 = static_cast<const uint8_t*>(source0_pointer);
+    const uint8_t* source1 = static_cast<const uint8_t*>(source1_pointer);
+    const __m256i low0 = BroadcastTable(FF8Tables[multiplier_log0].low);
+    const __m256i high0 = BroadcastTable(FF8Tables[multiplier_log0].high);
+    const __m256i low1 = BroadcastTable(FF8Tables[multiplier_log1].low);
+    const __m256i high1 = BroadcastTable(FF8Tables[multiplier_log1].high);
+    for (uint64_t offset = 0; offset < byte_count; offset += 32)
+    {
+        const __m256i input0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source0 + offset));
+        const __m256i input1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source1 + offset));
+        const __m256i product0 = Identity0 ? input0 :
+            AVX2FF8ProductVector(input0, low0, high0);
+        const __m256i product1 = Identity1 ? input1 :
+            AVX2FF8ProductVector(input1, low1, high1);
+        __m256i result = _mm256_xor_si256(product0, product1);
+        if (Add)
+        {
+            result = _mm256_xor_si256(result, _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(destination + offset)));
+        }
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(destination + offset), result);
+    }
+}
+
+static LEO_FORCE_INLINE __m128i AVX2FF8LinearCombination2TailProduct(
+    __m128i input,
+    uint16_t multiplier_log,
+    bool identity,
+    __m128i nibble_mask)
+{
+    if (identity)
+        return input;
+    const FF8NibbleTable& table = FF8Tables[multiplier_log];
+    const __m128i low_table = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(table.low));
+    const __m128i high_table = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(table.high));
+    const __m128i low_indices = _mm_and_si128(input, nibble_mask);
+    const __m128i high_indices = _mm_and_si128(
+        _mm_srli_epi64(input, 4), nibble_mask);
+    return _mm_xor_si128(
+        _mm_shuffle_epi8(low_table, low_indices),
+        _mm_shuffle_epi8(high_table, high_indices));
+}
+
+template<bool Add>
+static void AVX2FF8LinearCombination2Tail(
+    uint8_t* destination,
+    const uint8_t* source0,
+    const uint8_t* source1,
+    uint16_t multiplier_log0,
+    uint16_t multiplier_log1,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(byte_count < 32);
+    const bool identity0 = multiplier_log0 == 0 || multiplier_log0 == 255;
+    const bool identity1 = multiplier_log1 == 0 || multiplier_log1 == 255;
+    const __m128i nibble_mask = _mm_set1_epi8(0x0f);
+    uint64_t offset = 0;
+    if (byte_count >= 16)
+    {
+        const __m128i input0 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(source0));
+        const __m128i input1 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(source1));
+        __m128i result = _mm_xor_si128(
+            AVX2FF8LinearCombination2TailProduct(
+                input0, multiplier_log0, identity0, nibble_mask),
+            AVX2FF8LinearCombination2TailProduct(
+                input1, multiplier_log1, identity1, nibble_mask));
+        if (Add)
+        {
+            result = _mm_xor_si128(result, _mm_loadu_si128(
+                reinterpret_cast<const __m128i*>(destination)));
+        }
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination), result);
+        offset = 16;
+    }
+    if (byte_count - offset >= 8)
+    {
+        const __m128i input0 = _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(source0 + offset));
+        const __m128i input1 = _mm_loadl_epi64(
+            reinterpret_cast<const __m128i*>(source1 + offset));
+        __m128i result = _mm_xor_si128(
+            AVX2FF8LinearCombination2TailProduct(
+                input0, multiplier_log0, identity0, nibble_mask),
+            AVX2FF8LinearCombination2TailProduct(
+                input1, multiplier_log1, identity1, nibble_mask));
+        if (Add)
+        {
+            result = _mm_xor_si128(result, _mm_loadl_epi64(
+                reinterpret_cast<const __m128i*>(destination + offset)));
+        }
+        _mm_storel_epi64(
+            reinterpret_cast<__m128i*>(destination + offset), result);
+        offset += 8;
+    }
+    while (offset < byte_count)
+    {
+        const uint8_t product0 = identity0 ? source0[offset] :
+            FF8Product(multiplier_log0, source0[offset]);
+        const uint8_t product1 = identity1 ? source1[offset] :
+            FF8Product(multiplier_log1, source1[offset]);
+        const uint8_t result = static_cast<uint8_t>(product0 ^ product1);
+        if (Add)
+            destination[offset] ^= result;
+        else
+            destination[offset] = result;
+        ++offset;
+    }
+}
+
+template<bool Add>
+static void AVX2FF8LinearCombination2Mode(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint16_t multiplier_log0,
+    uint16_t multiplier_log1,
+    uint64_t byte_count)
+{
+    static const uint16_t kSuppressed = UINT16_MAX;
+    if (byte_count == 0)
+        return;
+    if (multiplier_log0 == kSuppressed && multiplier_log1 == kSuppressed)
+    {
+        if (!Add)
+            memset(destination, 0, static_cast<size_t>(byte_count));
+        return;
+    }
+    if (multiplier_log0 == kSuppressed || multiplier_log1 == kSuppressed)
+    {
+        const bool use_second = multiplier_log0 == kSuppressed;
+        const void* source = use_second ? source1 : source0;
+        const uint16_t multiplier_log = use_second
+            ? multiplier_log1 : multiplier_log0;
+        if (multiplier_log == 0 || multiplier_log == 255)
+        {
+            if (Add)
+                AVX2XorMemory(destination, source, byte_count);
+            else
+                memcpy(destination, source, static_cast<size_t>(byte_count));
+        }
+        else if (Add)
+        {
+            AVX2FF8MultiplyAdd(
+                destination, source, multiplier_log, byte_count);
+        }
+        else
+        {
+            AVX2FF8Multiply(destination, source, multiplier_log, byte_count);
+        }
+        return;
+    }
+
+    const bool identity0 = multiplier_log0 == 0 || multiplier_log0 == 255;
+    const bool identity1 = multiplier_log1 == 0 || multiplier_log1 == 255;
+    const uint64_t prefix_bytes = byte_count & ~UINT64_C(31);
+    if (prefix_bytes != 0)
+    {
+        if (identity0)
+        {
+            if (identity1)
+            {
+                AVX2FF8LinearCombination2Loop<Add, true, true>(
+                    destination, source0, source1,
+                    multiplier_log0, multiplier_log1, prefix_bytes);
+            }
+            else
+            {
+                AVX2FF8LinearCombination2Loop<Add, true, false>(
+                    destination, source0, source1,
+                    multiplier_log0, multiplier_log1, prefix_bytes);
+            }
+        }
+        else if (identity1)
+        {
+            AVX2FF8LinearCombination2Loop<Add, false, true>(
+                destination, source0, source1,
+                multiplier_log0, multiplier_log1, prefix_bytes);
+        }
+        else
+        {
+            AVX2FF8LinearCombination2Loop<Add, false, false>(
+                destination, source0, source1,
+                multiplier_log0, multiplier_log1, prefix_bytes);
+        }
+    }
+
+    const uint64_t tail_bytes = byte_count - prefix_bytes;
+    if (tail_bytes != 0)
+    {
+        AVX2FF8LinearCombination2Tail<Add>(
+            static_cast<uint8_t*>(destination) + prefix_bytes,
+            static_cast<const uint8_t*>(source0) + prefix_bytes,
+            static_cast<const uint8_t*>(source1) + prefix_bytes,
+            multiplier_log0, multiplier_log1, tail_bytes);
+    }
+}
+
+static void AVX2FF8LinearCombination2(
+    void* destination,
+    const void* source0,
+    const void* source1,
+    uint16_t multiplier_log0,
+    uint16_t multiplier_log1,
+    bool add,
+    uint64_t byte_count)
+{
+    if (add)
+    {
+        AVX2FF8LinearCombination2Mode<true>(
+            destination, source0, source1,
+            multiplier_log0, multiplier_log1, byte_count);
+    }
+    else
+    {
+        AVX2FF8LinearCombination2Mode<false>(
+            destination, source0, source1,
+            multiplier_log0, multiplier_log1, byte_count);
+    }
+}
+#endif
+
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
     !defined(LEO2_GFNI_VARIANT)
 static LEO_FORCE_INLINE __m128i AVX2FF8FourTinyProduct128(
     __m128i input,
@@ -4867,6 +5108,12 @@ static const Ops AVX2Ops = {
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8MultiplyAdd2Sources2Outputs
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8LinearCombination2
 #else
     , NULL
 #endif

@@ -171,6 +171,10 @@ struct leo2_codec
     leo2_field field;
     leo2_shard_layout shard_layout;
     uint32_t flags;
+    // Zero disables the optional AVX2 two-source one-loss executor.  A
+    // nonzero value is derived once from the immutable profile/count/backend
+    // identity so byte execution does not rescan the measured-shape table.
+    uint64_t direct_one_loss_pair_minimum_bytes;
     std::vector<uint8_t> permanent_erased;
     std::vector<uint8_t> permanent_locator8;
     std::vector<uint16_t> permanent_locator16;
@@ -384,6 +388,7 @@ static std::atomic<uint64_t> g_test_high_direct_reveal_shards(0);
 static std::atomic<uint64_t>
     g_test_high_materialized_direct_reveal_shards(0);
 static std::atomic<uint64_t> g_test_high_scratch_reveal_shards(0);
+static std::atomic<uint64_t> g_test_direct_pair_calls(0);
 static std::atomic<uint64_t> g_test_direct_four_tiny_calls(0);
 
 static bool TestConsumeThreadStartFault()
@@ -1715,6 +1720,61 @@ static bool IsGeneralDirectOneLossCodec(
 }
 
 #ifdef LEO_HAS_FF8
+static uint64_t GF8DirectOneLossPairMinimumBytes(
+    const leo2_codec* codec)
+{
+    /*
+        These exact shapes and thresholds cleared the frozen same-source
+        simple-versus-paired AVX2 campaign.  Keep immediate K/R and byte
+        neighbors on the ordinary direct loop until measured independently.
+        This changes only byte execution; field, profile, coordinates, and
+        repair coefficients remain fixed.
+    */
+    if (!IsGeneralDirectOneLossCodec(codec) ||
+        !codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_linear_combination2)
+        return 0;
+
+    struct MeasuredShape
+    {
+        leo2_profile profile;
+        uint32_t original_count;
+        uint32_t recovery_count;
+        uint64_t minimum_shard_bytes;
+    };
+    static const MeasuredShape kMeasuredShapes[] = {
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 192, 64, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 200, 30, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 224, 32, 64 },
+        { LEO2_PROFILE_LEGACY_HIGH_V1, 240, 16, 64U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 17, 31, 1024U * 1024U },
+        { LEO2_PROFILE_LOW_V1, 31, 200, 64 },
+        { LEO2_PROFILE_LOW_V1, 127, 128, 1024U * 1024U }
+    };
+    for (size_t i = 0;
+         i < sizeof(kMeasuredShapes) / sizeof(kMeasuredShapes[0]); ++i)
+    {
+        const MeasuredShape& shape = kMeasuredShapes[i];
+        if (codec->profile == shape.profile &&
+            codec->original_count == shape.original_count &&
+            codec->recovery_count == shape.recovery_count)
+            return shape.minimum_shard_bytes;
+    }
+    return 0;
+}
+
+static LEO_FORCE_INLINE bool ShouldUseGF8DirectOneLossPairFusion(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    return codec && codec->direct_one_loss_pair_minimum_bytes != 0 &&
+        shard_bytes >= codec->direct_one_loss_pair_minimum_bytes &&
+        codec->context && codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->context->ops->ff8_linear_combination2;
+}
+
 static bool ShouldUseGF8DirectOneLossFourTiny(
     const leo2_codec* codec,
     size_t direct_term_count,
@@ -5534,6 +5594,118 @@ static leo2_result ExecuteDirectEncode(
 
 #ifdef LEO_HAS_FF8
 #if defined(_MSC_VER)
+#define LEO2_PAIR_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_PAIR_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_PAIR_NOINLINE
+#endif
+
+/*
+    Pairing two coefficients halves output loads/stores and Ops dispatches
+    without changing the source order.  Keep the grouped traversal out of the
+    general decoder so unselected K/R/byte neighbors retain the mature loop's
+    code layout.
+*/
+static LEO2_PAIR_NOINLINE leo2_result
+ExecuteGF8DirectOneLossPairs(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    if (!plan || !plan->direct_repair || !plan->codec ||
+        !plan->codec->context || !plan->codec->context->ops ||
+        !original || !recovery || !restored_original ||
+        shard_bytes == 0 ||
+        plan->missing_original_count != 1 ||
+        plan->missing_originals.size() != 1 ||
+        plan->direct_term_offsets.size() != 2 ||
+        plan->direct_term_offsets[0] != 0 ||
+        plan->direct_term_offsets[1] != plan->direct_terms.size() ||
+        plan->direct_terms.size() < 2)
+        return LEO2_INTERNAL_ERROR;
+
+    const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (!ShouldUseGF8DirectOneLossPairFusion(codec, shard_bytes))
+        return LEO2_INTERNAL_ERROR;
+    leopard::backend::FF8LinearCombination2 callback =
+        ops.ff8_linear_combination2;
+    if (!callback)
+        return LEO2_INTERNAL_ERROR;
+
+    const uint32_t missing_original = plan->missing_originals[0];
+    if (missing_original >= codec->original_count ||
+        !restored_original[missing_original])
+        return LEO2_INTERNAL_ERROR;
+    void* const output = restored_original[missing_original];
+
+    size_t term_index = 0;
+    while (term_index + 1 < plan->direct_terms.size())
+    {
+        const leo2_direct_repair_term& term0 =
+            plan->direct_terms[term_index];
+        const leo2_direct_repair_term& term1 =
+            plan->direct_terms[term_index + 1];
+        const bool parity0 =
+            (term0.tagged_source & kDirectRecoveryTag) != 0;
+        const bool parity1 =
+            (term1.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index0 =
+            term0.tagged_source & ~kDirectRecoveryTag;
+        const uint32_t source_index1 =
+            term1.tagged_source & ~kDirectRecoveryTag;
+        if ((parity0 && source_index0 >= codec->recovery_count) ||
+            (!parity0 && source_index0 >= codec->original_count) ||
+            (parity1 && source_index1 >= codec->recovery_count) ||
+            (!parity1 && source_index1 >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* const source0 = parity0
+            ? recovery[source_index0] : original[source_index0];
+        const void* const source1 = parity1
+            ? recovery[source_index1] : original[source_index1];
+        if (!source0 || !source1)
+            return LEO2_INTERNAL_ERROR;
+        callback(output, source0, source1,
+            term0.multiplier_log, term1.multiplier_log,
+            term_index != 0, shard_bytes);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        g_test_direct_pair_calls.fetch_add(1, std::memory_order_relaxed);
+#endif
+        term_index += 2;
+    }
+
+    if (term_index < plan->direct_terms.size())
+    {
+        const leo2_direct_repair_term& term =
+            plan->direct_terms[term_index];
+        const bool parity =
+            (term.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            term.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* const source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        if (term.multiplier_log == 0)
+            XorArbitraryBytes(ops, output, source, shard_bytes);
+        else
+            leopard::ff8::MultiplyAddBytes(
+                ops, output, source,
+                static_cast<leopard::ff8::ffe_t>(term.multiplier_log),
+                shard_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_PAIR_NOINLINE
+
+#if defined(_MSC_VER)
 #define LEO2_FOUR_TINY_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 #define LEO2_FOUR_TINY_NOINLINE __attribute__((noinline))
@@ -5906,6 +6078,12 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
+    if (plan->missing_original_count == 1 &&
+        ShouldUseGF8DirectOneLossPairFusion(codec, shard_bytes))
+    {
+        return ExecuteGF8DirectOneLossPairs(
+            plan, shard_bytes, original, recovery, restored_original);
+    }
     if (plan->missing_original_count == 1 &&
         ShouldUseGF8DirectOneLossFourTiny(
             codec, plan->direct_terms.size(), shard_bytes))
@@ -7762,6 +7940,16 @@ LEO2_EXPORT uint64_t leo2_test_high_scratch_reveal_shards(void)
     return g_test_high_scratch_reveal_shards.load(std::memory_order_acquire);
 }
 
+LEO2_EXPORT void leo2_test_reset_direct_pair_calls(void)
+{
+    g_test_direct_pair_calls.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_direct_pair_calls(void)
+{
+    return g_test_direct_pair_calls.load(std::memory_order_acquire);
+}
+
 LEO2_EXPORT void leo2_test_reset_direct_four_tiny_calls(void)
 {
     g_test_direct_four_tiny_calls.store(0, std::memory_order_release);
@@ -7905,8 +8093,16 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->field = field;
     codec->shard_layout = shard_layout;
     codec->flags = options ? options->flags : 0;
+    codec->direct_one_loss_pair_minimum_bytes = 0;
     codec->direct_generator_numerator_log = 0;
     codec->direct_generator_numerator_valid = false;
+#ifdef LEO_HAS_FF8
+    if (field == LEO2_FIELD_GF8)
+    {
+        codec->direct_one_loss_pair_minimum_bytes =
+            GF8DirectOneLossPairMinimumBytes(codec);
+    }
+#endif
 #ifdef LEO2_ENABLE_TEST_HOOKS
     codec->test_encode_mode = LEO2_TEST_ENCODE_AUTO;
     codec->test_decode_mode = LEO2_TEST_DECODE_AUTO;

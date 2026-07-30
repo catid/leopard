@@ -125,6 +125,10 @@ leo2_test_high_materialized_direct_reveal_shards(void);
 
 LEO2_EXPORT uint64_t leo2_test_high_scratch_reveal_shards(void);
 
+LEO2_EXPORT void leo2_test_reset_direct_pair_calls(void);
+
+LEO2_EXPORT uint64_t leo2_test_direct_pair_calls(void);
+
 LEO2_EXPORT void leo2_test_reset_direct_four_tiny_calls(void);
 
 LEO2_EXPORT uint64_t leo2_test_direct_four_tiny_calls(void);

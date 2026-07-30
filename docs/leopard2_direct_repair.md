@@ -146,10 +146,44 @@ fixed-coefficient sources per call for shard sizes 1 through 63 except 7 bytes.
 Each group loads the output once, uses XMM or scalar tails without padding or
 out-of-range access, and either initializes or XOR-accumulates explicitly.
 The remaining zero through three sources retain their original term order.
-Seven-byte and 64-byte-or-larger shards use the mature output-major executor.
-The callback is absent from scalar, SSSE3, AVX-512, GFNI, GF8-disabled, and
-global-GFNI experiment tables, so an AVX2-looking diagnostic table cannot
-accidentally interpret affine GFNI tables as nibble tables.
+Seven-byte shards use the mature output-major executor.
+
+For larger generalized one-loss repairs, a separate pure-AVX2 callback groups
+two fixed-coefficient sources per output pass.  It uses YMM operations on each
+32-byte prefix, integrated XMM operations on 16- and 8-byte tails, and scalar
+code only for the final seven or fewer bytes.  Pairing preserves source order,
+halves output loads/stores and indirect dispatches, and adds no shard-data
+scratch.  Production selects it only for the exact measured profile/count
+shapes and byte thresholds:
+
+- high `(K,R)=(192,64),(200,30),(224,32)` at 64 bytes or larger;
+- high `(240,16)` at 64 KiB or larger;
+- low `(31,200)` at 64 bytes or larger;
+- low `(17,31)` and `(127,128)` at 1 MiB or larger.
+
+Low `(32,224)` was rejected rather than assigned a production threshold.  Its
+current-source results were non-monotonic: it missed the confidence gate at
+8 KiB and 256 KiB and regressed at 16 KiB, despite wins at several larger
+sizes.  This shape retains the mature output-major direct executor.
+
+The exact profile/count threshold is derived once while constructing the
+immutable codec and cached as one 64-bit value.  Execution therefore performs
+only a threshold load and branch; it does not rescan the measured-shape table.
+This matters for tiny unselected neighbors: before caching, low `(31,199)` at
+64 bytes had a credible 2.8-percent layout/dispatch regression; afterward its
+execution geomean was 1.016x, while selected `(31,200)` remained 1.298x
+faster.
+
+The low `(127,128)` threshold is intentionally 1 MiB: current-source screens
+found only about one to six percent at 64 KiB and one to four percent at
+256 KiB, but at least 1.32x in the measured 1-MiB rounds.  Immediate count and
+byte neighbors retain the mature executor.  The pair callback is absent from
+scalar, SSSE3, AVX-512, GFNI, GF8-disabled, and global-GFNI experiment tables.
+It changes neither repair coefficients nor the wire profile.
+
+The four-source callback has the same backend exclusions, so an AVX2-looking
+diagnostic table cannot accidentally interpret affine GFNI tables as nibble
+tables.
 
 GF16 uses optimized complete-tile kernels and handles an even compact tail as
 `q` low bytes followed by `q` high bytes.  Odd GF16 byte counts remain
@@ -189,7 +223,27 @@ The production API test now checks:
   through 63 bytes,
   the 7- and 64-byte fallbacks, all four possible term-count remainders,
   unaligned inputs and outputs, guard bytes, repeated source pointers, every
-  multiplier and input byte, and explicit callback-count attribution.
+  multiplier and input byte, and explicit callback-count attribution; and
+- the two-source callback at zero through 257 bytes around every vector
+  boundary, all 65,025 live multiplier-log pairs, coefficient suppression and
+  identity, replace and accumulate modes, unaligned guard bytes, repeated
+  source pointers, null pointers for a zero-byte operation, and exact
+  integration callback counts at every production threshold.
+
+The 2026-07-30 pure-AVX2 pair-fusion screen used frozen, hashed binaries pinned
+to CPU 4 with its SMT sibling idle.  All seven selected threshold cells won:
+execution geomean speedups ranged from 1.0831x to 1.5564x, while
+plan-amortized geomean speedups ranged from 1.0831x to 1.4647x.  The weakest
+execution and amortized 95-percent lower bounds were 1.0790x.  Eight unselected
+count/byte neighbors had no geomean regression larger than 1.0 percent.  Every
+workload digest matched.
+The AVX2 object text grew by 3,464 bytes (3.57 percent), and disassembly found
+no EVEX prefix.  Machine-readable evidence is
+`experiments/leopard2/direct_repair/results/avx2_pair_production_20260730.json`.
+Focused Clang 18 ASan+UBSan+LSan backend/API tests passed serially under a
+3-GiB cgroup ceiling; their largest recorded RSS was 1,559,312 KiB.  A
+GF16-only production compile also passed, confirming that the optional Ops
+member does not break reduced-field builds.
 
 Validation commands completed on 2026-07-16:
 
