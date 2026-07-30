@@ -174,6 +174,7 @@ struct CodecEncodePathInfo
     size_t direct_generator_rows;
     bool auto_direct_selected;
     bool high_t8_vector_selected;
+    bool high_t8_partial_binding_selected;
 };
 
 bool GetCodecEncodePathInfo(
