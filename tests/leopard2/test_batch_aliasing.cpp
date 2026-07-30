@@ -712,6 +712,118 @@ void TestT8TwoBlockBindingAllocation()
     leo2_context_destroy(context);
 }
 
+void TestT8OneBlockBindingAllocation()
+{
+    static const size_t byte_counts[] = {
+        128, 192, 256, 320, 384, 448, 512
+    };
+    static const unsigned shapes[][2] = {
+        { 5, 5 },
+        { 8, 8 }
+    };
+
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result =
+        leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    RequireResult(context_result, LEO2_SUCCESS,
+        "one-block allocation context create");
+
+    for (size_t shape_index = 0;
+         shape_index < sizeof(shapes) / sizeof(shapes[0]);
+         ++shape_index)
+    {
+        const unsigned k = shapes[shape_index][0];
+        const unsigned r = shapes[shape_index][1];
+        leo2_codec* codec = NULL;
+        RequireResult(leo2_codec_create(context, k, r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+            LEO2_SUCCESS, "one-block allocation codec create");
+
+        for (size_t byte_index = 0;
+             byte_index < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++byte_index)
+        {
+            const size_t bytes = byte_counts[byte_index];
+            leopard2_internal::CodecEncodePathInfo path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                    codec, bytes, r, &path),
+                "one-block allocation path introspection");
+            const bool extension_enabled =
+                leopard2_internal::HighT8OneBlockExtendedEnabled();
+            Require(path.high_t8_vector_selected ==
+                    (extension_enabled && k == 8 && r == 8),
+                "full one-block allocation selector differs");
+            Require(path.high_t8_partial_binding_selected ==
+                    (extension_enabled && (k != 8 || r != 8)),
+                "partial one-block allocation selector differs");
+
+            Shards source(k, Bytes(bytes, 0));
+            Fixture::Fill(source,
+                0x51a00000u + static_cast<uint32_t>(
+                    shape_index * 1024 + bytes));
+            std::vector<const void*> original(k, NULL);
+            for (unsigned i = 0; i < k; ++i)
+                original[i] = &source[i][0];
+            Shards expected(r, Bytes(bytes, 0));
+            Shards actual(r, Bytes(bytes, 0xa5));
+            std::vector<void*> expected_pointers(r, NULL);
+            std::vector<void*> actual_pointers(r, NULL);
+            for (unsigned i = 0; i < r; ++i)
+            {
+                expected_pointers[i] = &expected[i][0];
+                actual_pointers[i] = &actual[i][0];
+            }
+            size_t scratch_bytes = 0;
+            RequireResult(leo2_encode_scratch_size(
+                codec, bytes, &scratch_bytes), LEO2_SUCCESS,
+                "one-block allocation scratch query");
+            AlignedBuffer expected_scratch(scratch_bytes);
+            AlignedBuffer actual_scratch(scratch_bytes);
+            RequireResult(leo2_encode(codec, bytes, &original[0],
+                &expected_pointers[0], expected_scratch.data(),
+                expected_scratch.size()), LEO2_SUCCESS,
+                "one-block allocation parity oracle");
+
+            leo2_encode_batch_item item;
+            memset(&item, 0, sizeof(item));
+            item.shard_bytes = bytes;
+            item.original = &original[0];
+            item.recovery = &actual_pointers[0];
+            item.scratch = actual_scratch.data();
+            item.scratch_bytes = actual_scratch.size();
+            leo2_encode_batch_binding* binding = NULL;
+            RequireResult(leo2_encode_batch_binding_create(
+                codec, &item, 1, &binding), LEO2_SUCCESS,
+                "one-block allocation binding create");
+            RequireResult(leo2_encode_batch_binding_execute(binding),
+                LEO2_SUCCESS, "one-block allocation warm execute");
+            Require(actual == expected,
+                "one-block allocation warm parity mismatch");
+
+            BeginAllocationAudit();
+            const leo2_result audited_result =
+                leo2_encode_batch_binding_execute(binding);
+            const uint64_t audited_allocations = EndAllocationAudit();
+            RequireResult(audited_result, LEO2_SUCCESS,
+                "one-block allocation audited execute");
+            Require(audited_allocations == 0,
+                "one-block binding execution allocated memory");
+            Require(actual == expected,
+                "one-block allocation audited parity mismatch");
+            leo2_encode_batch_binding_destroy(binding);
+        }
+        leo2_codec_destroy(codec);
+    }
+    leo2_context_destroy(context);
+}
+
 void TestValidSharedInputs(Fixture& fixture)
 {
     Shards output_a(2, Bytes(Fixture::kLongBytes, 0xa5));
@@ -1979,6 +2091,7 @@ int main()
     {
         Run(1);
         Run(4);
+        TestT8OneBlockBindingAllocation();
         TestT8TwoBlockBindingAllocation();
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
                   << "valid_shared=4 conflict_checks=20 "
@@ -1987,6 +2100,7 @@ int main()
                   << " scalable_batch_sizes=9,64,1024"
                   << " allocation_audit=clean concurrent_scalable_calls=64"
                   << " encode_binding=deep-copy,live-bytes,allocation-free"
+                  << " t8_one_block_binding=allocation-free"
                   << " t8_two_block_binding=allocation-free"
                   << std::endl;
         return 0;

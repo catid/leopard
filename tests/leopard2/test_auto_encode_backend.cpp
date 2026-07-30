@@ -37,6 +37,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -826,6 +827,106 @@ Shards encode(
         recovery_ptrs.data(), scratch.get(), scratch_bytes),
         LEO2_SUCCESS, "encode");
     return recovery;
+}
+
+void run_t8_one_block_mixed_binding(
+    leo2_codec* codec,
+    const size_t* byte_counts,
+    size_t item_count,
+    uint64_t expected_whole_transform_calls)
+{
+    static const uint32_t k = 5;
+    static const uint32_t r = 5;
+    std::vector<Shards> original(item_count);
+    std::vector<Shards> expected(item_count);
+    std::vector<Shards> actual(item_count);
+    std::vector<std::vector<const void*> > original_ptrs(
+        item_count, std::vector<const void*>(k, NULL));
+    std::vector<std::vector<void*> > recovery_ptrs(
+        item_count, std::vector<void*>(r, NULL));
+    std::vector<std::unique_ptr<AlignedBuffer> > scratch(item_count);
+    std::vector<leo2_encode_batch_item> items(item_count);
+
+    for (size_t item_index = 0; item_index < item_count; ++item_index)
+    {
+        const size_t bytes = byte_counts[item_index];
+        original[item_index] = make_original(k, bytes);
+        expected[item_index] = encode(
+            codec, original[item_index], r, false);
+        actual[item_index] = Shards(r, Bytes(bytes, 0xa5));
+        for (uint32_t source = 0; source < k; ++source)
+            original_ptrs[item_index][source] =
+                original[item_index][source].data();
+        for (uint32_t parity = 0; parity < r; ++parity)
+            recovery_ptrs[item_index][parity] =
+                actual[item_index][parity].data();
+        size_t scratch_bytes = 0;
+        require_result(leo2_encode_scratch_size(
+                codec, bytes, &scratch_bytes),
+            LEO2_SUCCESS, "mixed T8 scratch query");
+        scratch[item_index].reset(new AlignedBuffer(scratch_bytes));
+        items[item_index].shard_bytes = bytes;
+        items[item_index].original = original_ptrs[item_index].data();
+        items[item_index].recovery = recovery_ptrs[item_index].data();
+        items[item_index].scratch = scratch[item_index]->get();
+        items[item_index].scratch_bytes = scratch_bytes;
+    }
+
+    leo2_encode_batch_binding* binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+            codec, items.data(), items.size(), &binding),
+        LEO2_SUCCESS, "mixed T8 binding create");
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    require_result(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "mixed T8 binding execute");
+    const leopard::ff8::TestOnlyHighEncodeCounts counts =
+        leopard::ff8::TestOnlyGetHighEncodeCounts();
+    if (counts.whole_transform_calls != expected_whole_transform_calls ||
+        counts.forward_fused_calls != expected_whole_transform_calls ||
+        (expected_whole_transform_calls != 0 &&
+         counts.ifft_butterfly4_out_of_place !=
+            2 * expected_whole_transform_calls))
+    {
+        throw std::runtime_error(
+            "mixed T8 binding executed the wrong transform route: whole=" +
+            std::to_string(counts.whole_transform_calls) +
+            " forward=" + std::to_string(counts.forward_fused_calls) +
+            " ifft4=" +
+            std::to_string(counts.ifft_butterfly4_out_of_place) +
+            " expected_whole=" +
+            std::to_string(expected_whole_transform_calls));
+    }
+    require(actual == expected, "mixed T8 binding changed parity bytes");
+    leo2_encode_batch_binding_destroy(binding);
+}
+
+void test_t8_one_block_mixed_binding(Context& avx2)
+{
+    if (avx2.result() != LEO2_SUCCESS)
+        return;
+    Codec codec(avx2.get(), 5, 5,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    static const size_t qualified[] = { 64, 128, 320, 512 };
+    leopard2_internal::CodecEncodePathInfo path = {};
+    require(leopard2_internal::GetCodecEncodePathInfo(
+            codec.get(), 128, 5, &path),
+        "mixed T8 path query");
+    const uint64_t expected_qualified_calls =
+        path.high_t8_partial_binding_selected ? 4 : 0;
+    run_t8_one_block_mixed_binding(
+        codec.get(), qualified,
+        sizeof(qualified) / sizeof(qualified[0]),
+        expected_qualified_calls);
+
+    /*
+        One unqualified item must disable the binding-level shortcut for the
+        complete heterogeneous batch.  The mature per-item path still emits
+        identical parity for both items.
+    */
+    static const size_t boundary[] = { 64, 513 };
+    run_t8_one_block_mixed_binding(
+        codec.get(), boundary,
+        sizeof(boundary) / sizeof(boundary[0]), 0);
 }
 
 Shards encode_unaligned(
@@ -1773,6 +1874,13 @@ int main()
         // LEO2_UNSUPPORTED and require_explicit_backend returns early.
         Context gfni(LEO2_BACKEND_GFNI);
 
+        if (std::getenv("LEO2_TEST_T8_ONE_BLOCK_ONLY"))
+        {
+            test_t8_one_block_mixed_binding(avx2);
+            std::puts("Leopard2 T8 mixed binding passed");
+            return 0;
+        }
+
         require_explicit_backend(scalar, LEO2_BACKEND_SCALAR);
         require_explicit_backend(ssse3, LEO2_BACKEND_SSSE3);
         require_explicit_backend(avx2, LEO2_BACKEND_AVX2);
@@ -1796,6 +1904,7 @@ int main()
         test_linux_cache_topology();
         test_gf16_cache_policy(avx2);
         test_gf16_cache_policy_bytes(avx2);
+        test_t8_one_block_mixed_binding(avx2);
 
         test_small_high_encode(scalar, ssse3, avx2, avx512);
 

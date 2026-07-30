@@ -1442,6 +1442,16 @@ static int Run(const Options& options)
         static_cast<uint64_t>(decode_batch_preflight_bytes),
         "batch decode scratch byte count");
 
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    leopard2_internal::CodecEncodePathInfo encode_path_info = {};
+    if (!leopard2_internal::GetCodecEncodePathInfo(
+            codec, options.bytes, options.r, &encode_path_info))
+        Fail("prevalidated benchmark encode-path introspection failed");
+    const bool high_t8_one_block_selected =
+        encode_path_info.high_t8_vector_selected ||
+        encode_path_info.high_t8_partial_binding_selected;
+#endif
+
     std::ostringstream json;
     json << std::fixed << std::setprecision(6);
     json << "{\n"
@@ -1454,6 +1464,11 @@ static int Run(const Options& options)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     json << ",\n"
          << "    \"prevalidated_batch_experiment\": true,\n"
+         << "    \"high_t8_one_block_extended_enabled\": "
+         << (leopard2_internal::HighT8OneBlockExtendedEnabled() ?
+                "true" : "false") << ",\n"
+         << "    \"high_t8_one_block_selected\": "
+         << (high_t8_one_block_selected ? "true" : "false") << ",\n"
          << "    \"high_t8_two_block_128_192_enabled\": "
          << (leopard2_internal::HighT8TwoBlock128192Enabled() ?
                 "true" : "false") << ",\n"

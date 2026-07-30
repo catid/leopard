@@ -100,6 +100,19 @@
 #endif
 
 /*
+    Text-layout-neutral control for extending the promoted one-block T=8
+    callback beyond its original 64-byte qualification.  Both values are
+    nonzero so candidate and control keep the marker in initialized data.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED must be 0 or 1"
+#endif
+
+/*
     Promoted fast path for the adjacent two-message-block T=8 family.
     Reusable binding setup maps public K=9..16,R=5..8 onto a padded
     K=16,R=8 transform call.
@@ -516,6 +529,7 @@ static void ExecuteHighT8PartialBinding(
     const leopard::backend::Ops& transform_ops,
     uint32_t original_count,
     uint32_t recovery_count,
+    uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery);
 #endif
@@ -533,6 +547,20 @@ static void ExecuteHighT8TwoBlockBinding(
 namespace {
 
 static const size_t kScratchAlignment = 64;
+
+#ifdef LEO_HAS_FF8
+static volatile uint32_t g_high_t8_one_block_extended_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
+
+static bool IsHighT8OneBlockByteCount(uint64_t shard_bytes)
+{
+    if (shard_bytes == 64)
+        return true;
+    return shard_bytes >= 128 && shard_bytes <= 512 &&
+        (shard_bytes & 63U) == 0 &&
+        g_high_t8_one_block_extended_mode == 1U;
+}
+#endif
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
 /*
@@ -8214,7 +8242,8 @@ static leo2_result RunHighT8PartialBatchItem(void* context, size_t index)
     const leo2_encode_batch_item& item = batch->items[index];
     ExecuteHighT8PartialBinding(
         *batch->ops, batch->codec->original_count,
-        batch->codec->recovery_count, item.original, item.recovery);
+        batch->codec->recovery_count, item.shard_bytes,
+        item.original, item.recovery);
     return LEO2_SUCCESS;
 }
 
@@ -9602,11 +9631,12 @@ bool GetCodecEncodePathInfo(
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count == 8 && codec->recovery_count == 8 &&
-        codec->padded_side == 8 && shard_bytes == 64 &&
+        codec->padded_side == 8 &&
+        IsHighT8OneBlockByteCount(shard_bytes) &&
         requested_recovery_count == 8)
     {
         const leopard::backend::Ops& transform_ops =
-            SelectTransformEncodeOps(codec, 64, 8, 8);
+            SelectTransformEncodeOps(codec, shard_bytes, 8, 8);
         info.high_t8_vector_selected =
             transform_ops.kind == LEO2_BACKEND_AVX2 &&
             transform_ops.ff8_high_encode_one_block != NULL &&
@@ -9618,11 +9648,12 @@ bool GetCodecEncodePathInfo(
         codec->original_count >= 5 && codec->original_count <= 8 &&
         codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
         (codec->original_count != 8 || codec->recovery_count != 8) &&
-        codec->padded_side == 8 && shard_bytes == 64 &&
+        codec->padded_side == 8 &&
+        IsHighT8OneBlockByteCount(shard_bytes) &&
         requested_recovery_count == codec->recovery_count)
     {
         const leopard::backend::Ops& transform_ops =
-            SelectTransformEncodeOps(codec, 64,
+            SelectTransformEncodeOps(codec, shard_bytes,
                 requested_recovery_count, requested_recovery_count);
         info.high_t8_partial_binding_selected =
             transform_ops.kind == LEO2_BACKEND_AVX2 &&
@@ -9687,6 +9718,15 @@ bool HighT8TwoBlock128192Enabled()
 #endif
 }
 
+bool HighT8OneBlockExtendedEnabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_high_t8_one_block_extended_mode == 1U;
+#else
+    return false;
+#endif
+}
+
 bool HighT8TwoBlock320Enabled()
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -9736,11 +9776,13 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
     const leopard::backend::Ops& transform_ops,
     uint32_t original_count,
     uint32_t recovery_count,
+    uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery)
 {
-    alignas(32) static const uint8_t zero_shard[64] = {};
-    alignas(32) uint8_t discarded_recovery[3][64];
+    LEO_DEBUG_ASSERT(IsHighT8OneBlockByteCount(shard_bytes));
+    alignas(32) static const uint8_t zero_shard[512] = {};
+    alignas(32) uint8_t discarded_recovery[3][512];
     const void* padded_original[8];
     void* padded_recovery[8];
     for (uint32_t i = 0; i < 8; ++i)
@@ -9751,9 +9793,8 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
             ? recovery[i]
             : discarded_recovery[i - recovery_count];
     }
-    leopard::ff8::ReedSolomonEncode(
-        transform_ops, 64, 8, 8, 8, 8, padded_original,
-        padded_recovery, NULL);
+    leopard::ff8::ReedSolomonEncodeOneBlockT8(
+        transform_ops, padded_original, padded_recovery, shard_bytes);
 }
 
 #undef LEO2_T8_PARTIAL_NOINLINE
@@ -9881,7 +9922,8 @@ static leo2_result EncodeInternal(
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count == 8 && codec->recovery_count == 8 &&
-        codec->padded_side == 8 && shard_bytes == 64)
+        codec->padded_side == 8 &&
+        IsHighT8OneBlockByteCount(shard_bytes))
     {
         bool full_output = true;
         for (uint32_t i = 0; i < 8; ++i)
@@ -9889,14 +9931,14 @@ static leo2_result EncodeInternal(
         if (full_output)
         {
             const leopard::backend::Ops& transform_ops =
-                SelectTransformEncodeOps(codec, 64, 8, 8);
+                SelectTransformEncodeOps(codec, shard_bytes, 8, 8);
             if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
                 transform_ops.ff8_high_encode_one_block &&
                 (transform_ops.ff8_high_encode_one_block_sides & 8U) != 0)
             {
-                leopard::ff8::ReedSolomonEncode(
-                    transform_ops, 64, 8, 8, 8, 8, original,
-                    const_cast<void**>(recovery), NULL);
+                leopard::ff8::ReedSolomonEncodeOneBlockT8(
+                    transform_ops, original,
+                    const_cast<void**>(recovery), shard_bytes);
                 return LEO2_SUCCESS;
             }
         }
@@ -10604,28 +10646,36 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         (codec->original_count != 8 || codec->recovery_count != 8) &&
         codec->padded_side == 8)
     {
-        bool all_dense_64 = true;
+        bool all_dense_qualified = true;
+        const leopard::backend::Ops* selected_ops = NULL;
         for (size_t item_index = 0;
              item_index < binding->items.size(); ++item_index)
         {
             const leo2_encode_batch_item& item =
                 binding->items[item_index];
-            all_dense_64 = all_dense_64 && item.shard_bytes == 64;
+            all_dense_qualified = all_dense_qualified &&
+                IsHighT8OneBlockByteCount(item.shard_bytes);
             for (uint32_t parity = 0;
                  parity < codec->recovery_count; ++parity)
-                all_dense_64 =
-                    all_dense_64 && item.recovery[parity] != NULL;
-        }
-        if (all_dense_64)
-        {
+                all_dense_qualified =
+                    all_dense_qualified && item.recovery[parity] != NULL;
+            if (!all_dense_qualified)
+                break;
             const leopard::backend::Ops& transform_ops =
-                SelectTransformEncodeOps(codec, 64,
+                SelectTransformEncodeOps(codec, item.shard_bytes,
                     codec->recovery_count, codec->recovery_count);
-            if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
-                transform_ops.ff8_high_encode_one_block &&
-                (transform_ops.ff8_high_encode_one_block_sides & 8U) != 0)
-                binding->high_t8_partial_ops = &transform_ops;
+            if (transform_ops.kind != LEO2_BACKEND_AVX2 ||
+                !transform_ops.ff8_high_encode_one_block ||
+                (transform_ops.ff8_high_encode_one_block_sides & 8U) == 0 ||
+                (selected_ops && selected_ops != &transform_ops))
+            {
+                all_dense_qualified = false;
+                break;
+            }
+            selected_ops = &transform_ops;
         }
+        if (all_dense_qualified)
+            binding->high_t8_partial_ops = selected_ops;
     }
 #endif
 

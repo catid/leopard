@@ -168,6 +168,17 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work); // m * 2 elements
 
+/*
+    Execute the already-qualified register-light AVX2 T=8 one-block callback
+    after reusable public validation has established a dense eight-output
+    layout.  Callers pad shortened inputs and punctured outputs explicitly.
+*/
+void ReedSolomonEncodeOneBlockT8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count);
+
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,

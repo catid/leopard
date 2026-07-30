@@ -208,6 +208,8 @@ bool OneShotNoLossShortCircuitExperimentEnabled();
     Private benchmark provenance marker.  Candidate/control builds read a
     volatile data initializer rather than compiling different selector code.
 */
+bool HighT8OneBlockExtendedEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

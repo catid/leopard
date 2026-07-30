@@ -100,6 +100,16 @@ def write_exclusive(path: Path, value: object) -> None:
         os.close(descriptor)
 
 
+def write_bytes_exclusive(path: Path, payload: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        require(os.write(descriptor, payload) == len(payload),
+                f"short write: {path}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
 def file_identity(path: Path) -> dict[str, Any]:
     resolved = path.resolve(strict=True)
     status = resolved.stat()
@@ -218,6 +228,7 @@ def validate_result(
     iterations: int,
     warmup: int,
     target_bytes: int,
+    campaign: str = "two-block",
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
     expected_parameters = {
@@ -261,17 +272,40 @@ def validate_result(
                 correctness.get("leopard2_round_trip") is True,
                 "Leopard2 benchmark identity or round trip failed")
         build = result.get("build")
-        expected_128_192 = (
-            implementation == "candidate" or target_bytes not in (128, 192)
-        )
-        expected_320 = (
-            implementation == "candidate" or target_bytes != 320
-        )
-        require(isinstance(build, dict) and
-                build.get("prevalidated_batch_experiment") is True and
+        require(campaign in ("two-block", "one-block-extended"),
+                f"unsupported campaign identity: {campaign}")
+        require(isinstance(build, dict),
+                "Leopard2 build identity is absent")
+        if campaign == "two-block":
+            expected_128_192 = (
+                implementation == "candidate" or
+                target_bytes not in (128, 192)
+            )
+            expected_320 = (
+                implementation == "candidate" or target_bytes != 320
+            )
+            marker_valid = (
                 build.get("high_t8_two_block_128_192_enabled") is
                     expected_128_192 and
-                build.get("high_t8_two_block_320_enabled") is expected_320 and
+                build.get("high_t8_two_block_320_enabled") is expected_320
+            )
+        else:
+            expected_selected = (
+                (str(cell["role"]).startswith("target") and
+                 implementation == "candidate") or
+                (cell["role"] == "neighbor" and cell["bytes"] == 64 and
+                 5 <= cell["K"] <= 8 and 5 <= cell["R"] <= 8)
+            )
+            marker_valid = (
+                build.get("high_t8_one_block_extended_enabled") is
+                    (implementation == "candidate") and
+                build.get("high_t8_one_block_selected") is
+                    expected_selected and
+                build.get("high_t8_two_block_128_192_enabled") is True and
+                build.get("high_t8_two_block_320_enabled") is True
+            )
+        require(build.get("prevalidated_batch_experiment") is True and
+                marker_valid and
                 build.get("source_commit") == source_commit and
                 build.get("source_tree") == source_tree and
                 build.get("source_tracked_dirty") is False,
@@ -292,6 +326,8 @@ def run_one(
     iterations: int,
     warmup: int,
     target_bytes: int,
+    campaign: str = "two-block",
+    failure_output: Path | None = None,
 ) -> dict[str, Any]:
     executable = Path(str(identity["path"]))
     require(sha256(executable) == identity["sha256"],
@@ -299,28 +335,51 @@ def run_one(
     command = benchmark_command(
         implementation, executable, cell, cpu, iterations, warmup)
     start = time.monotonic_ns()
-    completed = subprocess.run(
-        command, env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, timeout=60.0, check=False)
-    elapsed = time.monotonic_ns() - start
-    require(completed.returncode == 0,
-            f"{implementation} failed: " +
-            completed.stderr.decode("utf-8", errors="replace")[-1000:])
-    require(sha256(executable) == identity["sha256"],
-            f"{implementation} binary changed after execution")
+    failure_prefix = (
+        failure_output /
+        f"failure-{implementation}-{time.monotonic_ns()}"
+        if failure_output is not None else None
+    )
+
+    def persist_failure(stdout: bytes, stderr: bytes) -> None:
+        if failure_prefix is None:
+            return
+        write_bytes_exclusive(failure_prefix.with_suffix(".stdout"), stdout)
+        write_bytes_exclusive(failure_prefix.with_suffix(".stderr"), stderr)
+
     try:
+        completed = subprocess.run(
+            command, env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=60.0, check=False)
+    except subprocess.TimeoutExpired as error:
+        persist_failure(error.stdout or b"", error.stderr or b"")
+        raise EvidenceError(
+            f"{implementation} timed out after 60 seconds") from error
+    elapsed = time.monotonic_ns() - start
+    try:
+        require(completed.returncode == 0,
+                f"{implementation} failed: " +
+                completed.stderr.decode(
+                    "utf-8", errors="replace")[-1000:])
+        require(sha256(executable) == identity["sha256"],
+                f"{implementation} binary changed after execution")
         result = json.loads(completed.stdout.decode("utf-8"))
+        normalized = validate_result(
+            implementation, result, cell, source_commit, source_tree,
+            iterations, warmup, target_bytes, campaign)
     except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        persist_failure(completed.stdout, completed.stderr)
         raise EvidenceError(
             f"{implementation} output is not one JSON object: {error}") from error
+    except Exception:
+        persist_failure(completed.stdout, completed.stderr)
+        raise
     return {
         "implementation": implementation,
         "elapsed_ns": elapsed,
         "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
-        "normalized": validate_result(
-            implementation, result, cell, source_commit, source_tree,
-            iterations, warmup, target_bytes),
+        "normalized": normalized,
         "result": result,
     }
 
@@ -472,14 +531,20 @@ def main() -> int:
                     before_cpu = SUPPORT.cpu_stat_snapshot(options.cpu)
                     before_sibling = SUPPORT.cpu_stat_snapshot(options.sibling)
                     before_ns = time.monotonic_ns()
-                    invocations = [
-                        run_one(
+                    invocations = []
+                    for slot_index, label in enumerate(order):
+                        invocation = run_one(
                             label, identities[label], cell, options.cpu,
                             options.source_commit, options.source_tree,
                             options.iterations, options.warmup,
-                            options.target_bytes)
-                        for label in order
-                    ]
+                            options.target_bytes,
+                            failure_output=options.output)
+                        invocations.append(invocation)
+                        write_exclusive(
+                            options.output /
+                            f"partial-{cell['id']}-round-{round_index}-"
+                            f"slot-{slot_index}.json",
+                            invocation)
                     isolation = SUPPORT.isolation_record(
                         options.cpu, options.sibling, pair_lease,
                         before_ns, time.monotonic_ns(),

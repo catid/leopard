@@ -59,6 +59,13 @@
 #if !defined(LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING)
 #error "production high-T8 two-block-binding expectation must be explicit"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED must be 0 or 1"
+#endif
 #ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
 #define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 0
 #endif
@@ -90,6 +97,13 @@ void Require(bool condition, const char* message)
 {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+bool IsExpectedT8OneBlockByteCount(size_t bytes)
+{
+    return bytes == 64 ||
+        (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
+         bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0);
 }
 
 void RequireResult(leo2_result result, const char* message)
@@ -244,11 +258,12 @@ void EncodeAllAndCheck(
     }
 }
 
-uint64_t ExerciseT8BatchBinding(leo2_context* context)
+uint64_t ExerciseT8BatchBinding(
+    leo2_context* context,
+    size_t bytes)
 {
     static const unsigned k = 8;
     static const unsigned r = 8;
-    static const size_t bytes = 64;
     static const size_t batch_count = 8;
     static const uint8_t sentinel = 0xa5;
 
@@ -276,7 +291,8 @@ uint64_t ExerciseT8BatchBinding(leo2_context* context)
             codec, bytes, r, &t8_path),
         "T8 binding path introspection");
     Require(t8_path.high_t8_vector_selected ==
-            (LEO2_EXPECT_HIGH_T8_VECTOR != 0),
+            (LEO2_EXPECT_HIGH_T8_VECTOR != 0 &&
+             IsExpectedT8OneBlockByteCount(bytes)),
         "T8 binding selector differs from the production expectation");
 
     std::vector<Shards> recovery(
@@ -373,122 +389,137 @@ uint64_t ExerciseT8BatchBinding(leo2_context* context)
 
 uint64_t ExerciseT8PartialBindings(leo2_context* context)
 {
-    static const size_t bytes = 64;
+    static const size_t byte_counts[] = {
+        64, 128, 192, 256, 320, 384, 448, 512
+    };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
     uint64_t checks = 0;
 
-    for (unsigned k = 5; k <= 8; ++k)
-        for (unsigned r = 5; r <= 8; ++r)
-        {
-            leo2_codec* codec = NULL;
-            RequireResult(leo2_codec_create(context, k, r,
-                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
-                "partial T8 binding codec");
-            const leopard2_test::ProfileLayout layout =
-                leopard2_test::make_profile_layout(
-                    leopard2_test::kLegacyHigh, k, r);
-            const leopard2_test::Matrix generator =
-                leopard2_test::direct_systematic_generator(field, layout);
-            Shards original = MakeOriginal(k, bytes);
-            std::vector<const void*> input(k, NULL);
-            for (unsigned i = 0; i < k; ++i)
-                input[i] = &original[i][0];
-            Shards recovery(r, Bytes(bytes, sentinel));
-            std::vector<void*> output(r, NULL);
-            for (unsigned i = 0; i < r; ++i)
-                output[i] = &recovery[i][0];
-
-            size_t scratch_bytes = 0;
-            RequireResult(leo2_encode_scratch_size(
-                codec, bytes, &scratch_bytes),
-                "partial T8 binding scratch query");
-            AlignedBuffer scratch(scratch_bytes);
-            leopard2_internal::CodecEncodePathInfo path = {};
-            Require(leopard2_internal::GetCodecEncodePathInfo(
-                    codec, bytes, r, &path),
-                "partial T8 binding path introspection");
-            const bool expected =
-                LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING != 0 &&
-                (k != 8 || r != 8);
-            Require(path.high_t8_partial_binding_selected == expected,
-                "partial T8 binding selector differs from expectation");
-
-            leo2_encode_batch_item item = {};
-            item.shard_bytes = bytes;
-            item.original = &input[0];
-            item.recovery = &output[0];
-            item.scratch = scratch.data();
-            item.scratch_bytes = scratch.size();
-            leo2_encode_batch_binding* binding = NULL;
-            RequireResult(leo2_encode_batch_binding_create(
-                codec, &item, 1, &binding),
-                "partial T8 binding create");
-            RequireResult(leo2_encode_batch_binding_execute(binding),
-                "partial T8 binding execute");
-            for (unsigned parity = 0; parity < r; ++parity)
+    for (size_t byte_index = 0;
+         byte_index < sizeof(byte_counts) / sizeof(byte_counts[0]);
+         ++byte_index)
+    {
+        const size_t bytes = byte_counts[byte_index];
+        for (unsigned k = 5; k <= 8; ++k)
+            for (unsigned r = 5; r <= 8; ++r)
             {
-                Require(recovery[parity] == OracleParity(
-                    field, generator, original, parity),
-                    "partial T8 binding parity differs from oracle");
-                ++checks;
-            }
+                leo2_codec* codec = NULL;
+                RequireResult(leo2_codec_create(context, k, r,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+                    "partial T8 binding codec");
+                const leopard2_test::ProfileLayout layout =
+                    leopard2_test::make_profile_layout(
+                        leopard2_test::kLegacyHigh, k, r);
+                const leopard2_test::Matrix generator =
+                    leopard2_test::direct_systematic_generator(field, layout);
+                Shards original = MakeOriginal(k, bytes);
+                std::vector<const void*> input(k, NULL);
+                for (unsigned i = 0; i < k; ++i)
+                    input[i] = &original[i][0];
+                Shards recovery(r, Bytes(bytes, sentinel));
+                std::vector<void*> output(r, NULL);
+                for (unsigned parity = 0; parity < r; ++parity)
+                    output[parity] = &recovery[parity][0];
 
-            if (k == 5 && r == 5)
-            {
-                original[1][13] ^= 0x6du;
+                size_t scratch_bytes = 0;
+                RequireResult(leo2_encode_scratch_size(
+                    codec, bytes, &scratch_bytes),
+                    "partial T8 binding scratch query");
+                AlignedBuffer scratch(scratch_bytes);
+                leopard2_internal::CodecEncodePathInfo path = {};
+                Require(leopard2_internal::GetCodecEncodePathInfo(
+                        codec, bytes, r, &path),
+                    "partial T8 binding path introspection");
+                const bool expected =
+                    LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING != 0 &&
+                    IsExpectedT8OneBlockByteCount(bytes) &&
+                    (k != 8 || r != 8);
+                Require(path.high_t8_partial_binding_selected == expected,
+                    "partial T8 binding selector differs from expectation");
+                Require(path.high_t8_vector_selected ==
+                        (LEO2_EXPECT_HIGH_T8_VECTOR != 0 &&
+                         IsExpectedT8OneBlockByteCount(bytes) &&
+                         k == 8 && r == 8),
+                    "full T8 vector selector differs from expectation");
+
+                leo2_encode_batch_item item = {};
+                item.shard_bytes = bytes;
+                item.original = &input[0];
+                item.recovery = &output[0];
+                item.scratch = scratch.data();
+                item.scratch_bytes = scratch.size();
+                leo2_encode_batch_binding* binding = NULL;
+                RequireResult(leo2_encode_batch_binding_create(
+                    codec, &item, 1, &binding),
+                    "partial T8 binding create");
                 RequireResult(leo2_encode_batch_binding_execute(binding),
-                    "partial T8 changed-source binding execute");
+                    "partial T8 binding execute");
                 for (unsigned parity = 0; parity < r; ++parity)
                 {
                     Require(recovery[parity] == OracleParity(
                         field, generator, original, parity),
-                        "partial T8 changed-source parity differs from oracle");
+                        "partial T8 binding parity differs from oracle");
                     ++checks;
                 }
-                original[1][13] ^= 0x6du;
-                leo2_encode_batch_binding_destroy(binding);
-                binding = NULL;
-                for (unsigned parity = 0; parity < r; ++parity)
-                    std::fill(recovery[parity].begin(),
-                        recovery[parity].end(), sentinel);
-                output[2] = NULL;
-                path = leopard2_internal::CodecEncodePathInfo();
-                Require(leopard2_internal::GetCodecEncodePathInfo(
-                        codec, bytes, r - 1, &path),
-                    "sparse partial T8 path introspection");
-                Require(!path.high_t8_partial_binding_selected,
-                    "sparse partial T8 binding selected dense shortcut");
-                binding = NULL;
-                RequireResult(leo2_encode_batch_binding_create(
-                    codec, &item, 1, &binding),
-                    "sparse partial T8 binding create");
-                RequireResult(leo2_encode_batch_binding_execute(binding),
-                    "sparse partial T8 binding execute");
-                for (unsigned parity = 0; parity < r; ++parity)
+
+                if (k == 5 && r == 5)
                 {
-                    if (parity == 2)
-                    {
-                        Require(recovery[parity] == Bytes(bytes, sentinel),
-                            "sparse partial T8 modified a null output");
-                    }
-                    else
+                    original[1][13] ^= 0x6du;
+                    RequireResult(leo2_encode_batch_binding_execute(binding),
+                        "partial T8 changed-source binding execute");
+                    for (unsigned parity = 0; parity < r; ++parity)
                     {
                         Require(recovery[parity] == OracleParity(
                             field, generator, original, parity),
-                            "sparse partial T8 parity differs from oracle");
+                            "partial T8 changed-source parity differs from oracle");
+                        ++checks;
                     }
-                    ++checks;
+                    original[1][13] ^= 0x6du;
+                    leo2_encode_batch_binding_destroy(binding);
+                    binding = NULL;
+                    for (unsigned parity = 0; parity < r; ++parity)
+                        std::fill(recovery[parity].begin(),
+                            recovery[parity].end(), sentinel);
+                    output[2] = NULL;
+                    path = leopard2_internal::CodecEncodePathInfo();
+                    Require(leopard2_internal::GetCodecEncodePathInfo(
+                            codec, bytes, r - 1, &path),
+                        "sparse partial T8 path introspection");
+                    Require(!path.high_t8_partial_binding_selected,
+                        "sparse partial T8 binding selected dense shortcut");
+                    binding = NULL;
+                    RequireResult(leo2_encode_batch_binding_create(
+                        codec, &item, 1, &binding),
+                        "sparse partial T8 binding create");
+                    RequireResult(leo2_encode_batch_binding_execute(binding),
+                        "sparse partial T8 binding execute");
+                    for (unsigned parity = 0; parity < r; ++parity)
+                    {
+                        if (parity == 2)
+                        {
+                            Require(recovery[parity] == Bytes(bytes, sentinel),
+                                "sparse partial T8 modified a null output");
+                        }
+                        else
+                        {
+                            Require(recovery[parity] == OracleParity(
+                                field, generator, original, parity),
+                                "sparse partial T8 parity differs from oracle");
+                        }
+                        ++checks;
+                    }
+                    leo2_encode_batch_binding_destroy(binding);
                 }
-                leo2_encode_batch_binding_destroy(binding);
+                else
+                    leo2_encode_batch_binding_destroy(binding);
+                leo2_codec_destroy(codec);
             }
-            else
-                leo2_encode_batch_binding_destroy(binding);
-            leo2_codec_destroy(codec);
-        }
+    }
 
-    Require(checks == 114,
+    Require(checks == 114 *
+            (sizeof(byte_counts) / sizeof(byte_counts[0])),
         "partial T8 binding check count changed unexpectedly");
     return checks;
 }
@@ -633,11 +664,10 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
     return checks;
 }
 
-uint64_t ExerciseT8PartialThreadPool()
+uint64_t ExerciseT8PartialThreadPool(size_t bytes)
 {
     static const unsigned k = 5;
     static const unsigned r = 5;
-    static const size_t bytes = 64;
     static const size_t batch_count = 8;
 
     leo2_context_options options = {};
@@ -784,11 +814,12 @@ uint64_t ExerciseT8TwoBlockThreadPool(size_t bytes)
     return checks;
 }
 
-uint64_t ExerciseT8PartialUnaligned(leo2_context* context)
+uint64_t ExerciseT8PartialUnaligned(
+    leo2_context* context,
+    size_t bytes)
 {
     static const unsigned k = 5;
     static const unsigned r = 5;
-    static const size_t bytes = 64;
     static const uint8_t sentinel = 0xa5;
 
     leo2_codec* codec = NULL;
@@ -938,7 +969,8 @@ void ExerciseTinyFullOutputRegion(
 {
     const size_t byte_counts[] = {
         1, 2, 3, 4, 7, 8, 15, 16,
-        17, 31, 32, 33, 63, 64, 65, 70, 128, 192, 256, 320
+        17, 31, 32, 33, 63, 64, 65, 70,
+        128, 192, 256, 320, 384, 448, 512, 513
     };
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -969,7 +1001,7 @@ void ExerciseTinyFullOutputRegion(
                     "tiny full-output path introspection");
                 const bool expected_partial_binding =
                     LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING != 0 &&
-                    bytes == 64 && k <= 8 &&
+                    IsExpectedT8OneBlockByteCount(bytes) && k <= 8 &&
                     (k != 8 || r != 8);
                 Require(path.high_t8_partial_binding_selected ==
                         expected_partial_binding,
@@ -1101,13 +1133,27 @@ int main()
             context, tiny_codec_checks, tiny_encode_checks,
             tiny_direct_checks, tiny_transform_checks);
         const uint64_t t8_binding_checks =
-            ExerciseT8BatchBinding(context);
+            ExerciseT8BatchBinding(context, 64) +
+            ExerciseT8BatchBinding(context, 128) +
+            ExerciseT8BatchBinding(context, 192) +
+            ExerciseT8BatchBinding(context, 256) +
+            ExerciseT8BatchBinding(context, 320) +
+            ExerciseT8BatchBinding(context, 384) +
+            ExerciseT8BatchBinding(context, 448) +
+            ExerciseT8BatchBinding(context, 512);
         const uint64_t t8_partial_binding_checks =
             ExerciseT8PartialBindings(context);
         const uint64_t t8_two_block_binding_checks =
             ExerciseT8TwoBlockBindings(context);
         const uint64_t t8_partial_unaligned_checks =
-            ExerciseT8PartialUnaligned(context);
+            ExerciseT8PartialUnaligned(context, 64) +
+            ExerciseT8PartialUnaligned(context, 128) +
+            ExerciseT8PartialUnaligned(context, 192) +
+            ExerciseT8PartialUnaligned(context, 256) +
+            ExerciseT8PartialUnaligned(context, 320) +
+            ExerciseT8PartialUnaligned(context, 384) +
+            ExerciseT8PartialUnaligned(context, 448) +
+            ExerciseT8PartialUnaligned(context, 512);
         const uint64_t t8_two_block_unaligned_checks =
             ExerciseT8TwoBlockUnaligned(context, 64) +
             ExerciseT8TwoBlockUnaligned(context, 128) +
@@ -1116,7 +1162,14 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 320);
         leo2_context_destroy(context);
         const uint64_t t8_partial_thread_pool_checks =
-            ExerciseT8PartialThreadPool();
+            ExerciseT8PartialThreadPool(64) +
+            ExerciseT8PartialThreadPool(128) +
+            ExerciseT8PartialThreadPool(192) +
+            ExerciseT8PartialThreadPool(256) +
+            ExerciseT8PartialThreadPool(320) +
+            ExerciseT8PartialThreadPool(384) +
+            ExerciseT8PartialThreadPool(448) +
+            ExerciseT8PartialThreadPool(512);
         const uint64_t t8_two_block_thread_pool_checks =
             ExerciseT8TwoBlockThreadPool(128) +
             ExerciseT8TwoBlockThreadPool(192) +
