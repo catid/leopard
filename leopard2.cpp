@@ -597,24 +597,26 @@ static bool IsHighT8TwoBlockExtendedShapeByteCount(
 
             4 * (K - 9) + (R - 5)
 
-        selects one K=9..16, R=5..8 shape.  Each retained bit passed three
-        independent same-source and exact-main ABBA rounds with a 95% lower
-        confidence bound of at least 1.05x and above 1.0x, respectively.
-        Keeping the table in setup-only dispatch avoids branches in byte
-        execution while retaining every qualified measured cell.
+        selects one K=9..16, R=5..8 shape.  Each retained bit passed separate
+        discovery and independent-seed holdout campaigns, each with three
+        same-source and exact-main ABBA rounds.  Both campaigns required 95%
+        lower confidence bounds of at least 1.05x and above 1.0x,
+        respectively.  Keeping the table in setup-only dispatch avoids
+        branches in byte execution while retaining every robust measured
+        cell.
     */
     static const uint32_t kShapeMasks[] = {
         UINT32_C(0xfffffff6), // 384
-        UINT32_C(0xfffffff6), // 448
-        UINT32_C(0xfffffff4), // 512
-        UINT32_C(0xffff7ff0), // 576
-        UINT32_C(0xffff3ff0), // 640
-        UINT32_C(0xffff6ff4), // 704
-        UINT32_C(0xffff9ff0), // 768
-        UINT32_C(0xffffcff0), // 832
-        UINT32_C(0xffff8ff0), // 896
-        UINT32_C(0xffff0de0), // 960
-        UINT32_C(0x7fff4fc0)  // 1024
+        UINT32_C(0xffff5ff4), // 448
+        UINT32_C(0xffffeff0), // 512
+        UINT32_C(0xffff3ff0), // 576
+        UINT32_C(0xffff1ff0), // 640
+        UINT32_C(0xffff2f60), // 704
+        UINT32_C(0x6fff0e70), // 768
+        UINT32_C(0x5fff0d80), // 832
+        UINT32_C(0xffff0fd0), // 896
+        UINT32_C(0x5fff0d40), // 960
+        UINT32_C(0x6ff70c00)  // 1024
     };
     if (g_high_t8_two_block_extended_mode != 1U ||
         original_count < 9 || original_count > 16 ||

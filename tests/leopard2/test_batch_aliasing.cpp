@@ -175,12 +175,12 @@ bool IsExpectedT8TwoBlockExtendedShapeByteCount(
     size_t bytes)
 {
     static const uint32_t shape_masks[] = {
-        UINT32_C(0xfffffff6), UINT32_C(0xfffffff6),
-        UINT32_C(0xfffffff4), UINT32_C(0xffff7ff0),
-        UINT32_C(0xffff3ff0), UINT32_C(0xffff6ff4),
-        UINT32_C(0xffff9ff0), UINT32_C(0xffffcff0),
-        UINT32_C(0xffff8ff0), UINT32_C(0xffff0de0),
-        UINT32_C(0x7fff4fc0)
+        UINT32_C(0xfffffff6), UINT32_C(0xffff5ff4),
+        UINT32_C(0xffffeff0), UINT32_C(0xffff3ff0),
+        UINT32_C(0xffff1ff0), UINT32_C(0xffff2f60),
+        UINT32_C(0x6fff0e70), UINT32_C(0x5fff0d80),
+        UINT32_C(0xffff0fd0), UINT32_C(0x5fff0d40),
+        UINT32_C(0x6ff70c00)
     };
     if (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED != 0 ||
         k < 9 || k > 16 || r < 5 || r > 8 ||
