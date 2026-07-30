@@ -1,0 +1,150 @@
+{
+  "schema": "leopard2-gf8-t8-one-block-beyond512-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": [5, 8],
+    "R": [5, 8],
+    "shard_bytes": [576, 640, 704, 768, 832, 896, 960, 1024],
+    "batch": 64,
+    "reuse": 64,
+    "dense_full_parity_only": true,
+    "api": "reusable prevalidated encode-batch binding",
+    "one_shot_behavior_changed": false
+  },
+  "source": {
+    "discovery_commit": "2fbac92cad4f28d7f7d853d722598c0f36cbde7e",
+    "discovery_tree": "c9457bcd3aea002b31fddea8bb151cf873b15d99",
+    "final_selector_commit": "2fd80b3f746c6e82d4a8b44254d7626d794d380e",
+    "final_selector_tree": "329cbe6ec64311b2d7b29a038084a22228e33b9a",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "selection": {
+    "bit_index": "4 * (K - 5) + (R - 5)",
+    "rule": "intersection of discovery and independent-seed holdout gates",
+    "total_candidate_cells": 128,
+    "discovery_passing_cells": 98,
+    "holdout_passing_cells": 100,
+    "final_selected_cells": 94,
+    "final_public_exact_main_cells": 53,
+    "per_byte": {
+      "576": {"mask": "0xffff", "selected": 16},
+      "640": {"mask": "0xffff", "selected": 16},
+      "704": {"mask": "0x4ffd", "selected": 12},
+      "768": {"mask": "0x4fdd", "selected": 11},
+      "832": {"mask": "0x4fdd", "selected": 11},
+      "896": {"mask": "0x0fd4", "selected": 8},
+      "960": {"mask": "0x4efd", "selected": 11},
+      "1024": {"mask": "0x4fcc", "selected": 9}
+    }
+  },
+  "promotion_policy": {
+    "target_control_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.0,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "one mean log contrast per independent round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "rounds_per_campaign": 3,
+    "discovery_seed_family": "0x1640000/0x1650000",
+    "holdout_seed_family": "0x1650000/0x1660000",
+    "order": "mirrored ABCCBA for exact-main targets; mirrored ABBA for control-only targets and neighbors",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "discovery_processes": 2856,
+    "holdout_processes": 2856,
+    "neighbor_cells_per_campaign": 70,
+    "neighbor_failures": [],
+    "all_workload_digests_matched": true,
+    "all_accepted_rounds_zero_sibling_nonidle_jiffies": true,
+    "final_selected_discovery_control_speedup": {
+      "minimum": 1.0594448432248262,
+      "median": 1.1104784993672283,
+      "maximum": 1.1804461953641179,
+      "ci95_lower_minimum": 1.0514376092667723
+    },
+    "final_selected_discovery_exact_main_speedup": {
+      "minimum": 1.0932786334104794,
+      "median": 1.1637019273835063,
+      "maximum": 1.2482641862461825,
+      "ci95_lower_minimum": 1.0119817382594172
+    },
+    "final_selected_holdout_control_speedup": {
+      "minimum": 1.072906419731815,
+      "median": 1.1157684752951673,
+      "maximum": 1.1694173072889484,
+      "ci95_lower_minimum": 1.0502649432538453
+    },
+    "final_selected_holdout_exact_main_speedup": {
+      "minimum": 1.0983689883279764,
+      "median": 1.1598523104584435,
+      "maximum": 1.246045558173919,
+      "ci95_lower_minimum": 1.0336390706805878
+    },
+    "comparison_semantics": "Leopard2 uses one reusable prevalidated batch-binding call for 64 stripes; exact main performs 64 legacy encode calls. This is an end-to-end API comparison, not a kernel-only comparison."
+  },
+  "evidence_hashes": {
+    "discovery_summary_sha256": "8b2b5f0c66ae55d78917998765a7ed57dfe23415a0b57f1e1cff2477f720c82d",
+    "discovery_raw_sha256": "eee67ea542192f57ab6928f51f787922967a16adcb103185fd629e8da6b2efb2",
+    "holdout_summary_sha256": "703c2a04a6ff651471aec8fc800bae901c178f0a781adc5a2904f84b91f4437f",
+    "holdout_raw_sha256": "d9286d6c64537535f0f486691f040c983f5075d539fe45a120ba36cef8d94fc2"
+  },
+  "binary_provenance": {
+    "candidate_control_executable_sections_sha256": "6feb66f498a3895588536774c77c075c8d325a412f5fcf84c6d9982abb031ebb",
+    "candidate_control_executable_sections_identical": true,
+    "final_candidate_sha256": "70e27caca4516961c6259d41f075d5509e2bd6adfdb3cef8586937b5d9aa877f",
+    "final_control_sha256": "1367e4063015f85d422faec122432abac7bce791b3d588428684090cc13c6eca",
+    "exact_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "final_selected_and_excluded_dispatch_spot_checks": "passed at 1024 bytes"
+  },
+  "validation": {
+    "release_high_direct_production": "passed",
+    "release_auto_mixed_binding": "passed",
+    "release_batch_aliasing": "passed",
+    "clang18_asan_ubsan_high_direct_production": "passed",
+    "clang18_asan_ubsan_auto_mixed_binding": "passed",
+    "clang18_asan_ubsan_batch_aliasing": "passed",
+    "direct_generator_full_binding_checks": 2176,
+    "direct_generator_partial_binding_checks": 1824,
+    "unaligned_guard_checks": 192,
+    "thread_pool_output_checks": 768,
+    "hot_execution_allocations": 0,
+    "changed_source_reuse": "passed",
+    "sparse_output_nonselection": "passed",
+    "heterogeneous_qualified_binding": "passed at 64, 128, 512, and 1024 bytes",
+    "heterogeneous_unqualified_atomic_fallback": "passed at 64 and 1025 bytes",
+    "runner_python_compilation": "passed",
+    "maximum_release_test_rss_kib": 32256,
+    "maximum_sanitizer_test_rss_kib": 199936
+  },
+  "assembly_audit": {
+    "kernel_symbol": "leopard::backend::AVX2FF8HighEncodeOneBlockT8Vector",
+    "kernel_text_bytes": 3811,
+    "kernel_instruction_lines": 908,
+    "kernel_zmm_or_mask_register_references": 0,
+    "kernel_fixed_stack_frame_bytes": 320,
+    "kernel_hot_path_calls": 0,
+    "kernel_cold_stack_canary_calls": 1,
+    "wrapper_symbol": "ExecuteHighT8PartialBinding",
+    "wrapper_text_bytes": 1219,
+    "wrapper_fixed_stack_frame_bytes": 3232,
+    "wrapper_zero_shard_bytes": 1024,
+    "stack_note": "The bounded wrapper frame contains three 1024-byte discard shards, pointer arrays, alignment, and canary state. It is used only by selected prevalidated partial bindings.",
+    "code_size_note": "The existing 3811-byte AVX2 kernel already loops over arbitrary 32-byte tiles. The promotion changes its bounded selector and wrapper storage, and adds a 16-byte setup-time mask table; it adds no second transform body."
+  },
+  "memory_policy": {
+    "build_parallelism": 1,
+    "release_build_limit_bytes": 536870912,
+    "sanitizer_build_limit_bytes": 805306368,
+    "test_limit_bytes": 536870912,
+    "benchmark_child_address_space_limit_bytes": 201326592,
+    "subworkers": 0,
+    "campaigns_completed_without_oom": true
+  }
+}
