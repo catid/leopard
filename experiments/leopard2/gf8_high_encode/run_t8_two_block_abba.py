@@ -17,9 +17,12 @@ import importlib.util
 import json
 import math
 import os
+import re
+import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -133,6 +136,71 @@ def file_identity(path: Path) -> dict[str, Any]:
         "size": status.st_size,
         "mode": status.st_mode & 0o777,
         "sha256": sha256(resolved),
+    }
+
+
+def executable_sections_identity(executable: Path) -> dict[str, Any]:
+    """Hash every ELF section carrying executable instructions."""
+    readelf_name = shutil.which("readelf")
+    objcopy_name = shutil.which("objcopy")
+    require(readelf_name is not None and objcopy_name is not None,
+            "readelf and objcopy are required for executable provenance")
+    readelf = Path(readelf_name).resolve(strict=True)
+    objcopy = Path(objcopy_name).resolve(strict=True)
+    section_table = subprocess.run(
+        [str(readelf), "-W", "-S", str(executable)],
+        env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE, timeout=10.0, check=False)
+    require(section_table.returncode == 0,
+            "readelf failed: " +
+            section_table.stderr.decode(
+                "utf-8", errors="replace")[-1000:])
+    section_pattern = re.compile(
+        r"^\s*\[\s*\d+\]\s+(\.\S+)\s+\S+\s+"
+        r"[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+"
+        r"\S+\s+([A-Z]*)\s+")
+    section_names: list[str] = []
+    for line in section_table.stdout.decode(
+            "utf-8", errors="strict").splitlines():
+        match = section_pattern.match(line)
+        if match and "X" in match.group(2):
+            section_names.append(match.group(1))
+    require(".text" in section_names and section_names,
+            "ELF executable sections are incomplete")
+
+    records: list[dict[str, Any]] = []
+    combined = hashlib.sha256()
+    with tempfile.TemporaryDirectory(
+            prefix="leopard-t8-executable-sections-") as directory:
+        root = Path(directory)
+        for index, section_name in enumerate(section_names):
+            output = root / f"section-{index}.bin"
+            copied_elf = root / f"copy-{index}.elf"
+            completed = subprocess.run(
+                [str(objcopy), "--dump-section",
+                 f"{section_name}={output}", str(executable),
+                 str(copied_elf)],
+                env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE, timeout=10.0, check=False)
+            require(completed.returncode == 0 and output.is_file() and
+                    copied_elf.is_file(),
+                    f"objcopy failed for {section_name}: " +
+                    completed.stderr.decode(
+                        "utf-8", errors="replace")[-1000:])
+            payload = output.read_bytes()
+            records.append({
+                "name": section_name,
+                "size": len(payload),
+                "sha256": hashlib.sha256(payload).hexdigest(),
+            })
+            combined.update(section_name.encode("utf-8"))
+            combined.update(b"\0")
+            combined.update(payload)
+    return {
+        "sections": records,
+        "combined_sha256": combined.hexdigest(),
+        "readelf": file_identity(readelf),
+        "objcopy": file_identity(objcopy),
     }
 
 
@@ -543,14 +611,6 @@ def main() -> int:
             "insufficient benchmark repetitions")
     require(not options.output.exists(), "output path already exists")
     options.output.mkdir(parents=True)
-    lock_descriptor = acquire_global_lock()
-    identities = {
-        "candidate": file_identity(options.candidate),
-        "control": file_identity(options.control),
-        "main": file_identity(options.main),
-    }
-    require(len({identity["sha256"] for identity in identities.values()}) == 3,
-            "candidate, control, and main binaries are not distinct")
     cells = target_cells(
         options.target_bytes, options.final_selector) + \
         neighbor_cells(options.target_bytes)
@@ -568,10 +628,30 @@ def main() -> int:
         "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
-        "identities": identities,
         "cells": [],
     }
+    lock_descriptor: int | None = None
     try:
+        lock_descriptor = acquire_global_lock()
+        identities = {
+            "candidate": file_identity(options.candidate),
+            "control": file_identity(options.control),
+            "main": file_identity(options.main),
+        }
+        raw["identities"] = identities
+        require(
+            len({identity["sha256"] for identity in identities.values()}) == 3,
+            "candidate, control, and main binaries are not distinct")
+        executable_sections = {
+            name: executable_sections_identity(Path(str(identity["path"])))
+            for name, identity in identities.items()
+            if name in ("candidate", "control")
+        }
+        raw["executable_sections"] = executable_sections
+        require(
+            executable_sections["candidate"]["sections"] ==
+                executable_sections["control"]["sections"],
+            "candidate and control executable instruction sections differ")
         require(set(os.sched_getaffinity(0)) == {options.cpu},
                 "runner must be singleton-pinned to the benchmark CPU")
         sibling_text = Path(
@@ -580,6 +660,11 @@ def main() -> int:
         require(SUPPORT.parse_cpu_list(sibling_text) ==
                 {options.cpu, options.sibling},
                 "requested CPUs are not one SMT pair")
+        raw["host"] = {
+            "runner_affinity": sorted(os.sched_getaffinity(0)),
+            "benchmark_cpu": SUPPORT.cpu_policy_identity(options.cpu),
+            "reserved_sibling": SUPPORT.cpu_policy_identity(options.sibling),
+        }
         with SUPPORT.StableLeaseAnchor(), \
                 SUPPORT.PairLease(options.cpu, options.sibling) as pair_lease:
             raw["pair_lease"] = pair_lease
@@ -682,6 +767,8 @@ def main() -> int:
                 name: identity["sha256"]
                 for name, identity in identities.items()
             },
+            "candidate_control_executable_sections_sha256":
+                executable_sections["candidate"]["combined_sha256"],
             "raw_sha256": sha256(options.output / "raw.json"),
         }
         write_exclusive(options.output / "summary.json", summary)
@@ -703,7 +790,8 @@ def main() -> int:
         print(f"evidence rejected: {error}", file=sys.stderr)
         return 1
     finally:
-        os.close(lock_descriptor)
+        if lock_descriptor is not None:
+            os.close(lock_descriptor)
 
 
 if __name__ == "__main__":
