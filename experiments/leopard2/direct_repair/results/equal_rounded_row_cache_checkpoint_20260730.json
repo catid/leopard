@@ -1,0 +1,146 @@
+{
+  "schema": "leopard2-equal-rounded-row-cache-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.30",
+  "status": "default-off experiment; directional screen only",
+  "hypothesis": "moving exact GF8 generator rows from erasure-plan setup to immutable codec setup removes the equal-rounded tiny-shard reuse-one regression",
+  "implementation": {
+    "guard": "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS",
+    "backend": "avx2",
+    "profile": "legacy_high_v1",
+    "cache_layout": "R by K exact GF8 generator elements",
+    "maximum_cache_bytes": 16384,
+    "cache_owner": "immutable leo2_codec",
+    "fallback": "per-plan selected-row generation after an incomplete or unavailable cache",
+    "plan_change": "reuse cached rows and the existing Cauchy inverse plus AVX2 combined-row construction",
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "default_build_changed": false
+  },
+  "identity": {
+    "base_commit": "c6fb13c",
+    "working_diff_sha256": "7509a8b2e86fc2d072b6eff2b19ca5bcfad99b2c2c7826170b9b1c138f72791c",
+    "leopard2_cpp_sha256": "3128b37c0f200c10ec094a287511b5b7b8f7b678e0bdcc477f2771207bde40d4",
+    "transform_executable_sha256": "77b44cf36f1b4b1c4827e11a2c4ba5aa76e4682580fccc3f7a8ca8806c5c3449",
+    "split_tail_control_executable_sha256": "5a06717b0e5469976716c88bb4fd7ef39b20c32a583c8c38e4757a5a88e0b8f8",
+    "row_cache_candidate_executable_sha256": "0989c4cf3bdffe65a4bddea92d7ef7c29f21c6370d2d2f55256af4177834a2b8",
+    "frozen_binary_hashes_verified_after_timing": true,
+    "raw_artifact_directory": "/tmp/leopard2-equal-rounded-row-cache-screen-v1-20260730"
+  },
+  "correctness": {
+    "experimental_api_oracle_passed": true,
+    "experimental_api_oracle_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486
+    },
+    "default_off_api_oracle_passed": true,
+    "default_off_api_oracle_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 1921,
+      "plan_executions": 457,
+      "tail_cases": 243
+    },
+    "all_screen_round_trips_passed": true,
+    "all_within_cell_workload_digests_equal": true,
+    "all_selected_paths_verified": true
+  },
+  "directional_screen": {
+    "authority": "non-authoritative; serialized and pinned but not accepted for promotion because coordinator-exclusion bead leopard-79h.38.5.10.31 remains open",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "K_values": [
+      31,
+      32,
+      64
+    ],
+    "R": "equal to K",
+    "loss_count": 8,
+    "shard_bytes": [
+      31,
+      32,
+      63,
+      64
+    ],
+    "cells": 12,
+    "benchmark_invocations": 36,
+    "iterations_per_invocation": 15,
+    "warmups_per_invocation": 3,
+    "split_control_over_cache_plan_setup_speedup": {
+      "minimum": 1.771028,
+      "median": 2.652535,
+      "maximum": 2.949367
+    },
+    "cache_over_split_control_codec_setup_ratio": {
+      "minimum": 9.090909,
+      "median": 9.771645,
+      "maximum": 19.512821
+    },
+    "absolute_codec_setup_us": {
+      "minimum": 1.98,
+      "maximum": 7.61
+    },
+    "split_control_over_cache_execution_speedup": {
+      "minimum": 0.921384,
+      "median": 1.006823,
+      "maximum": 1.031049,
+      "interpretation": "execution code and coefficients are unchanged; this single-run spread is non-authoritative timing noise"
+    },
+    "transform_over_cache_derived_reuse_one_speedup": {
+      "minimum": 1.417582,
+      "median": 1.966410,
+      "maximum": 2.660999
+    },
+    "transform_over_cache_derived_reuse_eight_speedup": {
+      "minimum": 1.344478,
+      "median": 1.933442,
+      "maximum": 2.317155
+    },
+    "former_weakest_cell": {
+      "K": 31,
+      "R": 31,
+      "loss_count": 8,
+      "shard_bytes": 63,
+      "old_transform_over_candidate_reuse_one": 0.899534,
+      "new_transform_over_candidate_reuse_one": 1.417582,
+      "old_plan_setup_us": 3.8,
+      "new_plan_setup_us": 2.1
+    }
+  },
+  "resource_policy": {
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "build_parallelism_max": 2,
+    "benchmark_processes_at_once": 1,
+    "build_memory_limit_bytes": 2147483648,
+    "test_memory_limit_bytes": 2147483648,
+    "benchmark_scope_memory_limit_bytes": 1073741824,
+    "benchmark_process_address_space_limit_bytes": 805306368,
+    "experimental_build_peak_bytes": 367763456,
+    "experimental_test_peak_bytes": 827330560,
+    "directional_screen_peak_bytes": 11153408,
+    "default_incremental_build_peak_bytes": 185593856,
+    "default_test_peak_bytes": 826798080,
+    "all_scope_memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "decision": {
+    "candidate": "retain for the complete bounded and authoritative rescreen",
+    "production_promotion": false,
+    "remaining_work": [
+      "measure codec setup explicitly across all eligible K/R boundaries",
+      "run arbitrary-tail and large-shard neighboring cells",
+      "run GCC and Clang sanitizer and code-generation gates",
+      "rerun promotion cells with coordinator exclusion after leopard-79h.38.5.10.31"
+    ]
+  }
+}

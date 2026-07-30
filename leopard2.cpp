@@ -226,6 +226,16 @@ struct leo2_codec
     // logarithms, for the bounded allocation-free direct encoder.
     std::vector<uint8_t> direct_generator_logs8;
     std::vector<uint16_t> direct_generator_logs16;
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+    /*
+        Exact row-major GF8 generator coefficients for the default-off
+        equal-rounded multi-loss experiment.  Unlike the canonical K=65
+        context cache, this table is tied to the immutable codec's exact K/R
+        identity.  Moving row construction to codec setup lets every erasure
+        plan reuse both the rows and the Cauchy inverse path.
+    */
+    std::vector<uint8_t> direct_repair_generator_rows8;
+#endif
     // In the P=T,N=2P legacy-high region, coordinate xor P turns the parent
     // into the Algorithm 4 low-profile view without changing public bytes.
     // Keep that translated view immutable and code-dependent in the codec.
@@ -8553,6 +8563,22 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                                             direct_repair_generator_rows8);
                                 });
                         }
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+                        else if (codec->context->backend ==
+                                LEO2_BACKEND_AVX2 &&
+                            IsMeasuredEqualRoundedDirectRepairCodec(codec))
+                        {
+                            /*
+                                Setup failure is non-fatal: the per-plan row
+                                builder remains the correctness fallback.  A
+                                complete table is at most 128*128 GF8 symbols
+                                in this parent family.
+                            */
+                            PrepareDirectRepairGeneratorRows<DirectField8>(
+                                codec, weights,
+                                codec->direct_repair_generator_rows8);
+                        }
+#endif
                         codec->direct_barycentric8.swap(weights);
                     }
                 }
@@ -9531,13 +9557,24 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
                 }
                 if (!plan->direct_repair)
                 {
+                    const std::vector<DirectField8::Element>*
+                        cached_generator_rows = NULL;
+                    if (IsExpandedDirectRepairCodec(codec))
+                    {
+                        cached_generator_rows = &codec->context->
+                            direct_repair_generator_rows8;
+                    }
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+                    else if (!codec->direct_repair_generator_rows8.empty())
+                    {
+                        cached_generator_rows =
+                            &codec->direct_repair_generator_rows8;
+                    }
+#endif
                     plan->direct_repair =
                         PrepareDirectRepairTerms<DirectField8>(
                             plan, codec->direct_barycentric8,
-                            IsExpandedDirectRepairCodec(codec)
-                                ? &codec->context->
-                                    direct_repair_generator_rows8
-                                : NULL);
+                            cached_generator_rows);
                 }
             }
 #endif
