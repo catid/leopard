@@ -1,0 +1,173 @@
+{
+  "schema": "leopard2-gf8-t8-two-block-128-192-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": [9, 16],
+    "R": [5, 8],
+    "shard_bytes": [128, 192],
+    "batch": 64,
+    "reuse": 64,
+    "dense_full_parity_only": true,
+    "api": "reusable prevalidated encode-batch binding"
+  },
+  "source": {
+    "implementation_commit": "ceaea37483508e5893467c2f6184d04de4a254ac",
+    "measured_commit": "928b8afb47fad2eaca1d5e02bdbb2a560ee13806",
+    "measured_tree": "cee2dae9eb6cdbb181b335806c2383c7012163dc",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "build": {
+    "type": "Release",
+    "compiler": "GCC 13.3.0",
+    "backend_variant": "auto",
+    "avx512f_probe_forced": false,
+    "avx512bw_probe_forced": false,
+    "avx512vl_probe_forced": false,
+    "gfni_probe_forced": false,
+    "candidate_mode": "128/192 selector enabled",
+    "control_mode": "128/192 selector disabled through a nonzero volatile data marker",
+    "candidate_control_leopard2_text_sha256": "3c47771b0c9415d8f8f2e1388518edb0d25b0cb30c12377a1c8b8eb5616ff270",
+    "candidate_control_benchmark_text_sha256": "6ae345f807954dea2d1ec8efcf69343b1c3a1ada9432c90979e30f6041c0f1e8",
+    "candidate_control_text_identical": true
+  },
+  "binary_sha256": {
+    "candidate": "36e7e89f47d1e02f5b5ec416ada23c99845fbd7acfae02d5f0ef742eeb5bb06c",
+    "control": "c06339ec5583adbeb4439f0f98e5cc34124dffd6e71ca4832d33950a086caa62",
+    "exact_main": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "verified_unchanged_after_campaigns": true
+  },
+  "promotion_policy": {
+    "target_control_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.0,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "one mean log contrast per independent round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "campaign_128": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "rounds": 3,
+    "order": "mirrored ABCCBA for targets; mirrored ABBA for neighbors",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "target_cells": 32,
+    "neighbor_cells": 22,
+    "processes": 840,
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle_jiffies": true,
+    "target_control_speedup_range": [
+      1.7777752866913652,
+      1.9548873497008898
+    ],
+    "target_control_ci95_lower_minimum": 1.7344504718857998,
+    "target_exact_main_speedup_range": [
+      1.4248727522609117,
+      1.587666171052856
+    ],
+    "target_exact_main_ci95_lower_minimum": 1.308038803656576,
+    "neighbor_control_speedup_range": [
+      0.9890965368287975,
+      1.011546919032551
+    ],
+    "neighbor_ci95_upper_minimum": 1.0015851275202698,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "raw_sha256": "02d7f02d88767e5500271380c6f23abbba8d56b6f1425d069a508b8352d62088",
+    "summary_sha256": "571665e9c767fe254988e5834d4bccbae115cb46d9ebfdd1f5f3ae234d9e1a7f"
+  },
+  "campaign_192": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "rounds": 3,
+    "order": "mirrored ABCCBA for targets; mirrored ABBA for neighbors",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "target_cells": 32,
+    "neighbor_cells": 32,
+    "processes": 960,
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle_jiffies": true,
+    "target_control_speedup_range": [
+      1.435981538935643,
+      1.6458483058172286
+    ],
+    "target_control_ci95_lower_minimum": 1.4119043480817104,
+    "target_exact_main_speedup_range": [
+      1.2603178108901676,
+      1.4640396951897168
+    ],
+    "target_exact_main_ci95_lower_minimum": 1.1238801304369996,
+    "neighbor_control_speedup_range": [
+      0.9857753556605948,
+      1.8952223272831756
+    ],
+    "neighbor_ci95_upper_minimum": 1.0003094388305271,
+    "neighbor_range_note": "The 192-byte campaign treats 128 bytes as a neighbor. It is intentionally accelerated by the same promoted selector, which explains the upper range endpoint.",
+    "target_failures": [],
+    "neighbor_failures": [],
+    "raw_sha256": "e1b2011e1338ab81218355521ee6678e38d5920a26749dffd8773042b1ee60f2",
+    "summary_sha256": "5c6397a59d60b1743d302b8c6094ceb59c2ea7339fef4c658ff677e5b81e7408"
+  },
+  "rejected_control_design": {
+    "source_commit": "ceaea37483508e5893467c2f6184d04de4a254ac",
+    "target_failures": [],
+    "neighbor_failure": "shape-k9-r9-b128",
+    "neighbor_control_over_candidate_speedup": 0.9447089478659014,
+    "neighbor_ci95": [
+      0.9363013841757443,
+      0.9531920076819843
+    ],
+    "cause": "The compile-time branch changed unrelated code layout even though K=9,R=9 cannot select the T=8 callback.",
+    "disposition": "Rejected. Commit 928b8af replaced the branch with a runtime read of a nonzero initialized data marker and made candidate/control core and benchmark text byte-identical.",
+    "corrected_neighbor_speedup": 0.9892766818162378,
+    "corrected_neighbor_ci95": [
+      0.9617784434004382,
+      1.0175611232512056
+    ],
+    "rejected_raw_sha256": "778d66999e4392e700a679e9bd129431f5d5ba3c2997431b2dd356186ce68a6c",
+    "rejected_summary_sha256": "beabcd977fd9e59281cb6c4e3a640a58464598d5f438e82fe4398300fa295b12"
+  },
+  "validation": {
+    "release_candidate_focused": "2/2 passed",
+    "release_control_focused": "2/2 passed",
+    "clang18_asan_ubsan_focused": "2/2 passed",
+    "benchmark_json_regression": "passed",
+    "runner_python_compilation": "passed",
+    "direct_generator_shape_byte_pairs_64_128_192_256": 128,
+    "direct_generator_parity_checks": 872,
+    "changed_source_reuse": "passed at 64, 128, 192, and 256 bytes",
+    "partial_output_nonselection": "passed at 64, 128, 192, and 256 bytes",
+    "unaligned_guard_checks": 40,
+    "thread_pool_outputs_128_192_256": 120,
+    "hot_execution_allocations_128_192_256": 0,
+    "backend_startup_kat": "passed at unaligned 64, 128, 192, and 256 bytes"
+  },
+  "assembly_audit": {
+    "artifact_sha256": "36e7e89f47d1e02f5b5ec416ada23c99845fbd7acfae02d5f0ef742eeb5bb06c",
+    "symbol": "leopard::backend::AVX2FF8HighEncodeTwoBlocksT8",
+    "symbol_address": "0x95dc0",
+    "kernel_text_bytes": 2409,
+    "instruction_lines": 533,
+    "call_instructions": 0,
+    "evex_prefix_lines": 0,
+    "zmm_or_mask_register_references": 0,
+    "explicit_rsp_subtractions": 0,
+    "rsp_memory_references": 2,
+    "stack_note": "Leaf function with four saved GPR pushes, at most 31 bytes of 32-byte alignment adjustment, and one 32-byte red-zone spill/reload pair; the deepest touched address is at most 95 bytes below entry RSP.",
+    "code_size_note": "One 2409-byte 32-byte-tiled loop handles 64, 128, 192, and 256 bytes. Extending the accepted byte counts did not duplicate or unroll the transform body."
+  },
+  "memory_policy": {
+    "build_parallelism": 1,
+    "release_and_sanitizer_build_limit_bytes": 536870912,
+    "test_and_benchmark_limit_bytes": 268435456,
+    "benchmark_child_address_space_limit_bytes": 201326592,
+    "subworkers": 0,
+    "campaign_processes_completed_without_memory_limit_or_oom_failure": true,
+    "host_counter_note": "The enclosing user-service memory.events file is cumulative and contains earlier-session OOM events, so this checkpoint does not claim a zero counter delta."
+  }
+}
