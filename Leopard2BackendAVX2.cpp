@@ -4266,7 +4266,18 @@ AVX2FF8MultiplyAddOutputGroup4(
 }
 
 #if !defined(LEO2_GFNI_VARIANT)
-static LEO2_AVX2_DIRECT_NOINLINE void
+#if defined(_MSC_VER)
+#define LEO2_AVX2_GROUP35_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_AVX2_GROUP35_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_avx2_direct_group35")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_AVX2_GROUP35_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_AVX2_GROUP35_NOINLINE
+#endif
+
+static LEO2_AVX2_GROUP35_NOINLINE void
 AVX2FF8MultiplyAddOutputGroup3(
     void* const* destination_pointers,
     const void* source_pointer,
@@ -4354,7 +4365,7 @@ AVX2FF8MultiplyAddOutputGroup3(
     }
 }
 
-static LEO2_AVX2_DIRECT_NOINLINE void
+static LEO2_AVX2_GROUP35_NOINLINE void
 AVX2FF8MultiplyAddOutputGroup5(
     void* const* destination_pointers,
     const void* source_pointer,
@@ -4471,6 +4482,8 @@ AVX2FF8MultiplyAddOutputGroup5(
         ++offset;
     }
 }
+
+#undef LEO2_AVX2_GROUP35_NOINLINE
 #endif
 
 #undef LEO2_AVX2_DIRECT_NOINLINE
