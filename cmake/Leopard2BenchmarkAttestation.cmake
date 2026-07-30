@@ -49,7 +49,7 @@ function(leopard2_enable_benchmark_source_attestation target)
             LEO2_BUILD_TESTS
             LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
-            LEO2_EXPERIMENT_HIGH_T8_VECTOR
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
             LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
             LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE)
         set(variable_value "${${variable}}")

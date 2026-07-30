@@ -1388,6 +1388,7 @@ static const Ops ScalarOps = {
     NULL
 #endif
     , NULL
+    , 0
     , NULL
     , NULL
     , NULL

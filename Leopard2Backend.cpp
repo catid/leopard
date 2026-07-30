@@ -1186,15 +1186,8 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
          side_i < sizeof(kSides) / sizeof(kSides[0]); ++side_i)
     {
         const unsigned side = kSides[side_i];
-#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
-        /*
-            The register-light AVX2 experiment deliberately publishes only a
-            T=8 implementation through this otherwise wider callback slot.
-            AVX-512 retains the established 8/16/32/64 contract.
-        */
-        if (ops.kind == LEO2_BACKEND_AVX2 && side != 8)
+        if ((ops.ff8_high_encode_one_block_sides & side) == 0)
             continue;
-#endif
         for (unsigned lane = 0; lane < kMaximumSide; ++lane)
         {
             for (size_t i = 0; i < sizeof(input[lane]); ++i)
@@ -2391,6 +2384,11 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         (ops.xor_memory_dense != NULL))
         return false;
 #ifdef LEO_HAS_FF8
+    if ((ops.ff8_high_encode_one_block != NULL) !=
+            (ops.ff8_high_encode_one_block_sides != 0) ||
+        (ops.ff8_high_encode_one_block_sides &
+            ~kFF8HighEncodeSupportedSides) != 0)
+        return false;
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.ff8_multiply_add_outputs != NULL))
         return false;
@@ -2485,6 +2483,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_fft_butterfly4_range ||
         ops.ff8_ifft_butterfly4_xor_range ||
         ops.ff8_high_encode_one_block ||
+        ops.ff8_high_encode_one_block_sides != 0 ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
         ops.ff8_multiply_add_2_sources_2_outputs ||

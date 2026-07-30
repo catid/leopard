@@ -283,8 +283,12 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 // while forward_skew names the parity-coset table.  Keeping the regular
 // transform traversal in an ISA translation unit removes one indirect Ops
 // dispatch per butterfly range without changing the wire profile or arithmetic
-// order.  This callback is optional.
+// order.  This callback is optional.  The Ops side mask uses the power-of-two
+// side value itself as its bit, so a backend may publish a deliberately narrow
+// implementation without weakening the callback contract for other backends.
 static const uint32_t kFF8HighEncodeShortenedInput = 0x80000000U;
+static const uint32_t kFF8HighEncodeSupportedSides =
+    8U | 16U | 32U | 64U;
 
 typedef void (*FF8HighEncodeOneBlock)(
     const void* const* data,
@@ -418,6 +422,7 @@ struct Ops
     Butterfly4Range ff16_ifft_butterfly4_range;
     Butterfly4Range ff16_fft_butterfly4_range;
     FF8HighEncodeOneBlock ff8_high_encode_one_block;
+    uint32_t ff8_high_encode_one_block_sides;
     FF8HighEncodeSmall ff8_high_encode_small;
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;

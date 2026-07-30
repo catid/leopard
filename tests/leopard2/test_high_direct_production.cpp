@@ -244,6 +244,13 @@ uint64_t ExerciseT8BatchBinding(leo2_context* context)
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
         codec, bytes, &scratch_bytes), "T8 binding scratch query");
+    leopard2_internal::CodecEncodePathInfo t8_path = {};
+    Require(leopard2_internal::GetCodecEncodePathInfo(
+            codec, bytes, r, &t8_path),
+        "T8 binding path introspection");
+    Require(t8_path.high_t8_vector_selected ==
+            (LEO2_EXPECT_HIGH_T8_VECTOR != 0),
+        "T8 binding selector differs from the production expectation");
 
     std::vector<Shards> recovery(
         batch_count, Shards(r, Bytes(bytes, sentinel)));

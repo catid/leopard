@@ -2037,6 +2037,7 @@ static const Ops SSSE3Ops = {
     NULL
 #endif
     , NULL
+    , 0
     , NULL
     , NULL
     , NULL

@@ -9373,6 +9373,22 @@ bool GetCodecEncodePathInfo(
         !UseSingleSideEncodeLayout(codec) &&
         AutoDirectEncodePreferred(
             codec, shard_bytes, requested_recovery_count);
+    info.high_t8_vector_selected = false;
+#ifdef LEO_HAS_FF8
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->original_count == 8 && codec->recovery_count == 8 &&
+        codec->padded_side == 8 && shard_bytes == 64 &&
+        requested_recovery_count == 8)
+    {
+        const leopard::backend::Ops& transform_ops =
+            SelectTransformEncodeOps(codec, 64, 8, 8);
+        info.high_t8_vector_selected =
+            transform_ops.kind == LEO2_BACKEND_AVX2 &&
+            transform_ops.ff8_high_encode_one_block != NULL &&
+            (transform_ops.ff8_high_encode_one_block_sides & 8U) != 0;
+    }
+#endif
     *info_out = info;
     return true;
 }
@@ -9486,7 +9502,7 @@ static leo2_result EncodeInternal(
         return LEO2_SUCCESS;
     }
 
-#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR) && defined(LEO_HAS_FF8)
+#ifdef LEO_HAS_FF8
     /*
         A reusable batch has already validated every address, scratch span,
         byte count, and output mask.  The measured dense T=8 tile can therefore
@@ -9507,7 +9523,9 @@ static leo2_result EncodeInternal(
         {
             const leopard::backend::Ops& transform_ops =
                 SelectTransformEncodeOps(codec, 64, 8, 8);
-            if (transform_ops.kind == LEO2_BACKEND_AVX2)
+            if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
+                transform_ops.ff8_high_encode_one_block &&
+                (transform_ops.ff8_high_encode_one_block_sides & 8U) != 0)
             {
                 leopard::ff8::ReedSolomonEncode(
                     transform_ops, 64, 8, 8, 8, 8, original,

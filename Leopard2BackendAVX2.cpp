@@ -5783,15 +5783,16 @@ static void AVX2FF8FFTButterfly8Out(
 #undef LEO2_R8_STORE
 #endif
 
-#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR) && \
+#if defined(LEO_HAS_FF8) && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
     !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
 
 /*
     The AVX-512 implementation below keeps two 32-byte vectors for every T=8
     coordinate live at once.  That is appropriate with 32 architectural vector
-    registers but spills on ordinary AVX2.  This experiment processes one
-    32-byte slice at a time so the eight code symbols, two nibble tables, and
-    product temporaries fit in the 16-register AVX2 file.
+    registers but spills on ordinary AVX2.  The regular AVX2 callback processes
+    one 32-byte slice at a time so the eight code symbols, two nibble tables,
+    and product temporaries fit in the 16-register AVX2 file.
 */
 static LEO_FORCE_INLINE void AVX2FF8T8VectorXor(
     __m256i& destination,
@@ -6134,7 +6135,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
 
 #undef LEO2_AVX2_T8_ENTRY
 
-#endif // LEO2_EXPERIMENT_HIGH_T8_VECTOR && regular AVX2
+#endif // promoted T=8 callback in the regular AVX2 backend
 
 static const Ops AVX2Ops = {
     LEO2_AVX_BACKEND_KIND,
@@ -6210,11 +6211,20 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && defined(LEO2_AVX512_VARIANT)
     , AVX2FF8HighEncodeOneBlock
 #elif defined(LEO_HAS_FF8) && \
-      defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR) && \
+      !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
       !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8HighEncodeOneBlockT8Vector
 #else
     , NULL
+#endif
+#if defined(LEO_HAS_FF8) && defined(LEO2_AVX512_VARIANT)
+    , kFF8HighEncodeSupportedSides
+#elif defined(LEO_HAS_FF8) && \
+      !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
+      !defined(LEO2_GFNI_VARIANT)
+    , 8U
+#else
+    , 0
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8HighEncodeSmall
