@@ -42,6 +42,7 @@ struct Counts
     uint64_t field_checks;
     uint64_t subspace_checks;
     uint64_t barycentric_checks;
+    uint64_t complement_barycentric_checks;
     uint64_t normalization_checks;
     uint64_t high_basis_cases;
     uint64_t high_recovered_symbols;
@@ -53,6 +54,7 @@ struct Counts
         : field_checks(0)
         , subspace_checks(0)
         , barycentric_checks(0)
+        , complement_barycentric_checks(0)
         , normalization_checks(0)
         , high_basis_cases(0)
         , high_recovered_symbols(0)
@@ -121,6 +123,91 @@ void test_aligned_coset_barycentric_denominators(
                 require(denominator == expected,
                     "aligned-coset barycentric denominator is not constant");
                 ++counts->barycentric_checks;
+            }
+        }
+    }
+}
+
+void test_high_complement_barycentric_weights(
+    const BinaryField& field,
+    Counts* counts)
+{
+    /*
+        Independent direct-product proof for the production legacy-high
+        complement shortcut.  For S=V_n\\V_t and x in S:
+
+            c_n = s_t(x) Z_S'(x)
+            inverse(Z_S'(x)) = s_t(x) / c_n.
+
+        Use only the direct polynomial-basis field oracle here; no production
+        log table, generator row, or transform helper participates.
+    */
+    const unsigned maximum_parent = std::min(256u, field.order());
+    for (unsigned parent = 2;
+         parent <= maximum_parent;
+         parent <<= 1)
+    {
+        Element parent_derivative = 1;
+        for (unsigned difference = 1;
+             difference < parent; ++difference)
+        {
+            parent_derivative = field.multiply(
+                parent_derivative,
+                static_cast<Element>(difference));
+        }
+        require(parent_derivative != 0,
+            "high-complement parent derivative is zero");
+
+        for (unsigned parity_side = 1;
+             parity_side < parent;
+             parity_side <<= 1)
+        {
+            Element prior_block_weight = 0;
+            unsigned prior_block = 0;
+            for (unsigned x = parity_side; x < parent; ++x)
+            {
+                Element subspace_value = 1;
+                for (unsigned parity = 0;
+                     parity < parity_side; ++parity)
+                {
+                    subspace_value = field.multiply(
+                        subspace_value,
+                        static_cast<Element>(x ^ parity));
+                }
+                require(subspace_value != 0,
+                    "high-complement subspace value is zero");
+                const Element quotient_weight =
+                    field.divide(subspace_value, parent_derivative);
+
+                Element direct_denominator = 1;
+                for (unsigned systematic = parity_side;
+                     systematic < parent; ++systematic)
+                {
+                    if (systematic == x)
+                        continue;
+                    direct_denominator = field.multiply(
+                        direct_denominator,
+                        static_cast<Element>(x ^ systematic));
+                }
+                require(direct_denominator != 0,
+                    "high-complement direct denominator is zero");
+                const Element direct_weight =
+                    field.divide(1, direct_denominator);
+                require(quotient_weight == direct_weight,
+                    "high-complement quotient weight differs from direct product");
+
+                const unsigned block = x / parity_side;
+                if (block == prior_block)
+                {
+                    require(quotient_weight == prior_block_weight,
+                        "high-complement weight changed inside an additive coset");
+                }
+                else
+                {
+                    prior_block = block;
+                    prior_block_weight = quotient_weight;
+                }
+                ++counts->complement_barycentric_checks;
             }
         }
     }
@@ -582,6 +669,9 @@ int main()
         test_field(gf16, false, &counts);
         test_aligned_coset_barycentric_denominators(gf8, &counts);
         test_aligned_coset_barycentric_denominators(gf16, &counts);
+        test_high_complement_barycentric_weights(gf4, &counts);
+        test_high_complement_barycentric_weights(gf8, &counts);
+        test_high_complement_barycentric_weights(gf16, &counts);
         test_gf4_field_laws(gf4, &counts);
         test_subspaces(gf4, &counts);
         test_active_normalization_identity(gf4, &counts);
@@ -594,6 +684,8 @@ int main()
             << " field_checks=" << counts.field_checks
             << " subspace_checks=" << counts.subspace_checks
             << " barycentric_checks=" << counts.barycentric_checks
+            << " complement_barycentric_checks="
+            << counts.complement_barycentric_checks
             << " normalization_checks=" << counts.normalization_checks
             << " high_basis_cases=" << counts.high_basis_cases
             << " high_recovered_symbols=" << counts.high_recovered_symbols

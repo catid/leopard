@@ -47,7 +47,17 @@ TOOLS_DIRECTORY = Path(__file__).resolve().parents[3] / "tools"
 if str(TOOLS_DIRECTORY) not in sys.path:
     sys.path.insert(0, str(TOOLS_DIRECTORY))
 from leopard2_build_provenance import (
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
+    CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
+    LEGACY_REPLAY_RECIPE_SCHEMA,
+    PRODUCTION_BUILD_CLOSURE_SCHEMA,
+    PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
+    REPLAY_INVOCATION_SCHEMA,
+    REPLAY_INVOCATION_SCHEMA_V1,
+    REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+    REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2,
     candidate_build_provenance,
     compare_reproducible_builds,
     validate_reproducible_build_proof,
@@ -89,6 +99,62 @@ MASK64 = (1 << 64) - 1
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 MAX_SUPERVISOR_CONTROL_BYTES = 64 * 1024
 BOUNDED_SUPERVISOR_MODE = "--internal-bounded-process-supervisor"
+RUN_CONTRACT_SCHEMA_V4 = "leopard2-all-k-gap-contract/v4"
+RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v5"
+MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
+MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v5"
+ALL_K_EVIDENCE_CONTRACTS = {
+    RUN_CONTRACT_SCHEMA_V4: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2,
+        "replay_plan": LEGACY_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA_V1,
+    },
+    RUN_CONTRACT_SCHEMA: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
+}
+MANIFEST_TO_CONTRACT_SCHEMA = {
+    MANIFEST_SCHEMA_V4: RUN_CONTRACT_SCHEMA_V4,
+    MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
+}
+RUN_CONTRACT_KEYS = frozenset((
+    "schema", "main_commit", "current_commit", "expected_main_sha256",
+    "current_source_initial", "current_build_initial",
+    "current_reproducible_build", "main_executable_initial",
+    "current_executable_initial", "main_executable_snapshot",
+    "current_executable_snapshot", "current_source_attestation_identity",
+    "main_isa", "current_isa", "benchmark_lock", "allowed_cpus", "used_cpus",
+    "workers", "order", "timeout_seconds", "with_current_legacy", "matrix",
+    "measurement_note",
+))
+ALL_K_BUILD_CACHE_KEYS_V2 = frozenset((
+    "CMAKE_BUILD_TYPE", "CMAKE_EXPORT_COMPILE_COMMANDS", "CMAKE_GENERATOR",
+    "ENABLE_OPENMP", "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA",
+    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256",
+    "LEO2_BUILD_BENCHMARKS", "LEO2_BUILD_FUZZERS", "LEO2_ENABLE_CUDA",
+    "LEO2_BUILD_ALLK_DIAGNOSTIC", "LEO2_BUILD_TESTS",
+    "LEO2_BACKEND_VARIANT", "LEO2_BENCHMARK_GIT_EXECUTABLE",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16", "LEO2_FLAG_FALIGN_FUNCTIONS_64",
+    "LEO2_FLAG_MAVX2", "LEO2_FLAG_MNO_AVX512F",
+    "LEO2_FLAG_MAVX512F", "LEO2_FLAG_MAVX512BW",
+    "LEO2_FLAG_MAVX512VL", "LEO2_LOCATOR_GIT_EXECUTABLE",
+    "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_RELEASE", "CMAKE_AR",
+    "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_LINKER",
+    "CMAKE_MAKE_PROGRAM", "CMAKE_RANLIB",
+))
+ALL_K_BUILD_CACHE_KEYS = frozenset((
+    *ALL_K_BUILD_CACHE_KEYS_V2,
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+))
 
 
 def require(condition: bool, message: str) -> None:
@@ -1379,6 +1445,73 @@ def write_json_atomic(
         evidence_directory=evidence_directory)
 
 
+def validate_run_contract_evidence(
+        contract: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Bind each all-K outer schema to one exact replay-evidence generation."""
+    require(isinstance(contract, Mapping),
+            "all-K run contract is not an object")
+    require(set(contract) == RUN_CONTRACT_KEYS,
+            "all-K run contract fields differ")
+    contract_schema = contract.get("schema")
+    expected = ALL_K_EVIDENCE_CONTRACTS.get(contract_schema)
+    require(expected is not None,
+            "all-K run contract schema is unsupported")
+    build = contract.get("current_build_initial")
+    proof = contract.get("current_reproducible_build")
+    require(isinstance(build, Mapping) and isinstance(proof, Mapping),
+            "all-K run contract build/replay evidence is absent")
+    cache = build.get("validated_cache")
+    immutable = proof.get("immutable_replay")
+    transport = (
+        immutable.get("recipe_transport")
+        if isinstance(immutable, Mapping) else None)
+    invocations = (
+        immutable.get("invocations")
+        if isinstance(immutable, Mapping) else None)
+    expected_cache_keys = (
+        ALL_K_BUILD_CACHE_KEYS
+        if contract_schema == RUN_CONTRACT_SCHEMA else
+        ALL_K_BUILD_CACHE_KEYS_V2)
+    require(
+        build.get("schema") == expected["closure"] and
+        isinstance(cache, Mapping) and
+        set(cache) == expected_cache_keys and
+        cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+            expected["configuration"] and
+        proof.get("schema") == expected["proof"] and
+        isinstance(transport, Mapping) and
+        transport.get("schema") == expected["replay_plan"] and
+        isinstance(invocations, Mapping) and
+        set(invocations) == {"configure", "build"} and
+        all(isinstance(invocation, Mapping) and
+            invocation.get("schema") == expected["replay_invocation"]
+            for invocation in invocations.values()),
+        "all-K run contract replay-evidence schema tuple differs")
+    require(
+        cache.get("LEO2_BUILD_ALLK_DIAGNOSTIC") == "ON" and
+        cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN") == "OFF" and
+        cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE") == "OFF" and
+        cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE") in {"0", "1", "2"},
+        "all-K run contract selector tuple differs")
+    if contract_schema == RUN_CONTRACT_SCHEMA:
+        require(
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
+            "current all-K run contract does not bind the generalized "
+            "one-loss selector OFF")
+    else:
+        require(
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache,
+            "historical all-K run contract contains an unversioned selector")
+    try:
+        validate_reproducible_build_proof(
+            proof, build, label="all-K run contract")
+    except Exception as error:
+        raise RuntimeError(
+            "all-K run contract reproducible-build proof is invalid: " +
+            str(error)) from error
+    return contract
+
+
 def validate_manifest(
         document: Mapping[str, Any], contract: Mapping[str, Any],
         contract_digest: str, cells: Sequence["Cell"],
@@ -1389,8 +1522,13 @@ def validate_manifest(
         "schema", "run_contract", "run_contract_sha256", "cells", "completion",
         "current_source_attestation_preflights",
     }, "all-K manifest keys changed")
-    require(document.get("schema") == "leopard2-all-k-gap-manifest/v4",
-            "all-K manifest schema mismatch")
+    validate_run_contract_evidence(contract)
+    manifest_schema = document.get("schema")
+    require(
+        MANIFEST_TO_CONTRACT_SCHEMA.get(manifest_schema) ==
+            contract.get("schema"),
+        "all-K manifest/run-contract schema tuple mismatch")
+    validate_run_contract_evidence(document.get("run_contract"))
     require(canonical_equal(document.get("run_contract"), contract),
             "existing all-K manifest run contract does not match this request")
     require(document.get("run_contract_sha256") == contract_digest,
@@ -3682,7 +3820,7 @@ def _run_with_snapshot_owner_held(
         current_snapshot_initial)
     cells = make_cells(gf8_only=options.gf8_only)
     contract = {
-        "schema": "leopard2-all-k-gap-contract/v4",
+        "schema": RUN_CONTRACT_SCHEMA,
         "main_commit": main_commit, "current_commit": current_commit,
         "expected_main_sha256": expected_main_sha256,
         "current_source_initial": current_source_initial,
@@ -3709,10 +3847,11 @@ def _run_with_snapshot_owner_held(
         },
         "measurement_note": "all CPUs saturated; diagnostic crossover map, not isolated promotion evidence",
     }
+    validate_run_contract_evidence(contract)
     contract_digest = canonical_digest(contract)
     manifest_path = output / "manifest.json"
     manifest: dict[str, Any] = {
-        "schema": "leopard2-all-k-gap-manifest/v4",
+        "schema": MANIFEST_SCHEMA,
         "run_contract": contract,
         "run_contract_sha256": contract_digest,
         "cells": [dataclasses.asdict(cell) for cell in cells],

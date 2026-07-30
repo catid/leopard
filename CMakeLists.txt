@@ -47,6 +47,9 @@ option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
     "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
     OFF)
+option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+    "Enable default-off generalized GF8/AVX2 one-loss direct repair"
+    OFF)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
@@ -307,6 +310,18 @@ if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # reproducible across modes.
     set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
+endif()
+if(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT)
+    # The candidate changes production plan selection and publishes a
+    # pure-AVX2 callback.  Keep every consumer of the selector/KAT macro in
+    # lockstep while leaving the ordinary archive free of experimental code.
+    set_property(SOURCE
+        leopard2.cpp
+        Leopard2Backend.cpp
+        Leopard2BackendAVX2.cpp
+        tests/leopard2/test_api.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS
+        LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1)
 endif()
 if(LEOPARD_ENABLE_GF8)
     target_sources(leopard PRIVATE LeopardFF8.cpp LeopardFF8.h)
@@ -1909,6 +1924,25 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_fuzz_campaign.py
                     self-test)
+            # Both harnesses deliberately create short-lived and detached
+            # process trees while scanning global /proc state.  Running them
+            # beside the other process-heavy Python CTests can let a fixture
+            # complete before it receives one real observation.  Serialize
+            # the two tests without weakening their fail-closed runtime gates.
+            set_tests_properties(
+                leopard2_lab_self_test
+                PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+            set_tests_properties(
+                leopard2_fuzz_campaign_self_test
+                PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
             # The retained GF16 neighbor-evidence replay imports the Linux
             # affinity/lease support used by its fail-closed runner.
             add_test(

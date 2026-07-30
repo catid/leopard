@@ -562,6 +562,7 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
         }
         material = runner.build_configuration_material(configuration_entries)
@@ -676,9 +677,15 @@ def complete_build_fixture(
             "LEO2_ENABLE_CUDA": "OFF",
         }
         if raw_schema in runner.BUILD_CLOSURE_V7_SCHEMAS:
+            (configuration_record_schema, configuration_file_schema,
+             configuration_variables) = \
+                runner.build_configuration_contract_for_raw_schema(raw_schema)
             cache.update({
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                **({
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                } if raw_schema == runner.RAW_SCHEMA else {}),
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             })
             configuration_entries = {
@@ -700,19 +707,22 @@ def complete_build_fixture(
                 "LEO2_BUILD_TESTS": "OFF",
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                **({
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                } if raw_schema == runner.RAW_SCHEMA else {}),
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             }
             configuration_material = runner.build_configuration_material(
-                configuration_entries)
+                configuration_entries, configuration_variables)
             configuration_digest = runner.sha256_bytes(
                 configuration_material)
             configuration_text = (
-                f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"schema={configuration_file_schema}\n"
                 f"sha256={configuration_digest}\n").encode("ascii") + \
                 configuration_material
             configuration_text_value = configuration_text.decode("utf-8")
             effective_configuration = {
-                "schema": runner.BUILD_CONFIGURATION_RECORD_SCHEMA,
+                "schema": configuration_record_schema,
                 "artifact": complete_artifact(
                     build_dir + "/" +
                     runner.BUILD_CONFIGURATION_RELATIVE_PATH,
@@ -722,7 +732,7 @@ def complete_build_fixture(
                     configuration_text_value,
                     "fixture effective build configuration"),
                 "configuration_schema":
-                    runner.BUILD_CONFIGURATION_FILE_SCHEMA,
+                    configuration_file_schema,
                 "configuration_sha256": configuration_digest,
                 "entries": configuration_entries,
                 "embedded_build_type": "Release",
@@ -735,7 +745,7 @@ def complete_build_fixture(
                 "CMAKE_CONFIGURATION_TYPES": configuration_types,
                 "CMAKE_GENERATOR": generator,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                    runner.BUILD_CONFIGURATION_FILE_SCHEMA,
+                    configuration_file_schema,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                     configuration_digest,
             })
@@ -873,7 +883,8 @@ def complete_build_fixture(
         "isa_policy": isa_policy,
     }
     if raw_schema in (
-            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
+            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -987,7 +998,8 @@ def complete_runtime_fixture(
         result["raw_ldd_output"] = runner.exact_text_content(
             raw, "fixture raw ldd output")
     elif raw_schema in (
-            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
+            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1151,7 +1163,7 @@ def complete_source_fixture(
         "tracked_tree_listing_sha256": "7" * 64 if baseline else "9" * 64,
         "tracked_status": "clean", "commit_object": commit_object,
     }
-    if raw_schema != runner.RAW_SCHEMA:
+    if raw_schema not in runner.SEALED_EXECUTABLE_SCHEMAS:
         return legacy
     source_root = SPECIFICATION[f"{role}_source_root"]
     if not baseline:
@@ -1397,7 +1409,8 @@ def write_complete_evidence_bundle(
         stdout_path.write_bytes(stdout)
         stderr_path.write_bytes(b"")
         if manifest_schema in (
-                runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
+                runner.MANIFEST_SCHEMA):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1433,10 +1446,12 @@ def write_complete_evidence_bundle(
     }
     if manifest_schema in (
         runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA_V6,
-        runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
+        runner.MANIFEST_SCHEMA,
     ):
         manifest_payload["supervision"] = value["supervision"]
-    if manifest_schema == runner.MANIFEST_SCHEMA:
+    if manifest_schema in (
+            runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1516,6 +1531,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V5: runner.FAILURE_SCHEMA_V5,
         runner.RAW_SCHEMA_V6: runner.FAILURE_SCHEMA_V6,
         runner.RAW_SCHEMA_V7: runner.FAILURE_SCHEMA_V7,
+        runner.RAW_SCHEMA_V8: runner.FAILURE_SCHEMA_V8,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1536,6 +1552,8 @@ def synthetic_failure(raw_schema: str) -> dict:
         "retained_files": [],
         "traceback": "fixture traceback",
     }
+    if raw_schema == runner.RAW_SCHEMA:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
     if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS:
@@ -2136,7 +2154,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertEqual(document["schema"], runner.MANIFEST_SCHEMA_V7)
             self.assertEqual(
                 plan.validate_evidence_scope(scope)["schema"],
-                plan.EVIDENCE_SCOPE_SCHEMA)
+                plan.EVIDENCE_SCOPE_SCHEMA_V4)
 
         def missing_sources(value: dict) -> None:
             for role in ("baseline", "candidate"):
@@ -2312,7 +2330,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(plan.PlanError):
                     plan.verify_exact_manifest(manifest_path)
 
-    def test_promotion_accepts_v8_and_rejects_schema_downgrades(self) -> None:
+    def test_promotion_accepts_v9_and_rejects_schema_downgrades(self) -> None:
         plan = load_plan_runner()
         with tempfile.TemporaryDirectory() as directory:
             manifest_path = write_complete_evidence_bundle(
@@ -2323,6 +2341,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 plan.validate_evidence_scope(scope)["schema"],
                 plan.EVIDENCE_SCOPE_SCHEMA)
         for manifest_schema, raw_schema in (
+            (runner.MANIFEST_SCHEMA_V8, runner.RAW_SCHEMA),
+            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V8),
             (runner.MANIFEST_SCHEMA_V7, runner.RAW_SCHEMA),
             (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V7),
             (runner.MANIFEST_SCHEMA_V6, runner.RAW_SCHEMA_V5),
@@ -2964,6 +2984,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         for variable, invalid_value in (
             ("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
+            ("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", "ON"),
             ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "1"),
         ):
             with self.subTest(selector=variable):
@@ -3430,6 +3451,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_ENABLE_CUDA=OFF",
                 "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
                 "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF",
                 "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
             ]
             for label, generator, configure_extra, output_prefix in (
@@ -4074,6 +4096,54 @@ class MainCompareRunnerTests(unittest.TestCase):
             runner.validate_failure(
                 resign(relabeled), Path("/unused"), check_files=False)
 
+    def test_partial_failure_v8_v9_relabels_are_rejected(self) -> None:
+        def before_topology(raw_schema: str) -> dict:
+            value = synthetic_failure(raw_schema)
+            value.pop("digest")
+            value["campaign"].pop("allowed_cpu_set_at_launch")
+            for field in (
+                    "host_initial", "reservation", "supervision", "pair_lease",
+                    "isolation", "identities_initial", "executable_snapshots"):
+                value[field] = None
+            value["invocations"] = []
+            value["retained_files"] = []
+            return runner.signed(value)
+
+        historical = before_topology(runner.RAW_SCHEMA_V8)
+        current = before_topology(runner.RAW_SCHEMA)
+        runner.validate_failure(
+            historical, Path("/unused"), check_files=False)
+        runner.validate_failure(
+            current, Path("/unused"), check_files=False)
+
+        upgraded = copy.deepcopy(historical)
+        upgraded["schema"] = runner.FAILURE_SCHEMA
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "unexpected or missing fields"):
+            runner.validate_failure(
+                resign(upgraded), Path("/unused"), check_files=False)
+
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.FAILURE_SCHEMA_V8
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "unexpected or missing fields"):
+            runner.validate_failure(
+                resign(downgraded), Path("/unused"), check_files=False)
+
+        missing_contract = copy.deepcopy(current)
+        missing_contract.pop("evidence_contract")
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "unexpected or missing fields"):
+            runner.validate_failure(
+                resign(missing_contract), Path("/unused"), check_files=False)
+
+        wrong_contract = copy.deepcopy(current)
+        wrong_contract["evidence_contract"] += "-forged"
+        with self.assertRaisesRegex(
+                runner.EvidenceError, "evidence contract differs"):
+            runner.validate_failure(
+                resign(wrong_contract), Path("/unused"), check_files=False)
+
     def test_non_string_schema_values_fail_closed(self) -> None:
         value = synthetic_raw()
         value["schema"] = {"unexpected": "object"}
@@ -4519,6 +4589,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             }
             failure = runner.signed({
                 "schema": runner.FAILURE_SCHEMA,
+                "evidence_contract": runner.FAILURE_EVIDENCE_CONTRACT,
                 "created_utc": "2026-07-16T00:00:00Z",
                 "status": "failed", "valid": False,
                 "error_type": "EvidenceError", "error": "fixture failure",
@@ -4577,6 +4648,7 @@ class MainCompareRunnerTests(unittest.TestCase):
 
             legacy = copy.deepcopy(failure)
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
+            legacy.pop("evidence_contract")
             legacy["campaign"].pop("candidate_mode", None)
             legacy.pop("supervision", None)
             legacy.pop("executable_snapshots", None)
@@ -4987,7 +5059,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 os.close(duplicate)
             os.close(descriptor)
 
-    def test_v8_sealed_evidence_is_bound_and_v7_has_old_shape(self) -> None:
+    def test_v9_sealed_evidence_is_bound_and_v8_contract_is_historical(
+            self) -> None:
         value = synthetic_raw()
         for path, replacement in (
             (("executable_snapshots", "baseline", "snapshot", "sha256"),
@@ -5002,14 +5075,85 @@ class MainCompareRunnerTests(unittest.TestCase):
             target[path[-1]] = replacement
             self.assert_rejected(changed)
 
-        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V7)
-        self.assertNotIn("executable_snapshots", historical)
-        self.assertTrue(all(
-            "execution_protocol" not in invocation and
-            "executable_snapshot" not in invocation
-            for invocation in historical["invocations"]))
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V8)
+        historical_build = historical["identities_initial"]["candidate_build"]
+        historical_compile = historical_build["validated_compile_commands"]
+        historical_configuration = \
+            historical_compile["effective_build_configuration"]
+        self.assertIn("executable_snapshots", historical)
+        self.assertEqual(
+            historical_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA_V4)
+        self.assertEqual(
+            historical_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V2)
+        self.assertEqual(
+            historical_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V2)
+        self.assertNotIn(
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+            historical_configuration["entries"])
         runner.validate_raw(
             historical, None, check_files=False, check_current_inputs=False)
+        with tempfile.TemporaryDirectory() as directory:
+            historical_manifest = write_complete_evidence_bundle(
+                Path(directory), historical, runner.MANIFEST_SCHEMA_V8)
+            verified, retained, _, _ = runner.verified_campaign_bundle(
+                historical_manifest, no_current_input_check=True)
+            self.assertEqual(
+                (verified["schema"], retained["schema"]),
+                (runner.MANIFEST_SCHEMA_V8, runner.RAW_SCHEMA_V8))
+            promotion = load_plan_runner()
+            _, historical_scope, _ = promotion.verify_exact_manifest(
+                historical_manifest)
+            self.assertEqual(
+                historical_scope["schema"],
+                promotion.EVIDENCE_SCOPE_SCHEMA_V4)
+
+        current_build = value["identities_initial"]["candidate_build"]
+        current_compile = current_build["validated_compile_commands"]
+        current_configuration = current_compile["effective_build_configuration"]
+        self.assertEqual(
+            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+        self.assertEqual(
+            current_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA)
+        self.assertEqual(
+            current_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+        self.assertEqual(
+            current_configuration["entries"][
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
+
+        # The old body remains internally coherent, but changing only its
+        # enclosing schema cannot upgrade its compile/configuration contract.
+        relabeled = copy.deepcopy(historical)
+        relabeled["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(relabeled)
+
+        # Conversely, current v3 selector closure cannot be presented as the
+        # historical v8 contract.
+        downgraded = copy.deepcopy(value)
+        downgraded["schema"] = runner.RAW_SCHEMA_V8
+        self.assert_rejected(downgraded)
+
+        historical_variables = (
+            *runner.BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+            runner.BUILD_CONFIGURATION_VARIABLES_V2[-1],
+        )
+        extended_entries = dict(historical_configuration["entries"])
+        extended_entries["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+        extended_material = runner.build_configuration_material(
+            extended_entries, historical_variables)
+        extended_sidecar = (
+            f"schema={runner.BUILD_CONFIGURATION_FILE_SCHEMA_V2}\n"
+            f"sha256={runner.sha256_bytes(extended_material)}\n"
+        ).encode("ascii") + extended_material
+        with self.assertRaisesRegex(
+                runner.EvidenceError,
+                "effective-configuration.*(framing|line count) differs"):
+            runner.parse_build_configuration_bytes(
+                extended_sidecar, runner.RAW_SCHEMA_V8)
 
     def test_bounded_file_snapshot_rejects_fifo_without_open_block(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

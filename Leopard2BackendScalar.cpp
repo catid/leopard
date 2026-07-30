@@ -1397,6 +1397,7 @@ static const Ops ScalarOps = {
     // radix-four staging schedule and publishes no radix-eight round.
     , NULL
     , NULL
+    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

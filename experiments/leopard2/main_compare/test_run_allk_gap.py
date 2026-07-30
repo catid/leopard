@@ -247,8 +247,13 @@ class ProductionBuildFixture:
             "LEO2_BUILD_FUZZERS:BOOL": "OFF",
             "LEO2_ENABLE_CUDA:BOOL": "OFF",
             "LEO2_BENCHMARK_GIT_EXECUTABLE:FILEPATH": "/usr/bin/git",
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL":
+                runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256:INTERNAL":
+                "0" * 64,
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL": "OFF",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING": "0",
             "LEOPARD_ENABLE_GF8:BOOL": "ON",
             "LEOPARD_ENABLE_GF16:BOOL": "ON",
@@ -294,6 +299,67 @@ class AllKIdentityTests(unittest.TestCase):
         }
         self.main_snapshot = {"sha256": "d" * 64}
         self.current_snapshot = {"sha256": "e" * 64}
+
+    @staticmethod
+    def run_contract(
+            schema: str = runner.RUN_CONTRACT_SCHEMA) -> dict:
+        expected = runner.ALL_K_EVIDENCE_CONTRACTS[schema]
+        historical = schema == runner.RUN_CONTRACT_SCHEMA_V4
+        cache_keys = (
+            runner.ALL_K_BUILD_CACHE_KEYS_V2 if historical else
+            runner.ALL_K_BUILD_CACHE_KEYS)
+        cache = {key: "fixture" for key in cache_keys}
+        cache.update({
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                expected["configuration"],
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "1" * 64,
+            "LEO2_BUILD_ALLK_DIAGNOSTIC": "ON",
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+        })
+        if not historical:
+            cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+        return {
+            "schema": schema,
+            "main_commit": "a" * 40,
+            "current_commit": "b" * 40,
+            "expected_main_sha256": "c" * 64,
+            "current_source_initial": {"head": "b" * 40},
+            "current_build_initial": {
+                "schema": expected["closure"],
+                "validated_cache": cache,
+            },
+            "current_reproducible_build": {
+                "schema": expected["proof"],
+                "immutable_replay": {
+                    "schema": "leopard2-immutable-replay-tools/v2",
+                    "recipe_transport": {
+                        "schema": expected["replay_plan"],
+                    },
+                    "invocations": {
+                        name: {"schema": expected["replay_invocation"]}
+                        for name in ("configure", "build")
+                    },
+                },
+            },
+            "main_executable_initial": {"sha256": "d" * 64},
+            "current_executable_initial": {"sha256": "e" * 64},
+            "main_executable_snapshot": {"sha256": "d" * 64},
+            "current_executable_snapshot": {"sha256": "e" * 64},
+            "current_source_attestation_identity": {"sha256": "f" * 64},
+            "main_isa": {"profile": "pure-avx2"},
+            "current_isa": {"profile": "pure-avx2"},
+            "benchmark_lock": {"path": "/tmp/fixture.lock"},
+            "allowed_cpus": [0, 1, 2],
+            "used_cpus": [0],
+            "workers": 1,
+            "order": list(runner.ORDER),
+            "timeout_seconds": 30.0,
+            "with_current_legacy": False,
+            "matrix": {"cell_count": 1},
+            "measurement_note": "fixture",
+        }
 
     @staticmethod
     def bind_raw_output(record):
@@ -1075,15 +1141,19 @@ class AllKIdentityTests(unittest.TestCase):
                     message)
 
     def test_manifest_rejects_stale_or_resigned_contract(self) -> None:
+        proof_validator = mock.patch.object(
+            runner, "validate_reproducible_build_proof")
+        validated_proof = proof_validator.start()
+        self.addCleanup(proof_validator.stop)
         cell = runner.Cell("one", "gf8-all-k", 1, 1, 64, 1,
                            "low-R", "one-loss", 1, 1, 1, 0)
-        contract = {"source": self.current_source, "main": self.main_commit}
+        contract = self.run_contract()
         digest = runner.canonical_digest(contract)
         preflight = self.attestation_record()
         attestation_identity = runner.source_attestation_identity(
             preflight, self.current_source, self.current_snapshot)
         manifest = {
-            "schema": "leopard2-all-k-gap-manifest/v4",
+            "schema": runner.MANIFEST_SCHEMA,
             "run_contract": contract,
             "run_contract_sha256": digest,
             "cells": [runner.dataclasses.asdict(cell)],
@@ -1114,13 +1184,13 @@ class AllKIdentityTests(unittest.TestCase):
             "digest mismatch")
 
         historical = copy.deepcopy(manifest)
-        historical["schema"] = "leopard2-all-k-gap-manifest/v3"
+        historical["schema"] = runner.MANIFEST_SCHEMA_V4
         expect_rejected(
             self,
             lambda: runner.validate_manifest(
                 historical, contract, digest, [cell], self.current_source,
                 self.current_snapshot, attestation_identity),
-            "schema mismatch")
+            "schema tuple")
 
         coercible_cell = copy.deepcopy(manifest)
         coercible_cell["cells"][0]["k"] = True
@@ -1131,6 +1201,129 @@ class AllKIdentityTests(unittest.TestCase):
                 self.current_source, self.current_snapshot,
                 attestation_identity),
             "cell matrix")
+        self.assertGreater(validated_proof.call_count, 0)
+
+    def test_all_k_outer_schema_binds_exact_replay_generation(self) -> None:
+        proof_validator = mock.patch.object(
+            runner, "validate_reproducible_build_proof")
+        validated_proof = proof_validator.start()
+        self.addCleanup(proof_validator.stop)
+        current = self.run_contract()
+        historical = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
+        self.assertIs(
+            runner.validate_run_contract_evidence(current), current)
+        self.assertIs(
+            runner.validate_run_contract_evidence(historical), historical)
+
+        # Each body remains coherent under its own generation.  Relabeling only
+        # the outer contract cannot upgrade or downgrade its nested closure.
+        relabeled = copy.deepcopy(historical)
+        relabeled["schema"] = runner.RUN_CONTRACT_SCHEMA
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(relabeled),
+            "schema tuple")
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.RUN_CONTRACT_SCHEMA_V4
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(downgraded),
+            "schema tuple")
+
+        extended = copy.deepcopy(historical)
+        extended["current_build_initial"]["validated_cache"][
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(extended),
+            "schema tuple")
+
+        for label, variable, value in (
+            ("direct-source", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
+            ("high-direct", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
+            ("small-direct", "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "3"),
+        ):
+            with self.subTest(selector=label):
+                changed = copy.deepcopy(current)
+                changed["current_build_initial"]["validated_cache"][
+                    variable] = value
+                expect_rejected(
+                    self,
+                    lambda changed=changed:
+                        runner.validate_run_contract_evidence(changed),
+                    "selector tuple")
+
+        missing_selector = copy.deepcopy(current)
+        missing_selector["current_build_initial"]["validated_cache"].pop(
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE")
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(missing_selector),
+            "schema tuple")
+
+        extended_cache = copy.deepcopy(current)
+        extended_cache["current_build_initial"]["validated_cache"][
+            "LEO2_UNVERSIONED_SELECTOR"] = "OFF"
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(extended_cache),
+            "schema tuple")
+
+        wrong_plan = copy.deepcopy(current)
+        wrong_plan["current_reproducible_build"]["immutable_replay"][
+            "recipe_transport"]["schema"] = \
+                runner.LEGACY_REPLAY_RECIPE_SCHEMA
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(wrong_plan),
+            "schema tuple")
+
+        wrong_invocation = copy.deepcopy(current)
+        wrong_invocation["current_reproducible_build"]["immutable_replay"][
+            "invocations"]["configure"]["schema"] = \
+                runner.REPLAY_INVOCATION_SCHEMA_V1
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(wrong_invocation),
+            "schema tuple")
+
+        validated_proof.side_effect = RuntimeError("fixture proof drift")
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(current),
+            "reproducible-build proof is invalid")
+        validated_proof.side_effect = None
+
+        cell = runner.Cell(
+            "one", "gf8-all-k", 1, 1, 64, 1,
+            "low-R", "one-loss", 1, 1, 1, 0)
+        preflight = self.attestation_record()
+        attestation_identity = runner.source_attestation_identity(
+            preflight, self.current_source, self.current_snapshot)
+        historical_digest = runner.canonical_digest(historical)
+        historical_manifest = {
+            "schema": runner.MANIFEST_SCHEMA_V4,
+            "run_contract": historical,
+            "run_contract_sha256": historical_digest,
+            "cells": [runner.dataclasses.asdict(cell)],
+            "current_source_attestation_preflights": [preflight],
+            "completion": None,
+        }
+        runner.validate_manifest(
+            historical_manifest, historical, historical_digest, [cell],
+            self.current_source, self.current_snapshot,
+            attestation_identity)
+
+        relabeled_manifest = copy.deepcopy(historical_manifest)
+        relabeled_manifest["schema"] = runner.MANIFEST_SCHEMA
+        expect_rejected(
+            self,
+            lambda: runner.validate_manifest(
+                relabeled_manifest, historical, historical_digest, [cell],
+                self.current_source, self.current_snapshot,
+                attestation_identity),
+            "schema tuple")
+        self.assertGreaterEqual(validated_proof.call_count, 4)
 
     def test_attestation_contract_identity_excludes_only_volatile_timing(
             self) -> None:
@@ -3379,7 +3572,14 @@ class ProductionBuildClosureTests(unittest.TestCase):
     def test_exact_release_pure_avx2_closure_is_accepted(self) -> None:
         result = self.provenance()
         self.assertEqual(result["schema"],
-                         "leopard2-production-build-closure/v1")
+                         runner.PRODUCTION_BUILD_CLOSURE_SCHEMA)
+        self.assertEqual(
+            result["validated_cache"][
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA)
+        self.assertEqual(
+            result["validated_cache"][
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
         self.assertEqual(result["archive_members"], [
             path.name for path in self.fixture.archive_objects])
         self.assertTrue(

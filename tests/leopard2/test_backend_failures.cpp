@@ -130,8 +130,27 @@ void check_table_accounting(
     {
         require(state.ff8_bytes == 8192U,
             "SIMD GF8 table byte accounting changed");
+#if defined(LEO2_GFNI_VARIANT)
+        // The documented global experiment retains AVX2/AVX-512 public
+        // identities while replacing their GF16 nibble tables with the same
+        // packed four-block affine representation as the production GFNI
+        // member.  Scalar and SSSE3 remain separate translation units with
+        // their ordinary table representations.
+        if (backend == LEO2_BACKEND_AVX2 ||
+            backend == LEO2_BACKEND_AVX512)
+        {
+            require(state.ff16_bytes == 2097152U,
+                "global GFNI affine GF16 table byte accounting changed");
+        }
+        else
+        {
+            require(state.ff16_bytes == 8388608U,
+                "non-GFNI SIMD GF16 table byte accounting changed");
+        }
+#else
         require(state.ff16_bytes == 8388608U,
             "SIMD GF16 table byte accounting changed");
+#endif
     }
 }
 

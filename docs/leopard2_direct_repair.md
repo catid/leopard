@@ -3,8 +3,8 @@
 ## Scope and dispatch
 
 Leopard2 retains the specialized low/high LCH decoders and the generic
-`O(N log N)` decoder.  An immutable direct-repair plan is selected in three
-measured regions:
+`O(N log N)` decoder.  An immutable direct-repair plan is selected by default
+in three measured regions:
 
 - the original bounded region, `2 <= K <= 16`, for one through four missing
   originals and a parent systematic dimension no larger than 256;
@@ -13,12 +13,25 @@ measured regions:
 - the separately measured GF8/AVX2 `K=65`, `P=T=128` region for one through
   eight missing originals.
 
+Two broader one-loss candidates are available only when configured with
+`-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON`:
+
+- unequal legacy-high GF8/AVX2 parents with `K > 16`, `R > 1`, and parent
+  length no larger than 256; and
+- low-profile GF8/AVX2 parents with `K > 16`, `R > K`, and parent length no
+  larger than 256.
+
 Forced generic, specialized, tiled, or materialized decoding disables direct
 repair.  The existing `R=1` XOR and `K=1` copy paths remain earlier dispatch
 choices.  Other cases use the locator and transform decoder.  The added
-one-loss region is deliberately tied to the exact profile, field, backend,
-and parent shapes measured below; it is not a general claim that direct repair
-wins for multiple losses or for unequal rounded sides.
+experimental one-loss regions are deliberately tied to GF8 and the effective
+AVX2 operations table.  Diagnostic screens are not promotion evidence; the
+ordinary build keeps its established selector until the frozen same-source,
+exact-main, reuse, large-shard, and neighboring-shape gates pass.  They are not
+a claim that direct repair wins for multiple losses, GF16, GFNI, AVX-512,
+SSSE3, or scalar execution.  The historical global `LEO2_GFNI_VARIANT`
+diagnostic also leaves these selectors disabled even if the experiment option
+is set.
 
 ## Generator-row derivation
 
@@ -75,6 +88,31 @@ reduces setup from `O(K D)` to `O(D + K)` for every low-profile bounded direct
 encoder/repair codec and for equal-rounded `P=T` legacy-high direct repair;
 it does not change generator coefficients or wire bytes.
 
+The unequal legacy-high parent has another exact structure.  Its complete
+systematic coordinate set is
+
+    S = [T,N) = V_n \ V_t.
+
+Let `s_n`, `s_t`, and `Z_S` be the vanishing polynomials of `V_n`, `V_t`, and
+`S`.  Since `s_n = s_t Z_S`, differentiating at any `x` in `S` gives
+
+    c_n = s_n'(x) = s_t(x) Z_S'(x),
+
+because `Z_S(x)=0` and the derivative `c_n` of a complete additive subspace is
+constant.  The needed barycentric weight is therefore
+
+    w_x = inverse(Z_S'(x)) = s_t(x) / c_n.
+
+The additive polynomial `s_t` is constant on each aligned `T`-coordinate
+coset.  Production computes `c_n` once, computes one `s_t` value per occupied
+message block, and fills the public prefix of that block.  This is `O(N+D)`
+field work rather than `O(K D)`.  It applies equally to shortened public
+messages because the fixed shortened suffix remains part of `S`; puncturing
+does not alter `S`.  The independent direct-product test enumerates every
+power-of-two `N<=256`, every `T<N`, and every `x` in `S` in GF(2^4), legacy
+GF8, and legacy GF16, comparing this quotient identity with the original
+denominator product.
+
 The MDS property makes any valid selected `L x L` parity submatrix invertible.
 The implementation nevertheless treats a zero pivot as a plan-preparation
 failure and safely falls back to the transform decoder.
@@ -91,8 +129,21 @@ GF8 fixed multiply and multiply-add accept any positive byte count.  Complete
 64-byte tiles use the current SSSE3/AVX2/AVX512 backend.  The measured extended
 GF8/AVX2 regions zero-pad a trailing partial tile on the stack and run the same
 backend kernel; the original small region retains its scalar field-element
-tail.  GF16 uses optimized complete-tile kernels and handles an even compact
-tail as `q` low bytes followed by `q` high bytes.  Odd GF16 byte counts remain
+tail.
+
+With the generalized one-loss experiment enabled, pure AVX2 additionally
+groups four
+fixed-coefficient sources per call for shard sizes 1 through 63 except 7 bytes.
+Each group loads the output once, uses XMM or scalar tails without padding or
+out-of-range access, and either initializes or XOR-accumulates explicitly.
+The remaining zero through three sources retain their original term order.
+Seven-byte and 64-byte-or-larger shards use the mature output-major executor.
+The callback is absent from scalar, SSSE3, AVX-512, GFNI, GF8-disabled, and
+global-GFNI experiment tables, so an AVX2-looking diagnostic table cannot
+accidentally interpret affine GFNI tables as nibble tables.
+
+GF16 uses optimized complete-tile kernels and handles an even compact tail as
+`q` low bytes followed by `q` high bytes.  Odd GF16 byte counts remain
 unsupported.  No-loss, `R=1`, `K=1`, specialized LCH, and generic fallback
 semantics are unchanged.
 
@@ -112,11 +163,24 @@ The production API test now checks:
 - an independent direct-algebra check that enumerates aligned cosets through
   dimension 256 in GF8 and GF16 and verifies every barycentric denominator
   against `product(V_d \\ {0})`; and
+- an independent complement-subspace check for every supported power-of-two
+  `N,T` through the field order—`N<=16` in GF(2^4), and `N<=256` in GF8 and
+  GF16—verifying `s_t(x)/c_n` against direct products for every legacy-high
+  parent systematic coordinate; and
 - exact dispatch boundaries for the bounded region, the equal-rounded one-loss
-  region, and the `K=65` eight-loss exception; and
-- targeted one-loss execution at `K=17,32,33,64,66,128`, both lower and upper
-  equal-rounded `R` boundaries, scalar tails, aligned buffers, and a 1 MiB
-  shard, with every result compared to the independent/generic oracle.
+  region, unequal legacy-high and redundancy-dominant low one-loss regions,
+  and the `K=65` eight-loss exception; and
+- in an experiment-enabled build, targeted generalized one-loss execution
+  through high-profile
+  `(K,R)=(240,16)` and low-profile `(31,200)`, including first and last
+  systematic coordinates, first and last transmitted parity rows, arbitrary
+  tails, and shards through 64 KiB plus one byte, with every result compared
+  to the independent/generic oracle; and
+- in that build, the four-source callback at every selected boundary from 1
+  through 63 bytes,
+  the 7- and 64-byte fallbacks, all four possible term-count remainders,
+  unaligned inputs and outputs, guard bytes, repeated source pointers, every
+  multiplier and input byte, and explicit callback-count attribution.
 
 Validation commands completed on 2026-07-16:
 

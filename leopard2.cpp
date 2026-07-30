@@ -376,6 +376,7 @@ static std::atomic<uint64_t> g_test_high_direct_reveal_shards(0);
 static std::atomic<uint64_t>
     g_test_high_materialized_direct_reveal_shards(0);
 static std::atomic<uint64_t> g_test_high_scratch_reveal_shards(0);
+static std::atomic<uint64_t> g_test_direct_four_tiny_calls(0);
 
 static bool TestConsumeThreadStartFault()
 {
@@ -1660,6 +1661,74 @@ static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
         codec->original_count == 65 && codec->padded_side == 128;
 }
 
+static bool IsGeneralDirectOneLossCodec(
+    const leo2_codec* codec)
+{
+#if !LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT || \
+    defined(LEO2_GFNI_VARIANT)
+    (void)codec;
+    return false;
+#else
+    /*
+        A one-loss row contains one selected parity term and K-1 surviving
+        systematic terms.  Existing bounded direct-plan storage therefore
+        needs at most K terms and no R-by-K table.  Restrict the production
+        promotion to a GF8 parent and an effective AVX2 backend; GFNI,
+        AVX-512, lower-ISA, and GF16 dispatch remain unchanged until measured
+        independently.
+    */
+    if (!codec || !codec->context ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        codec->original_count <= kDirectLegacyMaxRepairOriginals ||
+        codec->parent_count > kGF8Order ||
+        codec->parent_dimension > kDirectMaxParentDimension)
+        return false;
+
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1)
+    {
+        /*
+            Equal-rounded parents retain their separately measured production
+            selector.  R=1 retains the XOR/copy plan.  This predicate covers
+            only unequal high parents such as (192,64), including shortening
+            and puncturing inside the same active GF8 parent.
+        */
+        return codec->recovery_count > 1 &&
+            !CanUseTranslatedLowDecode(codec);
+    }
+
+    /*
+        The measured LOW promotion is deliberately redundancy-dominant.
+        Balanced LOW remains a neighboring transform control.
+    */
+    return codec->profile == LEO2_PROFILE_LOW_V1 &&
+        codec->recovery_count > codec->original_count;
+#endif
+}
+
+#ifdef LEO_HAS_FF8
+static bool ShouldUseGF8DirectOneLossFourTiny(
+    const leo2_codec* codec,
+    size_t direct_term_count,
+    uint64_t shard_bytes)
+{
+    /*
+        The byte-independent direct-plan selector needs a tiny executor that
+        wins at the scalar/XMM boundaries.  Seven bytes remains on the mature
+        output-major loop because the measured callback crossover excluded it.
+        Require the actual immutable Ops table as well as the public context
+        identity: tracing or diagnostic table substitution must not dispatch
+        through a callback it did not publish.
+    */
+    return shard_bytes != 0 && shard_bytes <= 63 && shard_bytes != 7 &&
+        direct_term_count >= 4 &&
+        IsGeneralDirectOneLossCodec(codec) &&
+        codec->context && codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->context->ops->ff8_linear_combination4_tiny;
+}
+#endif
+
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
 static bool IsSmallDirectRepairCodec(const leo2_codec* codec)
 {
@@ -1681,7 +1750,8 @@ static bool CanPrepareDirectRepair(const leo2_codec* codec)
                            LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) == 0 &&
         codec->original_count >= 2 &&
         (codec->original_count <= kDirectLegacyMaxRepairOriginals ||
-         IsMeasuredEqualRoundedDirectRepairCodec(codec)) &&
+         IsMeasuredEqualRoundedDirectRepairCodec(codec) ||
+         IsGeneralDirectOneLossCodec(codec)) &&
         codec->parent_dimension <= kDirectMaxParentDimension &&
         codec->padded_side >= 2;
 }
@@ -1695,6 +1765,8 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
         return kDirectMaxRepairLosses;
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
+        return 1;
+    if (IsGeneralDirectOneLossCodec(codec))
         return 1;
     return 4;
 }
@@ -1807,7 +1879,82 @@ static bool PrepareDirectBarycentricWeights(
     const uint32_t systematic_begin =
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 ? codec->padded_side : 0;
     const uint32_t systematic_end = systematic_begin + codec->parent_dimension;
+    const uint32_t dimension = codec->parent_dimension;
     weights.resize(codec->original_count);
+
+    /*
+        A legacy-high parent partitions the additive parent subspace V_n into
+        the parity subspace V_t=[0,T) and the message coordinates
+        S=V_n\\V_t=[T,N).  If s_n and s_t are their vanishing polynomials,
+
+            Z_S = s_n / s_t
+            s_n'(x) = s_t(x) Z_S'(x), x in S
+
+        because Z_S(x)=0.  The full-subspace derivative c_n=s_n' is constant,
+        so the barycentric weight is exactly
+
+            1 / Z_S'(x) = s_t(x) / c_n.
+
+        s_t is additive and therefore constant on each aligned T-coordinate
+        coset.  Compute one log-domain value per block and fill its public
+        prefix.  This reduces the non-power-of-two high parent from O(K*D)
+        field products to O(N+D), while retaining the direct product below as
+        the oracle for every shape outside this exact partition.
+    */
+    const uint32_t parent = codec->parent_count;
+    const uint32_t parity_side = codec->padded_side;
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        dimension != 0 && (dimension & (dimension - 1)) != 0 &&
+        parent > parity_side &&
+        (parent & (parent - 1)) == 0 &&
+        parity_side != 0 && (parity_side & (parity_side - 1)) == 0 &&
+        systematic_begin == parity_side &&
+        dimension == parent - parity_side)
+    {
+        Element parent_derivative_log = 0;
+        for (uint32_t difference = 1; difference < parent; ++difference)
+        {
+            parent_derivative_log = Field::AddLogs(
+                parent_derivative_log,
+                Field::Log(static_cast<Element>(difference)));
+        }
+
+        size_t filled = 0;
+        for (uint32_t block_begin = parity_side;
+             block_begin < parent && filled < weights.size();
+             block_begin += parity_side)
+        {
+            Element subspace_log = 0;
+            for (uint32_t coordinate = 0;
+                 coordinate < parity_side; ++coordinate)
+            {
+                const Element difference =
+                    static_cast<Element>(block_begin ^ coordinate);
+                if (difference == 0)
+                {
+                    weights.clear();
+                    return false;
+                }
+                subspace_log = Field::AddLogs(
+                    subspace_log, Field::Log(difference));
+            }
+            const Element weight = Field::FromLog(
+                Field::SubtractLogs(
+                    subspace_log, parent_derivative_log));
+            const size_t count = std::min(
+                static_cast<size_t>(parity_side),
+                weights.size() - filled);
+            std::fill(weights.begin() + filled,
+                weights.begin() + filled + count, weight);
+            filled += count;
+        }
+        if (filled != weights.size())
+        {
+            weights.clear();
+            return false;
+        }
+        return true;
+    }
 
     /*
         A complete aligned power-of-two coordinate interval is an additive
@@ -1818,7 +1965,6 @@ static bool PrepareDirectBarycentricWeights(
         profiles and every low profile have this shape, so compute the product
         once instead of repeating the same O(D) loop for each public original.
     */
-    const uint32_t dimension = codec->parent_dimension;
     if (dimension != 0 && (dimension & (dimension - 1)) == 0 &&
         (systematic_begin & (dimension - 1)) == 0)
     {
@@ -5207,6 +5353,114 @@ static leo2_result ExecuteDirectEncode(
 
 #ifdef LEO_HAS_FF8
 #if defined(_MSC_VER)
+#define LEO2_FOUR_TINY_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_FOUR_TINY_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_FOUR_TINY_NOINLINE
+#endif
+
+/*
+    Keep the selected four-source traversal outside the general decoder.  Calls
+    outside its measured 1..6 and 8..63-byte range pay only the compact
+    predicate above, while the callback reduces output traffic and indirect
+    dispatches for the tiny shapes where the ordinary term-at-a-time loop was
+    slower than Algorithm 4/5.
+*/
+static LEO2_FOUR_TINY_NOINLINE leo2_result
+ExecuteGF8DirectOneLossFourTiny(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    if (!plan || !plan->direct_repair || !plan->codec ||
+        !plan->codec->context || !plan->codec->context->ops ||
+        !original || !recovery || !restored_original ||
+        shard_bytes == 0 || shard_bytes > 63 || shard_bytes == 7 ||
+        plan->missing_original_count != 1 ||
+        plan->missing_originals.size() != 1 ||
+        plan->direct_term_offsets.size() != 2 ||
+        plan->direct_term_offsets[0] != 0 ||
+        plan->direct_term_offsets[1] != plan->direct_terms.size() ||
+        plan->direct_terms.size() < 4)
+        return LEO2_INTERNAL_ERROR;
+
+    const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (!IsGeneralDirectOneLossCodec(codec) ||
+        ops.kind != LEO2_BACKEND_AVX2 ||
+        !ops.ff8_linear_combination4_tiny)
+        return LEO2_INTERNAL_ERROR;
+
+    const uint32_t missing_original = plan->missing_originals[0];
+    if (missing_original >= codec->original_count ||
+        !restored_original[missing_original])
+        return LEO2_INTERNAL_ERROR;
+    void* const output = restored_original[missing_original];
+
+    size_t term_index = 0;
+    while (term_index + 3 < plan->direct_terms.size())
+    {
+        const void* sources[4] = {};
+        uint16_t multiplier_logs[4] = {};
+        for (unsigned lane = 0; lane < 4; ++lane)
+        {
+            const leo2_direct_repair_term& term =
+                plan->direct_terms[term_index + lane];
+            const bool parity =
+                (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                term.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
+                return LEO2_INTERNAL_ERROR;
+            const void* const source = parity
+                ? recovery[source_index] : original[source_index];
+            if (!source)
+                return LEO2_INTERNAL_ERROR;
+            sources[lane] = source;
+            multiplier_logs[lane] = term.multiplier_log;
+        }
+        ops.ff8_linear_combination4_tiny(
+            output, sources, multiplier_logs, term_index != 0, shard_bytes);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        g_test_direct_four_tiny_calls.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
+        term_index += 4;
+    }
+
+    // A complete first group initialized the output.  Preserve term order for
+    // the remaining zero through three sources.
+    for (; term_index < plan->direct_terms.size(); ++term_index)
+    {
+        const leo2_direct_repair_term& term = plan->direct_terms[term_index];
+        const bool parity =
+            (term.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            term.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* const source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        if (term.multiplier_log == 0)
+            XorArbitraryBytes(ops, output, source, shard_bytes);
+        else
+            leopard::ff8::MultiplyAddBytes(ops, output, source,
+                static_cast<leopard::ff8::ffe_t>(
+                    term.multiplier_log), shard_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_FOUR_TINY_NOINLINE
+
+#if defined(_MSC_VER)
 #define LEO2_SOURCE_MAJOR_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 #define LEO2_SOURCE_MAJOR_NOINLINE __attribute__((noinline))
@@ -5471,6 +5725,13 @@ static leo2_result ExecuteDirectRepair(
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
 #ifdef LEO_HAS_FF8
+    if (plan->missing_original_count == 1 &&
+        ShouldUseGF8DirectOneLossFourTiny(
+            codec, plan->direct_terms.size(), shard_bytes))
+    {
+        return ExecuteGF8DirectOneLossFourTiny(
+            plan, shard_bytes, original, recovery, restored_original);
+    }
     if (SelectDirectRepairExecutor(plan, shard_bytes) ==
             leopard2_internal::kDirectRepairExecutorSourceMajor)
 #if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
@@ -7318,6 +7579,16 @@ leo2_test_high_materialized_direct_reveal_shards(void)
 LEO2_EXPORT uint64_t leo2_test_high_scratch_reveal_shards(void)
 {
     return g_test_high_scratch_reveal_shards.load(std::memory_order_acquire);
+}
+
+LEO2_EXPORT void leo2_test_reset_direct_four_tiny_calls(void)
+{
+    g_test_direct_four_tiny_calls.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_direct_four_tiny_calls(void)
+{
+    return g_test_direct_four_tiny_calls.load(std::memory_order_acquire);
 }
 #endif
 

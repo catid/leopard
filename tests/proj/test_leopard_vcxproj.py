@@ -27,7 +27,7 @@ BENCHMARK_ATTESTATION_MODULE = \
 BENCHMARK_ATTESTATION_GENERATOR = \
     ROOT / "cmake" / "GenerateBenchmarkSourceAttestation.cmake"
 BENCHMARK_ATTESTATION_MODULE_SHA256 = \
-    "886ebc7101327b95fc6fa730cb379fd542c8ff810549572b665762ba8a0e4b0e"
+    "9177bf306a2fa79b1337992c028284cc05e246d7ec81b4f8744ba1f117155c4e"
 BENCHMARK_ATTESTATION_GENERATOR_SHA256 = \
     "21857083921f70d62f44f0d5327d88e375f845906ab97493dbbdecfe3e07a389"
 NS = {"msb": "http://schemas.microsoft.com/developer/msbuild/2003"}
@@ -516,6 +516,14 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE="
             "${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}"),
     ))
+    _general_one_loss_source_property = (
+        "SOURCE",
+        "leopard2.cpp",
+        "Leopard2Backend.cpp",
+        "Leopard2BackendAVX2.cpp",
+        "tests/leopard2/test_api.cpp",
+        "APPEND", "PROPERTY", "COMPILE_DEFINITIONS",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
 
     _target_build_mutation_commands = {
         "target_compile_definitions", "target_compile_features",
@@ -764,6 +772,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
             "Enable default-off candidate legacy-high GF8/AVX2 direct "
             "diagnostics", "OFF")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+            "Enable default-off generalized GF8/AVX2 one-loss direct repair",
+            "OFF")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -910,6 +922,16 @@ class CMakeProductionGraph(object):
             "leopard2_sparse_encode_benchmark_smoke", "PROPERTIES",
             "ENVIRONMENT", "OMP_NUM_THREADS=1;OMP_DYNAMIC=FALSE")): 1,
         ("set_tests_properties", (
+            "leopard2_lab_self_test", "PROPERTIES", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
+            "leopard2_fuzz_campaign_self_test", "PROPERTIES", "ENVIRONMENT",
+            "PYTHONDONTWRITEBYTECODE=1;"
+            "PYTHONWARNINGS=error::ResourceWarning",
+            "RUN_SERIAL", "TRUE", "TIMEOUT", "300")): 1,
+        ("set_tests_properties", (
             "leopard2_high_decode_copy_benchmark_smoke", "PROPERTIES",
             "ENVIRONMENT", "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")): 1,
         ("set_tests_properties", (
@@ -987,6 +1009,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
             "Enable default-off candidate legacy-high GF8/AVX2 direct "
             "diagnostics", "OFF"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+            "Enable default-off generalized GF8/AVX2 one-loss direct repair",
+            "OFF"))),
         ("protected", (
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
             "Default-off small GF8 direct-repair experiment: 0=transform, "
@@ -1037,6 +1063,8 @@ class CMakeProductionGraph(object):
             "PRIVATE", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1"))),
         ("source-mutation", (
             "set_property", _small_direct_source_property)),
+        ("source-mutation", (
+            "set_property", _general_one_loss_source_property)),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
@@ -2362,12 +2390,14 @@ class CMakeProductionGraph(object):
                 (command == "set_property" and tokens and
                  tokens[0].upper() == "SOURCE"))
             if default_reachable and is_source_property:
-                small_direct_source_property = (
+                approved_experiment_source_property = (
                     command == "set_property" and
                     (tuple(tokens) == self._small_direct_source_property or
                      tuple(tokens) in
-                        self._small_direct_test_source_properties))
-                if small_direct_source_property:
+                        self._small_direct_test_source_properties or
+                     tuple(tokens) ==
+                        self._general_one_loss_source_property))
+                if approved_experiment_source_property:
                     source_property_tokens = list(tokens)
                 else:
                     try:
@@ -3212,6 +3242,16 @@ class CMakeProductionGraph(object):
         key = (command, tuple(raw_tokens))
         expected_key = (
             "set_property", self._small_direct_source_property)
+        general_one_loss_key = (
+            "set_property", self._general_one_loss_source_property)
+        if key == general_one_loss_key:
+            expected_guard = bool_atom(
+                "option:LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
+            if reasons or not self._formula_equivalent(guard, expected_guard):
+                raise ContractError(
+                    "general one-loss source definition guard drift")
+            self.contract_events.append(("source-mutation", key))
+            return
         approved_test_key = (
             command == "set_property" and
             tuple(raw_tokens) in self._small_direct_test_source_properties)

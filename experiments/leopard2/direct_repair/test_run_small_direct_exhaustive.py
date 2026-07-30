@@ -179,6 +179,7 @@ def make_build_record(origin: Path, binary_identity: dict, mode: int) -> dict:
         "LEO2_ENABLE_CUDA": "OFF",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
         RUNNER.MODE_CACHE_VARIABLE: str(mode),
         "LEO2_FLAG_MAVX2": "1",
         "LEO2_FLAG_MNO_AVX512F": "1",
@@ -198,7 +199,7 @@ def make_build_record(origin: Path, binary_identity: dict, mode: int) -> dict:
             "cmake_cache_sha256": metadata["sha256"],
             "effective_configuration_attestation": {
                 "schema":
-                    "leopard2-benchmark-build-configuration-attestation/v2",
+                    "leopard2-benchmark-build-configuration-attestation/v3",
                 "entries": attestation_entries,
                 "path": sidecar["path"],
                 "sha256":
@@ -251,7 +252,7 @@ def make_build_record(origin: Path, binary_identity: dict, mode: int) -> dict:
         }.items()
     }
     result["reproducible_rebuild"] = {
-        "schema": "leopard2-small-direct-clean-rebuild/v1",
+        "schema": RUNNER.CLEAN_REBUILD_SCHEMA,
         "mode": mode,
         "tools": proof_tools,
         "configure_profile":
@@ -263,6 +264,35 @@ def make_build_record(origin: Path, binary_identity: dict, mode: int) -> dict:
     }
     result["reproducible_rebuild"]["digest"] = RUNNER.record_digest(
         result["reproducible_rebuild"])
+    result["digest"] = RUNNER.record_digest(result)
+    RUNNER.validate_build_record(result)
+    return result
+
+
+def as_historical_v1_build(current: dict) -> dict:
+    result = copy.deepcopy(current)
+    result["schema"] = RUNNER.BUILD_SCHEMA_V1
+    general = "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"
+    result["controlled_configuration"].pop(general)
+    result["production_closure"]["validated_cache"].pop(general)
+    metadata = result["effective_configuration"]
+    metadata["entries"].pop(general)
+    attestation = metadata["effective_configuration_attestation"]
+    attestation["schema"] = \
+        RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2
+    attestation["entries"].pop(general)
+    attestation["sha256"] = RUNNER.build_configuration_digest(
+        attestation["entries"],
+        RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2)
+    material = RUNNER.build_reproducible_material(result)
+    proof = result["reproducible_rebuild"]
+    proof["schema"] = RUNNER.CLEAN_REBUILD_SCHEMA_V1
+    proof["configure_profile"] = RUNNER.controlled_configure_profile(
+        result["controlled_configuration"], result["mode"],
+        RUNNER.BUILD_SCHEMA_V1)
+    proof["candidate_material"] = material
+    proof["rebuilt_material"] = copy.deepcopy(material)
+    proof["digest"] = RUNNER.record_digest(proof)
     result["digest"] = RUNNER.record_digest(result)
     RUNNER.validate_build_record(result)
     return result
@@ -1978,7 +2008,8 @@ time.sleep(30)
             RUNNER.validate_build_record(build)
 
         for name in ("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
-                     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"):
+                     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+                     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"):
             build = copy.deepcopy(original)
             build["controlled_configuration"][name] = "ON"
             build["digest"] = RUNNER.record_digest(build)
@@ -1994,6 +2025,50 @@ time.sleep(30)
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "does not reproduce"):
             RUNNER.validate_build_record(build)
+
+    def test_historical_v1_build_replays_but_current_v3_is_strict(
+            self) -> None:
+        current = RUNNER.load_json(
+            self.manifest)["request"]["build_provenance"]
+        historical = as_historical_v1_build(current)
+        RUNNER.validate_build_record(historical)
+        self.assertNotIn(
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+            historical["effective_configuration"][
+                "effective_configuration_attestation"]["entries"])
+
+        general = "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"
+        missing = copy.deepcopy(current)
+        missing["effective_configuration"][
+            "effective_configuration_attestation"]["entries"].pop(general)
+        missing["digest"] = RUNNER.record_digest(missing)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "wrong mode/schema"):
+            RUNNER.validate_build_record(missing)
+
+        enabled = copy.deepcopy(current)
+        attestation = enabled["effective_configuration"][
+            "effective_configuration_attestation"]
+        attestation["entries"][general] = "ON"
+        attestation["sha256"] = RUNNER.build_configuration_digest(
+            attestation["entries"])
+        enabled["effective_configuration"]["entries"][general] = "ON"
+        enabled["digest"] = RUNNER.record_digest(enabled)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "wrong mode/schema"):
+            RUNNER.validate_build_record(enabled)
+
+        extended_historical = copy.deepcopy(historical)
+        historical_attestation = extended_historical[
+            "effective_configuration"][
+                "effective_configuration_attestation"]
+        historical_attestation["entries"][general] = "OFF"
+        historical_attestation["sha256"] = "0" * 64
+        extended_historical["digest"] = RUNNER.record_digest(
+            extended_historical)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "wrong mode/schema"):
+            RUNNER.validate_build_record(extended_historical)
 
     def test_output_root_and_subdirectory_creation_are_fail_closed(
             self) -> None:

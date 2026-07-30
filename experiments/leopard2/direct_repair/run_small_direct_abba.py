@@ -50,8 +50,10 @@ TINY_MATRIX_SCHEMA = "leopard2-small-direct-tiny-matrix/v1"
 CELL_SCHEMA = "leopard2-small-direct-cell/v3"
 ENVELOPE_SCHEMA = "leopard2-small-direct-envelope/v2"
 EXECUTION_SCHEMA = "leopard2-small-direct-immutable-execution/v2"
-BUILD_SCHEMA = "leopard2-small-direct-build/v4"
-BINARY_IDENTITY_SCHEMA = "leopard2-small-direct-binary-identity/v4"
+BUILD_SCHEMA_V4 = "leopard2-small-direct-build/v4"
+BUILD_SCHEMA = "leopard2-small-direct-build/v5"
+BINARY_IDENTITY_SCHEMA_V4 = "leopard2-small-direct-binary-identity/v4"
+BINARY_IDENTITY_SCHEMA = "leopard2-small-direct-binary-identity/v5"
 PROMOTION_SCHEMA = "leopard2-small-direct-promotion-analysis/v3"
 EXACT_LEOPARD1_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 ORDER = ("baseline", "candidate", "candidate", "baseline")
@@ -124,9 +126,43 @@ MODE_COMPILE_DEFINITIONS = {
 }
 MODE_CACHE_VALUES = {"transform": "0", "output": "1", "source": "2"}
 MODE_CACHE_VARIABLE = "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"
-REQUIRED_DISABLED_EXPERIMENTS = {
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
+    "leopard2-benchmark-build-configuration-attestation/v2")
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v3")
+BUILD_CONFIGURATION_VARIABLES_V2 = (
+    "CMAKE_BUILD_TYPE",
+    "CMAKE_GENERATOR",
+    "CMAKE_CONFIGURATION_TYPES",
+    "CMAKE_CXX_COMPILER",
+    "CMAKE_CXX_FLAGS",
+    "CMAKE_CXX_FLAGS_DEBUG",
+    "CMAKE_CXX_FLAGS_RELEASE",
+    "CMAKE_CXX_FLAGS_RELWITHDEBINFO",
+    "CMAKE_CXX_FLAGS_MINSIZEREL",
+    "ENABLE_OPENMP",
+    "LEOPARD_ENABLE_GF8",
+    "LEOPARD_ENABLE_GF16",
+    "LEO2_BACKEND_VARIANT",
+    "LEO2_BENCHMARK_GIT_EXECUTABLE",
+    "LEO2_BUILD_BENCHMARKS",
+    "LEO2_BUILD_TESTS",
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+)
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
+)
+REQUIRED_DISABLED_EXPERIMENTS_V2 = {
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+}
+REQUIRED_DISABLED_EXPERIMENTS = {
+    **REQUIRED_DISABLED_EXPERIMENTS_V2,
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
 }
 BENCHMARK_CONFIGURATION_DEFINITION = (
     "LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256")
@@ -355,11 +391,75 @@ def strip_mode_definition(arguments: list[str], mode: str,
     return result
 
 
+def build_record_contract(
+        build_schema: str) -> tuple[
+            str, tuple[str, ...], dict[str, str], str]:
+    if build_schema == BUILD_SCHEMA:
+        return (
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            BUILD_CONFIGURATION_VARIABLES,
+            REQUIRED_DISABLED_EXPERIMENTS,
+            BINARY_IDENTITY_SCHEMA,
+        )
+    if build_schema == BUILD_SCHEMA_V4:
+        return (
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+            BUILD_CONFIGURATION_VARIABLES_V2,
+            REQUIRED_DISABLED_EXPERIMENTS_V2,
+            BINARY_IDENTITY_SCHEMA_V4,
+        )
+    raise EvidenceError("small-direct build schema is unsupported")
+
+
+def build_configuration_digest(
+        entries: dict[str, str], variables: Sequence[str]) -> str:
+    require(tuple(variables) in (
+                BUILD_CONFIGURATION_VARIABLES,
+                BUILD_CONFIGURATION_VARIABLES_V2) and
+            isinstance(entries, dict) and
+            set(entries) == set(variables) and
+            all(isinstance(entries[name], str)
+                for name in variables),
+            "effective CMake configuration entries have the wrong shape")
+    material = "".join(
+        "%s=%s\n" % (name, entries[name]) for name in variables)
+    return sha256_bytes(material.encode("utf-8"))
+
+
 def require_disabled_experiments(
-        entries: dict[str, str], label: str) -> None:
+        entries: dict[str, str], label: str,
+        disabled: dict[str, str] = REQUIRED_DISABLED_EXPERIMENTS) -> None:
     require(all(entries.get(name) == value
-                for name, value in REQUIRED_DISABLED_EXPERIMENTS.items()),
+                for name, value in disabled.items()),
             "%s does not disable unrelated direct-path experiments" % label)
+
+
+def validate_effective_configuration_attestation(
+        attestation: Any, mode: str, build_schema: str,
+        label: str) -> dict[str, str]:
+    expected_schema, variables, disabled, unused_identity_schema = \
+        build_record_contract(build_schema)
+    del unused_identity_schema
+    require(isinstance(attestation, dict) and set(attestation) == {
+                "entries", "path", "schema", "sha256"} and
+            attestation.get("schema") == expected_schema and
+            isinstance(attestation.get("path"), str) and
+            bool(attestation["path"]) and
+            isinstance(attestation.get("sha256"), str) and
+            re.fullmatch(r"[0-9a-f]{64}", attestation["sha256"]) is not None,
+            "%s attestation framing is invalid" % label)
+    entries = attestation["entries"]
+    expected_mode = MODE_CACHE_VALUES.get(mode)
+    require(isinstance(entries, dict) and
+            set(entries) == set(variables) and
+            entries.get(MODE_CACHE_VARIABLE) == expected_mode,
+            "%s attestation has the wrong diagnostic mode or selector "
+            "keys differ" % label)
+    require_disabled_experiments(entries, label, disabled)
+    require(attestation["sha256"] ==
+                build_configuration_digest(entries, variables),
+            "%s attestation digest differs" % label)
+    return entries
 
 
 def require_exact_macro_argument(
@@ -706,12 +806,8 @@ def capture_current_build(
     require_disabled_experiments(cache, "CMake cache")
     attested_configuration = metadata[
         "effective_configuration_attestation"]
-    require(attested_configuration["entries"].get(MODE_CACHE_VARIABLE) ==
-            expected_mode,
-            "effective-configuration sidecar does not bind requested "
-            "small-direct mode")
-    require_disabled_experiments(
-        attested_configuration["entries"],
+    validate_effective_configuration_attestation(
+        attested_configuration, mode, BUILD_SCHEMA,
         "effective-configuration sidecar")
     validated_cache = closure["validated_cache"]
     require(validated_cache.get("LEO2_BACKEND_VARIANT") == "avx2",
@@ -824,29 +920,33 @@ def mode_bearing_archive_record(record: dict[str, Any]) -> bool:
 
 
 def normalized_effective_configuration(
-        attestation: dict[str, Any], mode: str) -> dict[str, str]:
-    require(isinstance(attestation, dict),
-            "effective CMake configuration is not an object")
-    entries = attestation.get("entries")
-    require(isinstance(entries, dict),
-            "effective CMake configuration entries are missing")
-    expected_mode = MODE_CACHE_VALUES.get(mode)
-    require(entries.get(MODE_CACHE_VARIABLE) == expected_mode,
-            "effective CMake configuration binds the wrong diagnostic mode")
-    require_disabled_experiments(entries, "effective CMake configuration")
+        attestation: dict[str, Any], mode: str,
+        build_schema: str = BUILD_SCHEMA) -> dict[str, str]:
+    entries = validate_effective_configuration_attestation(
+        attestation, mode, build_schema,
+        "effective CMake configuration")
     normalized = dict(entries)
     del normalized[MODE_CACHE_VARIABLE]
     return normalized
 
 
 def normalized_validated_cache(
-        cache: dict[str, Any], mode: str) -> dict[str, Any]:
+        cache: dict[str, Any], mode: str,
+        build_schema: str = BUILD_SCHEMA) -> dict[str, Any]:
     require(isinstance(cache, dict),
             "validated CMake semantics are not an object")
+    unused_schema, unused_variables, disabled, unused_identity_schema = \
+        build_record_contract(build_schema)
+    del unused_schema, unused_variables, unused_identity_schema
     expected_mode = MODE_CACHE_VALUES.get(mode)
     require(cache.get(MODE_CACHE_VARIABLE) == expected_mode,
             "validated CMake semantics bind the wrong diagnostic mode")
-    require_disabled_experiments(cache, "validated CMake semantics")
+    general = "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"
+    require((build_schema == BUILD_SCHEMA and general in cache) or
+            (build_schema == BUILD_SCHEMA_V4 and general not in cache),
+            "validated CMake semantics use the wrong versioned selector keys")
+    require_disabled_experiments(
+        cache, "validated CMake semantics", disabled)
     normalized = dict(cache)
     del normalized[MODE_CACHE_VARIABLE]
     return normalized
@@ -856,8 +956,11 @@ def compare_current_builds(
         baseline: dict[str, Any], candidate: dict[str, Any],
         modes: dict[str, str]) -> dict[str, Any]:
     require(baseline["mode"] == modes["baseline"] and
-            candidate["mode"] == modes["candidate"],
+            candidate["mode"] == modes["candidate"] and
+            baseline.get("schema") == candidate.get("schema") and
+            baseline.get("schema") in (BUILD_SCHEMA_V4, BUILD_SCHEMA),
             "build records use wrong comparison modes")
+    build_schema = baseline["schema"]
     for key in ("attestation_module", "attestation_generator",
                 "provenance_module", "configuration_reader"):
         require(baseline[key]["sha256"] == candidate[key]["sha256"] and
@@ -868,9 +971,9 @@ def compare_current_builds(
     candidate_attestation = candidate["effective_configuration"][
         "effective_configuration_attestation"]
     baseline_normalized = normalized_effective_configuration(
-        baseline_attestation, modes["baseline"])
+        baseline_attestation, modes["baseline"], build_schema)
     candidate_normalized = normalized_effective_configuration(
-        candidate_attestation, modes["candidate"])
+        candidate_attestation, modes["candidate"], build_schema)
     require(baseline_normalized == candidate_normalized,
             "effective CMake configurations differ beyond diagnostic mode")
     require(baseline_attestation["sha256"] !=
@@ -930,9 +1033,11 @@ def compare_current_builds(
     left_closure = baseline["closure"]
     right_closure = candidate["closure"]
     require(normalized_validated_cache(
-                left_closure["validated_cache"], modes["baseline"]) ==
+                left_closure["validated_cache"], modes["baseline"],
+                build_schema) ==
             normalized_validated_cache(
-                right_closure["validated_cache"], modes["candidate"]),
+                right_closure["validated_cache"], modes["candidate"],
+                build_schema),
             "validated CMake semantics differ beyond diagnostic mode")
     require(left_closure["compiler"]["sha256"] ==
                 right_closure["compiler"]["sha256"] and
@@ -4256,7 +4361,8 @@ def validate_binary_identity_structure(value: Any) -> None:
         "process_containment_source", "pair_lease_source", "source",
         "baseline", "candidate", "build_comparison", "digest",
     }, "binary identity")
-    require(value["schema"] == BINARY_IDENTITY_SCHEMA,
+    require(value["schema"] in (
+                BINARY_IDENTITY_SCHEMA_V4, BINARY_IDENTITY_SCHEMA),
             "binary identity has the wrong schema")
     copy = dict(value)
     digest = copy.pop("digest")
@@ -4268,6 +4374,9 @@ def validate_binary_identity_structure(value: Any) -> None:
             set(modes) == {"baseline", "candidate"},
             "binary identity comparison modes are invalid")
     comparison_modes(modes["baseline"], modes["candidate"])
+    expected_build_schema = (
+        BUILD_SCHEMA if value["schema"] == BINARY_IDENTITY_SCHEMA
+        else BUILD_SCHEMA_V4)
     validate_file_identity_record(value["runner"], "runner")
     validate_file_identity_record(
         value["process_containment_source"],
@@ -4312,7 +4421,7 @@ def validate_binary_identity_structure(value: Any) -> None:
             "attestation_generator", "provenance_module",
             "configuration_reader", "digest",
         }, "%s build identity" % label)
-        require(build["schema"] == BUILD_SCHEMA and
+        require(build["schema"] == expected_build_schema and
                 build["mode"] == modes[label] and
                 build["cache_mode"] == MODE_CACHE_VALUES[modes[label]],
                 "%s build mode identity is invalid" % label)
@@ -4325,6 +4434,11 @@ def validate_binary_identity_structure(value: Any) -> None:
                     "leopard2-production-build-closure/v1" and
                 isinstance(build["effective_configuration"], dict),
                 "%s current provenance structure is invalid" % label)
+        validate_effective_configuration_attestation(
+            build["effective_configuration"].get(
+                "effective_configuration_attestation"),
+            build["mode"], expected_build_schema,
+            "%s retained effective configuration" % label)
         validate_reproducible_build_proof(
             build["reproducible_build"], build["closure"], label)
         for key in ("attestation_module", "attestation_generator",

@@ -2046,6 +2046,7 @@ static const Ops SSSE3Ops = {
     // radix-four staging schedule and publishes no radix-eight round.
     , NULL
     , NULL
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

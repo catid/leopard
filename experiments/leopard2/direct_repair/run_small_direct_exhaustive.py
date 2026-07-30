@@ -37,8 +37,15 @@ from typing import Any, Iterable, Mapping, Sequence
 
 SCHEMA = "leopard2-small-direct-exhaustive-campaign/v3"
 SHARD_SCHEMA = "leopard2-small-direct-exhaustive/v1"
-BUILD_SCHEMA = "leopard2-small-direct-exhaustive-build/v1"
+BUILD_SCHEMA_V1 = "leopard2-small-direct-exhaustive-build/v1"
+BUILD_SCHEMA = "leopard2-small-direct-exhaustive-build/v2"
 BUNDLE_SCHEMA = "leopard2-small-direct-exhaustive-bundle/v1"
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
+    "leopard2-benchmark-build-configuration-attestation/v2")
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v3")
+CLEAN_REBUILD_SCHEMA_V1 = "leopard2-small-direct-clean-rebuild/v1"
+CLEAN_REBUILD_SCHEMA = "leopard2-small-direct-clean-rebuild/v2"
 EXPECTED_PATTERNS = 1_982_812
 DEFAULT_LOCK = Path("/tmp/leopard-gf8-authoritative.lock")
 CANONICAL_GIT = Path("/usr/bin/git")
@@ -58,15 +65,19 @@ FNV_PRIME = 1_099_511_628_211
 U64_MASK = (1 << 64) - 1
 MODE_CACHE_VARIABLE = "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"
 PROCESS_SUPPORT_RELATIVE = "experiments/leopard2/main_compare/run_abba.py"
-FORBIDDEN_EXPERIMENT_MACROS = (
+FORBIDDEN_EXPERIMENT_MACROS_V2 = (
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+)
+FORBIDDEN_EXPERIMENT_MACROS = (
+    *FORBIDDEN_EXPERIMENT_MACROS_V2,
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
 )
 MODE_DEFINITIONS = {
     1: "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1",
     2: "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2",
 }
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V2 = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_GENERATOR",
     "CMAKE_CONFIGURATION_TYPES",
@@ -87,7 +98,12 @@ BUILD_CONFIGURATION_VARIABLES = (
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
-CONTROLLED_CONFIGURATION_KEYS = (
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
+)
+CONTROLLED_CONFIGURATION_KEYS_V1 = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_AR",
     "CMAKE_COMMAND",
@@ -117,6 +133,11 @@ CONTROLLED_CONFIGURATION_KEYS = (
     "LEO2_FLAG_MAVX512F",
     "LEO2_FLAG_MAVX512BW",
     "LEO2_FLAG_MAVX512VL",
+)
+CONTROLLED_CONFIGURATION_KEYS = (
+    *CONTROLLED_CONFIGURATION_KEYS_V1[:-6],
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    *CONTROLLED_CONFIGURATION_KEYS_V1[-6:],
 )
 TARGET_NAME = "leopard2_small_direct_exhaustive_test"
 BENCHMARK_NAME = "bench_leopard2"
@@ -854,15 +875,47 @@ def require_compile_source_match(
             "compile argv source differs from entry file")
 
 
-def build_configuration_digest(entries: Mapping[str, Any]) -> str:
+def build_record_contract(
+        build_schema: str) -> tuple[
+            str, tuple[str, ...], tuple[str, ...], tuple[str, ...], str]:
+    if build_schema == BUILD_SCHEMA:
+        return (
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            BUILD_CONFIGURATION_VARIABLES,
+            FORBIDDEN_EXPERIMENT_MACROS,
+            CONTROLLED_CONFIGURATION_KEYS,
+            CLEAN_REBUILD_SCHEMA,
+        )
+    if build_schema == BUILD_SCHEMA_V1:
+        return (
+            BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+            BUILD_CONFIGURATION_VARIABLES_V2,
+            FORBIDDEN_EXPERIMENT_MACROS_V2,
+            CONTROLLED_CONFIGURATION_KEYS_V1,
+            CLEAN_REBUILD_SCHEMA_V1,
+        )
+    raise EvidenceError("retained exhaustive build schema is unsupported")
+
+
+def build_configuration_digest(
+        entries: Mapping[str, Any],
+        attestation_schema: str = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
+) -> str:
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA:
+        variables = BUILD_CONFIGURATION_VARIABLES
+    elif attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2:
+        variables = BUILD_CONFIGURATION_VARIABLES_V2
+    else:
+        raise EvidenceError(
+            "effective configuration attestation schema is unsupported")
     require(isinstance(entries, dict) and
-            set(entries) == set(BUILD_CONFIGURATION_VARIABLES) and
+            set(entries) == set(variables) and
             all(isinstance(entries[name], str)
-                for name in BUILD_CONFIGURATION_VARIABLES),
+                for name in variables),
             "effective configuration entries have the wrong shape")
     material = "".join(
         "%s=%s\n" % (name, entries[name])
-        for name in BUILD_CONFIGURATION_VARIABLES
+        for name in variables
     )
     return sha256_bytes(material.encode("utf-8"))
 
@@ -966,9 +1019,10 @@ def capture_build_closure(binary: Path) -> dict[str, Any]:
             "exhaustive target requires CMake small-direct mode 1 or 2")
     mode = int(mode_text)
     require(cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN") == "OFF" and
-            cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE") == "OFF",
-            "canonical small-direct evidence requires source-plan and "
-            "high-direct experiments OFF")
+            cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE") == "OFF" and
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
+            "canonical small-direct evidence requires source-plan, "
+            "high-direct, and generalized one-loss experiments OFF")
     controlled_configuration = {
         name: cache.get(name) for name in CONTROLLED_CONFIGURATION_KEYS
     }
@@ -976,8 +1030,18 @@ def capture_build_closure(binary: Path) -> dict[str, Any]:
                 for item in controlled_configuration.values()),
             "canonical small-direct build omits a controlled cache entry")
     attested = metadata["effective_configuration_attestation"]
-    require(attested["entries"].get(MODE_CACHE_VARIABLE) == mode_text,
-            "effective configuration binds another small-direct mode")
+    require(
+        isinstance(attested, dict) and
+        attested.get("schema") == BUILD_CONFIGURATION_ATTESTATION_SCHEMA and
+        isinstance(attested.get("entries"), dict) and
+        attested["entries"].get(MODE_CACHE_VARIABLE) == mode_text and
+        all(attested["entries"].get(name) == "OFF"
+            for name in FORBIDDEN_EXPERIMENT_MACROS) and
+        attested.get("sha256") ==
+            build_configuration_digest(
+                attested["entries"], BUILD_CONFIGURATION_ATTESTATION_SCHEMA),
+        "current effective configuration has the wrong schema, selectors, "
+        "or digest")
 
     commands_identity, commands_bytes = provenance.file_snapshot(
         build / "compile_commands.json",
@@ -1240,8 +1304,12 @@ def run_checked(
 
 
 def controlled_configure_profile(
-        controlled: Mapping[str, str], mode: int) -> list[str]:
-    return [
+        controlled: Mapping[str, str], mode: int,
+        build_schema: str = BUILD_SCHEMA) -> list[str]:
+    unused_attestation, unused_variables, disabled_experiments, \
+        unused_controlled, unused_rebuild = build_record_contract(build_schema)
+    del unused_attestation, unused_variables, unused_controlled, unused_rebuild
+    profile = [
         "-G", "Unix Makefiles",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
@@ -1262,6 +1330,11 @@ def controlled_configure_profile(
         "-DLEO2_FLAG_MAVX512BW=FALSE",
         "-DLEO2_FLAG_MAVX512VL=FALSE",
     ]
+    if "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" in disabled_experiments:
+        profile.insert(
+            profile.index("-D%s=%d" % (MODE_CACHE_VARIABLE, mode)),
+            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF")
+    return profile
 
 
 def controlled_configure_environment(
@@ -1325,7 +1398,7 @@ def clean_rebuild_proof(
                 "clean exhaustive rebuild did not reproduce the "
                 "archive/objects/link/executable bytes and semantics")
     result = {
-        "schema": "leopard2-small-direct-clean-rebuild/v1",
+        "schema": CLEAN_REBUILD_SCHEMA,
         "mode": candidate["mode"],
         "tools": tools,
         "configure_profile": configure_profile,
@@ -1364,7 +1437,7 @@ def validate_build_record(value: Any) -> None:
         "configuration_reader", "reproducible_rebuild", "digest",
     }
     require(isinstance(value, dict) and set(value) == build_keys and
-            value.get("schema") == BUILD_SCHEMA and
+            value.get("schema") in (BUILD_SCHEMA_V1, BUILD_SCHEMA) and
             type(value.get("mode")) is int and
             value["mode"] in (1, 2) and
             value.get("digest") == record_digest(value) and
@@ -1410,6 +1483,10 @@ def validate_build_record(value: Any) -> None:
                 "%s identity is invalid" % label)
         return identity
 
+    build_schema = value["schema"]
+    (attestation_schema, configuration_variables, disabled_experiments,
+     controlled_keys, clean_rebuild_schema) = \
+        build_record_contract(build_schema)
     mode = value["mode"]
     source = value["source"]
     controlled = value["controlled_configuration"]
@@ -1429,10 +1506,13 @@ def validate_build_record(value: Any) -> None:
         "LEO2_ENABLE_CUDA": "OFF",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        **({
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+        } if build_schema == BUILD_SCHEMA else {}),
         MODE_CACHE_VARIABLE: str(mode),
     }
     require(isinstance(controlled, dict) and
-            set(controlled) == set(CONTROLLED_CONFIGURATION_KEYS) and
+            set(controlled) == set(controlled_keys) and
             all(isinstance(item, str) for item in controlled.values()) and
             all(controlled[name] == expected
                 for name, expected in fixed_configuration.items()) and
@@ -1501,6 +1581,17 @@ def validate_build_record(value: Any) -> None:
         validate_minimal_identity(value[field], label)
 
     production = value["production_closure"]
+    production_cache = production.get("validated_cache")
+    general = "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"
+    require(isinstance(production_cache, dict) and
+            production_cache.get(MODE_CACHE_VARIABLE) == str(mode) and
+            all(production_cache.get(name) == "OFF"
+                for name in disabled_experiments) and
+            ((build_schema == BUILD_SCHEMA and
+              production_cache.get(general) == "OFF") or
+             (build_schema == BUILD_SCHEMA_V1 and
+              general not in production_cache)),
+            "retained production cache has the wrong versioned selectors")
     records = production.get("source_object_compile_closure")
     require(isinstance(records, list) and records,
             "retained production compile closure is empty")
@@ -1632,18 +1723,24 @@ def validate_build_record(value: Any) -> None:
     require(isinstance(attestation, dict) and set(attestation) == {
                 "schema", "entries", "path", "sha256",
             } and attestation.get("schema") ==
-                "leopard2-benchmark-build-configuration-attestation/v2" and
+                attestation_schema and
             isinstance(attestation.get("entries"), dict) and
-            all(isinstance(key, str) and isinstance(item, str)
-                for key, item in attestation["entries"].items()) and
+            set(attestation["entries"]) == set(configuration_variables) and
+            all(isinstance(attestation["entries"][name], str)
+                for name in configuration_variables) and
             attestation["entries"].get(MODE_CACHE_VARIABLE) == str(mode) and
             all(attestation["entries"].get(name) == "OFF"
-                for name in FORBIDDEN_EXPERIMENT_MACROS) and
+                for name in disabled_experiments) and
             attestation.get("sha256") ==
-                build_configuration_digest(attestation["entries"]) and
+                build_configuration_digest(
+                    attestation["entries"], attestation_schema) and
             metadata["entries"].get(MODE_CACHE_VARIABLE) == str(mode) and
             all(metadata["entries"].get(name) == "OFF"
-                for name in FORBIDDEN_EXPERIMENT_MACROS) and
+                for name in disabled_experiments) and
+            ((build_schema == BUILD_SCHEMA and
+              metadata["entries"].get(general) == "OFF") or
+             (build_schema == BUILD_SCHEMA_V1 and
+              general not in metadata["entries"])) and
             valid_path(attestation.get("path")) and
             valid_sha256(attestation.get("sha256")) and
             attestation["path"] == value["configuration_sidecar"]["path"] and
@@ -1656,12 +1753,12 @@ def validate_build_record(value: Any) -> None:
                 "configure_environment",
                 "candidate_material", "rebuilt_material", "digest",
             } and
-            proof["schema"] ==
-                "leopard2-small-direct-clean-rebuild/v1" and
+            proof["schema"] == clean_rebuild_schema and
             type(proof["mode"]) is int and proof["mode"] == mode and
             proof["digest"] == record_digest(proof) and
             proof["configure_profile"] ==
-                controlled_configure_profile(controlled, mode) and
+                controlled_configure_profile(
+                    controlled, mode, build_schema) and
             proof["configure_environment"] ==
                 controlled_configure_environment(controlled) and
             isinstance(proof["tools"], dict) and

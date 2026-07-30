@@ -57,8 +57,8 @@ import unicodedata
 from pathlib import Path
 
 
-SCHEMA = "leopard2-direct-encode-crossover/v6"
-JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v6"
+SCHEMA = "leopard2-direct-encode-crossover/v7"
+JOB_SCHEMA = "leopard2-direct-encode-crossover-job/v7"
 ANALYSIS_SCHEMA = "leopard2-direct-encode-crossover-analysis/v4"
 BENCHMARK_SCHEMA = "leopard2-direct-encode-benchmark-v2"
 KNOWN_BACKENDS = ("scalar", "ssse3", "avx2", "avx512")
@@ -80,18 +80,24 @@ TASKSET_EXECUTABLE_DESCRIPTOR = 196
 CONTROLLED_CMAKE_DESCRIPTOR = 195
 CONTROLLED_NINJA_DESCRIPTOR = 194
 CANONICAL_GIT = Path("/usr/bin/git")
-CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v6"
-BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v7"
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration-attestation/v2"
 )
-BUILD_CONFIGURATION_FILE_SCHEMA = (
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v3"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration/v2"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = (
+    "leopard2-benchmark-build-configuration/v3"
 )
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V2 = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_GENERATOR",
     "CMAKE_CONFIGURATION_TYPES",
@@ -112,11 +118,26 @@ BUILD_CONFIGURATION_VARIABLES = (
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
+)
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2 = {
+    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2,
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+}
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -130,6 +151,7 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
         frozenset(("INTERNAL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
 }
 BENCHMARK_ENVIRONMENT = {
@@ -2936,16 +2958,45 @@ def find_executable(root, backend):
     )
 
 
-def build_configuration_digest(entries):
+def build_configuration_contract(attestation_schema):
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA,
+            BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS,
+        )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V2,
+            BUILD_CONFIGURATION_VARIABLES_V2,
+            tuple(
+                variable
+                for variable in BUILD_CONFIGURATION_EXPERIMENT_SELECTORS
+                if variable in BUILD_CONFIGURATION_VARIABLES_V2
+            ),
+        )
+    raise CrossoverError(
+        "benchmark effective-configuration attestation schema is invalid"
+    )
+
+
+def build_configuration_digest(
+        entries, variables=BUILD_CONFIGURATION_VARIABLES):
     if not isinstance(entries, dict):
         raise CrossoverError(
             "effective CMake configuration is not an object"
         )
-    if set(entries) != set(BUILD_CONFIGURATION_VARIABLES):
+    if tuple(variables) not in (
+            BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V2):
+        raise CrossoverError(
+            "effective CMake configuration contract is invalid"
+        )
+    if set(entries) != set(variables):
         raise CrossoverError(
             "effective CMake configuration has unexpected variables"
         )
-    for variable in BUILD_CONFIGURATION_VARIABLES:
+    for variable in variables:
         attested_text(
             entries[variable],
             "effective CMake configuration value {}".format(variable)
@@ -2958,7 +3009,7 @@ def build_configuration_digest(entries):
         )
     material = "".join(
         "{}={}\n".format(variable, entries[variable])
-        for variable in BUILD_CONFIGURATION_VARIABLES
+        for variable in variables
     )
     return digest_bytes(material.encode("utf-8"))
 
@@ -2984,20 +3035,35 @@ def read_build_configuration_attestation(path):
         raise CrossoverError(
             "effective CMake configuration is not newline-terminated"
         )
-    # The v2 framing delimiter is exactly LF.  Values are subsequently passed
+    # The framing delimiter is exactly LF.  Values are subsequently passed
     # through attested_text(), which also rejects Unicode line/paragraph
     # separators and invisible/control format categories.
     lines = text[:-1].split("\n")
-    expected_count = 2 + len(BUILD_CONFIGURATION_VARIABLES)
+    if not lines:
+        raise CrossoverError(
+            "effective CMake configuration has an invalid schema"
+        )
+    schema_prefix = "schema="
+    file_schema = (
+        lines[0][len(schema_prefix):]
+        if lines[0].startswith(schema_prefix) else ""
+    )
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
+        variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V2:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2
+        variables = BUILD_CONFIGURATION_VARIABLES_V2
+    else:
+        raise CrossoverError(
+            "effective CMake configuration has an invalid schema"
+        )
+    expected_count = 2 + len(variables)
     if len(lines) != expected_count:
         raise CrossoverError(
             "effective CMake configuration has {} lines, expected {}".format(
                 len(lines), expected_count
             )
-        )
-    if lines[0] != "schema={}".format(BUILD_CONFIGURATION_FILE_SCHEMA):
-        raise CrossoverError(
-            "effective CMake configuration has an invalid schema"
         )
     if not lines[1].startswith("sha256="):
         raise CrossoverError(
@@ -3006,7 +3072,7 @@ def read_build_configuration_attestation(path):
     declared_digest = lines[1][len("sha256="):]
     entries = {}
     for variable, line in zip(
-            BUILD_CONFIGURATION_VARIABLES, lines[2:]):
+            variables, lines[2:]):
         prefix = "{}=".format(variable)
         if not line.startswith(prefix):
             raise CrossoverError(
@@ -3015,7 +3081,7 @@ def read_build_configuration_attestation(path):
                 )
             )
         entries[variable] = line[len(prefix):]
-    actual_digest = build_configuration_digest(entries)
+    actual_digest = build_configuration_digest(entries, variables)
     if (not re.fullmatch(r"[0-9a-f]{64}", declared_digest) or
             declared_digest != actual_digest):
         raise CrossoverError(
@@ -3026,12 +3092,14 @@ def read_build_configuration_attestation(path):
         "path": str(checked_resolve(
             configuration_path, "effective CMake configuration path"
         )),
-        "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+        "schema": attestation_schema,
         "sha256": actual_digest,
     }
 
 
-def validate_build_configuration_attestation(value, expected_path=None):
+def validate_build_configuration_attestation(
+        value, expected_path=None,
+        expected_schema=BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
     expected_keys = {"entries", "path", "schema", "sha256"}
     if not isinstance(value, dict) or set(value) != expected_keys:
         raise CrossoverError(
@@ -3043,17 +3111,32 @@ def validate_build_configuration_attestation(value, expected_path=None):
         )
     try:
         attested_text(value.get("schema"), "attestation schema")
+        if value.get("schema") != expected_schema:
+            raise CrossoverError(
+                "benchmark effective-configuration attestation schema "
+                "does not match its enclosing contract"
+            )
         attested_path = checked_absolute_path(
             value.get("path"), "attestation path"
         )
         attested_text(value.get("sha256"), "attestation digest")
+        file_schema, variables, selectors = \
+            build_configuration_contract(value.get("schema"))
+        del file_schema
+        canonical_selectors = (
+            BUILD_CONFIGURATION_CANONICAL_SELECTORS
+            if value.get("schema") ==
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA
+            else BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2
+        )
         valid = (
-            value.get("schema") ==
-                BUILD_CONFIGURATION_ATTESTATION_SCHEMA and
             re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
             value["sha256"] == build_configuration_digest(
-                value.get("entries")
-            )
+                value.get("entries"), variables
+            ) and
+            set(canonical_selectors) == set(selectors) and
+            all(value["entries"].get(name) == expected
+                for name, expected in canonical_selectors.items())
         )
     except CrossoverError:
         raise
@@ -3145,6 +3228,7 @@ def cmake_build_metadata(executable):
         "LEO2_BUILD_FUZZERS", "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
     )
     entries = parse_selected_cmake_cache(
@@ -3157,15 +3241,24 @@ def cmake_build_metadata(executable):
     build_configuration_attestation = (
         read_build_configuration_attestation(build_configuration_path)
     )
+    validate_build_configuration_attestation(
+        build_configuration_attestation,
+        build_configuration_path,
+        BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+    )
+    (build_configuration_file_schema, unused_variables,
+     build_configuration_selectors) = build_configuration_contract(
+        build_configuration_attestation["schema"])
+    del unused_variables
     if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
-            BUILD_CONFIGURATION_FILE_SCHEMA or
+            build_configuration_file_schema or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
             ) != build_configuration_attestation["sha256"] or
             any(entries.get(variable) !=
                 build_configuration_attestation["entries"].get(variable)
                 for variable in
-                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
+                build_configuration_selectors)):
         raise CrossoverError(
             "effective CMake configuration differs from its cache binding"
         )
@@ -3327,15 +3420,19 @@ def validate_build_source_binding(
         configuration_attestation,
         build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
     )
+    (configuration_file_schema, unused_variables,
+     configuration_selectors) = build_configuration_contract(
+        configuration_attestation["schema"])
+    del unused_variables
     configuration_entries = configuration_attestation["entries"]
     if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
-            BUILD_CONFIGURATION_FILE_SCHEMA or
+            configuration_file_schema or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
             ) != configuration_sha256 or
             any(entries.get(variable) != configuration_entries.get(variable)
                 for variable in
-                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
+                configuration_selectors)):
         raise CrossoverError(
             "effective CMake configuration differs from its cache binding"
         )
@@ -6384,6 +6481,7 @@ def controlled_avx2_configure_argv(cmake, ninja, source, build_root):
         "-DLEO2_ENABLE_CUDA=OFF",
         "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
         "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
+        "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF",
         "-DLEOPARD_ENABLE_GF8=ON",
         "-DLEOPARD_ENABLE_GF16=ON",
     ]
@@ -6867,15 +6965,19 @@ def validate_raw(raw, job, timed_mode, settings):
             build_root_path / BUILD_CONFIGURATION_RELATIVE_PATH
         )
     )
+    (configuration_file_schema, unused_variables,
+     configuration_selectors) = build_configuration_contract(
+        configuration_attestation["schema"])
+    del unused_variables
     if (entries.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") !=
-            BUILD_CONFIGURATION_FILE_SCHEMA or
+            configuration_file_schema or
             entries.get(
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
             ) != attested_configuration_sha256 or
             any(entries.get(variable) !=
                 configuration_attestation["entries"].get(variable)
                 for variable in
-                BUILD_CONFIGURATION_EXPERIMENT_SELECTORS)):
+                configuration_selectors)):
         raise CrossoverError(
             "job effective CMake configuration differs from its cache binding"
         )
@@ -9434,6 +9536,7 @@ def self_test():
         "LEO2_BUILD_TESTS": "ON",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
     self_test_digest = build_configuration_digest(
@@ -9498,6 +9601,87 @@ def self_test():
             len(set(mode_digests.values())) == 3,
             "small-direct mode sidecars have distinct digests"
         )
+        historical_entries = {
+            variable: self_test_effective_entries[variable]
+            for variable in BUILD_CONFIGURATION_VARIABLES_V2
+        }
+        historical_digest = build_configuration_digest(
+            historical_entries, BUILD_CONFIGURATION_VARIABLES_V2)
+        historical_material = "".join(
+            "{}={}\n".format(variable, historical_entries[variable])
+            for variable in BUILD_CONFIGURATION_VARIABLES_V2)
+        configuration_path.write_text(
+            "schema={}\nsha256={}\n{}".format(
+                BUILD_CONFIGURATION_FILE_SCHEMA_V2,
+                historical_digest,
+                historical_material),
+            encoding="utf-8")
+        historical_attestation = read_build_configuration_attestation(
+            configuration_path)
+        check(
+            historical_attestation == {
+                "entries": historical_entries,
+                "path": str(configuration_path.resolve()),
+                "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+                "sha256": historical_digest,
+            },
+            "historical v2 sidecar retains its exact selector set")
+        try:
+            validate_build_configuration_attestation(
+                historical_attestation, configuration_path)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: current evidence accepted a historical "
+                "v2 effective-configuration attestation")
+        check(
+            validate_build_configuration_attestation(
+                historical_attestation,
+                configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+            ) == historical_digest,
+            "historical v2 attestation requires an explicit old contract")
+        current_enabled = {
+            "entries": dict(self_test_effective_entries),
+            "path": str(configuration_path.resolve()),
+            "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            "sha256": "",
+        }
+        current_enabled["entries"][
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "ON"
+        current_enabled["sha256"] = build_configuration_digest(
+            current_enabled["entries"])
+        try:
+            validate_build_configuration_attestation(
+                current_enabled, configuration_path)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: current effective configuration accepted "
+                "GENERAL_ONE_LOSS_DIRECT=ON")
+        historical_enabled = {
+            "entries": dict(historical_entries),
+            "path": str(configuration_path.resolve()),
+            "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+            "sha256": "",
+        }
+        historical_enabled["entries"][
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"] = "ON"
+        historical_enabled["sha256"] = build_configuration_digest(
+            historical_enabled["entries"],
+            BUILD_CONFIGURATION_VARIABLES_V2)
+        try:
+            validate_build_configuration_attestation(
+                historical_enabled, configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: historical effective configuration "
+                "accepted HIGH_DIRECT_ENCODE=ON")
         separator_entries = dict(self_test_effective_entries)
         separator_entries["CMAKE_CXX_FLAGS"] += "\u2028preserved"
         try:
@@ -9563,6 +9747,12 @@ def self_test():
             "missing small-direct mode",
             valid_configuration.replace(
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n", "", 1
+            )
+        )
+        reject_configuration_file(
+            "missing current general one-loss selector",
+            valid_configuration.replace(
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\n", "", 1
             )
         )
         reject_configuration_file(
@@ -9670,12 +9860,16 @@ def self_test():
         "CMAKE_CXX_COMPILER",
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
     )
     valid_cache = (
         "CMAKE_BUILD_TYPE:STRING=Release\n"
         "CMAKE_CXX_COMPILER:STRING=/usr/bin/clang++-18\n"
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL=OFF\n"
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL=OFF\n"
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=OFF\n"
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING=0\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL={}\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256:INTERNAL={}\n"
@@ -9687,6 +9881,8 @@ def self_test():
         parsed_cache["CMAKE_BUILD_TYPE"] == "Release" and
         parsed_cache["CMAKE_CXX_COMPILER"] == "/usr/bin/clang++-18" and
         parsed_cache["LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"] == "OFF" and
+        parsed_cache["LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"] == "OFF" and
+        parsed_cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] == "OFF" and
         parsed_cache["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] == "0" and
         parsed_cache[
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
@@ -9823,6 +10019,7 @@ def self_test():
                 "LEO2_BUILD_TESTS": "ON",
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
                 "CMAKE_HOME_DIRECTORY": "/self-test/source",
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
@@ -10036,6 +10233,12 @@ def self_test():
         "high-direct-encode cache mismatch",
         lambda value: value["build_metadata"]["entries"].update({
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "ON"
+        })
+    )
+    reject_job_mutation(
+        "general-one-loss-direct cache mismatch",
+        lambda value: value["build_metadata"]["entries"].update({
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON"
         })
     )
     reject_job_mutation(

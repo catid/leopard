@@ -62,7 +62,8 @@ RAW_SCHEMA_V4 = "leopard2-main-compare-raw/v4"
 RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
-RAW_SCHEMA = "leopard2-main-compare-raw/v8"
+RAW_SCHEMA_V8 = "leopard2-main-compare-raw/v8"
+RAW_SCHEMA = "leopard2-main-compare-raw/v9"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
@@ -72,14 +73,18 @@ MANIFEST_SCHEMA_V4 = "leopard2-main-compare-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
 MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
 MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v8"
+MANIFEST_SCHEMA_V8 = "leopard2-main-compare-manifest/v8"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v9"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
 FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
 FAILURE_SCHEMA_V5 = "leopard2-main-compare-failure/v5"
 FAILURE_SCHEMA_V6 = "leopard2-main-compare-failure/v6"
 FAILURE_SCHEMA_V7 = "leopard2-main-compare-failure/v7"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v8"
+FAILURE_SCHEMA_V8 = "leopard2-main-compare-failure/v8"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v9"
+FAILURE_EVIDENCE_CONTRACT = \
+    "leopard2-main-compare-failure-evidence-contract/v9"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
@@ -132,6 +137,7 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V5: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V6: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V7: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V8: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -148,6 +154,7 @@ HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V5,
     RAW_SCHEMA_V6,
     RAW_SCHEMA_V7,
+    RAW_SCHEMA_V8,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
@@ -159,6 +166,7 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V5: RAW_SCHEMA_V5,
     MANIFEST_SCHEMA_V6: RAW_SCHEMA_V6,
     MANIFEST_SCHEMA_V7: RAW_SCHEMA_V7,
+    MANIFEST_SCHEMA_V8: RAW_SCHEMA_V8,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
@@ -168,25 +176,29 @@ FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V5: RAW_SCHEMA_V5,
     FAILURE_SCHEMA_V6: RAW_SCHEMA_V6,
     FAILURE_SCHEMA_V7: RAW_SCHEMA_V7,
+    FAILURE_SCHEMA_V8: RAW_SCHEMA_V8,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
 CANDIDATE_MODE_SCHEMAS = frozenset((
-    RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
+    RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7,
+    RAW_SCHEMA_V8, RAW_SCHEMA,
 ))
 WORKSPACE_SELECTOR_SCHEMAS = frozenset((
     RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6,
-    RAW_SCHEMA_V7, RAW_SCHEMA,
+    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA,
 ))
 ISOLATION_SCHEMAS = frozenset((
     RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5,
-    RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
+    RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA,
 ))
 COMPLETE_EVIDENCE_SCHEMAS = frozenset((
-    RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA,
+    RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA,
 ))
 SUPERVISION_SCHEMAS = COMPLETE_EVIDENCE_SCHEMAS
-BUILD_CLOSURE_V7_SCHEMAS = frozenset((RAW_SCHEMA_V7, RAW_SCHEMA))
-SEALED_EXECUTABLE_SCHEMAS = frozenset((RAW_SCHEMA,))
+BUILD_CLOSURE_V7_SCHEMAS = frozenset((
+    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA,
+))
+SEALED_EXECUTABLE_SCHEMAS = frozenset((RAW_SCHEMA_V8, RAW_SCHEMA))
 INPUT_SPECIFICATION_KEYS = frozenset((
     "runner", "taskset", "ldd", "baseline_executable",
     "candidate_executable", "baseline_archive", "candidate_archive",
@@ -300,17 +312,22 @@ BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = len(CANDIDATE_CONFIGURED_SOURCES)
 COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
 COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v4"
+COMPILE_COMMANDS_SCHEMA_V4 = "leopard2-main-compare-compile-commands/v4"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v5"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v2"
-BUILD_CONFIGURATION_RECORD_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA_V2 = \
     "leopard2-main-compare-build-configuration/v2"
-BUILD_CONFIGURATION_FILE_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v3"
+BUILD_CONFIGURATION_FILE_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v3"
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -320,7 +337,7 @@ BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH = \
 EVIDENCE_HELPER_RELATIVE_PATH = \
     "experiments/leopard2/decoder_dispatch/balanced_evidence_common.py"
 CANONICAL_NINJA_PATH = "/usr/bin/ninja"
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V2 = (
     "CMAKE_BUILD_TYPE",
     "CMAKE_GENERATOR",
     "CMAKE_CONFIGURATION_TYPES",
@@ -340,6 +357,11 @@ BUILD_CONFIGURATION_VARIABLES = (
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+)
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
 )
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
@@ -379,6 +401,7 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_BUILD_TESTS": frozenset(("BOOL",)),
     "LEO2_ENABLE_CUDA": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
 }
@@ -2867,15 +2890,41 @@ def compile_commands_schema_for_raw_schema(raw_schema: str) -> str:
         return COMPILE_COMMANDS_SCHEMA_V2
     if raw_schema == RAW_SCHEMA_V6:
         return COMPILE_COMMANDS_SCHEMA_V3
+    if raw_schema in (RAW_SCHEMA_V7, RAW_SCHEMA_V8):
+        return COMPILE_COMMANDS_SCHEMA_V4
     return COMPILE_COMMANDS_SCHEMA
 
 
-def build_configuration_material(entries: Mapping[str, str]) -> bytes:
+def build_configuration_contract_for_raw_schema(
+    raw_schema: str,
+) -> tuple[str, str, tuple[str, ...]]:
+    require(raw_schema in BUILD_CLOSURE_V7_SCHEMAS,
+            "build configuration uses an unsupported evidence schema")
+    if raw_schema in (RAW_SCHEMA_V7, RAW_SCHEMA_V8):
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V2,
+            BUILD_CONFIGURATION_FILE_SCHEMA_V2,
+            BUILD_CONFIGURATION_VARIABLES_V2,
+        )
+    return (
+        BUILD_CONFIGURATION_RECORD_SCHEMA,
+        BUILD_CONFIGURATION_FILE_SCHEMA,
+        BUILD_CONFIGURATION_VARIABLES,
+    )
+
+
+def build_configuration_material(
+    entries: Mapping[str, str],
+    variables: Sequence[str] = BUILD_CONFIGURATION_VARIABLES,
+) -> bytes:
     require(isinstance(entries, Mapping) and
-            set(entries) == set(BUILD_CONFIGURATION_VARIABLES),
+            tuple(variables) in (
+                BUILD_CONFIGURATION_VARIABLES,
+                BUILD_CONFIGURATION_VARIABLES_V2) and
+            set(entries) == set(variables),
             "benchmark effective-configuration variables differ")
     lines: list[str] = []
-    for variable in BUILD_CONFIGURATION_VARIABLES:
+    for variable in variables:
         value = entries.get(variable)
         require(isinstance(value, str) and
                 not any(character in value for character in ("\0", "\r", "\n")),
@@ -2888,7 +2937,12 @@ def build_configuration_material(entries: Mapping[str, str]) -> bytes:
             "benchmark effective-configuration is not strict UTF-8") from error
 
 
-def parse_build_configuration_bytes(retained: bytes) -> dict[str, Any]:
+def parse_build_configuration_bytes(
+    retained: bytes, raw_schema: str = RAW_SCHEMA,
+) -> dict[str, Any]:
+    unused_record_schema, file_schema, variables = \
+        build_configuration_contract_for_raw_schema(raw_schema)
+    del unused_record_schema
     require(isinstance(retained, bytes) and
             0 < len(retained) <= MAX_BUILD_CONFIGURATION_BYTES and
             b"\0" not in retained and b"\r" not in retained and
@@ -2904,9 +2958,9 @@ def parse_build_configuration_bytes(retained: bytes) -> dict[str, Any]:
     # treats several valid Unicode code points as line boundaries and would
     # disagree with CMake for paths or flag values containing those code points.
     lines = text[:-1].split("\n")
-    require(len(lines) == len(BUILD_CONFIGURATION_VARIABLES) + 2,
+    require(len(lines) == len(variables) + 2,
             "benchmark effective-configuration sidecar line count differs")
-    require(lines[0] == f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}",
+    require(lines[0] == f"schema={file_schema}",
             "benchmark effective-configuration sidecar schema differs")
     digest_line = lines[1]
     require(digest_line.startswith("sha256="),
@@ -2915,19 +2969,19 @@ def parse_build_configuration_bytes(retained: bytes) -> dict[str, Any]:
     require(HEX256.fullmatch(digest) is not None,
             "benchmark effective-configuration sidecar digest is invalid")
     entries: dict[str, str] = {}
-    for expected, line in zip(BUILD_CONFIGURATION_VARIABLES, lines[2:]):
+    for expected, line in zip(variables, lines[2:]):
         name, separator, value = line.partition("=")
         require(separator == "=" and name == expected and name not in entries,
                 "benchmark effective-configuration variable order differs")
         entries[name] = value
-    material = build_configuration_material(entries)
+    material = build_configuration_material(entries, variables)
     require(retained == (
-                f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+                f"schema={file_schema}\n"
                 f"sha256={digest}\n").encode("ascii") + material and
             sha256_bytes(material) == digest,
             "benchmark effective-configuration sidecar digest differs")
     return {
-        "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "configuration_schema": file_schema,
         "configuration_sha256": digest,
         "entries": entries,
         "text": text,
@@ -3007,9 +3061,13 @@ def cmake_build_layout(
 
 def validate_canonical_build_configuration_entries(
     entries: Mapping[str, str], cache: Mapping[str, str] | None = None,
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, str]:
+    unused_record_schema, unused_file_schema, variables = \
+        build_configuration_contract_for_raw_schema(raw_schema)
+    del unused_record_schema, unused_file_schema
     require(isinstance(entries, Mapping) and
-            set(entries) == set(BUILD_CONFIGURATION_VARIABLES),
+            set(entries) == set(variables),
             "candidate benchmark effective configuration variables differ")
     expected = {
         "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
@@ -3026,6 +3084,9 @@ def validate_canonical_build_configuration_entries(
         "LEO2_BUILD_TESTS": "OFF",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        **({
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+        } if raw_schema == RAW_SCHEMA else {}),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
     require(all(entries.get(name) == value for name, value in expected.items()) and
@@ -3143,6 +3204,7 @@ def capture_candidate_benchmark_attestation(
 
 def capture_candidate_build_configuration(
     specification: Mapping[str, Any], cache: Mapping[str, str],
+    raw_schema: str = RAW_SCHEMA,
 ) -> dict[str, Any]:
     """Bind the exact configure-time material embedded in benchmark.cpp."""
     source_root = Path(specification["candidate_source_root"]).resolve(strict=True)
@@ -3154,16 +3216,20 @@ def capture_candidate_build_configuration(
             "the build directory")
     metadata, retained = bounded_file_contents_snapshot(
         sidecar, MAX_BUILD_CONFIGURATION_BYTES)
-    parsed = parse_build_configuration_bytes(retained)
+    record_schema, file_schema, unused_variables = \
+        build_configuration_contract_for_raw_schema(raw_schema)
+    del unused_variables
+    parsed = parse_build_configuration_bytes(retained, raw_schema)
     entries = parsed["entries"]
     digest = parsed["configuration_sha256"]
     require(cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
-                BUILD_CONFIGURATION_FILE_SCHEMA and
+                file_schema and
             cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256") ==
                 digest,
             "candidate CMake cache differs from its effective-configuration "
             "sidecar")
-    validate_canonical_build_configuration_entries(entries, cache)
+    validate_canonical_build_configuration_entries(
+        entries, cache, raw_schema)
     git = Path(entries.get("LEO2_BENCHMARK_GIT_EXECUTABLE", "")).resolve(
         strict=True)
     require(git == Path("/usr/bin/git").resolve(strict=True),
@@ -3191,10 +3257,10 @@ def capture_candidate_build_configuration(
             content["sha256"] == artifact["sha256"],
             "candidate benchmark effective-configuration bytes changed")
     return {
-        "schema": BUILD_CONFIGURATION_RECORD_SCHEMA,
+        "schema": record_schema,
         "artifact": artifact,
         "content": content,
-        "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+        "configuration_schema": file_schema,
         "configuration_sha256": digest,
         "entries": dict(entries),
         "embedded_build_type": "Release",
@@ -3621,9 +3687,13 @@ def expected_compile_argv(
                 f'"{attestation_header}"',
             ]
         else:
+            expected_configuration_record_schema, unused_file_schema, \
+                unused_variables = \
+                    build_configuration_contract_for_raw_schema(raw_schema)
+            del unused_file_schema, unused_variables
             require(isinstance(build_configuration, Mapping) and
                     build_configuration.get("schema") ==
-                        BUILD_CONFIGURATION_RECORD_SCHEMA and
+                        expected_configuration_record_schema and
                     HEX256.fullmatch(str(build_configuration.get(
                         "configuration_sha256"))) is not None,
                     "current candidate compile profile lacks its effective "
@@ -3763,7 +3833,7 @@ def validate_compile_commands(
             implementation == "candidate" and \
             build_configuration is None:
         build_configuration = capture_candidate_build_configuration(
-            specification, cmake_cache)
+            specification, cmake_cache, raw_schema)
 
     selected_configuration: str | None = None
     configured_variants: tuple[str | None, ...] = (None,)
@@ -4354,6 +4424,9 @@ def build_provenance(
             required_cache.update({
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                **({
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                } if raw_schema == RAW_SCHEMA else {}),
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             })
         expected_archive_name = cmake_identity["archive"]
@@ -4365,9 +4438,13 @@ def build_provenance(
         if selected_configuration:
             required_cache["CMAKE_MAKE_PROGRAM"] = None
         if implementation == "candidate":
+            unused_record_schema, configuration_file_schema, \
+                unused_variables = \
+                    build_configuration_contract_for_raw_schema(raw_schema)
+            del unused_record_schema, unused_variables
             required_cache.update({
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                    configuration_file_schema,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": None,
             })
     for name, expected in required_cache.items():
@@ -4387,7 +4464,7 @@ def build_provenance(
     if raw_schema in BUILD_CLOSURE_V7_SCHEMAS and \
             implementation == "candidate":
         build_configuration = capture_candidate_build_configuration(
-            specification, cache)
+            specification, cache, raw_schema)
     archive_recipe_name = (
         f"{selected_configuration}/{names['archive']}"
         if selected_configuration else names["archive"])
@@ -4445,7 +4522,8 @@ def build_provenance(
     require(len(benchmark_records) == 1,
             f"{implementation} has no unique benchmark object")
     archive_records = [record for record in records if record not in benchmark_records]
-    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
+    if raw_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA):
         semantics["generated_attestation_header"] = (
             capture_candidate_benchmark_attestation(
                 specification, benchmark_records[0]["object"])
@@ -4750,7 +4828,7 @@ def runtime_closure(
         result["raw_ldd_output"] = exact_text_content(
             output, f"ldd output for {executable_argument}")
     elif retained_output_schema in (
-            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA):
         result["canonical_ldd_output"] = canonical_ldd_output(
             output, f"ldd output for {executable_argument}")
     else:
@@ -4821,7 +4899,7 @@ def input_snapshot(
         raise EvidenceError(str(error)) from error
     baseline_source, candidate_source = source_captures
     include_commit = raw_schema in COMPLETE_EVIDENCE_SCHEMAS
-    rich_source = raw_schema == RAW_SCHEMA
+    rich_source = raw_schema in SEALED_EXECUTABLE_SCHEMAS
     if not rich_source:
         baseline_source = git_capture.legacy_projection(
             baseline_source, include_commit_object=include_commit)
@@ -5023,7 +5101,7 @@ def validate_complete_git_identity(
     value: object, label: str, expected_path: str, expected_head: str,
     *, require_detached: bool, raw_schema: str,
 ) -> dict[str, Any]:
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
         try:
             return git_capture.validate_git_capture(
                 value, expected_path, expected_head,
@@ -5058,7 +5136,7 @@ def validate_complete_runtime_closure(
     output_key = (
         "raw_ldd_output" if raw_schema == RAW_SCHEMA_V5 else
         "canonical_ldd_output" if raw_schema in (
-            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA) else None)
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA) else None)
     require(output_key is not None,
             f"{label} runtime closure uses an unsupported evidence schema")
     require(isinstance(value, dict) and set(value) == {
@@ -5238,12 +5316,16 @@ def validate_complete_benchmark_attestation(
 def validate_complete_build_configuration(
     value: object, build_dir: str, source_root: str,
     benchmark_object: Mapping[str, Any], cache: Mapping[str, str],
+    raw_schema: str,
 ) -> dict[str, Any]:
+    record_schema, unused_file_schema, unused_variables = \
+        build_configuration_contract_for_raw_schema(raw_schema)
+    del unused_file_schema, unused_variables
     require(isinstance(value, dict) and set(value) == {
                 "schema", "artifact", "content", "configuration_schema",
                 "configuration_sha256", "entries", "embedded_build_type",
                 "helper_source"} and
-            value.get("schema") == BUILD_CONFIGURATION_RECORD_SCHEMA,
+            value.get("schema") == record_schema,
             "candidate effective build-configuration identity shape differs")
     artifact = validate_complete_artifact_identity(
         value.get("artifact"), "candidate effective build configuration",
@@ -5253,7 +5335,8 @@ def validate_complete_build_configuration(
             "candidate effective build-configuration path differs")
     content = validate_complete_text_identity(
         value.get("content"), "candidate effective build configuration")
-    parsed = parse_build_configuration_bytes(content["text"].encode("utf-8"))
+    parsed = parse_build_configuration_bytes(
+        content["text"].encode("utf-8"), raw_schema)
     require(content["size"] == artifact["size"] and
             content["sha256"] == artifact["sha256"] and
             value.get("configuration_schema") ==
@@ -5265,7 +5348,8 @@ def validate_complete_build_configuration(
     validate_embedded_build_type(
         parsed["entries"], value.get("embedded_build_type"),
         authoritative=True)
-    validate_canonical_build_configuration_entries(parsed["entries"], cache)
+    validate_canonical_build_configuration_entries(
+        parsed["entries"], cache, raw_schema)
     helper = validate_complete_artifact_identity(
         value.get("helper_source"),
         "candidate benchmark attestation helper", "source_file")
@@ -5360,6 +5444,9 @@ def validate_complete_build_identity(
             required_cache.update({
                 "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
                 "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+                **({
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                } if raw_schema == RAW_SCHEMA else {}),
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             })
         benchmark_suffix = "/bench/leopard2/benchmark.cpp"
@@ -5379,9 +5466,13 @@ def validate_complete_build_identity(
         if selected_configuration:
             required_cache["CMAKE_MAKE_PROGRAM"] = None
         if implementation == "candidate":
+            unused_record_schema, configuration_file_schema, \
+                unused_variables = \
+                    build_configuration_contract_for_raw_schema(raw_schema)
+            del unused_record_schema, unused_variables
             required_cache.update({
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                    configuration_file_schema,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": None,
             })
     expected_entry_count *= configured_variant_count
@@ -5508,7 +5599,8 @@ def validate_complete_build_identity(
                 "entry_count", "required_sources", "validated_optimization",
                 "validated_openmp", "required_source_object_pairs", "isa_policy",
                 "schema", "implementation", "profile", "required_entries"}
-    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
+    if raw_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA):
         expected_compile_keys.add("generated_attestation_header")
     if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
         expected_compile_keys.add("effective_build_configuration")
@@ -5594,7 +5686,8 @@ def validate_complete_build_identity(
                        if pair["source"]["path"].endswith(benchmark_suffix)]
     require(len(benchmark_pairs) == 1,
             f"{implementation} benchmark object is not unique")
-    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
+    if raw_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA):
         if implementation == "candidate":
             attestation = validate_complete_benchmark_attestation(
                 compile_record.get("generated_attestation_header"), build_dir,
@@ -5610,7 +5703,7 @@ def validate_complete_build_identity(
             configuration = validate_complete_build_configuration(
                 compile_record.get("effective_build_configuration"),
                 build_dir, specification["candidate_source_root"],
-                benchmark_pairs[0]["object"], cache)
+                benchmark_pairs[0]["object"], cache, raw_schema)
             require(cache[
                         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] ==
                         configuration["configuration_schema"] and
@@ -5770,7 +5863,8 @@ def validate_complete_input_snapshot(
         snapshot.get("candidate_source"), "candidate",
         specification["candidate_source_root"], specification["candidate_commit"],
         require_detached=False, raw_schema=raw_schema)
-    if raw_schema in (RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA):
+    if raw_schema in (
+            RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA):
         attestation = snapshot["candidate_build"][
             "validated_compile_commands"]["generated_attestation_header"]
         require(attestation["source_commit"] ==
@@ -7589,18 +7683,18 @@ def validate_raw(
     require(isinstance(raw_schema, str) and
             raw_schema in RAW_TO_CMAKE_IDENTITY,
             "wrong raw bundle schema")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
         require(set(raw) == RAW_V8_KEYS,
-                "current raw bundle has unexpected or missing fields")
+                "sealed raw bundle has unexpected or missing fields")
         validate_utc_timestamp(
-            raw.get("created_utc"), "current raw bundle creation time")
+            raw.get("created_utc"), "sealed raw bundle creation time")
     require(raw.get("validity_is_independent_of_speed") is True,
             "raw bundle does not bind speed-independent validity")
     campaign = raw.get("campaign")
     require(isinstance(campaign, dict), "campaign is not an object")
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
         require(set(campaign) == CAMPAIGN_V8_KEYS,
-                "current campaign has unexpected or missing fields")
+                "sealed campaign has unexpected or missing fields")
     validate_candidate_mode_schema(campaign, raw_schema)
     require(type(campaign.get("rounds")) is int and
             campaign["rounds"] == ROUNDS and
@@ -7678,7 +7772,8 @@ def validate_raw(
         require("executable_snapshots" not in raw,
                 "historical raw bundle contains unversioned executable snapshots")
     reservation = validate_reservation_identity(
-        raw.get("reservation"), cpu, sibling, exact=raw_schema == RAW_SCHEMA)
+        raw.get("reservation"), cpu, sibling,
+        exact=raw_schema in SEALED_EXECUTABLE_SCHEMAS)
     if raw_schema in SUPERVISION_SCHEMAS:
         require("supervision" in raw,
                 "complete raw bundle omits its supervision handshake field")
@@ -7693,7 +7788,7 @@ def validate_raw(
                     input_snapshot(input_spec, raw_schema), initial, raw_schema),
                 "current executable/archive/source identity differs from retained evidence")
         validate_reservation_current(
-            reservation, exact=raw_schema == RAW_SCHEMA)
+            reservation, exact=raw_schema in SEALED_EXECUTABLE_SCHEMAS)
     invocations = raw.get("invocations")
     expected_count = len(cells) * ROUNDS * len(ORDER)
     require(isinstance(invocations, list) and len(invocations) == expected_count,
@@ -7710,12 +7805,12 @@ def validate_raw(
     total_child_duration_ns = 0
     for invocation, expected in zip(invocations, expected_sequence):
         require(isinstance(invocation, dict), "invocation is not an object")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
             require(set(invocation) == INVOCATION_V8_KEYS,
-                    "current invocation has unexpected or missing fields")
+                    "sealed invocation has unexpected or missing fields")
             validate_utc_timestamp(
                 invocation.get("started_utc"),
-                "current invocation start time")
+                "sealed invocation start time")
         observed = (
             invocation.get("cell_id"), invocation.get("round"),
             invocation.get("slot"), invocation.get("implementation"))
@@ -7763,7 +7858,7 @@ def validate_raw(
                     "historical invocation contains unversioned sealed execution")
         require(exact_json_equal(invocation.get("environment"), CHILD_ENVIRONMENT),
                 "benchmark invocation inherited or retained an unsafe environment")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
             for stream_name, limit in (
                     ("stdout", 8 * 1024 * 1024),
                     ("stderr", 1024 * 1024)):
@@ -7776,14 +7871,14 @@ def validate_raw(
                         0 <= stream["size"] <= limit and
                         isinstance(stream.get("sha256"), str) and
                         HEX256.fullmatch(stream["sha256"]) is not None,
-                        f"current {stream_name} evidence identity is invalid")
+                        f"sealed {stream_name} evidence identity is invalid")
         result = invocation.get("result")
         if check_files:
             require(output is not None, "output root is required for file verification")
             for stream_name in ("stdout", "stderr"):
                 stream = invocation.get(stream_name)
                 require(isinstance(stream, dict) and
-                        (raw_schema != RAW_SCHEMA or
+                        (raw_schema not in SEALED_EXECUTABLE_SCHEMAS or
                          set(stream) == STREAM_IDENTITY_KEYS),
                         f"missing or malformed {stream_name} evidence")
                 limit = (8 * 1024 * 1024 if stream_name == "stdout"
@@ -8032,26 +8127,32 @@ def validate_failure(
         "retained_files", "schema", "status", "traceback", "valid"}
     if failure_schema in (
             FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
-            FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V8, FAILURE_SCHEMA):
         expected_fields.add("supervision")
-    if failure_schema == FAILURE_SCHEMA:
+    if failure_schema in (FAILURE_SCHEMA_V8, FAILURE_SCHEMA):
         expected_fields.add("executable_snapshots")
+    if failure_schema == FAILURE_SCHEMA:
+        expected_fields.add("evidence_contract")
     require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
     require(isinstance(failure_schema, str) and
             failure_schema in FAILURE_TO_RAW_SCHEMA and
             failure.get("status") == "failed" and failure.get("valid") is False,
             "failed campaign status is invalid")
+    if failure_schema == FAILURE_SCHEMA:
+        require(
+            failure.get("evidence_contract") == FAILURE_EVIDENCE_CONTRACT,
+            "current failed campaign evidence contract differs")
     require(all(isinstance(failure.get(name), str) and failure[name]
                 for name in ("created_utc", "error", "error_type", "traceback")),
             "failed campaign diagnostic fields are invalid")
-    if failure_schema == FAILURE_SCHEMA:
+    if failure_schema in (FAILURE_SCHEMA_V8, FAILURE_SCHEMA):
         validate_utc_timestamp(
-            failure.get("created_utc"), "current failed campaign creation time")
+            failure.get("created_utc"), "sealed failed campaign creation time")
     campaign = failure.get("campaign")
     require(isinstance(campaign, dict), "failed campaign metadata is missing")
     raw_schema = FAILURE_TO_RAW_SCHEMA[failure_schema]
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
         # A topology failure can occur before the producer adds the observed
         # launch affinity.  Both producer states are exact and closed-world;
         # no other optional campaign claims are accepted.
@@ -8113,12 +8214,13 @@ def validate_failure(
     reservation = failure.get("reservation")
     if reservation is not None:
         reservation = validate_reservation_identity(
-            reservation, cpu, sibling, exact=raw_schema == RAW_SCHEMA)
+            reservation, cpu, sibling,
+            exact=raw_schema in SEALED_EXECUTABLE_SCHEMAS)
     supervision = failure.get("supervision")
     if supervision is not None:
         require(failure_schema in (
                     FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
-                    FAILURE_SCHEMA) and
+                    FAILURE_SCHEMA_V8, FAILURE_SCHEMA) and
                 reservation is not None and
                 isolation is not None and isinstance(campaign, dict),
                 "failed supervision handshake has no complete-schema context")
@@ -8173,9 +8275,9 @@ def validate_failure(
                 type(invocation.get("returncode")) is int and
                 invocation["returncode"] == 0,
                 "failed campaign invocation prefix was edited")
-        if raw_schema == RAW_SCHEMA:
+        if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
             require(set(invocation) == INVOCATION_V8_KEYS,
-                    "current failed invocation has unexpected or missing fields")
+                    "sealed failed invocation has unexpected or missing fields")
             validate_utc_timestamp(
                 invocation.get("started_utc"),
                 "current failed invocation start time")
@@ -8249,7 +8351,7 @@ def validate_failure(
         for name in ("stdout", "stderr"):
             stream = invocation.get(name)
             require(isinstance(stream, dict) and
-                    (raw_schema != RAW_SCHEMA or
+                    (raw_schema not in SEALED_EXECUTABLE_SCHEMAS or
                      set(stream) == STREAM_IDENTITY_KEYS) and
                     exact_json_equal(
                         retained_by_path.get(stream.get("path")), stream),
@@ -8477,6 +8579,7 @@ def _run_campaign_owned(
                 f"{error}; sealed executable cleanup failed: {cleanup}")
         failure = signed({
             "schema": FAILURE_SCHEMA,
+            "evidence_contract": FAILURE_EVIDENCE_CONTRACT,
             "created_utc": utc_now(),
             "status": "failed",
             "valid": False,
@@ -8534,13 +8637,14 @@ def verified_campaign_bundle(
                 manifest.get("valid") is True and
                 manifest.get("validity_is_independent_of_speed") is True,
                 "manifest is not valid main-comparison evidence")
-        if manifest_schema == MANIFEST_SCHEMA:
+        if manifest_schema in (MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA):
             require(set(manifest) == MANIFEST_V8_KEYS,
-                    "current manifest has unexpected or missing fields")
+                    "sealed manifest has unexpected or missing fields")
             validate_utc_timestamp(
                 manifest.get("created_utc"),
-                "current manifest creation time")
-        if manifest_schema in (MANIFEST_SCHEMA_V7, MANIFEST_SCHEMA):
+                "sealed manifest creation time")
+        if manifest_schema in (
+                MANIFEST_SCHEMA_V7, MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA):
             directory.enable_owner_only()
             _, strict_manifest_bytes = directory.snapshot(
                 manifest_path.name, MAX_IDENTITY_FILE_BYTES)
@@ -8557,9 +8661,9 @@ def verified_campaign_bundle(
             manifest_bytes = strict_manifest_bytes
         raw_info = manifest.get("raw")
         require(isinstance(raw_info, dict), "manifest has no raw bundle identity")
-        if manifest_schema == MANIFEST_SCHEMA:
+        if manifest_schema in (MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA):
             require(set(raw_info) == MANIFEST_RAW_IDENTITY_KEYS,
-                    "current manifest raw identity has unexpected or missing fields")
+                    "sealed manifest raw identity has unexpected or missing fields")
         raw_relative = raw_info.get("path")
         require(isinstance(raw_relative, str) and raw_relative,
                 "retained raw bundle path is invalid")
@@ -8590,7 +8694,7 @@ def verified_campaign_bundle(
         if manifest_schema in (
             MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
             MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
-            MANIFEST_SCHEMA
+            MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA
         ):
             names.append("isolation")
         else:
@@ -8598,12 +8702,12 @@ def verified_campaign_bundle(
                     "legacy manifest contains unversioned isolation evidence")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
-                MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA):
             names.append("supervision")
         else:
             require("supervision" not in manifest,
                     "historical manifest contains unversioned supervision data")
-        if manifest_schema == MANIFEST_SCHEMA:
+        if manifest_schema in (MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA):
             names.append("executable_snapshots")
         else:
             require("executable_snapshots" not in manifest,
@@ -8668,7 +8772,8 @@ def verify_failed_campaign(options: argparse.Namespace) -> int:
         require(isinstance(failure_schema, str) and
                 failure_schema in FAILURE_TO_RAW_SCHEMA,
                 "failed campaign schema is invalid")
-        if failure_schema in (FAILURE_SCHEMA_V7, FAILURE_SCHEMA):
+        if failure_schema in (
+                FAILURE_SCHEMA_V7, FAILURE_SCHEMA_V8, FAILURE_SCHEMA):
             directory.enable_owner_only()
             _, strict_failure_bytes = directory.snapshot(
                 failure_path.name, MAX_IDENTITY_FILE_BYTES)

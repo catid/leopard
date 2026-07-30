@@ -52,6 +52,10 @@
 #define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+#define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -812,6 +816,12 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
 {
     static const bool experimental_small_direct =
         LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0;
+    static const bool experimental_general_one_loss =
+#if defined(LEO2_GFNI_VARIANT)
+        false;
+#else
+        LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT != 0;
+#endif
     struct Case
     {
         unsigned k;
@@ -843,13 +853,13 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 17, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, true, true },
         { 17, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, true, true },
         { 32, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           63, 1, true, true },
         { 32, 16, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, true, true },
         { 33, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           65, 1, true, true },
         { 64, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -909,7 +919,21 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1024, 4, false, false },
         { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 1, false, false },
+          64, 1, true, true },
+        { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 191, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          63, 1, true, true },
+        { 192, 63, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          64, 1, true, true },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 1, true, true },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          65, 2, false, false },
+        { 31, 200, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          33, 1, true, true },
+        { 32, 32, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+          33, 1, false, false },
         { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 8, false, false },
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
@@ -954,16 +978,39 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         require_result(leo2_decode_plan_scratch_size(
             reference_plan, test.bytes, &reference_scratch_bytes),
             "direct-dispatch reference scratch query");
+        uint32_t padded_k = 1;
+        while (padded_k < test.k)
+            padded_k <<= 1;
+        uint32_t padded_r = 1;
+        while (padded_r < test.r)
+            padded_r <<= 1;
+        const bool general_one_loss_shape =
+            test.field == LEO2_FIELD_GF8 && test.k > 16 &&
+            ((test.profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+              test.r > 1 && padded_k != padded_r) ||
+             (test.profile == LEO2_PROFILE_LOW_V1 && test.r > test.k));
         const bool expect_direct = test.expect_direct &&
+            (!general_one_loss_shape || experimental_general_one_loss) &&
             (!test.avx2_only ||
              leo2_context_backend(context) == LEO2_BACKEND_AVX2);
         leopard2_internal::DecodePathInfo path_info;
         require_result(leopard2_internal::GetDecodePlanPathInfo(
             plan, test.bytes, false, &path_info),
             "direct-dispatch path introspection");
-        require((path_info.path == leopard2_internal::kDecodePathDirect) ==
-                expect_direct,
-            "direct-repair path introspection disagrees with scratch shape");
+        if ((path_info.path == leopard2_internal::kDecodePathDirect) !=
+            expect_direct)
+        {
+            std::ostringstream message;
+            message << "direct-repair path introspection disagrees for K="
+                    << test.k << " R=" << test.r
+                    << " profile=" << static_cast<unsigned>(test.profile)
+                    << " field=" << static_cast<unsigned>(test.field)
+                    << " losses=" << test.losses
+                    << " expected=" << expect_direct
+                    << " actual_path="
+                    << static_cast<unsigned>(path_info.path);
+            require(false, message.str());
+        }
         if (expect_direct)
         {
             const bool expanded_k65_source_major =
@@ -1062,6 +1109,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
     }
 }
 
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
 void test_generalized_one_loss_direct_repair_execution(
     leo2_context* context,
     TestCounts* counts)
@@ -1095,7 +1143,207 @@ void test_generalized_one_loss_direct_repair_execution(
             test.bytes, std::vector<unsigned>{test.missing_original},
             std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
     }
+
+    struct GeneralCase
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        unsigned missing_original;
+        size_t bytes;
+    };
+    const GeneralCase general_cases[] = {
+        { 32, 16, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 17 },
+        { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 64, 33 },
+        { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 63, 257 },
+        { 191, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 1 },
+        { 192, 63, LEO2_PROFILE_LEGACY_HIGH_V1, 191, 63 },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 96, 65 },
+        { 224, 32, LEO2_PROFILE_LEGACY_HIGH_V1, 223, 1025 },
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 64 * 1024 },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 191, 64 * 1024 + 1 },
+        { 17, 31, LEO2_PROFILE_LOW_V1, 16, 7 },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 0, 33 },
+        { 32, 224, LEO2_PROFILE_LOW_V1, 31, 1025 },
+        { 127, 128, LEO2_PROFILE_LOW_V1, 63, 64 * 1024 },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 30, 64 * 1024 + 1 }
+    };
+    for (size_t i = 0;
+         i < sizeof(general_cases) / sizeof(general_cases[0]); ++i)
+    {
+        const GeneralCase& test = general_cases[i];
+        run_decode_case(context, test.k, test.r, test.profile,
+            LEO2_FIELD_GF8, test.bytes,
+            std::vector<unsigned>{test.missing_original},
+            std::vector<unsigned>{0, test.r / 2, test.r - 1}, counts);
+    }
+
+    /*
+        The ordinary cases leave many parity rows available, so deterministic
+        received-subset selection tends to choose the same low row.  Leave
+        exactly the first or last transmitted parity row available to bind
+        both ends of the promoted high and low generator-coordinate maps.
+    */
+    struct ParityRowCase
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+        unsigned missing_original;
+        unsigned available_recovery;
+    };
+    const ParityRowCase parity_row_cases[] = {
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 0, 0 },
+        { 192, 64, LEO2_PROFILE_LEGACY_HIGH_V1, 191, 63 },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 0, 0 },
+        { 31, 200, LEO2_PROFILE_LOW_V1, 30, 199 }
+    };
+    for (size_t i = 0;
+         i < sizeof(parity_row_cases) / sizeof(parity_row_cases[0]); ++i)
+    {
+        const ParityRowCase& test = parity_row_cases[i];
+        std::vector<unsigned> missing_recovery;
+        missing_recovery.reserve(test.r - 1);
+        for (unsigned recovery = 0; recovery < test.r; ++recovery)
+        {
+            if (recovery != test.available_recovery)
+                missing_recovery.push_back(recovery);
+        }
+        run_decode_case(context, test.k, test.r, test.profile,
+            LEO2_FIELD_GF8, 65,
+            std::vector<unsigned>{test.missing_original},
+            missing_recovery, counts);
+    }
 }
+
+#if !defined(LEO2_GFNI_VARIANT)
+void test_generalized_four_tiny_unaligned(
+    leo2_context* context,
+    TestCounts* counts)
+{
+    static const size_t byte_counts[] = {
+        1, 2, 3, 4, 5, 6, 7, 8, 15, 16, 17, 23, 24, 25,
+        31, 32, 33, 47, 48, 49, 55, 56, 57, 63, 64
+    };
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+        leo2_profile profile;
+    };
+    static const Shape shapes[] = {
+        { 240, 16, LEO2_PROFILE_LEGACY_HIGH_V1 },
+        { 18, 16, LEO2_PROFILE_LEGACY_HIGH_V1 },
+        { 17, 31, LEO2_PROFILE_LOW_V1 },
+        { 31, 200, LEO2_PROFILE_LOW_V1 },
+        { 32, 224, LEO2_PROFILE_LOW_V1 }
+    };
+
+    for (size_t shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]); ++shape_i)
+    {
+        const Shape& shape = shapes[shape_i];
+        const unsigned missing = shape.k - 1;
+        leo2_codec* codec = make_codec(context, shape.k, shape.r,
+            shape.profile, LEO2_FIELD_GF8);
+        std::vector<uint8_t> original_present(shape.k, 1);
+        std::vector<uint8_t> recovery_present(shape.r, 1);
+        original_present[missing] = 0;
+        leo2_decode_plan* plan = NULL;
+        require_result(leo2_decode_plan_create(codec,
+            original_present.data(), recovery_present.data(), &plan),
+            "general four-tiny plan create");
+
+        for (size_t byte_i = 0;
+             byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++byte_i)
+        {
+            const size_t bytes = byte_counts[byte_i];
+            leopard2_internal::DecodePathInfo path;
+            require_result(leopard2_internal::GetDecodePlanPathInfo(
+                plan, bytes, false, &path),
+                "general four-tiny path query");
+            require(path.path == leopard2_internal::kDecodePathDirect,
+                "general four-tiny case did not retain direct repair");
+
+            const Shards source = make_originals(shape.k, bytes,
+                UINT64_C(0x4f54110000000000) +
+                    shape_i * UINT64_C(0x100000) + bytes);
+            const Shards parity = encode_new(codec, source, bytes);
+            Shards original_storage(
+                shape.k, std::vector<uint8_t>(bytes + 2, 0x5a));
+            Shards recovery_storage(
+                shape.r, std::vector<uint8_t>(bytes + 2, 0x6b));
+            Shards output_storage(
+                shape.k, std::vector<uint8_t>(bytes + 2, 0xa5));
+            std::vector<const void*> original_input(shape.k, NULL);
+            std::vector<const void*> recovery_input(shape.r, NULL);
+            std::vector<void*> output(shape.k, NULL);
+            for (unsigned original = 0; original < shape.k; ++original)
+            {
+                std::memcpy(&original_storage[original][1],
+                    source[original].data(), bytes);
+                if (original != missing)
+                    original_input[original] =
+                        &original_storage[original][1];
+            }
+            for (unsigned recovery = 0; recovery < shape.r; ++recovery)
+            {
+                std::memcpy(&recovery_storage[recovery][1],
+                    parity[recovery].data(), bytes);
+                recovery_input[recovery] =
+                    &recovery_storage[recovery][1];
+            }
+            output[missing] = &output_storage[missing][1];
+            size_t scratch_bytes = 0;
+            require_result(leo2_decode_plan_scratch_size(
+                plan, bytes, &scratch_bytes),
+                "general four-tiny scratch query");
+            AlignedBuffer scratch(scratch_bytes);
+
+            leo2_test_reset_direct_four_tiny_calls();
+            require_result(leo2_decode_plan_execute(plan, bytes,
+                original_input.data(), recovery_input.data(), output.data(),
+                scratch.data, scratch.bytes),
+                "general four-tiny execute");
+            const bool selected =
+#if defined(LEO2_GFNI_VARIANT)
+                false;
+#else
+                bytes != 0 && bytes <= 63 && bytes != 7;
+#endif
+            const uint64_t expected_calls =
+                selected ? shape.k / 4U : 0;
+            require(leo2_test_direct_four_tiny_calls() == expected_calls,
+                "general four-tiny callback count differs from selector");
+            require(std::memcmp(&output_storage[missing][1],
+                    source[missing].data(), bytes) == 0,
+                "general four-tiny output differs from source");
+            require(output_storage[missing][0] == 0xa5 &&
+                    output_storage[missing][bytes + 1] == 0xa5,
+                "general four-tiny output changed a guard byte");
+            for (unsigned original = 0; original < shape.k; ++original)
+            {
+                require(original_storage[original][0] == 0x5a &&
+                        original_storage[original][bytes + 1] == 0x5a,
+                    "general four-tiny changed an original guard byte");
+            }
+            for (unsigned recovery = 0; recovery < shape.r; ++recovery)
+            {
+                require(recovery_storage[recovery][0] == 0x6b &&
+                        recovery_storage[recovery][bytes + 1] == 0x6b,
+                    "general four-tiny changed a recovery guard byte");
+            }
+            ++counts->recovered_shards;
+            ++counts->plan_executions;
+            if ((bytes & 63U) != 0)
+                ++counts->tail_cases;
+        }
+        leo2_decode_plan_destroy(plan);
+        leo2_codec_destroy(codec);
+    }
+}
+#endif
+#endif
 
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
 void test_experimental_small_direct_unaligned(
@@ -1554,7 +1802,12 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
 
     test_concurrent_expanded_direct_repair_cache(context, counts);
     test_direct_repair_dispatch_bounds(context);
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     test_generalized_one_loss_direct_repair_execution(context, counts);
+#if !defined(LEO2_GFNI_VARIANT)
+    test_generalized_four_tiny_unaligned(context, counts);
+#endif
+#endif
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
     test_experimental_small_direct_repair_execution(context, counts);
 #endif
@@ -2076,14 +2329,18 @@ void run_low_reveal_fusion_case(
     size_t bytes,
     unsigned missing_count)
 {
-    // K > the direct-repair limit ensures that the one-loss AUTO case reaches
-    // Algorithm 4 instead of the small matrix solver.  K is also the complete
-    // padded side, so the dense case covers the full final transform while the
-    // one-loss case covers the C1-pruned final-output schedule.
+    // K is the complete padded side, so the dense case covers the full final
+    // transform while the one-loss case covers the C1-pruned final-output
+    // schedule.  This is an Algorithm-4 attribution test, so its otherwise
+    // AUTO control explicitly stays on the specialized transform path now
+    // that redundancy-dominant one-loss AUTO uses direct repair on AVX2.
     const unsigned k = 32;
     const unsigned r = 33;
+    uint32_t effective_codec_flags = codec_flags;
+    if (effective_codec_flags == 0)
+        effective_codec_flags = LEO2_CODEC_FORCE_SPECIALIZED_DECODE;
     leo2_codec* codec = make_flagged_codec(context, k, r,
-        LEO2_PROFILE_LOW_V1, field, codec_flags);
+        LEO2_PROFILE_LOW_V1, field, effective_codec_flags);
     const Shards source = make_originals(k, bytes,
         UINT64_C(0x89ef342100000000) + bytes + field + missing_count);
     const Shards parity = encode_new(codec, source, bytes);

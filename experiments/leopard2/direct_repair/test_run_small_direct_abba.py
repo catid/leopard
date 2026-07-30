@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import errno
 import fcntl
 import importlib.util
@@ -761,20 +762,25 @@ class IsolationTests(unittest.TestCase):
                 RUNNER.validate_default_mode_source(root)
 
     def test_effective_configuration_normalizes_only_mode(self) -> None:
-        transform = {
-            "entries": {
+        def attestation(mode: str) -> dict:
+            entries = {
+                name: "" for name in RUNNER.BUILD_CONFIGURATION_VARIABLES
+            }
+            entries.update({
                 "CMAKE_BUILD_TYPE": "Release",
-                RUNNER.MODE_CACHE_VARIABLE: "0",
+                RUNNER.MODE_CACHE_VARIABLE: mode,
                 **RUNNER.REQUIRED_DISABLED_EXPERIMENTS,
-            },
-        }
-        source = {
-            "entries": {
-                "CMAKE_BUILD_TYPE": "Release",
-                RUNNER.MODE_CACHE_VARIABLE: "2",
-                **RUNNER.REQUIRED_DISABLED_EXPERIMENTS,
-            },
-        }
+            })
+            return {
+                "entries": entries,
+                "path": "/fixture/effective-configuration.txt",
+                "schema": RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                "sha256": RUNNER.build_configuration_digest(
+                    entries, RUNNER.BUILD_CONFIGURATION_VARIABLES),
+            }
+
+        transform = attestation("0")
+        source = attestation("2")
         self.assertEqual(
             RUNNER.normalized_effective_configuration(
                 transform, "transform"),
@@ -784,17 +790,18 @@ class IsolationTests(unittest.TestCase):
                 transform["entries"], "transform"),
             RUNNER.normalized_validated_cache(source["entries"], "source"))
 
-        forged = {"entries": dict(source["entries"])}
+        forged = copy.deepcopy(source)
         forged["entries"][RUNNER.MODE_CACHE_VARIABLE] = "1"
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "wrong diagnostic mode"):
             RUNNER.normalized_effective_configuration(forged, "source")
-        missing = {"entries": {"CMAKE_BUILD_TYPE": "Release"}}
+        missing = copy.deepcopy(source)
+        missing["entries"].pop(RUNNER.MODE_CACHE_VARIABLE)
         with self.assertRaisesRegex(
                 RUNNER.EvidenceError, "wrong diagnostic mode"):
             RUNNER.normalized_effective_configuration(missing, "source")
         for name in RUNNER.REQUIRED_DISABLED_EXPERIMENTS:
-            forged = {"entries": dict(source["entries"])}
+            forged = copy.deepcopy(source)
             forged["entries"][name] = "ON"
             with self.subTest(name=name), self.assertRaisesRegex(
                     RUNNER.EvidenceError,
@@ -806,6 +813,82 @@ class IsolationTests(unittest.TestCase):
                     "does not disable unrelated"):
                 RUNNER.normalized_validated_cache(
                     forged["entries"], "source")
+
+    def test_historical_v2_attestation_replays_but_current_v3_is_strict(
+            self) -> None:
+        def make_attestation(
+                schema: str, variables: tuple[str, ...],
+                disabled: dict[str, str]) -> dict:
+            entries = {name: "" for name in variables}
+            entries.update({
+                RUNNER.MODE_CACHE_VARIABLE: "2",
+                **disabled,
+            })
+            return {
+                "entries": entries,
+                "path": "/retained/effective-configuration.txt",
+                "schema": schema,
+                "sha256": RUNNER.build_configuration_digest(
+                    entries, variables),
+            }
+
+        historical = make_attestation(
+            RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
+            RUNNER.BUILD_CONFIGURATION_VARIABLES_V2,
+            RUNNER.REQUIRED_DISABLED_EXPERIMENTS_V2)
+        normalized = RUNNER.normalized_effective_configuration(
+            historical, "source", RUNNER.BUILD_SCHEMA_V4)
+        self.assertNotIn(
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", normalized)
+        historical_cache = dict(historical["entries"])
+        RUNNER.normalized_validated_cache(
+            historical_cache, "source", RUNNER.BUILD_SCHEMA_V4)
+
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "framing"):
+            RUNNER.normalized_effective_configuration(
+                historical, "source", RUNNER.BUILD_SCHEMA)
+
+        current = make_attestation(
+            RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+            RUNNER.BUILD_CONFIGURATION_VARIABLES,
+            RUNNER.REQUIRED_DISABLED_EXPERIMENTS)
+        general = "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"
+        missing = copy.deepcopy(current)
+        missing["entries"].pop(general)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "selector keys"):
+            RUNNER.normalized_effective_configuration(
+                missing, "source", RUNNER.BUILD_SCHEMA)
+        missing_cache = dict(current["entries"])
+        missing_cache.pop(general)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "versioned selector keys"):
+            RUNNER.normalized_validated_cache(
+                missing_cache, "source", RUNNER.BUILD_SCHEMA)
+
+        enabled = copy.deepcopy(current)
+        enabled["entries"][general] = "ON"
+        enabled["sha256"] = RUNNER.build_configuration_digest(
+            enabled["entries"], RUNNER.BUILD_CONFIGURATION_VARIABLES)
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "does not disable unrelated"):
+            RUNNER.normalized_effective_configuration(
+                enabled, "source", RUNNER.BUILD_SCHEMA)
+
+        extended_historical = copy.deepcopy(historical)
+        extended_historical["entries"][general] = "OFF"
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "selector keys"):
+            RUNNER.normalized_effective_configuration(
+                extended_historical, "source", RUNNER.BUILD_SCHEMA_V4)
+        extended_historical_cache = dict(historical_cache)
+        extended_historical_cache[general] = "OFF"
+        with self.assertRaisesRegex(
+                RUNNER.EvidenceError, "versioned selector keys"):
+            RUNNER.normalized_validated_cache(
+                extended_historical_cache, "source",
+                RUNNER.BUILD_SCHEMA_V4)
 
     def test_source_closure_binds_attestation_generator(self) -> None:
         self.assertIn(
@@ -994,10 +1077,15 @@ class IsolationTests(unittest.TestCase):
             cache_path.write_text("fixture\n", encoding="utf-8")
             cache_identity = RUNNER.file_identity(cache_path)
             entries = {
+                name: "" for name in RUNNER.BUILD_CONFIGURATION_VARIABLES
+            }
+            entries.update({
                 RUNNER.MODE_CACHE_VARIABLE: "2",
                 "LEO2_BACKEND_VARIANT": "avx2",
                 **RUNNER.REQUIRED_DISABLED_EXPERIMENTS,
-            }
+            })
+            configuration_digest = RUNNER.build_configuration_digest(
+                entries, RUNNER.BUILD_CONFIGURATION_VARIABLES)
             executable_identity = RUNNER.file_identity(executable)
             closure = {
                 "cmake_cache": cache_identity,
@@ -1061,7 +1149,11 @@ class IsolationTests(unittest.TestCase):
                         "build_root": str(build),
                         "executable": executable_identity,
                         "effective_configuration_attestation": {
-                            "entries": entries, "sha256": "a" * 64,
+                            "entries": entries,
+                            "path": str(build / "effective.json"),
+                            "schema":
+                                RUNNER.BUILD_CONFIGURATION_ATTESTATION_SCHEMA,
+                            "sha256": configuration_digest,
                         },
                     }
 

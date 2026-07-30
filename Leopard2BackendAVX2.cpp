@@ -4328,6 +4328,202 @@ static void AVX2FF8MultiplyAddOutputs(
     }
 }
 
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
+    !defined(LEO2_GFNI_VARIANT)
+static LEO_FORCE_INLINE __m128i AVX2FF8FourTinyProduct128(
+    __m128i input,
+    __m128i low_table,
+    __m128i high_table,
+    __m128i nibble_mask)
+{
+    const __m128i low_indices = _mm_and_si128(input, nibble_mask);
+    const __m128i high_indices = _mm_and_si128(
+        _mm_srli_epi64(input, 4), nibble_mask);
+    return _mm_xor_si128(
+        _mm_shuffle_epi8(low_table, low_indices),
+        _mm_shuffle_epi8(high_table, high_indices));
+}
+
+static LEO_FORCE_INLINE void AVX2FF8FourTinyConsume(__m128i& value)
+{
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
+    // Bound temporary-product lifetimes while the nine reusable vector
+    // constants are live.  This constraint emits no instruction.
+    __asm__ __volatile__("" : "+x"(value));
+#else
+    (void)value;
+#endif
+}
+
+static LEO_FORCE_INLINE uint8_t AVX2FF8FourTinyProduct(
+    uint8_t input,
+    uint16_t multiplier_log)
+{
+    // GF8 logarithms are modulo 255, so both representations name one.
+    if (multiplier_log == 0 || multiplier_log == 255)
+        return input;
+    return FF8Product(multiplier_log, input);
+}
+
+template<bool Add>
+static void AVX2FF8LinearCombination4TinyMode(
+    void* destination_pointer,
+    const void* const* source_pointers,
+    const uint16_t* multiplier_logs,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(byte_count <= 63);
+    uint8_t* const destination = static_cast<uint8_t*>(destination_pointer);
+    const uint8_t* sources[4] = {
+        static_cast<const uint8_t*>(source_pointers[0]),
+        static_cast<const uint8_t*>(source_pointers[1]),
+        static_cast<const uint8_t*>(source_pointers[2]),
+        static_cast<const uint8_t*>(source_pointers[3])
+    };
+    uint64_t offset = 0;
+    if (byte_count >= 8)
+    {
+        /*
+            Keep all four table pairs and the shared mask live across the
+            straight-line blocks.  The optional eight-byte tail is handled
+            first so the compiler need not preserve those constants across a
+            later tail branch.
+        */
+        const FF8NibbleTable& table0 = FF8Tables[multiplier_logs[0]];
+        const FF8NibbleTable& table1 = FF8Tables[multiplier_logs[1]];
+        const FF8NibbleTable& table2 = FF8Tables[multiplier_logs[2]];
+        const FF8NibbleTable& table3 = FF8Tables[multiplier_logs[3]];
+        const __m128i low0 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table0.low));
+        const __m128i high0 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table0.high));
+        const __m128i low1 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table1.low));
+        const __m128i high1 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table1.high));
+        const __m128i low2 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table2.low));
+        const __m128i high2 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table2.high));
+        const __m128i low3 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table3.low));
+        const __m128i high3 = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(table3.high));
+        __m128i nibble_mask = _mm_set1_epi8(0x0f);
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
+        __asm__ __volatile__("" : "+x"(nibble_mask));
+#endif
+
+        const uint64_t complete_bytes = byte_count & ~UINT64_C(15);
+        const bool has_xmm_tail = byte_count - complete_bytes >= 8;
+        if (has_xmm_tail)
+        {
+            const uint64_t tail_offset = complete_bytes;
+            __m128i result = AVX2FF8FourTinyProduct128(
+                _mm_loadl_epi64(reinterpret_cast<const __m128i*>(
+                    sources[0] + tail_offset)),
+                low0, high0, nibble_mask);
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadl_epi64(reinterpret_cast<const __m128i*>(
+                    sources[1] + tail_offset)),
+                low1, high1, nibble_mask));
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadl_epi64(reinterpret_cast<const __m128i*>(
+                    sources[2] + tail_offset)),
+                low2, high2, nibble_mask));
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadl_epi64(reinterpret_cast<const __m128i*>(
+                    sources[3] + tail_offset)),
+                low3, high3, nibble_mask));
+            if (Add)
+            {
+                result = _mm_xor_si128(result, _mm_loadl_epi64(
+                    reinterpret_cast<const __m128i*>(
+                        destination + tail_offset)));
+            }
+            _mm_storel_epi64(reinterpret_cast<__m128i*>(
+                destination + tail_offset), result);
+        }
+
+        while (offset < complete_bytes)
+        {
+            __m128i result = AVX2FF8FourTinyProduct128(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    sources[0] + offset)),
+                low0, high0, nibble_mask);
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    sources[1] + offset)),
+                low1, high1, nibble_mask));
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    sources[2] + offset)),
+                low2, high2, nibble_mask));
+            AVX2FF8FourTinyConsume(result);
+            result = _mm_xor_si128(result, AVX2FF8FourTinyProduct128(
+                _mm_loadu_si128(reinterpret_cast<const __m128i*>(
+                    sources[3] + offset)),
+                low3, high3, nibble_mask));
+            if (Add)
+            {
+                result = _mm_xor_si128(result, _mm_loadu_si128(
+                    reinterpret_cast<const __m128i*>(
+                        destination + offset)));
+            }
+            _mm_storeu_si128(reinterpret_cast<__m128i*>(
+                destination + offset), result);
+            offset += 16;
+        }
+        if (has_xmm_tail)
+            offset += 8;
+    }
+
+    while (offset < byte_count)
+    {
+        uint8_t result = AVX2FF8FourTinyProduct(
+            sources[0][offset], multiplier_logs[0]);
+        for (unsigned source = 1; source < 4; ++source)
+        {
+            result ^= AVX2FF8FourTinyProduct(
+                sources[source][offset], multiplier_logs[source]);
+        }
+        if (Add)
+            destination[offset] ^= result;
+        else
+            destination[offset] = result;
+        ++offset;
+    }
+}
+
+static void AVX2FF8LinearCombination4Tiny(
+    void* destination,
+    const void* const* sources,
+    const uint16_t* multiplier_logs,
+    bool add,
+    uint64_t byte_count)
+{
+    if (byte_count == 0)
+        return;
+    LEO_DEBUG_ASSERT(destination && sources && multiplier_logs);
+    LEO_DEBUG_ASSERT(byte_count <= 63);
+    if (add)
+    {
+        AVX2FF8LinearCombination4TinyMode<true>(
+            destination, sources, multiplier_logs, byte_count);
+    }
+    else
+    {
+        AVX2FF8LinearCombination4TinyMode<false>(
+            destination, sources, multiplier_logs, byte_count);
+    }
+}
+#endif // LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && !LEO2_GFNI_VARIANT
+
 static void AVX2FF8MultiplyAdd2Sources2Outputs(
     void* const* destination_pointers,
     const void* source0_pointer,
@@ -4686,6 +4882,12 @@ static const Ops AVX2Ops = {
     , NULL
     , NULL
 #endif
+#if defined(LEO_HAS_FF8) && LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8LinearCombination4Tiny
+#else
+    , NULL
+#endif
 };
 
 #if defined(LEO2_GFNI_VARIANT)
@@ -4805,7 +5007,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
         return NULL;
 # if defined(LEO2_GFNI_VARIANT)
     return GFNIPublishTables(args);
-# endif
+# else
 # ifdef LEO_HAS_FF8
     FF8Tables = static_cast<const FF8NibbleTable*>(GetAVX2FF8Tables());
     if (!FF8Tables)
@@ -4817,6 +5019,7 @@ const Ops* LEO2_AVX_INITIALIZER(const InitializeArgs& args)
         return NULL;
 # endif
     return &AVX2Ops;
+# endif
 #else
 #if defined(LEO_HAS_FF8) && defined(LEO_HAS_FF16)
     if (FF8Tables || FF16Tables)

@@ -299,6 +299,128 @@ static bool TestFF8MultiplyAdd2Sources2Outputs(
     return true;
 }
 
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+static bool TestFF8LinearCombination4Tiny(
+    FF8LinearCombination4Tiny callback,
+    FF8MultiplyLog reference)
+{
+    if (!callback || !reference)
+        return false;
+    static const uint16_t selected_logs[] = { 0, 1, 17, 193, 254, 255 };
+    uint8_t source_storage[4][68];
+    uint8_t original_storage[4][68];
+    uint8_t output[68];
+    uint8_t expected[68];
+    const void* sources[4];
+    uint16_t logs[4];
+
+    for (uint64_t bytes = 0; bytes <= 63; ++bytes)
+    {
+        for (unsigned alias_mode = 0; alias_mode < 3; ++alias_mode)
+        {
+            for (unsigned source = 0; source < 4; ++source)
+            {
+                for (size_t i = 0; i < sizeof(source_storage[source]); ++i)
+                {
+                    source_storage[source][i] =
+                        original_storage[source][i] =
+                        static_cast<uint8_t>(i * (23U + source * 10U) +
+                            bytes * 7U + source * 31U);
+                }
+                const unsigned aliased_source = alias_mode == 1 ? 0 :
+                    alias_mode == 2 ? (source & 1U) * 2U : source;
+                sources[source] = source_storage[aliased_source] + 1;
+                logs[source] = selected_logs[
+                    (bytes + source + alias_mode) %
+                    (sizeof(selected_logs) / sizeof(selected_logs[0]))];
+            }
+            for (unsigned add = 0; add < 2; ++add)
+            {
+                for (size_t i = 0; i < sizeof(output); ++i)
+                {
+                    output[i] = expected[i] = static_cast<uint8_t>(
+                        i * 43U + bytes * 5U + alias_mode * 11U + add);
+                }
+                for (uint64_t i = 0; i < bytes; ++i)
+                {
+                    uint8_t value = 0;
+                    for (unsigned source = 0; source < 4; ++source)
+                    {
+                        value ^= reference(
+                            static_cast<const uint8_t*>(
+                                sources[source])[i],
+                            static_cast<uint8_t>(logs[source]));
+                    }
+                    if (add)
+                        expected[i + 1] ^= value;
+                    else
+                        expected[i + 1] = value;
+                }
+                callback(output + 1, sources, logs, add != 0, bytes);
+                if (std::memcmp(output, expected, sizeof(output)) != 0)
+                    return false;
+                for (unsigned source = 0; source < 4; ++source)
+                {
+                    if (std::memcmp(source_storage[source],
+                            original_storage[source],
+                            sizeof(source_storage[source])) != 0)
+                        return false;
+                }
+            }
+        }
+    }
+
+    /*
+        Exhaust every multiplier and input byte in every lane.  The other
+        lanes are zero, which binds all 65,536 GF8 products without an
+        intractable four-dimensional Cartesian test.
+    */
+    for (unsigned active_source = 0; active_source < 4; ++active_source)
+    {
+        for (unsigned log = 0; log < 256; ++log)
+        {
+            for (unsigned first_value = 0; first_value < 256;
+                 first_value += 63)
+            {
+                const unsigned count = std::min(63U, 256U - first_value);
+                for (unsigned source = 0; source < 4; ++source)
+                {
+                    sources[source] = source_storage[source] + 1;
+                    logs[source] = source == active_source
+                        ? static_cast<uint16_t>(log) : 0;
+                    for (unsigned i = 0; i < count; ++i)
+                    {
+                        source_storage[source][i + 1] =
+                            source == active_source
+                                ? static_cast<uint8_t>(first_value + i) : 0;
+                    }
+                }
+                std::memset(output, 0xa5, sizeof(output));
+                callback(output + 1, sources, logs, false, count);
+                for (unsigned i = 0; i < count; ++i)
+                {
+                    if (output[i + 1] != reference(
+                            static_cast<uint8_t>(first_value + i),
+                            static_cast<uint8_t>(log)))
+                        return false;
+                }
+                std::memset(output, 0xa5, sizeof(output));
+                callback(output + 1, sources, logs, true, count);
+                for (unsigned i = 0; i < count; ++i)
+                {
+                    if (output[i + 1] != static_cast<uint8_t>(0xa5 ^
+                            reference(static_cast<uint8_t>(first_value + i),
+                                static_cast<uint8_t>(log))))
+                        return false;
+                }
+            }
+        }
+    }
+    callback(NULL, NULL, NULL, false, 0);
+    return true;
+}
+#endif
+
 template<bool Inverse>
 static void ReferenceFF8Butterfly2(
     uint8_t* x,
@@ -2169,6 +2291,28 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8HighEncodeOneBlock(ops) ||
         !TestFF8HighEncodeSmall(ops))
         return false;
+#if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+    const bool four_tiny_backend = ops.kind == LEO2_BACKEND_AVX2;
+    if (ops.ff8_linear_combination4_tiny && !four_tiny_backend)
+        return false;
+#if !defined(LEO2_GFNI_VARIANT)
+    /*
+        The ordinary AVX2 member must publish the qualified callback.  The
+        documented global GFNI experiment retains AVX2 identity while
+        replacing the nibble tables with affine matrices, so that build is
+        intentionally exempt and must leave the callback null.
+    */
+    if (four_tiny_backend && !ops.ff8_linear_combination4_tiny)
+        return false;
+#endif
+    if (ops.ff8_linear_combination4_tiny &&
+        !TestFF8LinearCombination4Tiny(
+            ops.ff8_linear_combination4_tiny, args.ff8_multiply_log))
+        return false;
+#else
+    if (ops.ff8_linear_combination4_tiny)
+        return false;
+#endif
     if (ops.kind == LEO2_BACKEND_AVX2 ||
         ops.kind == LEO2_BACKEND_AVX512 ||
         ops.kind == LEO2_BACKEND_GFNI)
@@ -2210,7 +2354,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_multiply_add_outputs ||
         ops.ff8_multiply_add_2_sources_2_outputs ||
         ops.ff8_ifft_butterfly8_out ||
-        ops.ff8_fft_butterfly8_out)
+        ops.ff8_fft_butterfly8_out ||
+        ops.ff8_linear_combination4_tiny)
         return false;
 #endif
 #ifdef LEO_HAS_FF16

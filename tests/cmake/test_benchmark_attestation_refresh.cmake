@@ -63,7 +63,7 @@ function(leo2_read_effective_configuration
     endif()
     file(READ "${configuration_file}" configuration)
     string(REGEX MATCH
-        "^schema=leopard2-benchmark-build-configuration/v2\nsha256=([0-9a-f]+)\n"
+        "^schema=leopard2-benchmark-build-configuration/v3\nsha256=([0-9a-f]+)\n"
         header "${configuration}")
     set(declared_digest "${CMAKE_MATCH_1}")
     string(LENGTH "${declared_digest}" declared_digest_length)
@@ -87,15 +87,20 @@ function(leo2_read_effective_configuration
         REGEX "^LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=")
     file(STRINGS "${configuration_file}" high_direct_encode_lines
         REGEX "^LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=")
+    file(STRINGS "${configuration_file}" general_one_loss_direct_lines
+        REGEX "^LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=")
     file(STRINGS "${configuration_file}" small_direct_mode_lines
         REGEX "^LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=")
     list(LENGTH build_type_lines build_type_line_count)
     list(LENGTH direct_source_plan_lines direct_source_plan_line_count)
     list(LENGTH high_direct_encode_lines high_direct_encode_line_count)
+    list(LENGTH general_one_loss_direct_lines
+        general_one_loss_direct_line_count)
     list(LENGTH small_direct_mode_lines small_direct_mode_line_count)
     if(NOT build_type_line_count EQUAL 1 OR
        NOT direct_source_plan_line_count EQUAL 1 OR
        NOT high_direct_encode_line_count EQUAL 1 OR
+       NOT general_one_loss_direct_line_count EQUAL 1 OR
        NOT small_direct_mode_line_count EQUAL 1)
         message(FATAL_ERROR
             "Effective build configuration omits CMAKE_BUILD_TYPE or has "
@@ -131,7 +136,7 @@ function(leo2_read_effective_configuration
     string(REGEX REPLACE "^[^=]+=" "" cached_schema "${cached_schema}")
     if(NOT cached_digest STREQUAL declared_digest OR
        NOT cached_schema STREQUAL
-           "leopard2-benchmark-build-configuration/v2")
+           "leopard2-benchmark-build-configuration/v3")
         message(FATAL_ERROR
             "Effective build configuration differs from its cache binding")
     endif()
@@ -269,7 +274,7 @@ if(NOT initial_build_type STREQUAL "Release" OR
    NOT initial_configuration_material MATCHES
        "CMAKE_CXX_FLAGS=[^\n]*LEO2_EFFECTIVE_ONE=1" OR
    NOT initial_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Initial sidecar omitted the effective non-cache CXX flag:\n"
         "${initial_configuration_material}")
@@ -349,6 +354,7 @@ leo2_run(${configure_command}
     -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
     -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
     "${fixture_build}" direct_source_configuration
@@ -356,7 +362,7 @@ leo2_read_effective_configuration(
 if(direct_source_configuration STREQUAL changed_configuration OR
    NOT direct_source_build_type STREQUAL "Release" OR
    NOT direct_source_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Direct-source-plan selector was not uniquely and positionally "
         "attested")
@@ -377,6 +383,7 @@ leo2_run(${configure_command}
     -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
     -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
     "${fixture_build}" high_direct_configuration
@@ -385,7 +392,7 @@ if(high_direct_configuration STREQUAL changed_configuration OR
    high_direct_configuration STREQUAL direct_source_configuration OR
    NOT high_direct_build_type STREQUAL "Release" OR
    NOT high_direct_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "High-direct-encode selector was not uniquely and positionally "
         "attested")
@@ -401,14 +408,46 @@ if(high_direct_standard_time STREQUAL direct_source_standard_time OR
         "High-direct-encode change did not relink benchmarks")
 endif()
 
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
+leo2_read_effective_configuration(
+    "${fixture_build}" general_one_loss_configuration
+    general_one_loss_build_type general_one_loss_material)
+if(general_one_loss_configuration STREQUAL changed_configuration OR
+   general_one_loss_configuration STREQUAL direct_source_configuration OR
+   general_one_loss_configuration STREQUAL high_direct_configuration OR
+   NOT general_one_loss_build_type STREQUAL "Release" OR
+   NOT general_one_loss_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+    message(FATAL_ERROR
+        "General one-loss selector was not uniquely and positionally "
+        "attested")
+endif()
+leo2_build_and_check()
+file(TIMESTAMP "${standard_executable}"
+    general_one_loss_standard_time "%s" UTC)
+file(TIMESTAMP "${allk_executable}"
+    general_one_loss_allk_time "%s" UTC)
+if(general_one_loss_standard_time STREQUAL high_direct_standard_time OR
+   general_one_loss_allk_time STREQUAL high_direct_allk_time)
+    message(FATAL_ERROR
+        "General one-loss selector change did not relink benchmarks")
+endif()
+
 # The default-off direct-repair selectors are part of the code identity.  Keep
-# every prior v1 material record in order and append the v2 selector records so
+# every prior material record in order and append the v3 selector records so
 # small-direct modes 0/1/2 differ only where intended.
 leo2_run("${CMAKE_COMMAND}" -E sleep 1)
 leo2_run(${configure_command}
     -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
     -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1)
 leo2_read_effective_configuration(
     "${fixture_build}" mode_one_configuration mode_one_build_type
@@ -416,7 +455,7 @@ leo2_read_effective_configuration(
 if(mode_one_configuration STREQUAL changed_configuration OR
    NOT mode_one_build_type STREQUAL "Release" OR
    NOT mode_one_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1\n$")
     message(FATAL_ERROR
         "Small-direct mode 1 was not uniquely and positionally attested")
 endif()
@@ -427,6 +466,7 @@ leo2_run(${configure_command}
     -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
     -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2)
 leo2_read_effective_configuration(
     "${fixture_build}" mode_two_configuration mode_two_build_type
@@ -435,7 +475,7 @@ if(mode_two_configuration STREQUAL changed_configuration OR
    mode_two_configuration STREQUAL mode_one_configuration OR
    NOT mode_two_build_type STREQUAL "Release" OR
    NOT mode_two_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2\n$")
     message(FATAL_ERROR
         "Small-direct mode 2 was not uniquely and positionally attested")
 endif()
@@ -942,7 +982,7 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
        NOT single_configuration_material MATCHES
            "CMAKE_GENERATOR=Ninja\nCMAKE_CONFIGURATION_TYPES=Debug;Release\n" OR
        NOT single_configuration_material MATCHES
-           "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+           "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
         message(FATAL_ERROR
             "Ninja single-config sidecar was misclassified:\n"
             "${single_configuration_material}")
@@ -979,7 +1019,7 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
            NOT multi_configuration_material MATCHES
                "CMAKE_GENERATOR=Ninja Multi-Config\n" OR
            NOT multi_configuration_material MATCHES
-               "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$" OR
+               "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$" OR
            multi_debug_index EQUAL -1 OR multi_release_index EQUAL -1)
             message(FATAL_ERROR
                 "Multi-config sidecar did not declare an empty "

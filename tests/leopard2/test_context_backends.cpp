@@ -550,6 +550,7 @@ public:
         tracing_.ff8_high_encode_one_block = NULL;
         tracing_.ff8_high_encode_small = NULL;
         tracing_.ff8_multiply_add_outputs = NULL;
+        tracing_.ff8_linear_combination4_tiny = NULL;
         if (entry.table->xor_memory_sources_fused_final)
             tracing_.xor_memory_sources_fused_final =
                 trace_xor_fused_final_sources;

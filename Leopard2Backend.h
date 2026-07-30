@@ -28,6 +28,10 @@
 
 #pragma once
 
+#ifndef LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+#define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
+#endif
+
 #include "leopard2.h"
 
 #include <stddef.h>
@@ -112,6 +116,18 @@ typedef void (*FF8MultiplyAdd2Sources2Outputs)(
     const void* source1,
     const uint16_t* multiplier_logs0,
     const uint16_t* multiplier_logs1,
+    uint64_t byte_count);
+
+// Form one GF8 linear combination from exactly four scaled sources.  All four
+// sources and multiplier logs are live.  add=false initializes destination;
+// add=true XOR-accumulates into it.  Destination must be disjoint from every
+// source, while the read-only sources may alias one another.  A zero-byte
+// operation accesses no pointer.
+typedef void (*FF8LinearCombination4Tiny)(
+    void* destination,
+    const void* const* sources,
+    const uint16_t* multiplier_logs,
+    bool add,
     uint64_t byte_count);
 
 // Four independent in-place XOR pairs.  Destination ranges must be pairwise
@@ -400,6 +416,10 @@ struct Ops
     // distance first: skew[4d], skew[2d], skew[6d], skew[d], skew[3d],
     // skew[5d], skew[7d].
     FF8IFFTButterfly8Out ff8_fft_butterfly8_out;
+    // Optional pure-AVX2 tiny-shard reduction.  It is deliberately absent
+    // from AVX-512 and GFNI members because their table/code-generation
+    // contracts differ from the qualified AVX2 nibble-table implementation.
+    FF8LinearCombination4Tiny ff8_linear_combination4_tiny;
 };
 
 struct X86Features
