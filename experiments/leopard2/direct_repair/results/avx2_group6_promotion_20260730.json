@@ -1,0 +1,323 @@
+{
+  "schema": "leopard2-avx2-direct-group6-promotion/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.26.2",
+  "parent_bead": "leopard-79h.38.5.10.26",
+  "hypothesis": "one dense pure-AVX2 source pass for six GF8 repair outputs is faster than the retained Group4 plus Group2 composition without regressing adjacent output counts",
+  "implementation": {
+    "candidate_commit": "21017455793247e22a22fcbfba008521b9462069",
+    "candidate_tree": "bb34beabc353c21d83c31ecef3c4832f4785699a",
+    "control_commit": "4db672938145cd448d3b3e3b8b8481e531916d53",
+    "compiler_scope": "GCC and Clang",
+    "backend_scope": "pure AVX2 GF8",
+    "output_count": 6,
+    "minimum_byte_count": 16384,
+    "required_byte_count_multiple": 32,
+    "source_passes": 1,
+    "fallback": "Group4 plus Group2 for inactive coefficients, arbitrary tails, smaller buffers, MSVC, GFNI, and AVX-512",
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "scratch_changed": false,
+    "hot_path_allocations_changed": false
+  },
+  "rejected_prototypes": [
+    {
+      "design": "keep all twelve multiplier tables and a register-resident intrinsic nibble mask",
+      "reason": "GCC spilled a hot YMM value"
+    },
+    {
+      "design": "broadcast the sixth table pair inside the loop",
+      "reason": "two table broadcasts remained in every vector iteration"
+    },
+    {
+      "design": "use a memory nibble mask directly",
+      "reason": "two memory-source vpand instructions remained in every vector iteration"
+    },
+    {
+      "design": "synthesize the nibble mask with vpcmpeqd followed by vpsrlw",
+      "reason": "the shift produced 0x000f per 16-bit word rather than 0x0f per byte; the new large six-output KAT detected incorrect recovery and the prototype was discarded before commit"
+    }
+  ],
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "numa_nodes": 1
+  },
+  "resource_policy": {
+    "reason": "the interactive host had suffered unrelated whole-machine OOMs, so this campaign deliberately favored bounded serial evidence over maximum parallelism",
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "build_parallelism_max": 2,
+    "sanitizer_parallelism": 1,
+    "build_and_test_memory_limit_bytes_max": 3221225472,
+    "benchmark_memory_limit_bytes": 1073741824,
+    "benchmark_address_space_limit_bytes": 805306368,
+    "scope_swap_limit_bytes_max": 268435456,
+    "enclosing_cgroup_memory_events_after_campaign": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "correctness": {
+    "release_focused_tests_passed": 4,
+    "clang18_asan_ubsan_focused_tests_passed": 4,
+    "tests": [
+      "leopard2_backend_ops",
+      "leopard2_context_backends",
+      "leopard2_api",
+      "leopard2_direct_repair"
+    ],
+    "release_command": "systemd-run --user --scope --quiet -p MemoryHigh=1536M -p MemoryMax=2G -p MemorySwapMax=256M -- ctest --test-dir /tmp/leopard2-group6-candidate-20260730 -R leopard2_(backend_ops|context_backends|api|direct_repair) -j1 --output-on-failure",
+    "sanitizer_build": "/tmp/leopard2-group35-asan-20260730",
+    "large_group6_kat": {
+      "explicit_backend": "avx2",
+      "byte_counts": [
+        16384,
+        16385
+      ],
+      "dense_multiplier_logs": [
+        0,
+        1,
+        17,
+        29,
+        127,
+        254
+      ],
+      "inactive_log": 65535,
+      "unaligned_source_and_destinations": true,
+      "whole_storage_guards_checked": true,
+      "source_preservation_checked": true
+    },
+    "all_benchmark_round_trips_passed": true,
+    "all_within_round_main_candidate_workload_identities_equal": true
+  },
+  "code_generation": {
+    "control_gcc_pure_avx2_object_text_bytes": 101741,
+    "candidate_gcc_pure_avx2_object_text_bytes": 102471,
+    "gcc_text_delta_bytes": 730,
+    "group6_elf_section": ".text.leo2_avx2_direct_group6",
+    "gcc_group6_section_bytes": 578,
+    "clang18_group6_section_bytes": 555,
+    "gcc_release_ymm_stack_references": 0,
+    "clang18_release_ymm_stack_references": 0,
+    "gcc_release_evex_zmm_mask_references": 0,
+    "clang18_release_evex_zmm_mask_references": 0,
+    "nibble_split": "one vpbroadcastb, two vpand, and one destructive vpsrlq per 32-byte source vector"
+  },
+  "same_source_directional_screens": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "loss_count": 6,
+    "reuse": 8,
+    "paired_samples_per_cell": 254,
+    "control_executable_sha256": "c9e41e09050b0686e4aec70f5100b6b4b8f11200f11ccdf7ddc098695e00ecbc",
+    "candidate_executable_sha256": "58af86c13dd99b936116dce226ed958c33f5469b0d9f36d62ad2417e7567d670",
+    "hashes_verified_after_timing": true,
+    "raw_bundle_sha256": {
+      "target_and_neighbors": "753acc7d0d99fdbecd51ec34badcc0dc0070719630eecd9c8d948508b1efd3a0",
+      "R_matrix": "0bb1254f0d2006e1f621dfae6980d150de5a55d62f8e8c19a86fa6b1878bd58f"
+    },
+    "cells": [
+      {
+        "R": 65,
+        "shard_bytes": 16384,
+        "execution_speedup": 1.080783,
+        "execution_ci95": [
+          1.080036,
+          1.081531
+        ]
+      },
+      {
+        "R": 65,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.065947,
+        "execution_ci95": [
+          1.065688,
+          1.066205
+        ]
+      },
+      {
+        "R": 65,
+        "shard_bytes": 1048576,
+        "execution_speedup": 1.076956,
+        "execution_ci95": [
+          1.012265,
+          1.145781
+        ],
+        "paired_samples": 18
+      },
+      {
+        "R": 96,
+        "shard_bytes": 16384,
+        "execution_speedup": 1.080455,
+        "execution_ci95": [
+          1.079871,
+          1.081040
+        ]
+      },
+      {
+        "R": 96,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.066475,
+        "execution_ci95": [
+          1.065996,
+          1.066954
+        ]
+      },
+      {
+        "R": 128,
+        "shard_bytes": 16384,
+        "execution_speedup": 1.075905,
+        "execution_ci95": [
+          1.075228,
+          1.076583
+        ]
+      },
+      {
+        "R": 128,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.063763,
+        "execution_ci95": [
+          1.063471,
+          1.064055
+        ]
+      },
+      {
+        "R": 65,
+        "loss_count": 5,
+        "neighbor": true,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.000973,
+        "execution_ci95": [
+          1.000752,
+          1.001193
+        ]
+      },
+      {
+        "R": 65,
+        "loss_count": 8,
+        "neighbor": true,
+        "shard_bytes": 65536,
+        "execution_speedup": 0.999346,
+        "execution_ci95": [
+          0.998610,
+          1.000083
+        ]
+      }
+    ]
+  },
+  "independent_round_confirmation": {
+    "method": "three independent control-candidate-candidate-control rounds, 31 samples per child after three warmups, one mean log contrast per round, Student-t 95 percent interval with df=2",
+    "timing_cpu": 4,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "raw_json_bundle_sha256": "b57a6be4cbcdfe1733c168628762cc085bdc776b3ccb9e993dacb98d3ad55fac",
+    "cells": [
+      {
+        "loss_count": 6,
+        "shard_bytes": 16384,
+        "execution_speedup": 1.074012,
+        "execution_ci95": [
+          1.056357,
+          1.091962
+        ],
+        "amortized_at_reuse_speedup": 1.073624,
+        "amortized_at_reuse_ci95": [
+          1.055943,
+          1.091602
+        ]
+      },
+      {
+        "loss_count": 6,
+        "shard_bytes": 65536,
+        "execution_speedup": 1.066249,
+        "execution_ci95": [
+          1.058172,
+          1.074389
+        ],
+        "amortized_at_reuse_speedup": 1.066160,
+        "amortized_at_reuse_ci95": [
+          1.058143,
+          1.074238
+        ]
+      },
+      {
+        "loss_count": 7,
+        "neighbor": true,
+        "shard_bytes": 65536,
+        "execution_speedup": 0.996950,
+        "execution_ci95": [
+          0.984353,
+          1.009709
+        ]
+      },
+      {
+        "loss_count": 6,
+        "tail_fallback": true,
+        "shard_bytes": 16385,
+        "execution_speedup": 1.002697,
+        "execution_ci95": [
+          0.893060,
+          1.125795
+        ]
+      }
+    ]
+  },
+  "exact_leopard_main_diagnostic": {
+    "scope": "bounded pinned diagnostic rather than final campaign-level affinity-exclusion evidence",
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "baseline_executable_sha256": "a0c3c58e24654f8afa9015af703af8200cd0f01ad8f1c3ad1ca1b68ba3dc2c63",
+    "candidate_commit": "21017455793247e22a22fcbfba008521b9462069",
+    "candidate_executable_sha256": "58af86c13dd99b936116dce226ed958c33f5469b0d9f36d62ad2417e7567d670",
+    "method": "three independent main-candidate-candidate-main rounds, 31 samples per child after two warmups, one mean log contrast per round, Student-t 95 percent interval with df=2",
+    "timing_cpu": 4,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "K": 65,
+    "R": 65,
+    "loss_count": 6,
+    "shard_bytes": 65536,
+    "batch": 1,
+    "reuse": 8,
+    "thread_count": 1,
+    "seeds": [
+      77401,
+      77402,
+      77403
+    ],
+    "main_decode_semantics": "locator and pattern setup included in every main decode call",
+    "candidate_decode_semantics": "immutable plan setup separated and amortized over eight executions",
+    "candidate_selected_path": "direct/source_major",
+    "all_within_round_workload_identities_equal": true,
+    "decode_main_over_leopard2_amortized": 8.439353,
+    "decode_ci95": [
+      8.114211,
+      8.777525
+    ],
+    "decode_round_ratios": [
+      8.594841,
+      8.366089,
+      8.359248
+    ],
+    "encode_main_over_leopard2": 0.996828,
+    "encode_ci95": [
+      0.911136,
+      1.090580
+    ],
+    "raw_json_bundle_sha256": "741b580e9c958874f057172f6e4adc43fa71c584db986e159e6c96450080c462"
+  },
+  "disposition": {
+    "promoted": true,
+    "production_default_changed": true,
+    "scope": "GCC/Clang pure-AVX2 GF8 source-major direct repair with exactly six active outputs, aligned vector length, and at least 16 KiB per shard",
+    "reason": "three independent rounds show 5.64 to 9.20 percent credible execution improvement at 16 and 64 KiB, measured neighboring output counts remain inside the 2 percent regression gate, code growth is 730 text bytes, GCC and Clang release loops have no vector spills, focused release and sanitizer gates pass, and the exact-main diagnostic is 8.44 times faster",
+    "parent_bead_remains_open": true,
+    "parent_open_reason": "other K65 candidates, additional reuse regimes, final affinity exclusion, and the all-K exact-main sweep remain separate acceptance work"
+  }
+}
