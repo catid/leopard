@@ -448,6 +448,141 @@ private:
     ScalableDecodeBatch& operator=(const ScalableDecodeBatch&);
 };
 
+void TestEncodeBinding(Fixture& fixture)
+{
+    /*
+        A one-item binding uses the compatibility validator at setup, then the
+        same allocation-free item executor as a larger binding.
+    */
+    ScalableEncodeBatch single(fixture, 1);
+    leo2_encode_batch_binding* single_binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        fixture.codec, &single.items[0], single.items.size(),
+        &single_binding), LEO2_SUCCESS, "single encode binding create");
+    Require(single_binding != NULL &&
+            leo2_encode_batch_binding_item_count(single_binding) == 1,
+        "single encode binding item-count mismatch");
+    RequireResult(leo2_encode_batch_binding_execute(single_binding),
+        LEO2_SUCCESS, "single encode binding execute");
+    single.Check();
+    leo2_encode_batch_binding_destroy(single_binding);
+
+    ScalableEncodeBatch batch(fixture, 8);
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        fixture.codec, &batch.items[0], batch.items.size(), &binding),
+        LEO2_SUCCESS, "encode binding create");
+    Require(binding != NULL &&
+            leo2_encode_batch_binding_item_count(binding) ==
+                batch.items.size(),
+        "encode binding item-count mismatch");
+
+    /*
+        Change both a caller descriptor and entries in a caller pointer array.
+        Binding execution must continue to use its captured metadata.  Keep all
+        replacement addresses valid so a failed deep copy is detected as a
+        byte mismatch rather than an invalid-memory access.
+    */
+    Shards descriptor_decoy(
+        2, Bytes(Fixture::kLongBytes, 0x6d));
+    Shards pointer_decoy(
+        2, Bytes(Fixture::kLongBytes, 0x7e));
+    void* descriptor_decoy_pointers[2] = {
+        &descriptor_decoy[0][0], &descriptor_decoy[1][0]
+    };
+    const leo2_encode_batch_item saved_descriptor = batch.items[0];
+    const std::vector<const void*> saved_original_pointers =
+        batch.original_pointers[2];
+    const std::vector<void*> saved_recovery_pointers =
+        batch.recovery_pointers[2];
+    batch.items[0].original = &fixture.original_b[0];
+    batch.items[0].recovery = descriptor_decoy_pointers;
+    for (size_t i = 0; i < batch.original_pointers[2].size(); ++i)
+        batch.original_pointers[2][i] = fixture.original_b[i];
+    for (size_t i = 0; i < batch.recovery_pointers[2].size(); ++i)
+        batch.recovery_pointers[2][i] = &pointer_decoy[i][0];
+
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "encode binding captured-metadata execute");
+    batch.items[0] = saved_descriptor;
+    for (size_t i = 0; i < batch.original_pointers[2].size(); ++i)
+        batch.original_pointers[2][i] = saved_original_pointers[i];
+    for (size_t i = 0; i < batch.recovery_pointers[2].size(); ++i)
+        batch.recovery_pointers[2][i] = saved_recovery_pointers[i];
+    batch.Check();
+    Require(descriptor_decoy ==
+                Shards(2, Bytes(Fixture::kLongBytes, 0x6d)) &&
+            pointer_decoy ==
+                Shards(2, Bytes(Fixture::kLongBytes, 0x7e)),
+        "encode binding retained caller metadata instead of copying it");
+
+    /*
+        Captured addresses are stable, but the bytes at those addresses are
+        intentionally live.  Reusing a binding after changing source bytes
+        must produce the same parity as a fresh one-shot encode.
+    */
+    const uint8_t saved_source_byte = fixture.source_a[0][0];
+    fixture.source_a[0][0] ^= 0x5bu;
+    Shards expected(2, Bytes(Fixture::kLongBytes, 0));
+    void* expected_pointers[2] = {
+        &expected[0][0], &expected[1][0]
+    };
+    AlignedBuffer expected_scratch(fixture.encode_long);
+    RequireResult(leo2_encode(fixture.codec, Fixture::kLongBytes,
+        &fixture.original_a[0], expected_pointers, expected_scratch.data(),
+        expected_scratch.size()), LEO2_SUCCESS,
+        "encode binding changed-source oracle");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "encode binding changed-source execute");
+    for (size_t item = 0; item < batch.items.size(); ++item)
+    {
+        const size_t bytes = BatchItemBytes(item);
+        for (size_t parity = 0; parity < expected.size(); ++parity)
+            Require(std::equal(batch.outputs[item][parity].begin(),
+                        batch.outputs[item][parity].begin() + bytes,
+                        expected[parity].begin()),
+                "encode binding did not observe changed source bytes");
+    }
+    fixture.source_a[0][0] = saved_source_byte;
+
+    /*
+        Pay any lazy worker startup before auditing.  Repeated execution is the
+        hot path and must not allocate.
+    */
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "encode binding warm execute");
+    batch.Check();
+    BeginAllocationAudit();
+    const leo2_result audited_result =
+        leo2_encode_batch_binding_execute(binding);
+    const uint64_t audited_allocations = EndAllocationAudit();
+    RequireResult(audited_result, LEO2_SUCCESS,
+        "encode binding audited execute");
+    Require(audited_allocations == 0,
+        "encode binding execution allocated memory");
+    batch.Check();
+    leo2_encode_batch_binding_destroy(binding);
+
+    /*
+        Setup must reject a cross-item conflict before any shard output is
+        modified, and a failed constructor must clear its output handle.
+    */
+    ScalableEncodeBatch conflict(fixture, 2);
+    conflict.recovery_pointers[1][0] =
+        conflict.recovery_pointers[0][0];
+    const std::vector<Shards> conflict_before = conflict.outputs;
+    leo2_encode_batch_binding* rejected =
+        reinterpret_cast<leo2_encode_batch_binding*>(
+            static_cast<uintptr_t>(1));
+    RequireResult(leo2_encode_batch_binding_create(fixture.codec,
+        &conflict.items[0], conflict.items.size(), &rejected),
+        LEO2_OVERLAP, "encode binding conflict rejection");
+    Require(rejected == NULL,
+        "failed encode binding creation retained output handle");
+    Require(conflict.outputs == conflict_before,
+        "encode binding setup modified a rejected output");
+}
+
 void TestValidSharedInputs(Fixture& fixture)
 {
     Shards output_a(2, Bytes(Fixture::kLongBytes, 0xa5));
@@ -1704,6 +1839,7 @@ void Run(uint32_t thread_count)
     TestScalableDifferential(fixture);
     TestScalableLargeBatch(fixture);
     TestConcurrentScalableCalls(fixture);
+    TestEncodeBinding(fixture);
 }
 
 } // namespace
@@ -1720,6 +1856,7 @@ int main()
                   << " scalable_query_cutoff=2"
                   << " scalable_batch_sizes=9,64,1024"
                   << " allocation_audit=clean concurrent_scalable_calls=64"
+                  << " encode_binding=deep-copy,live-bytes,allocation-free"
                   << std::endl;
         return 0;
     }

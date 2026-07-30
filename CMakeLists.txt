@@ -599,6 +599,14 @@ if(LEO2_BUILD_BENCHMARKS)
     target_link_libraries(bench_leopard2 leopard)
     leopard2_enable_benchmark_source_attestation(bench_leopard2)
 
+    add_executable(bench_leopard2_prevalidated_batch
+        bench/leopard2/benchmark.cpp)
+    target_compile_definitions(bench_leopard2_prevalidated_batch PRIVATE
+        LEO2_BENCHMARK_PREVALIDATED_BATCH=1)
+    target_link_libraries(bench_leopard2_prevalidated_batch leopard)
+    leopard2_enable_benchmark_source_attestation(
+        bench_leopard2_prevalidated_batch)
+
     if(LEOPARD_ENABLE_GF8)
         add_executable(bench_leopard2_batch_preflight
             bench/leopard2/batch_preflight_benchmark.cpp)

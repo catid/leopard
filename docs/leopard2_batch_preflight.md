@@ -1,12 +1,20 @@
 # Scalable batch alias preflight
 
-Leopard2 API version 5 exposes an opt-in caller-owned alias-preflight workspace
+Leopard2 API version 6 exposes an opt-in caller-owned alias-preflight workspace
 without changing the existing batch ABI:
 
 - `leo2_encode_batch_preflight_scratch_size` and
   `leo2_encode_batch_with_preflight_scratch`;
 - `leo2_decode_plan_batch_preflight_scratch_size` and
   `leo2_decode_plan_execute_batch_with_preflight_scratch`.
+
+Version 6 also adds an encode-only reusable binding for workloads whose shard,
+parity, and scratch addresses remain stable:
+
+- `leo2_encode_batch_binding_create`;
+- `leo2_encode_batch_binding_execute`;
+- `leo2_encode_batch_binding_item_count`;
+- `leo2_encode_batch_binding_destroy`.
 
 The original `leo2_encode_batch` and `leo2_decode_plan_execute_batch` remain
 correct, allocation-free compatibility entry points. They deliberately retain
@@ -51,7 +59,7 @@ runs of `bench_leopard2_batch_preflight`, were:
 | K=100 R=28, B=1024 | 1.72x | 1.52x |
 
 The writable-partitioned implementation made that original nine-item cutoff
-stale. API version 5 now selects scalable preflight from two items for every
+stale. API version 5 began selecting scalable preflight from two items for every
 codec except legacy-high `K=1,R=1`, whose specialized compatibility validator
 remains faster through eight items. `B=1` is unchanged. A three-pass LSD radix
 on `range.begin` measured faster still, but it needs a second equal-size buffer
@@ -77,6 +85,48 @@ batch-wide workspace as well as every per-stripe codec scratch span. Benchmark
 batch counts therefore measure the best safe public batch API rather than
 accidentally timing the deliberately quadratic compatibility fallback at 64 or
 1,024 items.
+
+## Reusable encode binding
+
+The scalable scratch API still validates and sorts `O(B * (K+R))` address
+ranges on every call. That is the correct safe default when application
+descriptors or buffers may change, but it can dominate 64-byte GF8 stripes.
+The binding API moves that work into explicit setup. Creation deep-copies the
+batch descriptors and all original/recovery pointer-array entries, validates
+the full alias contract once, and captures each per-item scratch address.
+Execution invokes only the already-validated codec items and allocates no
+memory.
+
+The caller may release or modify its descriptor and pointer arrays after
+creation. The codec, context, captured shard buffers, and captured scratch
+buffers must outlive the binding and remain at the same addresses and sizes.
+The source bytes at captured addresses may change between calls. Because a
+binding captures writable parity and scratch ranges, the same binding is not a
+concurrent-execution object; callers use separate disjoint bindings for
+concurrent batches. Context-worker startup remains lazy and should be paid
+before a latency-sensitive execution if the context uses a thread pool.
+
+A frozen-binary, one-core diagnostic on 2026-07-30 compared the exact
+`main`-branch Leopard codec with the reusable Leopard2 binding. Each batch item
+had independent output and scratch storage; shard size was 64 bytes. Times are
+median microseconds, so smaller is better:
+
+| K,R | Batch | Leopard main | Leopard2 binding | main / binding |
+|---:|---:|---:|---:|---:|
+| 5,5 | 1 | 0.049145 | 0.042465 | 1.157x |
+| 5,5 | 8 | 0.413207 | 0.336215 | 1.229x |
+| 5,5 | 64 | 2.939488 | 2.560965 | 1.148x |
+| 5,5 | 1024 | 56.314828 | 45.698453 | 1.232x |
+| 8,8 | 1 | 0.046328 | 0.067578 | 0.686x |
+| 8,8 | 8 | 0.377621 | 0.533207 | 0.708x |
+| 8,8 | 64 | 3.013469 | 4.310516 | 0.699x |
+| 8,8 | 1024 | 60.508781 | 78.259438 | 0.773x |
+
+This establishes the setup/execution separation and a production-useful K=5
+win; it does not close the K=8 AVX2 kernel gap. An AUTO-disabled transform
+comparison was within roughly 2–9% of the K=8 direct path across these batch
+counts, so the remaining deficit is not explained by one dispatch threshold.
+It remains tracked as codec-kernel work rather than being hidden by API timing.
 
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
@@ -105,6 +155,9 @@ adds:
 - allocation-audited repeated execution after setup;
 - concurrent calls sharing immutable codecs and decode plans while using
   independent item and batch scratch;
+- binding deep-copy independence, live source-byte reuse, setup-time conflict
+  rejection, scalar/four-thread execution, and allocation-free repeated
+  execution;
 - a 1024-item no-loss plan with deliberately invalid per-item state, proving
   true no-op behavior.
 

@@ -100,7 +100,8 @@ struct Fixture
         size_t item_count,
         size_t shard_bytes,
         uint32_t original_count,
-        uint32_t recovery_count)
+        uint32_t recovery_count,
+        leo2_backend backend)
         : context(NULL)
         , codec(NULL)
         , plan(NULL)
@@ -126,11 +127,12 @@ struct Fixture
         , decode_items(item_count)
         , encode_preflight_bytes(0)
         , decode_preflight_bytes(0)
+        , encode_binding(NULL)
     {
         leo2_context_options options;
         memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
-        options.backend = LEO2_BACKEND_SCALAR;
+        options.backend = backend;
         options.thread_count = 1;
         RequireResult(leo2_context_create(&options, &context),
             "context create");
@@ -217,10 +219,14 @@ struct Fixture
             "decode preflight scratch query");
         encode_preflight.reset(new AlignedBuffer(encode_preflight_bytes));
         decode_preflight.reset(new AlignedBuffer(decode_preflight_bytes));
+        RequireResult(leo2_encode_batch_binding_create(
+            codec, &encode_items[0], encode_items.size(),
+            &encode_binding), "encode binding create");
     }
 
     ~Fixture()
     {
+        leo2_encode_batch_binding_destroy(encode_binding);
         leo2_decode_plan_destroy(plan);
         leo2_codec_destroy(codec);
         leo2_context_destroy(context);
@@ -236,6 +242,11 @@ struct Fixture
         return leo2_encode_batch_with_preflight_scratch(codec,
             &encode_items[0], encode_items.size(), encode_preflight->data(),
             encode_preflight->size());
+    }
+
+    leo2_result EncodePrevalidated()
+    {
+        return leo2_encode_batch_binding_execute(encode_binding);
     }
 
     leo2_result DecodeCompatibility()
@@ -273,6 +284,7 @@ struct Fixture
     size_t decode_preflight_bytes;
     std::unique_ptr<AlignedBuffer> encode_preflight;
     std::unique_ptr<AlignedBuffer> decode_preflight;
+    leo2_encode_batch_binding* encode_binding;
 
 private:
     Fixture(const Fixture&);
@@ -346,8 +358,10 @@ Comparison Compare(
 
 void RunCell(
     size_t item_count,
+    size_t shard_bytes,
     uint32_t original_count,
-    uint32_t recovery_count)
+    uint32_t recovery_count,
+    leo2_backend backend)
 {
     const bool large_code = original_count > 16;
     const size_t iterations = large_code
@@ -355,7 +369,8 @@ void RunCell(
             (item_count == 8 ? 300 : (item_count == 64 ? 20 : 1)))
         : (item_count == 1 ? 50000 :
             (item_count == 8 ? 10000 : (item_count == 64 ? 200 : 2)));
-    Fixture fixture(item_count, 1, original_count, recovery_count);
+    Fixture fixture(item_count, shard_bytes, original_count, recovery_count,
+        backend);
     const Operation encode_scalable_operation =
         fixture.encode_preflight_bytes == 0
             ? &Fixture::EncodeCompatibility
@@ -366,17 +381,25 @@ void RunCell(
             : &Fixture::DecodeScalable;
     const Comparison encode = Compare(fixture,
         &Fixture::EncodeCompatibility, encode_scalable_operation, iterations);
+    const Comparison prevalidated = Compare(fixture,
+        encode_scalable_operation, &Fixture::EncodePrevalidated, iterations);
     const Comparison decode = Compare(fixture,
         &Fixture::DecodeCompatibility, decode_scalable_operation, iterations);
     std::cout << std::fixed << std::setprecision(3)
               << "{\"k\":" << original_count
               << ",\"r\":" << recovery_count
+              << ",\"shard_bytes\":" << shard_bytes
+              << ",\"backend\":" << static_cast<unsigned>(backend)
               << ",\"batch\":" << item_count
               << ",\"iterations\":" << iterations
               << ",\"encode_compatibility_ns\":" << encode.compatibility
               << ",\"encode_scalable_ns\":" << encode.scalable
               << ",\"encode_speedup\":"
               << encode.compatibility / encode.scalable
+              << ",\"encode_prevalidated_ns\":"
+              << prevalidated.scalable
+              << ",\"encode_scalable_over_prevalidated\":"
+              << prevalidated.compatibility / prevalidated.scalable
               << ",\"decode_compatibility_ns\":" << decode.compatibility
               << ",\"decode_scalable_ns\":" << decode.scalable
               << ",\"decode_speedup\":"
@@ -394,10 +417,24 @@ int main()
     try
     {
         const size_t batches[] = { 1, 8, 64, 1024 };
-        const uint32_t codes[][2] = { { 3, 2 }, { 100, 28 } };
-        for (size_t code = 0; code < sizeof(codes) / sizeof(codes[0]); ++code)
+        struct Cell
+        {
+            size_t shard_bytes;
+            uint32_t k;
+            uint32_t r;
+            leo2_backend backend;
+        };
+        const Cell cells[] = {
+            { 1, 3, 2, LEO2_BACKEND_SCALAR },
+            { 1, 100, 28, LEO2_BACKEND_SCALAR },
+            { 64, 5, 5, LEO2_BACKEND_AVX2 },
+            { 64, 8, 8, LEO2_BACKEND_AVX2 }
+        };
+        for (size_t cell = 0;
+             cell < sizeof(cells) / sizeof(cells[0]); ++cell)
             for (size_t i = 0; i < sizeof(batches) / sizeof(batches[0]); ++i)
-                RunCell(batches[i], codes[code][0], codes[code][1]);
+                RunCell(batches[i], cells[cell].shard_bytes, cells[cell].k,
+                    cells[cell].r, cells[cell].backend);
         return 0;
     }
     catch (const std::exception& error)

@@ -50,11 +50,12 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 5u
+#define LEO2_API_VERSION 6u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
 typedef struct leo2_decode_plan leo2_decode_plan;
+typedef struct leo2_encode_batch_binding leo2_encode_batch_binding;
 
 typedef enum leo2_result {
     LEO2_SUCCESS = 0,
@@ -391,6 +392,39 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
     size_t item_count,
     void* preflight_scratch,
     size_t preflight_scratch_bytes);
+
+/*
+    A binding is optional setup for repeatedly encoding the same buffer
+    addresses.  Creation deep-copies every batch descriptor and original/
+    recovery pointer-array entry, validates the complete cross-item alias
+    contract, and performs no encoding.  The caller's descriptor and pointer
+    arrays may be changed or released after successful creation.
+
+    The codec, every captured shard buffer, and every captured per-item scratch
+    span must remain alive and retain the same size and address until the
+    binding is destroyed.  Shard bytes may change between executions.  One
+    binding must not execute concurrently with itself because it captures
+    writable parity and scratch spans; separate bindings remain subject to
+    their ordinary buffer-disjointness obligations.  Destroying a binding
+    during execution is invalid.
+
+    Execution allocates nothing and repeats no pointer/alias validation.  A
+    context's optional worker pool retains its documented lazy first-use
+    behavior.  Creation is setup work: it may allocate and returns
+    LEO2_OUT_OF_MEMORY on failure.  item_count must be positive and no greater
+    than UINT32_MAX.  The codec and its context must outlive the binding.
+*/
+LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    leo2_encode_batch_binding** binding_out);
+LEO2_EXPORT void leo2_encode_batch_binding_destroy(
+    leo2_encode_batch_binding* binding);
+LEO2_EXPORT size_t leo2_encode_batch_binding_item_count(
+    const leo2_encode_batch_binding* binding);
+LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
+    const leo2_encode_batch_binding* binding);
 
 /*
     Presence arrays contain one for a received shard and zero for an erasure.

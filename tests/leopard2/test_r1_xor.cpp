@@ -701,6 +701,21 @@ void execute_public_k1_encode_batch(
         "K=1 scalable encode batch execute");
     check_outputs();
 
+    leo2_encode_batch_binding* binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        fixture.codec, &items[0], items.size(), &binding),
+        LEO2_SUCCESS, "K=1 encode binding create");
+    require(binding != NULL &&
+            leo2_encode_batch_binding_item_count(binding) == items.size(),
+        "K=1 encode binding item-count mismatch");
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(output_storage[item_i].begin(),
+            output_storage[item_i].end(), 0x5a);
+    require_result(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "K=1 encode binding execute");
+    check_outputs();
+    leo2_encode_batch_binding_destroy(binding);
+
     if (batch_count >= 9 && fixture.bytes == 4097)
     {
         AlignedScratch optional_item_scratch(64);

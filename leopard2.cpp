@@ -283,6 +283,14 @@ struct leo2_codec
 #endif
 };
 
+struct leo2_encode_batch_binding
+{
+    const leo2_codec* codec;
+    std::vector<leo2_encode_batch_item> items;
+    std::vector<const void*> original_pointers;
+    std::vector<void*> recovery_pointers;
+};
+
 struct leo2_direct_repair_term
 {
     // The high bit distinguishes recovery shards from original shards.
@@ -8072,6 +8080,33 @@ static leo2_result RunDecodeBatchItem(void* context, size_t index)
 
 namespace leopard2_internal {
 
+static leo2_result ExecuteEncodeBatchPrevalidated(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count)
+{
+    if (!codec || item_count > 0xffffffffu ||
+        (item_count != 0 && !items))
+        return LEO2_INVALID_ARGUMENT;
+    size_t item_bytes = 0;
+    if (!CheckedMultiply(item_count, sizeof(*items), item_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    const AddressRange unused_item_range = { 0, 0 };
+    EncodeBatchTaskContext batch = {
+        codec, items, item_bytes, unused_item_range
+    };
+    if (codec->context->pool)
+        return codec->context->pool->Run(
+            item_count, RunEncodeBatchItem, &batch, NULL);
+    for (size_t i = 0; i < item_count; ++i)
+    {
+        const leo2_result result = RunEncodeBatchItem(&batch, i);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    return LEO2_SUCCESS;
+}
+
 static void FillTerminalDecodePathInfo(
     DecodePath path,
     DecodePathRule rule,
@@ -9971,6 +10006,196 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
             return result;
     }
     return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count,
+    leo2_encode_batch_binding** binding_out)
+{
+    if (!IsRepresentableOutput(binding_out))
+        return LEO2_INVALID_ARGUMENT;
+    *binding_out = NULL;
+    if (!codec || !items || item_count == 0 || item_count > 0xffffffffu)
+        return LEO2_INVALID_ARGUMENT;
+
+    size_t caller_item_bytes = 0;
+    AddressRange caller_item_range;
+    if (!CheckedMultiply(
+            item_count, sizeof(*items), caller_item_bytes) ||
+        !MakeRange(items, static_cast<uint64_t>(caller_item_bytes),
+            caller_item_range))
+        return LEO2_INVALID_ARGUMENT;
+    (void)caller_item_range;
+
+    size_t original_pointer_count = 0;
+    size_t recovery_pointer_count = 0;
+    if (!CheckedMultiply(item_count,
+            static_cast<size_t>(codec->original_count),
+            original_pointer_count) ||
+        !CheckedMultiply(item_count,
+            static_cast<size_t>(codec->recovery_count),
+            recovery_pointer_count))
+        return LEO2_INVALID_ARGUMENT;
+
+    leo2_encode_batch_binding* binding =
+        new (std::nothrow) leo2_encode_batch_binding;
+    if (!binding)
+        return LEO2_OUT_OF_MEMORY;
+    binding->codec = codec;
+
+    leo2_result result = LEO2_SUCCESS;
+    try
+    {
+        if (item_count > binding->items.max_size() ||
+            original_pointer_count >
+                binding->original_pointers.max_size() ||
+            recovery_pointer_count >
+                binding->recovery_pointers.max_size())
+        {
+            delete binding;
+            return LEO2_INVALID_ARGUMENT;
+        }
+        binding->items.resize(item_count);
+        binding->original_pointers.resize(original_pointer_count);
+        binding->recovery_pointers.resize(recovery_pointer_count);
+
+        for (size_t item_index = 0;
+             item_index < item_count; ++item_index)
+        {
+            const leo2_encode_batch_item& source = items[item_index];
+            AddressRange pointer_range;
+            if (!source.original || !source.recovery ||
+                !MakeArrayRange(source.original, codec->original_count,
+                    sizeof(*source.original), pointer_range) ||
+                !MakeArrayRange(source.recovery, codec->recovery_count,
+                    sizeof(*source.recovery), pointer_range))
+            {
+                delete binding;
+                return LEO2_INVALID_ARGUMENT;
+            }
+
+            const size_t original_offset =
+                item_index * codec->original_count;
+            const size_t recovery_offset =
+                item_index * codec->recovery_count;
+            std::copy(source.original,
+                source.original + codec->original_count,
+                binding->original_pointers.begin() + original_offset);
+            std::copy(source.recovery,
+                source.recovery + codec->recovery_count,
+                binding->recovery_pointers.begin() + recovery_offset);
+
+            leo2_encode_batch_item& destination =
+                binding->items[item_index];
+            destination = source;
+            destination.original =
+                binding->original_pointers.data() + original_offset;
+            destination.recovery =
+                binding->recovery_pointers.data() + recovery_offset;
+        }
+    }
+    catch (const std::bad_alloc&)
+    {
+        delete binding;
+        return LEO2_OUT_OF_MEMORY;
+    }
+
+    size_t binding_item_bytes = 0;
+    AddressRange binding_item_range;
+    if (!CheckedMultiply(binding->items.size(),
+            sizeof(binding->items[0]), binding_item_bytes) ||
+        !MakeRange(binding->items.data(),
+            static_cast<uint64_t>(binding_item_bytes),
+            binding_item_range))
+    {
+        delete binding;
+        return LEO2_INTERNAL_ERROR;
+    }
+
+    size_t preflight_bytes = 0;
+    result = EncodeBatchPreflightScratchBytes(
+        codec, item_count, preflight_bytes);
+    if (result != LEO2_SUCCESS)
+    {
+        delete binding;
+        return result;
+    }
+    if (preflight_bytes != 0)
+    {
+        /*
+            The legacy allocator is aligned to LEO_ALIGN_BYTES, which can be
+            32 in an AVX2 build.  Leopard2's public scratch contract is 64
+            bytes, so reserve an extra cache line and align this setup-only
+            workspace explicitly.
+        */
+        size_t allocation_bytes = 0;
+        if (!CheckedAdd(preflight_bytes, kScratchAlignment - 1,
+                allocation_bytes))
+        {
+            delete binding;
+            return LEO2_INTERNAL_ERROR;
+        }
+        uint8_t* const allocation =
+            new (std::nothrow) uint8_t[allocation_bytes];
+        if (!allocation)
+        {
+            delete binding;
+            return LEO2_OUT_OF_MEMORY;
+        }
+        const uintptr_t aligned_address =
+            (reinterpret_cast<uintptr_t>(allocation) +
+                kScratchAlignment - 1) &
+            ~static_cast<uintptr_t>(kScratchAlignment - 1);
+        void* const preflight =
+            reinterpret_cast<void*>(aligned_address);
+        result = PreflightEncodeBatchScalable(
+            codec, binding->items.data(), item_count, binding_item_range,
+            preflight, preflight_bytes);
+        delete[] allocation;
+    }
+    else if (IsLegacyHighK1R1Codec(codec))
+    {
+        result = ValidateK1R1EncodeBatch(
+            codec, binding->items.data(), item_count, binding_item_range,
+            binding_item_bytes);
+    }
+    else
+    {
+        result = PreflightEncodeBatch(
+            codec, binding->items.data(), item_count, binding_item_range,
+            binding_item_bytes);
+    }
+    if (result != LEO2_SUCCESS)
+    {
+        delete binding;
+        return result;
+    }
+
+    *binding_out = binding;
+    return LEO2_SUCCESS;
+}
+
+LEO2_EXPORT void leo2_encode_batch_binding_destroy(
+    leo2_encode_batch_binding* binding)
+{
+    delete binding;
+}
+
+LEO2_EXPORT size_t leo2_encode_batch_binding_item_count(
+    const leo2_encode_batch_binding* binding)
+{
+    return binding ? binding->items.size() : 0;
+}
+
+LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
+    const leo2_encode_batch_binding* binding)
+{
+    if (!binding || !binding->codec || binding->items.empty())
+        return LEO2_INVALID_ARGUMENT;
+    return leopard2_internal::ExecuteEncodeBatchPrevalidated(
+        binding->codec, binding->items.data(), binding->items.size());
 }
 
 static leo2_result DecodePlanCreateInternal(

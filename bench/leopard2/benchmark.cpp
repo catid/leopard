@@ -1202,6 +1202,12 @@ static int Run(const Options& options)
         "decode batch preflight scratch query");
     AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
     AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
+    leo2_encode_batch_binding* encode_batch_binding = NULL;
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    RequireLeo2(leo2_encode_batch_binding_create(
+        codec, &encode_items[0], encode_items.size(),
+        &encode_batch_binding), "encode batch binding create");
+#endif
     const auto run_encode_batch = [&]() {
         const leo2_result result = encode_batch_preflight_bytes == 0
             ? leo2_encode_batch(
@@ -1221,6 +1227,14 @@ static int Run(const Options& options)
                 decode_batch_preflight.data(),
                 decode_batch_preflight.size());
         RequireLeo2(result, "decode batch");
+    };
+    const auto run_encode_batch_execution = [&]() {
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        RequireLeo2(leo2_encode_batch_binding_execute(
+            encode_batch_binding), "encode batch binding execute");
+#else
+        run_encode_batch();
+#endif
     };
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
@@ -1312,13 +1326,13 @@ static int Run(const Options& options)
 
     for (size_t i = 0; i < options.warmup; ++i)
     {
-        run_encode_batch();
+        run_encode_batch_execution();
         run_decode_batch();
     }
 
     const Summary encode_execution = Measure(
         options.iterations, options.reuse, options.retain_samples, [&]() {
-        run_encode_batch();
+        run_encode_batch_execution();
     });
     const Summary decode_execution = Measure(
         options.iterations, options.reuse, options.retain_samples, [&]() {
@@ -1436,6 +1450,10 @@ static int Run(const Options& options)
          << "    \"compiler\": \"" << CompilerName() << "\",\n"
          << "    \"compiler_version\": \"" << JsonEscape(CompilerVersion()) << "\",\n"
          << "    \"cplusplus\": " << __cplusplus;
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    json << ",\n"
+         << "    \"prevalidated_batch_experiment\": true";
+#endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)
     {
@@ -1639,6 +1657,7 @@ static int Run(const Options& options)
             Fail("failed writing JSON output: " + options.output);
     }
 
+    leo2_encode_batch_binding_destroy(encode_batch_binding);
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);

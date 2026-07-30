@@ -349,14 +349,23 @@ safe to invoke concurrently with distinct outputs and scratch.  Within a batch,
 the implementation reports the result from the lowest-index failing item
 deterministically; completion order is otherwise unspecified.
 
-API version 4 also provides an opt-in scalable alias preflight for large
+API version 6 provides an opt-in scalable alias preflight for repeated and large
 batches. Query caller-owned storage with
 `leo2_encode_batch_preflight_scratch_size` or
 `leo2_decode_plan_batch_preflight_scratch_size`, then pass that aligned storage
-to the corresponding `*_with_preflight_scratch` entry point. Below nine items
-the query returns zero and execution uses the exact compatibility path. At
-larger counts a flattened, allocation-free interval sort and sweep replaces the
+to the corresponding `*_with_preflight_scratch` entry point. General codecs
+select this path from two items; one item and legacy-high K=1,R=1 through eight
+items retain their measured specialized compatibility paths. A flattened,
+allocation-free interval sort and sweep replaces the
 compatibility path's pairwise item comparisons without weakening atomic
-rejection or immutable-input sharing. The full algorithm, alias treatment,
-tests, and diagnostic crossover evidence are in
+rejection or immutable-input sharing.
+
+When every buffer and per-item scratch address remains stable across many
+encodes, `leo2_encode_batch_binding_create` deep-copies and validates that
+metadata once. `leo2_encode_batch_binding_execute` then performs only the
+captured byte-heavy work without allocation or repeated alias sorting. Source
+bytes may change, but the codec/context and every captured buffer must outlive
+the binding; one binding is not concurrently executable because it owns no
+separate parity or scratch storage. The full algorithms, alias treatment,
+tests, lifetime rules, and diagnostic crossover evidence are in
 `docs/leopard2_batch_preflight.md`.

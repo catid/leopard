@@ -395,10 +395,26 @@ void test_introspection_and_null_contracts(
     require_result(leo2_codec_create(context, 3, 2, LEO2_PROFILE_AUTO,
         LEO2_FIELD_AUTO, NULL, NULL), LEO2_INVALID_ARGUMENT,
         "null codec output");
+    leo2_encode_batch_binding* invalid_binding =
+        reinterpret_cast<leo2_encode_batch_binding*>(
+            static_cast<uintptr_t>(1));
+    require_result(leo2_encode_batch_binding_create(
+        NULL, NULL, 0, &invalid_binding), LEO2_INVALID_ARGUMENT,
+        "null codec encode binding create");
+    require(invalid_binding == NULL,
+        "failed encode binding creation did not clear output");
+    require_result(leo2_encode_batch_binding_create(
+        NULL, NULL, 0, NULL), LEO2_INVALID_ARGUMENT,
+        "null encode binding output");
+    require(leo2_encode_batch_binding_item_count(NULL) == 0,
+        "null encode binding item-count sentinel");
+    require_result(leo2_encode_batch_binding_execute(NULL),
+        LEO2_INVALID_ARGUMENT, "null encode binding execute");
     leo2_context_destroy(NULL);
     leo2_codec_destroy(NULL);
     leo2_decode_plan_destroy(NULL);
-    counts->introspection_checks += 10;
+    leo2_encode_batch_binding_destroy(NULL);
+    counts->introspection_checks += 15;
 
     CodecOwner high;
     require_result(leo2_codec_create(context, 9, 7, LEO2_PROFILE_AUTO,
@@ -574,6 +590,10 @@ void test_introspection_and_null_contracts(
     require_result(leo2_encode_batch_preflight_scratch_size(
         high.codec, 9, invalid_size_output), LEO2_INVALID_ARGUMENT,
         "unrepresentable encode-batch scratch output span");
+    require_result(leo2_encode_batch_binding_create(high.codec, NULL, 1,
+        reinterpret_cast<leo2_encode_batch_binding**>(
+            invalid_size_address)), LEO2_INVALID_ARGUMENT,
+        "unrepresentable encode-binding output span");
     require_result(leo2_decode_plan_scratch_size(
         valid_plan.plan, 17, invalid_size_output), LEO2_INVALID_ARGUMENT,
         "unrepresentable plan scratch output span");
@@ -591,7 +611,7 @@ void test_introspection_and_null_contracts(
         NULL, 0), LEO2_INVALID_ARGUMENT, "null plan execute");
     require_result(leo2_decode_plan_execute_batch(NULL, NULL, 0),
         LEO2_INVALID_ARGUMENT, "null plan empty batch");
-    counts->introspection_checks += 29;
+    counts->introspection_checks += 30;
 }
 
 void test_default_affinity_thread_budget(Counts* counts)
