@@ -1,0 +1,277 @@
+{
+  "schema": "leopard2-equal-rounded-avx2-candidate/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.30",
+  "status": "production candidate pending authoritative isolated confirmation",
+  "promotion_scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "minimum_original_count": 17,
+    "maximum_original_count": 128,
+    "rounded_condition": "ceil_pow2(K) equals ceil_pow2(R)",
+    "excluded_existing_family": "K=65 keeps its separately measured selector and context cache",
+    "maximum_missing_originals": 8,
+    "minimum_shard_bytes": 1,
+    "arbitrary_positive_byte_tails": true,
+    "gfni_behavior_changed": false,
+    "avx512_behavior_changed": false,
+    "lower_backend_behavior_changed": false,
+    "wire_format_changed": false,
+    "public_abi_changed": false
+  },
+  "implementation": {
+    "execution": "source-major multi-output AVX2 repair",
+    "aligned_executor": "the established 1365-byte GCC function remains unchanged",
+    "tail_executor": "a separate zero-padded 32-byte AVX2 tile handles non-multiple-of-32 suffixes",
+    "plan_setup": "an immutable codec-owned R-by-K GF8 generator-row cache selects the existing Cauchy inverse and AVX2 combined-row builder",
+    "maximum_new_codec_bytes": 16384,
+    "scratch_bytes_changed": false,
+    "hot_path_allocations_changed": false,
+    "codec_setup_is_reported_separately": true,
+    "control_definitions": {
+      "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS": 0,
+      "LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE": 0
+    }
+  },
+  "identity": {
+    "base_commit": "d775571",
+    "staging_diff_sha256": "6c3ee37d90d5eb0cd76b07df5cc5f396892d68a4d4257a37aab99d36f016e919",
+    "leopard2_cpp_sha256": "93d121a2fabcff5bc0be9d8f44a5ec52a80c1cf3db9efaeaf4de10650b647773",
+    "test_api_cpp_sha256": "4da9a6df5404b54bb5cec9c66ca772333bdd4f42eeab2137389e35330562a179",
+    "directional_transform_executable_sha256": "77b44cf36f1b4b1c4827e11a2c4ba5aa76e4682580fccc3f7a8ca8806c5c3449",
+    "directional_candidate_executable_sha256": "0989c4cf3bdffe65a4bddea92d7ef7c29f21c6370d2d2f55256af4177834a2b8",
+    "exact_main_executable_sha256": "a0c3c58e24654f8afa9015af703af8200cd0f01ad8f1c3ad1ca1b68ba3dc2c63",
+    "all_frozen_binary_hashes_verified_after_timing": true,
+    "note": "the final staging diff changes the default and narrows backend eligibility; its explicit AVX2 arithmetic, cache, and tail implementation is the measured candidate"
+  },
+  "correctness": {
+    "focused_release_api_oracle_passed": true,
+    "focused_release_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486
+    },
+    "clang18_asan_ubsan_api_oracle_passed": true,
+    "clang18_asan_ubsan_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486
+    },
+    "gfni_boundary_test": "one loss remains direct; four losses remains transform",
+    "directional_cells": 175,
+    "directional_benchmark_invocations": 350,
+    "all_directional_round_trips_passed": true,
+    "all_within_cell_workload_digests_equal": true,
+    "all_candidate_paths_and_executors_verified": true
+  },
+  "directional_screens": {
+    "authority": "serialized and pinned directional evidence; promotion still requires coordinator-excluded authoritative rounds from leopard-79h.38.5.10.31",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "tiny_boundaries": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-tiny-boundary-v1-20260730",
+      "cells": 45,
+      "K_values": [
+        17,
+        31,
+        32,
+        64,
+        128
+      ],
+      "loss_count": 8,
+      "shard_bytes": [
+        1,
+        7,
+        15,
+        31,
+        32,
+        33,
+        63,
+        64,
+        65
+      ],
+      "minimum_transform_over_candidate_execution": 1.353739,
+      "minimum_transform_over_candidate_reuse_one": 1.411717
+    },
+    "all_loss_counts_64k": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-64k-allloss-v1-20260730",
+      "cells": 63,
+      "K_values": [
+        17,
+        31,
+        32,
+        33,
+        64,
+        66,
+        96,
+        127,
+        128
+      ],
+      "loss_counts": [
+        2,
+        3,
+        4,
+        5,
+        6,
+        7,
+        8
+      ],
+      "minimum_transform_over_candidate_execution": 2.062478,
+      "median_transform_over_candidate_execution": 4.565409,
+      "maximum_transform_over_candidate_execution": 13.096936,
+      "minimum_transform_over_candidate_reuse_one": 2.061846
+    },
+    "one_mib": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-1m-boundary-v1-20260730",
+      "cells": 10,
+      "K_values": [
+        17,
+        31,
+        33,
+        66,
+        128
+      ],
+      "loss_counts": [
+        2,
+        8
+      ],
+      "minimum_transform_over_candidate_execution": 2.049879,
+      "median_transform_over_candidate_execution": 4.264162,
+      "maximum_transform_over_candidate_execution": 10.953521,
+      "minimum_transform_over_candidate_reuse_one": 2.049444,
+      "peak_memory_bytes": 439324672
+    },
+    "sixteen_mib": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-16m-k17-v1-20260730",
+      "cells": 2,
+      "K": 17,
+      "R": 17,
+      "loss_2_execution_speedup": 8.603130,
+      "loss_8_execution_speedup": 1.154951,
+      "minimum_reuse_one_speedup": 1.154995,
+      "peak_memory_bytes": 876601344,
+      "scope_limit_bytes": 1610612736,
+      "coverage_limit": "larger K at 16 MiB was not allocated because public input/output storage alone leaves the established safe benchmark envelope"
+    },
+    "unequal_public_counts": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-kr-neighbors-v1-20260730",
+      "cells": 40,
+      "pairs": [
+        "17/31",
+        "17/32",
+        "31/17",
+        "32/17",
+        "33/64",
+        "64/33",
+        "66/96",
+        "66/128",
+        "96/65",
+        "128/65"
+      ],
+      "shard_bytes": [
+        63,
+        65536
+      ],
+      "loss_counts": [
+        2,
+        8
+      ],
+      "minimum_transform_over_candidate_execution": 1.356022,
+      "minimum_transform_over_candidate_reuse_one": 1.466993
+    },
+    "exact_main_64k": {
+      "artifact": "/tmp/leopard2-equal-rounded-rowcache-vs-main-v1-20260730",
+      "cells": 15,
+      "K_equals_R": [
+        17,
+        32,
+        64,
+        96,
+        128
+      ],
+      "loss_counts": [
+        2,
+        4,
+        8
+      ],
+      "main_over_candidate_decode_execution": {
+        "minimum": 2.753891,
+        "median": 6.833332,
+        "maximum": 15.584377
+      },
+      "main_over_candidate_decode_reuse_one": {
+        "minimum": 2.724013,
+        "median": 6.783981,
+        "maximum": 15.401137
+      },
+      "main_over_candidate_encode": {
+        "minimum": 0.995735,
+        "median": 1.082566,
+        "maximum": 1.204646
+      }
+    }
+  },
+  "setup_tradeoff": {
+    "plan_setup_speedup_over_uncached_candidate": {
+      "minimum": 1.771028,
+      "median": 2.652535,
+      "maximum": 2.949367
+    },
+    "absolute_codec_setup_us_in_weak_region": {
+      "minimum": 1.98,
+      "maximum": 7.61
+    },
+    "codec_setup_ratio_over_uncached_candidate": {
+      "minimum": 9.090909,
+      "median": 9.771645,
+      "maximum": 19.512821
+    },
+    "decision": "accept the bounded one-time codec setup and at most 16 KiB table because immutable codecs and erasure plans are reusable, while even one fresh plan now wins every measured cell"
+  },
+  "code_generation": {
+    "gcc": {
+      "aligned_executor_bytes": 1365,
+      "tail_outer_executor_bytes": 1762,
+      "tail_helper_bytes": 1088,
+      "vector_stack_references": 0,
+      "zmm_or_mask_references": 0
+    },
+    "clang18": {
+      "aligned_executor_bytes": 1029,
+      "tail_outer_executor_bytes": 1262,
+      "tail_helper_bytes": 787,
+      "vector_stack_references": 0,
+      "zmm_or_mask_references": 0
+    }
+  },
+  "resource_policy": {
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "build_parallelism_max": 2,
+    "sanitizer_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "release_test_peak_bytes": 826691584,
+    "asan_ubsan_build_peak_bytes": 639520768,
+    "asan_ubsan_test_peak_bytes": 1654575104,
+    "maximum_benchmark_peak_bytes": 876601344,
+    "all_scope_memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "decision": {
+    "stage_as_default_candidate": true,
+    "close_bead": false,
+    "remaining_gate": "clean-source authoritative exact-main and same-source rounds with coordinator exclusion",
+    "rollback": "compile the two control definitions as zero or revert the staging commit"
+  }
+}

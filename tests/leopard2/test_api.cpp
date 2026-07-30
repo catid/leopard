@@ -53,11 +53,11 @@
 #endif
 
 #ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
-#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 1
 #endif
 
 #ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES
-#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 2048
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 1
 #endif
 
 #ifndef LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
@@ -1968,6 +1968,49 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     leo2_context_destroy(context);
 }
 
+void test_equal_rounded_multi_loss_backend_scope()
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_GFNI;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result result = leo2_context_create(&options, &context);
+    require(result == LEO2_SUCCESS || result == LEO2_UNSUPPORTED,
+        "explicit GFNI boundary context returned an unexpected result");
+    if (result == LEO2_UNSUPPORTED)
+    {
+        require(context == NULL,
+            "unsupported GFNI boundary context was not cleared");
+        return;
+    }
+
+    leo2_codec* codec = make_codec(context, 17, 17,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    for (unsigned losses = 1; losses <= 4; losses += 3)
+    {
+        std::vector<uint8_t> original_present(17, 1);
+        std::vector<uint8_t> recovery_present(17, 1);
+        for (unsigned missing = 0; missing < losses; ++missing)
+            original_present[missing] = 0;
+        leo2_decode_plan* plan = NULL;
+        require_result(leo2_decode_plan_create(codec,
+            &original_present[0], &recovery_present[0], &plan),
+            "GFNI boundary plan create");
+        leopard2_internal::DecodePathInfo path;
+        require_result(leopard2_internal::GetDecodePlanPathInfo(
+            plan, 64, false, &path),
+            "GFNI boundary path introspection");
+        require((path.path == leopard2_internal::kDecodePathDirect) ==
+                (losses == 1),
+            "equal-rounded multi-loss promotion escaped AVX2");
+        leo2_decode_plan_destroy(plan);
+    }
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+}
+
 void test_direct_repair_field_helpers()
 {
     const BinaryField gf8 = leopard2_test::make_legacy_gf8();
@@ -3566,6 +3609,7 @@ int main()
         test_no_loss_no_op(context);
         test_direct_repair_dispatch_bounds(context);
         test_expanded_direct_repair_execution(&counts);
+        test_equal_rounded_multi_loss_backend_scope();
         test_direct_repair_field_helpers();
         test_overlap_rejection(context);
         test_decode_late_scratch_alias_failure_atomicity(context);

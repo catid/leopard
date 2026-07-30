@@ -79,27 +79,26 @@
 #endif
 
 /*
-    Default-off selector used to rescreen multi-loss direct repair for every
-    equal-rounded GF8 parent after the source-major backend was improved.
-    Production retains its measured one-loss boundary until a new crossover
-    map supports a narrower deterministic promotion.
+    Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
+    direct-repair promotion.  A value of zero retains the former one-loss
+    control for reproducible same-source comparisons.
 */
 #ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
-#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 1
 #endif
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS < 0 || \
     LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS > 1
 #error "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS must be 0 or 1"
 #endif
 #ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES
-#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 2048
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 1
 #endif
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES < 1
 #error "LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES must be positive"
 #endif
 
 #ifndef LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
-#define LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE 0
+#define LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE 1
 #endif
 #if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE < 0 || \
     LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE > 1
@@ -1712,6 +1711,20 @@ static bool IsExpandedDirectRepairCodec(const leo2_codec* codec)
         codec->original_count == 65 && codec->padded_side == 128;
 }
 
+static bool IsEqualRoundedMultiLossDirectRepairCodec(
+    const leo2_codec* codec)
+{
+    /*
+        The all-K, arbitrary-tail, large-shard, and K/R-neighbor campaigns
+        promoted only the explicit AVX2 equal-rounded family.  GFNI retains
+        the established one-loss selector, and K=65 retains its separately
+        measured byte boundary and shared canonical row cache.
+    */
+    return IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+        !IsExpandedDirectRepairCodec(codec) &&
+        codec->context->backend == LEO2_BACKEND_AVX2;
+}
+
 static bool IsGeneralDirectOneLossCodec(
     const leo2_codec* codec)
 {
@@ -1872,7 +1885,8 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
-        return kDirectMaxRepairLosses;
+        return IsEqualRoundedMultiLossDirectRepairCodec(codec)
+            ? kDirectMaxRepairLosses : 1;
 #else
         return 1;
 #endif
@@ -6354,8 +6368,7 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
             shard_bytes >=
                 LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES &&
-            IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
-            !IsExpandedDirectRepairCodec(codec);
+            IsEqualRoundedMultiLossDirectRepairCodec(codec);
 #else
             false;
 #endif
@@ -6412,9 +6425,7 @@ static LEO2_DIRECT_REPAIR_NOINLINE leo2_result ExecuteDirectRepair(
             leopard2_internal::kDirectRepairExecutorSourceMajor)
 #if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
     {
-        if (!IsExpandedDirectRepairCodec(codec) &&
-            codec->context->backend == LEO2_BACKEND_AVX2 &&
-            IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+        if (IsEqualRoundedMultiLossDirectRepairCodec(codec) &&
             (shard_bytes & (kSourceMajorTailTileBytes - 1U)) != 0)
         {
             return ExecuteGF8SourceMajorTiledTailDirectRepair(plan,
@@ -8564,9 +8575,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                                 });
                         }
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
-                        else if (codec->context->backend ==
-                                LEO2_BACKEND_AVX2 &&
-                            IsMeasuredEqualRoundedDirectRepairCodec(codec))
+                        else if (
+                            IsEqualRoundedMultiLossDirectRepairCodec(codec))
                         {
                             /*
                                 Setup failure is non-fatal: the per-plan row
