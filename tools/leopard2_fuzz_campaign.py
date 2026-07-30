@@ -27,6 +27,11 @@ import tempfile
 import time
 from pathlib import Path
 
+try:
+    import resource
+except ImportError:  # pragma: no cover - LSan companion requires Linux.
+    resource = None
+
 _TOOLS_DIRECTORY = str(Path(__file__).resolve().parent)
 if _TOOLS_DIRECTORY not in sys.path:
     sys.path.insert(0, _TOOLS_DIRECTORY)
@@ -34,8 +39,10 @@ if _TOOLS_DIRECTORY not in sys.path:
 import leopard2_lab as lab  # noqa: E402
 
 
-CAMPAIGN_SCHEMA = "leopard2-fuzz-campaign/v4"
-AUDIT_SCHEMA = "leopard2-fuzz-campaign-audit/v4"
+HISTORICAL_CAMPAIGN_SCHEMA = "leopard2-fuzz-campaign/v4"
+CAMPAIGN_SCHEMA = "leopard2-fuzz-campaign/v5"
+AUDIT_SCHEMA = "leopard2-fuzz-campaign-audit/v5"
+PROBE_EXECUTION_POLICY_SCHEMA = "leopard2-probe-execution-policy/v1"
 TARGETS = ("api", "pruned")
 CAMPAIGN_NAME = "api-and-pruned-asan-ubsan-no-lsan"
 SANITIZER_ENVIRONMENT = {
@@ -57,10 +64,10 @@ INSTRUMENTATION_SYMBOLS = (
     "__asan_init",
     "__ubsan_handle_type_mismatch_v1",
 )
-LEAK_CAMPAIGN_SCHEMA = "leopard2-fuzz-leak-campaign/v3"
-LEAK_RESULT_SCHEMA = "leopard2-fuzz-leak-result/v1"
-LEAK_MERGE_SCHEMA = "leopard2-fuzz-leak-merge/v1"
-LEAK_AUDIT_SCHEMA = "leopard2-fuzz-leak-campaign-audit/v3"
+LEAK_CAMPAIGN_SCHEMA = "leopard2-fuzz-leak-campaign/v4"
+LEAK_RESULT_SCHEMA = "leopard2-fuzz-leak-result/v2"
+LEAK_MERGE_SCHEMA = "leopard2-fuzz-leak-merge/v2"
+LEAK_AUDIT_SCHEMA = "leopard2-fuzz-leak-campaign-audit/v4"
 LEAK_CANARY_SCHEMA = "leopard2-lsan-canary-attestation/v2"
 LEAK_CANARY_ARGUMENT = "--leopard2-lsan-canary-v1"
 LEAK_CANARY_BYTES = 12345
@@ -97,10 +104,231 @@ LEAK_SANITIZER_SCOPE = {
     "leak_sanitizer": True,
     "process_count_evidence": False,
 }
+LEAK_CAPTURE_LIMITS_BYTES = {
+    # RLIMIT_FSIZE is a per-file limit, so use the same hard ceiling for both
+    # inherited regular-file descriptors.  Successful stdout remains bound to
+    # its exact deterministic marker by the result validator.
+    "stdout": 2 * 1024 * 1024,
+    "stderr": 2 * 1024 * 1024,
+}
+LEAK_CAPTURE_ENFORCEMENT = {
+    "child_file_size_limit_bytes": max(LEAK_CAPTURE_LIMITS_BYTES.values()),
+    "policy": "rlimit-fsize-and-retained-fd-v1",
+    "sigxfsz_disposition": "default",
+}
+LEAK_RESULT_JSON_LIMIT_BYTES = 1024 * 1024
+PROBE_ATTESTATION_STDOUT_LIMIT = 4096
+PROBE_STDERR_LIMIT = 2 * 1024 * 1024
+PROBE_NM_STDOUT_LIMIT = 64 * 1024 * 1024
+
+
+def _probe_capture_profile(stdout_limit, stderr_limit):
+    """Describe the exact limits enforced by one retained-file probe."""
+    return {
+        "stdout_limit_bytes": stdout_limit,
+        "stderr_limit_bytes": stderr_limit,
+        "rlimit_fsize_soft_bytes": max(stdout_limit, stderr_limit) + 1,
+        "rlimit_fsize_hard_bytes": max(stdout_limit, stderr_limit) + 1,
+    }
+
+
+def _probe_execution_policy():
+    """Return the closed-world policy used for live instrumentation probes."""
+    return {
+        "schema": PROBE_EXECUTION_POLICY_SCHEMA,
+        "platform_contract": "linux-procfs-elf",
+        "retained_input_descriptors": {
+            "roles": ["target-executable", "nm-tool"],
+            "open": "single-open-read-only-no-follow",
+            "content_identity":
+                "sha256-and-size-before-and-after-full-lifecycle",
+            "child_path": "proc-self-fd",
+            "inheritance": "explicit-pass-fds-only",
+        },
+        "retained_capture_descriptors": {
+            "streams": ["stdout", "stderr"],
+            "storage": "private-exclusive-regular-files",
+            "directory": "retained-no-follow-descriptor",
+            "published_name_binding":
+                "name-to-retained-device-and-inode",
+            "directory_aba_detection":
+                "device-inode-mode-links-size-mtime-ctime",
+            "capture_change_detection":
+                "device-inode-mode-links-size-mtime-ctime",
+            "read": "bounded-pread-from-retained-descriptor-after-cleanup",
+        },
+        "capture_profiles": {
+            "sanitizer_attestation": _probe_capture_profile(
+                PROBE_ATTESTATION_STDOUT_LIMIT, PROBE_STDERR_LIMIT),
+            "sanitizer_symbol_nm": _probe_capture_profile(
+                PROBE_NM_STDOUT_LIMIT, PROBE_STDERR_LIMIT),
+            "lsan_control_hook_nm": _probe_capture_profile(
+                PROBE_NM_STDOUT_LIMIT, PROBE_STDERR_LIMIT),
+            "lsan_canary": _probe_capture_profile(
+                4096, 2 * 1024 * 1024),
+        },
+        "capture_enforcement": {
+            "rlimit": "RLIMIT_FSIZE",
+            "soft_and_hard_limits": True,
+            "limit_formula": "max-stream-limit-plus-one",
+            "sigxfsz_disposition": "default",
+            "oversize_read": "signed-limit-plus-one-byte",
+        },
+        "descendant_containment": {
+            "child_subreaper": True,
+            "containment_token":
+                "sha256-of-random-32-bytes-and-probe-label",
+            "containment_token_environment":
+                "LEO2_LAB_CONTAINMENT_TOKEN",
+            "direct_child_baseline": True,
+            "retained_process_identity": "pid-and-starttime-ticks",
+            "leader_signaling": "popen-sigterm-then-sigkill",
+            "descendant_signaling":
+                "pidfd-or-verified-pid-and-starttime",
+            "raw_process_group_signaling": False,
+            "bounded_cleanup_before_capture_read": True,
+        },
+    }
 
 
 class CampaignError(Exception):
     pass
+
+
+class _LeakResumeIdentityError(CampaignError):
+    pass
+
+
+def _leak_resume_checkpoint(phase):
+    """Internal deterministic fault-injection seam for resume self-tests."""
+    del phase
+
+
+def _probe_terminal_exception(error):
+    return isinstance(error, (KeyboardInterrupt, SystemExit))
+
+
+def _merge_probe_exception(primary, later, context):
+    """Preserve the earliest terminal exception across bounded teardown."""
+    if primary is None:
+        return later
+    if _probe_terminal_exception(primary):
+        if hasattr(primary, "add_note"):
+            primary.add_note(
+                "{}: {}: {}".format(
+                    context, type(later).__name__, later))
+        return primary
+    if _probe_terminal_exception(later):
+        if hasattr(later, "add_note"):
+            later.add_note(
+                "earlier probe failure: {}: {}".format(
+                    type(primary).__name__, primary))
+        return later
+    if hasattr(primary, "add_note"):
+        primary.add_note(
+            "{}: {}: {}".format(context, type(later).__name__, later))
+    return primary
+
+
+def _raise_probe_exception(error, label):
+    if _probe_terminal_exception(error) or isinstance(error, CampaignError):
+        raise error
+    raise CampaignError(
+        "{} failed: {}: {}".format(
+            label, type(error).__name__, error)) from error
+
+
+def _retained_probe_descriptor_identity(descriptor, path, label):
+    """Hash one retained regular-file descriptor without changing its offset."""
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode):
+            raise CampaignError(
+                "{} is not a retained regular file".format(label))
+        hasher = hashlib.sha256()
+        offset = 0
+        while offset < before.st_size:
+            block = os.pread(
+                descriptor, min(1024 * 1024, before.st_size - offset), offset)
+            if not block:
+                break
+            hasher.update(block)
+            offset += len(block)
+        after = os.fstat(descriptor)
+    except CampaignError:
+        raise
+    except OSError as error:
+        raise CampaignError(
+            "cannot hash retained {}: {}".format(label, error))
+    if (offset != before.st_size or before.st_dev != after.st_dev or
+            before.st_ino != after.st_ino or before.st_size != after.st_size or
+            before.st_mtime_ns != after.st_mtime_ns):
+        raise CampaignError(
+            "{} changed while its retained descriptor was hashed".format(
+                label))
+    return {
+        "path": str(Path(path).resolve()),
+        "sha256": hasher.hexdigest(),
+        "size_bytes": after.st_size,
+    }
+
+
+def _open_retained_probe_file(path, expected_identity, label):
+    _validate_executable_identity(expected_identity, label)
+    try:
+        current_identity = lab._file_identity(path)
+    except lab.LabError as error:
+        raise CampaignError(
+            "{} identity cannot be checked: {}".format(label, error))
+    if current_identity != expected_identity:
+        raise CampaignError("{} changed before probe launch".format(label))
+    resolved = Path(expected_identity["path"]).resolve()
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(str(resolved), flags)
+    except OSError as error:
+        raise CampaignError(
+            "cannot retain {}: {}".format(label, error))
+    record = {
+        "descriptor": descriptor,
+        "path": str(resolved),
+        "expected_identity": expected_identity,
+        "label": label,
+        "proc_path": "/proc/self/fd/{}".format(descriptor),
+    }
+    try:
+        if (_retained_probe_descriptor_identity(
+                descriptor, resolved, label) != expected_identity or
+                lab._file_identity(resolved) != expected_identity):
+            raise CampaignError(
+                "{} changed while its descriptor was retained".format(label))
+    except BaseException as error:
+        primary_error = error
+        try:
+            os.close(descriptor)
+        except BaseException as close_error:
+            primary_error = _merge_probe_exception(
+                primary_error, close_error,
+                "{} retained descriptor close failed".format(label))
+        _raise_probe_exception(
+            primary_error, "{} retained descriptor setup".format(label))
+    return record
+
+
+def _verify_retained_probe_file(record):
+    expected = record["expected_identity"]
+    label = record["label"]
+    if (_retained_probe_descriptor_identity(
+            record["descriptor"], record["path"], label) != expected or
+            lab._file_identity(record["path"]) != expected):
+        raise CampaignError(
+            "{} changed during the complete probe lifecycle".format(label))
+
+
+def _retained_probe_argument(name):
+    return ("retained-probe-file", name)
 
 
 def _expected_lsan_canary_observed_result():
@@ -194,28 +422,542 @@ def _validate_lsan_canary_process(completed, role):
     return _expected_lsan_canary_observed_result()
 
 
-def _run_lsan_canary_process(executable, environment, role):
+def _probe_capture_checkpoint(phase, directory_descriptor=None):
+    """Internal deterministic fault-injection seam for capture self-tests."""
+    del phase, directory_descriptor
+
+
+def _probe_capture_descriptor_state(descriptor, label, regular):
     try:
-        process = subprocess.Popen(
-            [executable, LEAK_CANARY_ARGUMENT], env=environment,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, start_new_session=True)
-    except (OSError, subprocess.SubprocessError) as error:
+        value = os.fstat(descriptor)
+    except OSError as error:
         raise CampaignError(
-            "{} LSan canary could not launch: {}".format(role, error))
-    try:
-        stdout, stderr = process.communicate(timeout=30.0)
-    except subprocess.TimeoutExpired:
-        _signal_leak_process_group(process, signal.SIGTERM)
+            "cannot inspect retained {}: {}".format(label, error))
+    expected_type = stat.S_ISREG if regular else stat.S_ISDIR
+    if not expected_type(value.st_mode):
+        raise CampaignError(
+            "retained {} changed file type".format(label))
+    if regular and value.st_nlink != 1:
+        raise CampaignError(
+            "retained {} must not be hard-linked".format(label))
+    return {
+        "descriptor": descriptor,
+        "device": value.st_dev,
+        "inode": value.st_ino,
+        "mode": value.st_mode,
+        "links": value.st_nlink,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
+
+
+def _verify_probe_capture_evidence(
+        directory_descriptor, directory_state, captures,
+        capture_states=None):
+    current_directory = _probe_capture_descriptor_state(
+        directory_descriptor, "probe capture directory", regular=False)
+    if current_directory != directory_state:
+        raise CampaignError(
+            "probe capture directory changed during execution")
+    for name, descriptor in captures.items():
+        label = "probe capture {}".format(name)
         try:
-            process.communicate(timeout=0.5)
-        except subprocess.TimeoutExpired:
-            _signal_leak_process_group(process, signal.SIGKILL)
-            process.communicate()
-        raise CampaignError("{} LSan canary timed out".format(role))
+            lab._verify_named_fd(
+                directory_descriptor, name, descriptor, label, regular=True)
+        except lab.LabError as error:
+            raise CampaignError(str(error)) from error
+        if capture_states is not None:
+            current = _probe_capture_descriptor_state(
+                descriptor, label, regular=True)
+            if current != capture_states[name]:
+                raise CampaignError(
+                    "{} changed during evidence read".format(label))
+
+
+def _read_bounded_probe_capture(descriptor, maximum_bytes, label):
+    try:
+        return _bounded_leak_capture_from_descriptor(
+            descriptor, maximum_bytes, label)
+    except CampaignError as error:
+        if "exceeds its signed" in str(error):
+            raise CampaignError(
+                "{} emitted excessive output".format(label)) from error
+        raise
+
+
+def _lsan_cleanup_checkpoint(phase):
+    """Internal deterministic fault-injection seam for cleanup self-tests."""
+    del phase
+
+
+def _new_lsan_containment(process, containment_token):
+    return {
+        "process": process,
+        "containment_token": containment_token,
+        "contained_identities": {},
+        "direct_child_baseline": None,
+    }
+
+
+def _current_lsan_direct_children():
+    """Return exact children currently owned by this isolated subreaper."""
+    if not sys.platform.startswith("linux"):
+        return []
+    root = Path("/proc")
+    try:
+        entries = list(root.iterdir())
+    except OSError as error:
+        raise CampaignError(
+            "cannot enumerate direct children for LSan containment: {}".format(
+                error))
+    records = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        parsed = lab._parse_linux_proc_stat(
+            lab._read_text(entry / "stat") or "")
+        if parsed is not None and parsed["ppid"] == os.getpid():
+            records.append(parsed)
+    return records
+
+
+def _begin_lsan_direct_child_capture(active):
+    """Snapshot peers before launch so later direct children are attributable."""
+    if active.get("direct_child_baseline") is not None:
+        raise CampaignError("LSan direct-child capture began twice")
+    active["direct_child_baseline"] = {
+        (record["pid"], record["starttime_ticks"]): record
+        for record in _current_lsan_direct_children()
+    }
+
+
+def _remember_lsan_direct_children(active):
+    """Retain exact new direct/adopted children, including unpublished leaders."""
+    baseline = active.get("direct_child_baseline")
+    if baseline is None:
+        return
+    known = active["contained_identities"]
+    for record in _current_lsan_direct_children():
+        key = (record["pid"], record["starttime_ticks"])
+        if key not in baseline:
+            known[key] = record
+
+
+def _remember_lsan_descendants(active):
+    """Retain exact descendants while the unreaped leader reserves its PID.
+
+    Session IDs are safe attribution evidence only while the original Popen
+    child is still unreaped.  Once it is reaped, that PID can be reused as an
+    unrelated session ID.  Later cleanup therefore uses only these retained
+    PID/start-time identities and the unguessable inherited token.
+    """
+    _remember_lsan_direct_children(active)
+    process = active.get("process")
+    if process is None or process.returncode is not None:
+        return
+    known = active["contained_identities"]
+    for record in lab._contained_processes(active):
+        if record["pid"] == process.pid:
+            continue
+        known[(record["pid"], record["starttime_ticks"])] = record
+
+
+def _wait_lsan_leader(active, timeout_seconds):
+    """Poll one leader boundedly, sampling descendants before every reap."""
+    process = active["process"]
+    deadline = time.monotonic() + max(0.0, float(timeout_seconds))
+    while True:
+        _remember_lsan_descendants(active)
+        returncode = process.poll()
+        if returncode is not None:
+            return returncode
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return None
+        time.sleep(min(0.02, remaining))
+
+
+def _current_exact_lsan_descendants(active):
+    """Return retained/token descendants without a stale session-ID scan."""
+    _remember_lsan_direct_children(active)
+    known = active["contained_identities"]
+    process = active.get("process")
+    for record in lab._token_process_records(
+            active["containment_token"]):
+        # Popen owns the exact leader until it is reaped.  It is terminated
+        # separately with Popen.send_signal, never through a token PID scan.
+        if (process is not None and process.returncode is None and
+                record["pid"] == process.pid):
+            continue
+        known[(record["pid"], record["starttime_ticks"])] = record
+    current = []
+    for key, record in list(known.items()):
+        observed = lab._same_process_identity(record)
+        if observed is None:
+            del known[key]
+            continue
+        known[key] = observed
+        current.append(observed)
+    return current
+
+
+def _cleanup_exact_lsan_descendants(active):
+    """Boundedly terminate exact retained/token descendants."""
+    initial = []
+    for attempt in range(2):
+        initial = _current_exact_lsan_descendants(active)
+        if initial:
+            break
+        if attempt == 0:
+            time.sleep(0.02)
+    if not initial:
+        return {"detected": [], "remaining": []}
+
+    detected = {
+        (record["pid"], record["starttime_ticks"]): record
+        for record in initial
+    }
+    current = initial
+    deadline = time.monotonic() + 0.5
+    while current and time.monotonic() < deadline:
+        for record in current:
+            if record["state"] == "Z":
+                lab._reap_process_identity(record)
+            else:
+                lab._signal_process_identity(record, signal.SIGTERM)
+        time.sleep(0.02)
+        current = _current_exact_lsan_descendants(active)
+        for record in current:
+            detected[(record["pid"], record["starttime_ticks"])] = record
+
+    deadline = time.monotonic() + 0.75
+    while current and time.monotonic() < deadline:
+        for record in current:
+            if record["state"] == "Z":
+                lab._reap_process_identity(record)
+            else:
+                lab._signal_process_identity(record, signal.SIGKILL)
+        time.sleep(0.02)
+        current = _current_exact_lsan_descendants(active)
+        for record in current:
+            detected[(record["pid"], record["starttime_ticks"])] = record
+
+    return {
+        "detected": sorted({record["pid"] for record in detected.values()}),
+        "remaining": sorted({record["pid"] for record in current}),
+    }
+
+
+def _cleanup_lsan_process_tree(active):
+    """Boundedly stop one exact leader and all attributable descendants."""
+    _lsan_cleanup_checkpoint("begin")
+    process = active.get("process")
+    errors = []
+    leader_remaining = False
+    if process is not None and process.returncode is None:
+        _remember_lsan_descendants(active)
+        try:
+            process.send_signal(signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            pass
+        if _wait_lsan_leader(active, 0.5) is None:
+            try:
+                process.send_signal(signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                pass
+            if _wait_lsan_leader(active, 1.0) is None:
+                leader_remaining = True
+                errors.append(
+                    "leader {} remained live after bounded SIGKILL".format(
+                        process.pid))
+
+    _lsan_cleanup_checkpoint("before-descendants")
+    containment = _cleanup_exact_lsan_descendants(active)
+    if containment["remaining"]:
+        errors.append(
+            "contained processes remained after cleanup: {}".format(
+                ",".join(str(pid) for pid in containment["remaining"])))
+    return {
+        "detected": containment["detected"],
+        "remaining": containment["remaining"],
+        "leader_remaining": leader_remaining,
+        "errors": errors,
+    }
+
+
+def _cleanup_lsan_process_tree_with_retry(active):
+    """Retry teardown once after any cleanup exception.
+
+    KeyboardInterrupt and SystemExit remain authoritative, but teardown gets a
+    second bounded attempt before either is re-raised.
+    """
+    try:
+        return _cleanup_lsan_process_tree(active)
+    except BaseException as first_error:
+        try:
+            cleanup = _cleanup_lsan_process_tree(active)
+        except BaseException as retry_error:
+            if (not isinstance(first_error, (KeyboardInterrupt, SystemExit)) and
+                    isinstance(retry_error, (KeyboardInterrupt, SystemExit))):
+                if hasattr(retry_error, "add_note"):
+                    retry_error.add_note(
+                        "initial LSan cleanup failed: {}: {}".format(
+                            type(first_error).__name__, first_error))
+                raise retry_error
+            if hasattr(first_error, "add_note"):
+                first_error.add_note(
+                    "LSan cleanup retry failed: {}: {}".format(
+                        type(retry_error).__name__, retry_error))
+            raise first_error
+        if isinstance(first_error, (KeyboardInterrupt, SystemExit)):
+            cleanup_detail = "; ".join(cleanup["errors"])
+            if cleanup_detail and hasattr(first_error, "add_note"):
+                first_error.add_note(cleanup_detail)
+            raise first_error
+        cleanup["errors"].append(
+            "initial cleanup attempt failed: {}: {}".format(
+                type(first_error).__name__, first_error))
+        return cleanup
+
+
+def _probe_child_setup(capture_file_limit):
+    """Apply one inherited regular-file ceiling before executing a probe."""
+    if resource is None or not hasattr(resource, "RLIMIT_FSIZE"):
+        raise RuntimeError("RLIMIT_FSIZE is required for bounded probes")
+    signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+    unused_soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    del unused_soft
+    if hard != resource.RLIM_INFINITY and hard < capture_file_limit:
+        raise RuntimeError(
+            "inherited RLIMIT_FSIZE is below the probe capture limit")
+    # The probed executable is not trusted to preserve a soft limit.  Lower
+    # the inherited hard limit as well so it cannot raise RLIMIT_FSIZE again
+    # after exec and grow either retained capture without bound.
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE,
+        (capture_file_limit, capture_file_limit))
+
+
+def _run_bounded_probe_process(
+        command, environment, label, timeout_seconds,
+        stdout_limit, stderr_limit, pass_fds=()):
+    """Run one identity-bound probe with bounded files and exact containment."""
+    if (not isinstance(stdout_limit, int) or stdout_limit <= 0 or
+            not isinstance(stderr_limit, int) or stderr_limit <= 0):
+        raise CampaignError("{} has invalid capture limits".format(label))
+    capture_file_limit = max(stdout_limit, stderr_limit) + 1
+    containment_token = hashlib.sha256(
+        os.urandom(32) + label.encode("utf-8")).hexdigest()
+    probe_environment = dict(environment)
+    probe_environment["LEO2_LAB_CONTAINMENT_TOKEN"] = containment_token
+    process = None
+    timed_out = False
+    primary_error = None
+    cleanup = None
+    active = _new_lsan_containment(None, containment_token)
+    stdout = None
+    stderr = None
+
+    try:
+        # Adopting orphaned setsid descendants makes their final zombie state
+        # waitable by this runner.  Baseline capture also catches a tokenless
+        # child forked immediately before Popen itself raises.
+        with lab._ChildSubreaperLease():
+            _begin_lsan_direct_child_capture(active)
+            with tempfile.TemporaryDirectory(
+                    prefix="leopard2-bounded-probe-") as temporary:
+                stdout_path = Path(temporary) / "stdout.txt"
+                stderr_path = Path(temporary) / "stderr.txt"
+                directory_descriptor = None
+                try:
+                    directory_descriptor = os.open(
+                        temporary,
+                        os.O_RDONLY | os.O_CLOEXEC |
+                        os.O_DIRECTORY | os.O_NOFOLLOW)
+                    with stdout_path.open("x+b", buffering=0) as stdout_capture, \
+                            stderr_path.open("x+b", buffering=0) as stderr_capture:
+                        captures = {
+                            "stdout.txt": stdout_capture.fileno(),
+                            "stderr.txt": stderr_capture.fileno(),
+                        }
+                        directory_state = _probe_capture_descriptor_state(
+                            directory_descriptor,
+                            "probe capture directory", regular=False)
+                        try:
+                            process = subprocess.Popen(
+                                command, env=probe_environment,
+                                stdin=subprocess.DEVNULL,
+                                stdout=stdout_capture, stderr=stderr_capture,
+                                start_new_session=True,
+                                pass_fds=tuple(pass_fds),
+                                preexec_fn=lambda: _probe_child_setup(
+                                    capture_file_limit))
+                            active["process"] = process
+                            if _wait_lsan_leader(
+                                    active, timeout_seconds) is None:
+                                timed_out = True
+                        except BaseException as error:
+                            primary_error = error
+                        try:
+                            cleanup = (
+                                _cleanup_lsan_process_tree_with_retry(active))
+                        except BaseException as error:
+                            primary_error = _merge_probe_exception(
+                                primary_error, error,
+                                "{} teardown failed".format(label))
+                        cleanup_detail = ""
+                        if cleanup is not None:
+                            cleanup_detail = "; ".join(cleanup["errors"])
+                            if cleanup["detected"]:
+                                residual_detail = (
+                                    "probe left residual descendants {}; "
+                                    "cleanup remaining {}".format(
+                                        ",".join(
+                                            str(pid)
+                                            for pid in cleanup["detected"]),
+                                        ",".join(
+                                            str(pid)
+                                            for pid in cleanup["remaining"]) or
+                                        "none"))
+                                cleanup_detail = (
+                                    residual_detail if not cleanup_detail
+                                    else cleanup_detail + "; " +
+                                    residual_detail)
+                        if cleanup_detail:
+                            primary_error = _merge_probe_exception(
+                                primary_error,
+                                CampaignError(cleanup_detail),
+                                "{} containment failed".format(label))
+                        if timed_out:
+                            primary_error = _merge_probe_exception(
+                                primary_error,
+                                CampaignError("{} timed out".format(label)),
+                                "{} timeout".format(label))
+
+                        try:
+                            _probe_capture_checkpoint(
+                                "after-cleanup", directory_descriptor)
+                            _verify_probe_capture_evidence(
+                                directory_descriptor, directory_state,
+                                captures)
+                            capture_states = {
+                                name: _probe_capture_descriptor_state(
+                                    descriptor,
+                                    "probe capture {}".format(name),
+                                    regular=True)
+                                for name, descriptor in captures.items()
+                            }
+                            _probe_capture_checkpoint(
+                                "before-read", directory_descriptor)
+                            _verify_probe_capture_evidence(
+                                directory_descriptor, directory_state,
+                                captures, capture_states)
+                            if primary_error is None:
+                                stdout = _read_bounded_probe_capture(
+                                    captures["stdout.txt"], stdout_limit,
+                                    "{} stdout".format(label))
+                                stderr = _read_bounded_probe_capture(
+                                    captures["stderr.txt"], stderr_limit,
+                                    "{} stderr".format(label))
+                            _probe_capture_checkpoint(
+                                "after-read", directory_descriptor)
+                            _verify_probe_capture_evidence(
+                                directory_descriptor, directory_state,
+                                captures, capture_states)
+                        except BaseException as error:
+                            primary_error = _merge_probe_exception(
+                                primary_error, error,
+                                "{} retained capture verification failed"
+                                .format(label))
+                except BaseException as error:
+                    primary_error = _merge_probe_exception(
+                        primary_error, error,
+                        "{} capture lifecycle failed".format(label))
+                    if cleanup is None:
+                        try:
+                            cleanup = (
+                                _cleanup_lsan_process_tree_with_retry(active))
+                        except BaseException as cleanup_error:
+                            primary_error = _merge_probe_exception(
+                                primary_error, cleanup_error,
+                                "{} fallback teardown failed".format(label))
+                finally:
+                    if directory_descriptor is not None:
+                        os.close(directory_descriptor)
+    except BaseException as error:
+        primary_error = _merge_probe_exception(
+            primary_error, error,
+            "{} outer lifecycle failed".format(label))
+
+    if primary_error is not None:
+        _raise_probe_exception(primary_error, label)
+
     return subprocess.CompletedProcess(
-        args=[executable, LEAK_CANARY_ARGUMENT],
-        returncode=process.returncode, stdout=stdout, stderr=stderr)
+        args=command, returncode=process.returncode,
+        stdout=stdout, stderr=stderr)
+
+
+def _run_retained_probe(
+        command_parts, file_specs, environment, label, timeout_seconds,
+        stdout_limit, stderr_limit):
+    """Run a probe against retained files and revalidate paths after teardown."""
+    retained = {}
+    primary_error = None
+    result = None
+    try:
+        for name, spec in file_specs.items():
+            path, expected_identity, file_label = spec
+            retained[name] = _open_retained_probe_file(
+                path, expected_identity, file_label)
+        command = []
+        for part in command_parts:
+            if (isinstance(part, tuple) and len(part) == 2 and
+                    part[0] == "retained-probe-file"):
+                if part[1] not in retained:
+                    raise CampaignError(
+                        "{} references an unknown retained file {}".format(
+                            label, part[1]))
+                command.append(retained[part[1]]["proc_path"])
+            elif isinstance(part, str):
+                command.append(part)
+            else:
+                raise CampaignError(
+                    "{} has an invalid command argument".format(label))
+        result = _run_bounded_probe_process(
+            command, environment, label, timeout_seconds,
+            stdout_limit, stderr_limit,
+            pass_fds=tuple(
+                record["descriptor"] for record in retained.values()))
+    except BaseException as error:
+        primary_error = error
+    finally:
+        for record in retained.values():
+            try:
+                _verify_retained_probe_file(record)
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} retained identity verification failed".format(label))
+        for record in retained.values():
+            try:
+                os.close(record["descriptor"])
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} retained descriptor close failed".format(label))
+    if primary_error is not None:
+        _raise_probe_exception(primary_error, label)
+    return result
+
+
+def _run_lsan_canary_process(
+        executable, environment, role, timeout_seconds=30.0, pass_fds=()):
+    """Run one canary without pipes or an unbounded post-timeout wait."""
+    return _run_bounded_probe_process(
+        [executable, LEAK_CANARY_ARGUMENT], environment,
+        "{} LSan canary".format(role), timeout_seconds,
+        4096, 2 * 1024 * 1024, pass_fds=pass_fds)
 
 
 def _validate_lsan_canary_record(
@@ -260,65 +1002,90 @@ def _validate_lsan_canary_record(
 
 def _collect_lsan_canary(
         executable, role, executable_identity, instrumentation_record):
-    try:
-        current_identity = lab._file_identity(executable)
-    except lab.LabError as error:
-        raise CampaignError(
-            "{} LSan target identity cannot be checked: {}".format(
-                role, error))
-    if current_identity != executable_identity:
-        raise CampaignError(
-            "{} target changed before LSan canary".format(role))
     environment = os.environ.copy()
     environment.update(_lsan_canary_environment())
     nm_path = shutil.which("nm")
     if nm_path is None:
         raise CampaignError("nm is required for LSan canary evidence")
-    try:
-        symbols_completed = subprocess.run(
-            [nm_path, "-g", executable], env=environment,
-            stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE, timeout=30.0, check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise CampaignError(
-            "{} LSan disable-hook probe could not run: {}".format(
-                role, error))
-    symbols_stderr = symbols_completed.stderr.decode(
-        "utf-8", errors="replace").strip()
-    if symbols_completed.returncode != 0 or symbols_stderr:
-        raise CampaignError(
-            "{} LSan disable-hook probe failed (exit {}, stderr={!r})".format(
-                role, symbols_completed.returncode, symbols_stderr[-512:]))
-    symbols_stdout = symbols_completed.stdout.decode(
-        "utf-8", errors="replace")
-    control_hook_states = _validate_lsan_control_symbols(symbols_stdout)
     nm_identity = lab._file_identity(nm_path)
     if nm_identity != instrumentation_record["binary_probe"]["tool"]:
         raise CampaignError(
             "{} LSan probe tool differs from the signed instrumentation tool".format(
                 role))
-    completed = _run_lsan_canary_process(executable, environment, role)
-    observed_result = _validate_lsan_canary_process(completed, role)
-    if lab._file_identity(executable) != executable_identity:
-        raise CampaignError(
-            "{} target changed during LSan canary".format(role))
-    record = {
-        "schema": LEAK_CANARY_SCHEMA,
-        "role": role,
-        "executable_sha256": executable_identity["sha256"],
-        "argument": LEAK_CANARY_ARGUMENT,
-        "environment": _lsan_canary_environment(),
-        "expected_allocation_bytes": LEAK_CANARY_BYTES,
-        "expected_stdout": LEAK_CANARY_STDOUT,
-        "diagnostic_markers": list(LEAK_CANARY_DIAGNOSTICS),
-        "exit_policy": "exact-lsan-exit-{}".format(LEAK_CANARY_EXIT_CODE),
-        "observed_result": observed_result,
-        "control_hook_probe": {
-            "schema": "elf-nm-lsan-control-hooks/v2",
-            "tool": nm_identity,
-            "symbols": control_hook_states,
-        },
-    }
+
+    def collect(retained):
+        symbols_completed = _run_bounded_probe_process(
+            [retained["tool"]["proc_path"], "-g",
+             retained["target"]["proc_path"]],
+            environment, "{} LSan disable-hook probe".format(role), 30.0,
+            PROBE_NM_STDOUT_LIMIT, PROBE_STDERR_LIMIT,
+            pass_fds=(
+                retained["tool"]["descriptor"],
+                retained["target"]["descriptor"]))
+        symbols_stderr = symbols_completed.stderr.decode(
+            "utf-8", errors="replace").strip()
+        if symbols_completed.returncode != 0 or symbols_stderr:
+            raise CampaignError(
+                "{} LSan disable-hook probe failed "
+                "(exit {}, stderr={!r})".format(
+                    role, symbols_completed.returncode,
+                    symbols_stderr[-512:]))
+        control_hook_states = _validate_lsan_control_symbols(
+            symbols_completed.stdout.decode(
+                "utf-8", errors="replace"))
+        completed = _run_lsan_canary_process(
+            retained["target"]["proc_path"], environment, role,
+            pass_fds=(retained["target"]["descriptor"],))
+        observed_result = _validate_lsan_canary_process(completed, role)
+        return {
+            "schema": LEAK_CANARY_SCHEMA,
+            "role": role,
+            "executable_sha256": executable_identity["sha256"],
+            "argument": LEAK_CANARY_ARGUMENT,
+            "environment": _lsan_canary_environment(),
+            "expected_allocation_bytes": LEAK_CANARY_BYTES,
+            "expected_stdout": LEAK_CANARY_STDOUT,
+            "diagnostic_markers": list(LEAK_CANARY_DIAGNOSTICS),
+            "exit_policy": "exact-lsan-exit-{}".format(
+                LEAK_CANARY_EXIT_CODE),
+            "observed_result": observed_result,
+            "control_hook_probe": {
+                "schema": "elf-nm-lsan-control-hooks/v2",
+                "tool": nm_identity,
+                "symbols": control_hook_states,
+            },
+        }
+
+    retained = {}
+    primary_error = None
+    record = None
+    try:
+        retained["target"] = _open_retained_probe_file(
+            executable, executable_identity, "{} LSan target".format(role))
+        retained["tool"] = _open_retained_probe_file(
+            nm_path, nm_identity, "{} LSan instrumentation tool".format(role))
+        record = collect(retained)
+    except BaseException as error:
+        primary_error = error
+    finally:
+        for retained_record in retained.values():
+            try:
+                _verify_retained_probe_file(retained_record)
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} LSan retained identity verification failed".format(
+                        role))
+        for retained_record in retained.values():
+            try:
+                os.close(retained_record["descriptor"])
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} LSan retained descriptor close failed".format(role))
+    if primary_error is not None:
+        _raise_probe_exception(
+            primary_error, "{} LSan evidence lifecycle".format(role))
     return _validate_lsan_canary_record(
         record, role, executable_identity, instrumentation_record)
 
@@ -367,71 +1134,101 @@ def _validate_instrumentation_record(value, role, executable_identity):
 def _collect_instrumentation(executable, role, executable_identity):
     environment = os.environ.copy()
     environment.update(SANITIZER_ENVIRONMENT)
-    try:
-        completed = subprocess.run(
-            [executable, INSTRUMENTATION_ARGUMENT],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=10.0,
-            check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise CampaignError(
-            "{} sanitizer attestation could not run: {}".format(role, error))
-    stdout = completed.stdout.decode("utf-8", errors="replace").strip()
-    stderr = completed.stderr.decode("utf-8", errors="replace").strip()
-    if (completed.returncode != 0 or stderr or len(stdout) > 4096 or
-            len(stdout.splitlines()) != 1):
-        raise CampaignError(
-            "{} sanitizer attestation failed (exit {}, stderr={!r})".format(
-                role, completed.returncode, stderr[-512:]))
-    try:
-        attestation = json.loads(stdout)
-    except ValueError as error:
-        raise CampaignError(
-            "{} sanitizer attestation is not JSON: {}".format(role, error))
     nm_path = shutil.which("nm")
     if nm_path is None:
         raise CampaignError("nm is required for sanitizer binary evidence")
+    nm_identity = lab._file_identity(nm_path)
+    retained = {}
+    primary_error = None
+    record = None
     try:
-        symbols_completed = subprocess.run(
-            [nm_path, "-g", executable],
-            env=environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=30.0,
-            check=False)
-    except (OSError, subprocess.SubprocessError) as error:
-        raise CampaignError(
-            "{} sanitizer symbol probe could not run: {}".format(role, error))
-    symbols_stderr = symbols_completed.stderr.decode(
-        "utf-8", errors="replace").strip()
-    symbols_stdout = symbols_completed.stdout.decode(
-        "utf-8", errors="replace")
-    if symbols_completed.returncode != 0 or symbols_stderr:
-        raise CampaignError(
-            "{} sanitizer symbol probe failed (exit {}, stderr={!r})".format(
-                role, symbols_completed.returncode, symbols_stderr[-512:]))
-    symbols = sorted(set(
-        line.split()[-1] for line in symbols_stdout.splitlines()
-        if line.split()))
-    missing_symbols = sorted(set(INSTRUMENTATION_SYMBOLS) - set(symbols))
-    if missing_symbols:
-        raise CampaignError(
-            "{} target lacks sanitizer symbols: {}".format(
-                role, ", ".join(missing_symbols)))
-    record = {
-        "executable_sha256": executable_identity["sha256"],
-        "attestation": attestation,
-        "binary_probe": {
-            "schema": "elf-nm-global/v1",
-            "tool": lab._file_identity(nm_path),
-            "required_symbols": list(INSTRUMENTATION_SYMBOLS),
-            "symbol_table_digest": lab._digest(symbols),
-        },
-    }
+        retained["target"] = _open_retained_probe_file(
+            executable, executable_identity,
+            "{} sanitizer target".format(role))
+        retained["tool"] = _open_retained_probe_file(
+            nm_path, nm_identity,
+            "{} sanitizer instrumentation tool".format(role))
+        completed = _run_bounded_probe_process(
+            [retained["target"]["proc_path"],
+             INSTRUMENTATION_ARGUMENT],
+            environment, "{} sanitizer attestation".format(role), 10.0,
+            PROBE_ATTESTATION_STDOUT_LIMIT, PROBE_STDERR_LIMIT,
+            pass_fds=(retained["target"]["descriptor"],))
+        stdout = completed.stdout.decode(
+            "utf-8", errors="replace").strip()
+        stderr = completed.stderr.decode(
+            "utf-8", errors="replace").strip()
+        if (completed.returncode != 0 or stderr or
+                len(stdout.splitlines()) != 1):
+            raise CampaignError(
+                "{} sanitizer attestation failed "
+                "(exit {}, stderr={!r})".format(
+                    role, completed.returncode, stderr[-512:]))
+        try:
+            attestation = json.loads(stdout)
+        except ValueError as error:
+            raise CampaignError(
+                "{} sanitizer attestation is not JSON: {}".format(
+                    role, error))
+        symbols_completed = _run_bounded_probe_process(
+            [retained["tool"]["proc_path"], "-g",
+             retained["target"]["proc_path"]],
+            environment, "{} sanitizer symbol probe".format(role), 30.0,
+            PROBE_NM_STDOUT_LIMIT, PROBE_STDERR_LIMIT,
+            pass_fds=(
+                retained["tool"]["descriptor"],
+                retained["target"]["descriptor"]))
+        symbols_stderr = symbols_completed.stderr.decode(
+            "utf-8", errors="replace").strip()
+        symbols_stdout = symbols_completed.stdout.decode(
+            "utf-8", errors="replace")
+        if symbols_completed.returncode != 0 or symbols_stderr:
+            raise CampaignError(
+                "{} sanitizer symbol probe failed "
+                "(exit {}, stderr={!r})".format(
+                    role, symbols_completed.returncode,
+                    symbols_stderr[-512:]))
+        symbols = sorted(set(
+            line.split()[-1] for line in symbols_stdout.splitlines()
+            if line.split()))
+        missing_symbols = sorted(
+            set(INSTRUMENTATION_SYMBOLS) - set(symbols))
+        if missing_symbols:
+            raise CampaignError(
+                "{} target lacks sanitizer symbols: {}".format(
+                    role, ", ".join(missing_symbols)))
+        record = {
+            "executable_sha256": executable_identity["sha256"],
+            "attestation": attestation,
+            "binary_probe": {
+                "schema": "elf-nm-global/v1",
+                "tool": nm_identity,
+                "required_symbols": list(INSTRUMENTATION_SYMBOLS),
+                "symbol_table_digest": lab._digest(symbols),
+            },
+        }
+    except BaseException as error:
+        primary_error = error
+    finally:
+        for retained_record in retained.values():
+            try:
+                _verify_retained_probe_file(retained_record)
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} sanitizer retained identity verification failed".format(
+                        role))
+        for retained_record in retained.values():
+            try:
+                os.close(retained_record["descriptor"])
+            except BaseException as error:
+                primary_error = _merge_probe_exception(
+                    primary_error, error,
+                    "{} sanitizer retained descriptor close failed".format(
+                        role))
+    if primary_error is not None:
+        _raise_probe_exception(
+            primary_error, "{} sanitizer evidence lifecycle".format(role))
     return _validate_instrumentation_record(
         record, role, executable_identity)
 
@@ -510,6 +1307,7 @@ def _campaign_spec(arguments, instrumentation_override=None):
             "targets": list(TARGETS),
             "target_executables": executable_identities,
             "target_instrumentation": instrumentation,
+            "probe_execution_policy": _probe_execution_policy(),
             "sanitizer_environment": dict(SANITIZER_ENVIRONMENT),
             "sanitizer_scope": dict(SANITIZER_SCOPE),
             "timeout_seconds": arguments.timeout_seconds,
@@ -618,11 +1416,20 @@ def _validate_executable_identity(value, label):
     return value
 
 
-def _validate_campaign_manifest(value):
-    """Bind an audit to the exact canonical API/pruned sanitizer campaign."""
+def _validate_campaign_manifest(value, allow_historical_live_replay=False):
+    """Bind an audit to one exact API/pruned sanitizer campaign contract.
+
+    Historical v4 manifests did not sign the probe execution policy.  They are
+    accepted only by callers that immediately repeat every live
+    instrumentation probe using the current hardened runner.  Offline
+    consumers and all newly produced companion evidence require v5.
+    """
     manifest = lab.validate_manifest(value)
     source_spec = manifest.get("source_spec", {})
-    if source_spec.get("schema") != CAMPAIGN_SCHEMA:
+    source_schema = source_spec.get("schema")
+    historical = source_schema == HISTORICAL_CAMPAIGN_SCHEMA
+    if (source_schema != CAMPAIGN_SCHEMA and
+            not (allow_historical_live_replay and historical)):
         raise CampaignError("manifest is not a versioned fuzz campaign")
     metadata = source_spec.get("metadata")
     expected_metadata_fields = {
@@ -631,6 +1438,8 @@ def _validate_campaign_manifest(value):
         "sanitizer_environment", "timeout_seconds", "sanitizer_scope",
         "memory_policy",
     }
+    if not historical:
+        expected_metadata_fields.add("probe_execution_policy")
     if (not isinstance(metadata, dict) or
             set(metadata) != expected_metadata_fields or
             metadata.get("campaign") != CAMPAIGN_NAME or
@@ -638,6 +1447,11 @@ def _validate_campaign_manifest(value):
             metadata.get("sanitizer_environment") != SANITIZER_ENVIRONMENT or
             metadata.get("sanitizer_scope") != SANITIZER_SCOPE):
         raise CampaignError("manifest campaign metadata is not canonical")
+    if (not historical and
+            metadata.get("probe_execution_policy") !=
+                _probe_execution_policy()):
+        raise CampaignError(
+            "manifest probe execution policy is not canonical")
 
     seeds_per_target = metadata.get("seeds_per_target")
     iterations = metadata.get("iterations_per_seed")
@@ -740,6 +1554,71 @@ def _validate_campaign_manifest(value):
     return manifest
 
 
+def _campaign_probe_policy_binding(source_schema):
+    if source_schema == CAMPAIGN_SCHEMA:
+        return "source-manifest-and-live-revalidation"
+    if source_schema == HISTORICAL_CAMPAIGN_SCHEMA:
+        return "live-revalidation-only-historical-v4"
+    raise CampaignError("campaign audit source schema is invalid")
+
+
+def _validate_campaign_audit(value, source_manifest=None):
+    """Validate the closed-world terminal v5 campaign evidence."""
+    expected_fields = {
+        "schema", "source_campaign_schema", "probe_policy_binding",
+        "probe_execution_policy", "manifest_digest", "job_count",
+        "distinct_seed_count", "sanitizer_scope",
+        "target_instrumentation", "summary", "merged_results",
+        "audit_digest",
+    }
+    if (not isinstance(value, dict) or set(value) != expected_fields or
+            value.get("schema") != AUDIT_SCHEMA):
+        raise CampaignError("campaign audit is malformed or unsupported")
+    unsigned = dict(value)
+    audit_digest = unsigned.pop("audit_digest", None)
+    if (not isinstance(audit_digest, str) or
+            audit_digest != lab._digest(unsigned)):
+        raise CampaignError("campaign audit digest does not match its contents")
+    source_schema = value.get("source_campaign_schema")
+    if (source_schema not in
+            (CAMPAIGN_SCHEMA, HISTORICAL_CAMPAIGN_SCHEMA) or
+            value.get("probe_policy_binding") !=
+                _campaign_probe_policy_binding(source_schema) or
+            value.get("probe_execution_policy") !=
+                _probe_execution_policy() or
+            value.get("sanitizer_scope") != SANITIZER_SCOPE):
+        raise CampaignError("campaign audit policy is not canonical")
+    if (isinstance(value.get("job_count"), bool) or
+            not isinstance(value.get("job_count"), int) or
+            value["job_count"] <= 0 or
+            isinstance(value.get("distinct_seed_count"), bool) or
+            not isinstance(value.get("distinct_seed_count"), int) or
+            value["distinct_seed_count"] != value["job_count"]):
+        raise CampaignError("campaign audit counts are invalid")
+    merged = value.get("merged_results")
+    if (not isinstance(merged, dict) or
+            value.get("summary") != merged.get("summary") or
+            not isinstance(merged.get("results"), list) or
+            len(merged["results"]) != value["job_count"] or
+            value["summary"] != {
+                "missing": 0, "success": value["job_count"]}):
+        raise CampaignError("campaign audit merge summary is invalid")
+    if source_manifest is not None:
+        source_manifest = _validate_campaign_manifest(
+            source_manifest,
+            allow_historical_live_replay=True)
+        metadata = source_manifest["source_spec"]["metadata"]
+        if (source_schema != source_manifest["source_spec"]["schema"] or
+                value.get("manifest_digest") !=
+                    source_manifest["manifest_digest"] or
+                value.get("job_count") != len(source_manifest["jobs"]) or
+                value.get("target_instrumentation") !=
+                    metadata["target_instrumentation"]):
+            raise CampaignError(
+                "campaign audit differs from its source manifest")
+    return value
+
+
 def _prepare_audit_destination(arguments):
     """Clear stale output before validation without deleting input evidence."""
     destination = Path(arguments.output).absolute()
@@ -830,7 +1709,9 @@ def _verify_live_lsan_canaries(leak_manifest):
 
 def audit_campaign(arguments):
     destination = _prepare_audit_destination(arguments)
-    manifest = _validate_campaign_manifest(_load_json(arguments.manifest))
+    manifest = _validate_campaign_manifest(
+        _load_json(arguments.manifest),
+        allow_historical_live_replay=True)
     _verify_live_instrumentation(manifest)
     metadata = manifest.get("source_spec", {}).get("metadata", {})
     expected_per_target = metadata.get("seeds_per_target")
@@ -883,8 +1764,13 @@ def audit_campaign(arguments):
             raise CampaignError(
                 "job {} violated its runtime allocation".format(
                     result["job_id"]))
-    lab._atomic_write_json(destination, {
+    source_schema = manifest["source_spec"]["schema"]
+    audit = {
         "schema": AUDIT_SCHEMA,
+        "source_campaign_schema": source_schema,
+        "probe_policy_binding":
+            _campaign_probe_policy_binding(source_schema),
+        "probe_execution_policy": _probe_execution_policy(),
         "manifest_digest": manifest["manifest_digest"],
         "job_count": len(manifest["jobs"]),
         "distinct_seed_count": len(seeds),
@@ -892,7 +1778,10 @@ def audit_campaign(arguments):
         "target_instrumentation": metadata["target_instrumentation"],
         "summary": merged["summary"],
         "merged_results": merged,
-    })
+    }
+    audit["audit_digest"] = lab._digest(audit)
+    _validate_campaign_audit(audit, manifest)
+    lab._atomic_write_json(destination, audit)
     print("audited {} jobs, {} distinct seeds, one thread per CPU".format(
         len(manifest["jobs"]), len(seeds)))
 
@@ -910,6 +1799,22 @@ def _lsan_canary_environment():
     environment = dict(LEAK_CANARY_SANITIZER_ENVIRONMENT)
     environment.update(lab._thread_environment(1))
     return dict(sorted(environment.items()))
+
+
+def _leak_capture_limits():
+    return dict(sorted(LEAK_CAPTURE_LIMITS_BYTES.items()))
+
+
+def _leak_execution_policy():
+    return {
+        "mode": "serial",
+        "native_max_threads": 1,
+        "effective_environment": _leak_environment(),
+        "process_count_evidence": False,
+        "lsan_helper_processes": "permitted-not-classified",
+        "capture_limits_bytes": _leak_capture_limits(),
+        "capture_enforcement": dict(LEAK_CAPTURE_ENFORCEMENT),
+    }
 
 
 def _derive_leak_jobs(source_manifest):
@@ -931,6 +1836,7 @@ def _derive_leak_jobs(source_manifest):
             "timeout_seconds": source_job["timeout_seconds"],
             "environment": _leak_environment(),
             "executable": lab._json_copy(identity),
+            "capture_limits_bytes": _leak_capture_limits(),
         }
         job["job_digest"] = lab._digest(job)
         jobs.append(job)
@@ -955,13 +1861,7 @@ def _build_leak_manifest(source_manifest, target_lsan_canaries):
         "source_manifest_digest": source_manifest["manifest_digest"],
         "source_manifest": lab._json_copy(source_manifest),
         "target_lsan_canaries": lab._json_copy(target_lsan_canaries),
-        "execution_policy": {
-            "mode": "serial",
-            "native_max_threads": 1,
-            "effective_environment": _leak_environment(),
-            "process_count_evidence": False,
-            "lsan_helper_processes": "permitted-not-classified",
-        },
+        "execution_policy": _leak_execution_policy(),
         "sanitizer_scope": dict(LEAK_SANITIZER_SCOPE),
         "jobs": _derive_leak_jobs(source_manifest),
     }
@@ -986,13 +1886,7 @@ def _validate_leak_manifest(value):
     source_manifest = _validate_campaign_manifest(value.get("source_manifest"))
     if value.get("source_manifest_digest") != source_manifest["manifest_digest"]:
         raise CampaignError("leak campaign source manifest identity is invalid")
-    expected_policy = {
-        "mode": "serial",
-        "native_max_threads": 1,
-        "effective_environment": _leak_environment(),
-        "process_count_evidence": False,
-        "lsan_helper_processes": "permitted-not-classified",
-    }
+    expected_policy = _leak_execution_policy()
     if (value.get("execution_policy") != expected_policy or
             value.get("sanitizer_scope") != LEAK_SANITIZER_SCOPE):
         raise CampaignError("leak campaign execution policy is not canonical")
@@ -1088,7 +1982,8 @@ def _expected_leak_stdout(job):
         job["seed"], job["iterations"]).encode("ascii")
 
 
-def _validate_leak_result(result_path, result, job):
+def _validate_leak_result(
+        result_path, result, job, retained_artifacts=None):
     required = {
         "schema", "state", "job_id", "job_digest", "outcome", "exit_code",
         "duration_seconds", "seed", "cpu_set", "command", "environment",
@@ -1128,28 +2023,81 @@ def _validate_leak_result(result_path, result, job):
         raise CampaignError(
             "leak replay result digest is invalid for job {}".format(job["id"]))
     outputs = result.get("outputs")
-    job_dir = Path(result_path).parent
-    for name in ("stdout.txt", "stderr.txt", "result.json"):
-        _assert_private_regular_file(
-            job_dir / name,
-            "LSan job {} {}".format(job["id"], name))
+    job_dir = None
+    if retained_artifacts is None:
+        job_dir = Path(result_path).parent
+        for name in ("stdout.txt", "stderr.txt", "result.json"):
+            _assert_private_regular_file(
+                job_dir / name,
+                "LSan job {} {}".format(job["id"], name))
+    else:
+        expected_streams = {"stdout.txt", "stderr.txt", "result.json"}
+        if set(retained_artifacts.streams) != expected_streams:
+            raise _LeakResumeIdentityError(
+                "LSan job {} retained artifact set is incomplete".format(
+                    job["id"]))
+        retained_artifacts.verify()
+        for name in sorted(expected_streams):
+            try:
+                lab._verify_named_fd(
+                    retained_artifacts.fd, name,
+                    retained_artifacts.streams[name],
+                    "LSan job {} {}".format(job["id"], name),
+                    regular=True)
+            except lab.LabError as error:
+                raise _LeakResumeIdentityError(str(error)) from error
     if (not isinstance(outputs, dict) or set(outputs) != {"stdout", "stderr"}):
         raise CampaignError(
             "leak replay outputs are invalid for job {}".format(job["id"]))
     for name in ("stdout", "stderr"):
-        if (not isinstance(outputs.get(name), dict) or
-                lab._content_identity(job_dir / (name + ".txt")) !=
-                    outputs[name]):
+        limit = _leak_capture_limit(job, name)
+        if retained_artifacts is None:
+            capture_path = job_dir / (name + ".txt")
+            try:
+                capture_size = capture_path.stat().st_size
+            except OSError as error:
+                raise CampaignError(
+                    "cannot inspect leak replay {} for job {}: {}".format(
+                        name, job["id"], error))
+            capture_identity = lab._content_identity(capture_path)
+        else:
+            descriptor = retained_artifacts.streams[name + ".txt"]
+            try:
+                capture_size = os.fstat(descriptor).st_size
+                capture_identity = retained_artifacts.content_identity(
+                    name + ".txt")
+            except (OSError, lab.LabError) as error:
+                raise _LeakResumeIdentityError(
+                    "cannot inspect retained leak replay {} for job {}: {}"
+                    .format(name, job["id"], error)) from error
+        if (capture_size > limit or
+                not isinstance(outputs.get(name), dict) or
+                outputs[name].get("size_bytes") != capture_size or
+                capture_identity != outputs[name]):
             raise CampaignError(
                 "leak replay {} changed for job {}".format(name, job["id"]))
     if result["outcome"] == "success":
-        try:
-            stdout = (job_dir / "stdout.txt").read_bytes()
-            stderr = (job_dir / "stderr.txt").read_bytes()
-        except OSError as error:
-            raise CampaignError(
-                "cannot read leak replay output for job {}: {}".format(
-                    job["id"], error))
+        if retained_artifacts is None:
+            stdout = _bounded_leak_capture_from_path(
+                job_dir / "stdout.txt",
+                _leak_capture_limit(job, "stdout"),
+                "LSan job {} stdout".format(job["id"]))
+            stderr = _bounded_leak_capture_from_path(
+                job_dir / "stderr.txt",
+                _leak_capture_limit(job, "stderr"),
+                "LSan job {} stderr".format(job["id"]))
+        else:
+            try:
+                stdout = _read_retained_leak_capture(
+                    retained_artifacts, "stdout.txt",
+                    _leak_capture_limit(job, "stdout"))
+                stderr = _read_retained_leak_capture(
+                    retained_artifacts, "stderr.txt",
+                    _leak_capture_limit(job, "stderr"))
+            except (CampaignError, lab.LabError, OSError) as error:
+                raise _LeakResumeIdentityError(
+                    "cannot read retained leak replay output for job {}: {}"
+                    .format(job["id"], error)) from error
         if (result.get("exit_code") != 0 or "detail" in result or
                 result.get("executable_before") != job["executable"] or
                 result.get("executable_after") != job["executable"] or
@@ -1157,51 +2105,312 @@ def _validate_leak_result(result_path, result, job):
             raise CampaignError(
                 "successful leak replay evidence is invalid for job {}".format(
                     job["id"]))
+    if retained_artifacts is not None:
+        retained_artifacts.verify()
     return result
 
 
-def _write_leak_result(job_dir, result):
-    for name in ("stdout.txt", "stderr.txt"):
+def _write_leak_result(job_dir, result, job_artifacts=None):
+    result_path = Path(job_dir) / "result.json"
+    if job_artifacts is None:
+        for name in ("stdout.txt", "stderr.txt"):
+            _assert_private_regular_file(
+                Path(job_dir) / name,
+                "LSan result {}".format(name))
         _assert_private_regular_file(
-            Path(job_dir) / name,
-            "LSan result {}".format(name))
-    _assert_private_regular_file(
-        Path(job_dir) / "result.json", "LSan result.json",
-        allow_missing=True)
-    result["outputs"] = {
-        "stdout": lab._content_identity(Path(job_dir) / "stdout.txt"),
-        "stderr": lab._content_identity(Path(job_dir) / "stderr.txt"),
-    }
+            Path(job_dir) / "result.json", "LSan result.json",
+            allow_missing=True)
+        outputs = {
+            "stdout": lab._content_identity(Path(job_dir) / "stdout.txt"),
+            "stderr": lab._content_identity(Path(job_dir) / "stderr.txt"),
+        }
+    else:
+        outputs = {
+            "stdout": job_artifacts.content_identity("stdout.txt"),
+            "stderr": job_artifacts.content_identity("stderr.txt"),
+        }
+    result["outputs"] = outputs
     unsigned = dict(result)
     unsigned.pop("result_digest", None)
     result["result_digest"] = lab._digest(unsigned)
-    lab._atomic_write_json(Path(job_dir) / "result.json", result)
+    try:
+        if job_artifacts is None:
+            lab._atomic_write_json(result_path, result)
+        else:
+            job_artifacts.atomic_write_json("result.json", result)
+        for name in ("stdout", "stderr"):
+            current = (
+                lab._content_identity(Path(job_dir) / (name + ".txt"))
+                if job_artifacts is None else
+                job_artifacts.content_identity(name + ".txt"))
+            if current != outputs[name]:
+                raise CampaignError(
+                    "LSan {} changed during result publication".format(name))
+    except BaseException as publication_error:
+        invalidation_error = None
+        try:
+            if job_artifacts is None:
+                try:
+                    result_path.unlink()
+                except FileNotFoundError:
+                    pass
+            else:
+                job_artifacts.invalidate_result()
+        except BaseException as error:
+            invalidation_error = error
+        if invalidation_error is not None:
+            note = "LSan result invalidation failed: {}: {}".format(
+                type(invalidation_error).__name__, invalidation_error)
+            if isinstance(publication_error, (KeyboardInterrupt, SystemExit)):
+                if hasattr(publication_error, "add_note"):
+                    publication_error.add_note(note)
+                raise publication_error
+            if isinstance(invalidation_error, (KeyboardInterrupt, SystemExit)):
+                if hasattr(invalidation_error, "add_note"):
+                    invalidation_error.add_note(
+                        "LSan result publication failure: {}: {}".format(
+                            type(publication_error).__name__,
+                            publication_error))
+                raise invalidation_error
+            if hasattr(publication_error, "add_note"):
+                publication_error.add_note(note)
+        raise publication_error
     return result
 
 
-def _read_resumable_leak_result(output_dir, job):
-    job_dir = _prepare_leak_job_directory(output_dir, job)
-    result_path = job_dir / "result.json"
-    if not _assert_private_regular_file(
-            result_path, "LSan job {} result.json".format(job["id"]),
-            allow_missing=True):
-        return None
+def _leak_resume_descriptor_state(descriptor, label):
     try:
-        result = _load_json(result_path)
-        _validate_leak_result(result_path, result, job)
-    except (CampaignError, lab.LabError, OSError):
-        return None
-    return result if result.get("outcome") == "success" else None
+        value = os.fstat(descriptor)
+    except OSError as error:
+        raise _LeakResumeIdentityError(
+            "cannot inspect retained {}: {}".format(label, error))
+    return {
+        "descriptor": descriptor,
+        "label": label,
+        "device": value.st_dev,
+        "inode": value.st_ino,
+        "mode": value.st_mode,
+        "links": value.st_nlink,
+        "size": value.st_size,
+        "mtime_ns": value.st_mtime_ns,
+        "ctime_ns": value.st_ctime_ns,
+    }
 
 
-def _signal_leak_process_group(process, sig):
+def _snapshot_leak_resume_owner(owner):
+    tree = owner["tree"]
+    artifacts = owner["artifacts"]
+    records = []
+    if tree._edges:
+        records.append(_leak_resume_descriptor_state(
+            tree._edges[-1][0], "LSan result-root parent"))
+    records.extend((
+        _leak_resume_descriptor_state(
+            tree.root_fd, "LSan result root"),
+        _leak_resume_descriptor_state(
+            tree.jobs_fd, "LSan jobs directory"),
+        _leak_resume_descriptor_state(
+            artifacts.fd,
+            "LSan job {} directory".format(artifacts.job_id)),
+    ))
+    for name in sorted(artifacts.streams):
+        records.append(_leak_resume_descriptor_state(
+            artifacts.streams[name],
+            "LSan job {} {}".format(artifacts.job_id, name)))
+    owner["snapshots"] = records
+
+
+def _verify_leak_resume_owner(owner):
+    tree = owner["tree"]
+    artifacts = owner["artifacts"]
     try:
-        os.killpg(process.pid, sig)
-    except (ProcessLookupError, OSError):
+        artifacts.verify()
+        for name in sorted(artifacts.streams):
+            lab._verify_named_fd(
+                artifacts.fd, name, artifacts.streams[name],
+                "LSan job {} {}".format(artifacts.job_id, name),
+                regular=True)
+    except lab.LabError as error:
+        raise _LeakResumeIdentityError(str(error)) from error
+    for snapshot in owner.get("snapshots", ()):
+        current = _leak_resume_descriptor_state(
+            snapshot["descriptor"], snapshot["label"])
+        if current != snapshot:
+            raise _LeakResumeIdentityError(
+                "{} changed during resume validation".format(
+                    snapshot["label"]))
+    tree.verify()
+
+
+def _close_leak_resume_owner(owner):
+    """Close every retained descriptor while preserving terminal precedence."""
+    primary_error = None
+    artifacts = owner.get("artifacts")
+    tree = owner.get("tree")
+    descriptors = []
+    if artifacts is not None:
+        descriptors.extend(
+            (descriptor, "LSan job {} {}".format(artifacts.job_id, name))
+            for name, descriptor in artifacts.streams.items())
+        artifacts.streams.clear()
+        if artifacts.fd is not None:
+            descriptors.append((
+                artifacts.fd,
+                "LSan job {} directory".format(artifacts.job_id)))
+            artifacts.fd = None
+    if tree is not None:
+        descriptors.extend(
+            (descriptor, "LSan result-tree descriptor")
+            for descriptor in reversed(tree._fds))
+        tree._fds = []
+        tree.jobs_fd = None
+    closed = set()
+    for descriptor, label in descriptors:
+        if descriptor in closed:
+            continue
+        closed.add(descriptor)
+        close_error = None
         try:
-            process.send_signal(sig)
-        except OSError:
-            pass
+            os.close(descriptor)
+        except BaseException as error:
+            # close(2) may already have released the numeric descriptor before
+            # Python dispatches an asynchronous terminal exception.  The same
+            # number can then name an unrelated OFD, even one for the same
+            # inode, so retrying by integer can close someone else's resource.
+            close_error = error
+        if close_error is not None:
+            primary_error = _merge_probe_exception(
+                primary_error, close_error,
+                "{} close failed".format(label))
+    owner["artifacts"] = None
+    owner["tree"] = None
+    owner["snapshots"] = []
+    return primary_error
+
+
+def _open_leak_resume_owner(output_dir, job):
+    owner = {"tree": None, "artifacts": None, "snapshots": []}
+    primary_error = None
+    try:
+        owner["tree"] = lab._ResultTree(output_dir, create=True)
+        owner["artifacts"] = owner["tree"].open_job(
+            job["id"], create=True)
+        if owner["artifacts"] is None:
+            raise _LeakResumeIdentityError(
+                "cannot retain LSan job {} directory".format(job["id"]))
+        complete = True
+        for name in ("stdout.txt", "stderr.txt", "result.json"):
+            descriptor = owner["artifacts"].open_existing(name)
+            if descriptor is None:
+                complete = False
+            else:
+                owner["artifacts"].streams[name] = descriptor
+        if not complete:
+            return owner, False
+        _snapshot_leak_resume_owner(owner)
+        _verify_leak_resume_owner(owner)
+        return owner, True
+    except _LeakResumeIdentityError as error:
+        primary_error = error
+    except (lab.LabError, OSError) as error:
+        primary_error = _LeakResumeIdentityError(
+            "cannot retain LSan job {} evidence: {}".format(
+                job["id"], error))
+    except BaseException as error:
+        primary_error = error
+    cleanup_error = _close_leak_resume_owner(owner)
+    if cleanup_error is not None:
+        primary_error = _merge_probe_exception(
+            primary_error, cleanup_error,
+            "LSan resume-owner constructor cleanup failed")
+    _raise_probe_exception(primary_error, "LSan resume-owner construction")
+
+
+def _bounded_leak_result_json(descriptor, job):
+    label = "LSan job {} result.json".format(job["id"])
+    data = _bounded_leak_capture_from_descriptor(
+        descriptor, LEAK_RESULT_JSON_LIMIT_BYTES, label)
+    try:
+        return json.loads(data.decode("utf-8"))
+    except (UnicodeError, ValueError) as error:
+        raise CampaignError(
+            "invalid JSON in {}: {}".format(label, error))
+
+
+def _read_resumable_leak_result(output_dir, job):
+    owner = None
+    eligible = False
+    result = None
+    primary_error = None
+    invalid_result = False
+    identity_failure = False
+    cleanup_error = None
+    try:
+        owner, eligible = _open_leak_resume_owner(output_dir, job)
+        if eligible:
+            _leak_resume_checkpoint("after-retain")
+            artifacts = owner["artifacts"]
+            result_before = artifacts.content_identity("result.json")
+            result = _bounded_leak_result_json(
+                artifacts.streams["result.json"], job)
+            _leak_resume_checkpoint("after-result-read")
+            _validate_leak_result(
+                None, result, job, retained_artifacts=artifacts)
+            if artifacts.content_identity("result.json") != result_before:
+                raise _LeakResumeIdentityError(
+                    "LSan job {} result.json changed during validation".format(
+                        job["id"]))
+            _leak_resume_checkpoint("before-accept")
+            _verify_leak_resume_owner(owner)
+            if result.get("outcome") != "success":
+                invalid_result = True
+    except _LeakResumeIdentityError as error:
+        primary_error = error
+        identity_failure = True
+    except lab.LabError as error:
+        primary_error = _LeakResumeIdentityError(str(error))
+        identity_failure = True
+    except (CampaignError, OSError) as error:
+        primary_error = error
+        invalid_result = True
+    except BaseException as error:
+        primary_error = error
+    finally:
+        try:
+            _leak_resume_checkpoint("before-close")
+        except BaseException as error:
+            primary_error = _merge_probe_exception(
+                primary_error, error,
+                "LSan resume pre-close checkpoint failed")
+        if owner is not None:
+            if eligible:
+                try:
+                    _verify_leak_resume_owner(owner)
+                except BaseException as error:
+                    if not _probe_terminal_exception(error):
+                        identity_failure = True
+                    if (not _probe_terminal_exception(error) and
+                            not isinstance(
+                                error, _LeakResumeIdentityError)):
+                        error = _LeakResumeIdentityError(str(error))
+                    primary_error = _merge_probe_exception(
+                        primary_error, error,
+                        "LSan resume final identity verification failed")
+            cleanup_error = _close_leak_resume_owner(owner)
+            if cleanup_error is not None:
+                primary_error = _merge_probe_exception(
+                    primary_error, cleanup_error,
+                    "LSan resume descriptor cleanup failed")
+    if _probe_terminal_exception(primary_error):
+        raise primary_error
+    if cleanup_error is not None:
+        _raise_probe_exception(
+            primary_error, "LSan resume descriptor cleanup")
+    if identity_failure:
+        _raise_probe_exception(primary_error, "LSan resume identity")
+    if primary_error is not None or invalid_result or not eligible:
+        return None
+    return result
 
 
 def _assert_private_regular_file(path, label, allow_missing=False):
@@ -1221,73 +2430,144 @@ def _assert_private_regular_file(path, label, allow_missing=False):
     return True
 
 
-def _prepare_leak_job_directory(output_dir, job):
-    jobs_root = Path(output_dir) / "jobs"
-    if jobs_root.exists() or jobs_root.is_symlink():
-        if jobs_root.is_symlink() or not jobs_root.is_dir():
-            raise CampaignError("LSan jobs output must be a real directory")
-    else:
-        jobs_root.mkdir(parents=True)
-    job_dir = jobs_root / job["id"]
-    if job_dir.exists() or job_dir.is_symlink():
-        if job_dir.is_symlink() or not job_dir.is_dir():
-            raise CampaignError(
-                "LSan job {} output must be a real directory".format(job["id"]))
-    else:
-        job_dir.mkdir()
-    for name in ("stdout.txt", "stderr.txt", "result.json"):
-        _assert_private_regular_file(
-            job_dir / name, "LSan job {} {}".format(job["id"], name),
-            allow_missing=True)
-    return job_dir
+def _leak_capture_limit(job, name):
+    limits = job.get("capture_limits_bytes")
+    if limits != _leak_capture_limits() or name not in limits:
+        raise CampaignError(
+            "LSan job {} capture limits are not canonical".format(job["id"]))
+    limit = limits[name]
+    if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
+        raise CampaignError(
+            "LSan job {} {} capture limit is invalid".format(
+                job["id"], name))
+    return limit
 
 
-def _reset_leak_job_evidence(job_dir, job):
-    for name in ("stdout.txt", "stderr.txt", "result.json"):
-        path = Path(job_dir) / name
-        if _assert_private_regular_file(
-                path, "LSan job {} {}".format(job["id"], name),
-                allow_missing=True):
-            try:
-                path.unlink()
-            except OSError as error:
-                raise CampaignError(
-                    "cannot clear LSan job {} {}: {}".format(
-                        job["id"], name, error))
+def _leak_child_setup(cpu_set, capture_limits):
+    """Apply inherited execution limits before the replay executable starts."""
+    if resource is None or not hasattr(resource, "RLIMIT_FSIZE"):
+        raise RuntimeError("RLIMIT_FSIZE is unavailable")
+    if capture_limits != _leak_capture_limits():
+        raise RuntimeError("noncanonical LSan capture limits")
+    signed_limit = LEAK_CAPTURE_ENFORCEMENT[
+        "child_file_size_limit_bytes"]
+    unused_soft, inherited_hard = resource.getrlimit(resource.RLIMIT_FSIZE)
+    del unused_soft
+    if (inherited_hard != resource.RLIM_INFINITY and
+            inherited_hard < signed_limit):
+        raise RuntimeError(
+            "inherited RLIMIT_FSIZE is below the signed capture limit")
+    resource.setrlimit(
+        resource.RLIMIT_FSIZE, (signed_limit, signed_limit))
+    if hasattr(signal, "SIGXFSZ"):
+        signal.signal(signal.SIGXFSZ, signal.SIG_DFL)
+    lab._child_setup(cpu_set, 0)
 
 
-def _open_new_leak_output(path, label):
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
-    if hasattr(os, "O_CLOEXEC"):
-        flags |= os.O_CLOEXEC
-    if hasattr(os, "O_NOFOLLOW"):
-        flags |= os.O_NOFOLLOW
-    descriptor = None
+def _bounded_leak_capture_from_descriptor(
+        descriptor, maximum_bytes, label):
+    """Read at most maximum_bytes + 1 while detecting concurrent growth."""
     try:
-        descriptor = os.open(str(path), flags, 0o600)
-        status = os.fstat(descriptor)
-        if not stat.S_ISREG(status.st_mode) or status.st_nlink != 1:
-            raise CampaignError("{} is not a private regular file".format(label))
-        return os.fdopen(descriptor, "wb")
-    except BaseException:
-        try:
-            if descriptor is not None:
-                os.close(descriptor)
-        except OSError:
-            pass
-        if descriptor is not None:
-            try:
-                Path(path).unlink()
-            except OSError:
-                pass
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise CampaignError(
+                "{} must be a private regular file".format(label))
+        if before.st_size > maximum_bytes:
+            raise CampaignError(
+                "{} exceeds its signed {}-byte limit".format(
+                    label, maximum_bytes))
+        data = bytearray()
+        offset = 0
+        while True:
+            request = min(1024 * 1024, maximum_bytes + 1 - offset)
+            if request <= 0:
+                raise CampaignError(
+                    "{} exceeds its signed {}-byte limit".format(
+                        label, maximum_bytes))
+            block = os.pread(descriptor, request, offset)
+            if not block:
+                break
+            data.extend(block)
+            offset += len(block)
+        after = os.fstat(descriptor)
+    except CampaignError:
         raise
+    except OSError as error:
+        raise CampaignError("cannot read {}: {}".format(label, error))
+    if (before.st_dev != after.st_dev or before.st_ino != after.st_ino or
+            before.st_size != after.st_size or
+            before.st_mtime_ns != after.st_mtime_ns or
+            before.st_ctime_ns != after.st_ctime_ns):
+        raise CampaignError("{} changed while it was read".format(label))
+    return bytes(data)
+
+
+def _bounded_leak_capture_from_path(path, maximum_bytes, label):
+    flags = os.O_RDONLY
+    flags |= getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0)
+    try:
+        descriptor = os.open(str(path), flags)
+    except OSError as error:
+        raise CampaignError("cannot open {}: {}".format(label, error))
+    try:
+        return _bounded_leak_capture_from_descriptor(
+            descriptor, maximum_bytes, label)
+    finally:
+        os.close(descriptor)
+
+
+def _retained_leak_capture_size(job_artifacts, name, maximum_bytes):
+    descriptor = job_artifacts.streams.get(name)
+    if descriptor is None:
+        raise CampaignError(
+            "LSan job {} {} is not retained".format(
+                job_artifacts.job_id, name))
+    try:
+        size = os.fstat(descriptor).st_size
+    except OSError as error:
+        raise CampaignError(
+            "cannot inspect LSan job {} {}: {}".format(
+                job_artifacts.job_id, name, error))
+    if size > maximum_bytes:
+        raise CampaignError(
+            "LSan job {} {} exceeds its signed {}-byte limit".format(
+                job_artifacts.job_id, name, maximum_bytes))
+    return size
+
+
+def _read_retained_leak_capture(
+        job_artifacts, name, maximum_bytes):
+    """Read a retained capture inode and reject concurrent replacement/change."""
+    descriptor = job_artifacts.streams.get(name)
+    if descriptor is None:
+        raise CampaignError(
+            "LSan job {} {} is not retained".format(
+                job_artifacts.job_id, name))
+    _retained_leak_capture_size(
+        job_artifacts, name, maximum_bytes)
+    before = job_artifacts.content_identity(name)
+    data = _bounded_leak_capture_from_descriptor(
+        descriptor, maximum_bytes,
+        "LSan job {} {}".format(job_artifacts.job_id, name))
+    after = job_artifacts.content_identity(name)
+    if before != after:
+        raise CampaignError(
+            "LSan job {} {} changed while it was read".format(
+                job_artifacts.job_id, name))
+    return data
+
+
+def _append_leak_detail(detail, addition):
+    return addition if not detail else detail + "; " + addition
 
 
 def _execute_leak_job(manifest, job, output_dir):
-    job_dir = _prepare_leak_job_directory(output_dir, job)
-    _reset_leak_job_evidence(job_dir, job)
-    stdout_path = job_dir / "stdout.txt"
-    stderr_path = job_dir / "stderr.txt"
+    capture_limits = {
+        name: _leak_capture_limit(job, name)
+        for name in ("stdout", "stderr")
+    }
+    job_dir = _leak_job_directory(output_dir, job["id"])
     started = time.monotonic()
     before = None
     after = None
@@ -1297,11 +2577,32 @@ def _execute_leak_job(manifest, job, output_dir):
     process = None
     stdout_handle = None
     stderr_handle = None
+    result_tree = None
+    job_artifacts = None
+    cleanup = None
+    primary_error = None
+    containment_token = hashlib.sha256(
+        os.urandom(32) + job["id"].encode("utf-8")).hexdigest()
+    active = _new_lsan_containment(None, containment_token)
     try:
-        stdout_handle = _open_new_leak_output(
-            stdout_path, "LSan job {} stdout".format(job["id"]))
-        stderr_handle = _open_new_leak_output(
-            stderr_path, "LSan job {} stderr".format(job["id"]))
+        result_tree = lab._ResultTree(output_dir, create=True)
+        job_artifacts = result_tree.open_job(job["id"], create=True)
+        if job_artifacts is None:
+            raise CampaignError(
+                "cannot create LSan job {} output".format(job["id"]))
+        # Preserve the established fail-closed contract for pre-existing
+        # symlink, FIFO, or hard-link artifacts before publishing replacements.
+        for name in ("stdout.txt", "stderr.txt", "result.json"):
+            existing = job_artifacts.open_existing(name)
+            if existing is not None:
+                os.close(existing)
+        job_artifacts.invalidate_result()
+        stdout_descriptor = job_artifacts.open_capture("stdout.txt")
+        stderr_descriptor = job_artifacts.open_capture("stderr.txt")
+        stdout_handle = os.fdopen(
+            os.dup(stdout_descriptor), "wb", buffering=0)
+        stderr_handle = os.fdopen(
+            os.dup(stderr_descriptor), "wb", buffering=0)
         before = lab._file_identity(job["executable"]["path"])
         if before != job["executable"]:
             raise CampaignError("executable changed before leak replay")
@@ -1310,90 +2611,198 @@ def _execute_leak_job(manifest, job, output_dir):
             cwd = Path(manifest["source_manifest"]["root"]) / cwd
         environment = os.environ.copy()
         environment.update(job["environment"])
-        process = subprocess.Popen(
-            job["command"], cwd=str(cwd), env=environment,
-            stdin=subprocess.DEVNULL, stdout=stdout_handle,
-            stderr=stderr_handle, start_new_session=True,
-            preexec_fn=lambda: lab._child_setup(job["cpu_set"], 0))
+        environment["LEO2_LAB_CONTAINMENT_TOKEN"] = containment_token
+        with lab._ChildSubreaperLease():
+            _begin_lsan_direct_child_capture(active)
+            try:
+                process = subprocess.Popen(
+                    job["command"], cwd=str(cwd), env=environment,
+                    stdin=subprocess.DEVNULL, stdout=stdout_handle,
+                    stderr=stderr_handle, start_new_session=True,
+                    preexec_fn=lambda: _leak_child_setup(
+                        job["cpu_set"], capture_limits))
+                active["process"] = process
+                exit_code = _wait_lsan_leader(
+                    active, job["timeout_seconds"])
+                if exit_code is None:
+                    outcome = "timeout"
+                    detail = "leak replay exceeded its signed timeout"
+                elif (hasattr(signal, "SIGXFSZ") and
+                        exit_code == -int(signal.SIGXFSZ)):
+                    outcome = "evidence_invalid"
+                    detail = (
+                        "leak replay exceeded its signed capture byte limit "
+                        "(SIGXFSZ)")
+                else:
+                    outcome = "success" if exit_code == 0 else "failed"
+                    if outcome == "failed":
+                        detail = "leak replay exited {}".format(exit_code)
+            except BaseException as error:
+                primary_error = error
+            finally:
+                try:
+                    cleanup = _cleanup_lsan_process_tree_with_retry(active)
+                except BaseException as cleanup_error:
+                    primary_error = _merge_probe_exception(
+                        primary_error, cleanup_error,
+                        "LSan replay cleanup failed")
+
+        if primary_error is not None:
+            if isinstance(primary_error, (
+                    OSError, subprocess.SubprocessError,
+                    lab.LabError, CampaignError)):
+                detail = str(primary_error)
+                outcome = (
+                    "launch_error" if process is None
+                    else "evidence_invalid")
+            else:
+                raise primary_error
+        if process is not None and process.returncode is not None:
+            exit_code = process.returncode
+        if (exit_code is not None and hasattr(signal, "SIGXFSZ") and
+                exit_code == -int(signal.SIGXFSZ) and
+                "(SIGXFSZ)" not in (detail or "")):
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail,
+                "leak replay exceeded its signed capture byte limit "
+                "(SIGXFSZ)")
+        if cleanup is None:
+            raise CampaignError("LSan replay cleanup did not complete")
+        if cleanup["leader_remaining"]:
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail,
+                "job leader remained live after bounded SIGKILL cleanup")
+        if cleanup["errors"]:
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail, "; ".join(cleanup["errors"]))
+        if cleanup["detected"]:
+            residual_detail = (
+                "job leader exited with residual descendants {}; cleanup "
+                "remaining {}".format(
+                    ",".join(str(pid) for pid in cleanup["detected"]),
+                    ",".join(str(pid) for pid in cleanup["remaining"]) or
+                    "none"))
+            if outcome in ("success", "failed"):
+                outcome = "evidence_invalid"
+            detail = _append_leak_detail(detail, residual_detail)
+
+        if stdout_handle is not None:
+            stdout_handle.close()
+            stdout_handle = None
+        if stderr_handle is not None:
+            stderr_handle.close()
+            stderr_handle = None
+        capture_limit_errors = []
+        capture_sizes = {}
+        for name in ("stdout", "stderr"):
+            try:
+                capture_sizes[name] = _retained_leak_capture_size(
+                    job_artifacts, name + ".txt", capture_limits[name])
+            except CampaignError as error:
+                capture_limit_errors.append(str(error))
+        if capture_limit_errors:
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail, "; ".join(capture_limit_errors))
+        saturated = [
+            name for name, size in capture_sizes.items()
+            if size == LEAK_CAPTURE_ENFORCEMENT[
+                "child_file_size_limit_bytes"]
+        ]
+        if saturated and "capture byte limit" not in (detail or ""):
+            # A process may ignore SIGXFSZ and observe EFBIG instead.  An exact
+            # hard-limit capture cannot prove that its final diagnostic was
+            # retained, so it is invalid even when the leader exits normally.
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail,
+                "{} capture reached its signed capture byte limit "
+                "(SIGXFSZ/EFBIG)".format(",".join(saturated)))
         try:
-            exit_code = process.wait(timeout=job["timeout_seconds"])
-        except subprocess.TimeoutExpired:
-            outcome = "timeout"
-            detail = "leak replay exceeded its signed timeout"
-            _signal_leak_process_group(process, signal.SIGTERM)
+            after = lab._file_identity(job["executable"]["path"])
+        except lab.LabError as error:
+            after = None
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(detail, str(error))
+        if before != job["executable"] or after != job["executable"]:
+            outcome = "evidence_invalid"
+            detail = _append_leak_detail(
+                detail, "executable identity changed during leak replay")
+        if outcome == "success":
             try:
-                exit_code = process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                _signal_leak_process_group(process, signal.SIGKILL)
-                exit_code = process.wait()
-        if outcome != "timeout":
-            outcome = "success" if exit_code == 0 else "failed"
-            if outcome == "failed":
-                detail = "leak replay exited {}".format(exit_code)
-    except (OSError, subprocess.SubprocessError, lab.LabError,
-            CampaignError) as error:
-        detail = str(error)
-        outcome = "launch_error" if process is None else "evidence_invalid"
+                stdout = _read_retained_leak_capture(
+                    job_artifacts, "stdout.txt",
+                    capture_limits["stdout"])
+                stderr = _read_retained_leak_capture(
+                    job_artifacts, "stderr.txt",
+                    capture_limits["stderr"])
+            except (CampaignError, lab.LabError, OSError) as error:
+                outcome = "evidence_invalid"
+                detail = _append_leak_detail(
+                    detail,
+                    "cannot read leak replay output: {}".format(error))
+            else:
+                if stderr:
+                    outcome = "diagnostic"
+                    detail = _append_leak_detail(
+                        detail,
+                        "leak replay emitted sanitizer or unexpected stderr")
+                elif stdout != _expected_leak_stdout(job):
+                    outcome = "evidence_invalid"
+                    detail = _append_leak_detail(
+                        detail,
+                        "leak replay success marker is missing or mismatched")
+
+        result = {
+            "schema": LEAK_RESULT_SCHEMA,
+            "state": "complete",
+            "job_id": job["id"],
+            "job_digest": job["job_digest"],
+            "outcome": outcome,
+            "exit_code": exit_code,
+            "duration_seconds": round(
+                max(0.0, time.monotonic() - started), 6),
+            "seed": job["seed"],
+            "cpu_set": job["cpu_set"],
+            "command": job["command"],
+            "environment": job["environment"],
+            "executable_before": before,
+            "executable_after": after,
+            "stdout": "stdout.txt",
+            "stderr": "stderr.txt",
+        }
+        if detail:
+            result["detail"] = detail
+        return _write_leak_result(
+            job_dir, result, job_artifacts=job_artifacts)
     finally:
-        if process is not None and process.poll() is None:
-            _signal_leak_process_group(process, signal.SIGTERM)
-            try:
-                process.wait(timeout=0.5)
-            except subprocess.TimeoutExpired:
-                _signal_leak_process_group(process, signal.SIGKILL)
-                process.wait()
         if stdout_handle is not None:
             stdout_handle.close()
         if stderr_handle is not None:
             stderr_handle.close()
-    try:
-        after = lab._file_identity(job["executable"]["path"])
-    except lab.LabError as error:
-        after = None
-        outcome = "evidence_invalid"
-        detail = str(error)
-    if before != job["executable"] or after != job["executable"]:
-        outcome = "evidence_invalid"
-        detail = "executable identity changed during leak replay"
-    if outcome == "success":
-        try:
-            stdout = stdout_path.read_bytes()
-            stderr = stderr_path.read_bytes()
-        except OSError as error:
-            outcome = "evidence_invalid"
-            detail = "cannot read leak replay output: {}".format(error)
-        else:
-            if stderr:
-                outcome = "diagnostic"
-                detail = "leak replay emitted sanitizer or unexpected stderr"
-            elif stdout != _expected_leak_stdout(job):
-                outcome = "evidence_invalid"
-                detail = "leak replay success marker is missing or mismatched"
-    result = {
-        "schema": LEAK_RESULT_SCHEMA,
-        "state": "complete",
-        "job_id": job["id"],
-        "job_digest": job["job_digest"],
-        "outcome": outcome,
-        "exit_code": exit_code,
-        "duration_seconds": round(max(0.0, time.monotonic() - started), 6),
-        "seed": job["seed"],
-        "cpu_set": job["cpu_set"],
-        "command": job["command"],
-        "environment": job["environment"],
-        "executable_before": before,
-        "executable_after": after,
-        "stdout": "stdout.txt",
-        "stderr": "stderr.txt",
-    }
-    if detail:
-        result["detail"] = detail
-    return _write_leak_result(job_dir, result)
+        if job_artifacts is not None:
+            job_artifacts.close()
+        if result_tree is not None:
+            result_tree.close()
 
 
 def _verify_leak_runtime_cpus(manifest):
     if not hasattr(os, "sched_getaffinity"):
         raise CampaignError("LSan companion execution requires Linux affinity")
+    if resource is None or not hasattr(resource, "RLIMIT_FSIZE"):
+        raise CampaignError(
+            "LSan companion execution requires RLIMIT_FSIZE")
+    unused_soft, hard_limit = resource.getrlimit(resource.RLIMIT_FSIZE)
+    del unused_soft
+    signed_limit = LEAK_CAPTURE_ENFORCEMENT[
+        "child_file_size_limit_bytes"]
+    if (hard_limit != resource.RLIM_INFINITY and
+            hard_limit < signed_limit):
+        raise CampaignError(
+            "inherited RLIMIT_FSIZE is below the signed capture limit")
     allowed = set(os.sched_getaffinity(0))
     unavailable = sorted({
         cpu for job in manifest["jobs"] for cpu in job["cpu_set"]
@@ -1603,7 +3012,501 @@ def audit_leak_campaign(arguments):
     return _audit_leak_campaign(arguments, verify_live=True)
 
 
+def _probe_runner_self_test(directory, nm_path, nm_identity):
+    """Exercise bounded probe containment and terminal-error precedence."""
+    if (not sys.platform.startswith("linux") or not hasattr(os, "fork") or
+            not hasattr(os, "setsid") or
+            not Path("/proc/self/stat").is_file()):
+        return
+
+    helper = Path(directory) / "fake-bounded-probe.py"
+    helper.write_text(
+        "#!{}\n"
+        "import os, resource, sys, time\n"
+        "mode = sys.argv[1]\n"
+        "pid_path = sys.argv[2] if len(sys.argv) > 2 else ''\n"
+        "if mode == 'normal':\n"
+        "    if pid_path:\n"
+        "        open(pid_path, 'w').write(str(os.getpid()))\n"
+        "    sys.stdout.write('probe stdout\\n')\n"
+        "    sys.stderr.write('probe stderr\\n')\n"
+        "    raise SystemExit(7)\n"
+        "if mode == 'detached-writer':\n"
+        "    pid = os.fork()\n"
+        "    if pid == 0:\n"
+        "        os.setsid()\n"
+        "        open(pid_path, 'w').write(str(os.getpid()))\n"
+        "        while True:\n"
+        "            os.write(1, b'detached writer\\n')\n"
+        "            time.sleep(0.02)\n"
+        "    while not os.path.exists(pid_path):\n"
+        "        time.sleep(0.005)\n"
+        "    os._exit(0)\n"
+        "if mode == 'excessive':\n"
+        "    open(pid_path, 'w').write(str(os.getpid()))\n"
+        "    while True:\n"
+        "        os.write(1, b'x' * 4096)\n"
+        "if mode == 'raise-file-limit':\n"
+        "    open(pid_path, 'w').write(str(os.getpid()))\n"
+        "    expected = int(sys.argv[3])\n"
+        "    soft, hard = resource.getrlimit(resource.RLIMIT_FSIZE)\n"
+        "    if soft != expected or hard != expected:\n"
+        "        sys.stderr.write('unexpected file limit {{}} {{}}\\n'.format("
+        "soft, hard))\n"
+        "        raise SystemExit(91)\n"
+        "    try:\n"
+        "        resource.setrlimit(resource.RLIMIT_FSIZE, "
+        "(expected + 1, expected + 1))\n"
+        "    except (OSError, ValueError):\n"
+        "        pass\n"
+        "    else:\n"
+        "        raise SystemExit(92)\n"
+        "    while True:\n"
+        "        os.write(1, b'r' * 4096)\n"
+        "if mode == 'mutate':\n"
+        "    with open(sys.argv[0], 'ab') as output:\n"
+        "        output.write(b'\\n# changed during probe\\n')\n"
+        "    raise SystemExit(0)\n"
+        "open(pid_path, 'w').write(str(os.getpid()))\n"
+        "time.sleep(30)\n".format(sys.executable),
+        encoding="utf-8")
+    helper.chmod(0o700)
+    helper_identity = lab._file_identity(helper)
+
+    def run_helper(mode, pid_path, timeout_seconds=1.0,
+                   stdout_limit=4096, stderr_limit=4096):
+        return _run_retained_probe(
+            [_retained_probe_argument("target"), mode, str(pid_path),
+             str(max(stdout_limit, stderr_limit) + 1)],
+            {"target": (
+                str(helper), helper_identity, "modeled probe target")},
+            {}, "modeled {} probe".format(mode), timeout_seconds,
+            stdout_limit, stderr_limit)
+
+    def require_process_gone(pid_path, label):
+        try:
+            pid = int(pid_path.read_text(encoding="ascii"))
+        except (OSError, ValueError) as error:
+            raise CampaignError(
+                "{} did not publish a process identity: {}".format(
+                    label, error))
+        deadline = time.monotonic() + 1.0
+        while (Path("/proc") / str(pid)).exists() and \
+                time.monotonic() < deadline:
+            time.sleep(0.01)
+        if (Path("/proc") / str(pid)).exists():
+            raise CampaignError(
+                "{} left process {} live".format(label, pid))
+
+    ordinary_pid = Path(directory) / "ordinary-probe.pid"
+    ordinary = run_helper("normal", ordinary_pid)
+    if (ordinary.returncode != 7 or
+            ordinary.stdout != b"probe stdout\n" or
+            ordinary.stderr != b"probe stderr\n"):
+        raise CampaignError(
+            "bounded probe changed ordinary captures: returncode={}, "
+            "stdout={!r}, stderr={!r}".format(
+                ordinary.returncode, ordinary.stdout, ordinary.stderr))
+    require_process_gone(ordinary_pid, "ordinary bounded probe")
+
+    def probe_resource_snapshot():
+        return (
+            len(os.listdir("/proc/self/fd")),
+            {
+                (record["pid"], record["starttime_ticks"])
+                for record in _current_lsan_direct_children()
+            })
+
+    def expect_capture_mutation(label, phase, restore_name):
+        original_checkpoint = globals()["_probe_capture_checkpoint"]
+        mutation_count = []
+        pid_path = Path(directory) / (
+            "{}-capture-probe.pid".format(label))
+        before_resources = probe_resource_snapshot()
+
+        def mutate_capture(observed_phase, directory_descriptor=None):
+            if observed_phase != phase or mutation_count:
+                return
+            mutation_count.append(observed_phase)
+            os.rename(
+                "stdout.txt", ".stdout.saved",
+                src_dir_fd=directory_descriptor,
+                dst_dir_fd=directory_descriptor)
+            replacement = os.open(
+                "stdout.txt",
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+                os.O_CLOEXEC | os.O_NOFOLLOW,
+                0o600, dir_fd=directory_descriptor)
+            try:
+                os.write(replacement, b"substituted probe capture\n")
+            finally:
+                os.close(replacement)
+            if restore_name:
+                os.unlink("stdout.txt", dir_fd=directory_descriptor)
+                os.rename(
+                    ".stdout.saved", "stdout.txt",
+                    src_dir_fd=directory_descriptor,
+                    dst_dir_fd=directory_descriptor)
+
+        globals()["_probe_capture_checkpoint"] = mutate_capture
+        try:
+            try:
+                run_helper("normal", pid_path)
+            except CampaignError:
+                pass
+            else:
+                raise CampaignError(
+                    "bounded probe accepted {}".format(label))
+        finally:
+            globals()["_probe_capture_checkpoint"] = original_checkpoint
+        if mutation_count != [phase]:
+            raise CampaignError(
+                "bounded probe did not exercise {}".format(label))
+        require_process_gone(pid_path, label)
+        if probe_resource_snapshot() != before_resources:
+            raise CampaignError(
+                "bounded probe leaked resources after {}".format(label))
+
+    expect_capture_mutation(
+        "capture-rename-replacement", "after-cleanup", False)
+    expect_capture_mutation(
+        "capture-name-ABA", "after-read", True)
+
+    original_capture_checkpoint = globals()["_probe_capture_checkpoint"]
+    for label, terminal, expected_type, expected_code in (
+            ("capture-KeyboardInterrupt", KeyboardInterrupt(),
+             KeyboardInterrupt, None),
+            ("capture-SystemExit", SystemExit(47), SystemExit, 47)):
+        pid_path = Path(directory) / (label + ".pid")
+        before_resources = probe_resource_snapshot()
+        interruptions = []
+
+        def interrupt_capture(
+                observed_phase, unused_directory_descriptor=None,
+                exception=terminal):
+            del unused_directory_descriptor
+            if observed_phase == "after-cleanup" and not interruptions:
+                interruptions.append(observed_phase)
+                raise exception
+
+        globals()["_probe_capture_checkpoint"] = interrupt_capture
+        try:
+            try:
+                run_helper("normal", pid_path)
+            except BaseException as observed:
+                if not isinstance(observed, expected_type):
+                    raise CampaignError(
+                        "bounded capture propagated {} instead of {}"
+                        .format(type(observed).__name__, label))
+                if (expected_code is not None and
+                        getattr(observed, "code", None) != expected_code):
+                    raise CampaignError(
+                        "bounded capture changed {} code".format(label))
+            else:
+                raise CampaignError(
+                    "bounded capture swallowed {}".format(label))
+        finally:
+            globals()["_probe_capture_checkpoint"] = (
+                original_capture_checkpoint)
+        if interruptions != ["after-cleanup"]:
+            raise CampaignError(
+                "bounded capture did not inject {} exactly once".format(
+                    label))
+        require_process_gone(pid_path, label)
+        if probe_resource_snapshot() != before_resources:
+            raise CampaignError(
+                "bounded capture leaked resources after {}".format(label))
+
+    tool_version = _run_retained_probe(
+        [_retained_probe_argument("tool"), "--version"],
+        {"tool": (
+            nm_path, nm_identity, "modeled instrumentation tool")},
+        {}, "ordinary instrumentation tool probe", 5.0,
+        1024 * 1024, PROBE_STDERR_LIMIT)
+    if tool_version.returncode != 0 or not tool_version.stdout:
+        raise CampaignError(
+            "bounded instrumentation tool probe did not complete normally")
+    python_identity = lab._file_identity(sys.executable)
+    symbol_probe = _run_retained_probe(
+        [_retained_probe_argument("tool"), "-g",
+         _retained_probe_argument("target")],
+        {
+            "tool": (
+                nm_path, nm_identity, "modeled instrumentation tool"),
+            "target": (
+                sys.executable, python_identity,
+                "modeled instrumentation target"),
+        },
+        {}, "ordinary retained symbol probe", 5.0,
+        PROBE_NM_STDOUT_LIMIT, PROBE_STDERR_LIMIT)
+    if symbol_probe.returncode != 0:
+        raise CampaignError(
+            "bounded retained symbol probe did not complete normally: "
+            "returncode={}, stderr={!r}".format(
+                symbol_probe.returncode, symbol_probe.stderr[-512:]))
+
+    detached_pid = Path(directory) / "detached-probe.pid"
+    try:
+        run_helper("detached-writer", detached_pid)
+    except CampaignError as error:
+        if "residual descendants" not in str(error):
+            raise
+    else:
+        raise CampaignError(
+            "bounded probe accepted a detached output writer")
+    require_process_gone(detached_pid, "detached bounded probe")
+
+    timeout_pid = Path(directory) / "timeout-probe.pid"
+    timeout_started = time.monotonic()
+    try:
+        run_helper("sleep", timeout_pid, timeout_seconds=0.05)
+    except CampaignError as error:
+        if "timed out" not in str(error):
+            raise
+    else:
+        raise CampaignError("bounded probe timeout was accepted")
+    if time.monotonic() - timeout_started > 3.0:
+        raise CampaignError("bounded probe timeout teardown was unbounded")
+    require_process_gone(timeout_pid, "timed-out bounded probe")
+
+    excessive_pid = Path(directory) / "excessive-probe.pid"
+    try:
+        run_helper(
+            "excessive", excessive_pid, timeout_seconds=1.0,
+            stdout_limit=1024, stderr_limit=1024)
+    except CampaignError as error:
+        if "excessive output" not in str(error):
+            raise
+    else:
+        raise CampaignError("bounded probe accepted excessive output")
+    require_process_gone(excessive_pid, "excessive-output bounded probe")
+
+    raised_limit_pid = Path(directory) / "raised-limit-probe.pid"
+    try:
+        run_helper(
+            "raise-file-limit", raised_limit_pid, timeout_seconds=1.0,
+            stdout_limit=1024, stderr_limit=1024)
+    except CampaignError as error:
+        if "excessive output" not in str(error):
+            raise
+    else:
+        raise CampaignError(
+            "bounded probe could raise its inherited file-size hard limit")
+    require_process_gone(
+        raised_limit_pid, "raised-file-limit bounded probe")
+
+    if hasattr(signal, "setitimer") and hasattr(signal, "ITIMER_REAL"):
+        for label, exception_factory in (
+                ("KeyboardInterrupt", KeyboardInterrupt),
+                ("SystemExit", lambda: SystemExit(23))):
+            pid_path = Path(directory) / (
+                "{}-probe.pid".format(label.lower()))
+            prior_handler = signal.getsignal(signal.SIGALRM)
+
+            def interrupt_probe(_signum, _frame, factory=exception_factory):
+                raise factory()
+
+            signal.signal(signal.SIGALRM, interrupt_probe)
+            signal.setitimer(signal.ITIMER_REAL, 0.15)
+            try:
+                try:
+                    run_helper("sleep", pid_path, timeout_seconds=5.0)
+                except BaseException as error:
+                    if label == "KeyboardInterrupt":
+                        if not isinstance(error, KeyboardInterrupt):
+                            raise
+                    elif not (isinstance(error, SystemExit) and
+                              error.code == 23):
+                        raise
+                else:
+                    raise CampaignError(
+                        "bounded probe swallowed {}".format(label))
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, prior_handler)
+            require_process_gone(
+                pid_path, "{} bounded probe".format(label))
+
+    original_popen = subprocess.Popen
+    original_cleanup = globals()["_cleanup_lsan_process_tree_with_retry"]
+
+    def cleanup_then(error):
+        def scripted(active):
+            original_cleanup(active)
+            raise error
+        return scripted
+
+    precedence_cases = (
+        (CampaignError("ordinary launch"), KeyboardInterrupt(),
+         KeyboardInterrupt, None),
+        (KeyboardInterrupt(), SystemExit(31), KeyboardInterrupt, None),
+        (SystemExit(29), KeyboardInterrupt(), SystemExit, 29),
+    )
+    for index, (launch_error, cleanup_error, expected_type,
+                expected_code) in enumerate(precedence_cases):
+        def fail_launch(*unused_args, error=launch_error, **unused_kwargs):
+            del unused_args, unused_kwargs
+            raise error
+
+        subprocess.Popen = fail_launch
+        globals()["_cleanup_lsan_process_tree_with_retry"] = cleanup_then(
+            cleanup_error)
+        try:
+            try:
+                _run_bounded_probe_process(
+                    [str(helper), "normal", ""], {},
+                    "modeled precedence probe {}".format(index), 1.0,
+                    4096, 4096)
+            except BaseException as observed:
+                if not isinstance(observed, expected_type):
+                    raise CampaignError(
+                        "probe precedence case {} propagated {} "
+                        "instead of {}".format(
+                            index, type(observed).__name__,
+                            expected_type.__name__))
+                if (expected_code is not None and
+                        getattr(observed, "code", None) != expected_code):
+                    raise CampaignError(
+                        "probe precedence case {} changed SystemExit code"
+                        .format(index))
+            else:
+                raise CampaignError(
+                    "probe precedence case {} unexpectedly passed".format(
+                        index))
+        finally:
+            subprocess.Popen = original_popen
+            globals()["_cleanup_lsan_process_tree_with_retry"] = (
+                original_cleanup)
+
+    mutating = Path(directory) / "mutating-bounded-probe.py"
+    shutil.copy2(helper, mutating)
+    mutating.chmod(0o700)
+    mutating_identity = lab._file_identity(mutating)
+    try:
+        _run_retained_probe(
+            [_retained_probe_argument("target"), "mutate", ""],
+            {"target": (
+                str(mutating), mutating_identity,
+                "mutating modeled probe target")},
+            {}, "mutating modeled probe", 1.0, 4096, 4096)
+    except CampaignError as error:
+        if "changed during the complete probe lifecycle" not in str(error):
+            raise
+    else:
+        raise CampaignError(
+            "retained probe accepted an executable identity mutation")
+
+
 def _leak_companion_self_test(directory, nm_identity):
+    def verify_cleanup_exception_precedence(
+            first_error, retry_error, expected_error, label):
+        original_cleanup = globals()["_cleanup_lsan_process_tree"]
+        failures = [first_error, retry_error]
+
+        def scripted_cleanup(unused_active):
+            del unused_active
+            raise failures.pop(0)
+
+        globals()["_cleanup_lsan_process_tree"] = scripted_cleanup
+        try:
+            try:
+                _cleanup_lsan_process_tree_with_retry({})
+            except BaseException as observed:
+                if observed is not expected_error:
+                    raise CampaignError(
+                        "{} propagated {} instead of {}".format(
+                            label, type(observed).__name__,
+                            type(expected_error).__name__))
+            else:
+                raise CampaignError(
+                    "{} unexpectedly completed cleanup".format(label))
+        finally:
+            globals()["_cleanup_lsan_process_tree"] = original_cleanup
+        if failures:
+            raise CampaignError(
+                "{} did not execute the cleanup retry".format(label))
+
+    ordinary_then_interrupt = (
+        CampaignError("initial ordinary cleanup failure"),
+        KeyboardInterrupt())
+    verify_cleanup_exception_precedence(
+        ordinary_then_interrupt[0], ordinary_then_interrupt[1],
+        ordinary_then_interrupt[1],
+        "ordinary-to-KeyboardInterrupt cleanup")
+    ordinary_then_exit = (
+        CampaignError("initial ordinary cleanup failure"), SystemExit(17))
+    verify_cleanup_exception_precedence(
+        ordinary_then_exit[0], ordinary_then_exit[1],
+        ordinary_then_exit[1], "ordinary-to-SystemExit cleanup")
+    interrupt_then_ordinary = (
+        KeyboardInterrupt(), CampaignError("retry ordinary cleanup failure"))
+    verify_cleanup_exception_precedence(
+        interrupt_then_ordinary[0], interrupt_then_ordinary[1],
+        interrupt_then_ordinary[0],
+        "KeyboardInterrupt-to-ordinary cleanup")
+    exit_then_interrupt = (SystemExit(19), KeyboardInterrupt())
+    verify_cleanup_exception_precedence(
+        exit_then_interrupt[0], exit_then_interrupt[1],
+        exit_then_interrupt[0], "SystemExit-to-KeyboardInterrupt cleanup")
+
+    class RecycledCloseArtifacts(object):
+        def __init__(self, descriptor):
+            self.job_id = "modeled-recycled-close"
+            self.streams = {"stdout.txt": descriptor}
+            self.fd = None
+
+    recycled_path = Path(directory) / "same-inode-close-recycle.bin"
+    recycled_path.write_bytes(b"same inode, different open file description")
+    descriptor_count_before = len(os.listdir("/proc/self/fd"))
+    owned_descriptor = os.open(
+        str(recycled_path), os.O_RDONLY | os.O_CLOEXEC)
+    recycled_artifacts = RecycledCloseArtifacts(owned_descriptor)
+    recycled_owner = {
+        "tree": None,
+        "artifacts": recycled_artifacts,
+        "snapshots": [],
+    }
+    original_os_close = os.close
+    recycled = {"descriptor": None, "calls": 0}
+
+    def close_then_recycle(descriptor):
+        if descriptor == owned_descriptor and recycled["calls"] == 0:
+            recycled["calls"] += 1
+            original_os_close(descriptor)
+            replacement = os.open(
+                str(recycled_path), os.O_RDONLY | os.O_CLOEXEC)
+            recycled["descriptor"] = replacement
+            if replacement != descriptor:
+                raise CampaignError(
+                    "same-inode close test did not recycle the numeric fd")
+            raise KeyboardInterrupt()
+        recycled["calls"] += 1
+        original_os_close(descriptor)
+
+    os.close = close_then_recycle
+    try:
+        close_error = _close_leak_resume_owner(recycled_owner)
+    finally:
+        os.close = original_os_close
+    try:
+        if (not isinstance(close_error, KeyboardInterrupt) or
+                recycled["calls"] != 1 or
+                recycled["descriptor"] != owned_descriptor):
+            raise CampaignError(
+                "resume owner retried an ambiguously closed numeric fd")
+        retained_state = os.fstat(recycled["descriptor"])
+        path_state = recycled_path.stat()
+        if (retained_state.st_dev != path_state.st_dev or
+                retained_state.st_ino != path_state.st_ino):
+            raise CampaignError(
+                "same-inode recycled descriptor changed identity")
+    finally:
+        if recycled["descriptor"] is not None:
+            original_os_close(recycled["descriptor"])
+    if len(os.listdir("/proc/self/fd")) != descriptor_count_before:
+        raise CampaignError(
+            "same-inode recycled descriptor test leaked an fd")
+
     weak_symbols = "".join(
         "                 w {}\n".format(symbol)
         for symbol in LSAN_CONTROL_SYMBOLS)
@@ -1659,6 +3562,227 @@ def _leak_companion_self_test(directory, nm_identity):
             pass
         else:
             raise CampaignError("LSan canary accepted {}".format(label))
+
+    class PublicationRaceArtifacts(object):
+        def __init__(self, interrupt=False):
+            self.changed = False
+            self.interrupt = interrupt
+            self.invalidated = False
+
+        def content_identity(self, name):
+            del name
+            return {
+                "sha256": ("b" if self.changed else "a") * 64,
+                "size_bytes": 1,
+            }
+
+        def atomic_write_json(self, name, value):
+            del name, value
+            self.changed = True
+            if self.interrupt:
+                raise KeyboardInterrupt()
+
+        def invalidate_result(self):
+            self.invalidated = True
+
+    publication_race = PublicationRaceArtifacts()
+    try:
+        _write_leak_result(
+            Path(directory) / "unused-publication-race", {
+                "schema": LEAK_RESULT_SCHEMA,
+                "state": "complete",
+            }, job_artifacts=publication_race)
+    except CampaignError:
+        pass
+    else:
+        raise CampaignError(
+            "LSan result publication accepted changed capture bytes")
+    if not publication_race.invalidated:
+        raise CampaignError(
+            "LSan result publication did not invalidate changed evidence")
+
+    interrupted_publication = PublicationRaceArtifacts(interrupt=True)
+    try:
+        _write_leak_result(
+            Path(directory) / "unused-interrupted-publication", {
+                "schema": LEAK_RESULT_SCHEMA,
+                "state": "complete",
+            }, job_artifacts=interrupted_publication)
+    except KeyboardInterrupt:
+        pass
+    else:
+        raise CampaignError(
+            "LSan result publication swallowed KeyboardInterrupt")
+    if not interrupted_publication.invalidated:
+        raise CampaignError(
+            "interrupted LSan result publication retained stale authority")
+
+    if (sys.platform.startswith("linux") and hasattr(os, "fork") and
+            hasattr(os, "setsid") and Path("/proc/self/stat").is_file()):
+        canary_helper = Path(directory) / "fake-lsan-canary-process.py"
+        canary_helper.write_text(
+            "#!{}\n"
+            "import os, sys, time\n"
+            "mode = os.environ.get('LEO2_TEST_CANARY_MODE', 'normal')\n"
+            "pid_path = os.environ.get('LEO2_TEST_CANARY_PID')\n"
+            "if mode == 'normal':\n"
+            "    sys.stdout.write('canary stdout\\n')\n"
+            "    sys.stderr.write('canary stderr\\n')\n"
+            "    raise SystemExit(7)\n"
+            "if mode == 'detached':\n"
+            "    pid = os.fork()\n"
+            "    if pid == 0:\n"
+            "        os.setsid()\n"
+            "        with open(pid_path, 'w') as output:\n"
+            "            output.write(str(os.getpid()))\n"
+            "        time.sleep(30)\n"
+            "        os._exit(0)\n"
+            "    while not os.path.exists(pid_path):\n"
+            "        time.sleep(0.005)\n"
+            "    os._exit(0)\n"
+            "with open(pid_path, 'w') as output:\n"
+            "    output.write(str(os.getpid()))\n"
+            "time.sleep(30)\n".format(sys.executable),
+            encoding="utf-8")
+        canary_helper.chmod(0o700)
+
+        normal = _run_lsan_canary_process(
+            str(canary_helper), {
+                "LEO2_TEST_CANARY_MODE": "normal",
+            }, "modeled", timeout_seconds=1.0)
+        if (normal.returncode != 7 or
+                normal.stdout != b"canary stdout\n" or
+                normal.stderr != b"canary stderr\n"):
+            raise CampaignError(
+                "bounded LSan canary runner changed ordinary captures")
+
+        def require_process_gone(pid_path, label):
+            try:
+                pid = int(pid_path.read_text(encoding="ascii"))
+            except (OSError, ValueError) as error:
+                raise CampaignError(
+                    "{} did not publish a process identity: {}".format(
+                        label, error))
+            deadline = time.monotonic() + 1.0
+            while (Path("/proc") / str(pid)).exists() and \
+                    time.monotonic() < deadline:
+                time.sleep(0.01)
+            if (Path("/proc") / str(pid)).exists():
+                raise CampaignError(
+                    "{} left process {} live".format(label, pid))
+
+        tokenless_pid = Path(directory) / "tokenless-canary.pid"
+        original_popen = subprocess.Popen
+        fault_child = {"pid": None}
+
+        def interrupt_after_fork(*unused_args, **unused_kwargs):
+            del unused_args, unused_kwargs
+            pid = os.fork()
+            if pid == 0:
+                try:
+                    os.setsid()
+                    time.sleep(30)
+                finally:
+                    os._exit(0)
+            fault_child["pid"] = pid
+            tokenless_pid.write_text(str(pid), encoding="ascii")
+            raise KeyboardInterrupt()
+
+        subprocess.Popen = interrupt_after_fork
+        try:
+            try:
+                _run_lsan_canary_process(
+                    str(canary_helper), {}, "modeled-tokenless",
+                    timeout_seconds=1.0)
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise CampaignError(
+                    "LSan canary swallowed a post-fork KeyboardInterrupt")
+        finally:
+            subprocess.Popen = original_popen
+        try:
+            require_process_gone(
+                tokenless_pid, "tokenless unpublished LSan child cleanup")
+        except BaseException:
+            pid = fault_child["pid"]
+            if pid is not None:
+                try:
+                    waited, unused_status = os.waitpid(pid, os.WNOHANG)
+                    del unused_status
+                except ChildProcessError:
+                    waited = pid
+                if waited == 0:
+                    try:
+                        os.kill(pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    try:
+                        os.waitpid(pid, 0)
+                    except ChildProcessError:
+                        pass
+            raise
+
+        detached_pid = Path(directory) / "detached-canary.pid"
+        try:
+            _run_lsan_canary_process(
+                str(canary_helper), {
+                    "LEO2_TEST_CANARY_MODE": "detached",
+                    "LEO2_TEST_CANARY_PID": str(detached_pid),
+                }, "modeled-detached", timeout_seconds=1.0)
+        except CampaignError as error:
+            if "residual descendants" not in str(error):
+                raise
+        else:
+            raise CampaignError(
+                "LSan canary accepted a detached residual descendant")
+        require_process_gone(
+            detached_pid, "detached LSan canary cleanup")
+
+        timeout_pid = Path(directory) / "timeout-canary.pid"
+        timeout_started = time.monotonic()
+        try:
+            _run_lsan_canary_process(
+                str(canary_helper), {
+                    "LEO2_TEST_CANARY_MODE": "sleep",
+                    "LEO2_TEST_CANARY_PID": str(timeout_pid),
+                }, "modeled-timeout", timeout_seconds=0.05)
+        except CampaignError as error:
+            if "timed out" not in str(error):
+                raise
+        else:
+            raise CampaignError("LSan canary timeout was accepted")
+        if time.monotonic() - timeout_started > 3.0:
+            raise CampaignError(
+                "LSan canary timeout recovery was not bounded")
+        require_process_gone(timeout_pid, "timed-out LSan canary cleanup")
+
+        if hasattr(signal, "setitimer") and hasattr(signal, "ITIMER_REAL"):
+            interrupted_pid = Path(directory) / "interrupted-canary.pid"
+            prior_handler = signal.getsignal(signal.SIGALRM)
+
+            def interrupt_canary(_signum, _frame):
+                raise KeyboardInterrupt()
+
+            signal.signal(signal.SIGALRM, interrupt_canary)
+            signal.setitimer(signal.ITIMER_REAL, 0.1)
+            try:
+                try:
+                    _run_lsan_canary_process(
+                        str(canary_helper), {
+                            "LEO2_TEST_CANARY_MODE": "sleep",
+                            "LEO2_TEST_CANARY_PID": str(interrupted_pid),
+                        }, "modeled-interrupt", timeout_seconds=5.0)
+                except KeyboardInterrupt:
+                    pass
+                else:
+                    raise CampaignError(
+                        "LSan canary swallowed KeyboardInterrupt")
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, prior_handler)
+            require_process_gone(
+                interrupted_pid, "interrupted LSan canary cleanup")
 
     helper = Path(directory) / "fake-exact-leak-replay.py"
     helper.write_text(
@@ -1752,7 +3876,10 @@ def _leak_companion_self_test(directory, nm_identity):
                 [job["seed"] for job in source["jobs"]] or
             any(job["iterations"] != 19 for job in leak["jobs"]) or
             any(job["environment"] != _leak_environment()
-                for job in leak["jobs"])):
+                for job in leak["jobs"]) or
+            any(job["capture_limits_bytes"] != _leak_capture_limits()
+                for job in leak["jobs"]) or
+            leak["execution_policy"] != _leak_execution_policy()):
         raise CampaignError("LSan companion changed the source seed matrix")
 
     coverage_arguments = argparse.Namespace(**vars(source_arguments))
@@ -1782,6 +3909,344 @@ def _leak_companion_self_test(directory, nm_identity):
         value["manifest_digest"] = lab._digest(unsigned)
         return value
 
+    if (sys.platform.startswith("linux") and hasattr(os, "fork") and
+            hasattr(os, "setsid") and Path("/proc/self/stat").is_file()):
+        replay_helper = Path(directory) / "fake-adversarial-leak-replay.py"
+        replay_helper.write_text(
+            "#!{}\n"
+            "import os, signal, sys, time\n"
+            "seed = int(sys.argv[1], 0)\n"
+            "iterations = int(sys.argv[2], 0)\n"
+            "mode = os.environ['LEO2_TEST_LEAK_MODE']\n"
+            "pid_path = os.environ['LEO2_TEST_LEAK_PID']\n"
+            "capture_limit = int(os.environ['LEO2_TEST_CAPTURE_LIMIT'])\n"
+            "def publish(pid):\n"
+            "    with open(pid_path, 'w') as output:\n"
+            "        output.write(str(pid))\n"
+            "        output.flush()\n"
+            "        os.fsync(output.fileno())\n"
+            "def marker():\n"
+            "    print('leopard2_fuzz_replay seed={{}} iterations={{}} "
+            "passed'.format(seed, iterations), flush=True)\n"
+            "def fill_capture(byte, count):\n"
+            "    chunk = byte * 65536\n"
+            "    written = 0\n"
+            "    while written < count:\n"
+            "        written += os.write(1, chunk[:min(len(chunk), "
+            "count - written)])\n"
+            "if mode == 'excessive-output':\n"
+            "    publish(os.getpid())\n"
+            "    signal.signal(signal.SIGXFSZ, signal.SIG_DFL)\n"
+            "    fill_capture(b'X', capture_limit + 1)\n"
+            "    raise SystemExit(99)\n"
+            "if mode == 'timeout-output':\n"
+            "    publish(os.getpid())\n"
+            "    fill_capture(b'T', capture_limit - 1)\n"
+            "    time.sleep(30)\n"
+            "if mode == 'detached-output':\n"
+            "    pid = os.fork()\n"
+            "    if pid == 0:\n"
+            "        os.setsid()\n"
+            "        publish(os.getpid())\n"
+            "        fill_capture(b'D', capture_limit - 1)\n"
+            "        time.sleep(30)\n"
+            "        os._exit(0)\n"
+            "    while not os.path.exists(pid_path):\n"
+            "        time.sleep(0.005)\n"
+            "    marker()\n"
+            "    raise SystemExit(0)\n"
+            "if mode == 'detached':\n"
+            "    pid = os.fork()\n"
+            "    if pid == 0:\n"
+            "        os.setsid()\n"
+            "        publish(os.getpid())\n"
+            "        time.sleep(30)\n"
+            "        os._exit(0)\n"
+            "    while not os.path.exists(pid_path):\n"
+            "        time.sleep(0.005)\n"
+            "    marker()\n"
+            "    raise SystemExit(0)\n"
+            "if mode == 'timeout-tree':\n"
+            "    pid = os.fork()\n"
+            "    if pid == 0:\n"
+            "        os.setsid()\n"
+            "        publish(os.getpid())\n"
+            "        time.sleep(30)\n"
+            "        os._exit(0)\n"
+            "    while not os.path.exists(pid_path):\n"
+            "        time.sleep(0.005)\n"
+            "    time.sleep(30)\n"
+            "publish(os.getpid())\n"
+            "time.sleep(30)\n".format(sys.executable),
+            encoding="utf-8")
+        replay_helper.chmod(0o700)
+        replay_identity = lab._file_identity(replay_helper)
+
+        def adversarial_job(name, mode, pid_path, timeout_seconds):
+            value = clone(leak["jobs"][0])
+            value["id"] = "adversarial-{}".format(name)
+            value["command"] = [
+                str(replay_helper), str(value["seed"]),
+                str(value["iterations"])]
+            value["cwd"] = directory
+            value["timeout_seconds"] = timeout_seconds
+            value["environment"] = dict(value["environment"])
+            value["environment"]["LEO2_TEST_LEAK_MODE"] = mode
+            value["environment"]["LEO2_TEST_LEAK_PID"] = str(pid_path)
+            value["environment"]["LEO2_TEST_CAPTURE_LIMIT"] = str(
+                _leak_capture_limit(value, "stdout"))
+            value["executable"] = replay_identity
+            unsigned_job = dict(value)
+            unsigned_job.pop("job_digest", None)
+            value["job_digest"] = lab._digest(unsigned_job)
+            return value
+
+        original_execute_popen = subprocess.Popen
+        original_execute_cleanup = globals()[
+            "_cleanup_lsan_process_tree_with_retry"]
+
+        def execution_resource_snapshot():
+            return (
+                len(os.listdir("/proc/self/fd")),
+                {
+                    (record["pid"], record["starttime_ticks"])
+                    for record in _current_lsan_direct_children()
+                })
+
+        execute_precedence_cases = (
+            (KeyboardInterrupt(), SystemExit(53), KeyboardInterrupt, None),
+            (SystemExit(51), KeyboardInterrupt(), SystemExit, 51),
+            (CampaignError("ordinary launch failure"), SystemExit(55),
+             SystemExit, 55),
+        )
+        for index, (launch_error, cleanup_terminal, expected_type,
+                    expected_code) in enumerate(execute_precedence_cases):
+            precedence_job = adversarial_job(
+                "cleanup-precedence-{}".format(index), "sleep",
+                Path(directory) / "unused-cleanup-precedence.pid", 1.0)
+            before_resources = execution_resource_snapshot()
+
+            def fail_execute_launch(
+                    *unused_args, error=launch_error, **unused_kwargs):
+                del unused_args, unused_kwargs
+                raise error
+
+            def cleanup_then_terminal(
+                    active, terminal=cleanup_terminal):
+                original_execute_cleanup(active)
+                raise terminal
+
+            subprocess.Popen = fail_execute_launch
+            globals()["_cleanup_lsan_process_tree_with_retry"] = (
+                cleanup_then_terminal)
+            try:
+                try:
+                    _execute_leak_job(
+                        leak, precedence_job,
+                        str(Path(directory) /
+                            "cleanup-precedence-results-{}".format(index)))
+                except BaseException as observed:
+                    if not isinstance(observed, expected_type):
+                        raise CampaignError(
+                            "LSan execution cleanup precedence {} "
+                            "propagated {} instead of {}".format(
+                                index, type(observed).__name__,
+                                expected_type.__name__))
+                    if (expected_code is not None and
+                            getattr(observed, "code", None) != expected_code):
+                        raise CampaignError(
+                            "LSan execution cleanup precedence {} changed "
+                            "SystemExit code".format(index))
+                else:
+                    raise CampaignError(
+                        "LSan execution cleanup precedence {} unexpectedly "
+                        "completed".format(index))
+            finally:
+                subprocess.Popen = original_execute_popen
+                globals()["_cleanup_lsan_process_tree_with_retry"] = (
+                    original_execute_cleanup)
+            if execution_resource_snapshot() != before_resources:
+                raise CampaignError(
+                    "LSan execution cleanup precedence {} leaked resources"
+                    .format(index))
+
+        excessive_replay_pid = Path(directory) / "excessive-replay.pid"
+        excessive_job = adversarial_job(
+            "excessive-output", "excessive-output",
+            excessive_replay_pid, 1.0)
+        excessive_result = _execute_leak_job(
+            leak, excessive_job,
+            str(Path(directory) / "excessive-replay-results"))
+        if (excessive_result["outcome"] != "evidence_invalid" or
+                excessive_result.get("exit_code") !=
+                    -int(signal.SIGXFSZ) or
+                "capture byte limit (SIGXFSZ)" not in
+                    excessive_result.get("detail", "")):
+            raise CampaignError(
+                "LSan replay did not classify excessive output exactly: "
+                "{}".format(excessive_result))
+        excessive_stdout = (
+            _leak_job_directory(
+                Path(directory) / "excessive-replay-results",
+                excessive_job["id"]) / "stdout.txt")
+        if excessive_stdout.stat().st_size > _leak_capture_limit(
+                excessive_job, "stdout"):
+            raise CampaignError(
+                "LSan replay retained stdout beyond its signed limit")
+        require_process_gone(
+            excessive_replay_pid, "excessive-output LSan replay cleanup")
+
+        timeout_output_pid = Path(directory) / "timeout-output.pid"
+        timeout_output_job = adversarial_job(
+            "timeout-output", "timeout-output", timeout_output_pid, 0.05)
+        timeout_output_result = _execute_leak_job(
+            leak, timeout_output_job,
+            str(Path(directory) / "timeout-output-results"))
+        if (timeout_output_result["outcome"] != "timeout" or
+                "signed timeout" not in
+                    timeout_output_result.get("detail", "")):
+            raise CampaignError(
+                "LSan replay did not bound a timed-out capture writer")
+        timeout_output_stdout = (
+            _leak_job_directory(
+                Path(directory) / "timeout-output-results",
+                timeout_output_job["id"]) / "stdout.txt")
+        if timeout_output_stdout.stat().st_size > _leak_capture_limit(
+                timeout_output_job, "stdout"):
+            raise CampaignError(
+                "timed-out LSan replay exceeded its signed capture limit")
+        require_process_gone(
+            timeout_output_pid, "timed-out output-writer cleanup")
+
+        detached_output_pid = Path(directory) / "detached-output.pid"
+        detached_output_job = adversarial_job(
+            "detached-output", "detached-output",
+            detached_output_pid, 1.0)
+        detached_output_result = _execute_leak_job(
+            leak, detached_output_job,
+            str(Path(directory) / "detached-output-results"))
+        if (detached_output_result["outcome"] != "evidence_invalid" or
+                "residual descendants" not in
+                    detached_output_result.get("detail", "") or
+                "capture byte limit" not in
+                    detached_output_result.get("detail", "")):
+            raise CampaignError(
+                "LSan replay accepted a detached capture writer")
+        detached_output_stdout = (
+            _leak_job_directory(
+                Path(directory) / "detached-output-results",
+                detached_output_job["id"]) / "stdout.txt")
+        if detached_output_stdout.stat().st_size > _leak_capture_limit(
+                detached_output_job, "stdout"):
+            raise CampaignError(
+                "detached LSan writer exceeded its signed capture limit")
+        require_process_gone(
+            detached_output_pid, "detached output-writer cleanup")
+
+        detached_replay_pid = Path(directory) / "detached-replay.pid"
+        detached_job = adversarial_job(
+            "detached", "detached", detached_replay_pid, 1.0)
+        detached_started = time.monotonic()
+        detached_result = _execute_leak_job(
+            leak, detached_job,
+            str(Path(directory) / "detached-replay-results"))
+        if (detached_result["outcome"] != "evidence_invalid" or
+                "residual descendants" not in
+                detached_result.get("detail", "") or
+                time.monotonic() - detached_started > 3.0):
+            raise CampaignError(
+                "LSan replay accepted or stalled on a detached child "
+                "holding its capture descriptors")
+        detached_stdout = (
+            _leak_job_directory(
+                Path(directory) / "detached-replay-results",
+                detached_job["id"]) / "stdout.txt").read_bytes()
+        if detached_stdout != _expected_leak_stdout(detached_job):
+            raise CampaignError(
+                "detached LSan replay changed its retained stdout capture")
+        require_process_gone(
+            detached_replay_pid, "detached LSan replay cleanup")
+
+        timeout_replay_pid = Path(directory) / "timeout-replay.pid"
+        timeout_job = adversarial_job(
+            "timeout", "timeout-tree", timeout_replay_pid, 0.05)
+        timeout_started = time.monotonic()
+        timeout_result = _execute_leak_job(
+            leak, timeout_job,
+            str(Path(directory) / "timeout-replay-results"))
+        if (timeout_result["outcome"] != "timeout" or
+                "signed timeout" not in timeout_result.get("detail", "") or
+                "residual descendants" not in
+                timeout_result.get("detail", "") or
+                time.monotonic() - timeout_started > 3.0):
+            raise CampaignError(
+                "LSan replay timeout teardown was not bounded and exact")
+        require_process_gone(
+            timeout_replay_pid, "timed-out LSan replay cleanup")
+
+        if hasattr(signal, "setitimer") and hasattr(signal, "ITIMER_REAL"):
+            interrupted_replay_pid = (
+                Path(directory) / "interrupted-replay.pid")
+            interrupted_job = adversarial_job(
+                "interrupt", "sleep", interrupted_replay_pid, 5.0)
+            prior_handler = signal.getsignal(signal.SIGALRM)
+
+            def interrupt_replay(_signum, _frame):
+                raise KeyboardInterrupt()
+
+            signal.signal(signal.SIGALRM, interrupt_replay)
+            signal.setitimer(signal.ITIMER_REAL, 0.1)
+            try:
+                try:
+                    _execute_leak_job(
+                        leak, interrupted_job,
+                        str(Path(directory) /
+                            "interrupted-replay-results"))
+                except KeyboardInterrupt:
+                    pass
+                else:
+                    raise CampaignError(
+                        "LSan replay swallowed KeyboardInterrupt")
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0.0)
+                signal.signal(signal.SIGALRM, prior_handler)
+            require_process_gone(
+                interrupted_replay_pid,
+                "interrupted LSan replay cleanup")
+
+        cleanup_interrupt_pid = Path(directory) / "cleanup-interrupt.pid"
+        cleanup_interrupt_job = adversarial_job(
+            "cleanup-interrupt", "sleep", cleanup_interrupt_pid, 0.05)
+        original_cleanup_checkpoint = globals()["_lsan_cleanup_checkpoint"]
+        cleanup_checkpoints = []
+
+        def interrupt_first_cleanup(phase):
+            cleanup_checkpoints.append(phase)
+            if len(cleanup_checkpoints) == 1:
+                raise KeyboardInterrupt()
+
+        globals()["_lsan_cleanup_checkpoint"] = interrupt_first_cleanup
+        try:
+            try:
+                _execute_leak_job(
+                    leak, cleanup_interrupt_job,
+                    str(Path(directory) /
+                        "cleanup-interrupt-results"))
+            except KeyboardInterrupt:
+                pass
+            else:
+                raise CampaignError(
+                    "LSan replay swallowed cleanup-time KeyboardInterrupt")
+        finally:
+            globals()["_lsan_cleanup_checkpoint"] = (
+                original_cleanup_checkpoint)
+        if len(cleanup_checkpoints) < 3:
+            raise CampaignError(
+                "LSan replay did not retry interrupted cleanup")
+        require_process_gone(
+            cleanup_interrupt_pid,
+            "cleanup-interrupted LSan replay cleanup")
+
     def expect_invalid_manifest(value, label):
         try:
             _validate_leak_manifest(value)
@@ -1803,6 +4268,26 @@ def _leak_companion_self_test(directory, nm_identity):
     wrong_lsan_job["environment"]["LSAN_OPTIONS"] = "detect_leaks=0"
     expect_invalid_manifest(
         resign_manifest(wrong_lsan, wrong_lsan_job), "LSan environment")
+
+    wrong_capture_limit = clone(leak)
+    wrong_capture_job = wrong_capture_limit["jobs"][0]
+    wrong_capture_job["capture_limits_bytes"]["stdout"] += 1
+    expect_invalid_manifest(
+        resign_manifest(wrong_capture_limit, wrong_capture_job),
+        "job capture byte limit")
+
+    wrong_capture_policy = clone(leak)
+    wrong_capture_policy["execution_policy"]["capture_limits_bytes"][
+        "stderr"] += 1
+    expect_invalid_manifest(
+        resign_manifest(wrong_capture_policy),
+        "manifest capture byte limit")
+
+    historical_leak_schema = clone(leak)
+    historical_leak_schema["schema"] = "leopard2-fuzz-leak-campaign/v3"
+    expect_invalid_manifest(
+        resign_manifest(historical_leak_schema),
+        "historical leak schema under current semantics")
 
     missing_canary = clone(leak)
     missing_canary["target_lsan_canaries"].pop("api")
@@ -1884,6 +4369,183 @@ def _leak_companion_self_test(directory, nm_identity):
 
     first_job = leak["jobs"][0]
     first_dir = _leak_job_directory(output_dir, first_job["id"])
+
+    def resume_resource_snapshot():
+        descriptor_count = len(os.listdir("/proc/self/fd"))
+        children = {
+            (record["pid"], record["starttime_ticks"])
+            for record in _current_lsan_direct_children()
+        }
+        return descriptor_count, children
+
+    def expect_resume_identity_race(
+            label, phase, mutate, restore):
+        original_checkpoint = globals()["_leak_resume_checkpoint"]
+        mutations = []
+        before_resources = resume_resource_snapshot()
+
+        def race_checkpoint(observed_phase):
+            if observed_phase == phase and not mutations:
+                mutate()
+                mutations.append(observed_phase)
+
+        globals()["_leak_resume_checkpoint"] = race_checkpoint
+        observed_error = None
+        try:
+            try:
+                _read_resumable_leak_result(output_dir, first_job)
+            except (CampaignError, lab.LabError) as error:
+                observed_error = error
+            else:
+                raise CampaignError(
+                    "LSan resume accepted {}".format(label))
+        finally:
+            globals()["_leak_resume_checkpoint"] = original_checkpoint
+            restore()
+        if not mutations:
+            raise CampaignError(
+                "LSan resume did not exercise {}".format(label))
+        if not isinstance(observed_error, _LeakResumeIdentityError):
+            raise CampaignError(
+                "LSan resume classified {} as {} instead of an identity "
+                "failure".format(label, type(observed_error).__name__))
+        if resume_resource_snapshot() != before_resources:
+            raise CampaignError(
+                "LSan resume leaked resources after {}".format(label))
+
+    capture_path = first_dir / "stdout.txt"
+    capture_saved = first_dir / ".stdout.saved"
+
+    def replace_capture():
+        capture_path.rename(capture_saved)
+        capture_path.write_bytes(b"replacement capture\n")
+
+    def restore_capture():
+        try:
+            capture_path.unlink()
+        except FileNotFoundError:
+            pass
+        if capture_saved.exists():
+            capture_saved.rename(capture_path)
+
+    expect_resume_identity_race(
+        "a retained capture rename/replacement",
+        "after-result-read", replace_capture, restore_capture)
+
+    result_path = first_dir / "result.json"
+    result_saved = first_dir / ".result.saved"
+
+    def replace_result():
+        result_path.rename(result_saved)
+        result_path.write_text("{}\n", encoding="ascii")
+
+    def restore_result():
+        try:
+            result_path.unlink()
+        except FileNotFoundError:
+            pass
+        if result_saved.exists():
+            result_saved.rename(result_path)
+
+    expect_resume_identity_race(
+        "a retained result rename/replacement",
+        "after-retain", replace_result, restore_result)
+
+    expect_resume_identity_race(
+        "a late retained capture rename/replacement",
+        "before-close", replace_capture, restore_capture)
+
+    def aba_capture():
+        capture_path.rename(capture_saved)
+        capture_path.write_bytes(b"temporary capture replacement\n")
+        capture_path.unlink()
+        capture_saved.rename(capture_path)
+
+    expect_resume_identity_race(
+        "a retained capture ABA replacement",
+        "after-result-read", aba_capture, lambda: None)
+
+    def aba_result():
+        result_path.rename(result_saved)
+        result_path.write_text("{}\n", encoding="ascii")
+        result_path.unlink()
+        result_saved.rename(result_path)
+
+    expect_resume_identity_race(
+        "a retained result ABA replacement",
+        "after-result-read", aba_result, lambda: None)
+
+    first_saved_dir = Path(str(first_dir) + ".resume-saved")
+
+    def replace_job_directory():
+        first_dir.rename(first_saved_dir)
+        first_dir.mkdir()
+
+    def restore_job_directory():
+        if first_dir.exists():
+            first_dir.rmdir()
+        if first_saved_dir.exists():
+            first_saved_dir.rename(first_dir)
+
+    expect_resume_identity_race(
+        "a retained job-directory descriptor/path disagreement",
+        "after-retain", replace_job_directory, restore_job_directory)
+
+    original_resume_checkpoint = globals()["_leak_resume_checkpoint"]
+    for label, phase, terminal, expected_type, expected_code in (
+            ("KeyboardInterrupt", "after-result-read", KeyboardInterrupt(),
+             KeyboardInterrupt, None),
+            ("SystemExit", "before-close", SystemExit(43),
+             SystemExit, 43)):
+        before_resources = resume_resource_snapshot()
+        interruptions = []
+
+        def interrupt_resume(
+                observed_phase, expected_phase=phase,
+                exception=terminal):
+            if observed_phase == expected_phase and not interruptions:
+                interruptions.append(observed_phase)
+                raise exception
+
+        globals()["_leak_resume_checkpoint"] = interrupt_resume
+        try:
+            try:
+                _read_resumable_leak_result(output_dir, first_job)
+            except BaseException as observed:
+                if not isinstance(observed, expected_type):
+                    raise CampaignError(
+                        "LSan resume propagated {} instead of {}".format(
+                            type(observed).__name__, label))
+                if (expected_code is not None and
+                        getattr(observed, "code", None) != expected_code):
+                    raise CampaignError(
+                        "LSan resume changed {} code".format(label))
+            else:
+                raise CampaignError(
+                    "LSan resume swallowed {}".format(label))
+        finally:
+            globals()["_leak_resume_checkpoint"] = (
+                original_resume_checkpoint)
+        if interruptions != [phase]:
+            raise CampaignError(
+                "LSan resume did not inject {} exactly once".format(label))
+        if resume_resource_snapshot() != before_resources:
+            raise CampaignError(
+                "LSan resume leaked resources after {}".format(label))
+
+    if _read_resumable_leak_result(output_dir, first_job) is None:
+        raise CampaignError(
+            "descriptor-bound LSan resume lost valid evidence")
+
+    resign_result(
+        first_dir / "result.json",
+        lambda value: value.update({
+            "schema": "leopard2-fuzz-leak-result/v1"}))
+    if _read_resumable_leak_result(output_dir, first_job) is not None:
+        raise CampaignError(
+            "current leak runner resumed a historical result schema")
+    expect_one_repair("historical result-schema evidence")
+
     (first_dir / "stderr.txt").write_text(
         "ERROR: LeakSanitizer: modeled diagnostic\n", encoding="utf-8")
     resign_result(
@@ -1892,6 +4554,19 @@ def _leak_companion_self_test(directory, nm_identity):
             "stderr": lab._content_identity(first_dir / "stderr.txt")}))
     expect_audit_failure("a sanitizer diagnostic")
     expect_one_repair("diagnostic evidence")
+
+    with (first_dir / "stdout.txt").open("r+b") as oversized:
+        oversized.truncate(
+            _leak_capture_limit(first_job, "stdout") + 1)
+    resign_result(
+        first_dir / "result.json",
+        lambda value: value["outputs"].update({
+            "stdout": lab._content_identity(first_dir / "stdout.txt")}))
+    expect_audit_failure("an oversized retained capture")
+    if _read_resumable_leak_result(output_dir, first_job) is not None:
+        raise CampaignError(
+            "LSan runner resumed an oversized retained capture")
+    expect_one_repair("oversized capture evidence")
 
     def make_failed(value):
         value["outcome"] = "failed"
@@ -1918,6 +4593,13 @@ def _leak_companion_self_test(directory, nm_identity):
     (first_dir / "stdout.txt").symlink_to(helper)
     expect_audit_failure("an aliased per-job output")
     try:
+        _read_resumable_leak_result(output_dir, first_job)
+    except _LeakResumeIdentityError:
+        pass
+    else:
+        raise CampaignError(
+            "descriptor-bound LSan resume did not fail closed on a symlink")
+    try:
         _run_leak_manifest(
             leak, str(leak_path), str(output_dir), verify_live=False)
     except (CampaignError, lab.LabError):
@@ -1932,6 +4614,13 @@ def _leak_companion_self_test(directory, nm_identity):
     (first_dir / "stdout.txt").unlink()
     os.link(str(helper), str(first_dir / "stdout.txt"))
     expect_audit_failure("a hard-linked per-job output")
+    try:
+        _read_resumable_leak_result(output_dir, first_job)
+    except _LeakResumeIdentityError:
+        pass
+    else:
+        raise CampaignError(
+            "descriptor-bound LSan resume did not fail closed on a hard link")
     try:
         _run_leak_manifest(
             leak, str(leak_path), str(output_dir), verify_live=False)
@@ -1949,6 +4638,13 @@ def _leak_companion_self_test(directory, nm_identity):
     second_dir.rename(second_real_dir)
     second_dir.symlink_to(second_real_dir, target_is_directory=True)
     expect_audit_failure("an aliased job directory")
+    try:
+        _read_resumable_leak_result(output_dir, leak["jobs"][1])
+    except _LeakResumeIdentityError:
+        pass
+    else:
+        raise CampaignError(
+            "descriptor-bound LSan resume accepted an aliased job directory")
     try:
         _run_leak_manifest(
             leak, str(leak_path), str(output_dir), verify_live=False)
@@ -2011,6 +4707,7 @@ def self_test():
         if nm_path is None:
             raise CampaignError("self-test requires nm")
         nm_identity = lab._file_identity(nm_path)
+        _probe_runner_self_test(directory, nm_path, nm_identity)
         _leak_companion_self_test(directory, nm_identity)
         test_instrumentation = {
             target: {
@@ -2116,6 +4813,98 @@ def self_test():
         wrong_schema = clone(first)
         wrong_schema["source_spec"]["schema"] = CAMPAIGN_SCHEMA + ".forged"
         expect_invalid(resign(wrong_schema), "campaign schema")
+
+        wrong_probe_policy = clone(first)
+        wrong_probe_policy["source_spec"]["metadata"][
+            "probe_execution_policy"]["capture_profiles"][
+                "sanitizer_attestation"]["stdout_limit_bytes"] += 1
+        expect_invalid(
+            resign(wrong_probe_policy), "probe execution policy")
+
+        missing_probe_policy = clone(first)
+        del missing_probe_policy["source_spec"]["metadata"][
+            "probe_execution_policy"]
+        expect_invalid(
+            resign(missing_probe_policy), "missing probe execution policy")
+
+        historical = clone(first)
+        historical["source_spec"]["schema"] = HISTORICAL_CAMPAIGN_SCHEMA
+        del historical["source_spec"]["metadata"]["probe_execution_policy"]
+        resign(historical)
+        expect_invalid(historical, "offline historical campaign")
+        _validate_campaign_manifest(
+            historical, allow_historical_live_replay=True)
+
+        historical_with_extension = clone(historical)
+        historical_with_extension["source_spec"]["metadata"][
+            "probe_execution_policy"] = _probe_execution_policy()
+        expect_invalid(
+            resign(historical_with_extension),
+            "extended historical campaign")
+
+        audit = {
+            "schema": AUDIT_SCHEMA,
+            "source_campaign_schema": CAMPAIGN_SCHEMA,
+            "probe_policy_binding":
+                _campaign_probe_policy_binding(CAMPAIGN_SCHEMA),
+            "probe_execution_policy": _probe_execution_policy(),
+            "manifest_digest": first["manifest_digest"],
+            "job_count": len(first["jobs"]),
+            "distinct_seed_count": len(first["jobs"]),
+            "sanitizer_scope": dict(SANITIZER_SCOPE),
+            "target_instrumentation": clone(first["source_spec"]["metadata"][
+                "target_instrumentation"]),
+            "summary": {
+                "missing": 0, "success": len(first["jobs"])},
+            "merged_results": {
+                "summary": {
+                    "missing": 0, "success": len(first["jobs"])},
+                "results": [
+                    {"job_id": job["id"]} for job in first["jobs"]],
+            },
+        }
+        audit["audit_digest"] = lab._digest(audit)
+        _validate_campaign_audit(audit, first)
+
+        forged_audit_policy = clone(audit)
+        forged_audit_policy["probe_execution_policy"][
+            "capture_enforcement"]["soft_and_hard_limits"] = False
+        forged_audit_policy["audit_digest"] = lab._digest({
+            key: value for key, value in forged_audit_policy.items()
+            if key != "audit_digest"
+        })
+        try:
+            _validate_campaign_audit(forged_audit_policy, first)
+        except CampaignError:
+            pass
+        else:
+            raise CampaignError(
+                "campaign audit accepted a forged probe policy")
+
+        historical_audit = clone(audit)
+        historical_audit["source_campaign_schema"] = \
+            HISTORICAL_CAMPAIGN_SCHEMA
+        historical_audit["probe_policy_binding"] = \
+            _campaign_probe_policy_binding(HISTORICAL_CAMPAIGN_SCHEMA)
+        historical_audit["manifest_digest"] = historical["manifest_digest"]
+        historical_audit["audit_digest"] = lab._digest({
+            key: value for key, value in historical_audit.items()
+            if key != "audit_digest"
+        })
+        _validate_campaign_audit(historical_audit, historical)
+
+        old_audit = clone(audit)
+        old_audit["schema"] = "leopard2-fuzz-campaign-audit/v4"
+        old_audit["audit_digest"] = lab._digest({
+            key: value for key, value in old_audit.items()
+            if key != "audit_digest"
+        })
+        try:
+            _validate_campaign_audit(old_audit)
+        except CampaignError:
+            pass
+        else:
+            raise CampaignError("current validator accepted a v4 audit")
 
         wrong_command = clone(first)
         wrong_command_job = wrong_command["jobs"][0]
@@ -2233,7 +5022,12 @@ def self_test():
                 "if '=' in part)\n"
                 "detect_leaks = lsan_options.get('detect_leaks', "
                 "asan_options.get('detect_leaks', '1'))\n"
-                "time.sleep(0.15)\n"
+                # A successful job must remain live long enough for one
+                # complete system-wide /proc affinity/RSS sample even on a
+                # loaded CI host.  This does not relax the generic fork gate:
+                # the leak-enabled branch below still creates a second
+                # process and must remain evidence-invalid.
+                "time.sleep(1.5)\n"
                 "if detect_leaks != '0':\n"
                 "    pid = os.fork()\n"
                 "    if pid == 0:\n"

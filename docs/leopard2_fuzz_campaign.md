@@ -16,6 +16,13 @@ ASan and UBSan global runtime symbols. The executable hash, role attestation,
 core attestation, symbol-table digest, and probing-tool identity are signed into the manifest;
 audit repeats the live probes and rejects changed binaries or tools. Merely
 setting sanitizer environment variables is not instrumentation evidence.
+The v5 producer opens each target and `nm` exactly once, executes it through a
+retained `/proc/self/fd` name, and revalidates the same descriptor after all
+descendants are contained. Probe stdout and stderr are retained regular files,
+not pipes: the manifest signs their per-role limits, hard and soft
+`RLIMIT_FSIZE`, default `SIGXFSZ`, retained-name checks, and bounded descriptor
+reads. A subreaper plus an unpredictable containment token binds detached
+descendants to the probe before capture evidence is read.
 The destination is cleared before those checks, so a failed create cannot
 leave a stale manifest. An output path that resolves to either fuzz executable
 is rejected without modifying that executable.
@@ -70,11 +77,18 @@ reading results. It binds the exact API and pruned job IDs, stable seeds,
 content-addressed executable assigned to each role, `{seed}` and iteration
 arguments, sanitizer environment, timeout, memory policy, one-thread runtime
 policy, and deterministic CPU assignment. A generic lab manifest cannot become
-sanitizer evidence merely by copying campaign-looking metadata. Campaign
-manifests and audit outputs use `leopard2-fuzz-campaign/v4` and
-`leopard2-fuzz-campaign-audit/v4`; earlier artifacts, including the superseded
-no-attestation v3 contract, must be regenerated. The v4 metadata and audit
-output explicitly record that ASan and UBSan are active,
+sanitizer evidence merely by copying campaign-looking metadata. Historical
+artifacts used `leopard2-fuzz-campaign/v4` and
+`leopard2-fuzz-campaign-audit/v4`. New artifacts use
+`leopard2-fuzz-campaign/v5` and
+`leopard2-fuzz-campaign-audit/v5`. The v5 manifest signs the exact hardened
+probe-execution policy; the audit repeats that policy, records whether it was
+bound by the source manifest or supplied by a secure live replay of a
+historical v4 source, and signs the terminal artifact with `audit_digest`.
+An old v4 manifest is accepted only by the audit path that immediately repeats
+the current live probes. Offline consumers and new leak companions reject it,
+and new code never emits a v4 audit. The metadata and audit output explicitly
+record that ASan and UBSan are active,
 LSan is inactive, and leak checking is a separate phase.
 
 The strict campaign is currently Linux/ELF evidence: independent
@@ -105,8 +119,10 @@ ASan and UBSan applied to both the codec and executables. Then run:
       --output-dir build/fuzz-campaign/results \
       --output build/fuzz-campaign/audited-results.json
 
-The final output uses `leopard2-fuzz-campaign-audit/v4` and embeds the ordinary
-deterministic lab merge. It is written atomically only after every stricter
+The final output uses `leopard2-fuzz-campaign-audit/v5`, embeds the ordinary
+deterministic lab merge, the exact probe policy and its binding origin, and
+contains an `audit_digest` over the complete terminal object. It is written
+atomically only after every stricter
 campaign gate passes. The destination is cleared before manifest validation,
 so a failed audit cannot leave a stale artifact that could be mistaken for
 accepted fuzz evidence. The destination may not overwrite the manifest or any
@@ -121,7 +137,7 @@ declared thread demand would exceed the union of allocated CPUs.
 
 ## Full-coverage leak-check companion
 
-Derive the LeakSanitizer manifest from the already validated v4 parallel
+Derive the LeakSanitizer manifest from the already validated v5 parallel
 manifest. The companion reproduces every source job ID, stable seed, iteration
 count, executable identity, command, timeout, working directory, and assigned
 CPU. For the 30-by-2 example above this is the same 60 jobs and 491,520 replay
@@ -153,8 +169,9 @@ the manifest and audit file SHA-256 values are respectively
 and
 `343a034fad04a4df87906961b824cb8797c58f41f127b456a8a27ea144070a43`.
 
-The exact serial LSan v3 companion then passed and audited the same 60 jobs
-and 491,520 iterations, followed by a 60-of-60 zero-execution resume. It signed
+The then-current serial LSan v3 companion at that historical checkpoint passed
+and audited the same 60 jobs and 491,520 iterations, followed by a 60-of-60
+zero-execution resume. It signed
 both LSan control hooks as undefined. Its manifest digest is
 `2c7a5a11cb1e13eebe7e4184b798a5ff7d4105801469ad18e07757126fb8ded0`;
 the leak manifest and audit file SHA-256 values are respectively
@@ -196,7 +213,8 @@ normalized diagnostic-evidence hash. Actual replay jobs retain
 The companion intentionally permits transient LeakSanitizer helpers and does
 not make a process-count claim. It still pins the replay to its signed CPU and
 requires native/OpenMP thread limits of one. The v4 parallel audit remains the
-independent evidence for one-process runtime behavior; never substitute the
+historical checkpoint for one-process runtime behavior; current campaigns use
+the v5 parallel audit. Never substitute the
 companion for that audit or remove `detect_leaks=0` from the parallel manifest.
 
 Each companion job retains content-addressed stdout, stderr, executable
@@ -206,15 +224,23 @@ diagnostic), nonzero exit, timeout, changed executable, malformed success
 marker, stale result, symlink/hard-link alias, missing job, or extra job fails
 closed. Audit clears a stale destination before validation, checks the complete
 matrix, merges in signed manifest order, and emits
-`leopard2-fuzz-leak-campaign-audit/v3`. The manifest, per-job result, and merge
-schemas are respectively `leopard2-fuzz-leak-campaign/v3`,
-`leopard2-fuzz-leak-result/v1`, and `leopard2-fuzz-leak-merge/v1`.
-The former v1/v2 companions must be regenerated. V1 did not independently
-prove that the target had not disabled LSan; v2 did not attest the selective
-default-suppression hook. The v3 gate closes statically linked suppression
-hooks and inherited suppression files. A privileged loader configuration or a
-runtime-injected library remains outside this artifact's trust boundary and
-must be controlled by the test host.
+`leopard2-fuzz-leak-campaign-audit/v4`. The manifest, per-job result, and merge
+schemas are respectively `leopard2-fuzz-leak-campaign/v4`,
+`leopard2-fuzz-leak-result/v2`, and `leopard2-fuzz-leak-merge/v2`.
+Earlier companions must be regenerated. V1 did not independently prove that
+the target had not disabled LSan; v2 did not attest the selective
+default-suppression hook; v3 did not bind or enforce finite stdout and stderr
+captures. The v4 contract retains the v3 statically linked suppression-hook
+and inherited-suppression-file checks and additionally signs a 2 MiB limit for
+each captured stream. The child receives the corresponding `RLIMIT_FSIZE` and
+default `SIGXFSZ` disposition. Cleanup validates the retained file descriptors
+before reading at most the signed limit plus one byte; a signal, `EFBIG`,
+exact-limit saturation, oversized retained inode, or concurrent change makes
+the result invalid. Detached writers are contained before any capture is read,
+so neither timeout nor resume can wait for pipe EOF or allocate from unbounded
+output. A privileged loader configuration or a runtime-injected library
+remains outside this artifact's trust boundary and must be controlled by the
+test host.
 
 For a quick local leak smoke only, the two deterministic CTests may still be
 run serially with the explicit ASan/LSan/UBSan environment. They are useful

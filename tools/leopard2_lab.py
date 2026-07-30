@@ -11,6 +11,9 @@ Run ``python3 tools/leopard2_lab.py --help`` for the command-line interface.
 from __future__ import print_function
 
 import argparse
+import ctypes
+import errno
+import gc
 import hashlib
 import json
 import math
@@ -20,9 +23,11 @@ import re
 import shlex
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from collections import Counter
 from pathlib import Path
@@ -84,6 +89,281 @@ THREAD_ENV_KEYS = tuple(sorted(
 
 class LabError(Exception):
     """An actionable input, platform, or execution error."""
+
+
+_SUBREAPER_LOCK = threading.Lock()
+_SUBREAPER_DEPTH = 0
+_SUBREAPER_PREVIOUS = None
+
+
+def _linux_child_subreaper_state():
+    """Return whether this process adopts orphaned descendants on Linux."""
+    if not sys.platform.startswith("linux"):
+        return None
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as error:
+        raise LabError(
+            "Linux child-subreaper control is unavailable: {}".format(
+                error))
+    state = ctypes.c_int(-1)
+    ctypes.set_errno(0)
+    result = prctl(
+        ctypes.c_int(37), ctypes.byref(state),
+        ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        raise LabError(
+            "cannot inspect Linux child-subreaper state: {}".format(
+                os.strerror(number or 1)))
+    if state.value not in (0, 1):
+        raise LabError("Linux returned an invalid child-subreaper state")
+    return state.value
+
+
+def _set_linux_child_subreaper(enabled):
+    """Set and verify Linux PR_SET_CHILD_SUBREAPER."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        prctl = ctypes.CDLL(None, use_errno=True).prctl
+    except (AttributeError, OSError) as error:
+        raise LabError(
+            "Linux child-subreaper control is unavailable: {}".format(
+                error))
+    ctypes.set_errno(0)
+    result = prctl(
+        ctypes.c_int(36), ctypes.c_ulong(1 if enabled else 0),
+        ctypes.c_ulong(0), ctypes.c_ulong(0), ctypes.c_ulong(0))
+    if result != 0:
+        number = ctypes.get_errno()
+        raise LabError(
+            "cannot set Linux child-subreaper state: {}".format(
+                os.strerror(number or 1)))
+    if _linux_child_subreaper_state() != (1 if enabled else 0):
+        raise LabError("Linux child-subreaper state did not take effect")
+
+
+def _subreaper_transition_checkpoint(phase):
+    """Internal deterministic fault-injection seam for lease self-tests."""
+    del phase
+
+
+def _attempt_subreaper_state(enabled):
+    """Best-effort state transition with post-error state verification."""
+    transition_error = None
+    try:
+        _set_linux_child_subreaper(enabled)
+    except BaseException as error:
+        transition_error = error
+    try:
+        restored = _linux_child_subreaper_state() == (1 if enabled else 0)
+    except BaseException as error:
+        if transition_error is None:
+            transition_error = error
+        elif isinstance(
+                transition_error, (KeyboardInterrupt, SystemExit)):
+            if hasattr(transition_error, "add_note"):
+                transition_error.add_note(
+                    "later subreaper state verification failure was {}: {}"
+                    .format(type(error).__name__, error))
+        elif isinstance(error, (KeyboardInterrupt, SystemExit)):
+            if hasattr(error, "add_note"):
+                error.add_note(
+                    "earlier subreaper transition failure was {}: {}"
+                    .format(
+                        type(transition_error).__name__,
+                        transition_error))
+            transition_error = error
+        restored = False
+    return restored, transition_error
+
+
+class _ChildSubreaperLease(object):
+    """Keep one process-wide subreaper lease across a complete lab run.
+
+    Session and environment-token scans identify descendants that call
+    ``setsid()``.  Becoming their subreaper additionally makes killed orphans
+    waitable by this runner, so a zombie cannot be mistaken for completed
+    cleanup merely because PID 1 has not reaped it yet.
+    """
+
+    def __init__(self):
+        self.entered = False
+
+    def __enter__(self):
+        global _SUBREAPER_DEPTH, _SUBREAPER_PREVIOUS
+        if not sys.platform.startswith("linux"):
+            self.entered = True
+            return self
+        with _SUBREAPER_LOCK:
+            # A failed earlier release retains its restoration target while
+            # depth is zero.  Recover it before acquiring a new lease rather
+            # than silently treating the poisoned kernel state as the caller's
+            # original state.
+            if _SUBREAPER_DEPTH == 0 and _SUBREAPER_PREVIOUS is not None:
+                pending = _SUBREAPER_PREVIOUS
+                try:
+                    _set_linux_child_subreaper(pending != 0)
+                    _subreaper_transition_checkpoint("recovery")
+                except BaseException as error:
+                    restored, restore_error = _attempt_subreaper_state(
+                        pending != 0)
+                    if restored:
+                        _SUBREAPER_PREVIOUS = None
+                        raise
+                    if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                        if hasattr(error, "add_note"):
+                            error.add_note(
+                                "pending child-subreaper restoration retry "
+                                "failed: {}: {}".format(
+                                    type(restore_error).__name__,
+                                    restore_error))
+                        raise
+                    if isinstance(
+                            restore_error, (KeyboardInterrupt, SystemExit)):
+                        if hasattr(restore_error, "add_note"):
+                            restore_error.add_note(
+                                "initial pending child-subreaper restoration "
+                                "failure was {}: {}".format(
+                                    type(error).__name__, error))
+                        raise restore_error
+                    raise LabError(
+                        "pending child-subreaper restoration failed: {}; "
+                        "transition failure: {}: {}".format(
+                            restore_error, type(error).__name__, error)
+                    ) from (restore_error or error)
+                _SUBREAPER_PREVIOUS = None
+
+            original_depth = _SUBREAPER_DEPTH
+            original_previous = _SUBREAPER_PREVIOUS
+            previous = None
+            try:
+                if original_depth == 0:
+                    _require_isolated_subreaper_runner()
+                    previous = _linux_child_subreaper_state()
+                    _set_linux_child_subreaper(True)
+                    _subreaper_transition_checkpoint("acquire")
+                    _SUBREAPER_PREVIOUS = previous
+                _SUBREAPER_DEPTH = original_depth + 1
+                self.entered = True
+                # Keep the return bytecode inside the transactional handler:
+                # an asynchronously delivered exception before __enter__
+                # completes otherwise receives no matching __exit__.
+                return self
+            except BaseException as error:
+                self.entered = False
+                _SUBREAPER_DEPTH = original_depth
+                _SUBREAPER_PREVIOUS = original_previous
+                if original_depth == 0 and previous is not None:
+                    restored, restore_error = _attempt_subreaper_state(
+                        previous != 0)
+                    if not restored:
+                        # Depth zero plus a retained prior state is an explicit
+                        # poisoned/retryable release state for the next entry.
+                        _SUBREAPER_PREVIOUS = previous
+                        if isinstance(
+                                error, (KeyboardInterrupt, SystemExit)):
+                            if hasattr(error, "add_note"):
+                                error.add_note(
+                                    "child-subreaper acquisition rollback "
+                                    "failed: {}: {}".format(
+                                        type(restore_error).__name__,
+                                        restore_error))
+                            raise
+                        if isinstance(
+                                restore_error,
+                                (KeyboardInterrupt, SystemExit)):
+                            if hasattr(restore_error, "add_note"):
+                                restore_error.add_note(
+                                    "initial child-subreaper acquisition "
+                                    "failure was {}: {}".format(
+                                        type(error).__name__, error))
+                            raise restore_error
+                        raise LabError(
+                            "child-subreaper acquisition rollback failed: "
+                            "{}; primary failure: {}: {}".format(
+                                restore_error, type(error).__name__, error)
+                        ) from (restore_error or error)
+                raise
+
+    def __exit__(self, exc_type, exc, tb):
+        del exc_type, tb
+        global _SUBREAPER_DEPTH, _SUBREAPER_PREVIOUS
+        if not self.entered or not sys.platform.startswith("linux"):
+            return
+        cleanup_error = None
+        with _SUBREAPER_LOCK:
+            if _SUBREAPER_DEPTH <= 0:
+                cleanup_error = LabError(
+                    "Linux child-subreaper lease underflow")
+                self.entered = False
+            elif _SUBREAPER_DEPTH > 1:
+                # Nested release changes no kernel state.  Finalize the desired
+                # bookkeeping even if an asynchronous exception lands between
+                # its individual Python assignments.
+                nested_target = _SUBREAPER_DEPTH - 1
+                try:
+                    _SUBREAPER_DEPTH = nested_target
+                    self.entered = False
+                    _subreaper_transition_checkpoint("nested-release")
+                except BaseException as error:
+                    _SUBREAPER_DEPTH = nested_target
+                    self.entered = False
+                    cleanup_error = error
+            else:
+                previous = _SUBREAPER_PREVIOUS
+                if previous not in (0, 1):
+                    cleanup_error = LabError(
+                        "Linux child-subreaper lease lost its prior state")
+                    _SUBREAPER_DEPTH = 0
+                    self.entered = False
+                else:
+                    try:
+                        _set_linux_child_subreaper(previous != 0)
+                        _subreaper_transition_checkpoint("release")
+                        _SUBREAPER_DEPTH = 0
+                        _SUBREAPER_PREVIOUS = None
+                        self.entered = False
+                    except BaseException as error:
+                        restored, restore_error = _attempt_subreaper_state(
+                            previous != 0)
+                        _SUBREAPER_DEPTH = 0
+                        self.entered = False
+                        if restored:
+                            _SUBREAPER_PREVIOUS = None
+                            cleanup_error = error
+                        else:
+                            _SUBREAPER_PREVIOUS = previous
+                            cleanup_error = LabError(
+                                "child-subreaper release failed and retained "
+                                "a retryable prior state: {}; transition "
+                                "failure: {}: {}".format(
+                                    restore_error, type(error).__name__,
+                                    error))
+        if cleanup_error is not None:
+            cleanup_detail = (
+                "child-subreaper cleanup failed: {}: {}".format(
+                    type(cleanup_error).__name__, cleanup_error))
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                if hasattr(exc, "add_note"):
+                    exc.add_note(cleanup_detail)
+                # Returning a false value preserves the exception already
+                # active in the with-body.  Teardown diagnostics must not turn
+                # an operator interrupt or an intentional process exit into an
+                # ordinary harness error.
+                return False
+            if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+                if exc is not None and hasattr(cleanup_error, "add_note"):
+                    cleanup_error.add_note(
+                        "primary failure: {}: {}".format(
+                            type(exc).__name__, exc))
+                raise cleanup_error
+            if exc is None:
+                raise cleanup_error
+            raise LabError(
+                "child-subreaper cleanup failed: {}; primary failure: {}: {}"
+                .format(cleanup_error, type(exc).__name__, exc))
 
 
 def _read_text(path):
@@ -429,6 +709,602 @@ def _content_identity(path):
     return {"sha256": hasher.hexdigest(), "size_bytes": size}
 
 
+def _require_secure_open_support():
+    """Fail closed when the host cannot provide no-follow openat semantics."""
+    required = ("O_CLOEXEC", "O_DIRECTORY", "O_NOFOLLOW")
+    missing = [name for name in required if not hasattr(os, name)]
+    if (missing or not hasattr(os, "pread") or
+            os.open not in os.supports_dir_fd or
+            os.mkdir not in os.supports_dir_fd or
+            os.stat not in os.supports_dir_fd or
+            os.unlink not in os.supports_dir_fd or
+            os.rename not in os.supports_dir_fd):
+        detail = ", ".join(missing) if missing else "dir_fd operations"
+        raise LabError(
+            "secure result-tree operations are unavailable ({})".format(
+                detail))
+
+
+def _same_inode(left, right):
+    return left.st_dev == right.st_dev and left.st_ino == right.st_ino
+
+
+def _merge_owned_cleanup_exception(first, later, context):
+    """Retain the earliest terminal exception across owner cleanup.
+
+    A numeric descriptor is not a durable ownership token after ``close``
+    reports an exception: on Linux the close may already have completed and an
+    asynchronous handler may already have reused that number.  The callers
+    below therefore relinquish ownership before the syscall and use this
+    helper only to preserve exception precedence while attempting the other
+    independent cleanup operations.
+    """
+    if first is None:
+        return later
+    first_terminal = isinstance(first, (KeyboardInterrupt, SystemExit))
+    later_terminal = isinstance(later, (KeyboardInterrupt, SystemExit))
+    if first_terminal:
+        if hasattr(first, "add_note"):
+            first.add_note(
+                "{}: later cleanup failure was {}: {}".format(
+                    context, type(later).__name__, later))
+        return first
+    if later_terminal:
+        if hasattr(later, "add_note"):
+            later.add_note(
+                "{}: earlier failure was {}: {}".format(
+                    context, type(first).__name__, first))
+        return later
+    if hasattr(first, "add_note"):
+        first.add_note(
+            "{}: later cleanup failure was {}: {}".format(
+                context, type(later).__name__, later))
+    return first
+
+
+def _apply_owned_cleanup_precedence(primary, cleanup, context):
+    """Promote a cleanup terminal only when the active failure is ordinary."""
+    authoritative = _merge_owned_cleanup_exception(
+        primary, cleanup, context)
+    if authoritative is not primary:
+        raise authoritative
+
+
+def _close_owned_descriptors_once(records, context):
+    """Relinquish and close independent numeric descriptors exactly once."""
+    failure = None
+    closed = set()
+    for descriptor, label in records:
+        if descriptor in closed:
+            continue
+        closed.add(descriptor)
+        try:
+            os.close(descriptor)
+        except OSError:
+            # These owners historically provided best-effort close semantics.
+            # Ownership was already relinquished, so retrying an uncertain
+            # numeric descriptor would be less safe than a possible leak.
+            pass
+        except BaseException as error:
+            failure = _merge_owned_cleanup_exception(
+                failure, error, "{} {}".format(context, label))
+    if failure is not None:
+        raise failure
+
+
+def _verify_named_fd(parent_fd, name, descriptor, label, regular):
+    """Verify that one retained descriptor is still published at ``name``."""
+    try:
+        named = os.stat(name, dir_fd=parent_fd, follow_symlinks=False)
+        retained = os.fstat(descriptor)
+    except OSError as error:
+        raise LabError("cannot verify {}: {}".format(label, error))
+    expected_type = stat.S_ISREG if regular else stat.S_ISDIR
+    if (not expected_type(named.st_mode) or
+            not expected_type(retained.st_mode) or
+            not _same_inode(named, retained)):
+        raise LabError("{} changed identity".format(label))
+    if regular and retained.st_nlink != 1:
+        raise LabError("{} must not be hard-linked".format(label))
+    return retained
+
+
+def _harden_owned_fd(descriptor, label, mode, regular, harden=True):
+    """Accept legacy owned artifacts, then harden the retained exact inode."""
+    try:
+        retained = os.fstat(descriptor)
+        expected_type = stat.S_ISREG if regular else stat.S_ISDIR
+        if not expected_type(retained.st_mode):
+            raise LabError("{} is not a regular {}".format(
+                label, "file" if regular else "directory"))
+        if retained.st_uid != os.geteuid():
+            raise LabError("{} is not owned by the current user".format(label))
+        if regular and retained.st_nlink != 1:
+            raise LabError("{} must not be hard-linked".format(label))
+        if harden:
+            os.fchmod(descriptor, mode)
+    except LabError:
+        raise
+    except OSError as error:
+        raise LabError("cannot harden {}: {}".format(label, error))
+    return retained
+
+
+def _open_directory_at(parent_fd, name, label, create, harden=True):
+    flags = os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY | os.O_NOFOLLOW
+    created = False
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        if not create:
+            return None
+        try:
+            os.mkdir(name, 0o700, dir_fd=parent_fd)
+            os.fsync(parent_fd)
+            created = True
+            descriptor = os.open(name, flags, dir_fd=parent_fd)
+        except OSError as error:
+            raise LabError("cannot create {}: {}".format(label, error))
+    except OSError as error:
+        raise LabError("cannot retain {} without following links: {}".format(
+            label, error))
+    try:
+        _harden_owned_fd(
+            descriptor, label, 0o700, regular=False, harden=harden)
+        _verify_named_fd(
+            parent_fd, name, descriptor, label, regular=False)
+        if created:
+            os.fsync(descriptor)
+    except BaseException as primary:
+        try:
+            os.close(descriptor)
+        except BaseException as cleanup:
+            _apply_owned_cleanup_precedence(
+                primary, cleanup, "{} cleanup".format(label))
+        raise
+    return descriptor
+
+
+def _open_regular_at(parent_fd, name, label, harden=True):
+    """Retain one existing owned regular file without blocking or following."""
+    flags = (
+        os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW |
+        getattr(os, "O_NONBLOCK", 0))
+    try:
+        descriptor = os.open(name, flags, dir_fd=parent_fd)
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise LabError("cannot retain {} without following links: {}".format(
+            label, error))
+    try:
+        _harden_owned_fd(
+            descriptor, label, 0o600, regular=True, harden=harden)
+        _verify_named_fd(parent_fd, name, descriptor, label, regular=True)
+    except BaseException as primary:
+        try:
+            os.close(descriptor)
+        except BaseException as cleanup:
+            _apply_owned_cleanup_precedence(
+                primary, cleanup, "{} cleanup".format(label))
+        raise
+    return descriptor
+
+
+def _publish_fresh_regular_at(parent_fd, name, label):
+    """Atomically replace a capture name with one new retained inode."""
+    temporary_name = ".{}.{}.capture".format(
+        name, hashlib.sha256(os.urandom(32)).hexdigest())
+    descriptor = None
+    renamed = False
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_RDWR | os.O_CREAT | os.O_EXCL |
+            os.O_CLOEXEC | os.O_NOFOLLOW |
+            getattr(os, "O_NONBLOCK", 0),
+            0o600, dir_fd=parent_fd)
+        _harden_owned_fd(
+            descriptor, label + " temporary", 0o600, regular=True)
+        os.fsync(descriptor)
+        # Replacing a symlink, FIFO, or hard-linked regular file only removes
+        # the directory entry.  It never opens or truncates the old inode.
+        os.replace(
+            temporary_name, name,
+            src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        renamed = True
+        os.fsync(parent_fd)
+        _verify_named_fd(
+            parent_fd, name, descriptor, label, regular=True)
+        return descriptor
+    except BaseException as primary:
+        cleanup_failure = None
+        if descriptor is not None:
+            closing = descriptor
+            descriptor = None
+            try:
+                os.close(closing)
+            except BaseException as cleanup:
+                cleanup_failure = _merge_owned_cleanup_exception(
+                    cleanup_failure, cleanup,
+                    "{} descriptor cleanup".format(label))
+        if not renamed:
+            try:
+                os.unlink(temporary_name, dir_fd=parent_fd)
+            except OSError:
+                pass
+            except BaseException as cleanup:
+                cleanup_failure = _merge_owned_cleanup_exception(
+                    cleanup_failure, cleanup,
+                    "{} name cleanup".format(label))
+        if cleanup_failure is not None:
+            _apply_owned_cleanup_precedence(
+                primary, cleanup_failure, "{} publication".format(label))
+        raise
+
+
+def _content_identity_fd(descriptor, label):
+    """Hash one stable retained inode without reopening a mutable name."""
+    try:
+        os.fsync(descriptor)
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise LabError(
+                "{} is not a single-linked regular file".format(label))
+        hasher = hashlib.sha256()
+        size = 0
+        offset = 0
+        while True:
+            block = os.pread(descriptor, 1024 * 1024, offset)
+            if not block:
+                break
+            hasher.update(block)
+            size += len(block)
+            offset += len(block)
+        after = os.fstat(descriptor)
+        if (not _same_inode(before, after) or
+                before.st_size != after.st_size or
+                before.st_mtime_ns != after.st_mtime_ns or
+                before.st_ctime_ns != after.st_ctime_ns or
+                after.st_nlink != 1):
+            raise LabError("{} changed while it was being hashed".format(
+                label))
+    except LabError:
+        raise
+    except OSError as error:
+        raise LabError("cannot hash {}: {}".format(label, error))
+    return {"sha256": hasher.hexdigest(), "size_bytes": size}
+
+
+def _load_json_fd(descriptor, label):
+    try:
+        before = os.fstat(descriptor)
+        if not stat.S_ISREG(before.st_mode) or before.st_nlink != 1:
+            raise LabError("{} is not a single-linked regular file".format(
+                label))
+        data = bytearray()
+        offset = 0
+        while True:
+            block = os.pread(descriptor, 1024 * 1024, offset)
+            if not block:
+                break
+            data.extend(block)
+            offset += len(block)
+        value = json.loads(bytes(data).decode("utf-8"))
+        after = os.fstat(descriptor)
+        if (not _same_inode(before, after) or
+                before.st_size != after.st_size or
+                before.st_mtime_ns != after.st_mtime_ns or
+                before.st_ctime_ns != after.st_ctime_ns or
+                after.st_nlink != 1):
+            raise LabError("{} changed while it was being read".format(label))
+        return value
+    except LabError:
+        raise
+    except OSError as error:
+        raise LabError("cannot read {}: {}".format(label, error))
+    except (UnicodeError, ValueError) as error:
+        raise LabError("invalid JSON in {}: {}".format(label, error))
+
+
+def _atomic_write_json_at(parent_fd, name, label, value):
+    """Publish JSON by durable same-directory rename without touching target."""
+    payload = json.dumps(
+        value, indent=2, sort_keys=True, ensure_ascii=True).encode("ascii")
+    payload += b"\n"
+    temporary_name = ".{}.{}.tmp".format(
+        name, hashlib.sha256(os.urandom(32)).hexdigest())
+    descriptor = None
+    try:
+        descriptor = os.open(
+            temporary_name,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL |
+            os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600, dir_fd=parent_fd)
+        _harden_owned_fd(descriptor, label + " temporary", 0o600, regular=True)
+        written = 0
+        while written < len(payload):
+            count = os.write(descriptor, payload[written:])
+            if count <= 0:
+                raise LabError("short write while publishing {}".format(
+                    label))
+            written += count
+        os.fsync(descriptor)
+        # Relinquish the numeric descriptor before close.  If an asynchronous
+        # exception is delivered after the kernel completed close(2), the
+        # exception path must not retry a number that a handler may have
+        # reopened.
+        closing = descriptor
+        descriptor = None
+        os.close(closing)
+        os.replace(
+            temporary_name, name,
+            src_dir_fd=parent_fd, dst_dir_fd=parent_fd)
+        os.fsync(parent_fd)
+        published = _open_regular_at(
+            parent_fd, name, label)
+        if published is None:
+            raise LabError("{} disappeared after publication".format(label))
+        try:
+            if _load_json_fd(published, label) != value:
+                raise LabError("{} changed after publication".format(label))
+        except BaseException as primary:
+            try:
+                os.close(published)
+            except BaseException as cleanup:
+                _apply_owned_cleanup_precedence(
+                    primary, cleanup,
+                    "{} verification cleanup".format(label))
+            raise
+        else:
+            os.close(published)
+    except BaseException as primary:
+        cleanup_failure = None
+        if descriptor is not None:
+            closing = descriptor
+            descriptor = None
+            try:
+                os.close(closing)
+            except BaseException as cleanup:
+                cleanup_failure = _merge_owned_cleanup_exception(
+                    cleanup_failure, cleanup,
+                    "{} temporary descriptor cleanup".format(label))
+        try:
+            os.unlink(temporary_name, dir_fd=parent_fd)
+        except OSError:
+            pass
+        except BaseException as cleanup:
+            cleanup_failure = _merge_owned_cleanup_exception(
+                cleanup_failure, cleanup,
+                "{} temporary name cleanup".format(label))
+        if cleanup_failure is not None:
+            _apply_owned_cleanup_precedence(
+                primary, cleanup_failure, "{} atomic publication".format(
+                    label))
+        raise
+
+
+class _SecureJobDirectory(object):
+    """Retained no-follow job directory and its exact capture streams."""
+
+    def __init__(self, result_tree, job_id, create):
+        self.tree = result_tree
+        self.job_id = job_id
+        self.fd = _open_directory_at(
+            result_tree.jobs_fd, job_id,
+            "job directory {!r}".format(job_id), create,
+            harden=result_tree.harden)
+        self.streams = {}
+
+    def exists(self):
+        return self.fd is not None
+
+    def verify(self):
+        self.tree.verify()
+        if self.fd is not None:
+            _verify_named_fd(
+                self.tree.jobs_fd, self.job_id, self.fd,
+                "job directory {!r}".format(self.job_id), regular=False)
+
+    def open_capture(self, name):
+        if name in self.streams:
+            raise LabError("capture {} was opened twice".format(name))
+        descriptor = _publish_fresh_regular_at(
+            self.fd, name, "job {} {}".format(self.job_id, name))
+        self.streams[name] = descriptor
+        return descriptor
+
+    def invalidate_result(self):
+        """Durably remove old terminal authority before replacing captures."""
+        self.verify()
+        try:
+            os.unlink("result.json", dir_fd=self.fd)
+            os.fsync(self.fd)
+        except FileNotFoundError:
+            pass
+        except OSError as error:
+            raise LabError(
+                "cannot invalidate job {} result.json: {}".format(
+                    self.job_id, error))
+        self.verify()
+
+    def open_existing(self, name):
+        return _open_regular_at(
+            self.fd, name, "job {} {}".format(self.job_id, name),
+            harden=self.tree.harden)
+
+    def content_identity(self, name):
+        retained = self.streams.get(name)
+        close_after = retained is None
+        if retained is None:
+            retained = self.open_existing(name)
+        if retained is None:
+            raise LabError("job {} {} is missing".format(self.job_id, name))
+        try:
+            self.verify()
+            _verify_named_fd(
+                self.fd, name, retained,
+                "job {} {}".format(self.job_id, name), regular=True)
+            identity = _content_identity_fd(
+                retained, "job {} {}".format(self.job_id, name))
+            _verify_named_fd(
+                self.fd, name, retained,
+                "job {} {}".format(self.job_id, name), regular=True)
+            return identity
+        finally:
+            if close_after:
+                os.close(retained)
+
+    def perf_evidence(self, name, events):
+        retained = self.streams.get(name)
+        close_after = retained is None
+        if retained is None:
+            retained = self.open_existing(name)
+        if retained is None:
+            raise LabError("job {} {} is missing".format(self.job_id, name))
+        try:
+            self.verify()
+            _verify_named_fd(
+                self.fd, name, retained,
+                "job {} {}".format(self.job_id, name), regular=True)
+            evidence = _read_perf_stat_evidence(
+                Path("/proc/self/fd/{}".format(retained)), events)
+            if evidence[0] != _content_identity_fd(
+                    retained, "job {} {}".format(self.job_id, name)):
+                raise LabError(
+                    "job {} {} changed while parsing".format(
+                        self.job_id, name))
+            _verify_named_fd(
+                self.fd, name, retained,
+                "job {} {}".format(self.job_id, name), regular=True)
+            return evidence
+        finally:
+            if close_after:
+                os.close(retained)
+
+    def atomic_write_json(self, name, value):
+        self.verify()
+        _atomic_write_json_at(
+            self.fd, name, "job {} {}".format(self.job_id, name), value)
+        self.verify()
+
+    def close(self):
+        records = [
+            (descriptor, "capture {!r}".format(name))
+            for name, descriptor in self.streams.items()]
+        self.streams = {}
+        if self.fd is not None:
+            records.append((self.fd, "job directory"))
+            self.fd = None
+        _close_owned_descriptors_once(
+            records, "job {!r}".format(self.job_id))
+
+
+class _ResultTree(object):
+    """Retain every path edge from / through output/jobs for one operation."""
+
+    def __init__(
+            self, output_dir, create, harden=True, create_jobs=True,
+            require_owned_root=True):
+        _require_secure_open_support()
+        self.path = Path(os.path.abspath(os.fspath(output_dir)))
+        self.harden = harden
+        self._edges = []
+        self._fds = []
+        self.root_fd = None
+        self.jobs_fd = None
+        components = [
+            part for part in self.path.parts if part != os.path.sep]
+        if not components:
+            raise LabError(
+                "the filesystem root may not be used as a result root")
+        current = os.open(
+            "/", os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY |
+            os.O_NOFOLLOW)
+        self._fds.append(current)
+        try:
+            for index, component in enumerate(components):
+                label = "result root" if index == len(components) - 1 else (
+                    "result-root ancestor {!r}".format(component))
+                flags = (
+                    os.O_RDONLY | os.O_CLOEXEC |
+                    os.O_DIRECTORY | os.O_NOFOLLOW)
+                created = False
+                try:
+                    child = os.open(component, flags, dir_fd=current)
+                except FileNotFoundError:
+                    if not create:
+                        raise
+                    os.mkdir(component, 0o700, dir_fd=current)
+                    os.fsync(current)
+                    created = True
+                    child = os.open(component, flags, dir_fd=current)
+                except OSError as error:
+                    raise LabError(
+                        "cannot retain {} without following links: {}".format(
+                            label, error))
+                self._fds.append(child)
+                self._edges.append((current, component, child, label))
+                current = child
+                if created or (
+                        index == len(components) - 1 and require_owned_root):
+                    _harden_owned_fd(
+                        child, label, 0o700, regular=False,
+                        harden=(harden or created))
+                    _verify_named_fd(
+                        self._edges[-1][0], component, child, label,
+                        regular=False)
+            self.root_fd = current
+            self.jobs_fd = (
+                _open_directory_at(
+                    self.root_fd, "jobs", "result jobs directory", create,
+                    harden=harden)
+                if create_jobs else None)
+            if self.jobs_fd is not None:
+                self._fds.append(self.jobs_fd)
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup:
+                _apply_owned_cleanup_precedence(
+                    primary, cleanup, "result-tree constructor cleanup")
+            raise
+
+    def verify(self):
+        for parent, name, child, label in self._edges:
+            _verify_named_fd(
+                parent, name, child, label, regular=False)
+        if self.jobs_fd is not None:
+            _verify_named_fd(
+                self.root_fd, "jobs", self.jobs_fd,
+                "result jobs directory", regular=False)
+
+    def open_job(self, job_id, create=False):
+        self.verify()
+        if self.jobs_fd is None:
+            return None
+        job = _SecureJobDirectory(self, job_id, create)
+        if not job.exists():
+            job.close()
+            return None
+        return job
+
+    def atomic_write_root_json(self, name, value):
+        self.verify()
+        _atomic_write_json_at(
+            self.root_fd, name, "result root {}".format(name), value)
+        self.verify()
+
+    def close(self):
+        records = [
+            (descriptor, "descriptor")
+            for descriptor in reversed(getattr(self, "_fds", []))]
+        self._fds = []
+        self.jobs_fd = None
+        self.root_fd = None
+        _close_owned_descriptors_once(records, "result tree")
+
+
 def _resolve_executable(command, root_path, cwd, environment, identity_cache=None):
     token = command[0]
     if any("{" + replacement + "}" in token for replacement in TOKEN_REPLACEMENTS):
@@ -508,21 +1384,15 @@ def _json_copy(value):
 
 def _atomic_write_json(path, value):
     path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=path.name + ".", suffix=".tmp", dir=str(path.parent))
+    if not path.name:
+        raise LabError("JSON output path must name a file")
+    parent = _ResultTree(
+        path.parent, create=True, harden=False, create_jobs=False,
+        require_owned_root=False)
     try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
-            json.dump(value, output, indent=2, sort_keys=True, ensure_ascii=True)
-            output.write("\n")
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary_name, str(path))
-    except BaseException:
-        try:
-            os.unlink(temporary_name)
-        except OSError:
-            pass
-        raise
+        parent.atomic_write_root_json(path.name, value)
+    finally:
+        parent.close()
 
 
 def _load_json(path):
@@ -1029,24 +1899,41 @@ def _job_directory(output_dir, job_id):
     return Path(output_dir) / "jobs" / job_id
 
 
-def _read_completed_result(output_dir, job, rerun_failed):
-    result_path = _job_directory(output_dir, job["id"]) / "result.json"
-    if not result_path.is_file():
+def _read_completed_result(result_tree, job, rerun_failed):
+    if result_tree is None:
+        return None
+    job_artifacts = result_tree.open_job(job["id"], create=False)
+    if job_artifacts is None:
         return None
     try:
-        result = _load_json(result_path)
-    except LabError:
-        return None
-    if (result.get("schema") != RESULT_SCHEMA or result.get("state") != "complete" or
-            result.get("job_digest") != job["job_digest"]):
-        return None
-    _validate_terminal_result(result_path, result, job)
-    if rerun_failed and result.get("outcome") != "success":
-        return None
-    return result
+        result_fd = job_artifacts.open_existing("result.json")
+        if result_fd is None:
+            return None
+        try:
+            result = _load_json_fd(
+                result_fd, "job {} result.json".format(job["id"]))
+            _verify_named_fd(
+                job_artifacts.fd, "result.json", result_fd,
+                "job {} result.json".format(job["id"]), regular=True)
+        except LabError:
+            return None
+        finally:
+            os.close(result_fd)
+        if (result.get("schema") != RESULT_SCHEMA or
+                result.get("state") != "complete" or
+                result.get("job_digest") != job["job_digest"]):
+            return None
+        _validate_terminal_result(
+            _job_directory(result_tree.path, job["id"]), result, job,
+            job_artifacts=job_artifacts)
+        if rerun_failed and result.get("outcome") != "success":
+            return None
+        return result
+    finally:
+        job_artifacts.close()
 
 
-def _resume_candidates(manifest, output_dir, rerun_failed):
+def _resume_candidates(manifest, output_dir, rerun_failed, result_tree=None):
     """Return resumable terminal results, enforcing atomic resume groups.
 
     Jobs without ``resume_group`` retain the historical job-granular behavior.
@@ -1056,7 +1943,7 @@ def _resume_candidates(manifest, output_dir, rerun_failed):
     observations made by separate runner invocations.
     """
     candidates = {
-        job["id"]: _read_completed_result(output_dir, job, rerun_failed)
+        job["id"]: _read_completed_result(result_tree, job, rerun_failed)
         for job in manifest["jobs"]
     }
     groups = {}
@@ -1148,7 +2035,8 @@ def _validate_thread_runtime_evidence(result, job):
     return runtime
 
 
-def _validate_terminal_result(result_path, result, job):
+def _validate_terminal_result(
+        result_path, result, job, job_artifacts=None):
     unsigned = dict(result)
     expected_result_digest = unsigned.pop("result_digest", None)
     if expected_result_digest != _digest(unsigned):
@@ -1168,13 +2056,32 @@ def _validate_terminal_result(result_path, result, job):
     if not isinstance(outputs, dict):
         raise LabError("terminal result output identities are missing for job {}".format(job["id"]))
     job_dir = Path(result_path).parent
-    for name in ("stdout", "stderr"):
-        expected = outputs.get(name)
-        if not isinstance(expected, dict) or _content_identity(
-                job_dir / (name + ".txt")) != expected:
-            raise LabError("{} changed after job {} completed".format(name, job["id"]))
-    _validate_performance_evidence(
-        job, result.get("performance_counters"), outputs, job_dir)
+    close_artifacts = False
+    if job_artifacts is None:
+        result_tree = _ResultTree(job_dir.parent.parent, create=False)
+        job_artifacts = result_tree.open_job(job["id"], create=False)
+        if job_artifacts is None:
+            result_tree.close()
+            raise LabError(
+                "terminal result directory is missing for job {}".format(
+                    job["id"]))
+        close_artifacts = True
+    try:
+        for name in ("stdout", "stderr"):
+            expected = outputs.get(name)
+            if (not isinstance(expected, dict) or
+                    job_artifacts.content_identity(name + ".txt") !=
+                    expected):
+                raise LabError(
+                    "{} changed after job {} completed".format(
+                        name, job["id"]))
+        _validate_performance_evidence(
+            job, result.get("performance_counters"), outputs, job_dir,
+            job_artifacts=job_artifacts)
+    finally:
+        if close_artifacts:
+            job_artifacts.close()
+            result_tree.close()
 
 
 def _replace_tokens(value, job):
@@ -1220,7 +2127,8 @@ def _counter_executable_matches(job):
             current["size_bytes"] == expected["size_bytes"])
 
 
-def _validate_performance_evidence(job, counters, outputs, job_dir):
+def _validate_performance_evidence(
+        job, counters, outputs, job_dir, job_artifacts=None):
     """Re-derive counter evidence from retained raw bytes before trusting it."""
     request = job.get("performance_counters")
     has_output_identity = "performance_counters" in outputs
@@ -1304,9 +2212,14 @@ def _validate_performance_evidence(job, counters, outputs, job_dir):
                 job["id"]))
 
     try:
-        (raw_identity, derived_measurements, derived_status,
-         derived_detail) = _read_perf_stat_evidence(
-             Path(job_dir) / raw_name, request["events"])
+        if job_artifacts is None:
+            (raw_identity, derived_measurements, derived_status,
+             derived_detail) = _read_perf_stat_evidence(
+                 Path(job_dir) / raw_name, request["events"])
+        else:
+            (raw_identity, derived_measurements, derived_status,
+             derived_detail) = job_artifacts.perf_evidence(
+                 raw_name, request["events"])
     except OSError as error:
         raise LabError(
             "cannot read retained counters for job {}: {}".format(
@@ -1347,46 +2260,93 @@ def _probe_performance_counters(job):
     counters = job["performance_counters"]
     logical_command = list(counters["probe_command"])
     probe_workload = logical_command[-3:]
+    containment_token = hashlib.sha256(
+        os.urandom(32) + job["job_digest"].encode("ascii")).hexdigest()
     probe = {
         "status": "unavailable",
         "command": logical_command,
         "cpu_set": job["cpu_set"],
         "exit_code": None,
     }
+    containment = {"detected": [], "remaining": []}
+    probe_primary_error = None
     try:
         with tempfile.TemporaryDirectory(prefix="leopard2-perf-probe-") as temporary:
             output_path = Path(temporary) / "perf-stat.txt"
+            stdout_path = Path(temporary) / "stdout.txt"
+            stderr_path = Path(temporary) / "stderr.txt"
             command = _performance_command(
                 job, probe_workload, output_path)
-            completed = subprocess.run(
-                command,
-                env=_expanded_environment(job),
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=10.0,
-                check=False,
-                preexec_fn=lambda: _child_setup(job["cpu_set"], 0),
-            )
+            # Do not use PIPE here.  A detached grandchild can retain a pipe
+            # writer after the probe leader exits, causing communicate() to
+            # await EOF until timeout (or indefinitely during timeout
+            # recovery).  Private regular captures let leader wait remain
+            # bounded; descendant containment below owns the remaining
+            # lifecycle.
+            with stdout_path.open("wb") as stdout_capture, \
+                    stderr_path.open("wb") as stderr_capture:
+                completed = subprocess.run(
+                    command,
+                    env=_expanded_environment(job, containment_token),
+                    stdin=subprocess.DEVNULL,
+                    stdout=stdout_capture,
+                    stderr=stderr_capture,
+                    timeout=10.0,
+                    check=False,
+                    start_new_session=True,
+                    preexec_fn=lambda: _child_setup(job["cpu_set"], 0),
+                )
             probe["exit_code"] = completed.returncode
-            stderr = completed.stderr.decode("utf-8", errors="replace").strip()
+            stderr_size = stderr_path.stat().st_size
+            with stderr_path.open("rb") as stderr_capture:
+                stderr_capture.seek(max(0, stderr_size - 4096))
+                stderr = stderr_capture.read(4096).decode(
+                    "utf-8", errors="replace").strip()
             if stderr:
-                probe["stderr_tail"] = stderr[-4096:]
+                probe["stderr_tail"] = stderr
             measurements, parse_detail = _parse_perf_stat(
                 output_path, counters["events"])
             if completed.returncode == 0 and parse_detail is None:
                 probe["status"] = "available"
-                probe["duration_seconds"] = round(
-                    time.monotonic() - started, 6)
-                return probe
-            details = []
-            if completed.returncode != 0:
-                details.append("perf probe exited {}".format(completed.returncode))
-            if parse_detail:
-                details.append(parse_detail)
-            probe["detail"] = "; ".join(details) or "perf probe failed"
+            else:
+                details = []
+                if completed.returncode != 0:
+                    details.append(
+                        "perf probe exited {}".format(completed.returncode))
+                if parse_detail:
+                    details.append(parse_detail)
+                probe["detail"] = "; ".join(details) or "perf probe failed"
     except (OSError, subprocess.SubprocessError, LabError) as error:
+        probe_primary_error = error
         probe["detail"] = "perf probe could not run: {}".format(error)
+    finally:
+        active_error = sys.exc_info()[1]
+        cleanup_errors = []
+        cleanup_terminal = None
+        try:
+            containment = _cleanup_containment_token(containment_token)
+        except BaseException as error:
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                cleanup_terminal = error
+            else:
+                cleanup_errors.append(
+                    "perf probe containment cleanup: {}: {}".format(
+                        type(error).__name__, error))
+        if cleanup_errors or cleanup_terminal is not None:
+            _apply_abort_cleanup_precedence(
+                active_error or probe_primary_error,
+                cleanup_errors, cleanup_terminal,
+                "perf probe cleanup failed")
+    if containment["remaining"]:
+        raise LabError(
+            "perf probe left uncontained processes: {}".format(
+                ",".join(str(pid) for pid in containment["remaining"])))
+    if containment["detected"]:
+        probe["status"] = "unavailable"
+        probe["detail"] = (
+            "perf probe left residual descendants {}; cleanup completed"
+            .format(",".join(
+                str(pid) for pid in containment["detected"])))
     probe["duration_seconds"] = round(time.monotonic() - started, 6)
     return probe
 
@@ -1499,6 +2459,37 @@ def _parse_linux_proc_stat(text):
         return None
 
 
+def _require_isolated_subreaper_runner(proc_root="/proc"):
+    """Reject an embedding process whose other work could be adopted/reaped."""
+    root = Path(proc_root)
+    try:
+        task_count = sum(
+            1 for entry in (root / "self" / "task").iterdir()
+            if entry.name.isdigit())
+        entries = list(root.iterdir())
+    except OSError as error:
+        raise LabError(
+            "cannot establish isolated child-subreaper ownership: {}".format(
+                error))
+    if task_count != 1:
+        raise LabError(
+            "lab execution requires a single-threaded runner while owning "
+            "orphan cleanup")
+    direct_children = []
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        parsed = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
+        if parsed is not None and parsed["ppid"] == os.getpid():
+            direct_children.append(
+                (parsed["pid"], parsed["starttime_ticks"]))
+    if direct_children:
+        raise LabError(
+            "lab execution found pre-existing direct children: {}".format(
+                ",".join(str(pid) for pid, _starttime in
+                         sorted(direct_children))))
+
+
 def _status_cpu_set(path):
     text = _read_text(path)
     if not text:
@@ -1602,6 +2593,9 @@ def _linux_session_snapshot(proc_root="/proc", session_tokens=None):
             continue
         sessions.setdefault(target_session, []).append({
             "pid": parsed["pid"],
+            "ppid": parsed["ppid"],
+            "state": parsed["state"],
+            "session": parsed["session"],
             "starttime_ticks": parsed["starttime_ticks"],
             # Preserve every enumerated task in demand evidence.  A TID that
             # exits or becomes unreadable during the scan may lack an affinity
@@ -1628,6 +2622,24 @@ def _sample_thread_runtime(active_jobs, proc_root="/proc"):
             observation["detail"] = "Linux /proc runtime observation is unavailable"
             continue
         processes = list(sessions.get(active["process"].pid, []))
+        contained_identities = active.setdefault("contained_identities", {})
+        for key, record in list(contained_identities.items()):
+            current = _parse_linux_proc_stat(
+                _read_text(
+                    Path(proc_root) / str(record["pid"]) / "stat") or "")
+            if (current is None or
+                    current["starttime_ticks"] !=
+                    record["starttime_ticks"]):
+                del contained_identities[key]
+        for process in processes:
+            identity = (process["pid"], process["starttime_ticks"])
+            contained_identities[identity] = {
+                "pid": process["pid"],
+                "ppid": process["ppid"],
+                "state": process["state"],
+                "session": process["session"],
+                "starttime_ticks": process["starttime_ticks"],
+            }
         if active.get("counter_active"):
             # perf stat is runner instrumentation, not part of the workload's
             # declared internal team.  Its descendant command remains counted.
@@ -1667,7 +2679,11 @@ def _sample_thread_runtime(active_jobs, proc_root="/proc"):
             observation["rss_exceeded"] = True
 
 
-def _child_setup(cpu_set, memory_mb):
+def _child_setup(cpu_set, memory_mb, inherited_signal_mask=None):
+    if (inherited_signal_mask is not None and
+            hasattr(signal, "pthread_sigmask")):
+        signal.pthread_sigmask(
+            signal.SIG_SETMASK, inherited_signal_mask)
     if hasattr(os, "sched_setaffinity"):
         os.sched_setaffinity(0, set(cpu_set))
     elif cpu_set:
@@ -1711,27 +2727,51 @@ def _base_result(
     return result
 
 
-def _write_terminal_result(job_dir, result):
+def _write_terminal_result(job_dir, result, job_artifacts=None):
     job_dir = Path(job_dir)
-    result["outputs"] = {
-        "stdout": _content_identity(job_dir / "stdout.txt"),
-        "stderr": _content_identity(job_dir / "stderr.txt"),
-    }
-    counters = result.get("performance_counters")
-    if isinstance(counters, dict) and counters.get("raw_output") is not None:
-        raw_name = counters["raw_output"]
-        if raw_name != "perf-stat.txt":
-            raise LabError("invalid performance counter output name")
-        result["outputs"]["performance_counters"] = _content_identity(
-            job_dir / raw_name)
-    unsigned = dict(result)
-    unsigned.pop("result_digest", None)
-    result["result_digest"] = _digest(unsigned)
-    _atomic_write_json(job_dir / "result.json", result)
-    return result
+    close_artifacts = False
+    if job_artifacts is None:
+        result_tree = _ResultTree(job_dir.parent.parent, create=True)
+        job_artifacts = result_tree.open_job(result["job_id"], create=True)
+        close_artifacts = True
+    try:
+        result["outputs"] = {
+            "stdout": job_artifacts.content_identity("stdout.txt"),
+            "stderr": job_artifacts.content_identity("stderr.txt"),
+        }
+        counters = result.get("performance_counters")
+        if isinstance(counters, dict) and counters.get("raw_output") is not None:
+            raw_name = counters["raw_output"]
+            if raw_name != "perf-stat.txt":
+                raise LabError("invalid performance counter output name")
+            result["outputs"]["performance_counters"] = (
+                job_artifacts.content_identity(raw_name))
+        unsigned = dict(result)
+        unsigned.pop("result_digest", None)
+        result["result_digest"] = _digest(unsigned)
+        job_artifacts.atomic_write_json("result.json", result)
+        for name, output_name in (
+                ("stdout", "stdout.txt"), ("stderr", "stderr.txt")):
+            if job_artifacts.content_identity(output_name) != (
+                    result["outputs"][name]):
+                raise LabError(
+                    "job {} {} changed during result publication".format(
+                        result["job_id"], output_name))
+        if "performance_counters" in result["outputs"]:
+            if job_artifacts.content_identity("perf-stat.txt") != (
+                    result["outputs"]["performance_counters"]):
+                raise LabError(
+                    "job {} perf-stat.txt changed during result publication"
+                    .format(result["job_id"]))
+        return result
+    finally:
+        if close_artifacts:
+            job_artifacts.close()
+            result_tree.close()
 
 
-def _rewrite_evidence_invalid(job, output_dir, result, detail):
+def _rewrite_evidence_invalid(
+        job, output_dir, result, detail, result_tree=None):
     """Invalidate an already written result without changing captured streams."""
     rewritten = _json_copy(result)
     rewritten["outcome"] = "evidence_invalid"
@@ -1740,8 +2780,25 @@ def _rewrite_evidence_invalid(job, output_dir, result, detail):
         rewritten["detail"] = detail
     elif detail not in existing_detail:
         rewritten["detail"] = existing_detail + "; " + detail
-    return _write_terminal_result(
-        _job_directory(output_dir, job["id"]), rewritten)
+    close_artifacts = False
+    if result_tree is None:
+        result_tree = _ResultTree(output_dir, create=False)
+        close_artifacts = True
+    job_artifacts = result_tree.open_job(job["id"], create=False)
+    if job_artifacts is None:
+        if close_artifacts:
+            result_tree.close()
+        raise LabError(
+            "cannot rewrite missing result directory for job {}".format(
+                job["id"]))
+    try:
+        return _write_terminal_result(
+            _job_directory(output_dir, job["id"]), rewritten,
+            job_artifacts=job_artifacts)
+    finally:
+        job_artifacts.close()
+        if close_artifacts:
+            result_tree.close()
 
 
 def _job_executable_matches(job):
@@ -1752,68 +2809,68 @@ def _job_executable_matches(job):
 
 
 def _launch_job(
-        job, manifest_root, output_dir, run_epoch, performance_probe=None):
-    job_dir = _job_directory(output_dir, job["id"])
-    job_dir.mkdir(parents=True, exist_ok=True)
-    stdout_path = job_dir / "stdout.txt"
-    stderr_path = job_dir / "stderr.txt"
-    counter_output_path = job_dir / "perf-stat.txt"
+        job, manifest_root, output_dir, run_epoch, performance_probe=None,
+        result_tree=None,
+        excluded_runner_children=()):
+    close_result_tree = False
+    if result_tree is None:
+        result_tree = _ResultTree(output_dir, create=True)
+        close_result_tree = True
+    job_dir = _job_directory(result_tree.path, job["id"])
+    job_artifacts = result_tree.open_job(job["id"], create=True)
+    stdout_handle = None
+    stderr_handle = None
     try:
-        counter_output_path.unlink()
-    except FileNotFoundError:
-        pass
-    stdout_handle = stdout_path.open("wb")
-    stderr_handle = stderr_path.open("wb")
-    command = _expanded_command(job)
-    process_command = command
-    counter_active = (
-        job.get("performance_counters") is not None and
-        isinstance(performance_probe, dict) and
-        performance_probe.get("status") == "available")
-    if counter_active:
-        process_command = _performance_command(
-            job, command, counter_output_path)
-    cwd = Path(job["cwd"])
-    if not cwd.is_absolute():
-        cwd = Path(manifest_root) / cwd
-    started = time.monotonic()
-    containment_token = hashlib.sha256(
-        (run_epoch + "\0" + job["job_digest"]).encode("utf-8")).hexdigest()
-    try:
-        if not _job_executable_matches(job):
-            raise LabError("executable changed before launch: {}".format(
-                job["executable"]["path"]))
-        if not _counter_executable_matches(job):
-            raise LabError("performance counter executable changed before launch: {}".format(
-                job["performance_counters"]["executable"]["path"]))
-        process = subprocess.Popen(
-            process_command,
-            cwd=str(cwd),
-            env=_expanded_environment(job, containment_token),
-            stdin=subprocess.DEVNULL,
-            stdout=stdout_handle,
-            stderr=stderr_handle,
-            start_new_session=True,
-            preexec_fn=lambda: _child_setup(job["cpu_set"], job["memory_mb"]),
-        )
+        # A terminal result is the authority for resumability.  Remove it
+        # durably before replacing any captured stream so a crash leaves an
+        # incomplete rerunnable job, never stale contradictory evidence.
+        job_artifacts.invalidate_result()
+        try:
+            os.unlink("perf-stat.txt", dir_fd=job_artifacts.fd)
+            os.fsync(job_artifacts.fd)
+        except FileNotFoundError:
+            pass
+        command = _expanded_command(job)
+        process_command = command
+        counter_active = (
+            job.get("performance_counters") is not None and
+            isinstance(performance_probe, dict) and
+            performance_probe.get("status") == "available")
+        if counter_active:
+            counter_output_fd = job_artifacts.open_capture("perf-stat.txt")
+            process_command = _performance_command(
+                job, command,
+                Path("/proc/self/fd/{}".format(counter_output_fd)))
+        else:
+            counter_output_fd = None
+        cwd = Path(job["cwd"])
+        if not cwd.is_absolute():
+            cwd = Path(manifest_root) / cwd
+        started = time.monotonic()
+        containment_token = hashlib.sha256(
+            (run_epoch + "\0" + job["job_digest"]).encode("utf-8")
+        ).hexdigest()
+        # Perform job-only initialization before opening durable streams or
+        # creating a child.  In particular, no helper is called between a
+        # successful Popen return and publication into the active record.
+        thread_observation = _new_thread_observation(job)
+        stdout_fd = job_artifacts.open_capture("stdout.txt")
+        stderr_fd = job_artifacts.open_capture("stderr.txt")
+        stdout_handle = os.fdopen(os.dup(stdout_fd), "wb", buffering=0)
+        stderr_handle = os.fdopen(os.dup(stderr_fd), "wb", buffering=0)
     except BaseException as error:
-        stdout_handle.close()
-        stderr_handle.close()
-        result = _base_result(
-            job, command, time.monotonic() - started, "launch_error",
-            detail=str(error), run_epoch=run_epoch)
-        performance = _performance_result(
-            job, performance_probe,
-            counter_output_path if counter_output_path.is_file() else None)
-        if performance is not None:
-            result["performance_counters"] = performance
-        _write_terminal_result(job_dir, result)
-        return None, result
+        cleanup_errors, cleanup_terminal = _close_job_launch_resources(
+            stdout_handle, stderr_handle, job_artifacts,
+            close_result_tree, result_tree)
+        _apply_abort_cleanup_precedence(
+            error, cleanup_errors, cleanup_terminal,
+            "launch-resource initialization cleanup failed")
+        raise
     active = {
         "job": job,
         "command": command,
         "process_command": process_command,
-        "process": process,
+        "process": None,
         "started": started,
         "stdout_handle": stdout_handle,
         "stderr_handle": stderr_handle,
@@ -1823,27 +2880,166 @@ def _launch_job(
         "terminate_started": None,
         "run_epoch": run_epoch,
         "performance_probe": performance_probe,
-        "counter_output_path": counter_output_path if counter_active else None,
+        "job_artifacts": job_artifacts,
+        "close_result_tree": close_result_tree,
+        "result_tree": result_tree,
+        "counter_output_fd": counter_output_fd,
         "counter_active": counter_active,
-        "thread_observation": _new_thread_observation(job),
+        "thread_observation": thread_observation,
         "containment_token": containment_token,
+        "contained_identities": {},
     }
-    # This is a real /proc observation, not a synthetic one.  Very short jobs
-    # that depart before either this scan or the run-loop scan fail closed.
-    _sample_thread_runtime([active])
+    try:
+        if not _job_executable_matches(job):
+            raise LabError("executable changed before launch: {}".format(
+                job["executable"]["path"]))
+        if not _counter_executable_matches(job):
+            raise LabError("performance counter executable changed before launch: {}".format(
+                job["performance_counters"]["executable"]["path"]))
+        previous_signal_mask = None
+        try:
+            if hasattr(signal, "pthread_sigmask"):
+                previous_signal_mask = signal.pthread_sigmask(
+                    signal.SIG_BLOCK, {signal.SIGINT})
+            process = subprocess.Popen(
+                process_command,
+                cwd=str(cwd),
+                env=_expanded_environment(job, containment_token),
+                stdin=subprocess.DEVNULL,
+                stdout=stdout_handle,
+                stderr=stderr_handle,
+                pass_fds=(
+                    (counter_output_fd,)
+                    if counter_output_fd is not None else ()),
+                start_new_session=True,
+                preexec_fn=lambda: _child_setup(
+                    job["cpu_set"], job["memory_mb"],
+                    previous_signal_mask),
+            )
+            active["process"] = process
+        finally:
+            if previous_signal_mask is not None:
+                active_error = sys.exc_info()[1]
+                mask_cleanup_errors = []
+                mask_cleanup_terminal = None
+                try:
+                    signal.pthread_sigmask(
+                        signal.SIG_SETMASK, previous_signal_mask)
+                except BaseException as cleanup_error:
+                    if isinstance(
+                            cleanup_error, (KeyboardInterrupt, SystemExit)):
+                        mask_cleanup_terminal = cleanup_error
+                    else:
+                        mask_cleanup_errors.append(
+                            "signal-mask restoration: {}: {}".format(
+                                type(cleanup_error).__name__, cleanup_error))
+                _apply_abort_cleanup_precedence(
+                    active_error, mask_cleanup_errors,
+                    mask_cleanup_terminal,
+                    "post-Popen signal-mask cleanup failed")
+    except BaseException as error:
+        if active["process"] is not None:
+            forced_outcome = (
+                "interrupted"
+                if isinstance(error, (KeyboardInterrupt, SystemExit))
+                else "launch_error")
+            cleanup_errors, cleanup_terminal = _abort_active_jobs(
+                [active], output_dir, forced_outcome,
+                "runner interrupted after process launch: {}".format(error),
+                excluded_runner_children=excluded_runner_children)
+            if isinstance(error, KeyboardInterrupt):
+                error._leo2_terminal_job = job["id"]
+            _apply_abort_cleanup_precedence(
+                error, cleanup_errors, cleanup_terminal,
+                "post-launch cleanup failed")
+            raise
+        try:
+            containment = None
+            cleanup_errors = []
+            cleanup_terminal = None
+            try:
+                containment = _cleanup_containment_token(containment_token)
+            except BaseException as cleanup_error:
+                if isinstance(
+                        cleanup_error, (KeyboardInterrupt, SystemExit)):
+                    cleanup_terminal = cleanup_error
+                else:
+                    cleanup_errors.append(
+                        "pre-launch containment cleanup: {}: {}".format(
+                            type(cleanup_error).__name__, cleanup_error))
+            if (containment is not None and
+                    containment["remaining"]):
+                cleanup_errors.append(
+                    "launch failure left contained processes {}".format(
+                        ",".join(
+                            str(pid) for pid in containment["remaining"])))
+            _apply_abort_cleanup_precedence(
+                error, cleanup_errors, cleanup_terminal,
+                "pre-launch containment cleanup failed")
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            result = _base_result(
+                job, command, time.monotonic() - started, "launch_error",
+                detail=str(error), run_epoch=run_epoch)
+            if containment is not None and containment["detected"]:
+                result["detail"] = (
+                    result.get("detail", "") +
+                    "; cleaned processes created by failed launch: {}".format(
+                        ",".join(
+                            str(pid) for pid in containment["detected"])))
+            performance = _performance_result(
+                job, performance_probe,
+                (Path("/proc/self/fd/{}".format(counter_output_fd))
+                 if counter_output_fd is not None else None))
+            if performance is not None:
+                result["performance_counters"] = performance
+            _write_terminal_result(
+                job_dir, result, job_artifacts=job_artifacts)
+            return None, result
+        finally:
+            active_error = sys.exc_info()[1]
+            cleanup_errors, cleanup_terminal = (
+                _close_job_launch_resources(
+                    stdout_handle, stderr_handle, job_artifacts,
+                    close_result_tree, result_tree))
+            _apply_abort_cleanup_precedence(
+                active_error, cleanup_errors, cleanup_terminal,
+                "pre-launch resource cleanup failed")
+    try:
+        # This is a real /proc observation, not a synthetic one.  Very short
+        # jobs that depart before either this scan or the run-loop scan fail
+        # closed.
+        _sample_thread_runtime([active])
+    except BaseException as error:
+        forced_outcome = (
+            "interrupted"
+            if isinstance(error, (KeyboardInterrupt, SystemExit))
+            else "launch_error")
+        cleanup_errors, cleanup_terminal = _abort_active_jobs(
+            [active], output_dir, forced_outcome,
+            "runner failed after process launch: {}".format(error),
+            excluded_runner_children=excluded_runner_children)
+        if isinstance(error, KeyboardInterrupt):
+            error._leo2_terminal_job = job["id"]
+        _apply_abort_cleanup_precedence(
+            error, cleanup_errors, cleanup_terminal,
+            "post-launch cleanup failed")
+        raise
     return active, None
 
 
 def _signal_group(process, sig):
+    """Signal the unreaped job leader without a process-group reuse race.
+
+    Descendants are found by session/token and terminated by the bounded
+    containment cleanup after the leader exits.  A live or zombie unreaped
+    child keeps its PID reserved, so Popen.send_signal cannot target a reused
+    unrelated PID.
+    """
     try:
-        os.killpg(process.pid, sig)
-    except ProcessLookupError:
+        process.send_signal(sig)
+    except (OSError, ProcessLookupError):
         pass
-    except OSError:
-        try:
-            process.send_signal(sig)
-        except OSError:
-            pass
 
 
 def _process_has_containment_token(entry, token):
@@ -1851,10 +3047,14 @@ def _process_has_containment_token(entry, token):
     return _process_containment_token(entry) == token
 
 
-def _contained_processes(active, proc_root="/proc"):
-    """Find live descendants by original session or inherited opaque token."""
+def _contained_processes(
+        active, proc_root="/proc", excluded_runner_children=()):
+    """Find descendants by original session or inherited opaque token."""
     root = Path(proc_root)
     matches = []
+    excluded = set(excluded_runner_children)
+    have_peer_jobs = bool(excluded)
+    excluded.add(active["process"].pid)
     try:
         entries = list(root.iterdir())
     except OSError:
@@ -1865,21 +3065,146 @@ def _contained_processes(active, proc_root="/proc"):
         if not entry.name.isdigit():
             continue
         parsed = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
-        if (parsed is None or parsed["pid"] == os.getpid() or
-                parsed["state"] == "Z"):
+        if parsed is None or parsed["pid"] == os.getpid():
             continue
-        if (parsed["session"] == original_session or
+        # Only claim an otherwise unattributed adopted child when this is the
+        # sole live job owned by the isolated subreaper.  With concurrent
+        # jobs, another lane's detached child can be reparented here and must
+        # be attributed by its session or opaque token instead.
+        adopted_orphan = (
+            not have_peer_jobs and
+            parsed["ppid"] == os.getpid() and
+            parsed["pid"] not in excluded)
+        if (adopted_orphan or parsed["session"] == original_session or
                 _process_has_containment_token(entry, token)):
             matches.append(parsed)
     return matches
 
 
+def _same_process_identity(record, proc_root="/proc"):
+    """Return the current exact PID/start-time record, including zombies."""
+    current = _parse_linux_proc_stat(
+        _read_text(
+            Path(proc_root) / str(record["pid"]) / "stat") or "")
+    if (current is None or
+            current["starttime_ticks"] != record["starttime_ticks"]):
+        return None
+    return current
+
+
+def _token_process_records(token, proc_root="/proc"):
+    """Return exact identities of processes carrying one launch token."""
+    root = Path(proc_root)
+    records = []
+    try:
+        entries = list(root.iterdir())
+    except OSError:
+        return records
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        parsed = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
+        if (parsed is None or parsed["pid"] == os.getpid() or
+                not _process_has_containment_token(entry, token)):
+            continue
+        records.append(parsed)
+    return records
+
+
+def _cleanup_containment_token(token, proc_root="/proc"):
+    """Boundedly clean a child when Popen failed before publishing its PID."""
+    known = {}
+
+    def current_records():
+        for record in _token_process_records(token, proc_root):
+            known[(record["pid"], record["starttime_ticks"])] = record
+        current = []
+        for key, record in list(known.items()):
+            observed = _same_process_identity(record, proc_root)
+            if observed is None:
+                del known[key]
+                continue
+            known[key] = observed
+            current.append(observed)
+        return current
+
+    initial = []
+    for attempt in range(2):
+        initial = current_records()
+        if initial:
+            break
+        if attempt == 0:
+            time.sleep(0.02)
+    if not initial:
+        return {"detected": [], "remaining": []}
+
+    current = initial
+    deadline = time.monotonic() + 0.5
+    while current and time.monotonic() < deadline:
+        for record in current:
+            if record["state"] == "Z":
+                _reap_process_identity(record, proc_root)
+            else:
+                _signal_process_identity(record, signal.SIGTERM, proc_root)
+        time.sleep(0.02)
+        current = current_records()
+
+    deadline = time.monotonic() + 0.75
+    while current and time.monotonic() < deadline:
+        for record in current:
+            if record["state"] == "Z":
+                _reap_process_identity(record, proc_root)
+            else:
+                _signal_process_identity(record, signal.SIGKILL, proc_root)
+        time.sleep(0.02)
+        current = current_records()
+
+    return {
+        "detected": sorted(record["pid"] for record in initial),
+        "remaining": sorted(record["pid"] for record in current),
+    }
+
+
 def _signal_process_identity(record, sig, proc_root="/proc"):
-    """Signal only if PID and kernel start time still identify one process."""
+    """Signal an exact process identity, using a Linux pidfd when available."""
     entry = Path(proc_root) / str(record["pid"])
     current = _parse_linux_proc_stat(_read_text(entry / "stat") or "")
     if (current is None or
             current["starttime_ticks"] != record["starttime_ticks"]):
+        return
+    pidfd_open = getattr(os, "pidfd_open", None)
+    pidfd_send_signal = getattr(signal, "pidfd_send_signal", None)
+    if (str(Path(proc_root)) == "/proc" and callable(pidfd_open) and
+            callable(pidfd_send_signal)):
+        try:
+            descriptor = pidfd_open(current["pid"], 0)
+        except ProcessLookupError:
+            return
+        except PermissionError:
+            return
+        except OSError as error:
+            if error.errno not in (errno.ENOSYS, errno.EINVAL):
+                raise LabError(
+                    "cannot open exact process handle: {}".format(error))
+        else:
+            try:
+                after = _same_process_identity(record, proc_root)
+                if after is None:
+                    return
+                try:
+                    pidfd_send_signal(descriptor, sig, None, 0)
+                except ProcessLookupError:
+                    pass
+                except PermissionError:
+                    pass
+                return
+            finally:
+                os.close(descriptor)
+    # Compatibility fallback for kernels/Python builds without pidfds.  The
+    # identity is rechecked immediately before kill; unlike the pidfd path,
+    # exit plus PID reuse between these two syscalls remains a platform race.
+    current = _same_process_identity(record, proc_root)
+    if current is None:
         return
     try:
         os.kill(record["pid"], sig)
@@ -1887,7 +3212,85 @@ def _signal_process_identity(record, sig, proc_root="/proc"):
         pass
 
 
-def _cleanup_active_descendants(active, proc_root="/proc"):
+def _reap_process_identity(record, proc_root="/proc"):
+    """Reap one exact adopted zombie without waiting on an unrelated child."""
+    current = _same_process_identity(record, proc_root)
+    if (current is None or current["state"] != "Z" or
+            current["ppid"] != os.getpid() or
+            str(Path(proc_root)) != "/proc"):
+        return False
+
+    pidfd_open = getattr(os, "pidfd_open", None)
+    waitid = getattr(os, "waitid", None)
+    p_pidfd = getattr(os, "P_PIDFD", None)
+    if callable(pidfd_open) and callable(waitid) and p_pidfd is not None:
+        try:
+            descriptor = pidfd_open(current["pid"], 0)
+        except ProcessLookupError:
+            return True
+        except OSError as error:
+            if error.errno not in (
+                    errno.EACCES, errno.EPERM, errno.ENOSYS, errno.EINVAL):
+                raise LabError(
+                    "cannot open exact zombie process handle: {}".format(
+                        error))
+        else:
+            try:
+                after = _same_process_identity(record, proc_root)
+                if after is None:
+                    return True
+                if after["state"] != "Z" or after["ppid"] != os.getpid():
+                    return False
+                try:
+                    waited = waitid(
+                        p_pidfd, descriptor, os.WEXITED | os.WNOHANG)
+                except ChildProcessError:
+                    return False
+                except OSError as error:
+                    if error.errno not in (
+                            errno.EACCES, errno.EPERM, errno.ENOSYS,
+                            errno.EINVAL):
+                        raise LabError(
+                            "cannot reap exact zombie process handle: {}"
+                            .format(error))
+                else:
+                    return waited is not None
+            finally:
+                os.close(descriptor)
+
+    # A zombie PID cannot be reused until its parent reaps it.  Recheck the
+    # exact identity and parent immediately before the compatibility fallback.
+    after = _same_process_identity(record, proc_root)
+    if after is None:
+        return True
+    if after["state"] != "Z" or after["ppid"] != os.getpid():
+        return False
+    try:
+        waited_pid, _status = os.waitpid(after["pid"], os.WNOHANG)
+    except ChildProcessError:
+        return False
+    return waited_pid == after["pid"]
+
+
+def _current_contained_processes(
+        active, known, proc_root="/proc", excluded_runner_children=()):
+    """Merge newly discovered descendants with retained exact identities."""
+    for record in _contained_processes(
+            active, proc_root, excluded_runner_children):
+        known[(record["pid"], record["starttime_ticks"])] = record
+    current = []
+    for key, record in list(known.items()):
+        observed = _same_process_identity(record, proc_root)
+        if observed is None:
+            del known[key]
+            continue
+        known[key] = observed
+        current.append(observed)
+    return current
+
+
+def _cleanup_active_descendants(
+        active, proc_root="/proc", excluded_runner_children=()):
     """Terminate descendants that outlive their signed job leader.
 
     A normal session scan covers ordinary children.  The opaque inherited token
@@ -1897,7 +3300,17 @@ def _cleanup_active_descendants(active, proc_root="/proc"):
     security sandbox for a hostile child that deliberately scrubs its
     environment and daemonizes.
     """
-    initial = _contained_processes(active, proc_root)
+    known = dict(active.get("contained_identities", {}))
+    initial = []
+    quiet_scans = 0
+    while quiet_scans < 2:
+        initial = _current_contained_processes(
+            active, known, proc_root, excluded_runner_children)
+        if initial:
+            break
+        quiet_scans += 1
+        if quiet_scans < 2:
+            time.sleep(0.02)
     if not initial:
         return {"detected": [], "remaining": []}
 
@@ -1905,16 +3318,24 @@ def _cleanup_active_descendants(active, proc_root="/proc"):
     current = initial
     while current and time.monotonic() < deadline:
         for record in current:
-            _signal_process_identity(record, signal.SIGTERM, proc_root)
+            if record["state"] == "Z":
+                _reap_process_identity(record, proc_root)
+            else:
+                _signal_process_identity(record, signal.SIGTERM, proc_root)
         time.sleep(0.02)
-        current = _contained_processes(active, proc_root)
+        current = _current_contained_processes(
+            active, known, proc_root, excluded_runner_children)
 
     deadline = time.monotonic() + 0.75
     while current and time.monotonic() < deadline:
         for record in current:
-            _signal_process_identity(record, signal.SIGKILL, proc_root)
+            if record["state"] == "Z":
+                _reap_process_identity(record, proc_root)
+            else:
+                _signal_process_identity(record, signal.SIGKILL, proc_root)
         time.sleep(0.02)
-        current = _contained_processes(active, proc_root)
+        current = _current_contained_processes(
+            active, known, proc_root, excluded_runner_children)
 
     return {
         "detected": sorted(record["pid"] for record in initial),
@@ -1922,18 +3343,32 @@ def _cleanup_active_descendants(active, proc_root="/proc"):
     }
 
 
-def _finish_active(active, output_dir, forced_outcome=None, detail=None):
+def _finish_active(
+        active, output_dir, forced_outcome=None, detail=None,
+        excluded_runner_children=()):
     process = active["process"]
+    leader_remaining = False
     try:
         exit_code = process.wait(timeout=1.0)
     except subprocess.TimeoutExpired:
         _signal_group(process, signal.SIGKILL)
-        exit_code = process.wait()
-    containment = _cleanup_active_descendants(active)
+        try:
+            exit_code = process.wait(timeout=1.0)
+        except subprocess.TimeoutExpired:
+            exit_code = None
+            leader_remaining = True
+    containment = _cleanup_active_descendants(
+        active, excluded_runner_children=excluded_runner_children)
+    if leader_remaining:
+        containment["detected"] = sorted(
+            set(containment["detected"]) | {process.pid})
+        containment["remaining"] = sorted(
+            set(containment["remaining"]) | {process.pid})
     active["containment_detected"] = list(containment["detected"])
     active["containment_remaining"] = list(containment["remaining"])
     active["stdout_handle"].close()
     active["stderr_handle"].close()
+    job_artifacts = active["job_artifacts"]
     executable_detail = None
     try:
         if not _job_executable_matches(active["job"]):
@@ -1942,7 +3377,14 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
             executable_detail = "performance counter executable changed during execution"
     except LabError as error:
         executable_detail = str(error)
-    if forced_outcome:
+    if leader_remaining:
+        outcome = "evidence_invalid"
+        leader_detail = (
+            "job leader remained live after bounded SIGKILL cleanup")
+        detail = (
+            leader_detail if detail is None
+            else detail + "; " + leader_detail)
+    elif forced_outcome:
         outcome = forced_outcome
     elif active["resource_limited"]:
         outcome = "memory_limit"
@@ -1994,15 +3436,228 @@ def _finish_active(active, output_dir, forced_outcome=None, detail=None):
         outcome, exit_code=exit_code, detail=detail,
         run_epoch=active["run_epoch"])
     result["thread_runtime"]["observation"] = _json_copy(observation)
-    counter_output_path = active.get("counter_output_path")
+    counter_output_fd = active.get("counter_output_fd")
     performance = _performance_result(
         active["job"], active.get("performance_probe"),
-        counter_output_path if (
-            counter_output_path is not None and counter_output_path.is_file()) else None)
+        (Path("/proc/self/fd/{}".format(counter_output_fd))
+         if counter_output_fd is not None else None))
     if performance is not None:
         result["performance_counters"] = performance
     result_path = _job_directory(output_dir, active["job"]["id"]) / "result.json"
-    return _write_terminal_result(result_path.parent, result)
+    try:
+        return _write_terminal_result(
+            result_path.parent, result, job_artifacts=job_artifacts)
+    finally:
+        job_artifacts.close()
+        if active.get("close_result_tree"):
+            active["result_tree"].close()
+
+
+def _append_exception_note(error, note):
+    """Attach cleanup context without risking replacement of control flow."""
+    if hasattr(error, "add_note"):
+        error.add_note(note)
+
+
+def _apply_abort_cleanup_precedence(
+        primary_error, cleanup_errors, cleanup_terminal, context):
+    """Preserve terminal exceptions while reporting bounded-cleanup failures.
+
+    An operator interrupt or intentional SystemExit already propagating from
+    the body is authoritative.  If the body failed ordinarily but cleanup was
+    interrupted, the cleanup terminal exception is authoritative.  Purely
+    ordinary cleanup failures retain the historical LabError boundary.
+    """
+    if primary_error is None:
+        if cleanup_terminal is not None:
+            for cleanup_error in cleanup_errors:
+                _append_exception_note(
+                    cleanup_terminal,
+                    "{}: {}".format(context, cleanup_error))
+            raise cleanup_terminal
+        if cleanup_errors:
+            raise LabError(
+                "{}: {}".format(context, "; ".join(cleanup_errors)))
+        return
+
+    primary_terminal = isinstance(
+        primary_error, (KeyboardInterrupt, SystemExit))
+    if primary_terminal:
+        if cleanup_terminal is not None:
+            _append_exception_note(
+                primary_error,
+                "{}: later cleanup terminal was {}: {}".format(
+                    context, type(cleanup_terminal).__name__,
+                    cleanup_terminal))
+        for cleanup_error in cleanup_errors:
+            _append_exception_note(
+                primary_error, "{}: {}".format(context, cleanup_error))
+        return
+
+    if cleanup_terminal is not None:
+        _append_exception_note(
+            cleanup_terminal,
+            "{}: primary failure was {}: {}".format(
+                context, type(primary_error).__name__, primary_error))
+        for cleanup_error in cleanup_errors:
+            _append_exception_note(
+                cleanup_terminal,
+                "{}: {}".format(context, cleanup_error))
+        raise cleanup_terminal
+
+    if cleanup_errors:
+        raise LabError(
+            "{}: {}; primary failure: {}: {}".format(
+                context, "; ".join(cleanup_errors),
+                type(primary_error).__name__, primary_error)
+        ) from primary_error
+
+
+def _close_job_launch_resources(
+        stdout_handle, stderr_handle, job_artifacts,
+        close_result_tree, result_tree):
+    """Close pre-publication launch resources without losing termination."""
+    cleanup_errors = []
+    cleanup_terminal = None
+
+    def record(label, error):
+        nonlocal cleanup_terminal
+        description = "{}: {}: {}".format(
+            label, type(error).__name__, error)
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            if cleanup_terminal is None:
+                cleanup_terminal = error
+                _append_exception_note(
+                    cleanup_terminal,
+                    "launch-resource cleanup phase: {}".format(description))
+            else:
+                _append_exception_note(
+                    cleanup_terminal,
+                    "later launch-resource cleanup terminal: {}".format(
+                        description))
+        else:
+            cleanup_errors.append(description)
+
+    for label, handle in (
+            ("stdout handle", stdout_handle),
+            ("stderr handle", stderr_handle)):
+        if handle is None:
+            continue
+        try:
+            if not handle.closed:
+                handle.close()
+        except BaseException as error:
+            record(label, error)
+    if job_artifacts is not None:
+        try:
+            job_artifacts.close()
+        except BaseException as error:
+            record("job artifacts", error)
+    if close_result_tree and result_tree is not None:
+        try:
+            result_tree.close()
+        except BaseException as error:
+            record("result tree", error)
+    return cleanup_errors, cleanup_terminal
+
+
+def _abort_active_jobs(
+        active, output_dir, outcome, detail,
+        excluded_runner_children=()):
+    """Best-effort bounded cleanup for an exceptional runner exit.
+
+    Every active job receives a bounded teardown attempt even when an earlier
+    teardown raises.  Ordinary diagnostics and the first terminal cleanup
+    exception are returned separately so the caller can preserve the
+    exception that was already in flight.
+    """
+    cleanup_errors = []
+    cleanup_terminal = None
+
+    def record_cleanup_failure(current, phase, error):
+        nonlocal cleanup_terminal
+        job_id = current["job"]["id"]
+        description = "{} {}: {}: {}".format(
+            job_id, phase, type(error).__name__, error)
+        if isinstance(error, (KeyboardInterrupt, SystemExit)):
+            if cleanup_terminal is None:
+                cleanup_terminal = error
+                _append_exception_note(
+                    cleanup_terminal,
+                    "active-job cleanup phase: {}".format(description))
+            else:
+                _append_exception_note(
+                    cleanup_terminal,
+                    "later active-job cleanup terminal: {}".format(
+                        description))
+        else:
+            cleanup_errors.append(description)
+
+    for current in list(active):
+        try:
+            _signal_group(current["process"], signal.SIGTERM)
+        except BaseException as error:
+            record_cleanup_failure(current, "SIGTERM", error)
+    for current in list(active):
+        try:
+            _finish_active(
+                current, output_dir, forced_outcome=outcome, detail=detail,
+                excluded_runner_children=(
+                    set(excluded_runner_children) | {
+                    other["process"].pid for other in active
+                    if other is not current}))
+        except BaseException as error:
+            record_cleanup_failure(current, "finish", error)
+            try:
+                _signal_group(current["process"], signal.SIGKILL)
+            except BaseException as signal_error:
+                record_cleanup_failure(current, "SIGKILL", signal_error)
+            try:
+                current["process"].wait(timeout=1.0)
+            except BaseException as wait_error:
+                record_cleanup_failure(current, "wait", wait_error)
+            try:
+                containment = _cleanup_active_descendants(
+                    current,
+                    excluded_runner_children=(
+                        set(excluded_runner_children) | {
+                            other["process"].pid for other in active
+                            if other is not current}))
+                if containment["remaining"]:
+                    cleanup_errors.append(
+                        "{} residual processes: {}".format(
+                            current["job"]["id"],
+                            ",".join(
+                                str(pid) for pid in
+                                containment["remaining"])))
+            except BaseException as containment_error:
+                record_cleanup_failure(
+                    current, "containment retry", containment_error)
+            for name in ("stdout_handle", "stderr_handle"):
+                handle = current.get(name)
+                if handle is None or handle.closed:
+                    continue
+                try:
+                    handle.close()
+                except BaseException as close_error:
+                    record_cleanup_failure(current, name, close_error)
+            artifacts = current.get("job_artifacts")
+            if artifacts is not None:
+                try:
+                    artifacts.close()
+                except BaseException as close_error:
+                    record_cleanup_failure(
+                        current, "job artifacts", close_error)
+            if current.get("close_result_tree"):
+                try:
+                    current["result_tree"].close()
+                except BaseException as close_error:
+                    record_cleanup_failure(
+                        current, "result tree", close_error)
+        finally:
+            if current in active:
+                active.remove(current)
+    return cleanup_errors, cleanup_terminal
 
 
 def _can_launch(job, active, allow_cpu_overlap, memory_budget_mb=None):
@@ -2090,26 +3745,43 @@ def _manifest_memory_budget_mb(manifest):
 
 
 def _record_unavailable(
-        job, output_dir, reason, run_epoch, performance_probe=None):
-    job_dir = _job_directory(output_dir, job["id"])
-    job_dir.mkdir(parents=True, exist_ok=True)
-    (job_dir / "stdout.txt").write_text("", encoding="utf-8")
-    (job_dir / "stderr.txt").write_text(reason + "\n", encoding="utf-8")
-    result = _base_result(
-        job, _expanded_command(job), 0.0, "unavailable", detail=reason,
-        run_epoch=run_epoch)
-    if job.get("performance_counters") is not None:
-        if performance_probe is None:
-            performance_probe = {
-                "status": "unavailable",
-                "command": [],
-                "cpu_set": job["cpu_set"],
-                "exit_code": None,
-                "detail": "job was unavailable before performance counter preflight",
-            }
-        result["performance_counters"] = _performance_result(
-            job, performance_probe)
-    return _write_terminal_result(job_dir, result)
+        job, output_dir, reason, run_epoch, performance_probe=None,
+        result_tree=None):
+    close_result_tree = False
+    if result_tree is None:
+        result_tree = _ResultTree(output_dir, create=True)
+        close_result_tree = True
+    job_dir = _job_directory(result_tree.path, job["id"])
+    job_artifacts = result_tree.open_job(job["id"], create=True)
+    try:
+        job_artifacts.invalidate_result()
+        stdout_fd = job_artifacts.open_capture("stdout.txt")
+        stderr_fd = job_artifacts.open_capture("stderr.txt")
+        os.write(stderr_fd, (reason + "\n").encode("utf-8"))
+        os.fsync(stdout_fd)
+        os.fsync(stderr_fd)
+        result = _base_result(
+            job, _expanded_command(job), 0.0, "unavailable", detail=reason,
+            run_epoch=run_epoch)
+        if job.get("performance_counters") is not None:
+            if performance_probe is None:
+                performance_probe = {
+                    "status": "unavailable",
+                    "command": [],
+                    "cpu_set": job["cpu_set"],
+                    "exit_code": None,
+                    "detail": (
+                        "job was unavailable before performance counter "
+                        "preflight"),
+                }
+            result["performance_counters"] = _performance_result(
+                job, performance_probe)
+        return _write_terminal_result(
+            job_dir, result, job_artifacts=job_artifacts)
+    finally:
+        job_artifacts.close()
+        if close_result_tree:
+            result_tree.close()
 
 
 def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
@@ -2120,7 +3792,19 @@ def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
     if worker_count > 128:
         raise LabError("workers may not exceed 128")
     memory_budget_mb = _manifest_memory_budget_mb(manifest)
-    candidates = _resume_candidates(manifest, output_dir, rerun_failed)
+    result_tree = None
+    try:
+        # A dry run validates existing evidence but must not chmod it.
+        result_tree = _ResultTree(
+            output_dir, create=False, harden=False)
+    except FileNotFoundError:
+        pass
+    try:
+        candidates = _resume_candidates(
+            manifest, output_dir, rerun_failed, result_tree=result_tree)
+    finally:
+        if result_tree is not None:
+            result_tree.close()
     planned = []
     for job in manifest["jobs"]:
         completed = candidates[job["id"]]
@@ -2151,7 +3835,33 @@ def _dry_run_plan(manifest, output_dir, rerun_failed, workers=None):
 
 def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                  allow_cpu_overlap=False, progress_seconds=1.0, quiet=False):
+    """Execute one run while owning and reaping every orphaned descendant."""
+    with _ChildSubreaperLease():
+        return _run_manifest(
+            manifest, output_dir, workers=workers,
+            rerun_failed=rerun_failed,
+            allow_cpu_overlap=allow_cpu_overlap,
+            progress_seconds=progress_seconds, quiet=quiet)
+
+
+def _run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
+                  allow_cpu_overlap=False, progress_seconds=1.0, quiet=False):
     """Execute a manifest and return a summary; result files are always durable."""
+    result_tree = _ResultTree(output_dir, create=True)
+    try:
+        return _run_manifest_in_tree(
+            manifest, result_tree, workers=workers,
+            rerun_failed=rerun_failed,
+            allow_cpu_overlap=allow_cpu_overlap,
+            progress_seconds=progress_seconds, quiet=quiet)
+    finally:
+        result_tree.close()
+
+
+def _run_manifest_in_tree(
+        manifest, result_tree, workers=None, rerun_failed=False,
+        allow_cpu_overlap=False, progress_seconds=1.0, quiet=False):
+    """Execute against one retained result-tree identity."""
     validate_manifest(manifest)
     _validate_runtime_cpus(manifest)
     _validate_runtime_executables(manifest)
@@ -2160,9 +3870,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     if worker_count > 128:
         raise LabError("workers may not exceed 128")
     _positive_number(progress_seconds, "progress_seconds", allow_zero=True)
-    output_dir = Path(output_dir).resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    _atomic_write_json(output_dir / "manifest.json", manifest)
+    output_dir = result_tree.path
+    result_tree.atomic_write_root_json("manifest.json", manifest)
     run_epoch = _new_run_epoch()
     run_started = time.monotonic()
 
@@ -2171,7 +3880,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
     resumed = 0
     preflight_unavailable = 0
     memory_budget_mb = _manifest_memory_budget_mb(manifest)
-    candidates = _resume_candidates(manifest, output_dir, rerun_failed)
+    candidates = _resume_candidates(
+        manifest, output_dir, rerun_failed, result_tree=result_tree)
     for job in manifest["jobs"]:
         completed = candidates[job["id"]]
         if completed is not None:
@@ -2181,7 +3891,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
             unavailable_reason = _memory_unavailable_reason(job, memory_budget_mb)
             if unavailable_reason:
                 results[job["id"]] = _record_unavailable(
-                    job, output_dir, unavailable_reason, run_epoch)
+                    job, output_dir, unavailable_reason, run_epoch,
+                    result_tree=result_tree)
                 preflight_unavailable += 1
             else:
                 pending.append(job)
@@ -2210,7 +3921,8 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                 "required performance counters are unavailable: " +
                 probe.get("detail", "perf preflight failed"))
             results[job["id"]] = _record_unavailable(
-                job, output_dir, reason, run_epoch, probe)
+                job, output_dir, reason, run_epoch, probe,
+                result_tree=result_tree)
             preflight_unavailable += 1
         else:
             runnable.append(job)
@@ -2234,9 +3946,23 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                             job, active, allow_cpu_overlap, memory_budget_mb):
                         continue
                     pending.pop(index)
-                    launched, launch_result = _launch_job(
-                        job, manifest["root"], output_dir, run_epoch,
-                        performance_probes.get(job["id"]))
+                    try:
+                        launched, launch_result = _launch_job(
+                            job, manifest["root"], output_dir, run_epoch,
+                            performance_probes.get(job["id"]),
+                            result_tree=result_tree,
+                            excluded_runner_children={
+                                current["process"].pid for current in active})
+                    except KeyboardInterrupt as error:
+                        # A pre-spawn interruption has no terminal result and
+                        # did not execute the popped candidate.  Preserve it in
+                        # the pending count; post-spawn cleanup marks the exact
+                        # job on the exception after publishing its terminal
+                        # interrupted result.
+                        if getattr(
+                                error, "_leo2_terminal_job", None) != job["id"]:
+                            pending.insert(index, job)
+                        raise
                     if launched is not None:
                         active.append(launched)
                         launched_job_ids.add(job["id"])
@@ -2285,7 +4011,11 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                       now - current["terminate_started"] >= 0.5):
                     _signal_group(process, signal.SIGKILL)
                 if process.poll() is not None:
-                    result = _finish_active(current, output_dir)
+                    result = _finish_active(
+                        current, output_dir,
+                        excluded_runner_children={
+                            other["process"].pid for other in active
+                            if other is not current})
                     results[current["job"]["id"]] = result
                     active.remove(current)
                     if current.get("containment_detected"):
@@ -2313,7 +4043,10 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                     result = _finish_active(
                         current, output_dir,
                         forced_outcome="evidence_invalid",
-                        detail=containment_failure)
+                        detail=containment_failure,
+                        excluded_runner_children={
+                            other["process"].pid for other in active
+                            if other is not current})
                     results[current["job"]["id"]] = result
                     active.remove(current)
                 for job_id in sorted(launched_job_ids):
@@ -2321,11 +4054,12 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                         continue
                     results[job_id] = _rewrite_evidence_invalid(
                         jobs_by_id[job_id], output_dir, results[job_id],
-                        containment_failure)
+                        containment_failure, result_tree=result_tree)
                 for job in pending:
                     results[job["id"]] = _record_unavailable(
                         job, output_dir, containment_failure, run_epoch,
-                        performance_probes.get(job["id"]))
+                        performance_probes.get(job["id"]),
+                        result_tree=result_tree)
                     containment_unavailable += 1
                 pending = []
                 break
@@ -2345,25 +4079,25 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
                 last_progress = time.monotonic()
             if active:
                 time.sleep(0.05)
-    except KeyboardInterrupt:
+    except KeyboardInterrupt as error:
         interrupted = True
-        for current in active:
-            _signal_group(current["process"], signal.SIGTERM)
-        deadline = time.monotonic() + 0.5
-        while active and time.monotonic() < deadline:
-            for current in list(active):
-                if current["process"].poll() is not None:
-                    result = _finish_active(current, output_dir, forced_outcome="interrupted")
-                    results[current["job"]["id"]] = result
-                    active.remove(current)
-            time.sleep(0.02)
-        for current in active:
-            _signal_group(current["process"], signal.SIGKILL)
-            result = _finish_active(current, output_dir, forced_outcome="interrupted")
-            results[current["job"]["id"]] = result
-        active = []
+        cleanup_errors, cleanup_terminal = _abort_active_jobs(
+            active, output_dir, "interrupted",
+            "runner interrupted by KeyboardInterrupt")
+        _apply_abort_cleanup_precedence(
+            error, cleanup_errors, cleanup_terminal,
+            "interrupted runner cleanup failed")
+    except BaseException as error:
+        cleanup_errors, cleanup_terminal = _abort_active_jobs(
+            active, output_dir, "evidence_invalid",
+            "runner aborted after internal failure: {}".format(error))
+        _apply_abort_cleanup_precedence(
+            error, cleanup_errors, cleanup_terminal,
+            "exceptional runner cleanup failed")
+        raise
 
-    merged = merge_results(manifest, output_dir, allow_missing=True)
+    merged = _merge_results_in_tree(
+        manifest, result_tree, allow_missing=True)
     summary = {
         "total": total,
         "resumed": resumed,
@@ -2382,20 +4116,50 @@ def run_manifest(manifest, output_dir, workers=None, rerun_failed=False,
 
 def merge_results(manifest, output_dir, output_path=None, allow_missing=False):
     """Merge per-job JSON in manifest order into one canonical JSON document."""
+    result_tree = _ResultTree(output_dir, create=True)
+    try:
+        return _merge_results_in_tree(
+            manifest, result_tree, output_path=output_path,
+            allow_missing=allow_missing)
+    finally:
+        result_tree.close()
+
+
+def _merge_results_in_tree(
+        manifest, result_tree, output_path=None, allow_missing=False):
+    """Merge results from one retained no-follow result tree."""
     validate_manifest(manifest)
-    output_dir = Path(output_dir).resolve()
+    output_dir = result_tree.path
     records = []
     missing = []
     for job in manifest["jobs"]:
         result_path = _job_directory(output_dir, job["id"]) / "result.json"
-        if not result_path.is_file():
+        job_artifacts = result_tree.open_job(job["id"], create=False)
+        if job_artifacts is None:
             missing.append(job["id"])
             continue
-        result = _load_json(result_path)
-        if result.get("schema") != RESULT_SCHEMA or result.get("job_digest") != job["job_digest"]:
-            raise LabError("stale or invalid result for job {}".format(job["id"]))
-        _validate_terminal_result(result_path, result, job)
-        records.append(result)
+        try:
+            result_fd = job_artifacts.open_existing("result.json")
+            if result_fd is None:
+                missing.append(job["id"])
+                continue
+            try:
+                result = _load_json_fd(
+                    result_fd, "job {} result.json".format(job["id"]))
+                _verify_named_fd(
+                    job_artifacts.fd, "result.json", result_fd,
+                    "job {} result.json".format(job["id"]), regular=True)
+            finally:
+                os.close(result_fd)
+            if (result.get("schema") != RESULT_SCHEMA or
+                    result.get("job_digest") != job["job_digest"]):
+                raise LabError(
+                    "stale or invalid result for job {}".format(job["id"]))
+            _validate_terminal_result(
+                result_path, result, job, job_artifacts=job_artifacts)
+            records.append(result)
+        finally:
+            job_artifacts.close()
     if missing and not allow_missing:
         raise LabError("missing results for jobs: {}".format(", ".join(missing)))
     counts = Counter(record.get("outcome", "invalid") for record in records)
@@ -2409,7 +4173,10 @@ def merge_results(manifest, output_dir, output_path=None, allow_missing=False):
         "results": records,
     }
     destination = Path(output_path) if output_path else output_dir / "merged-results.json"
-    _atomic_write_json(destination, merged)
+    if destination.parent == output_dir:
+        result_tree.atomic_write_root_json(destination.name, merged)
+    else:
+        _atomic_write_json(destination, merged)
     return merged
 
 
@@ -2529,6 +4296,399 @@ def self_test():
         if any(job["executable"]["sha256"] != expected_python["sha256"]
                for job in first_manifest["jobs"]):
             raise LabError("self-test: executable content was not hashed into each job")
+        capture_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "capture",
+                "command": [
+                    python, "-c",
+                    "import time; print('capture'); time.sleep(0.08)"],
+            }],
+        })
+        try:
+            unexpected_root_tree = _ResultTree(os.path.sep, create=True)
+        except LabError:
+            pass
+        else:
+            unexpected_root_tree.close()
+            raise LabError(
+                "self-test: the filesystem root was accepted as a result root")
+
+        # close(2) may have completed before Python delivers an asynchronous
+        # exception.  Reopening a file in the handler deterministically reuses
+        # the just-closed number in this single-threaded test; the atomic
+        # writer must not close that new open-file description on its failure
+        # path.
+        atomic_recycle_root = root / "atomic-close-recycle"
+        atomic_recycle_root.mkdir()
+        atomic_guard = atomic_recycle_root / "guard.txt"
+        atomic_guard.write_bytes(b"replacement descriptor remains owned\n")
+        atomic_parent_fd = os.open(
+            str(atomic_recycle_root),
+            os.O_RDONLY | os.O_CLOEXEC | os.O_DIRECTORY)
+        original_os_close = os.close
+        recycled = {"descriptor": None, "closed": None}
+
+        def close_then_recycle(descriptor):
+            if recycled["descriptor"] is None and descriptor != atomic_parent_fd:
+                original_os_close(descriptor)
+                replacement = os.open(
+                    str(atomic_guard), os.O_RDONLY | os.O_CLOEXEC)
+                recycled["descriptor"] = replacement
+                recycled["closed"] = descriptor
+                raise KeyboardInterrupt(
+                    "atomic writer close completed before interrupt")
+            return original_os_close(descriptor)
+
+        atomic_error = None
+        try:
+            os.close = close_then_recycle
+            try:
+                _atomic_write_json_at(
+                    atomic_parent_fd, "result.json",
+                    "self-test atomic result", {"value": 1})
+            except BaseException as error:
+                atomic_error = error
+        finally:
+            os.close = original_os_close
+        try:
+            replacement = recycled["descriptor"]
+            if (not isinstance(atomic_error, KeyboardInterrupt) or
+                    str(atomic_error) !=
+                    "atomic writer close completed before interrupt" or
+                    replacement is None or
+                    replacement != recycled["closed"] or
+                    os.pread(replacement, 4096, 0) !=
+                    b"replacement descriptor remains owned\n" or
+                    (atomic_recycle_root / "result.json").exists() or
+                    any(path.name.endswith(".tmp")
+                        for path in atomic_recycle_root.iterdir())):
+                raise LabError(
+                    "self-test: atomic writer retried or lost an uncertain "
+                    "numeric descriptor")
+        finally:
+            if recycled["descriptor"] is not None:
+                original_os_close(recycled["descriptor"])
+            original_os_close(atomic_parent_fd)
+
+        # Owner close must clear its retry state before each syscall, attempt
+        # every independent descriptor, and retain the first terminal
+        # exception rather than the last one observed during cleanup.
+        owner_tree = _ResultTree(
+            root / "owner-close-results", create=True)
+        owner_job = owner_tree.open_job("owner", create=True)
+        owner_job.open_capture("stdout.txt")
+        owner_job.open_capture("stderr.txt")
+        owner_descriptors = list(owner_job.streams.values()) + [owner_job.fd]
+        owner_first = owner_descriptors[0]
+        owner_later = owner_descriptors[1]
+
+        def terminal_owner_close(descriptor):
+            original_os_close(descriptor)
+            if descriptor == owner_first:
+                raise KeyboardInterrupt("first owner close terminal")
+            if descriptor == owner_later:
+                raise SystemExit(91)
+
+        owner_error = None
+        try:
+            os.close = terminal_owner_close
+            try:
+                owner_job.close()
+            except BaseException as error:
+                owner_error = error
+        finally:
+            os.close = original_os_close
+        if (not isinstance(owner_error, KeyboardInterrupt) or
+                str(owner_error) != "first owner close terminal" or
+                owner_job.fd is not None or owner_job.streams or
+                not any(
+                    "later cleanup failure was SystemExit" in note
+                    for note in getattr(owner_error, "__notes__", ()))):
+            raise LabError(
+                "self-test: secure job close lost terminal ordering or "
+                "retained descriptor ownership")
+        for descriptor in owner_descriptors:
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+            else:
+                raise LabError(
+                    "self-test: secure job close skipped an owned descriptor")
+        owner_tree.close()
+
+        tree_owner = _ResultTree(
+            root / "tree-close-results", create=True)
+        tree_descriptors = list(reversed(tree_owner._fds))
+        tree_first = tree_descriptors[0]
+        tree_later = tree_descriptors[1]
+
+        def terminal_tree_close(descriptor):
+            original_os_close(descriptor)
+            if descriptor == tree_first:
+                raise SystemExit(92)
+            if descriptor == tree_later:
+                raise KeyboardInterrupt("later tree close terminal")
+
+        tree_error = None
+        try:
+            os.close = terminal_tree_close
+            try:
+                tree_owner.close()
+            except BaseException as error:
+                tree_error = error
+        finally:
+            os.close = original_os_close
+        if (not isinstance(tree_error, SystemExit) or
+                tree_error.code != 92 or tree_owner._fds or
+                tree_owner.jobs_fd is not None or
+                tree_owner.root_fd is not None or
+                not any(
+                    "later cleanup failure was KeyboardInterrupt" in note
+                    for note in getattr(tree_error, "__notes__", ()))):
+            raise LabError(
+                "self-test: result-tree close lost terminal ordering or "
+                "retained descriptor ownership")
+        for descriptor in tree_descriptors:
+            try:
+                os.fstat(descriptor)
+            except OSError as error:
+                if error.errno != errno.EBADF:
+                    raise
+            else:
+                raise LabError(
+                    "self-test: result-tree close skipped an owned descriptor")
+
+        # A terminal already propagating from constructor work remains
+        # authoritative over a later cleanup terminal.  Conversely, a cleanup
+        # terminal outranks an ordinary constructor failure.
+        original_harden_owned_fd = globals()["_harden_owned_fd"]
+        constructor_cases = (
+            (
+                KeyboardInterrupt("constructor body terminal"),
+                SystemExit(93),
+                KeyboardInterrupt,
+                "constructor body terminal",
+                "later cleanup failure was SystemExit",
+            ),
+            (
+                LabError("ordinary constructor body failure"),
+                KeyboardInterrupt("constructor cleanup terminal"),
+                KeyboardInterrupt,
+                "constructor cleanup terminal",
+                "earlier failure was LabError",
+            ),
+        )
+        for case_index, (
+                body_failure, cleanup_failure, expected_type,
+                expected_text, expected_note) in enumerate(constructor_cases):
+            constructor_closed = []
+            cleanup_injected = {"value": False}
+
+            def fail_constructor_hardening(
+                    descriptor, label, mode, regular, harden=True):
+                del descriptor, label, mode, regular, harden
+                raise body_failure
+
+            def terminal_constructor_close(descriptor):
+                original_os_close(descriptor)
+                constructor_closed.append(descriptor)
+                if not cleanup_injected["value"]:
+                    cleanup_injected["value"] = True
+                    raise cleanup_failure
+
+            constructor_error = None
+            try:
+                globals()["_harden_owned_fd"] = fail_constructor_hardening
+                os.close = terminal_constructor_close
+                try:
+                    _ResultTree(
+                        root / "constructor-close-{}".format(case_index),
+                        create=True)
+                except BaseException as error:
+                    constructor_error = error
+            finally:
+                os.close = original_os_close
+                globals()["_harden_owned_fd"] = original_harden_owned_fd
+            if (not isinstance(constructor_error, expected_type) or
+                    str(constructor_error) != expected_text or
+                    not cleanup_injected["value"] or
+                    not constructor_closed or
+                    not any(
+                        expected_note in note for note in
+                        getattr(constructor_error, "__notes__", ()))):
+                raise LabError(
+                    "self-test: result-tree constructor cleanup violated "
+                    "terminal precedence")
+            for descriptor in constructor_closed:
+                try:
+                    os.fstat(descriptor)
+                except OSError as error:
+                    if error.errno != errno.EBADF:
+                        raise
+                else:
+                    raise LabError(
+                        "self-test: constructor cleanup left an owned "
+                        "descriptor open")
+
+        root_link_victim = root / "root-link-victim"
+        root_link_victim.mkdir()
+        root_link_output = root / "root-link-results"
+        root_link_output.symlink_to(root_link_victim, target_is_directory=True)
+        try:
+            run_manifest(capture_manifest, root_link_output, quiet=True)
+        except LabError:
+            pass
+        else:
+            raise LabError(
+                "self-test: a symlinked result root was accepted")
+        if any(root_link_victim.iterdir()):
+            raise LabError(
+                "self-test: a symlinked result root redirected output")
+
+        directory_link_output = root / "directory-link-results"
+        directory_link_output.mkdir(mode=0o775)
+        directory_link_victim = root / "directory-link-victim"
+        directory_link_victim.mkdir()
+        (directory_link_output / "jobs").symlink_to(
+            directory_link_victim, target_is_directory=True)
+        try:
+            run_manifest(capture_manifest, directory_link_output, quiet=True)
+        except LabError:
+            pass
+        else:
+            raise LabError(
+                "self-test: a symlinked jobs directory was accepted")
+        if any(directory_link_victim.iterdir()):
+            raise LabError(
+                "self-test: a symlinked jobs directory redirected output")
+
+        for link_kind in ("symlink", "hardlink"):
+            attack_output = root / ("stdout-" + link_kind + "-results")
+            attack_job = attack_output / "jobs" / "capture"
+            attack_job.mkdir(parents=True, mode=0o775)
+            victim = root / ("stdout-" + link_kind + "-victim")
+            victim.write_bytes(b"must-not-be-truncated\n")
+            stdout_attack = attack_job / "stdout.txt"
+            if link_kind == "symlink":
+                stdout_attack.symlink_to(victim)
+            else:
+                os.link(victim, stdout_attack)
+            attack_summary = run_manifest(
+                capture_manifest, attack_output, quiet=True)
+            if attack_summary["outcomes"] != {
+                    "missing": 0, "success": 1}:
+                raise LabError(
+                    "self-test: stdout {} was not safely replaced".format(
+                        link_kind))
+            if victim.read_bytes() != b"must-not-be-truncated\n":
+                raise LabError(
+                    "self-test: stdout {} truncated another inode".format(
+                        link_kind))
+            if (not stdout_attack.is_file() or
+                    os.path.samefile(stdout_attack, victim)):
+                raise LabError(
+                    "self-test: stdout {} retained the hostile inode".format(
+                        link_kind))
+
+        fifo_output = root / "result-fifo-results"
+        fifo_job = fifo_output / "jobs" / "capture"
+        fifo_job.mkdir(parents=True, mode=0o775)
+        os.mkfifo(fifo_job / "result.json", 0o600)
+        fifo_started = time.monotonic()
+        try:
+            run_manifest(capture_manifest, fifo_output, quiet=True)
+        except LabError:
+            pass
+        else:
+            raise LabError("self-test: a result FIFO was accepted")
+        if time.monotonic() - fifo_started > 2.0:
+            raise LabError(
+                "self-test: result FIFO rejection blocked before type checking")
+
+        legacy_output = root / "legacy-mode-results"
+        legacy_job = legacy_output / "jobs" / "capture"
+        legacy_job.mkdir(parents=True, mode=0o775)
+        legacy_output.chmod(0o775)
+        (legacy_output / "jobs").chmod(0o775)
+        legacy_job.chmod(0o775)
+        for name in ("stdout.txt", "stderr.txt"):
+            path = legacy_job / name
+            path.write_text("legacy\n", encoding="utf-8")
+            path.chmod(0o664)
+        legacy_summary = run_manifest(
+            capture_manifest, legacy_output, quiet=True)
+        if legacy_summary["outcomes"] != {"missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: owned legacy result artifacts did not run")
+        for path in (
+                legacy_output, legacy_output / "jobs", legacy_job):
+            path.chmod(0o775)
+        for name in ("stdout.txt", "stderr.txt", "result.json"):
+            (legacy_job / name).chmod(0o664)
+        legacy_resume = run_manifest(
+            capture_manifest, legacy_output, quiet=True)
+        if legacy_resume["resumed"] != 1 or legacy_resume["executed"] != 0:
+            raise LabError(
+                "self-test: owned 0775/0664 legacy artifacts did not resume")
+        for path in (
+                legacy_output, legacy_output / "jobs", legacy_job):
+            if stat.S_IMODE(path.stat().st_mode) != 0o700:
+                raise LabError(
+                    "self-test: legacy result directory was not hardened")
+        for name in ("stdout.txt", "stderr.txt", "result.json"):
+            if stat.S_IMODE((legacy_job / name).stat().st_mode) != 0o600:
+                raise LabError(
+                    "self-test: legacy result file was not hardened")
+        legacy_directories = (
+            legacy_output, legacy_output / "jobs", legacy_job)
+        legacy_files = tuple(
+            legacy_job / name
+            for name in ("stdout.txt", "stderr.txt", "result.json"))
+        for path in legacy_directories:
+            path.chmod(0o775)
+        for path in legacy_files:
+            path.chmod(0o664)
+        dry_modes_before = {
+            str(path): stat.S_IMODE(path.stat().st_mode)
+            for path in legacy_directories + legacy_files}
+        legacy_plan = _dry_run_plan(
+            capture_manifest, legacy_output, rerun_failed=False)
+        dry_modes_after = {
+            str(path): stat.S_IMODE(path.stat().st_mode)
+            for path in legacy_directories + legacy_files}
+        if (legacy_plan["jobs"][0]["action"] != "resume" or
+                dry_modes_after != dry_modes_before):
+            raise LabError(
+                "self-test: dry-run mutated existing result-tree modes")
+
+        crash_window_output = root / "crash-window-results"
+        run_manifest(capture_manifest, crash_window_output, quiet=True)
+        crash_tree = _ResultTree(crash_window_output, create=False)
+        crash_artifacts = crash_tree.open_job("capture", create=False)
+        try:
+            crash_artifacts.invalidate_result()
+            partial_stdout = crash_artifacts.open_capture("stdout.txt")
+            os.write(partial_stdout, b"partial replacement before crash\n")
+            os.fsync(partial_stdout)
+        finally:
+            crash_artifacts.close()
+            crash_tree.close()
+        crash_plan = _dry_run_plan(
+            capture_manifest, crash_window_output, rerun_failed=False)
+        if crash_plan["jobs"][0]["action"] != "run":
+            raise LabError(
+                "self-test: crash-window artifacts were treated as resumable")
+        crash_recovery = run_manifest(
+            capture_manifest, crash_window_output, quiet=True)
+        if crash_recovery["outcomes"] != {"missing": 0, "success": 1}:
+            raise LabError(
+                "self-test: crash-window result did not rerun cleanly")
+
         grouped_manifest = build_manifest({
             "root": str(root),
             "defaults": {"memory_mb": 0, "cpu_count": 1},
@@ -2600,6 +4760,388 @@ def self_test():
                     "cpu": unavailable_cpu, "socket": 0,
                     "core": unavailable_cpu}])),
 
+        original_require_isolated = globals()[
+            "_require_isolated_subreaper_runner"]
+        original_subreaper_state = globals()["_linux_child_subreaper_state"]
+        original_set_subreaper = globals()["_set_linux_child_subreaper"]
+        original_subreaper_checkpoint = globals()[
+            "_subreaper_transition_checkpoint"]
+        original_subreaper_depth = globals()["_SUBREAPER_DEPTH"]
+        original_subreaper_previous = globals()["_SUBREAPER_PREVIOUS"]
+        simulated_subreaper = {
+            "state": 0,
+            "interrupt_phase": "acquire",
+            "exception_type": KeyboardInterrupt,
+        }
+
+        def simulated_subreaper_transition(enabled):
+            simulated_subreaper["state"] = 1 if enabled else 0
+
+        def interrupted_subreaper_checkpoint(phase):
+            if simulated_subreaper["interrupt_phase"] == phase:
+                simulated_subreaper["interrupt_phase"] = None
+                raise simulated_subreaper["exception_type"](
+                    "injected after child-subreaper {} transition".format(
+                        phase))
+
+        try:
+            globals()["_require_isolated_subreaper_runner"] = lambda: None
+            globals()["_linux_child_subreaper_state"] = (
+                lambda: simulated_subreaper["state"])
+            globals()["_set_linux_child_subreaper"] = (
+                simulated_subreaper_transition)
+            globals()["_subreaper_transition_checkpoint"] = (
+                interrupted_subreaper_checkpoint)
+            globals()["_SUBREAPER_DEPTH"] = 0
+            globals()["_SUBREAPER_PREVIOUS"] = None
+            try:
+                with _ChildSubreaperLease():
+                    raise LabError(
+                        "self-test: interrupted subreaper lease entered")
+            except KeyboardInterrupt:
+                pass
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: failed subreaper acquisition was not rolled "
+                    "back transactionally")
+
+            # If acquisition itself is interrupted and rollback fails
+            # ordinarily, retain the operator interrupt while leaving an
+            # explicit retryable prior-state record.
+            rollback_failure = {"enabled": True}
+
+            def ordinary_rollback_failure(enabled):
+                if not enabled and rollback_failure["enabled"]:
+                    raise LabError("injected ordinary rollback failure")
+                simulated_subreaper_transition(enabled)
+
+            globals()["_set_linux_child_subreaper"] = (
+                ordinary_rollback_failure)
+            simulated_subreaper["exception_type"] = KeyboardInterrupt
+            simulated_subreaper["interrupt_phase"] = "acquire"
+            try:
+                with _ChildSubreaperLease():
+                    raise LabError(
+                        "self-test: rollback-failure lease entered")
+            except KeyboardInterrupt as error:
+                if not any(
+                        "acquisition rollback failed" in note and
+                        "injected ordinary rollback failure" in note
+                        for note in getattr(error, "__notes__", ())):
+                    raise LabError(
+                        "self-test: acquisition rollback replaced or lost "
+                        "the primary interrupt")
+            if (simulated_subreaper["state"] != 1 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] != 0):
+                raise LabError(
+                    "self-test: failed acquisition rollback did not retain "
+                    "retryable subreaper state")
+            rollback_failure["enabled"] = False
+            globals()["_set_linux_child_subreaper"] = (
+                simulated_subreaper_transition)
+            simulated_subreaper["interrupt_phase"] = None
+            with _ChildSubreaperLease():
+                if simulated_subreaper["state"] != 1:
+                    raise LabError(
+                        "self-test: poisoned acquisition state did not "
+                        "recover before reuse")
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: recovered acquisition state did not release")
+
+            # Conversely, a rollback interrupt outranks an ordinary
+            # acquisition failure and retains that failure as context.
+            def interrupting_rollback(enabled):
+                if not enabled:
+                    raise KeyboardInterrupt(
+                        "injected rollback interrupt")
+                simulated_subreaper_transition(enabled)
+
+            globals()["_set_linux_child_subreaper"] = interrupting_rollback
+            simulated_subreaper["exception_type"] = LabError
+            simulated_subreaper["interrupt_phase"] = "acquire"
+            try:
+                with _ChildSubreaperLease():
+                    raise LabError(
+                        "self-test: interrupting-rollback lease entered")
+            except KeyboardInterrupt as error:
+                if (str(error) != "injected rollback interrupt" or
+                        not any(
+                            "initial child-subreaper acquisition failure was "
+                            "LabError" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: rollback interrupt lost ordinary "
+                        "acquisition context")
+            if (simulated_subreaper["state"] != 1 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] != 0):
+                raise LabError(
+                    "self-test: interrupting rollback did not retain "
+                    "retryable state")
+            globals()["_set_linux_child_subreaper"] = (
+                simulated_subreaper_transition)
+            simulated_subreaper["interrupt_phase"] = None
+            with _ChildSubreaperLease():
+                pass
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: retry after rollback interrupt did not "
+                    "restore subreaper state")
+
+            simulated_subreaper["exception_type"] = KeyboardInterrupt
+            simulated_subreaper["interrupt_phase"] = "release"
+            try:
+                with _ChildSubreaperLease():
+                    if simulated_subreaper["state"] != 1:
+                        raise LabError(
+                            "self-test: subreaper lease did not become active")
+            except KeyboardInterrupt:
+                pass
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: failed subreaper release was not finalized "
+                    "transactionally")
+
+            # Cleanup diagnostics must never replace an operator interrupt
+            # already propagating from the with-body.
+            simulated_subreaper["exception_type"] = LabError
+            simulated_subreaper["interrupt_phase"] = "release"
+            try:
+                with _ChildSubreaperLease():
+                    raise KeyboardInterrupt(
+                        "primary body interrupt during subreaper lease")
+            except KeyboardInterrupt as error:
+                if (str(error) !=
+                        "primary body interrupt during subreaper lease" or
+                        not any(
+                            "child-subreaper cleanup failed" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: subreaper cleanup replaced or lost the "
+                        "primary body interrupt")
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: interrupted-body subreaper release was not "
+                    "finalized transactionally")
+
+            simulated_subreaper["exception_type"] = LabError
+            simulated_subreaper["interrupt_phase"] = "release"
+            try:
+                with _ChildSubreaperLease():
+                    raise SystemExit(73)
+            except SystemExit as error:
+                if (error.code != 73 or
+                        not any(
+                            "child-subreaper cleanup failed" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: subreaper cleanup replaced or lost the "
+                        "primary SystemExit")
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: SystemExit subreaper release was not finalized "
+                    "transactionally")
+
+            # Conversely, an interrupt delivered by release cleanup outranks
+            # an ordinary body error while retaining that error as context.
+            simulated_subreaper["exception_type"] = KeyboardInterrupt
+            simulated_subreaper["interrupt_phase"] = "release"
+            try:
+                with _ChildSubreaperLease():
+                    raise LabError(
+                        "ordinary body failure during subreaper lease")
+            except KeyboardInterrupt as error:
+                if not any(
+                        "primary failure: LabError: ordinary body failure" in
+                        note for note in getattr(error, "__notes__", ())):
+                    raise LabError(
+                        "self-test: release interrupt lost its primary body "
+                        "failure context")
+            if (simulated_subreaper["state"] != 0 or
+                    globals()["_SUBREAPER_DEPTH"] != 0 or
+                    globals()["_SUBREAPER_PREVIOUS"] is not None):
+                raise LabError(
+                    "self-test: release-interrupt subreaper state was not "
+                    "finalized transactionally")
+        finally:
+            globals()["_require_isolated_subreaper_runner"] = (
+                original_require_isolated)
+            globals()["_linux_child_subreaper_state"] = (
+                original_subreaper_state)
+            globals()["_set_linux_child_subreaper"] = original_set_subreaper
+            globals()["_subreaper_transition_checkpoint"] = (
+                original_subreaper_checkpoint)
+            globals()["_SUBREAPER_DEPTH"] = original_subreaper_depth
+            globals()["_SUBREAPER_PREVIOUS"] = original_subreaper_previous
+
+        # Exceptional multi-job teardown must finish every bounded cleanup
+        # attempt without demoting KeyboardInterrupt/SystemExit into strings.
+        class AbortTestProcess(object):
+            def __init__(self, pid):
+                self.pid = pid
+                self.signals = []
+                self.waited = 0
+
+            def send_signal(self, requested_signal):
+                self.signals.append(requested_signal)
+
+            def wait(self, timeout=None):
+                del timeout
+                self.waited += 1
+                return 0
+
+        class AbortTestArtifacts(object):
+            def __init__(self):
+                self.closed = False
+
+            def close(self):
+                self.closed = True
+
+        abort_active = []
+        for index, job_id in enumerate(
+                ("first-terminal-cleanup", "later-terminal-cleanup")):
+            abort_active.append({
+                "job": {"id": job_id},
+                "process": AbortTestProcess(900001 + index),
+                "stdout_handle": None,
+                "stderr_handle": None,
+                "job_artifacts": AbortTestArtifacts(),
+                "close_result_tree": False,
+            })
+        abort_artifacts = [
+            current["job_artifacts"] for current in abort_active]
+        original_finish_active = globals()["_finish_active"]
+        original_cleanup_active_descendants = globals()[
+            "_cleanup_active_descendants"]
+
+        def terminal_finish_active(current, *args, **kwargs):
+            del args, kwargs
+            if current["job"]["id"] == "first-terminal-cleanup":
+                raise KeyboardInterrupt("first cleanup interrupt")
+            raise SystemExit(81)
+
+        try:
+            globals()["_finish_active"] = terminal_finish_active
+            globals()["_cleanup_active_descendants"] = (
+                lambda *_args, **_kwargs: {
+                    "detected": [], "remaining": []})
+            abort_errors, abort_terminal = _abort_active_jobs(
+                abort_active, root, "evidence_invalid",
+                "injected exceptional cleanup")
+        finally:
+            globals()["_finish_active"] = original_finish_active
+            globals()["_cleanup_active_descendants"] = (
+                original_cleanup_active_descendants)
+        if (abort_errors or abort_active or
+                not isinstance(abort_terminal, KeyboardInterrupt) or
+                str(abort_terminal) != "first cleanup interrupt" or
+                not all(artifact.closed for artifact in abort_artifacts) or
+                not any(
+                    "later active-job cleanup terminal" in note and
+                    "SystemExit" in note
+                    for note in getattr(abort_terminal, "__notes__", ()))):
+            raise LabError(
+                "self-test: active-job cleanup lost deterministic terminal "
+                "precedence or skipped a resource")
+
+        ordinary_primary = LabError("ordinary runner failure")
+        try:
+            _apply_abort_cleanup_precedence(
+                ordinary_primary, [], abort_terminal,
+                "injected abort cleanup")
+        except KeyboardInterrupt as error:
+            if (error is not abort_terminal or
+                    not any(
+                        "primary failure was LabError: ordinary runner "
+                        "failure" in note
+                        for note in getattr(error, "__notes__", ()))):
+                raise LabError(
+                    "self-test: cleanup interrupt lost ordinary primary "
+                    "failure context")
+        else:
+            raise LabError(
+                "self-test: cleanup interrupt was demoted to an ordinary "
+                "diagnostic")
+
+        body_exit = SystemExit(82)
+        later_cleanup_interrupt = KeyboardInterrupt(
+            "later cleanup interrupt")
+        _apply_abort_cleanup_precedence(
+            body_exit, ["ordinary cleanup diagnostic"],
+            later_cleanup_interrupt, "injected abort cleanup")
+        if (body_exit.code != 82 or
+                not any(
+                    "later cleanup terminal was KeyboardInterrupt" in note
+                    for note in getattr(body_exit, "__notes__", ())) or
+                not any(
+                    "ordinary cleanup diagnostic" in note
+                    for note in getattr(body_exit, "__notes__", ()))):
+            raise LabError(
+                "self-test: primary SystemExit lost cleanup diagnostics")
+
+        try:
+            _apply_abort_cleanup_precedence(
+                LabError("ordinary runner failure"),
+                ["job finish: OSError: injected close failure"], None,
+                "injected abort cleanup")
+        except LabError as error:
+            if ("injected close failure" not in str(error) or
+                    "ordinary runner failure" not in str(error)):
+                raise
+        else:
+            raise LabError(
+                "self-test: ordinary abort cleanup failure was swallowed")
+
+        class LaunchCleanupResource(object):
+            def __init__(self, label, failure=None):
+                self.label = label
+                self.failure = failure
+                self.close_count = 0
+                self.closed = False
+
+            def close(self):
+                self.close_count += 1
+                self.closed = True
+                if self.failure is not None:
+                    raise self.failure
+
+        launch_stdout = LaunchCleanupResource(
+            "stdout", KeyboardInterrupt("stdout close interrupt"))
+        launch_stderr = LaunchCleanupResource("stderr")
+        launch_artifacts = LaunchCleanupResource(
+            "artifacts", SystemExit(83))
+        launch_tree = LaunchCleanupResource(
+            "tree", LabError("tree close failure"))
+        launch_errors, launch_terminal = _close_job_launch_resources(
+            launch_stdout, launch_stderr, launch_artifacts, True, launch_tree)
+        if (not isinstance(launch_terminal, KeyboardInterrupt) or
+                str(launch_terminal) != "stdout close interrupt" or
+                "tree close failure" not in "; ".join(launch_errors) or
+                any(resource.close_count != 1 for resource in (
+                    launch_stdout, launch_stderr, launch_artifacts,
+                    launch_tree)) or
+                not any(
+                    "later launch-resource cleanup terminal" in note and
+                    "SystemExit" in note
+                    for note in getattr(launch_terminal, "__notes__", ()))):
+            raise LabError(
+                "self-test: launch-resource cleanup lost terminal ordering "
+                "or skipped a later resource")
+
         stat_fields = ["S"] + [str(value) for value in range(1, 20)]
         parsed_stat = _parse_linux_proc_stat(
             "123 (command ) with spaces) " + " ".join(stat_fields))
@@ -2608,6 +5150,392 @@ def self_test():
                 "session": 3, "starttime_ticks": 19}:
             raise LabError(
                 "self-test: /proc stat identity parser lost a field")
+
+        scan_sequence = iter((
+            [],
+            [{
+                "pid": 1 << 30, "state": "S", "ppid": os.getpid(),
+                "pgrp": 1 << 30, "session": 1 << 30,
+                "starttime_ticks": 1,
+            }],
+            [],
+        ))
+        original_current_contained = globals()[
+            "_current_contained_processes"]
+        try:
+            globals()["_current_contained_processes"] = (
+                lambda _active, _known, _proc_root="/proc",
+                       _excluded_runner_children=():
+                    next(scan_sequence, []))
+            quiet_race = _cleanup_active_descendants({
+                "contained_identities": {},
+            })
+        finally:
+            globals()["_current_contained_processes"] = \
+                original_current_contained
+        if quiet_race != {"detected": [1 << 30], "remaining": []}:
+            raise LabError(
+                "self-test: cleanup accepted one quiet scan before a "
+                "residual descendant appeared")
+
+        exceptional_pid = root / "exceptional-launch.pid"
+        exceptional_detached_pid = root / "exceptional-launch-detached.pid"
+        exceptional_command = (
+            "import os,pathlib,time; "
+            "child=os.fork(); "
+            "target={!r} if child else {!r}; "
+            "os.setsid() if not child else None; "
+            "text=pathlib.Path('/proc/self/stat').read_text("
+            "encoding='ascii'); close=text.rfind(')'); "
+            "start=int(text[close+2:].split()[19]); "
+            "pathlib.Path(target).write_text("
+            "str(os.getpid())+':'+str(start),encoding='ascii'); "
+            "time.sleep(60)"
+        ).format(
+            str(exceptional_pid), str(exceptional_detached_pid))
+        exceptional_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "exception-after-popen",
+                "command": [python, "-c", exceptional_command],
+            }],
+        })
+        original_sample_runtime = globals()["_sample_thread_runtime"]
+
+        def fail_after_popen(active_jobs, proc_root="/proc"):
+            if any(current["job"]["id"] == "exception-after-popen"
+                   for current in active_jobs):
+                deadline = time.monotonic() + 1.0
+                while ((not exceptional_pid.is_file() or
+                        not exceptional_detached_pid.is_file()) and
+                       time.monotonic() < deadline):
+                    time.sleep(0.01)
+                raise LabError("injected post-Popen failure")
+            return original_sample_runtime(active_jobs, proc_root)
+
+        try:
+            globals()["_sample_thread_runtime"] = fail_after_popen
+            try:
+                run_manifest(
+                    exceptional_manifest,
+                    root / "exceptional-launch-results", quiet=True)
+            except LabError as error:
+                if "injected post-Popen failure" not in str(error):
+                    raise
+            else:
+                raise LabError(
+                    "self-test: injected post-Popen failure was swallowed")
+        finally:
+            globals()["_sample_thread_runtime"] = original_sample_runtime
+        for label, identity_path in (
+                ("leader", exceptional_pid),
+                ("detached child", exceptional_detached_pid)):
+            try:
+                exceptional_fields = identity_path.read_text(
+                    encoding="ascii").split(":")
+                exceptional_process = (
+                    int(exceptional_fields[0]), int(exceptional_fields[1]))
+            except (OSError, ValueError, IndexError) as error:
+                raise LabError(
+                    "self-test: post-Popen {} did not publish an exact "
+                    "identity: {}".format(label, error)) from error
+            if _same_process_identity({
+                    "pid": exceptional_process[0],
+                    "starttime_ticks": exceptional_process[1],
+            }) is not None:
+                raise LabError(
+                    "self-test: internal post-Popen failure leaked its {}"
+                    .format(label))
+
+        constructor_pid = root / "constructor-launch.pid"
+        constructor_detached_pid = (
+            root / "constructor-launch-detached.pid")
+        constructor_command = (
+            "import os,pathlib,time; "
+            "child=os.fork(); "
+            "target={!r} if child else {!r}; "
+            "os.setsid() if not child else None; "
+            "text=pathlib.Path('/proc/self/stat').read_text("
+            "encoding='ascii'); close=text.rfind(')'); "
+            "start=int(text[close+2:].split()[19]); "
+            "pathlib.Path(target).write_text("
+            "str(os.getpid())+':'+str(start),encoding='ascii'); "
+            "time.sleep(60)"
+        ).format(
+            str(constructor_pid), str(constructor_detached_pid))
+        constructor_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "constructor-after-spawn",
+                "command": [python, "-c", constructor_command],
+            }],
+        })
+        original_popen = subprocess.Popen
+        handed_off_processes = []
+
+        def fail_after_spawn(*args, **kwargs):
+            process = original_popen(*args, **kwargs)
+            if (kwargs.get("env", {}).get("LEO2_LAB_JOB_ID") ==
+                    "constructor-after-spawn"):
+                handed_off_processes.append(process)
+                deadline = time.monotonic() + 1.0
+                while ((not constructor_pid.is_file() or
+                        not constructor_detached_pid.is_file()) and
+                       time.monotonic() < deadline):
+                    time.sleep(0.01)
+                raise LabError("injected Popen handoff failure")
+            return process
+
+        try:
+            subprocess.Popen = fail_after_spawn
+            constructor_summary = run_manifest(
+                constructor_manifest,
+                root / "constructor-launch-results", quiet=True)
+        finally:
+            subprocess.Popen = original_popen
+        for process in handed_off_processes:
+            process.poll()
+        if constructor_summary["outcomes"] != {
+                "launch_error": 1, "missing": 0}:
+            raise LabError(
+                "self-test: Popen handoff failure was not terminal: {}"
+                .format(constructor_summary["outcomes"]))
+        for label, identity_path in (
+                ("leader", constructor_pid),
+                ("detached child", constructor_detached_pid)):
+            try:
+                fields = identity_path.read_text(
+                    encoding="ascii").split(":")
+                record = {
+                    "pid": int(fields[0]),
+                    "starttime_ticks": int(fields[1]),
+                }
+            except (OSError, ValueError, IndexError) as error:
+                raise LabError(
+                    "self-test: Popen handoff {} did not publish an exact "
+                    "identity: {}".format(label, error)) from error
+            if _same_process_identity(record) is not None:
+                raise LabError(
+                    "self-test: Popen handoff failure leaked its {}"
+                    .format(label))
+
+        def retained_descriptors():
+            descriptors = set()
+            for name in os.listdir("/proc/self/fd"):
+                try:
+                    descriptor = int(name)
+                    os.fstat(descriptor)
+                except (OSError, ValueError):
+                    continue
+                descriptors.add(descriptor)
+            return descriptors
+
+        cleanup_failure_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "pre-popen-cleanup-failure",
+                "command": [python, "-c", "pass"],
+            }],
+        })
+        descriptors_before = retained_descriptors()
+        original_executable_match = globals()["_job_executable_matches"]
+        original_token_cleanup = globals()["_cleanup_containment_token"]
+        try:
+            globals()["_job_executable_matches"] = (
+                lambda _job: (_ for _ in ()).throw(
+                    LabError("injected pre-Popen failure")))
+            globals()["_cleanup_containment_token"] = (
+                lambda _token: (_ for _ in ()).throw(
+                    LabError("injected containment cleanup failure")))
+            try:
+                run_manifest(
+                    cleanup_failure_manifest,
+                    root / "pre-popen-cleanup-failure-results", quiet=True)
+            except LabError as error:
+                if "injected containment cleanup failure" not in str(error):
+                    raise
+            else:
+                raise LabError(
+                    "self-test: pre-Popen containment cleanup failure was "
+                    "swallowed")
+
+            globals()["_job_executable_matches"] = (
+                lambda _job: (_ for _ in ()).throw(SystemExit(84)))
+            globals()["_cleanup_containment_token"] = (
+                lambda _token: (_ for _ in ()).throw(
+                    LabError("ordinary cleanup after SystemExit")))
+            try:
+                _launch_job(
+                    cleanup_failure_manifest["jobs"][0],
+                    cleanup_failure_manifest["root"],
+                    root / "pre-popen-system-exit-results",
+                    "pre-popen-system-exit", None)
+            except SystemExit as error:
+                if (error.code != 84 or
+                        not any(
+                            "ordinary cleanup after SystemExit" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: pre-Popen cleanup replaced or lost "
+                        "primary SystemExit")
+            else:
+                raise LabError(
+                    "self-test: pre-Popen SystemExit was swallowed")
+
+            globals()["_job_executable_matches"] = (
+                lambda _job: (_ for _ in ()).throw(
+                    LabError("ordinary pre-Popen failure")))
+            globals()["_cleanup_containment_token"] = (
+                lambda _token: (_ for _ in ()).throw(
+                    KeyboardInterrupt("cleanup interrupt before Popen")))
+            try:
+                _launch_job(
+                    cleanup_failure_manifest["jobs"][0],
+                    cleanup_failure_manifest["root"],
+                    root / "pre-popen-cleanup-interrupt-results",
+                    "pre-popen-cleanup-interrupt", None)
+            except KeyboardInterrupt as error:
+                if (str(error) != "cleanup interrupt before Popen" or
+                        not any(
+                            "primary failure was LabError: ordinary "
+                            "pre-Popen failure" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: pre-Popen cleanup interrupt lost "
+                        "ordinary primary context")
+            else:
+                raise LabError(
+                    "self-test: pre-Popen cleanup interrupt was demoted")
+
+            if hasattr(signal, "pthread_sigmask"):
+                original_pthread_sigmask = signal.pthread_sigmask
+                original_popen_for_mask = subprocess.Popen
+                globals()["_job_executable_matches"] = lambda _job: True
+                globals()["_cleanup_containment_token"] = (
+                    lambda _token: {"detected": [], "remaining": []})
+                mask_calls = {"count": 0}
+
+                def ordinary_mask_restore_failure(how, requested):
+                    del how, requested
+                    mask_calls["count"] += 1
+                    if mask_calls["count"] == 1:
+                        return set()
+                    raise LabError("injected signal-mask restore failure")
+
+                try:
+                    signal.pthread_sigmask = ordinary_mask_restore_failure
+                    subprocess.Popen = (
+                        lambda *_args, **_kwargs: (
+                            (_ for _ in ()).throw(SystemExit(85))))
+                    try:
+                        _launch_job(
+                            cleanup_failure_manifest["jobs"][0],
+                            cleanup_failure_manifest["root"],
+                            root / "popen-system-exit-mask-results",
+                            "popen-system-exit-mask", None)
+                    except SystemExit as error:
+                        if (error.code != 85 or
+                                not any(
+                                    "signal-mask restore failure" in note
+                                    for note in getattr(
+                                        error, "__notes__", ()))):
+                            raise LabError(
+                                "self-test: signal-mask cleanup replaced or "
+                                "lost primary SystemExit")
+                    else:
+                        raise LabError(
+                            "self-test: Popen SystemExit was swallowed")
+
+                    mask_calls["count"] = 0
+
+                    def interrupting_mask_restore(how, requested):
+                        del how, requested
+                        mask_calls["count"] += 1
+                        if mask_calls["count"] == 1:
+                            return set()
+                        raise KeyboardInterrupt(
+                            "signal-mask restoration interrupt")
+
+                    signal.pthread_sigmask = interrupting_mask_restore
+                    subprocess.Popen = (
+                        lambda *_args, **_kwargs: (
+                            (_ for _ in ()).throw(
+                                LabError("ordinary Popen failure"))))
+                    try:
+                        _launch_job(
+                            cleanup_failure_manifest["jobs"][0],
+                            cleanup_failure_manifest["root"],
+                            root / "popen-mask-interrupt-results",
+                            "popen-mask-interrupt", None)
+                    except KeyboardInterrupt as error:
+                        if (str(error) !=
+                                "signal-mask restoration interrupt" or
+                                not any(
+                                    "primary failure was LabError: ordinary "
+                                    "Popen failure" in note
+                                    for note in getattr(
+                                        error, "__notes__", ()))):
+                            raise LabError(
+                                "self-test: signal-mask cleanup interrupt "
+                                "lost ordinary Popen context")
+                    else:
+                        raise LabError(
+                            "self-test: signal-mask cleanup interrupt was "
+                            "demoted")
+                finally:
+                    signal.pthread_sigmask = original_pthread_sigmask
+                    subprocess.Popen = original_popen_for_mask
+        finally:
+            globals()["_job_executable_matches"] = original_executable_match
+            globals()["_cleanup_containment_token"] = original_token_cleanup
+        gc.collect()
+        descriptors_after = retained_descriptors()
+        if descriptors_after != descriptors_before:
+            raise LabError(
+                "self-test: pre-Popen cleanup failure leaked descriptors {}"
+                .format(sorted(descriptors_after - descriptors_before)))
+
+        interrupt_later = root / "interrupt-later-ran.txt"
+        interrupt_manifest = build_manifest({
+            "root": str(root), "workers": 1,
+            "defaults": {"memory_mb": 0, "cpu_count": 1},
+            "jobs": [{
+                "id": "interrupt-before-launch",
+                "command": [python, "-c", "pass"],
+            }, {
+                "id": "must-not-run-after-interrupt",
+                "command": [
+                    python, "-c",
+                    "import pathlib; pathlib.Path({!r}).write_text('bad')"
+                    .format(str(interrupt_later))],
+            }],
+        })
+        original_new_observation = globals()["_new_thread_observation"]
+
+        def interrupt_before_launch(job, *args, **kwargs):
+            if job["id"] == "interrupt-before-launch":
+                raise KeyboardInterrupt()
+            return original_new_observation(job, *args, **kwargs)
+
+        try:
+            globals()["_new_thread_observation"] = interrupt_before_launch
+            interrupt_summary = run_manifest(
+                interrupt_manifest,
+                root / "interrupt-before-launch-results", quiet=True)
+        finally:
+            globals()["_new_thread_observation"] = original_new_observation
+        if (not interrupt_summary["interrupted"] or
+                interrupt_summary["executed"] != 0 or
+                interrupt_summary["pending"] != 2 or
+                interrupt_summary["outcomes"] != {"missing": 2} or
+                interrupt_later.exists()):
+            raise LabError(
+                "self-test: pre-launch KeyboardInterrupt was swallowed, "
+                "miscounted, or allowed later work: {}".format(
+                    interrupt_summary))
 
         def expect_bad_thread_spec(fragment, label):
             candidate = {
@@ -2811,19 +5739,87 @@ def self_test():
             raise LabError(
                 "self-test: oversubscription evidence did not record the team")
 
-        def residual_command(marker, detached):
-            child = (
-                "import pathlib,time; time.sleep(0.45); "
-                "pathlib.Path({!r}).write_text('escaped',encoding='utf-8')"
-            ).format(str(marker))
+        def residual_command(ready_marker, escaped_marker, detached):
+            # A pipe binds the readiness payload to the exact forked child.
+            # The parent validates it before atomically publishing the marker,
+            # then deliberately exits without waiting so the runner must find
+            # and clean the residual process.  Avoid Popen here: its expected
+            # live-child ResourceWarning would make the warnings-as-errors
+            # self-test noisy without adding containment coverage.
             return (
-                "import subprocess,sys; "
-                "subprocess.Popen([sys.executable,'-c',{!r}],"
-                "start_new_session={!r})"
-            ).format(child, detached)
+                "import os,pathlib,select,signal\n"
+                "ready=pathlib.Path({!r})\n"
+                "escaped=pathlib.Path({!r})\n"
+                "read_fd,write_fd=os.pipe()\n"
+                "pid=os.fork()\n"
+                "if pid==0:\n"
+                "    os.close(read_fd)\n"
+                "    try:\n"
+                "        if {!r}:\n"
+                "            os.setsid()\n"
+                "        text=pathlib.Path('/proc/self/stat').read_text("
+                "encoding='ascii')\n"
+                "        close_paren=text.rindex(')')\n"
+                "        fields=text[close_paren+1:].split()\n"
+                "        if len(fields)<20:\n"
+                "            raise RuntimeError('short /proc/self/stat')\n"
+                "        starttime=int(fields[19],10)\n"
+                "        if starttime<=0:\n"
+                "            raise RuntimeError('invalid process start time')\n"
+                "        payload=(str(os.getpid())+':'+str(starttime)).encode("
+                "'ascii')\n"
+                "        if os.write(write_fd,payload)!=len(payload):\n"
+                "            raise RuntimeError('short readiness write')\n"
+                "        os.close(write_fd)\n"
+                "        import time\n"
+                "        time.sleep(10)\n"
+                "        escaped.write_text('escaped',encoding='utf-8')\n"
+                "    finally:\n"
+                "        os._exit(0)\n"
+                "os.close(write_fd)\n"
+                "try:\n"
+                "    readable,_,_=select.select([read_fd],[],[],5)\n"
+                "    if not readable:\n"
+                "        raise RuntimeError("
+                "'residual child did not publish readiness')\n"
+                "    payload=os.read(read_fd,128)\n"
+                "    fields=payload.decode('ascii').split(':')\n"
+                "    if (len(fields)!=2 or int(fields[0],10)!=pid or "
+                "int(fields[1],10)<=0):\n"
+                "        raise RuntimeError('invalid residual readiness')\n"
+                "    temporary=ready.with_name("
+                "ready.name+'.tmp-'+str(os.getpid()))\n"
+                "    fd=os.open(str(temporary),"
+                "os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)\n"
+                "    try:\n"
+                "        if os.write(fd,payload)!=len(payload):\n"
+                "            raise RuntimeError('short marker write')\n"
+                "        os.fsync(fd)\n"
+                "    finally:\n"
+                "        os.close(fd)\n"
+                "    os.replace(str(temporary),str(ready))\n"
+                "except BaseException:\n"
+                "    try:\n"
+                "        os.kill(pid,signal.SIGKILL)\n"
+                "    except ProcessLookupError:\n"
+                "        pass\n"
+                "    os.waitpid(pid,0)\n"
+                "    raise\n"
+                "finally:\n"
+                "    os.close(read_fd)\n"
+            ).format(
+                str(ready_marker), str(escaped_marker), detached)
+
+        def exact_residual_is_live(pid, starttime_ticks):
+            parsed = _parse_linux_proc_stat(
+                _read_text(Path("/proc") / str(pid) / "stat") or "")
+            return (
+                parsed is not None and parsed["pid"] == pid and
+                parsed["starttime_ticks"] == starttime_ticks)
 
         for label, detached in (
                 ("same-session", False), ("detached-session", True)):
+            ready_marker = root / ("residual-" + label + "-ready.txt")
             marker = root / ("residual-" + label + ".txt")
             residual_manifest = build_manifest({
                 "root": str(root), "workers": 1,
@@ -2831,7 +5827,8 @@ def self_test():
                 "jobs": [{
                     "id": "residual-" + label,
                     "command": [
-                        python, "-c", residual_command(marker, detached)],
+                        python, "-c", residual_command(
+                            ready_marker, marker, detached)],
                 }],
             })
             residual_output = root / ("residual-" + label + "-results")
@@ -2840,14 +5837,59 @@ def self_test():
             residual_result = _load_json(
                 _job_directory(
                     residual_output, "residual-" + label) / "result.json")
-            time.sleep(0.5)
-            if (residual_summary["outcomes"] != {
-                    "evidence_invalid": 1, "missing": 0} or
-                    "residual descendants" not in
-                    residual_result.get("detail", "") or marker.exists()):
+            try:
+                ready_fields = ready_marker.read_text(
+                    encoding="ascii").split(":")
+                if len(ready_fields) != 2:
+                    raise ValueError("wrong field count")
+                residual_pid = int(ready_fields[0], 10)
+                residual_starttime = int(ready_fields[1], 10)
+                if residual_pid <= 0 or residual_starttime <= 0:
+                    raise ValueError("non-positive process identity")
+            except (OSError, ValueError) as error:
                 raise LabError(
-                    "self-test: {} residual process escaped cleanup: {}".format(
-                        label, residual_summary["outcomes"]))
+                    "self-test: {} residual readiness is invalid: {}".format(
+                        label, error)) from error
+            runner_left_residual = False
+            cleanup_failed = False
+            try:
+                deadline = time.monotonic() + 1.0
+                while (exact_residual_is_live(
+                        residual_pid, residual_starttime) and
+                        time.monotonic() < deadline):
+                    time.sleep(0.02)
+                runner_left_residual = exact_residual_is_live(
+                    residual_pid, residual_starttime)
+                detail = residual_result.get("detail", "")
+                if (residual_summary["outcomes"] != {
+                        "evidence_invalid": 1, "missing": 0} or
+                        "residual descendants" not in detail or
+                        "cleanup remaining none" not in detail or
+                        runner_left_residual or marker.exists()):
+                    raise LabError(
+                        "self-test: {} residual process escaped cleanup: "
+                        "{}".format(label, residual_summary["outcomes"]))
+            finally:
+                if exact_residual_is_live(
+                        residual_pid, residual_starttime):
+                    residual_identity = {
+                        "pid": residual_pid,
+                        "starttime_ticks": residual_starttime,
+                    }
+                    _signal_process_identity(
+                        residual_identity, signal.SIGKILL)
+                    kill_deadline = time.monotonic() + 1.0
+                    while (exact_residual_is_live(
+                            residual_pid, residual_starttime) and
+                            time.monotonic() < kill_deadline):
+                        _reap_process_identity(residual_identity)
+                        time.sleep(0.02)
+                    cleanup_failed = exact_residual_is_live(
+                        residual_pid, residual_starttime)
+                if cleanup_failed:
+                    raise LabError(
+                        "self-test: {} residual emergency cleanup failed"
+                        .format(label))
 
         quarantine_pid = root / "quarantine-child.pid"
         quarantine_later = root / "quarantine-later-ran.txt"
@@ -2892,7 +5934,30 @@ def self_test():
                 try:
                     escaped_pid = int(
                         quarantine_pid.read_text(encoding="utf-8"))
-                    os.kill(escaped_pid, signal.SIGKILL)
+                    escaped_record = _parse_linux_proc_stat(
+                        _read_text(
+                            Path("/proc") / str(escaped_pid) / "stat") or "")
+                    if escaped_record is not None:
+                        escaped_identity = {
+                            "pid": escaped_record["pid"],
+                            "starttime_ticks":
+                                escaped_record["starttime_ticks"],
+                        }
+                        _signal_process_identity(
+                            escaped_identity, signal.SIGKILL)
+                        escaped_deadline = time.monotonic() + 1.0
+                        while (exact_residual_is_live(
+                                escaped_identity["pid"],
+                                escaped_identity["starttime_ticks"]) and
+                                time.monotonic() < escaped_deadline):
+                            _reap_process_identity(escaped_identity)
+                            time.sleep(0.02)
+                        if exact_residual_is_live(
+                                escaped_identity["pid"],
+                                escaped_identity["starttime_ticks"]):
+                            raise LabError(
+                                "self-test: quarantine emergency cleanup "
+                                "failed")
                 except (OSError, ValueError):
                     pass
         if (quarantine_summary["outcomes"] != {
@@ -2903,6 +5968,42 @@ def self_test():
             raise LabError(
                 "self-test: residual containment failure did not quarantine "
                 "later work")
+
+        unrelated = subprocess.Popen(
+            [python, "-c", "import time; time.sleep(60)"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL)
+        try:
+            unrelated_manifest = build_manifest({
+                "root": str(root), "workers": 1,
+                "defaults": {"memory_mb": 0, "cpu_count": 1},
+                "jobs": [{
+                    "id": "must-not-own-unrelated-child",
+                    "command": [python, "-c", "raise SystemExit(0)"],
+                }],
+            })
+            try:
+                run_manifest(
+                    unrelated_manifest,
+                    root / "unrelated-child-results", quiet=True)
+            except LabError as error:
+                if "pre-existing direct children" not in str(error):
+                    raise
+            else:
+                raise LabError(
+                    "self-test: runner accepted an unrelated direct child")
+            if unrelated.poll() is not None:
+                raise LabError(
+                    "self-test: runner terminated an unrelated direct child")
+        finally:
+            if unrelated.poll() is None:
+                unrelated.terminate()
+            try:
+                unrelated.wait(timeout=1.0)
+            except subprocess.TimeoutExpired:
+                unrelated.kill()
+                unrelated.wait(timeout=1.0)
 
         if len(_allowed_cpus()[0]) >= 3:
             available = _allowed_cpus()[0]
@@ -3094,6 +6195,104 @@ def self_test():
                     "self-test: a non-leader thread affinity escape was "
                     "accepted")
 
+        residual_perf_identity = root / "residual-perf-child.txt"
+        residual_perf_marker = root / "residual-perf-workload-ran.txt"
+        residual_perf = root / "residual-perf.py"
+        residual_perf.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, pathlib, time\n"
+            "identity = pathlib.Path({!r})\n"
+            "child = os.fork()\n"
+            "if child == 0:\n"
+            "    os.setsid()\n"
+            "    null = os.open(os.devnull, os.O_RDWR)\n"
+            "    os.dup2(null, 0)\n"
+            "    if null > 2: os.close(null)\n"
+            "    text = pathlib.Path('/proc/self/stat').read_text()\n"
+            "    close = text.rfind(')')\n"
+            "    start = int(text[close + 2:].split()[19])\n"
+            "    identity.write_text(str(os.getpid()) + ':' + str(start))\n"
+            "    time.sleep(60)\n"
+            "    os._exit(0)\n"
+            "deadline = time.monotonic() + 1.0\n"
+            "while not identity.exists() and time.monotonic() < deadline:\n"
+            "    time.sleep(0.01)\n"
+            "raise SystemExit(1)\n".format(str(residual_perf_identity)),
+            encoding="utf-8")
+        residual_perf.chmod(0o700)
+        residual_perf_manifest = build_manifest({
+            "root": str(root),
+            "workers": 1,
+            "defaults": {
+                "memory_mb": 0,
+                "cpu_count": 1,
+                "performance_counters": {
+                    "provider": PERF_PROVIDER,
+                    "command": str(residual_perf),
+                    "events": ["cycles"],
+                    "optional": False,
+                },
+            },
+            "jobs": [{
+                "id": "residual-perf",
+                "command": [
+                    python, "-c",
+                    "import pathlib; pathlib.Path({!r}).write_text('bad')"
+                    .format(str(residual_perf_marker))],
+            }],
+        })
+        residual_perf_record = None
+        try:
+            residual_perf_started = time.monotonic()
+            residual_perf_summary = run_manifest(
+                residual_perf_manifest,
+                root / "residual-perf-results", quiet=True)
+            residual_perf_elapsed = time.monotonic() - residual_perf_started
+            fields = residual_perf_identity.read_text(
+                encoding="ascii").split(":")
+            residual_perf_record = {
+                "pid": int(fields[0]),
+                "starttime_ticks": int(fields[1]),
+            }
+            residual_result = _load_json(
+                _job_directory(
+                    root / "residual-perf-results", "residual-perf") /
+                "result.json")
+            if (residual_perf_summary["outcomes"] != {
+                    "missing": 0, "unavailable": 1} or
+                    residual_perf_elapsed > 3.0 or
+                    residual_perf_marker.exists() or
+                    "residual descendants" not in
+                    residual_result.get(
+                        "performance_counters", {}).get(
+                            "probe", {}).get("detail", "") or
+                    _same_process_identity(residual_perf_record) is not None):
+                raise LabError(
+                    "self-test: perf preflight residual descendant was not "
+                    "cleaned and rejected")
+        finally:
+            if (residual_perf_record is None and
+                    residual_perf_identity.is_file()):
+                try:
+                    fields = residual_perf_identity.read_text(
+                        encoding="ascii").split(":")
+                    residual_perf_record = {
+                        "pid": int(fields[0]),
+                        "starttime_ticks": int(fields[1]),
+                    }
+                except (OSError, ValueError, IndexError):
+                    residual_perf_record = None
+            if (residual_perf_record is not None and
+                    _same_process_identity(residual_perf_record) is not None):
+                try:
+                    os.kill(residual_perf_record["pid"], signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+                try:
+                    os.waitpid(residual_perf_record["pid"], 0)
+                except ChildProcessError:
+                    pass
+
         fake_perf = root / "fake-perf.py"
         fake_perf.write_text(
             "#!/usr/bin/env python3\n"
@@ -3144,6 +6343,57 @@ def self_test():
                 _file_identity(fake_perf)):
             raise LabError(
                 "self-test: performance counter executable was not content-addressed")
+
+        original_subprocess_run = subprocess.run
+        original_counter_token_cleanup = globals()[
+            "_cleanup_containment_token"]
+        try:
+            subprocess.run = (
+                lambda *_args, **_kwargs: (
+                    (_ for _ in ()).throw(SystemExit(86))))
+            globals()["_cleanup_containment_token"] = (
+                lambda _token: (_ for _ in ()).throw(
+                    LabError("ordinary perf cleanup failure")))
+            try:
+                _probe_performance_counters(counter_job)
+            except SystemExit as error:
+                if (error.code != 86 or
+                        not any(
+                            "ordinary perf cleanup failure" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: perf cleanup replaced or lost primary "
+                        "SystemExit")
+            else:
+                raise LabError(
+                    "self-test: perf probe SystemExit was swallowed")
+
+            subprocess.run = (
+                lambda *_args, **_kwargs: (
+                    (_ for _ in ()).throw(
+                        LabError("ordinary perf probe failure"))))
+            globals()["_cleanup_containment_token"] = (
+                lambda _token: (_ for _ in ()).throw(
+                    KeyboardInterrupt("perf cleanup interrupt")))
+            try:
+                _probe_performance_counters(counter_job)
+            except KeyboardInterrupt as error:
+                if (str(error) != "perf cleanup interrupt" or
+                        not any(
+                            "primary failure was LabError: ordinary perf "
+                            "probe failure" in note
+                            for note in getattr(error, "__notes__", ()))):
+                    raise LabError(
+                        "self-test: perf cleanup interrupt lost ordinary "
+                        "probe context")
+            else:
+                raise LabError(
+                    "self-test: perf cleanup interrupt was demoted")
+        finally:
+            subprocess.run = original_subprocess_run
+            globals()["_cleanup_containment_token"] = (
+                original_counter_token_cleanup)
+
         counter_output = root / "counter-results"
         counter_summary = run_manifest(
             counter_manifest, counter_output, quiet=True)
@@ -3483,6 +6733,30 @@ def self_test():
         merge_results(first_manifest, output_dir, second_merge)
         if first_merge.read_bytes() != second_merge.read_bytes():
             raise LabError("self-test: merge output is not deterministic")
+        external_merge = root / "external-merge" / "merged.json"
+        merge_results(
+            first_manifest, output_dir, external_merge)
+        if external_merge.read_bytes() != first_merge.read_bytes():
+            raise LabError(
+                "self-test: external merge output changed public behavior")
+        external_merge_victim = root / "external-merge-victim"
+        external_merge_victim.mkdir()
+        external_merge_link = root / "external-merge-link"
+        external_merge_link.symlink_to(
+            external_merge_victim, target_is_directory=True)
+        try:
+            merge_results(
+                first_manifest, output_dir,
+                external_merge_link / "merged.json")
+        except LabError:
+            pass
+        else:
+            raise LabError(
+                "self-test: external merge followed a symlinked parent")
+        if any(external_merge_victim.iterdir()):
+            raise LabError(
+                "self-test: external merge redirected evidence through a "
+                "symlink")
         plan = _dry_run_plan(first_manifest, output_dir, rerun_failed=False)
         if any(job["action"] != "resume" for job in plan["jobs"]):
             raise LabError("self-test: dry-run did not identify resumable jobs")
