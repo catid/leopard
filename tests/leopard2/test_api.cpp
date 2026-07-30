@@ -56,6 +56,10 @@
 #define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 2048
+#endif
+
 #ifndef LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
 #define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
 #endif
@@ -1024,7 +1028,9 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
             const bool experimental_equal_rounded_source_major =
                 LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0 &&
                 test.k > 16 && padded_k == padded_r &&
-                test.losses >= 2 && test.bytes >= 2048;
+                test.k != 65 && test.losses >= 2 &&
+                test.bytes >=
+                    LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES;
             const bool experimental_small_source_major =
                 test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
@@ -1889,7 +1895,9 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
         17, 31, 32, 33, 64, 66, 96, 127, 128
     };
     static const unsigned equal_rounded_losses[] = { 2, 4, 8 };
-    static const size_t equal_rounded_bytes[] = { 64, 2049 };
+    static const size_t equal_rounded_bytes[] = {
+        1, 7, 31, 32, 33, 63, 64, 65, 2047, 2048, 2049
+    };
     for (size_t count_i = 0;
          count_i < sizeof(equal_rounded_counts) /
              sizeof(equal_rounded_counts[0]); ++count_i)

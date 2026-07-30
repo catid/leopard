@@ -1,0 +1,155 @@
+{
+  "schema": "leopard2-equal-rounded-tail-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.30",
+  "status": "default-off experiment; directional screen only",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K_values": [
+      31,
+      64,
+      128
+    ],
+    "R": "equal to K",
+    "loss_counts": [
+      2,
+      8
+    ],
+    "shard_bytes": [
+      31,
+      32,
+      63,
+      64,
+      2047,
+      2048
+    ],
+    "reuse": 8,
+    "cells": 36,
+    "benchmark_invocations": 108
+  },
+  "implementation": {
+    "selector_macro": "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS",
+    "tail_macro": "LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE",
+    "tail_tile_bytes": 32,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "default_build_changed": false,
+    "aligned_executor_elf_bytes": 1365,
+    "scalar_control_aligned_executor_elf_bytes": 1365,
+    "tail_outer_executor_elf_bytes": 1762,
+    "tail_helper_elf_bytes": 1088,
+    "design": "route non-multiple-of-32 equal-rounded experimental calls to a separate executor; retain the exact established aligned/K=65 source-major executor"
+  },
+  "identity": {
+    "base_commit": "84fac4be5022ee042d95c809f2e2647bbfd205dd",
+    "working_diff_sha256": "fa7d4575596a3c380cb96798d8e18799531d824021a1c9b33ee2657b507075b8",
+    "leopard2_cpp_sha256": "6282fdec10f7a203d28d8618796e44a7834a2fe59738cd6df1fb0807ade249a7",
+    "test_api_cpp_sha256": "ca106744abc4df1809f8e6e7870bc8325bec764ca56edd622d76d65aa03d6f90",
+    "transform_executable_sha256": "77b44cf36f1b4b1c4827e11a2c4ba5aa76e4682580fccc3f7a8ca8806c5c3449",
+    "scalar_tail_executable_sha256": "a3068e64805bc7fa767080d8190c1eb80702e931be40dae1b588c213ce4ff4f3",
+    "split_tail_executable_sha256": "5a06717b0e5469976716c88bb4fd7ef39b20c32a583c8c38e4757a5a88e0b8f8",
+    "frozen_binary_hashes_verified_after_timing": true,
+    "raw_artifact_directory": "/tmp/leopard2-equal-rounded-tail-split-screen-v1-20260730"
+  },
+  "correctness": {
+    "experimental_api_oracle_passed": true,
+    "experimental_api_oracle_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486
+    },
+    "default_off_api_oracle_passed": true,
+    "default_off_api_oracle_summary": {
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 1921,
+      "plan_executions": 457,
+      "tail_cases": 243
+    },
+    "all_benchmark_round_trips_passed": true,
+    "all_within_cell_workload_digests_equal": true,
+    "selected_paths_verified": true
+  },
+  "directional_screen": {
+    "authority": "non-authoritative; serialized and pinned but not accepted for promotion because coordinator-exclusion bead leopard-79h.38.5.10.31 remains open",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "iterations_per_invocation": 9,
+    "warmups_per_invocation": 2,
+    "transform_over_split_tail_execution_speedup": {
+      "minimum": 1.278481,
+      "median": 2.466499,
+      "maximum": 6.518692
+    },
+    "tail_cells_only": {
+      "transform_over_split_tail_execution_speedup": {
+        "minimum": 1.278481,
+        "median": 2.348398,
+        "maximum": 5.858929
+      },
+      "scalar_tail_over_split_tail_execution_speedup": {
+        "minimum": 1.063427,
+        "median": 1.806209,
+        "maximum": 3.422791
+      }
+    },
+    "aligned_cells_only": {
+      "transform_over_split_tail_execution_speedup": {
+        "minimum": 1.870775,
+        "median": 2.996405,
+        "maximum": 6.518692
+      },
+      "scalar_tail_over_split_tail_execution_speedup": {
+        "minimum": 0.931474,
+        "median": 0.997446,
+        "maximum": 1.020080
+      },
+      "interpretation": "the median is neutral and the compiled aligned executor is identical in address and size; the single-run extrema are timing noise and are not promotion evidence"
+    },
+    "derived_reuse_one_transform_over_candidate": {
+      "minimum": 0.899534,
+      "median": 2.979799,
+      "maximum": 6.642208,
+      "weakest_cell": {
+        "K": 31,
+        "R": 31,
+        "loss_count": 8,
+        "shard_bytes": 63
+      }
+    }
+  },
+  "resource_policy": {
+    "reason": "repeated interactive-host OOMs required serial bounded validation",
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "build_parallelism_max": 2,
+    "benchmark_processes_at_once": 1,
+    "build_memory_limit_bytes": 2147483648,
+    "test_memory_limit_bytes": 2147483648,
+    "benchmark_scope_memory_limit_bytes": 1073741824,
+    "benchmark_process_address_space_limit_bytes": 805306368,
+    "experimental_build_peak_bytes": 366215168,
+    "experimental_test_peak_bytes": 827015168,
+    "directional_screen_peak_bytes": 12718080,
+    "default_build_peak_bytes": 435843072,
+    "default_test_peak_bytes": 826892288,
+    "all_scope_memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0
+    }
+  },
+  "decision": {
+    "tail_execution": "promising; retain for authoritative rescreen",
+    "production_promotion": false,
+    "remaining_blocker": "first-use direct-plan setup still regresses K=31, loss_count=8 at tiny byte counts",
+    "next_experiment": "cache code-dependent GF8 generator rows in the immutable codec so per-erasure plan construction avoids repeating dense generator setup"
+  }
+}

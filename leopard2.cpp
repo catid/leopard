@@ -91,6 +91,20 @@
     LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS > 1
 #error "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS must be 0 or 1"
 #endif
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES 2048
+#endif
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES < 1
+#error "LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES must be positive"
+#endif
+
+#ifndef LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+#define LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE 0
+#endif
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE < 0 || \
+    LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE > 1
+#error "LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE must be 0 or 1"
+#endif
 
 class leo2_thread_pool;
 
@@ -5918,6 +5932,255 @@ ExecuteGF8PreformattedSourceMajorDirectRepair(
 }
 #endif
 
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+static const size_t kSourceMajorTailTileBytes = 32;
+
+static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
+ExecuteGF8SourceMajorDirectRepairTail(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    size_t execution_bytes,
+    const uint32_t* sources,
+    const uint16_t* source_logs,
+    size_t source_count,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* outputs)
+{
+    const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const uint32_t output_count = plan->missing_original_count;
+    const size_t tail_bytes = shard_bytes - execution_bytes;
+    if (tail_bytes == 0 || tail_bytes >= kSourceMajorTailTileBytes)
+        return LEO2_INTERNAL_ERROR;
+
+    alignas(kScratchAlignment)
+        uint8_t source_tile[kSourceMajorTailTileBytes];
+    alignas(kScratchAlignment)
+        uint8_t output_tiles
+            [kDirectMaxRepairLosses][kSourceMajorTailTileBytes];
+    void* tail_outputs[kDirectMaxRepairLosses] = {};
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        tail_outputs[output_index] = output_tiles[output_index];
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const leo2_direct_repair_term& initial =
+            plan->direct_terms[begin];
+        const bool parity =
+            (initial.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            initial.tagged_source & ~kDirectRecoveryTag;
+        const uint8_t* source = static_cast<const uint8_t*>(
+            parity ? recovery[source_index] : original[source_index]);
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        memcpy(source_tile, source + execution_bytes, tail_bytes);
+        memset(source_tile + tail_bytes, 0,
+            sizeof(source_tile) - tail_bytes);
+        if (initial.multiplier_log == 0)
+        {
+            memcpy(output_tiles[output_index],
+                source_tile, sizeof(source_tile));
+        }
+        else
+        {
+            leopard::ff8::MultiplyBytes(
+                ops, output_tiles[output_index], source_tile,
+                static_cast<leopard::ff8::ffe_t>(
+                    initial.multiplier_log),
+                sizeof(source_tile));
+        }
+    }
+    for (size_t source_row = 0;
+         source_row < source_count; ++source_row)
+    {
+        const uint32_t tagged_source = sources[source_row];
+        const bool parity =
+            (tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            tagged_source & ~kDirectRecoveryTag;
+        const uint8_t* source = static_cast<const uint8_t*>(
+            parity ? recovery[source_index] : original[source_index]);
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        memcpy(source_tile, source + execution_bytes, tail_bytes);
+        memset(source_tile + tail_bytes, 0,
+            sizeof(source_tile) - tail_bytes);
+        ops.ff8_multiply_add_outputs(
+            tail_outputs, source_tile,
+            source_logs + source_row * output_count,
+            output_count, sizeof(source_tile));
+    }
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        memcpy(static_cast<uint8_t*>(outputs[output_index]) +
+                execution_bytes,
+            output_tiles[output_index], tail_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+#endif
+
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
+ExecuteGF8SourceMajorTiledTailDirectRepair(
+    const leo2_decode_plan* plan,
+    size_t shard_bytes,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original)
+{
+    const leo2_codec* codec = plan->codec;
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const uint32_t output_count = plan->missing_original_count;
+    if (output_count < 2 || output_count > kDirectMaxRepairLosses ||
+        codec->original_count > kDirectMaxParentDimension ||
+        codec->recovery_count > kDirectMaxParentDimension ||
+        plan->missing_originals.size() != output_count ||
+        plan->direct_term_offsets.size() !=
+            static_cast<size_t>(output_count) + 1U ||
+        plan->direct_term_offsets.front() != 0 ||
+        plan->direct_term_offsets.back() != plan->direct_terms.size())
+        return LEO2_INTERNAL_ERROR;
+
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+    const bool tiled_tail =
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+        (shard_bytes & (kSourceMajorTailTileBytes - 1U)) != 0;
+    const size_t execution_bytes = tiled_tail
+        ? shard_bytes & ~(kSourceMajorTailTileBytes - 1U)
+        : shard_bytes;
+#else
+    const size_t execution_bytes = shard_bytes;
+#endif
+
+    // Preserve the compact immutable output-major plan because it is faster
+    // for short shards and has no extra cold-plan allocation.  For a large
+    // execution, transpose its at-most K*L coefficients into a bounded stack
+    // schedule.  Direct repair uses L selected parities and K-L surviving
+    // originals, so the union contains at most K rows.
+    uint32_t sources[kDirectMaxParentDimension] = {};
+    uint16_t original_source_rows[kDirectMaxParentDimension];
+    uint16_t recovery_source_rows[kDirectMaxParentDimension];
+    uint16_t source_logs[
+        kDirectMaxParentDimension * kDirectMaxRepairLosses];
+    std::fill(original_source_rows,
+        original_source_rows + codec->original_count, UINT16_MAX);
+    std::fill(recovery_source_rows,
+        recovery_source_rows + codec->recovery_count, UINT16_MAX);
+    const size_t maximum_source_logs =
+        static_cast<size_t>(codec->original_count) * output_count;
+    std::fill(source_logs, source_logs + maximum_source_logs, UINT16_MAX);
+    size_t source_count = 0;
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const size_t end = plan->direct_term_offsets[output_index + 1];
+        if (begin >= end || end > plan->direct_terms.size())
+            return LEO2_INTERNAL_ERROR;
+
+        // The output-major plan places a unit coefficient first when one
+        // exists.  Preserve that efficient copy/multiply initializer and
+        // transpose only the remaining accumulation.
+        for (size_t term_index = begin + 1;
+             term_index < end; ++term_index)
+        {
+            const leo2_direct_repair_term& term =
+                plan->direct_terms[term_index];
+            const bool parity =
+                (term.tagged_source & kDirectRecoveryTag) != 0;
+            const uint32_t source_index =
+                term.tagged_source & ~kDirectRecoveryTag;
+            if ((parity && source_index >= codec->recovery_count) ||
+                (!parity && source_index >= codec->original_count))
+                return LEO2_INTERNAL_ERROR;
+            uint16_t* source_row = parity
+                ? &recovery_source_rows[source_index]
+                : &original_source_rows[source_index];
+            if (*source_row == UINT16_MAX)
+            {
+                if (source_count >= codec->original_count)
+                    return LEO2_INTERNAL_ERROR;
+                *source_row = static_cast<uint16_t>(source_count);
+                sources[source_count++] = term.tagged_source;
+            }
+            source_logs[
+                static_cast<size_t>(*source_row) * output_count +
+                    output_index] = term.multiplier_log;
+        }
+    }
+    if (source_count == 0)
+        return LEO2_INTERNAL_ERROR;
+
+    void* outputs[kDirectMaxRepairLosses] = {};
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        const uint32_t missing_original =
+            plan->missing_originals[output_index];
+        if (missing_original >= codec->original_count)
+            return LEO2_INTERNAL_ERROR;
+        outputs[output_index] = restored_original[missing_original];
+        if (!outputs[output_index])
+            return LEO2_INTERNAL_ERROR;
+        const size_t begin = plan->direct_term_offsets[output_index];
+        const leo2_direct_repair_term& initial = plan->direct_terms[begin];
+        const bool parity =
+            (initial.tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index =
+            initial.tagged_source & ~kDirectRecoveryTag;
+        if ((parity && source_index >= codec->recovery_count) ||
+            (!parity && source_index >= codec->original_count))
+            return LEO2_INTERNAL_ERROR;
+        const void* source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        if (execution_bytes != 0)
+        {
+            if (initial.multiplier_log == 0)
+                memcpy(outputs[output_index], source, execution_bytes);
+            else
+                leopard::ff8::MultiplyBytes(
+                    ops, outputs[output_index], source,
+                    static_cast<leopard::ff8::ffe_t>(
+                        initial.multiplier_log),
+                    execution_bytes);
+        }
+    }
+
+    for (size_t source_row = 0;
+         source_row < source_count; ++source_row)
+    {
+        const uint32_t tagged_source = sources[source_row];
+        const bool parity = (tagged_source & kDirectRecoveryTag) != 0;
+        const uint32_t source_index = tagged_source & ~kDirectRecoveryTag;
+        const void* source = parity
+            ? recovery[source_index] : original[source_index];
+        if (!source)
+            return LEO2_INTERNAL_ERROR;
+        if (execution_bytes != 0)
+        {
+            ops.ff8_multiply_add_outputs(outputs, source,
+                source_logs + source_row * output_count,
+                output_count, execution_bytes);
+        }
+    }
+
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+    if (tiled_tail)
+        return ExecuteGF8SourceMajorDirectRepairTail(
+            plan, shard_bytes, execution_bytes, sources, source_logs,
+            source_count, original, recovery, outputs);
+#endif
+    return LEO2_SUCCESS;
+}
+#endif
+
 static LEO2_SOURCE_MAJOR_NOINLINE leo2_result
 ExecuteGF8SourceMajorDirectRepair(
     const leo2_decode_plan* plan,
@@ -6079,8 +6342,10 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
 #endif
         const bool experimental_equal_rounded =
 #if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
-            shard_bytes >= 2048 &&
-            IsMeasuredEqualRoundedDirectRepairCodec(codec);
+            shard_bytes >=
+                LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES &&
+            IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+            !IsExpandedDirectRepairCodec(codec);
 #else
             false;
 #endif
@@ -6135,7 +6400,28 @@ static LEO2_DIRECT_REPAIR_NOINLINE leo2_result ExecuteDirectRepair(
     }
     if (SelectDirectRepairExecutor(plan, shard_bytes) ==
             leopard2_internal::kDirectRepairExecutorSourceMajor)
+#if LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
+    {
+        if (!IsExpandedDirectRepairCodec(codec) &&
+            codec->context->backend == LEO2_BACKEND_AVX2 &&
+            IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+            (shard_bytes & (kSourceMajorTailTileBytes - 1U)) != 0)
+        {
+            return ExecuteGF8SourceMajorTiledTailDirectRepair(plan,
+                shard_bytes, original, recovery, restored_original);
+        }
 #if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+        if (!plan->direct_source_rows.empty())
+            return ExecuteGF8PreformattedSourceMajorDirectRepair(plan,
+                shard_bytes, original, recovery, restored_original);
+        return ExecuteGF8SourceMajorDirectRepair(plan, shard_bytes,
+            original, recovery, restored_original);
+#else
+        return ExecuteGF8SourceMajorDirectRepair(plan, shard_bytes,
+            original, recovery, restored_original);
+#endif
+    }
+#elif defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
     {
         if (!plan->direct_source_rows.empty())
             return ExecuteGF8PreformattedSourceMajorDirectRepair(plan,
