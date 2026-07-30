@@ -7322,8 +7322,10 @@ def validate_result(
                 legacy.get("unavailable_reason") == "disabled by --skip-legacy",
                 "candidate silently ran the in-tree legacy comparison")
     digests = validate_digest_object(value.get("workload_digests"))
-    require(digests["recovered_originals"] == digests["original_data"],
-            f"{implementation} recovered-original digest differs from its input")
+    # recovered_originals covers only the sorted missing-original set, while
+    # original_data covers every systematic shard.  Their values therefore
+    # differ for a partial-loss workload.  validate_raw_evidence compares the
+    # complete digest object across the independently built implementations.
     metrics = value.get("metrics")
     require(isinstance(metrics, dict), "metrics is not an object")
     iterations = int(campaign["iterations"])

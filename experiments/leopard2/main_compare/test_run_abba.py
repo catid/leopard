@@ -209,7 +209,9 @@ DIGESTS = {
     "algorithm": "fnv1a64",
     "original_data": "0123456789abcdef",
     "transmitted_parity": "1111111111111111",
-    "recovered_originals": "0123456789abcdef",
+    # This digest covers only missing originals, not the full original_data
+    # sequence.  A partial-loss workload must not require the two to match.
+    "recovered_originals": "2222222222222222",
 }
 RESERVATION_PAYLOAD = {
     "benchmark_cpu": 0,
@@ -4223,7 +4225,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 value["validity_is_independent_of_speed"] = replacement
                 self.assert_rejected(value)
 
-    def test_successful_round_trip_requires_matching_recovered_digest(self) -> None:
+    def test_successful_round_trip_requires_cross_codec_recovered_digest(self) -> None:
         value = synthetic_raw()
         value["invocations"][0]["result"]["workload_digests"][
             "recovered_originals"] = "f" * 16
@@ -4258,7 +4260,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         for name in ("original_data", "transmitted_parity", "recovered_originals"):
             with self.subTest(name=name):
                 value = synthetic_raw()
-                value["invocations"][1]["result"]["workload_digests"][name] = "2" * 16
+                value["invocations"][1]["result"]["workload_digests"][name] = "f" * 16
                 self.assert_rejected(value)
 
     def test_sample_mutations_rejected(self) -> None:
