@@ -1,0 +1,119 @@
+{
+  "schema": "leopard2.gf8_t4_fallback_closure.v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.35",
+  "decision": "codec_complete_pending_persistent_timing_isolation",
+  "source": {
+    "leopard2_commit": "29227e45a7de43e48f92b02775c68fbf1cafb712",
+    "leopard2_tree": "d1ff8eeed2334d1b32e66f2e0e1280b1d45f7a4a",
+    "leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "benchmark_source_sha256": "0da13bddcd8f064c0a80b8437b1e9ab7acc78e27253d1e75a794c49240899bd8",
+    "leopard2_archive_sha256": "b2c35ceb90562f9131b48916175e5aa128c56115b26207b2f5bdb9840db70489"
+  },
+  "binaries": {
+    "leopard2_sha256": "8675286cd4536f66f95fcbc4fa4346db200c0cc66c3075248b76910f0942c373",
+    "leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "hashes_verified_after_run": true,
+    "pure_avx2": true,
+    "zmm_opmask_gfni_or_vpternlog_matches": 0
+  },
+  "execution": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "pinned_cpu": 4,
+    "threads": 1,
+    "shard_bytes": 2048,
+    "reuse": 64,
+    "iterations_per_run": 401,
+    "warmup_calls": 16,
+    "order": "Leopard2, Leopard-main, Leopard-main, Leopard2",
+    "samples_per_variant_per_cell": 802,
+    "result_set_sha256": "8ba089346680532faf0732c7b0fd90eeed1dfa6de55c36a9de39d92886664357",
+    "all_round_trips_passed": true,
+    "all_workload_digests_matched": true
+  },
+  "exact_main_cells": [
+    {
+      "k": 12,
+      "r": 3,
+      "main_encode_median_us": 0.532672,
+      "leopard2_encode_median_us": 0.495875,
+      "main_over_leopard2_encode": 1.0742,
+      "encode_bootstrap_95_percent": [1.0655, 1.0770],
+      "main_decode_median_us": 2.260961,
+      "leopard2_reused_decode_median_us": 0.324062,
+      "main_over_leopard2_decode": 6.9769
+    },
+    {
+      "k": 12,
+      "r": 4,
+      "main_encode_median_us": 0.523594,
+      "leopard2_encode_median_us": 0.495398,
+      "main_over_leopard2_encode": 1.0569,
+      "encode_bootstrap_95_percent": [1.0553, 1.0853],
+      "main_decode_median_us": 2.290328,
+      "leopard2_reused_decode_median_us": 0.321719,
+      "main_over_leopard2_decode": 7.1190
+    },
+    {
+      "k": 15,
+      "r": 3,
+      "main_encode_median_us": 0.710016,
+      "leopard2_encode_median_us": 0.605469,
+      "main_over_leopard2_encode": 1.1727,
+      "encode_bootstrap_95_percent": [1.1707, 1.1745],
+      "main_decode_median_us": 4.493797,
+      "leopard2_reused_decode_median_us": 0.420312,
+      "main_over_leopard2_decode": 10.6916
+    },
+    {
+      "k": 15,
+      "r": 4,
+      "main_encode_median_us": 0.711891,
+      "leopard2_encode_median_us": 0.614851,
+      "main_over_leopard2_encode": 1.1578,
+      "encode_bootstrap_95_percent": [1.1563, 1.1594],
+      "main_decode_median_us": 4.517547,
+      "leopard2_reused_decode_median_us": 0.403524,
+      "main_over_leopard2_decode": 11.1953
+    }
+  ],
+  "route_and_wire_gate": {
+    "test": "leopard2_auto_encode_backend_test",
+    "new_exact_cases": [
+      {"k": 12, "r": 3, "bytes": 2048},
+      {"k": 12, "r": 4, "bytes": 2048},
+      {"k": 15, "r": 3, "bytes": 2048},
+      {"k": 15, "r": 4, "bytes": 2048}
+    ],
+    "result": "pass",
+    "assertions_per_case": [
+      "one AVX2 ff8_high_encode_small call for the aligned pass",
+      "expected zero avoidable input-copy shards",
+      "caller originals unchanged",
+      "bit-identical legacy Leopard parity",
+      "unaligned buffers match",
+      "sparse output masks retain their intended fallback",
+      "scalar and SSSE3 parity match when available"
+    ]
+  },
+  "memory_policy": {
+    "subworkers": 0,
+    "maximum_concurrent_substantial_processes": 1,
+    "maximum_build_jobs": 2,
+    "swap_allowed_per_scope": false,
+    "pure_avx2_build_memory_max_bytes": 2147483648,
+    "pure_avx2_build_peak_kib": 203556,
+    "benchmark_compile_memory_max_bytes": 1073741824,
+    "benchmark_compile_peak_kib": 159616,
+    "route_test_build_memory_max_bytes": 2147483648,
+    "route_test_build_peak_kib": 210720,
+    "route_test_memory_max_bytes": 1073741824,
+    "route_test_peak_kib": 213744,
+    "benchmark_memory_max_bytes": 268435456,
+    "benchmark_address_space_max_bytes": 201326592,
+    "new_cgroup_oom_events": 0,
+    "new_cgroup_oom_kills": 0
+  },
+  "conclusion": "All literal T=4 codec and selector gaps are closed and every exact-main point clears the 5 percent target. The Bead remains open only because current policy requires replay after persistent coordinator/session containment in leopard-79h.38.5.10.31; these directional timings must not be relabeled authoritative."
+}

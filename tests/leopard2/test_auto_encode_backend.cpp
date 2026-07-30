@@ -1140,7 +1140,12 @@ void test_small_high_encode(
         { 9, 4, 2048 },
         { 10, 3, 2049 },
         { 11, 4, 2048 },
+        // Final T=4 exact-main fallback-map closure cells.
+        { 12, 3, 2048 },
+        { 12, 4, 2048 },
         { 12, 3, 2049 },
+        { 15, 3, 2048 },
+        { 15, 4, 2048 },
         // Retain the previously qualified interior and upper-bound cases.
         { 64, 2, 4096 },
         { 64, 3, 4097 },
