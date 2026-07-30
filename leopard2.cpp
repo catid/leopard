@@ -167,6 +167,19 @@
 #endif
 
 /*
+    Text-layout-neutral discovery control for extending the two-block T=8
+    binding above 320 bytes.  The provisional broad range is narrowed by the
+    authoritative crossover campaign before promotion.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -571,6 +584,8 @@ static volatile uint32_t g_high_t8_two_block_128_192_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192;
 static volatile uint32_t g_high_t8_two_block_320_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320;
+static volatile uint32_t g_high_t8_two_block_extended_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED;
 
 static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 {
@@ -584,6 +599,10 @@ static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
         return true;
 #endif
     if (shard_bytes == 320 && g_high_t8_two_block_320_mode == 1U)
+        return true;
+    if (shard_bytes >= 384 && shard_bytes <= 1024 &&
+        (shard_bytes & 63U) == 0 &&
+        g_high_t8_two_block_extended_mode == 1U)
         return true;
     return false;
 }
@@ -9736,6 +9755,15 @@ bool HighT8TwoBlock320Enabled()
 #endif
 }
 
+bool HighT8TwoBlockExtendedEnabled()
+{
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    return g_high_t8_two_block_extended_mode == 1U;
+#else
+    return false;
+#endif
+}
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 bool GetDecodePlanPresenceStorageInfo(
     const leo2_decode_plan* plan,
@@ -9826,8 +9854,8 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
     void* const* recovery)
 {
     LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(shard_bytes));
-    alignas(32) static const uint8_t zero_shard[320] = {};
-    alignas(32) uint8_t discarded_recovery[3][320];
+    alignas(32) static const uint8_t zero_shard[1024] = {};
+    alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[16];
     void* work[8];
     for (uint32_t i = 0; i < 16; ++i)

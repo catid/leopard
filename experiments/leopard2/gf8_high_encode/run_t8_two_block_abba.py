@@ -152,9 +152,16 @@ def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
         256: (64, 65, 255, 257, 1024),
         320: (256, 257, 288, 319, 321, 352, 384, 512),
     }
-    require(target_bytes in byte_neighbors_by_target,
-            f"unsupported target byte count: {target_bytes}")
-    byte_neighbors = byte_neighbors_by_target[target_bytes]
+    if target_bytes >= 384 and target_bytes <= 1024 and \
+            target_bytes % 64 == 0:
+        byte_neighbors = tuple(sorted({
+            320, target_bytes - 64, target_bytes - 1,
+            target_bytes + 1, target_bytes + 64,
+        }))
+    else:
+        require(target_bytes in byte_neighbors_by_target,
+                f"unsupported target byte count: {target_bytes}")
+        byte_neighbors = byte_neighbors_by_target[target_bytes]
     for k, r in ((9, 5), (16, 8)):
         for shard_bytes in byte_neighbors:
             cells.append({
@@ -284,10 +291,28 @@ def validate_result(
             expected_320 = (
                 implementation == "candidate" or target_bytes != 320
             )
+            expected_extended = (
+                implementation == "candidate" or target_bytes < 384
+            )
+            eligible_shape = (
+                9 <= cell["K"] <= 16 and 5 <= cell["R"] <= 8
+            )
+            byte_count = int(cell["bytes"])
+            expected_selected = eligible_shape and (
+                byte_count == 64 or
+                (byte_count in (128, 192) and expected_128_192) or
+                byte_count == 256 or
+                (byte_count == 320 and expected_320) or
+                (384 <= byte_count <= 1024 and
+                 byte_count % 64 == 0 and expected_extended)
+            )
             marker_valid = (
                 build.get("high_t8_two_block_128_192_enabled") is
                     expected_128_192 and
-                build.get("high_t8_two_block_320_enabled") is expected_320
+                build.get("high_t8_two_block_320_enabled") is expected_320 and
+                build.get("high_t8_two_block_extended_enabled") is
+                    expected_extended and
+                build.get("high_t8_two_block_selected") is expected_selected
             )
         else:
             expected_selected = (
@@ -460,7 +485,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument(
         "--target-bytes", type=int,
-        choices=(64, 128, 192, 256, 320), default=64,
+        choices=(
+            64, 128, 192, 256, 320, 384, 448, 512,
+            576, 640, 704, 768, 832, 896, 960, 1024,
+        ), default=64,
         help="dense target shard size; default preserves the original campaign")
     return parser.parse_args()
 

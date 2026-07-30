@@ -1450,6 +1450,8 @@ static int Run(const Options& options)
     const bool high_t8_one_block_selected =
         encode_path_info.high_t8_vector_selected ||
         encode_path_info.high_t8_partial_binding_selected;
+    const bool high_t8_two_block_selected =
+        encode_path_info.high_t8_two_block_binding_selected;
 #endif
 
     std::ostringstream json;
@@ -1474,7 +1476,12 @@ static int Run(const Options& options)
                 "true" : "false") << ",\n"
          << "    \"high_t8_two_block_320_enabled\": "
          << (leopard2_internal::HighT8TwoBlock320Enabled() ?
-                "true" : "false");
+                "true" : "false") << ",\n"
+         << "    \"high_t8_two_block_extended_enabled\": "
+         << (leopard2_internal::HighT8TwoBlockExtendedEnabled() ?
+                "true" : "false") << ",\n"
+         << "    \"high_t8_two_block_selected\": "
+         << (high_t8_two_block_selected ? "true" : "false");
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)

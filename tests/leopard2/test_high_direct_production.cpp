@@ -87,6 +87,13 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 must be 0 or 1"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED must be 0 or 1"
+#endif
 
 namespace {
 
@@ -104,6 +111,19 @@ bool IsExpectedT8OneBlockByteCount(size_t bytes)
     return bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0);
+}
+
+bool IsExpectedT8TwoBlockByteCount(size_t bytes)
+{
+    return bytes == 64 ||
+        ((bytes == 128 || bytes == 192) &&
+         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 == 0) ||
+        (bytes == 256 &&
+         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 == 0) ||
+        (bytes == 320 &&
+         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320 == 0) ||
+        (bytes >= 384 && bytes <= 1024 && (bytes & 63U) == 0 &&
+         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED == 0);
 }
 
 void RequireResult(leo2_result result, const char* message)
@@ -526,7 +546,10 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
 
 uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
 {
-    static const size_t byte_counts[] = { 64, 128, 192, 256, 320 };
+    static const size_t byte_counts[] = {
+        64, 128, 192, 256, 320, 384, 448, 512,
+        576, 640, 704, 768, 832, 896, 960, 1024
+    };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -571,13 +594,7 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
                     "two-block T8 binding path introspection");
                 const bool expect_two_block =
                     LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0 &&
-                    (bytes == 64 ||
-                        ((bytes == 128 || bytes == 192) &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192) ||
-                        (bytes == 256 &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256) ||
-                        (bytes == 320 &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320));
+                    IsExpectedT8TwoBlockByteCount(bytes);
                 Require(path.high_t8_two_block_binding_selected ==
                         expect_two_block,
                     "two-block T8 selector differs from expectation");
@@ -659,7 +676,8 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
             }
     }
 
-    Require(checks == 1090,
+    Require(checks == 218 *
+            (sizeof(byte_counts) / sizeof(byte_counts[0])),
         "two-block T8 binding check count changed unexpectedly");
     return checks;
 }
@@ -970,7 +988,8 @@ void ExerciseTinyFullOutputRegion(
     const size_t byte_counts[] = {
         1, 2, 3, 4, 7, 8, 15, 16,
         17, 31, 32, 33, 63, 64, 65, 70,
-        128, 192, 256, 320, 384, 448, 512, 513
+        128, 192, 256, 320, 384, 448, 512, 513,
+        576, 640, 704, 768, 832, 896, 960, 1024, 1025
     };
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -1008,13 +1027,7 @@ void ExerciseTinyFullOutputRegion(
                     "tiny partial T8 selector differs from expectation");
                 const bool expected_two_block_binding =
                     LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0 &&
-                    (bytes == 64 ||
-                        ((bytes == 128 || bytes == 192) &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192) ||
-                        (bytes == 256 &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256) ||
-                        (bytes == 320 &&
-                         !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_320)) &&
+                    IsExpectedT8TwoBlockByteCount(bytes) &&
                     k >= 9;
                 Require(path.high_t8_two_block_binding_selected ==
                         expected_two_block_binding,
@@ -1159,7 +1172,18 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 128) +
             ExerciseT8TwoBlockUnaligned(context, 192) +
             ExerciseT8TwoBlockUnaligned(context, 256) +
-            ExerciseT8TwoBlockUnaligned(context, 320);
+            ExerciseT8TwoBlockUnaligned(context, 320) +
+            ExerciseT8TwoBlockUnaligned(context, 384) +
+            ExerciseT8TwoBlockUnaligned(context, 448) +
+            ExerciseT8TwoBlockUnaligned(context, 512) +
+            ExerciseT8TwoBlockUnaligned(context, 576) +
+            ExerciseT8TwoBlockUnaligned(context, 640) +
+            ExerciseT8TwoBlockUnaligned(context, 704) +
+            ExerciseT8TwoBlockUnaligned(context, 768) +
+            ExerciseT8TwoBlockUnaligned(context, 832) +
+            ExerciseT8TwoBlockUnaligned(context, 896) +
+            ExerciseT8TwoBlockUnaligned(context, 960) +
+            ExerciseT8TwoBlockUnaligned(context, 1024);
         leo2_context_destroy(context);
         const uint64_t t8_partial_thread_pool_checks =
             ExerciseT8PartialThreadPool(64) +
@@ -1174,7 +1198,18 @@ int main()
             ExerciseT8TwoBlockThreadPool(128) +
             ExerciseT8TwoBlockThreadPool(192) +
             ExerciseT8TwoBlockThreadPool(256) +
-            ExerciseT8TwoBlockThreadPool(320);
+            ExerciseT8TwoBlockThreadPool(320) +
+            ExerciseT8TwoBlockThreadPool(384) +
+            ExerciseT8TwoBlockThreadPool(448) +
+            ExerciseT8TwoBlockThreadPool(512) +
+            ExerciseT8TwoBlockThreadPool(576) +
+            ExerciseT8TwoBlockThreadPool(640) +
+            ExerciseT8TwoBlockThreadPool(704) +
+            ExerciseT8TwoBlockThreadPool(768) +
+            ExerciseT8TwoBlockThreadPool(832) +
+            ExerciseT8TwoBlockThreadPool(896) +
+            ExerciseT8TwoBlockThreadPool(960) +
+            ExerciseT8TwoBlockThreadPool(1024);
 #if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
         const char* const table_state = "ON";
 #else

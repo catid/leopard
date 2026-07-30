@@ -1261,12 +1261,15 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
 
     static const unsigned kInputCount = 16;
     static const unsigned kOutputCount = 8;
-    static const uint64_t kByteCounts[] = { 64, 128, 192, 256, 320 };
-    uint8_t input[kInputCount][324];
-    uint8_t input_before[kInputCount][324];
-    uint8_t actual[kOutputCount][324];
-    uint8_t expected[kOutputCount][324];
-    uint8_t second[kOutputCount][324];
+    static const uint64_t kByteCounts[] = {
+        64, 128, 192, 256, 320, 384, 448, 512,
+        576, 640, 704, 768, 832, 896, 960, 1024
+    };
+    uint8_t input[kInputCount][1028];
+    uint8_t input_before[kInputCount][1028];
+    uint8_t actual[kOutputCount][1028];
+    uint8_t expected[kOutputCount][1028];
+    uint8_t second[kOutputCount][1028];
     const void* input_pointers[kInputCount];
     void* actual_pointers[kOutputCount];
     void* expected_pointers[kOutputCount];

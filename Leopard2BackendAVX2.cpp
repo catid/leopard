@@ -6186,10 +6186,9 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
     uint64_t byte_count)
 {
     LEO_DEBUG_ASSERT(
-        byte_count == 64 || byte_count == 128 ||
-        byte_count == 192 || byte_count == 256 ||
-        byte_count == 320);
-    if (byte_count < 64 || byte_count > 320 ||
+        byte_count >= 64 && byte_count <= 1024 &&
+        (byte_count & 63U) == 0);
+    if (byte_count < 64 || byte_count > 1024 ||
         (byte_count & 63U) != 0)
         return;
 
