@@ -1261,12 +1261,12 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
 
     static const unsigned kInputCount = 16;
     static const unsigned kOutputCount = 8;
-    static const uint64_t kBytes = 64;
-    uint8_t input[kInputCount][68];
-    uint8_t input_before[kInputCount][68];
-    uint8_t actual[kOutputCount][68];
-    uint8_t expected[kOutputCount][68];
-    uint8_t second[kOutputCount][68];
+    static const uint64_t kByteCounts[] = { 64, 256 };
+    uint8_t input[kInputCount][260];
+    uint8_t input_before[kInputCount][260];
+    uint8_t actual[kOutputCount][260];
+    uint8_t expected[kOutputCount][260];
+    uint8_t second[kOutputCount][260];
     const void* input_pointers[kInputCount];
     void* actual_pointers[kOutputCount];
     void* expected_pointers[kOutputCount];
@@ -1284,16 +1284,6 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
     }
     for (unsigned lane = 0; lane < kOutputCount; ++lane)
     {
-        for (size_t i = 0; i < sizeof(actual[lane]); ++i)
-        {
-            actual[lane][i] = expected[lane][i] =
-                static_cast<uint8_t>(0xc3U + lane * 7U + i * 13U);
-            second[lane][i] =
-                static_cast<uint8_t>(0x5dU + lane * 17U + i * 3U);
-        }
-        actual_pointers[lane] = actual[lane] + 1;
-        expected_pointers[lane] = expected[lane] + 1;
-        second_pointers[lane] = second[lane] + 1;
         first_inverse_skew[lane] = lane % 5U == 0
             ? static_cast<uint8_t>(255)
             : static_cast<uint8_t>((lane * 37U + 3U) % 255U);
@@ -1305,21 +1295,44 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
             : static_cast<uint8_t>((lane * 53U + 9U) % 255U);
     }
 
-    ReferenceFF8HighEncodeOneBlock(
-        ops, input_pointers, expected_pointers, kOutputCount,
-        first_inverse_skew, forward_skew, kBytes);
-    ReferenceFF8HighEncodeOneBlock(
-        ops, input_pointers + kOutputCount, second_pointers, kOutputCount,
-        second_inverse_skew, forward_skew, kBytes);
-    for (unsigned lane = 0; lane < kOutputCount; ++lane)
-        ops.xor_memory(
-            expected_pointers[lane], second_pointers[lane], kBytes);
+    for (size_t byte_index = 0;
+         byte_index < sizeof(kByteCounts) / sizeof(kByteCounts[0]);
+         ++byte_index)
+    {
+        const uint64_t byte_count = kByteCounts[byte_index];
+        for (unsigned lane = 0; lane < kOutputCount; ++lane)
+        {
+            for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+            {
+                actual[lane][i] = expected[lane][i] =
+                    static_cast<uint8_t>(0xc3U + lane * 7U + i * 13U);
+                second[lane][i] =
+                    static_cast<uint8_t>(0x5dU + lane * 17U + i * 3U);
+            }
+            actual_pointers[lane] = actual[lane] + 1;
+            expected_pointers[lane] = expected[lane] + 1;
+            second_pointers[lane] = second[lane] + 1;
+        }
 
-    ops.ff8_high_encode_two_blocks_t8(
-        input_pointers, actual_pointers,
-        first_inverse_skew, second_inverse_skew, forward_skew, kBytes);
-    return std::memcmp(input, input_before, sizeof(input)) == 0 &&
-        std::memcmp(actual, expected, sizeof(actual)) == 0;
+        ReferenceFF8HighEncodeOneBlock(
+            ops, input_pointers, expected_pointers, kOutputCount,
+            first_inverse_skew, forward_skew, byte_count);
+        ReferenceFF8HighEncodeOneBlock(
+            ops, input_pointers + kOutputCount, second_pointers,
+            kOutputCount, second_inverse_skew, forward_skew, byte_count);
+        for (unsigned lane = 0; lane < kOutputCount; ++lane)
+            ops.xor_memory(
+                expected_pointers[lane], second_pointers[lane], byte_count);
+
+        ops.ff8_high_encode_two_blocks_t8(
+            input_pointers, actual_pointers,
+            first_inverse_skew, second_inverse_skew,
+            forward_skew, byte_count);
+        if (std::memcmp(input, input_before, sizeof(input)) != 0 ||
+            std::memcmp(actual, expected, sizeof(actual)) != 0)
+            return false;
+    }
+    return true;
 }
 
 static bool TestFF8HighEncodeSmall(const Ops& ops)

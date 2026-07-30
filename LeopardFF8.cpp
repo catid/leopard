@@ -2901,13 +2901,14 @@ void ReedSolomonEncode(
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,
     const void* const* data,
-    void* const* work)
+    void* const* work,
+    uint64_t byte_count)
 {
     LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
     LEO_DEBUG_ASSERT(ops.ff8_high_encode_two_blocks_t8 != NULL);
     ops.ff8_high_encode_two_blocks_t8(
         data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
-        FFTSkewStorage, 64);
+        FFTSkewStorage, byte_count);
 }
 #endif
 

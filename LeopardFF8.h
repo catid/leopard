@@ -172,7 +172,8 @@ void ReedSolomonEncode(
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,
     const void* const* data,
-    void* const* work);
+    void* const* work,
+    uint64_t byte_count);
 #endif
 
 // Encodes the low-rate coordinate profile:

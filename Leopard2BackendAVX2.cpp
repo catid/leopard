@@ -6185,11 +6185,11 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
     const uint8_t* forward_skew,
     uint64_t byte_count)
 {
-    LEO_DEBUG_ASSERT(byte_count == 64);
-    if (byte_count != 64)
+    LEO_DEBUG_ASSERT(byte_count == 64 || byte_count == 256);
+    if (byte_count != 64 && byte_count != 256)
         return;
 
-    for (uint64_t offset = 0; offset < 64; offset += 32)
+    for (uint64_t offset = 0; offset < byte_count; offset += 32)
     {
         __m256i value0 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(

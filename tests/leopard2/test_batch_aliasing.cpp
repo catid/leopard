@@ -49,6 +49,13 @@
 #if !defined(LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING)
 #error "production high-T8 two-block-binding expectation must be explicit"
 #endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 must be 0 or 1"
+#endif
 
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
 static std::atomic<bool> g_track_allocations(false);
@@ -592,7 +599,7 @@ void TestT8TwoBlockBindingAllocation()
 {
     static const unsigned k = 9;
     static const unsigned r = 5;
-    static const size_t bytes = 64;
+    static const size_t bytes = 256;
 
     leo2_context_options options;
     memset(&options, 0, sizeof(options));
@@ -616,7 +623,8 @@ void TestT8TwoBlockBindingAllocation()
             codec, bytes, r, &path),
         "two-block allocation path introspection");
     Require(path.high_t8_two_block_binding_selected ==
-            (LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0),
+            (LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0 &&
+             !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256),
         "two-block allocation selector differs from expectation");
 
     Shards source(k, Bytes(bytes, 0));

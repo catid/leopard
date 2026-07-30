@@ -113,6 +113,19 @@
 #endif
 
 /*
+    Internal same-source timing control for the 256-byte extension.  It is
+    intentionally not a public CMake option; benchmark builds can define it in
+    their recorded global compiler flags.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256 must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -484,6 +497,7 @@ static void ExecuteHighT8TwoBlockBinding(
     const leopard::backend::Ops& transform_ops,
     uint32_t original_count,
     uint32_t recovery_count,
+    uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery);
 #endif
@@ -491,6 +505,17 @@ static void ExecuteHighT8TwoBlockBinding(
 namespace {
 
 static const size_t kScratchAlignment = 64;
+
+static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
+{
+    if (shard_bytes == 64)
+        return true;
+#if !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
+    if (shard_bytes == 256)
+        return true;
+#endif
+    return false;
+}
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
@@ -8196,7 +8221,8 @@ static leo2_result RunHighT8TwoBlockBatchItem(void* context, size_t index)
     const leo2_encode_batch_item& item = batch->items[index];
     ExecuteHighT8TwoBlockBinding(
         *batch->ops, batch->codec->original_count,
-        batch->codec->recovery_count, item.original, item.recovery);
+        batch->codec->recovery_count, item.shard_bytes,
+        item.original, item.recovery);
     return LEO2_SUCCESS;
 }
 
@@ -9565,11 +9591,12 @@ bool GetCodecEncodePathInfo(
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count >= 9 && codec->original_count <= 16 &&
         codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
-        codec->padded_side == 8 && shard_bytes == 64 &&
+        codec->padded_side == 8 &&
+        IsHighT8TwoBlockByteCount(shard_bytes) &&
         requested_recovery_count == codec->recovery_count)
     {
         const leopard::backend::Ops& transform_ops =
-            SelectTransformEncodeOps(codec, 64,
+            SelectTransformEncodeOps(codec, shard_bytes,
                 requested_recovery_count, requested_recovery_count);
         info.high_t8_two_block_binding_selected =
             transform_ops.kind == LEO2_BACKEND_AVX2 &&
@@ -9691,11 +9718,13 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
     const leopard::backend::Ops& transform_ops,
     uint32_t original_count,
     uint32_t recovery_count,
+    uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery)
 {
-    alignas(32) static const uint8_t zero_shard[64] = {};
-    alignas(32) uint8_t discarded_recovery[3][64];
+    LEO_DEBUG_ASSERT(IsHighT8TwoBlockByteCount(shard_bytes));
+    alignas(32) static const uint8_t zero_shard[256] = {};
+    alignas(32) uint8_t discarded_recovery[3][256];
     const void* padded_original[16];
     void* work[8];
     for (uint32_t i = 0; i < 16; ++i)
@@ -9708,7 +9737,7 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
             : discarded_recovery[i - recovery_count];
     }
     leopard::ff8::ReedSolomonEncodeTwoBlocksT8(
-        transform_ops, padded_original, work);
+        transform_ops, padded_original, work, shard_bytes);
 }
 
 #undef LEO2_T8_TWO_BLOCK_NOINLINE
@@ -10545,27 +10574,35 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
         codec->padded_side == 8)
     {
-        bool all_dense_64 = true;
+        const leopard::backend::Ops* selected_ops = NULL;
+        bool all_dense_qualified = true;
         for (size_t item_index = 0;
              item_index < binding->items.size(); ++item_index)
         {
             const leo2_encode_batch_item& item =
                 binding->items[item_index];
-            all_dense_64 = all_dense_64 && item.shard_bytes == 64;
+            all_dense_qualified = all_dense_qualified &&
+                IsHighT8TwoBlockByteCount(item.shard_bytes);
             for (uint32_t parity = 0;
                  parity < codec->recovery_count; ++parity)
-                all_dense_64 =
-                    all_dense_64 && item.recovery[parity] != NULL;
-        }
-        if (all_dense_64)
-        {
+                all_dense_qualified = all_dense_qualified &&
+                    item.recovery[parity] != NULL;
+            if (!all_dense_qualified)
+                break;
             const leopard::backend::Ops& transform_ops =
-                SelectTransformEncodeOps(codec, 64,
+                SelectTransformEncodeOps(codec, item.shard_bytes,
                     codec->recovery_count, codec->recovery_count);
-            if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
-                transform_ops.ff8_high_encode_two_blocks_t8)
-                binding->high_t8_two_block_ops = &transform_ops;
+            if (transform_ops.kind != LEO2_BACKEND_AVX2 ||
+                !transform_ops.ff8_high_encode_two_blocks_t8 ||
+                (selected_ops && selected_ops != &transform_ops))
+            {
+                all_dense_qualified = false;
+                break;
+            }
+            selected_ops = &transform_ops;
         }
+        if (all_dense_qualified)
+            binding->high_t8_two_block_ops = selected_ops;
     }
 #endif
 

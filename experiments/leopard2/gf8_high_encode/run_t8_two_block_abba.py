@@ -113,16 +113,16 @@ def file_identity(path: Path) -> dict[str, Any]:
     }
 
 
-def target_cells() -> list[dict[str, Any]]:
+def target_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
     cells = []
     index = 0
     for k in range(9, 17):
         for r in range(5, 9):
             cells.append({
-                "id": f"target-k{k}-r{r}-b64",
+                "id": f"target-k{k}-r{r}-b{target_bytes}",
                 "K": k,
                 "R": r,
-                "bytes": 64,
+                "bytes": target_bytes,
                 "role": "target",
                 "seed": 0x142E000 + index,
             })
@@ -130,10 +130,12 @@ def target_cells() -> list[dict[str, Any]]:
     return cells
 
 
-def neighbor_cells() -> list[dict[str, Any]]:
+def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
     cells = []
+    byte_neighbors = (32, 33, 63, 65) if target_bytes == 64 \
+        else (64, 65, 255, 257, 1024)
     for k, r in ((9, 5), (16, 8)):
-        for shard_bytes in (32, 33, 63, 65):
+        for shard_bytes in byte_neighbors:
             cells.append({
                 "id": f"bytes-k{k}-r{r}-b{shard_bytes}",
                 "K": k,
@@ -146,10 +148,10 @@ def neighbor_cells() -> list[dict[str, Any]]:
         (9, 4), (16, 4), (9, 9), (16, 9),
     ):
         cells.append({
-            "id": f"shape-k{k}-r{r}-b64",
+            "id": f"shape-k{k}-r{r}-b{target_bytes}",
             "K": k,
             "R": r,
-            "bytes": 64,
+            "bytes": target_bytes,
             "role": "shape_neighbor",
         })
     for index, cell in enumerate(cells):
@@ -375,6 +377,9 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=9)
     parser.add_argument("--warmup", type=int, default=2)
+    parser.add_argument(
+        "--target-bytes", type=int, choices=(64, 256), default=64,
+        help="dense target shard size; default preserves the original campaign")
     return parser.parse_args()
 
 
@@ -392,7 +397,8 @@ def main() -> int:
     }
     require(len({identity["sha256"] for identity in identities.values()}) == 3,
             "candidate, control, and main binaries are not distinct")
-    cells = target_cells() + neighbor_cells()
+    cells = target_cells(options.target_bytes) + \
+        neighbor_cells(options.target_bytes)
     raw: dict[str, Any] = {
         "schema": SCHEMA,
         "created_utc": SUPPORT.utc_now(),
@@ -403,6 +409,7 @@ def main() -> int:
         "reserved_sibling": options.sibling,
         "iterations": options.iterations,
         "warmup": options.warmup,
+        "target_bytes": options.target_bytes,
         "batch": 64,
         "reuse": 64,
         "identities": identities,
@@ -490,9 +497,10 @@ def main() -> int:
             "source_commit": options.source_commit,
             "source_tree": options.source_tree,
             "main_commit": MAIN_COMMIT,
+            "target_bytes": options.target_bytes,
             "cell_count": len(analyses),
-            "target_count": len(target_cells()),
-            "neighbor_count": len(neighbor_cells()),
+            "target_count": len(target_cells(options.target_bytes)),
+            "neighbor_count": len(neighbor_cells(options.target_bytes)),
             "process_count": sum(
                 len(round_value["invocations"])
                 for item in raw["cells"] for round_value in item["rounds"]),

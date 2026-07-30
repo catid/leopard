@@ -299,10 +299,11 @@ typedef void (*FF8HighEncodeOneBlock)(
     uint64_t byte_count);
 
 /*
-    Complete dense encode for exactly two T=8 message blocks and a 64-byte
-    shard.  data has 16 readable rows, work has eight pairwise-disjoint output
-    rows, and all input/output ranges are disjoint.  The callback accumulates
-    the two shifted inverse transforms and applies the final parity transform.
+    Complete dense encode for exactly two T=8 message blocks and a 64- or
+    256-byte shard.  data has 16 readable rows, work has eight
+    pairwise-disjoint output rows, and all input/output ranges are disjoint.
+    The callback accumulates the two shifted inverse transforms and applies
+    the final parity transform.
 */
 typedef void (*FF8HighEncodeTwoBlocksT8)(
     const void* const* data,
