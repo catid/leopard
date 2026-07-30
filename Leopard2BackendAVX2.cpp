@@ -6121,11 +6121,9 @@ static void AVX2FF8HighEncodeT8Vector(
     same complete parent transform; only provably dead loads and stores are
     removed.
 */
-static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Multiple32(
     const void* const* data,
     void* const* work,
-    const uint8_t* inverse_skew,
-    const uint8_t* forward_skew,
     uint64_t byte_count)
 {
     /*
@@ -6142,6 +6140,135 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
     static const uint16_t kInverse4 = 85;
     static const uint16_t kInverse5 = 51;
     static const uint16_t kInverse6 = 34;
+    static const uint16_t kForward5 = 17;
+    LEO_DEBUG_ASSERT(byte_count != 0 && (byte_count & 31) == 0);
+
+    const uint8_t* input0 = static_cast<const uint8_t*>(data[0]);
+    const uint8_t* input1 = static_cast<const uint8_t*>(data[1]);
+    const uint8_t* input2 = static_cast<const uint8_t*>(data[2]);
+    const uint8_t* input3 = static_cast<const uint8_t*>(data[3]);
+    const uint8_t* input4 = static_cast<const uint8_t*>(data[4]);
+    uint8_t* output0 = static_cast<uint8_t*>(work[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(work[1]);
+    uint8_t* output2 = static_cast<uint8_t*>(work[2]);
+    uint8_t* output3 = static_cast<uint8_t*>(work[3]);
+    uint8_t* output4 = static_cast<uint8_t*>(work[4]);
+
+    for (uint64_t offset = 0; offset < byte_count; offset += 32)
+    {
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input0 + offset));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input1 + offset));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input2 + offset));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input3 + offset));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input4 + offset));
+
+        AVX2FF8T8VectorIFFTRadix4(
+            value0, value1, value2, value3,
+            kInverse1, kInverse3, kInverse2);
+
+        /*
+            The shortened upper inverse radix-4 maps [E,0,0,0] to
+
+              [M119(E), M136(E), M238(E), E].
+
+            Generate the same values with its two useful factors, then fuse
+            each distance-4 inverse pair with the cancelling forward XOR:
+
+              t = u ^ s; z = u ^ M85(t); b = t ^ z.
+
+            The five requested outputs need only b0, b1 and their products
+            with b2, b3.  This avoids materializing the three punctured
+            forward outputs and, importantly, keeps the log-17 tables out of
+            the eight-value live range.
+        */
+        __m256i value5 = value4;
+        AVX2FF8T8VectorMulAdd(value5, value4, kInverse5);
+        __m256i value6 = value5;
+        __m256i value7 = value4;
+        {
+            const FF8NibbleTable& table = FF8Tables[kInverse6];
+            const __m256i low_table = BroadcastTable(table.low);
+            const __m256i high_table = BroadcastTable(table.high);
+            AVX2FF8T8VectorMulAddPrepared(
+                value6, value5, low_table, high_table);
+            AVX2FF8T8VectorMulAddPrepared(
+                value7, value4, low_table, high_table);
+        }
+        {
+            const FF8NibbleTable& table = FF8Tables[kInverse4];
+            const __m256i low_table = BroadcastTable(table.low);
+            const __m256i high_table = BroadcastTable(table.high);
+
+            AVX2FF8T8VectorXor(value6, value0);
+            AVX2FF8T8VectorMulAddPrepared(
+                value0, value6, low_table, high_table);
+            AVX2FF8T8VectorXor(value6, value0);
+
+            AVX2FF8T8VectorXor(value5, value2);
+            AVX2FF8T8VectorMulAddPrepared(
+                value2, value5, low_table, high_table);
+            AVX2FF8T8VectorXor(value5, value2);
+
+            AVX2FF8T8VectorXor(value7, value1);
+            AVX2FF8T8VectorMulAddPrepared(
+                value1, value7, low_table, high_table);
+            AVX2FF8T8VectorXor(value7, value1);
+
+            AVX2FF8T8VectorXor(value4, value3);
+            AVX2FF8T8VectorMulAddPrepared(
+                value3, value4, low_table, high_table);
+            AVX2FF8T8VectorXor(value4, value3);
+
+            AVX2FF8T8VectorXor(value2, value0);
+            AVX2FF8T8VectorXor(value3, value1);
+            AVX2FF8T8VectorMulAddPrepared(
+                value2, value3, low_table, high_table);
+            AVX2FF8T8VectorXor(value3, value2);
+            AVX2FF8T8VectorXor(value1, value0);
+
+            /*
+                Scatter the lower four outputs before reducing the upper
+                pair.  This deliberately ends their live ranges while the
+                log-85 tables are still resident, leaving enough registers
+                for the two upper reductions without a stack spill.
+            */
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output0 + offset), value0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output1 + offset), value1);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output2 + offset), value2);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output3 + offset), value3);
+
+            AVX2FF8T8VectorMulAddPrepared(
+                value6, value5, low_table, high_table);
+            AVX2FF8T8VectorMulAddPrepared(
+                value7, value4, low_table, high_table);
+        }
+        AVX2FF8T8VectorMulAdd(value6, value7, kForward5);
+
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output4 + offset), value6);
+    }
+}
+
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Tail(
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count)
+{
+    static const uint16_t kInverse1 = 153;
+    static const uint16_t kInverse2 = 17;
+    static const uint16_t kInverse3 = 102;
+    static const uint16_t kInverse4 = 85;
+    static const uint16_t kInverse5 = 51;
+    static const uint16_t kInverse6 = 34;
     static const uint16_t kInverse7 = 187;
     static const uint16_t kForward1 = 255;
     static const uint16_t kForward2 = 255;
@@ -6149,28 +6276,10 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
     static const uint16_t kForward4 = 255;
     static const uint16_t kForward5 = 17;
     static const uint16_t kForward6 = 85;
-    static const uint16_t kForward7 = 34;
-    LEO_DEBUG_ASSERT(
-        inverse_skew[0] == 255 &&
-        inverse_skew[1] == kInverse1 &&
-        inverse_skew[2] == kInverse2 &&
-        inverse_skew[3] == kInverse3 &&
-        inverse_skew[4] == kInverse4 &&
-        inverse_skew[5] == kInverse5 &&
-        inverse_skew[6] == kInverse6 &&
-        inverse_skew[7] == kInverse7);
-    LEO_DEBUG_ASSERT(
-        forward_skew[0] == 0 &&
-        forward_skew[1] == kForward1 &&
-        forward_skew[2] == kForward2 &&
-        forward_skew[3] == kForward3 &&
-        forward_skew[4] == kForward4 &&
-        forward_skew[5] == kForward5 &&
-        forward_skew[6] == kForward6 &&
-        forward_skew[7] == kForward7);
-    (void)inverse_skew;
-    (void)forward_skew;
-    (void)kForward7;
+
+    const uint64_t vector_bytes = byte_count & ~UINT64_C(31);
+    if (vector_bytes != 0)
+        AVX2FF8HighEncodeK5R5T8Multiple32(data, work, vector_bytes);
 
     const uint8_t* input[5];
     uint8_t* output[5];
@@ -6180,55 +6289,7 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
         output[lane] = static_cast<uint8_t*>(work[lane]);
     }
 
-    uint64_t offset = 0;
-    while (byte_count - offset >= 32)
-    {
-        __m256i value0 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input[0] + offset));
-        __m256i value1 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input[1] + offset));
-        __m256i value2 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input[2] + offset));
-        __m256i value3 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input[3] + offset));
-        __m256i value4 = _mm256_loadu_si256(
-            reinterpret_cast<const __m256i*>(input[4] + offset));
-        __m256i value5 = _mm256_setzero_si256();
-        __m256i value6 = _mm256_setzero_si256();
-        __m256i value7 = _mm256_setzero_si256();
-
-        AVX2FF8T8VectorIFFTRadix4(
-            value0, value1, value2, value3,
-            kInverse1, kInverse3, kInverse2);
-        AVX2FF8T8VectorIFFTRadix4(
-            value4, value5, value6, value7,
-            kInverse5, kInverse7, kInverse6);
-        AVX2FF8T8VectorIFFTDistance4(
-            value0, value1, value2, value3,
-            value4, value5, value6, value7, kInverse4);
-
-        AVX2FF8T8VectorFFTRadix4Distance2(
-            value0, value1, value2, value3,
-            value4, value5, value6, value7,
-            kForward2, kForward6, kForward4);
-        AVX2FF8T8VectorFFT2(value0, value1, kForward1);
-        AVX2FF8T8VectorFFT2(value2, value3, kForward3);
-        AVX2FF8T8VectorFFT2(value4, value5, kForward5);
-
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[0] + offset), value0);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[1] + offset), value1);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[2] + offset), value2);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[3] + offset), value3);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output[4] + offset), value4);
-        offset += 32;
-    }
-
-    while (offset < byte_count)
+    for (uint64_t offset = vector_bytes; offset < byte_count; ++offset)
     {
         uint8_t values[8] = {};
         for (unsigned lane = 0; lane < 5; ++lane)
@@ -6279,8 +6340,45 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
 
         for (unsigned lane = 0; lane < 5; ++lane)
             output[lane][offset] = values[lane];
-        ++offset;
     }
+}
+
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(
+        inverse_skew[0] == 255 &&
+        inverse_skew[1] == 153 &&
+        inverse_skew[2] == 17 &&
+        inverse_skew[3] == 102 &&
+        inverse_skew[4] == 85 &&
+        inverse_skew[5] == 51 &&
+        inverse_skew[6] == 34 &&
+        inverse_skew[7] == 187);
+    LEO_DEBUG_ASSERT(
+        forward_skew[0] == 0 &&
+        forward_skew[1] == 255 &&
+        forward_skew[2] == 255 &&
+        forward_skew[3] == 85 &&
+        forward_skew[4] == 255 &&
+        forward_skew[5] == 17 &&
+        forward_skew[6] == 85 &&
+        forward_skew[7] == 34);
+    (void)inverse_skew;
+    (void)forward_skew;
+
+    if (byte_count == 0)
+        return;
+    if ((byte_count & 31) == 0)
+    {
+        AVX2FF8HighEncodeK5R5T8Multiple32(data, work, byte_count);
+        return;
+    }
+    AVX2FF8HighEncodeK5R5T8Tail(data, work, byte_count);
 }
 
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
