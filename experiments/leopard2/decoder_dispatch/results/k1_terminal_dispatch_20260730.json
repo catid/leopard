@@ -2,7 +2,7 @@
   "schema": "leopard2.k1_terminal_dispatch.v1",
   "date_utc": "2026-07-30",
   "bead": "leopard-79h.38.5.10.33",
-  "decision": "retain_intermediate_and_continue",
+  "decision": "retain_best_contract_preserving_path_and_close_bounded_task",
   "source": {
     "implementation_commit": "26b9d596fea859b68d9953e4daa67c98093991dd",
     "base_commit": "4fe92f845013301ec54a8725d2dd60307b44f285",
@@ -164,7 +164,50 @@
       {"bytes": 65536, "reuse": 8, "ratio": 1.00000, "bootstrap_95_percent": [0.99608, 1.00000]},
       {"bytes": 65536, "reuse": 64, "ratio": 0.99292, "bootstrap_95_percent": [0.99263, 0.99335]}
     ],
-    "conclusion": "The retained change improves Leopard2 itself, but robust public-wrapper validation still leaves a small-shard gap to Leopard main. Keep the Bead open and screen a dedicated top-level K=1 presence and validation path."
+    "conclusion": "The retained change improves Leopard2 itself, but robust public-wrapper validation still leaves a small-shard gap to Leopard main. Later candidates that moved the K=1 decision earlier either exceeded the neighboring-regression gate or added complexity without material gain."
+  },
+  "rejected_followups": {
+    "early_k1_presence_specialization": {
+      "candidate_binary_sha256": "fd63b9af5afc73db6f00089dd9e4af3c680b32a37141f54194c4e47bc55c3e0a",
+      "control_binary_sha256": "3becd3766f2fbf4abbb83350b3c15e31b6678b99aab4dea064bfc68132b7bdd6",
+      "candidate_diff_sha256": "18d98864be234126321d6bc1dc3957d85d488882b6cab12f519a6e1960d9cb9e",
+      "k1_result_set_sha256": "1a560eb966226539d5dfc412305f4837eceeb4a98c3d8b7996db713dc11c79b4",
+      "neighbor_repeat_result_set_sha256": "90f2dd047fd552d564bd9ad173a54b7c1bab80dd8a2640602f83fa598b358950",
+      "k1_control_over_candidate_reuse64": {
+        "1B": 1.036304,
+        "17B": 1.053600,
+        "64B": 1.054457,
+        "65B": 1.035657,
+        "257B": 1.030253,
+        "1024B": 1.026623,
+        "4096B": 1.005677,
+        "65536B": 1.000000
+      },
+      "blocking_neighbor": {
+        "shape": "K2_R1_GF8_high_loss1_64B_reuse512",
+        "alternating_rounds": 10,
+        "control_over_candidate_geometric_mean": 0.977130,
+        "control_over_candidate_pooled": 0.976413,
+        "maximum_allowed_regression": 0.02
+      },
+      "decision": "reject_and_revert",
+      "reason": "The extra early count dispatch moves about 3-5% out of K=1 but costs 2.29-2.36% at the immediate K=2 neighbor, beyond the promotion gate."
+    },
+    "exported_tail_dispatcher": {
+      "candidate_binary_sha256": "5c687bace03082792b527bf31153c84b85379142e6be70445709bc5217a33ee8",
+      "presence_only_binary_sha256": "fd63b9af5afc73db6f00089dd9e4af3c680b32a37141f54194c4e47bc55c3e0a",
+      "incremental_result_set_sha256": "9acd8ef939ad4be5d64843a6b8877e6860a847947ad040ed724fdd554e40ae59",
+      "presence_over_tail_reuse512": {
+        "1B": 1.002241,
+        "64B": 1.004354,
+        "1024B": 0.983891,
+        "4096B": 1.009131
+      },
+      "incremental_text_bytes": 461,
+      "decision": "reject_and_revert",
+      "reason": "A tiny exported tail dispatcher removed the generic prologue but was materially neutral, regressed 1KiB by 1.61%, and added disproportionate code and maintenance burden."
+    },
+    "residual_gap_classification": "The remaining small-shard difference versus Leopard main is principally the cost of Leopard2's stronger public validation contract. Removing those checks is not an acceptable optimization; recursively specializing every adjacent K merely relocates dispatch cost."
   },
   "code_layout": {
     "leopard2_object_text_bytes_before": 141116,
