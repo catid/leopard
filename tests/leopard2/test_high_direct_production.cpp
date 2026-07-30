@@ -30,9 +30,11 @@
 #include "Leopard2Direct.h"
 #include "leopard2.h"
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -47,6 +49,9 @@
 #endif
 #if !defined(LEO2_EXPECT_HIGH_DIRECT_AUTO)
 #error "production high-direct AUTO expectation must be explicit"
+#endif
+#if !defined(LEO2_EXPECT_HIGH_T8_VECTOR)
+#error "production high-T8 expectation must be explicit"
 #endif
 
 namespace {
@@ -212,6 +217,126 @@ void EncodeAllAndCheck(
     }
 }
 
+uint64_t ExerciseT8BatchBinding(leo2_context* context)
+{
+    static const unsigned k = 8;
+    static const unsigned r = 8;
+    static const size_t bytes = 64;
+    static const size_t batch_count = 8;
+    static const uint8_t sentinel = 0xa5;
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        "T8 binding codec");
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh, k, r);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+
+    Shards original = MakeOriginal(k, bytes);
+    std::vector<const void*> input(k, NULL);
+    for (unsigned i = 0; i < k; ++i)
+        input[i] = &original[i][0];
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        codec, bytes, &scratch_bytes), "T8 binding scratch query");
+
+    std::vector<Shards> recovery(
+        batch_count, Shards(r, Bytes(bytes, sentinel)));
+    std::vector<std::vector<void*> > output(
+        batch_count, std::vector<void*>(r, NULL));
+    std::vector<std::unique_ptr<AlignedBuffer> > scratch(batch_count);
+    std::vector<leo2_encode_batch_item> items(batch_count);
+    for (size_t batch = 0; batch < batch_count; ++batch)
+    {
+        for (unsigned parity = 0; parity < r; ++parity)
+            output[batch][parity] = &recovery[batch][parity][0];
+        scratch[batch].reset(new AlignedBuffer(scratch_bytes));
+        items[batch].shard_bytes = bytes;
+        items[batch].original = &input[0];
+        items[batch].recovery = &output[batch][0];
+        items[batch].scratch = scratch[batch]->data();
+        items[batch].scratch_bytes = scratch[batch]->size();
+    }
+
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &items[0], items.size(), &binding),
+        "T8 binding create");
+    Require(binding != NULL &&
+            leo2_encode_batch_binding_item_count(binding) == batch_count,
+        "T8 binding item count");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        "T8 binding execute");
+
+    uint64_t checks = 0;
+    for (size_t batch = 0; batch < batch_count; ++batch)
+        for (unsigned parity = 0; parity < r; ++parity)
+        {
+            Require(recovery[batch][parity] == OracleParity(
+                field, generator, original, parity),
+                "T8 binding parity differs from the independent oracle");
+            ++checks;
+        }
+
+    /*
+        Execution must read current bytes from captured addresses rather than
+        caching a value-dependent transform during setup.
+    */
+    original[3][17] ^= 0x6du;
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        "T8 binding changed-source execute");
+    for (size_t batch = 0; batch < batch_count; ++batch)
+        for (unsigned parity = 0; parity < r; ++parity)
+        {
+            Require(recovery[batch][parity] == OracleParity(
+                field, generator, original, parity),
+                "T8 binding changed-source parity differs from oracle");
+            ++checks;
+        }
+    original[3][17] ^= 0x6du;
+    leo2_encode_batch_binding_destroy(binding);
+
+    /*
+        A sparse output mask must bypass the dense shortcut and retain the
+        ordinary no-write guarantee for its null entry.
+    */
+    for (unsigned parity = 0; parity < r; ++parity)
+        std::fill(recovery[0][parity].begin(),
+            recovery[0][parity].end(), sentinel);
+    output[0][3] = NULL;
+    binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &items[0], 1, &binding),
+        "T8 sparse binding create");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        "T8 sparse binding execute");
+    for (unsigned parity = 0; parity < r; ++parity)
+    {
+        if (parity == 3)
+        {
+            Require(recovery[0][parity] == Bytes(bytes, sentinel),
+                "T8 sparse binding modified a null output");
+        }
+        else
+        {
+            Require(recovery[0][parity] == OracleParity(
+                field, generator, original, parity),
+                "T8 sparse binding parity differs from oracle");
+        }
+        ++checks;
+    }
+    leo2_encode_batch_binding_destroy(binding);
+    leo2_codec_destroy(codec);
+    Require(checks == 136,
+        "T8 binding check count changed unexpectedly");
+    return checks;
+}
+
 void ExerciseTinyFullOutputRegion(
     leo2_context* context,
     uint64_t& codec_checks,
@@ -363,6 +488,8 @@ int main()
         ExerciseTinyFullOutputRegion(
             context, tiny_codec_checks, tiny_encode_checks,
             tiny_direct_checks, tiny_transform_checks);
+        const uint64_t t8_binding_checks =
+            ExerciseT8BatchBinding(context);
         leo2_context_destroy(context);
 #if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
         const char* const table_state = "ON";
@@ -374,15 +501,23 @@ int main()
 #else
         const char* const auto_state = "OFF";
 #endif
+#if LEO2_EXPECT_HIGH_T8_VECTOR
+        const char* const t8_state = "ON";
+#else
+        const char* const t8_state = "OFF";
+#endif
         std::printf(
-            "Leopard2 production high-direct smoke passed: tables=%s auto=%s "
+            "Leopard2 production high-direct smoke passed: "
+            "tables=%s auto=%s t8_vector=%s "
             "K=2 R=16 bytes=4096 Q=1 parity=0,15 "
-            "tiny_codecs=%llu tiny_encodes=%llu direct=%llu transform=%llu\n",
-            table_state, auto_state,
+            "tiny_codecs=%llu tiny_encodes=%llu direct=%llu transform=%llu "
+            "t8_binding_checks=%llu\n",
+            table_state, auto_state, t8_state,
             static_cast<unsigned long long>(tiny_codec_checks),
             static_cast<unsigned long long>(tiny_encode_checks),
             static_cast<unsigned long long>(tiny_direct_checks),
-            static_cast<unsigned long long>(tiny_transform_checks));
+            static_cast<unsigned long long>(tiny_transform_checks),
+            static_cast<unsigned long long>(t8_binding_checks));
         return 0;
     }
     catch (const std::exception& error)

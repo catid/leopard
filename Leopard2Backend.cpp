@@ -1186,6 +1186,15 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
          side_i < sizeof(kSides) / sizeof(kSides[0]); ++side_i)
     {
         const unsigned side = kSides[side_i];
+#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+        /*
+            The register-light AVX2 experiment deliberately publishes only a
+            T=8 implementation through this otherwise wider callback slot.
+            AVX-512 retains the established 8/16/32/64 contract.
+        */
+        if (ops.kind == LEO2_BACKEND_AVX2 && side != 8)
+            continue;
+#endif
         for (unsigned lane = 0; lane < kMaximumSide; ++lane)
         {
             for (size_t i = 0; i < sizeof(input[lane]); ++i)

@@ -9486,6 +9486,38 @@ static leo2_result EncodeInternal(
         return LEO2_SUCCESS;
     }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR) && defined(LEO_HAS_FF8)
+    /*
+        A reusable batch has already validated every address, scratch span,
+        byte count, and output mask.  The measured dense T=8 tile can therefore
+        enter its concrete transform without rebuilding general sparse/tiled
+        geometry for each stripe.  Ordinary one-shot encode retains the full
+        validation and layout path below.
+    */
+    if (prevalidated &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->original_count == 8 && codec->recovery_count == 8 &&
+        codec->padded_side == 8 && shard_bytes == 64)
+    {
+        bool full_output = true;
+        for (uint32_t i = 0; i < 8; ++i)
+            full_output = full_output && recovery[i] != NULL;
+        if (full_output)
+        {
+            const leopard::backend::Ops& transform_ops =
+                SelectTransformEncodeOps(codec, 64, 8, 8);
+            if (transform_ops.kind == LEO2_BACKEND_AVX2)
+            {
+                leopard::ff8::ReedSolomonEncode(
+                    transform_ops, 64, 8, 8, 8, 8, original,
+                    const_cast<void**>(recovery), NULL);
+                return LEO2_SUCCESS;
+            }
+        }
+    }
+#endif
+
     EncodeScratchGeometry geometry;
     leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)

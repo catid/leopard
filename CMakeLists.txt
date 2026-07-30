@@ -50,6 +50,9 @@ option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
     "Allow the legacy-high direct-encode experiment to change AUTO dispatch"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T8_VECTOR
+    "Enable a default-off register-light AVX2 T=8 encode experiment"
+    OFF)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -307,6 +310,10 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
 endif()
+if(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_EXPERIMENT_HIGH_T8_VECTOR=1)
+endif()
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -482,6 +489,10 @@ if(LEO2_HAVE_AVX2_BACKEND)
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+    endif()
+    if(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            LEO2_EXPERIMENT_HIGH_T8_VECTOR=1)
     endif()
     if(NOT LEOPARD_ENABLE_GF8)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
@@ -755,6 +766,10 @@ if(LEO2_BUILD_TESTS)
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
     endif()
+    if(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+        target_compile_definitions(leopard_test_hooks PRIVATE
+            LEO2_EXPERIMENT_HIGH_T8_VECTOR=1)
+    endif()
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -818,6 +833,11 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
                 LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
+        endif()
+        if(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+            target_compile_definitions(
+                leopard2_backend_avx2_test_hooks PRIVATE
+                LEO2_EXPERIMENT_HIGH_T8_VECTOR=1)
         endif()
         if(NOT LEOPARD_ENABLE_GF8)
             target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
@@ -1219,6 +1239,15 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_DIRECT_AUTO=0)
+        endif()
+        if(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_T8_VECTOR=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_T8_VECTOR=0)
         endif()
         target_link_libraries(leopard2_high_direct_production_test leopard)
         add_test(NAME leopard2_high_direct_production

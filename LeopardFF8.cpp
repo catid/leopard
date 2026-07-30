@@ -2739,9 +2739,17 @@ void ReedSolomonEncode(
 #endif
         return;
     }
-    if (ops.kind == LEO2_BACKEND_AVX512 &&
+    bool use_one_block_callback =
+        ops.kind == LEO2_BACKEND_AVX512 && buffer_bytes > 1024;
+#if defined(LEO2_EXPERIMENT_HIGH_T8_VECTOR)
+    use_one_block_callback = use_one_block_callback ||
+        (ops.kind == LEO2_BACKEND_AVX2 &&
+         m == 8 && original_count == 8 && recovery_count == 8 &&
+         buffer_bytes == 64);
+#endif
+    if (use_one_block_callback &&
         ops.ff8_high_encode_one_block &&
-        whole_transform_size && buffer_bytes > 1024 &&
+        whole_transform_size &&
         (original_count == m || original_count + 1U == m) &&
         (recovery_count == m || recovery_count + 1U == m) &&
         requested_output_count == recovery_count && dense_schedule)
