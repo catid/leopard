@@ -234,13 +234,18 @@ def target_cells(
                 "R": r,
                 "bytes": target_bytes,
                 "role": role,
-                "seed": 0x142E000 + index,
+                "seed": (
+                    0x152E000 if final_selector else 0x142E000
+                ) + index,
             })
             index += 1
     return cells
 
 
-def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
+def neighbor_cells(
+    target_bytes: int = 64,
+    final_selector: bool = False,
+) -> list[dict[str, Any]]:
     cells = []
     byte_neighbors_by_target = {
         64: (32, 33, 63, 65),
@@ -283,7 +288,9 @@ def neighbor_cells(target_bytes: int = 64) -> list[dict[str, Any]]:
             "role": "shape_neighbor",
         })
     for index, cell in enumerate(cells):
-        cell["seed"] = 0x142F000 + index
+        cell["seed"] = (
+            0x152F000 if final_selector else 0x142F000
+        ) + index
     return cells
 
 
@@ -613,7 +620,7 @@ def main() -> int:
     options.output.mkdir(parents=True)
     cells = target_cells(
         options.target_bytes, options.final_selector) + \
-        neighbor_cells(options.target_bytes)
+        neighbor_cells(options.target_bytes, options.final_selector)
     raw: dict[str, Any] = {
         "schema": SCHEMA,
         "created_utc": SUPPORT.utc_now(),
