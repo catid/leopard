@@ -87,11 +87,12 @@
 #endif
 
 /*
-    Default-off experiment that maps shortened/punctured T=8 profiles onto
-    the measured full K=8,R=8 kernel after reusable batch validation.
+    Promoted path that maps shortened/punctured T=8 profiles onto the measured
+    full K=8,R=8 kernel after reusable batch validation.  CMake defines this
+    selector explicitly in both production and diagnostic-control builds.
 */
 #ifndef LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
-#define LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING 0
+#define LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING 1
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING < 0 || \
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING > 1

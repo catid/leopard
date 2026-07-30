@@ -230,6 +230,66 @@ at 36,352 KiB RSS, and a GF16-only compile caught and verified the required
 `LEO_HAS_FF8` guard. The compact final checkpoint is
 `experiments/leopard2/gf8_high_encode/t8_vector_production_checkpoint.json`.
 
+### Shortened and punctured T=8 binding promotion
+
+The production T=8 kernel now also handles dense, reusable 64-byte AVX2
+bindings with public K and R independently in 5 through 8, except exact
+`K=8,R=8`, which retains the full-size path above. Binding creation performs
+all qualification. Execution pads shortened systematic coordinates with one
+immutable zero shard, directs the punctured parity suffix to local discard
+storage, and invokes the already KAT-validated full `K=8,R=8` kernel. This
+supports `R>K` without changing the legacy-high wire profile. One-shot calls,
+sparse parity subsets, other byte lengths, counts, fields, profiles, and
+backends retain their prior paths.
+
+`LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING` is ON by default after promotion and
+may be set OFF only for a same-source diagnostic control. CMake defines the
+selector explicitly in both modes; non-CMake compilation defaults to the
+promoted path. The padded-pointer helper and batch scheduler are noinline so
+their stack frame and instruction footprint do not perturb ordinary encode
+paths. ELF builds additionally isolate them in
+`.text.leo2_t8_partial_binding`; other object formats use portable plain
+noinline annotations.
+
+The source-attested candidate was commit
+`2948725720b60a1b61a18305559feaa277751e76`, tree
+`5708be46bb08da44a256d8956d3056a27c24d2a4`. Frozen SHA-256 values were:
+
+- promoted candidate:
+  `cc714634bce4b06fc352d785c7ee420265a789b22c37398eb35292122a54f4ef`;
+- same-source option-OFF control:
+  `6c923e590b1e50df3ae9b3842069ab9c578fcec112576c544e2e94c6afa4cd1a`;
+- exact Leopard main:
+  `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
+
+The clean CPU-4 campaign used batch 64, reuse 256, 15 samples and four warmups
+per process, one thread, immutable executables, and counterbalanced process
+order. All jobs ran under the canonical lock with 256-MiB memory and 192-MiB
+address-space limits. CPU 20, the reserved SMT sibling, accumulated zero
+non-idle jiffies. Results are geometric timing ratios with Student-t 95%
+intervals over independent ABBA rounds:
+
+| Gate | Cells | Observed geometric range | Weakest lower 95% bound |
+|---|---:|---:|---:|
+| same-source target/control | 15 | 2.456x–2.742x | 2.152x |
+| exact Leopard main/candidate | 9 | 1.521x–1.608x | 1.405x |
+| inactive neighbors | 11 | 0.989x–1.109x | 0.983x |
+
+All 684 timing processes passed their internal round-trip checks. Original,
+transmitted-parity, and recovered-original digests matched across exact main
+and Leopard2 for every comparable shape. Frozen hashes were unchanged after
+the campaigns. Candidate and control Release tests each passed 42 codecs, 672
+one-shot direct-oracle cases, 136 exact-T8 checks, 114 partial-binding checks,
+10 unaligned/guard checks, and 40 four-thread-pool checks. Clang 18
+ASan+UBSan passed at 41,472 KiB peak RSS.
+
+The candidate adds 3,421 bytes to the `leopard2.cpp` object text while leaving
+the ordinary `EncodeInternal` bytes identical to control. Fresh default-ON and
+explicit-OFF promotion builds reproduced their corresponding measured
+`leopard2.cpp` objects byte-for-byte. The complete machine-readable checkpoint,
+including every cell and artifact digest, is
+`experiments/leopard2/gf8_high_encode/results/t8_partial_binding_checkpoint_20260730.json`.
+
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
 are unspecified on return, but item scratch, shard outputs, and immutable

@@ -54,8 +54,8 @@ option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
     "Disable the promoted AVX2 T=8 encoder for same-source diagnostics"
     OFF)
 option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
-    "Enable default-off shortened/punctured T=8 binding fast path"
-    OFF)
+    "Enable the promoted shortened/punctured AVX2 T=8 binding fast path"
+    ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -313,10 +313,8 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
 endif()
-if(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING)
-    target_compile_definitions(leopard PRIVATE
-        LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1)
-endif()
+target_compile_definitions(leopard PRIVATE
+    LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>)
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -769,10 +767,8 @@ if(LEO2_BUILD_TESTS)
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
     endif()
-    if(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING)
-        target_compile_definitions(leopard_test_hooks PRIVATE
-            LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1)
-    endif()
+    target_compile_definitions(leopard_test_hooks PRIVATE
+        LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>)
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
