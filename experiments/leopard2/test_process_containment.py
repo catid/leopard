@@ -236,25 +236,42 @@ class ProcessContainmentFaultTests(unittest.TestCase):
                     if record is None:
                         self.fail(
                             "process record is None after non-None assertion")
-                    real_descriptor = module._emergency_pidfd_open(unrelated.pid)
-                    self.assertIsNotNone(real_descriptor)
-                    if real_descriptor is None:
-                        self.fail(
-                            "pidfd is None after non-None assertion")
-                    reused = tuple(record[:3]) + (record[3] + 1,) + tuple(record[4:])
-                    with mock.patch.object(
-                            module, "_emergency_proc_process_record",
-                            side_effect=[record, reused]), \
-                         mock.patch.object(
-                             module, "_emergency_pidfd_open",
-                             side_effect=lambda _pid: os.dup(real_descriptor)), \
-                         mock.patch.object(
-                             module, "_emergency_pidfd_signal") as send_signal:
-                        module._emergency_signal_identity(
-                            (unrelated.pid, record[3]))
-                    send_signal.assert_not_called()
+                    if hasattr(module, "_emergency_retain_linux_process"):
+                        reused = (
+                            unrelated.pid, record[3] + 1,
+                            record[5], record[6])
+                        with mock.patch.object(
+                                module, "_emergency_pidfd_open") as open_pidfd:
+                            handle = module._emergency_retain_linux_process(
+                                unrelated.pid, reused)
+                        self.assertIsNone(handle)
+                        open_pidfd.assert_not_called()
+                    else:
+                        real_descriptor = module._emergency_pidfd_open(
+                            unrelated.pid)
+                        self.assertIsNotNone(real_descriptor)
+                        if real_descriptor is None:
+                            self.fail(
+                                "pidfd is None after non-None assertion")
+                        reused = tuple(record[:3]) + (
+                            record[3] + 1,) + tuple(record[4:])
+                        try:
+                            with mock.patch.object(
+                                    module, "_emergency_proc_process_record",
+                                    side_effect=[record, reused]), \
+                                 mock.patch.object(
+                                     module, "_emergency_pidfd_open",
+                                     side_effect=lambda _pid:
+                                         os.dup(real_descriptor)), \
+                                 mock.patch.object(
+                                     module,
+                                     "_emergency_pidfd_signal") as send_signal:
+                                module._emergency_signal_identity(
+                                    (unrelated.pid, record[3]))
+                            send_signal.assert_not_called()
+                        finally:
+                            os.close(real_descriptor)
                     self.assertIsNone(unrelated.poll())
-                    os.close(real_descriptor)
                 finally:
                     if unrelated.poll() is None:
                         unrelated.send_signal(signal.SIGKILL)
