@@ -30,7 +30,8 @@
 #include "leopard2.h"
 #include "Leopard2Dispatch.h"
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION) || \
-    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
+    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
+    defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
 #include "Leopard2Direct.h"
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
@@ -68,14 +69,6 @@
 
 #if defined(_MSC_VER)
 #include <malloc.h>
-#endif
-
-#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
-#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 0
-#endif
-#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 < 0 || \
-    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 > 1
-#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 must be 0 or 1"
 #endif
 
 namespace {
@@ -1462,8 +1455,8 @@ static int Run(const Options& options)
     json << ",\n"
          << "    \"prevalidated_batch_experiment\": true,\n"
          << "    \"high_t8_two_block_128_192_enabled\": "
-         << (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 ?
-                "false" : "true");
+         << (leopard2_internal::HighT8TwoBlock128192Enabled() ?
+                "true" : "false");
 #endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)

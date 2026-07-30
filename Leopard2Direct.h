@@ -204,6 +204,12 @@ bool GetDecodePlanPrunedScheduleInfo(
 /* Fail-closed provenance marker for the one-shot no-loss experiment. */
 bool OneShotNoLossShortCircuitExperimentEnabled();
 
+/*
+    Private benchmark provenance marker.  Candidate/control builds read a
+    volatile data initializer rather than compiling different selector code.
+*/
+bool HighT8TwoBlock128192Enabled();
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 /*
     Test-only storage accounting for presence-dependent no-op plan state.

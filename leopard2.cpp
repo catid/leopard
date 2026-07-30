@@ -127,8 +127,10 @@
 
 /*
     Internal same-source timing control for the 128- and 192-byte extension.
-    Like the 256-byte control, this is recorded through benchmark compiler
-    flags rather than exposed as a supported public build option.
+    The macro changes only a volatile data initializer.  Binding setup reads
+    the marker at runtime so candidate and control retain identical executable
+    code layout; this avoids attributing unrelated alignment changes to the
+    selected kernel.  It remains absent from the public build API.
 */
 #ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
 #define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 0
@@ -520,14 +522,20 @@ namespace {
 static const size_t kScratchAlignment = 64;
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+/*
+    Keep both values nonzero so candidate and control place this word in the
+    same initialized-data section rather than splitting it between data/BSS.
+*/
+static volatile uint32_t g_high_t8_two_block_128_192_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192;
+
 static bool IsHighT8TwoBlockByteCount(uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
         return true;
-#if !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192
-    if (shard_bytes == 128 || shard_bytes == 192)
+    if ((shard_bytes == 128 || shard_bytes == 192) &&
+        g_high_t8_two_block_128_192_mode == 1U)
         return true;
-#endif
 #if !LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_256
     if (shard_bytes == 256)
         return true;
@@ -9651,6 +9659,15 @@ bool GetDecodePlanPrunedScheduleInfo(
 bool OneShotNoLossShortCircuitExperimentEnabled()
 {
     return LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT != 0;
+}
+
+bool HighT8TwoBlock128192Enabled()
+{
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    return g_high_t8_two_block_128_192_mode == 1U;
+#else
+    return false;
+#endif
 }
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
