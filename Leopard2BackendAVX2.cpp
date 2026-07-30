@@ -4484,6 +4484,144 @@ AVX2FF8MultiplyAddOutputGroup5(
 }
 
 #undef LEO2_AVX2_GROUP35_NOINLINE
+
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
+#if defined(__ELF__)
+#define LEO2_AVX2_GROUP6_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_avx2_direct_group6")))
+#else
+#define LEO2_AVX2_GROUP6_NOINLINE __attribute__((noinline))
+#endif
+
+static const uint8_t AVX2FF8NibbleMaskByte = 0x0f;
+
+static LEO2_AVX2_GROUP6_NOINLINE void
+AVX2FF8MultiplyAddOutputGroup6(
+    void* const* destination_pointers,
+    const void* source_pointer,
+    const uint16_t* multiplier_logs,
+    uint64_t byte_count)
+{
+    const bool all_active =
+        multiplier_logs[0] != UINT16_MAX &&
+        multiplier_logs[1] != UINT16_MAX &&
+        multiplier_logs[2] != UINT16_MAX &&
+        multiplier_logs[3] != UINT16_MAX &&
+        multiplier_logs[4] != UINT16_MAX &&
+        multiplier_logs[5] != UINT16_MAX;
+    if (!all_active)
+    {
+        AVX2FF8MultiplyAddOutputGroup4(
+            destination_pointers, source_pointer,
+            multiplier_logs, byte_count);
+        AVX2FF8MultiplyAddOutputGroup2(
+            destination_pointers + 4, source_pointer,
+            multiplier_logs + 4, byte_count);
+        return;
+    }
+
+    uint8_t* const destination0 =
+        static_cast<uint8_t*>(destination_pointers[0]);
+    uint8_t* const destination1 =
+        static_cast<uint8_t*>(destination_pointers[1]);
+    uint8_t* const destination2 =
+        static_cast<uint8_t*>(destination_pointers[2]);
+    uint8_t* const destination3 =
+        static_cast<uint8_t*>(destination_pointers[3]);
+    uint8_t* const destination4 =
+        static_cast<uint8_t*>(destination_pointers[4]);
+    uint8_t* const destination5 =
+        static_cast<uint8_t*>(destination_pointers[5]);
+    const uint8_t* const source =
+        static_cast<const uint8_t*>(source_pointer);
+    const uint16_t log0 = multiplier_logs[0];
+    const uint16_t log1 = multiplier_logs[1];
+    const uint16_t log2 = multiplier_logs[2];
+    const uint16_t log3 = multiplier_logs[3];
+    const uint16_t log4 = multiplier_logs[4];
+    const uint16_t log5 = multiplier_logs[5];
+    const FF8NibbleTable& table0 = FF8Tables[log0];
+    const FF8NibbleTable& table1 = FF8Tables[log1];
+    const FF8NibbleTable& table2 = FF8Tables[log2];
+    const FF8NibbleTable& table3 = FF8Tables[log3];
+    const FF8NibbleTable& table4 = FF8Tables[log4];
+    const FF8NibbleTable& table5 = FF8Tables[log5];
+    const __m256i low0 = BroadcastTable(table0.low);
+    const __m256i high0 = BroadcastTable(table0.high);
+    const __m256i low1 = BroadcastTable(table1.low);
+    const __m256i high1 = BroadcastTable(table1.high);
+    const __m256i low2 = BroadcastTable(table2.low);
+    const __m256i high2 = BroadcastTable(table2.high);
+    const __m256i low3 = BroadcastTable(table3.low);
+    const __m256i high3 = BroadcastTable(table3.high);
+    const __m256i low4 = BroadcastTable(table4.low);
+    const __m256i high4 = BroadcastTable(table4.high);
+    const __m256i low5 = BroadcastTable(table5.low);
+    const __m256i high5 = BroadcastTable(table5.high);
+    // The dispatcher admits only complete AVX2 vectors to this dense kernel.
+    uint64_t offset = 0;
+    while (offset < byte_count)
+    {
+        __m256i high_indices = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + offset));
+        __m256i low_indices;
+        __m256i generated_mask;
+        __asm__(
+            "vpbroadcastb %3, %2\n\t"
+            "vpand %2, %1, %0\n\t"
+            "vpsrlq $4, %1, %1\n\t"
+            "vpand %2, %1, %1"
+            : "=&x"(low_indices), "+x"(high_indices),
+              "=&x"(generated_mask)
+            : "m"(AVX2FF8NibbleMaskByte));
+        __m256i product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low0, low_indices),
+            _mm256_shuffle_epi8(high0, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination0 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination0 + offset), product);
+        product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low1, low_indices),
+            _mm256_shuffle_epi8(high1, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination1 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination1 + offset), product);
+        product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low2, low_indices),
+            _mm256_shuffle_epi8(high2, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination2 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination2 + offset), product);
+        product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low3, low_indices),
+            _mm256_shuffle_epi8(high3, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination3 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination3 + offset), product);
+        product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low4, low_indices),
+            _mm256_shuffle_epi8(high4, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination4 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination4 + offset), product);
+        product = _mm256_xor_si256(
+            _mm256_shuffle_epi8(low5, low_indices),
+            _mm256_shuffle_epi8(high5, high_indices));
+        product = _mm256_xor_si256(product, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(destination5 + offset)));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(
+            destination5 + offset), product);
+        offset += 32;
+    }
+}
+
+#undef LEO2_AVX2_GROUP6_NOINLINE
+#endif
 #endif
 
 #undef LEO2_AVX2_DIRECT_NOINLINE
@@ -4541,6 +4679,16 @@ static void AVX2FF8MultiplyAddOutputs(
             destinations + 4, source, multiplier_logs + 4, byte_count);
         return;
     }
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(_MSC_VER)
+    if (output_count == 6 &&
+        byte_count >= UINT64_C(16384) &&
+        (byte_count & UINT64_C(31)) == 0)
+    {
+        AVX2FF8MultiplyAddOutputGroup6(
+            destinations, source, multiplier_logs, byte_count);
+        return;
+    }
+#endif
 #endif
 
     // Compose the established zero-spill four- and two-output kernels and

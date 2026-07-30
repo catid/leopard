@@ -164,6 +164,79 @@ void test_processor_classifier()
         "uncalibrated family/model entered the calibrated selector");
 }
 
+#ifdef LEO_HAS_FF8
+void test_avx2_six_output_large()
+{
+    const leopard::backend::Ops* ops =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
+    if (!ops)
+        return;
+    require(ops->ff8_multiply_add_outputs != NULL,
+        "qualified AVX2 backend omitted multi-output GF8 multiply-add");
+
+    static const size_t byte_counts[] = { 16384, 16385 };
+    static const uint16_t log_sets[][6] = {
+        { 0, 1, 17, 29, 127, 254 },
+        { 0, UINT16_MAX, 17, 29, UINT16_MAX, 254 }
+    };
+    static const size_t kStorageBytes = 16387;
+    std::vector<uint8_t> source(kStorageBytes);
+    std::vector<uint8_t> source_before(kStorageBytes);
+    std::vector<std::vector<uint8_t> > outputs(
+        6, std::vector<uint8_t>(kStorageBytes));
+    std::vector<std::vector<uint8_t> > expected(
+        6, std::vector<uint8_t>(kStorageBytes));
+    void* output_pointers[6];
+
+    for (size_t count_index = 0;
+         count_index < sizeof(byte_counts) / sizeof(byte_counts[0]);
+         ++count_index)
+    {
+        const size_t bytes = byte_counts[count_index];
+        for (size_t log_set = 0;
+             log_set < sizeof(log_sets) / sizeof(log_sets[0]);
+             ++log_set)
+        {
+            for (size_t i = 0; i < kStorageBytes; ++i)
+            {
+                source[i] = source_before[i] = static_cast<uint8_t>(
+                    i * 73U + count_index * 19U + log_set * 31U + 11U);
+            }
+            for (unsigned output = 0; output < 6; ++output)
+            {
+                output_pointers[output] = outputs[output].data() + 1;
+                for (size_t i = 0; i < kStorageBytes; ++i)
+                {
+                    outputs[output][i] = expected[output][i] =
+                        static_cast<uint8_t>(
+                            i * (29U + output * 6U) +
+                            count_index * 7U + log_set * 13U + output);
+                }
+                const uint16_t log = log_sets[log_set][output];
+                if (log == UINT16_MAX)
+                    continue;
+                for (size_t i = 0; i < bytes; ++i)
+                {
+                    expected[output][i + 1] ^=
+                        leopard::ff8::MultiplyLogElement(
+                            source[i + 1], static_cast<uint8_t>(log));
+                }
+            }
+            ops->ff8_multiply_add_outputs(
+                output_pointers, source.data() + 1,
+                log_sets[log_set], 6, bytes);
+            require(source == source_before,
+                "AVX2 six-output kernel modified its source");
+            for (unsigned output = 0; output < 6; ++output)
+            {
+                require(outputs[output] == expected[output],
+                    "AVX2 six-output large/tail result mismatch");
+            }
+        }
+    }
+}
+#endif
+
 void run_kernel_check(unsigned seed)
 {
     const leopard::backend::Ops& ops = leopard::backend::GetOps();
@@ -590,6 +663,7 @@ int main()
         if (gfni_ops)
             require(gfni_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "GFNI backend omitted its qualified weighted boundary");
+        test_avx2_six_output_large();
 #else
         require(!ops.ff8_weighted_ifft_butterfly4,
             "FF8-disabled build exposed a weighted boundary");
