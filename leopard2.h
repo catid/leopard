@@ -50,7 +50,7 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 4u
+#define LEO2_API_VERSION 5u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
@@ -366,12 +366,14 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     choices, and may be reused for later calls with the same or smaller item
     count.  Its contents are unspecified on return.
 
-    For fewer than nine items the query returns zero and the execution entry
-    point preserves the ordinary compatibility path without inspecting
-    preflight_scratch; this deterministic cutoff avoids penalizing small
-    batches.  A caller can invoke the ordinary entry point when the query
-    returns zero to retain its exact call-wrapper overhead.  Otherwise the full
-    supplied preflight scratch span must be
+    For one item the query returns zero and the execution entry point preserves
+    the ordinary compatibility path without inspecting preflight_scratch.
+    Legacy-high K=1,R=1 copy batches retain a measured nine-item cutoff; their
+    specialized compatibility validator is faster for two through eight
+    items.  All other codecs request scalable preflight scratch from two items
+    onward.  A caller can invoke the ordinary entry point when the query
+    returns zero to retain its exact call-wrapper overhead.  Otherwise the
+    full supplied preflight scratch span must be
     disjoint from the item array, all pointer arrays, all shard ranges, and
     every per-item scratch span.  An overlap between this span and metadata is
     rejected before this span is modified.  The interval preflight and item

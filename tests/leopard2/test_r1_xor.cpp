@@ -524,12 +524,14 @@ void execute_public_r1_multi_item_batch(
     };
     check_outputs();
 
-    /* Nine or more items may use the allocation-free, caller-supplied
-       interval preflight.  Compact R=1 plans omit all presence vectors, so
-       exercise one representative serial/pool case through that independent
-       entry point instead of relying on the compatibility preflight above to
-       cover the reconstructed scalar metadata. */
-    if (batch_count >= 9 &&
+    /* Two or more items may use the allocation-free, caller-supplied interval
+       preflight.  Legacy-high K=1,R=1 retains its measured nine-item cutoff.
+       Compact R=1 plans omit all presence vectors, so exercise representative
+       serial/pool cases through that independent entry point instead of
+       relying on the compatibility preflight above to cover the reconstructed
+       scalar metadata. */
+    const size_t scalable_minimum = fixture.k == 1 ? 9 : 2;
+    if (batch_count >= scalable_minimum &&
         (fixture.k == 1 || fixture.k == 9) && fixture.bytes == 4097)
     {
         size_t preflight_bytes = 0;

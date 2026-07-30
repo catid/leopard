@@ -1,6 +1,6 @@
 # Scalable batch alias preflight
 
-Leopard2 API version 4 adds an opt-in caller-owned alias-preflight workspace
+Leopard2 API version 5 exposes an opt-in caller-owned alias-preflight workspace
 without changing the existing batch ABI:
 
 - `leo2_encode_batch_preflight_scratch_size` and
@@ -29,19 +29,19 @@ scratch is rejected before the workspace is written.
 After that pass, the implementation flattens all intervals into caller storage.
 Each record holds a half-open address range and one writable bit. Item and
 pointer arrays plus received shards are immutable; output shards and every
-supplied scratch span are writable. `std::sort` orders the records; introsort
-allocates nothing, so it meets the allocation-free preflight contract, and the
-same property is already relied on for the per-item `std::sort` in the
-compatibility path. The record comparator is a strict total order on
-`(begin, end, writable)`, so the sorted sequence is unique and the sweep below
-cannot observe a tie order. One max-end sweep then rejects an overlap whenever
-either interval is writable.
+supplied scratch span are writable. An allocation-free partition moves writable
+records to the front, and `std::sort` orders only that smaller set. A linear
+sweep rejects writable/writable overlap. Each readable record then performs one
+predecessor probe in the disjoint writable set; readable/readable overlap
+remains permitted. The comparator is a strict total order on
+`(begin, end, writable)`.
 
-This replaced a hand-rolled in-place heapsort on 2026-07-24. The heapsort was
-the dominant term of the scalable preflight, and because that preflight runs as
-a serial section on the calling thread it dominated whole-batch time for small
-shards. Measured on an AMD Ryzen 9 9950X3D, one pinned logical CPU, best of
-three runs of `bench_leopard2_batch_preflight`, scalable path:
+This evolved from a hand-rolled in-place heapsort to full introsort and then to
+the writable-partitioned form. Sorting preflight metadata can dominate
+whole-batch time for small shards, so every change is measured at the complete
+public call rather than by comparison count alone. Historical full-sort
+measurements on an AMD Ryzen 9 9950X3D, one pinned logical CPU, best of three
+runs of `bench_leopard2_batch_preflight`, were:
 
 | Cell | Encode speedup | Decode speedup |
 | --- | ---: | ---: |
@@ -50,14 +50,13 @@ three runs of `bench_leopard2_batch_preflight`, scalable path:
 | K=100 R=28, B=64 | 1.36x | 1.30x |
 | K=100 R=28, B=1024 | 1.72x | 1.52x |
 
-`B=1` and `B=8` use the compatibility path and are unchanged. A three-pass LSD
-radix on `range.begin` measured faster still, but it needs a second equal-size
-buffer and therefore an additive change to
-`leo2_encode_batch_preflight_scratch_size`; that remains open work. It deliberately permits
-input/input, metadata/metadata, and input/metadata sharing. Tracking the
-furthest prior end, rather than comparing only adjacent intervals, handles a
-long immutable interval that contains another immutable interval before a
-later output overlaps only the long interval.
+The writable-partitioned implementation made that original nine-item cutoff
+stale. API version 5 now selects scalable preflight from two items for every
+codec except legacy-high `K=1,R=1`, whose specialized compatibility validator
+remains faster through eight items. `B=1` is unchanged. A three-pass LSD radix
+on `range.begin` measured faster still, but it needs a second equal-size buffer
+and therefore a larger size query; that remains open work. The algorithm
+deliberately permits input/input, metadata/metadata, and input/metadata sharing.
 
 For `M = O(B * (K+R))` intervals, setup is `O(M log M)` time and `O(M)`
 caller-owned bytes. Encoding, decoding, sorting, and the interval sweep perform
@@ -65,11 +64,19 @@ no allocation. A context pool may still start or grow worker threads lazily as
 documented by `leo2_context_options`; this change does not hide that separate
 scheduler setup inside the preflight workspace.
 
-The size query returns zero below nine items, and the new execution entry point
-routes those calls through the existing implementation. This fixed cutoff
-makes batches 1 and 8 identical to the compatibility path and avoids a small
-batch regression. No-loss decode likewise returns zero and remains a true
-no-op: it does not inspect per-item pointers, byte sizes, aliases, or workspace.
+The size query returns zero for one item. Legacy-high `K=1,R=1` also returns
+zero through eight items; all other codecs return a nonzero aligned span from
+two items onward. No-loss decode always returns zero and remains a true no-op:
+it does not inspect per-item pointers, byte sizes, aliases, or workspace.
+
+The general `bench_leopard2` harness follows this recommended caller pattern:
+it queries and allocates both batch-wide workspaces before timing, uses the
+scalable entry points whenever the query is nonzero, and otherwise retains the
+compatibility calls. Its reported batch scratch totals include the reusable
+batch-wide workspace as well as every per-stripe codec scratch span. Benchmark
+batch counts therefore measure the best safe public batch API rather than
+accidentally timing the deliberately quadratic compatibility fallback at 64 or
+1,024 items.
 
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
@@ -82,7 +89,8 @@ checked `size_t`/address arithmetic are unchanged.
 `leopard2_batch_aliasing` covers both scalar and four-thread contexts and now
 adds:
 
-- exact workspace queries at the 8/9 cutoff and overflow/error behavior;
+- exact workspace queries at the 1/2 cutoff, the legacy `K=1,R=1` exception,
+  and overflow/error behavior;
 - valid encode and decode at batches 64 and 1024 with alternating 17- and
   33-byte shard tails;
 - shared immutable inputs and pointer arrays;
@@ -115,14 +123,12 @@ replacement allocation functions.
 
 ## Diagnostic crossover evidence
 
-The benchmark uses scalar GF8, one-byte shards, one thread, eight warmups, and
-the median of seven alternating-order measurements. It compares complete valid
-batch calls, so each number includes both alias preflight and the same codec
-execution. When the size query returns zero, the harness invokes the ordinary
-compatibility entry point, matching the intended caller dispatch. On
-2026-07-18 this 30-CPU host was pinned to allowed CPU 0. Other
-project workers were active, so these are diagnostic crossover data, not
-release-authoritative latency claims:
+The original crossover benchmark used scalar GF8, one-byte shards, one thread,
+eight warmups, and the median of seven alternating-order measurements. It
+compared complete valid batch calls, so each number included both alias
+preflight and the same codec execution. On 2026-07-18 this 30-CPU host was
+pinned to allowed CPU 0. Other project workers were active, so these are
+historical diagnostic data, not release-authoritative latency claims:
 
 | K,R | Batch | Encode compatibility / scalable ns | Encode gain | Decode compatibility / scalable ns | Decode gain | Encode / decode workspace bytes |
 |---:|---:|---:|---:|---:|---:|---:|
@@ -135,10 +141,31 @@ release-authoritative latency claims:
 | 100,28 | 64 | 801693.400 / 664546.750 | 1.206x | 948273.300 / 724241.150 | 1.309x | 201280 / 161344 |
 | 100,28 | 1024 | 141596200.000 / 14166648.000 | 9.995x | 138352107.000 / 14577945.000 | 9.491x | 3219520 / 2580544 |
 
-The 1- and 8-item cells exercise the exact compatibility implementation; their
-sub-one-percent differences measure run noise/call-wrapper cost and remain
-inside the 2 percent gate. The large-batch cells show the intended removal of
-quadratic setup work. Reproduce the raw JSONL with:
+At that time the 1- and 8-item cells exercised the exact compatibility
+implementation; their sub-one-percent differences measured
+run noise/call-wrapper cost. The large-batch cells established that caller
+scratch removes the quadratic setup term.
+
+After writable partitioning, a pinned complete-call comparison of the old
+nine-item dispatch and the new general two-item dispatch produced these encode
+speedups at 64-byte shards:
+
+| K,R | Batch 2 | Batch 4 | Batch 8 |
+|---:|---:|---:|---:|
+| 3,2 | 1.186x | 1.294x | 1.651x |
+| 5,5 | 1.256x | 1.445x | 1.865x |
+| 8,8 | 1.111x | 1.324x | 1.920x |
+| 16,8 | 1.309x | 1.503x | 1.944x |
+| 100,28 | 1.287x | 1.331x | 1.704x |
+| 240,16 | 1.283x | 1.321x | 1.629x |
+
+The 4-KiB neighbors also improved; the weakest tested general neighbor was
+1.004x at K=100,R=28,batch=4. Legacy-high K=1,R=1 was the sole measured
+exception, with new/old ratios of 0.725x, 0.783x, and 0.974x at batches 2, 4,
+and 8 for 64-byte shards. It therefore retains the old nine-item dispatch
+without penalizing other K=1 profiles.
+
+Reproduce the dedicated preflight raw JSONL with:
 
     taskset -c 0 env OMP_NUM_THREADS=1 OMP_DYNAMIC=FALSE \
       ./build/release/bench_leopard2_batch_preflight

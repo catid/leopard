@@ -87,7 +87,7 @@ int main(void)
     memset(&context_options, 0, sizeof(context_options));
     context_options.struct_size = sizeof(context_options);
     context_options.thread_count = 1;
-    if (LEO2_API_VERSION < 4u ||
+    if (LEO2_API_VERSION < 5u ||
         leo2_codec_create_integer_selector_signature == NULL ||
         !require_result(leo2_context_create(&context_options, &context), LEO2_SUCCESS,
             "C ABI context create")) {

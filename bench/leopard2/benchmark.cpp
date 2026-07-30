@@ -971,6 +971,13 @@ static uint64_t CheckedU64Product(uint64_t left, uint64_t right, const char* wha
     return left * right;
 }
 
+static uint64_t CheckedU64Sum(uint64_t left, uint64_t right, const char* what)
+{
+    if (right > std::numeric_limits<uint64_t>::max() - left)
+        Fail(std::string(what) + " overflows uint64");
+    return left + right;
+}
+
 static void WriteOptionalRate(std::ostream& output, uint64_t bytes, double microseconds)
 {
     if (bytes == 0)
@@ -1185,6 +1192,37 @@ static int Run(const Options& options)
         decode_items[i].scratch_bytes = stripe.decode_scratch.size();
     }
 
+    size_t encode_batch_preflight_bytes = 0;
+    size_t decode_batch_preflight_bytes = 0;
+    RequireLeo2(leo2_encode_batch_preflight_scratch_size(
+        codec, encode_items.size(), &encode_batch_preflight_bytes),
+        "encode batch preflight scratch query");
+    RequireLeo2(leo2_decode_plan_batch_preflight_scratch_size(
+        plan, decode_items.size(), &decode_batch_preflight_bytes),
+        "decode batch preflight scratch query");
+    AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
+    AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
+    const auto run_encode_batch = [&]() {
+        const leo2_result result = encode_batch_preflight_bytes == 0
+            ? leo2_encode_batch(
+                codec, &encode_items[0], encode_items.size())
+            : leo2_encode_batch_with_preflight_scratch(
+                codec, &encode_items[0], encode_items.size(),
+                encode_batch_preflight.data(),
+                encode_batch_preflight.size());
+        RequireLeo2(result, "encode batch");
+    };
+    const auto run_decode_batch = [&]() {
+        const leo2_result result = decode_batch_preflight_bytes == 0
+            ? leo2_decode_plan_execute_batch(
+                plan, &decode_items[0], decode_items.size())
+            : leo2_decode_plan_execute_batch_with_preflight_scratch(
+                plan, &decode_items[0], decode_items.size(),
+                decode_batch_preflight.data(),
+                decode_batch_preflight.size());
+        RequireLeo2(result, "decode batch");
+    };
+
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
         options.attest_source;
@@ -1201,8 +1239,7 @@ static int Run(const Options& options)
     uint64_t parity_digest = kFnv1a64Offset;
     uint64_t recovered_digest = kFnv1a64Offset;
 
-    RequireLeo2(leo2_encode_batch(codec, &encode_items[0], encode_items.size()),
-        "correctness encode batch");
+    run_encode_batch();
     if (extended_schema)
     {
         for (size_t stripe_index = 0; stripe_index < stripes.size(); ++stripe_index)
@@ -1217,8 +1254,7 @@ static int Run(const Options& options)
         }
     }
 
-    RequireLeo2(leo2_decode_plan_execute_batch(plan, &decode_items[0], decode_items.size()),
-        "correctness decode batch");
+    run_decode_batch();
     for (size_t i = 0; i < stripes.size(); ++i)
         CheckRestored(*stripes[i], options, losses, "Leopard2");
     if (extended_schema)
@@ -1276,21 +1312,17 @@ static int Run(const Options& options)
 
     for (size_t i = 0; i < options.warmup; ++i)
     {
-        RequireLeo2(leo2_encode_batch(codec, &encode_items[0], encode_items.size()),
-            "encode warmup");
-        RequireLeo2(leo2_decode_plan_execute_batch(plan, &decode_items[0], decode_items.size()),
-            "decode warmup");
+        run_encode_batch();
+        run_decode_batch();
     }
 
     const Summary encode_execution = Measure(
         options.iterations, options.reuse, options.retain_samples, [&]() {
-        RequireLeo2(leo2_encode_batch(codec, &encode_items[0], encode_items.size()),
-            "timed encode batch");
+        run_encode_batch();
     });
     const Summary decode_execution = Measure(
         options.iterations, options.reuse, options.retain_samples, [&]() {
-        RequireLeo2(leo2_decode_plan_execute_batch(plan, &decode_items[0], decode_items.size()),
-            "timed decode batch");
+        run_decode_batch();
     });
 
     const std::string legacy_reason = options.skip_legacy
@@ -1382,11 +1414,17 @@ static int Run(const Options& options)
     const uint64_t decode_output_bytes = CheckedU64Product(
         CheckedU64Product(options.losses, options.bytes, "decode output byte count"),
         batch, "decode output byte count");
-    const uint64_t encode_scratch_batch = CheckedU64Product(
-        static_cast<uint64_t>(encode_scratch_bytes), batch,
+    const uint64_t encode_scratch_batch = CheckedU64Sum(
+        CheckedU64Product(
+            static_cast<uint64_t>(encode_scratch_bytes), batch,
+            "batch encode scratch byte count"),
+        static_cast<uint64_t>(encode_batch_preflight_bytes),
         "batch encode scratch byte count");
-    const uint64_t decode_scratch_batch = CheckedU64Product(
-        static_cast<uint64_t>(decode_scratch_bytes), batch,
+    const uint64_t decode_scratch_batch = CheckedU64Sum(
+        CheckedU64Product(
+            static_cast<uint64_t>(decode_scratch_bytes), batch,
+            "batch decode scratch byte count"),
+        static_cast<uint64_t>(decode_batch_preflight_bytes),
         "batch decode scratch byte count");
 
     std::ostringstream json;

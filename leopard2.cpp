@@ -443,7 +443,8 @@ static const uint32_t kDirectMaxRepairLosses = 8;
 static const uint32_t kDirectMaxParentDimension = 256;
 static const uint64_t kDirectSimdTileBytes = 64;
 static const uint64_t kDirectMinimumMeasuredBytes = 1024;
-static const size_t kScalableBatchPreflightMinItems = 9;
+static const size_t kScalableBatchPreflightMinItems = 2;
+static const size_t kLegacyK1R1ScalableBatchPreflightMinItems = 9;
 static const size_t kSparseEncodeScheduleBudget = 65536;
 
 typedef leo2_result (*BatchTaskFunction)(void* context, size_t index);
@@ -6965,10 +6966,10 @@ static leo2_result ValidateBatchRangesPartitioned(
         // predecessor can intersect, because the writable set is disjoint
         // and ascending, so every earlier writable ends at or before the
         // predecessor's begin.
-        const BatchRangeRecord* probe = std::upper_bound(
+        const BatchRangeRecord* probe = std::lower_bound(
             ranges, writable_end, readable.range.end,
-            [](uintptr_t end, const BatchRangeRecord& record)
-            { return end <= record.range.begin; });
+            [](const BatchRangeRecord& record, uintptr_t end)
+            { return record.range.begin < end; });
         if (probe != ranges && (probe - 1)->range.end > readable.range.begin)
             return LEO2_OVERLAP;
     }
@@ -7011,6 +7012,28 @@ static leo2_result PrepareBatchPreflightScratch(
     return LEO2_SUCCESS;
 }
 
+static bool UseScalableEncodeBatchPreflight(
+    const leo2_codec* codec,
+    size_t item_count)
+{
+    const size_t minimum_items = IsLegacyHighK1R1Codec(codec)
+        ? kLegacyK1R1ScalableBatchPreflightMinItems
+        : kScalableBatchPreflightMinItems;
+    return item_count >= minimum_items;
+}
+
+static bool UseScalableDecodeBatchPreflight(
+    const leo2_decode_plan* plan,
+    size_t item_count)
+{
+    if (!plan || plan->no_op)
+        return false;
+    const size_t minimum_items = IsLegacyHighK1R1Codec(plan->codec)
+        ? kLegacyK1R1ScalableBatchPreflightMinItems
+        : kScalableBatchPreflightMinItems;
+    return item_count >= minimum_items;
+}
+
 static leo2_result EncodeBatchPreflightScratchBytes(
     const leo2_codec* codec,
     size_t item_count,
@@ -7021,6 +7044,8 @@ static leo2_result EncodeBatchPreflightScratchBytes(
         return LEO2_INVALID_ARGUMENT;
     if (item_count > 0xffffffffu)
         return LEO2_INVALID_ARGUMENT;
+    if (!UseScalableEncodeBatchPreflight(codec, item_count))
+        return LEO2_SUCCESS;
     size_t ranges_per_item = 0;
     if (!CheckedAdd(codec->original_count, codec->recovery_count,
             ranges_per_item) ||
@@ -7040,7 +7065,7 @@ static leo2_result DecodeBatchPreflightScratchBytes(
         return LEO2_INVALID_ARGUMENT;
     if (item_count > 0xffffffffu)
         return LEO2_INVALID_ARGUMENT;
-    if (item_count < kScalableBatchPreflightMinItems || plan->no_op)
+    if (!UseScalableDecodeBatchPreflight(plan, item_count))
         return LEO2_SUCCESS;
 
     size_t recovery_input_count = 0;
@@ -9915,7 +9940,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
 {
     /* Preserve the established empty/single-item validation, metadata
        protection, and lazy-worker behavior without imposing a new workspace. */
-    if (item_count < kScalableBatchPreflightMinItems)
+    if (!UseScalableEncodeBatchPreflight(codec, item_count))
         return EncodeBatchCompatibilityInternal(codec, items, item_count);
     if (item_count > 0xffffffffu || !items || !codec)
         return LEO2_INVALID_ARGUMENT;
@@ -10798,8 +10823,7 @@ leo2_decode_plan_execute_batch_with_preflight_scratch(
     /* The compatibility entry point owns the exact true-no-op and one-item
        semantics, including validation of only top-level item-array arithmetic
        for a no-loss plan. */
-    if (item_count < kScalableBatchPreflightMinItems ||
-        (plan && plan->no_op))
+    if (!UseScalableDecodeBatchPreflight(plan, item_count))
         return DecodeBatchCompatibilityInternal(plan, items, item_count);
     if (item_count > 0xffffffffu || !items || !plan)
         return LEO2_INVALID_ARGUMENT;

@@ -1152,30 +1152,28 @@ void TestScalableQueriesAndNoOp(Fixture& fixture)
         "single-item encode preflight query");
     Require(bytes == 0, "single-item encode preflight was not zero");
     RequireResult(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, 2, &bytes), LEO2_SUCCESS,
+        "two-item encode preflight query");
+    Require(bytes != 0 && bytes % leo2_scratch_alignment() == 0,
+        "two-item encode preflight size is not aligned");
+    const size_t encode_two = bytes;
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
         fixture.codec, 8, &bytes), LEO2_SUCCESS,
         "eight-item encode preflight query");
-    Require(bytes == 0, "small encode batch did not retain compatibility path");
-    RequireResult(leo2_encode_batch_preflight_scratch_size(
-        fixture.codec, 9, &bytes), LEO2_SUCCESS,
-        "nine-item encode preflight query");
-    Require(bytes != 0 && bytes % leo2_scratch_alignment() == 0,
-        "scalable encode preflight size is not aligned");
-    const size_t encode_nine = bytes;
+    Require(bytes > encode_two,
+        "encode preflight scratch did not grow above two items");
+    const size_t encode_eight = bytes;
     RequireResult(leo2_encode_batch_preflight_scratch_size(
         fixture.codec, 64, &bytes), LEO2_SUCCESS,
         "64-item encode preflight query");
-    Require(bytes > encode_nine,
+    Require(bytes > encode_eight,
         "encode preflight scratch did not scale with batch size");
 
     RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
-        fixture.plan, 8, &bytes), LEO2_SUCCESS,
-        "eight-item decode preflight query");
-    Require(bytes == 0, "small decode batch did not retain compatibility path");
-    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
-        fixture.plan, 9, &bytes), LEO2_SUCCESS,
-        "nine-item decode preflight query");
+        fixture.plan, 2, &bytes), LEO2_SUCCESS,
+        "two-item decode preflight query");
     Require(bytes != 0 && bytes % leo2_scratch_alignment() == 0,
-        "scalable decode preflight size is not aligned");
+        "two-item decode preflight size is not aligned");
 
     bytes = 123;
     RequireResult(leo2_encode_batch_preflight_scratch_size(
@@ -1239,18 +1237,78 @@ void TestScalableQueriesAndNoOp(Fixture& fixture)
         "scalable no-loss batch inspected item state");
 }
 
+void TestLegacyK1R1Cutoff(Fixture& fixture)
+{
+    leo2_codec* legacy = NULL;
+    leo2_codec* low = NULL;
+    leo2_decode_plan* legacy_plan = NULL;
+    leo2_decode_plan* low_plan = NULL;
+    RequireResult(leo2_codec_create(fixture.context, 1, 1,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &legacy),
+        LEO2_SUCCESS, "legacy K=1,R=1 codec create");
+    RequireResult(leo2_codec_create(fixture.context, 1, 1,
+        LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, NULL, &low),
+        LEO2_SUCCESS, "low K=1,R=1 codec create");
+
+    size_t bytes = 1;
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        legacy, 8, &bytes), LEO2_SUCCESS,
+        "legacy K=1,R=1 batch-8 encode query");
+    Require(bytes == 0,
+        "legacy K=1,R=1 batch-8 encode did not retain compatibility path");
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        legacy, 9, &bytes), LEO2_SUCCESS,
+        "legacy K=1,R=1 batch-9 encode query");
+    Require(bytes != 0,
+        "legacy K=1,R=1 batch-9 encode did not select scalable path");
+    RequireResult(leo2_encode_batch_preflight_scratch_size(
+        low, 2, &bytes), LEO2_SUCCESS,
+        "low K=1,R=1 batch-2 encode query");
+    Require(bytes != 0,
+        "low K=1,R=1 batch-2 encode did not select scalable path");
+
+    const uint8_t original_present[1] = { 0 };
+    const uint8_t recovery_present[1] = { 1 };
+    RequireResult(leo2_decode_plan_create(legacy, original_present,
+        recovery_present, &legacy_plan), LEO2_SUCCESS,
+        "legacy K=1,R=1 decode plan create");
+    RequireResult(leo2_decode_plan_create(low, original_present,
+        recovery_present, &low_plan), LEO2_SUCCESS,
+        "low K=1,R=1 decode plan create");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        legacy_plan, 8, &bytes), LEO2_SUCCESS,
+        "legacy K=1,R=1 batch-8 decode query");
+    Require(bytes == 0,
+        "legacy K=1,R=1 batch-8 decode did not retain compatibility path");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        legacy_plan, 9, &bytes), LEO2_SUCCESS,
+        "legacy K=1,R=1 batch-9 decode query");
+    Require(bytes != 0,
+        "legacy K=1,R=1 batch-9 decode did not select scalable path");
+    RequireResult(leo2_decode_plan_batch_preflight_scratch_size(
+        low_plan, 2, &bytes), LEO2_SUCCESS,
+        "low K=1,R=1 batch-2 decode query");
+    Require(bytes != 0,
+        "low K=1,R=1 batch-2 decode did not select scalable path");
+
+    leo2_decode_plan_destroy(low_plan);
+    leo2_decode_plan_destroy(legacy_plan);
+    leo2_codec_destroy(low);
+    leo2_codec_destroy(legacy);
+}
+
 void TestScalableValidAndAllocationFree(Fixture& fixture)
 {
-    const size_t compatibility_counts[2] = { 1, 8 };
-    for (size_t i = 0; i < 2; ++i)
+    const size_t dispatch_counts[3] = { 1, 2, 8 };
+    for (size_t i = 0; i < 3; ++i)
     {
-        ScalableEncodeBatch small(fixture, compatibility_counts[i]);
+        ScalableEncodeBatch small(fixture, dispatch_counts[i]);
         RequireResult(small.Execute(), LEO2_SUCCESS,
-            "small scalable encode compatibility path");
+            "small scalable encode dispatch");
         small.Check();
         ScalableDecodeBatch small_decode(fixture, small);
         RequireResult(small_decode.Execute(), LEO2_SUCCESS,
-            "small scalable decode compatibility path");
+            "small scalable decode dispatch");
         small_decode.Check();
     }
 
@@ -1639,6 +1697,7 @@ void Run(uint32_t thread_count)
     TestLargeBatchCount(fixture);
     TestNoLossBatchIsTrueNoOp(fixture);
     TestScalableQueriesAndNoOp(fixture);
+    TestLegacyK1R1Cutoff(fixture);
     TestScalableValidAndAllocationFree(fixture);
     TestScalableEncodeConflicts(fixture);
     TestScalableDecodeConflicts(fixture);
@@ -1658,6 +1717,7 @@ int main()
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
                   << "valid_shared=4 conflict_checks=20 "
                   << "large_encode_items=514 large_decode_items=514"
+                  << " scalable_query_cutoff=2"
                   << " scalable_batch_sizes=9,64,1024"
                   << " allocation_audit=clean concurrent_scalable_calls=64"
                   << std::endl;
