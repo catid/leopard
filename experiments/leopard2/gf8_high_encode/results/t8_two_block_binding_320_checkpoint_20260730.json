@@ -1,0 +1,122 @@
+{
+  "schema": "leopard2-gf8-t8-two-block-320-checkpoint/v1",
+  "date_utc": "2026-07-30",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": [9, 16],
+    "R": [5, 8],
+    "shard_bytes": [320],
+    "batch": 64,
+    "reuse": 64,
+    "dense_full_parity_only": true,
+    "api": "reusable prevalidated encode-batch binding"
+  },
+  "source": {
+    "implementation_commit": "1cbcbf63d3a057eab60267064bd10961b01769e3",
+    "measured_tree": "04de91e5f72fd8581f4fb5e93a3d074e4ba7d512",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "build": {
+    "type": "Release",
+    "compiler": "GCC 13.3.0",
+    "backend_variant": "auto",
+    "avx512f_probe_forced": false,
+    "avx512bw_probe_forced": false,
+    "avx512vl_probe_forced": false,
+    "gfni_probe_forced": false,
+    "candidate_mode": "64/128/192/256/320 selector enabled",
+    "control_mode": "only the 320-byte selector disabled through a nonzero volatile data marker",
+    "candidate_control_leopard2_text_sha256": "5dd5822e0b672bbf31b6c6bcc43eaf45493a237dfa8ce187c7e972ad384cbd69",
+    "candidate_control_benchmark_text_sha256": "c834f9ca0a9ab9684a10c1db866c27ec72118d0ff5a7ec8ead906806236b9cec",
+    "candidate_control_text_identical": true
+  },
+  "binary_sha256": {
+    "candidate": "62190ff897f2f3fed5ad0b4bf201de387db48e0388484d7516e1a27e566f51a7",
+    "control": "4e21e1eda25a670031abc630a5b7744ed477505d895ef3c5e1b9aa3a7cd22223",
+    "exact_main": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "verified_unchanged_after_campaign": true
+  },
+  "promotion_policy": {
+    "target_control_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.0,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "one mean log contrast per independent round; two-sided Student-t 95 percent CI with df=2"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "rounds": 3,
+    "order": "mirrored ABCCBA for targets; mirrored ABBA for neighbors",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "target_cells": 32,
+    "neighbor_cells": 24,
+    "processes": 864,
+    "neighbor_bytes": [256, 257, 288, 319, 321, 352, 384, 512],
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle_jiffies": true,
+    "target_control_speedup_range": [
+      1.1341638324064125,
+      1.4078125717644594
+    ],
+    "target_control_ci95_lower_minimum": 1.1234654275099774,
+    "target_exact_main_speedup_range": [
+      1.1346820570575284,
+      1.3458819688071808
+    ],
+    "target_exact_main_ci95_lower_minimum": 1.0013628847226794,
+    "neighbor_control_speedup_range": [
+      0.9910922743240457,
+      1.0164011324041897
+    ],
+    "neighbor_ci95_upper_minimum": 1.00130613205755,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "raw_sha256": "3c9a07a8ac7ef6549751fe3d44db0ccd6dd9f0fd8c4b3df43df21c742c68626f",
+    "summary_sha256": "013ca928a9341ca3b01fe6640641b092945ef343679592ffacc58646c5158d46"
+  },
+  "validation": {
+    "release_candidate_focused": "2/2 passed",
+    "release_control_focused": "2/2 passed",
+    "clang18_asan_ubsan_focused": "2/2 passed",
+    "benchmark_json_regression": "passed",
+    "runner_python_compilation": "passed",
+    "direct_generator_shape_byte_pairs_64_128_192_256_320": 160,
+    "direct_generator_parity_checks": 1090,
+    "changed_source_reuse": "passed at 64, 128, 192, 256, and 320 bytes",
+    "partial_output_nonselection": "passed at 64, 128, 192, 256, and 320 bytes",
+    "unaligned_guard_checks": 50,
+    "thread_pool_outputs_64_128_192_256_320": 160,
+    "hot_execution_allocations_64_128_192_256_320": 0,
+    "backend_startup_kat": "passed at unaligned 64, 128, 192, 256, and 320 bytes"
+  },
+  "assembly_audit": {
+    "artifact_sha256": "62190ff897f2f3fed5ad0b4bf201de387db48e0388484d7516e1a27e566f51a7",
+    "kernel_symbol": "leopard::backend::AVX2FF8HighEncodeTwoBlocksT8",
+    "kernel_object_address": "0xf00",
+    "kernel_text_bytes": 2409,
+    "kernel_instruction_lines": 532,
+    "kernel_call_instructions": 0,
+    "kernel_zmm_or_mask_register_references": 0,
+    "kernel_explicit_rsp_subtractions": 0,
+    "wrapper_symbol": "ExecuteHighT8TwoBlockBinding",
+    "wrapper_text_bytes": 1099,
+    "wrapper_fixed_stack_frame_bytes": 1184,
+    "wrapper_zero_shard_bytes": 320,
+    "stack_note": "The AVX2 callback remains a leaf 32-byte-tiled loop. The wrapper's bounded frame contains the 960-byte three-shard discard storage plus pointer arrays and canary state.",
+    "code_size_note": "One unchanged 2409-byte transform loop handles 64, 128, 192, 256, and 320 bytes; the 320-byte promotion adds no duplicate transform body."
+  },
+  "memory_policy": {
+    "build_parallelism": 1,
+    "release_and_sanitizer_build_limit_bytes": 536870912,
+    "test_and_benchmark_limit_bytes": 268435456,
+    "benchmark_child_address_space_limit_bytes": 201326592,
+    "subworkers": 0,
+    "campaign_processes_completed_without_memory_limit_or_oom_failure": true,
+    "host_counter_note": "The enclosing user-service memory.events file is cumulative and contains earlier-session OOM events, so this checkpoint does not claim a zero counter delta."
+  }
+}
