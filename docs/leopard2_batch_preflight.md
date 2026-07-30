@@ -133,7 +133,7 @@ the exact-main executable SHA-256 was
 `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
 Both hashes were verified after the serialized run.
 
-### Register-light T=8 follow-up
+### Register-light T=8 prototype
 
 The default-off `LEO2_EXPERIMENT_HIGH_T8_VECTOR` follow-up closes the remaining
 64-byte `K=8,R=8` gap. The AVX2 kernel processes one 32-byte vector from each of
@@ -182,6 +182,53 @@ regression separately proves that toggling this CMake option changes the
 effective build-configuration digest and relinks benchmarks. The compact
 machine-readable checkpoint is
 `experiments/leopard2/gf8_high_encode/t8_vector_checkpoint.json`.
+
+### Production T=8 promotion
+
+Commit `83918e2054302b622e68be2ba2464f9fb2f7a578` promotes that qualified
+kernel into ordinary AVX2 builds. The backend contract now carries an explicit
+supported-side mask: regular AVX2 declares only side 8, while AVX-512 retains
+8, 16, 32, and 64. Startup known-answer tests execute every declared size, so
+the prototype's AVX2-specific KAT exception is gone. A GF8-disabled build
+compiles the same `Ops` layout with a null callback and zero mask.
+
+`LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=ON` provides the same-source control;
+it is not a normal dispatcher setting. The option is included in benchmark
+source attestation and its focused CMake regression proves that toggling it
+changes the effective-configuration digest and relinks benchmark binaries.
+
+Final frozen SHA-256 values were:
+
+- promoted production:
+  `971678cef9ef88c6081fab888fe371e1b3d0abace3d6639d5a5c24a75215adc9`;
+- diagnostic-disabled control:
+  `dfd18bf19be706b36c09521b5b1f2b1883287d953fe1b728098dae9b8b164e21`;
+- exact Leopard main:
+  `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
+
+The final clean-source, pinned CPU-4 campaign used the same counterbalanced
+method and limits as the prototype. Times are median microseconds per batch
+call:
+
+| Batch | Leopard main | diagnostic control | production | main / production |
+|---:|---:|---:|---:|---:|
+| 1 | 0.048008 | 0.074805 | 0.028477 | 1.686x |
+| 8 | 0.404340 | 0.645320 | 0.214180 | 1.888x |
+| 64 | 3.034137 | 5.052320 | 1.752992 | 1.731x |
+| 1024 | 60.861102 | 83.591234 | 37.753109 | 1.612x |
+
+The final neighbor production/control ratios were 1.498x, 1.481x, 1.497x,
+and 1.546x at 32, 33, 63, and 65 bytes; `K=8,R=7` and `K=9,R=8` improved
+1.053x and 1.453x. The inactive `K=7,R=7` cell changed by -0.16%, inside the
+2% regression gate. All 78 benchmark processes passed and attested the clean
+production commit. Frozen hashes matched before and after.
+
+The promoted Release target passed 672 tiny transform cells, 136 binding-oracle
+checks, and the 16-thread/1,024-iteration backend startup KAT. The diagnostic
+control passed the same independent-oracle target. Clang 18 ASan+UBSan passed
+at 36,352 KiB RSS, and a GF16-only compile caught and verified the required
+`LEO_HAS_FF8` guard. The compact final checkpoint is
+`experiments/leopard2/gf8_high_encode/t8_vector_production_checkpoint.json`.
 
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
