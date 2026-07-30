@@ -580,7 +580,47 @@ static volatile uint32_t g_high_t8_one_block_extended_mode =
 static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512;
 
-static bool IsHighT8OneBlockByteCount(uint64_t shard_bytes)
+static bool IsHighT8OneBlockBeyond512ShapeByteCount(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
+{
+    /*
+        Offline discovery/independent-holdout intersection.  Bit
+
+            4 * (K - 5) + (R - 5)
+
+        selects one K=5..8,R=5..8 shape.  Both campaigns required a
+        same-source 95% lower confidence bound of at least 1.05x; public
+        R<=K cells additionally required an exact-main lower bound above 1.
+    */
+    static const uint16_t kShapeMasks[] = {
+        UINT16_C(0xffff), // 576
+        UINT16_C(0xffff), // 640
+        UINT16_C(0x4ffd), // 704
+        UINT16_C(0x4fdd), // 768
+        UINT16_C(0x4fdd), // 832
+        UINT16_C(0x0fd4), // 896
+        UINT16_C(0x4efd), // 960
+        UINT16_C(0x4fcc)  // 1024
+    };
+    if (g_high_t8_one_block_beyond_512_mode != 1U ||
+        original_count < 5 || original_count > 8 ||
+        recovery_count < 5 || recovery_count > 8 ||
+        shard_bytes < 576 || shard_bytes > 1024 ||
+        (shard_bytes & 63U) != 0)
+        return false;
+    const size_t byte_index =
+        static_cast<size_t>((shard_bytes - 576) / 64);
+    const uint32_t shape_bit =
+        4U * (original_count - 5U) + (recovery_count - 5U);
+    return (kShapeMasks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
+}
+
+static bool IsHighT8OneBlockByteCount(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
 {
     if (shard_bytes == 64)
         return true;
@@ -588,9 +628,8 @@ static bool IsHighT8OneBlockByteCount(uint64_t shard_bytes)
         (shard_bytes & 63U) == 0 &&
         g_high_t8_one_block_extended_mode == 1U)
         return true;
-    return shard_bytes >= 576 && shard_bytes <= 1024 &&
-        (shard_bytes & 63U) == 0 &&
-        g_high_t8_one_block_beyond_512_mode == 1U;
+    return IsHighT8OneBlockBeyond512ShapeByteCount(
+        original_count, recovery_count, shard_bytes);
 }
 #endif
 
@@ -9714,7 +9753,8 @@ bool GetCodecEncodePathInfo(
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count == 8 && codec->recovery_count == 8 &&
         codec->padded_side == 8 &&
-        IsHighT8OneBlockByteCount(shard_bytes) &&
+        IsHighT8OneBlockByteCount(
+            codec->original_count, codec->recovery_count, shard_bytes) &&
         requested_recovery_count == 8)
     {
         const leopard::backend::Ops& transform_ops =
@@ -9731,7 +9771,8 @@ bool GetCodecEncodePathInfo(
         codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
         (codec->original_count != 8 || codec->recovery_count != 8) &&
         codec->padded_side == 8 &&
-        IsHighT8OneBlockByteCount(shard_bytes) &&
+        IsHighT8OneBlockByteCount(
+            codec->original_count, codec->recovery_count, shard_bytes) &&
         requested_recovery_count == codec->recovery_count)
     {
         const leopard::backend::Ops& transform_ops =
@@ -9881,7 +9922,8 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
     const void* const* original,
     void* const* recovery)
 {
-    LEO_DEBUG_ASSERT(IsHighT8OneBlockByteCount(shard_bytes));
+    LEO_DEBUG_ASSERT(IsHighT8OneBlockByteCount(
+        original_count, recovery_count, shard_bytes));
     alignas(32) static const uint8_t zero_shard[1024] = {};
     alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[8];
@@ -10025,7 +10067,8 @@ static leo2_result EncodeInternal(
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count == 8 && codec->recovery_count == 8 &&
         codec->padded_side == 8 &&
-        IsHighT8OneBlockByteCount(shard_bytes))
+        IsHighT8OneBlockByteCount(
+            codec->original_count, codec->recovery_count, shard_bytes))
     {
         bool full_output = true;
         for (uint32_t i = 0; i < 8; ++i)
@@ -10756,7 +10799,9 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
             const leo2_encode_batch_item& item =
                 binding->items[item_index];
             all_dense_qualified = all_dense_qualified &&
-                IsHighT8OneBlockByteCount(item.shard_bytes);
+                IsHighT8OneBlockByteCount(
+                    codec->original_count, codec->recovery_count,
+                    item.shard_bytes);
             for (uint32_t parity = 0;
                  parity < codec->recovery_count; ++parity)
                 all_dense_qualified =

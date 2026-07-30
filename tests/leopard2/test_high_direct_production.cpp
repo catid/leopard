@@ -113,13 +113,35 @@ void Require(bool condition, const char* message)
         throw std::runtime_error(message);
 }
 
-bool IsExpectedT8OneBlockByteCount(size_t bytes)
+bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
+{
+    static const uint16_t shape_masks[] = {
+        UINT16_C(0xffff), UINT16_C(0xffff),
+        UINT16_C(0x4ffd), UINT16_C(0x4fdd),
+        UINT16_C(0x4fdd), UINT16_C(0x0fd4),
+        UINT16_C(0x4efd), UINT16_C(0x4fcc)
+    };
+    if (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 != 0 ||
+        k < 5 || k > 8 || r < 5 || r > 8 ||
+        bytes < 576 || bytes > 1024 || (bytes & 63U) != 0)
+        return false;
+    const size_t byte_index = (bytes - 576) / 64;
+    const unsigned shape_bit = 4U * (k - 5U) + (r - 5U);
+    return (shape_masks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
+}
+
+bool IsExpectedT8OneBlockByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
 {
     return bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
-        (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 == 0 &&
-         bytes >= 576 && bytes <= 1024 && (bytes & 63U) == 0);
+        IsExpectedT8OneBlockBeyond512ShapeByteCount(k, r, bytes);
 }
 
 bool IsExpectedT8TwoBlockExtendedShapeByteCount(
@@ -345,7 +367,7 @@ uint64_t ExerciseT8BatchBinding(
         "T8 binding path introspection");
     Require(t8_path.high_t8_vector_selected ==
             (LEO2_EXPECT_HIGH_T8_VECTOR != 0 &&
-             IsExpectedT8OneBlockByteCount(bytes)),
+             IsExpectedT8OneBlockByteCount(k, r, bytes)),
         "T8 binding selector differs from the production expectation");
 
     std::vector<Shards> recovery(
@@ -488,13 +510,13 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
                     "partial T8 binding path introspection");
                 const bool expected =
                     LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING != 0 &&
-                    IsExpectedT8OneBlockByteCount(bytes) &&
+                    IsExpectedT8OneBlockByteCount(k, r, bytes) &&
                     (k != 8 || r != 8);
                 Require(path.high_t8_partial_binding_selected == expected,
                     "partial T8 binding selector differs from expectation");
                 Require(path.high_t8_vector_selected ==
                         (LEO2_EXPECT_HIGH_T8_VECTOR != 0 &&
-                         IsExpectedT8OneBlockByteCount(bytes) &&
+                         IsExpectedT8OneBlockByteCount(k, r, bytes) &&
                          k == 8 && r == 8),
                     "full T8 vector selector differs from expectation");
 
@@ -721,8 +743,8 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
 
 uint64_t ExerciseT8PartialThreadPool(size_t bytes)
 {
-    static const unsigned k = 5;
-    static const unsigned r = 5;
+    const unsigned k = bytes > 512 ? 7 : 5;
+    const unsigned r = bytes > 512 ? 7 : 5;
     static const size_t batch_count = 8;
 
     leo2_context_options options = {};
@@ -873,8 +895,8 @@ uint64_t ExerciseT8PartialUnaligned(
     leo2_context* context,
     size_t bytes)
 {
-    static const unsigned k = 5;
-    static const unsigned r = 5;
+    const unsigned k = bytes > 512 ? 7 : 5;
+    const unsigned r = bytes > 512 ? 7 : 5;
     static const uint8_t sentinel = 0xa5;
 
     leo2_codec* codec = NULL;
@@ -937,7 +959,7 @@ uint64_t ExerciseT8PartialUnaligned(
 
     leo2_encode_batch_binding_destroy(binding);
     leo2_codec_destroy(codec);
-    Require(checks == 10,
+    Require(checks == 2 * r,
         "partial T8 unaligned check count changed unexpectedly");
     return checks;
 }
@@ -1057,7 +1079,7 @@ void ExerciseTinyFullOutputRegion(
                     "tiny full-output path introspection");
                 const bool expected_partial_binding =
                     LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING != 0 &&
-                    IsExpectedT8OneBlockByteCount(bytes) && k <= 8 &&
+                    IsExpectedT8OneBlockByteCount(k, r, bytes) && k <= 8 &&
                     (k != 8 || r != 8);
                 Require(path.high_t8_partial_binding_selected ==
                         expected_partial_binding,

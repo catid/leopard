@@ -206,6 +206,25 @@ bool IsExpectedT8TwoBlockByteCount(
         IsExpectedT8TwoBlockExtendedShapeByteCount(k, r, bytes);
 }
 
+bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
+{
+    static const uint16_t shape_masks[] = {
+        UINT16_C(0xffff), UINT16_C(0xffff),
+        UINT16_C(0x4ffd), UINT16_C(0x4fdd),
+        UINT16_C(0x4fdd), UINT16_C(0x0fd4),
+        UINT16_C(0x4efd), UINT16_C(0x4fcc)
+    };
+    if (k < 5 || k > 8 || r < 5 || r > 8 ||
+        bytes < 576 || bytes > 1024 || (bytes & 63U) != 0)
+        return false;
+    const size_t byte_index = (bytes - 576) / 64;
+    const unsigned shape_bit = 4U * (k - 5U) + (r - 5U);
+    return (shape_masks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
+}
+
 void RequireResult(
     leo2_result actual,
     leo2_result expected,
@@ -762,6 +781,7 @@ void TestT8OneBlockBindingAllocation()
     };
     static const unsigned shapes[][2] = {
         { 5, 5 },
+        { 7, 7 },
         { 8, 8 }
     };
 
@@ -800,11 +820,18 @@ void TestT8OneBlockBindingAllocation()
                 "one-block allocation path introspection");
             const bool extension_enabled =
                 leopard2_internal::HighT8OneBlockExtendedEnabled();
+            const bool beyond_enabled =
+                leopard2_internal::HighT8OneBlockBeyond512Enabled();
+            const bool expected_selection =
+                bytes <= 512 ? extension_enabled :
+                beyond_enabled &&
+                    IsExpectedT8OneBlockBeyond512ShapeByteCount(
+                        k, r, bytes);
             Require(path.high_t8_vector_selected ==
-                    (extension_enabled && k == 8 && r == 8),
+                    (expected_selection && k == 8 && r == 8),
                 "full one-block allocation selector differs");
             Require(path.high_t8_partial_binding_selected ==
-                    (extension_enabled && (k != 8 || r != 8)),
+                    (expected_selection && (k != 8 || r != 8)),
                 "partial one-block allocation selector differs");
 
             Shards source(k, Bytes(bytes, 0));

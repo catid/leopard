@@ -451,13 +451,17 @@ def validate_result(
                 5 <= cell["K"] <= 8 and 5 <= cell["R"] <= 8
             )
             expected_beyond = implementation == "candidate"
-            expected_selected = eligible_shape and (
-                byte_count == 64 or
-                (128 <= byte_count <= 512 and
-                 byte_count % 64 == 0) or
-                (576 <= byte_count <= 1024 and
-                 byte_count % 64 == 0 and expected_beyond)
-            )
+            if final_selector and implementation == "candidate":
+                expected_selected = cell.get(
+                    "candidate_selected") is True
+            else:
+                expected_selected = eligible_shape and (
+                    byte_count == 64 or
+                    (128 <= byte_count <= 512 and
+                     byte_count % 64 == 0) or
+                    (576 <= byte_count <= 1024 and
+                     byte_count % 64 == 0 and expected_beyond)
+                )
             marker_valid = (
                 build.get("high_t8_one_block_extended_enabled") is True and
                 build.get("high_t8_one_block_beyond_512_enabled") is

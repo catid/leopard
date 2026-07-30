@@ -44,9 +44,36 @@ BEYOND_BYTE_NEIGHBORS = (
     512, 513, 575, 577, 639, 641, 703, 705, 767,
     769, 831, 833, 895, 897, 959, 961, 1023, 1025, 1088,
 )
+BEYOND_PRODUCTION_MASKS = {
+    576: 0xFFFF,
+    640: 0xFFFF,
+    704: 0x4FFD,
+    768: 0x4FDD,
+    832: 0x4FDD,
+    896: 0x0FD4,
+    960: 0x4EFD,
+    1024: 0x4FCC,
+}
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
+
+
+def beyond_production_selected(
+    k: int,
+    r: int,
+    shard_bytes: int,
+) -> bool:
+    if not (5 <= k <= 8 and 5 <= r <= 8):
+        return False
+    if shard_bytes == 64 or (
+            128 <= shard_bytes <= 512 and shard_bytes % 64 == 0):
+        return True
+    mask = BEYOND_PRODUCTION_MASKS.get(shard_bytes)
+    if mask is None:
+        return False
+    bit = 4 * (k - 5) + (r - 5)
+    return (mask & (1 << bit)) != 0
 
 
 def executable_sections_identity(executable: Path) -> dict[str, Any]:
@@ -243,6 +270,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--holdout", action="store_true",
         help="use an independent seed family for confirmation")
+    parser.add_argument(
+        "--final-selector", action="store_true",
+        help=(
+            "validate the discovery/holdout intersection; excluded target "
+            "shapes become same-source regression neighbors"
+        ))
     return parser.parse_args()
 
 
@@ -269,6 +302,7 @@ def run_cell(
                 options.source_commit, options.source_tree,
                 options.iterations, options.warmup, 0,
                 campaign=options.campaign,
+                final_selector=options.final_selector,
                 failure_output=output)
             invocations.append(invocation)
             base.write_exclusive(
@@ -321,8 +355,18 @@ def main() -> int:
     if options.holdout:
         target_seed += 0x10000
         neighbor_seed += 0x10000
+    base.require(not options.final_selector or options.beyond_512,
+                 "--final-selector requires --beyond-512")
     cells = target_cells(target_bytes, target_seed) + \
         neighbor_cells(target_bytes, byte_neighbors, neighbor_seed)
+    if options.beyond_512:
+        for cell in cells:
+            selected = beyond_production_selected(
+                int(cell["K"]), int(cell["R"]), int(cell["bytes"]))
+            cell["candidate_selected"] = selected
+            if options.final_selector and \
+                    cell["role"].startswith("target") and not selected:
+                cell["role"] = "excluded_neighbor"
     raw: dict[str, Any] = {
         "schema": schema,
         "created_utc": base.SUPPORT.utc_now(),
@@ -336,6 +380,7 @@ def main() -> int:
         "target_bytes": list(target_bytes),
         "campaign": options.campaign,
         "holdout": options.holdout,
+        "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
         "cells": [],
@@ -447,6 +492,7 @@ def main() -> int:
             "target_bytes": list(target_bytes),
             "campaign": options.campaign,
             "holdout": options.holdout,
+            "final_selector": options.final_selector,
             "cell_count": len(analyses),
             "target_main_count": sum(
                 item["cell"]["role"] == "target_main"
@@ -455,7 +501,7 @@ def main() -> int:
                 item["cell"]["role"] == "target_control"
                 for item in analyses),
             "neighbor_count": sum(
-                item["cell"]["role"] == "neighbor"
+                not item["cell"]["role"].startswith("target")
                 for item in analyses),
             "process_count": sum(
                 len(round_value["invocations"])

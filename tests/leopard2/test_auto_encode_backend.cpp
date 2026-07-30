@@ -906,17 +906,17 @@ void test_t8_one_block_mixed_binding(Context& avx2)
 {
     if (avx2.result() != LEO2_SUCCESS)
         return;
-    Codec codec(avx2.get(), 5, 5,
+    Codec codec(avx2.get(), 7, 7,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     static const size_t qualified[] = { 64, 128, 512, 1024 };
     leopard2_internal::CodecEncodePathInfo path = {};
     require(leopard2_internal::GetCodecEncodePathInfo(
-            codec.get(), 128, 5, &path),
+            codec.get(), 1024, 7, &path),
         "mixed T8 path query");
     const uint64_t expected_qualified_calls =
         path.high_t8_partial_binding_selected ? 4 : 0;
     run_t8_mixed_binding(
-        codec.get(), 5, 5, qualified,
+        codec.get(), 7, 7, qualified,
         sizeof(qualified) / sizeof(qualified[0]),
         expected_qualified_calls, 2);
 
@@ -927,7 +927,7 @@ void test_t8_one_block_mixed_binding(Context& avx2)
     */
     static const size_t boundary[] = { 64, 1025 };
     run_t8_mixed_binding(
-        codec.get(), 5, 5, boundary,
+        codec.get(), 7, 7, boundary,
         sizeof(boundary) / sizeof(boundary[0]), 0, 2);
 }
 
