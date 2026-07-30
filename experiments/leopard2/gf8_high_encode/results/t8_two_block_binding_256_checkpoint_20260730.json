@@ -144,6 +144,20 @@
     "hot_execution_allocations_256_bytes": 0,
     "backend_startup_kat": "passed at unaligned 64 and 256 bytes"
   },
+  "assembly_audit": {
+    "artifact_sha256": "71312e5d99e604394d606d14577e47fa3739206d5a3fb88f7e5e40f40561bc03",
+    "symbol": "leopard::backend::AVX2FF8HighEncodeTwoBlocksT8",
+    "symbol_address": "0x95cc0",
+    "kernel_text_bytes": 2401,
+    "instruction_lines": 531,
+    "call_instructions": 0,
+    "evex_prefix_lines": 0,
+    "zmm_or_mask_register_references": 0,
+    "explicit_rsp_subtractions": 0,
+    "rsp_memory_references": 2,
+    "stack_note": "Leaf function with four saved GPR pushes, at most 31 bytes of 32-byte alignment adjustment, and one 32-byte red-zone spill/reload pair; the deepest touched address is at most 95 bytes below entry RSP.",
+    "code_size_note": "The same 2401-byte loop handles 64 and 256 bytes in 32-byte tiles; extending the byte count did not duplicate or four-way unroll the kernel."
+  },
   "broader_gate_notes": {
     "release_codec_and_tool_tests": "All codec tests exercised before and after the two high-memory fixture boundaries passed. Test 70, the unrelated build-provenance stress harness, exceeded a 1 GiB cap and also reported pre-existing mock failures when run verbosely. Test 107, the unrelated Visual Studio project contract, reports pre-existing CMake-model/hash failures. Neither test imports or executes the changed T8 callback.",
     "memory_policy": "Builds were serial under 512 MiB. Ordinary tests used 256 or 512 MiB. The API matrix used a measured 802088 KiB peak under an explicit 1 GiB cap. Nested Ninja builds were forced to CMAKE_BUILD_PARALLEL_LEVEL=1."
