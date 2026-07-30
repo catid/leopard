@@ -1393,6 +1393,7 @@ static const Ops ScalarOps = {
     , NULL
     , NULL
     , NULL
+    , NULL
     // ff8_linear_combination2
     , NULL
     , NULL

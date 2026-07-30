@@ -56,6 +56,9 @@ option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
 option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
     "Enable the promoted shortened/punctured AVX2 T=8 binding fast path"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+    "Enable the candidate two-message-block AVX2 T=8 binding fast path"
+    OFF)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -314,7 +317,8 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
 endif()
 target_compile_definitions(leopard PRIVATE
-    LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>)
+    LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -487,6 +491,8 @@ if(LEO2_HAVE_SSSE3_BACKEND)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
 endif()
 if(LEO2_HAVE_AVX2_BACKEND)
+    target_compile_definitions(leopard2_backend_avx2 PRIVATE
+        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -768,7 +774,8 @@ if(LEO2_BUILD_TESTS)
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO=$<BOOL:${LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO}>)
     endif()
     target_compile_definitions(leopard_test_hooks PRIVATE
-        LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>)
+        LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
+        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -827,7 +834,8 @@ if(LEO2_BUILD_TESTS)
         target_include_directories(leopard2_backend_avx2_test_hooks PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
         if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
@@ -1248,7 +1256,8 @@ if(LEO2_BUILD_TESTS)
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_T8_VECTOR=1)
         endif()
-        if(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING)
+        if(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING AND
+           NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
             target_compile_definitions(
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING=1)
@@ -1256,6 +1265,16 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_T8_PARTIAL_BINDING=0)
+        endif()
+        if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+           NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING=1)
+        else()
+            target_compile_definitions(
+                leopard2_high_direct_production_test PRIVATE
+                LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING=0)
         endif()
         target_link_libraries(leopard2_high_direct_production_test leopard)
         add_test(NAME leopard2_high_direct_production
@@ -1568,6 +1587,14 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_batch_aliasing_test
         tests/leopard2/test_batch_aliasing.cpp)
+    if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+       NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+        target_compile_definitions(leopard2_batch_aliasing_test PRIVATE
+            LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING=1)
+    else()
+        target_compile_definitions(leopard2_batch_aliasing_test PRIVATE
+            LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING=0)
+    endif()
     target_link_libraries(leopard2_batch_aliasing_test leopard)
     add_test(NAME leopard2_batch_aliasing
         COMMAND leopard2_batch_aliasing_test)

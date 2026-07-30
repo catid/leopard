@@ -2897,6 +2897,20 @@ void ReedSolomonEncode(
         m, data, work);
 }
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+void ReedSolomonEncodeTwoBlocksT8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_high_encode_two_blocks_t8 != NULL);
+    ops.ff8_high_encode_two_blocks_t8(
+        data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
+        FFTSkewStorage, 64);
+}
+#endif
+
 
 void ReedSolomonEncodeLow(
     const backend::Ops& ops,

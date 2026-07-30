@@ -1254,6 +1254,74 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
     return true;
 }
 
+static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
+{
+    if (!ops.ff8_high_encode_two_blocks_t8)
+        return true;
+
+    static const unsigned kInputCount = 16;
+    static const unsigned kOutputCount = 8;
+    static const uint64_t kBytes = 64;
+    uint8_t input[kInputCount][68];
+    uint8_t input_before[kInputCount][68];
+    uint8_t actual[kOutputCount][68];
+    uint8_t expected[kOutputCount][68];
+    uint8_t second[kOutputCount][68];
+    const void* input_pointers[kInputCount];
+    void* actual_pointers[kOutputCount];
+    void* expected_pointers[kOutputCount];
+    void* second_pointers[kOutputCount];
+    uint8_t first_inverse_skew[kOutputCount];
+    uint8_t second_inverse_skew[kOutputCount];
+    uint8_t forward_skew[kOutputCount];
+
+    for (unsigned lane = 0; lane < kInputCount; ++lane)
+    {
+        for (size_t i = 0; i < sizeof(input[lane]); ++i)
+            input[lane][i] = input_before[lane][i] =
+                static_cast<uint8_t>(lane * 29U + i * 47U + 11U);
+        input_pointers[lane] = input[lane] + 1;
+    }
+    for (unsigned lane = 0; lane < kOutputCount; ++lane)
+    {
+        for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+        {
+            actual[lane][i] = expected[lane][i] =
+                static_cast<uint8_t>(0xc3U + lane * 7U + i * 13U);
+            second[lane][i] =
+                static_cast<uint8_t>(0x5dU + lane * 17U + i * 3U);
+        }
+        actual_pointers[lane] = actual[lane] + 1;
+        expected_pointers[lane] = expected[lane] + 1;
+        second_pointers[lane] = second[lane] + 1;
+        first_inverse_skew[lane] = lane % 5U == 0
+            ? static_cast<uint8_t>(255)
+            : static_cast<uint8_t>((lane * 37U + 3U) % 255U);
+        second_inverse_skew[lane] = lane % 3U == 0
+            ? static_cast<uint8_t>(255)
+            : static_cast<uint8_t>((lane * 41U + 17U) % 255U);
+        forward_skew[lane] = lane % 7U == 0
+            ? static_cast<uint8_t>(255)
+            : static_cast<uint8_t>((lane * 53U + 9U) % 255U);
+    }
+
+    ReferenceFF8HighEncodeOneBlock(
+        ops, input_pointers, expected_pointers, kOutputCount,
+        first_inverse_skew, forward_skew, kBytes);
+    ReferenceFF8HighEncodeOneBlock(
+        ops, input_pointers + kOutputCount, second_pointers, kOutputCount,
+        second_inverse_skew, forward_skew, kBytes);
+    for (unsigned lane = 0; lane < kOutputCount; ++lane)
+        ops.xor_memory(
+            expected_pointers[lane], second_pointers[lane], kBytes);
+
+    ops.ff8_high_encode_two_blocks_t8(
+        input_pointers, actual_pointers,
+        first_inverse_skew, second_inverse_skew, forward_skew, kBytes);
+    return std::memcmp(input, input_before, sizeof(input)) == 0 &&
+        std::memcmp(actual, expected, sizeof(actual)) == 0;
+}
+
 static bool TestFF8HighEncodeSmall(const Ops& ops)
 {
     if (!ops.ff8_high_encode_small)
@@ -2389,6 +2457,16 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         (ops.ff8_high_encode_one_block_sides &
             ~kFF8HighEncodeSupportedSides) != 0)
         return false;
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+    if ((ops.ff8_high_encode_two_blocks_t8 != NULL) !=
+        (ops.kind == LEO2_BACKEND_AVX2 &&
+            ops.ff8_high_encode_one_block != NULL &&
+            (ops.ff8_high_encode_one_block_sides & 8U) != 0))
+        return false;
+#else
+    if (ops.ff8_high_encode_two_blocks_t8)
+        return false;
+#endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.ff8_multiply_add_outputs != NULL))
         return false;
@@ -2411,6 +2489,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8Butterflies4(ops, args.ff8_multiply_log) ||
         !TestFF8ButterflyRanges(ops) ||
         !TestFF8HighEncodeOneBlock(ops) ||
+        !TestFF8HighEncodeTwoBlocksT8(ops) ||
         !TestFF8HighEncodeSmall(ops))
         return false;
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
@@ -2484,6 +2563,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_ifft_butterfly4_xor_range ||
         ops.ff8_high_encode_one_block ||
         ops.ff8_high_encode_one_block_sides != 0 ||
+        ops.ff8_high_encode_two_blocks_t8 ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
         ops.ff8_multiply_add_2_sources_2_outputs ||

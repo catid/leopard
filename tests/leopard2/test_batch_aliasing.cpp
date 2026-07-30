@@ -27,6 +27,7 @@
 */
 
 #include "leopard2.h"
+#include "Leopard2Direct.h"
 #include "allocation_audit_config.h"
 
 #include <algorithm>
@@ -43,6 +44,10 @@
 
 #if defined(_MSC_VER)
 #include <malloc.h>
+#endif
+
+#if !defined(LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING)
+#error "production high-T8 two-block-binding expectation must be explicit"
 #endif
 
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
@@ -581,6 +586,94 @@ void TestEncodeBinding(Fixture& fixture)
         "failed encode binding creation retained output handle");
     Require(conflict.outputs == conflict_before,
         "encode binding setup modified a rejected output");
+}
+
+void TestT8TwoBlockBindingAllocation()
+{
+    static const unsigned k = 9;
+    static const unsigned r = 5;
+    static const size_t bytes = 64;
+
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result =
+        leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    RequireResult(context_result, LEO2_SUCCESS,
+        "two-block allocation context create");
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "two-block allocation codec create");
+    leopard2_internal::CodecEncodePathInfo path = {};
+    Require(leopard2_internal::GetCodecEncodePathInfo(
+            codec, bytes, r, &path),
+        "two-block allocation path introspection");
+    Require(path.high_t8_two_block_binding_selected ==
+            (LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING != 0),
+        "two-block allocation selector differs from expectation");
+
+    Shards source(k, Bytes(bytes, 0));
+    Fixture::Fill(source, 0x89abcdefu);
+    std::vector<const void*> original(k, NULL);
+    for (unsigned i = 0; i < k; ++i)
+        original[i] = &source[i][0];
+    Shards expected(r, Bytes(bytes, 0));
+    Shards actual(r, Bytes(bytes, 0xa5));
+    std::vector<void*> expected_pointers(r, NULL);
+    std::vector<void*> actual_pointers(r, NULL);
+    for (unsigned i = 0; i < r; ++i)
+    {
+        expected_pointers[i] = &expected[i][0];
+        actual_pointers[i] = &actual[i][0];
+    }
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        codec, bytes, &scratch_bytes), LEO2_SUCCESS,
+        "two-block allocation scratch query");
+    AlignedBuffer expected_scratch(scratch_bytes);
+    AlignedBuffer actual_scratch(scratch_bytes);
+    RequireResult(leo2_encode(codec, bytes, &original[0],
+        &expected_pointers[0], expected_scratch.data(),
+        expected_scratch.size()), LEO2_SUCCESS,
+        "two-block allocation parity oracle");
+
+    leo2_encode_batch_item item;
+    memset(&item, 0, sizeof(item));
+    item.shard_bytes = bytes;
+    item.original = &original[0];
+    item.recovery = &actual_pointers[0];
+    item.scratch = actual_scratch.data();
+    item.scratch_bytes = actual_scratch.size();
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &item, 1, &binding), LEO2_SUCCESS,
+        "two-block allocation binding create");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "two-block allocation warm execute");
+    Require(actual == expected,
+        "two-block allocation warm parity mismatch");
+
+    BeginAllocationAudit();
+    const leo2_result audited_result =
+        leo2_encode_batch_binding_execute(binding);
+    const uint64_t audited_allocations = EndAllocationAudit();
+    RequireResult(audited_result, LEO2_SUCCESS,
+        "two-block allocation audited execute");
+    Require(audited_allocations == 0,
+        "two-block binding execution allocated memory");
+    Require(actual == expected,
+        "two-block allocation audited parity mismatch");
+
+    leo2_encode_batch_binding_destroy(binding);
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
 }
 
 void TestValidSharedInputs(Fixture& fixture)
@@ -1850,6 +1943,7 @@ int main()
     {
         Run(1);
         Run(4);
+        TestT8TwoBlockBindingAllocation();
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
                   << "valid_shared=4 conflict_checks=20 "
                   << "large_encode_items=514 large_decode_items=514"
@@ -1857,6 +1951,7 @@ int main()
                   << " scalable_batch_sizes=9,64,1024"
                   << " allocation_audit=clean concurrent_scalable_calls=64"
                   << " encode_binding=deep-copy,live-bytes,allocation-free"
+                  << " t8_two_block_binding=allocation-free"
                   << std::endl;
         return 0;
     }

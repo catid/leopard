@@ -6133,6 +6133,198 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         data, work, shortened, inverse_skew, forward_skew, byte_count);
 }
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+static LEO_FORCE_INLINE void AVX2FF8T8InverseValues(
+    __m256i& value0,
+    __m256i& value1,
+    __m256i& value2,
+    __m256i& value3,
+    __m256i& value4,
+    __m256i& value5,
+    __m256i& value6,
+    __m256i& value7,
+    const uint8_t* inverse_skew)
+{
+    AVX2FF8T8VectorIFFTRadix4(
+        value0, value1, value2, value3,
+        inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+    AVX2FF8T8VectorIFFTRadix4(
+        value4, value5, value6, value7,
+        inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+    AVX2FF8T8VectorIFFTDistance4(
+        value0, value1, value2, value3,
+        value4, value5, value6, value7, inverse_skew[4]);
+}
+
+static LEO_FORCE_INLINE void AVX2FF8T8ForwardValues(
+    __m256i& value0,
+    __m256i& value1,
+    __m256i& value2,
+    __m256i& value3,
+    __m256i& value4,
+    __m256i& value5,
+    __m256i& value6,
+    __m256i& value7,
+    const uint8_t* forward_skew)
+{
+    AVX2FF8T8VectorFFTRadix4Distance2(
+        value0, value1, value2, value3,
+        value4, value5, value6, value7,
+        forward_skew[2], forward_skew[6], forward_skew[4]);
+    AVX2FF8T8VectorFFT2(value0, value1, forward_skew[1]);
+    AVX2FF8T8VectorFFT2(value2, value3, forward_skew[3]);
+    AVX2FF8T8VectorFFT2(value4, value5, forward_skew[5]);
+    AVX2FF8T8VectorFFT2(value6, value7, forward_skew[7]);
+}
+
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(byte_count == 64);
+    if (byte_count != 64)
+        return;
+
+    for (uint64_t offset = 0; offset < 64; offset += 32)
+    {
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[0]) + offset));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[1]) + offset));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[2]) + offset));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[3]) + offset));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[4]) + offset));
+        __m256i value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[5]) + offset));
+        __m256i value6 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[6]) + offset));
+        __m256i value7 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[7]) + offset));
+        AVX2FF8T8InverseValues(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, first_inverse_skew);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[0]) + offset), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[1]) + offset), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[2]) + offset), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[3]) + offset), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[4]) + offset), value4);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[5]) + offset), value5);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[6]) + offset), value6);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[7]) + offset), value7);
+
+        value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[8]) + offset));
+        value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[9]) + offset));
+        value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[10]) + offset));
+        value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[11]) + offset));
+        value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[12]) + offset));
+        value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[13]) + offset));
+        value6 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[14]) + offset));
+        value7 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(data[15]) + offset));
+        AVX2FF8T8InverseValues(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, second_inverse_skew);
+        value0 = _mm256_xor_si256(value0, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[0]) + offset)));
+        value1 = _mm256_xor_si256(value1, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[1]) + offset)));
+        value2 = _mm256_xor_si256(value2, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[2]) + offset)));
+        value3 = _mm256_xor_si256(value3, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[3]) + offset)));
+        value4 = _mm256_xor_si256(value4, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[4]) + offset)));
+        value5 = _mm256_xor_si256(value5, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[5]) + offset)));
+        value6 = _mm256_xor_si256(value6, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[6]) + offset)));
+        value7 = _mm256_xor_si256(value7, _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(
+                static_cast<const uint8_t*>(work[7]) + offset)));
+        AVX2FF8T8ForwardValues(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, forward_skew);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[0]) + offset), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[1]) + offset), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[2]) + offset), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[3]) + offset), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[4]) + offset), value4);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[5]) + offset), value5);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[6]) + offset), value6);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(
+                static_cast<uint8_t*>(work[7]) + offset), value7);
+    }
+}
+#endif
+
 #undef LEO2_AVX2_T8_ENTRY
 
 #endif // promoted T=8 callback in the regular AVX2 backend
@@ -6225,6 +6417,14 @@ static const Ops AVX2Ops = {
     , 8U
 #else
     , 0
+#endif
+#if defined(LEO_HAS_FF8) && \
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8HighEncodeTwoBlocksT8
+#else
+    , NULL
 #endif
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT)
     , AVX2FF8HighEncodeSmall

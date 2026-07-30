@@ -91,6 +91,8 @@ function(leo2_read_effective_configuration
         REGEX "^LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=")
     file(STRINGS "${configuration_file}" high_t8_partial_binding_lines
         REGEX "^LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=")
+    file(STRINGS "${configuration_file}" high_t8_two_block_binding_lines
+        REGEX "^LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=")
     file(STRINGS "${configuration_file}" general_one_loss_direct_lines
         REGEX "^LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=")
     file(STRINGS "${configuration_file}" small_direct_mode_lines
@@ -101,6 +103,8 @@ function(leo2_read_effective_configuration
     list(LENGTH high_t8_disable_vector_lines high_t8_disable_vector_line_count)
     list(LENGTH high_t8_partial_binding_lines
         high_t8_partial_binding_line_count)
+    list(LENGTH high_t8_two_block_binding_lines
+        high_t8_two_block_binding_line_count)
     list(LENGTH general_one_loss_direct_lines
         general_one_loss_direct_line_count)
     list(LENGTH small_direct_mode_lines small_direct_mode_line_count)
@@ -109,6 +113,7 @@ function(leo2_read_effective_configuration
        NOT high_direct_encode_line_count EQUAL 1 OR
        NOT high_t8_disable_vector_line_count EQUAL 1 OR
        NOT high_t8_partial_binding_line_count EQUAL 1 OR
+       NOT high_t8_two_block_binding_line_count EQUAL 1 OR
        NOT general_one_loss_direct_line_count EQUAL 1 OR
        NOT small_direct_mode_line_count EQUAL 1)
         message(FATAL_ERROR
@@ -283,7 +288,7 @@ if(NOT initial_build_type STREQUAL "Release" OR
    NOT initial_configuration_material MATCHES
        "CMAKE_CXX_FLAGS=[^\n]*LEO2_EFFECTIVE_ONE=1" OR
    NOT initial_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Initial sidecar omitted the effective non-cache CXX flag:\n"
         "${initial_configuration_material}")
@@ -365,6 +370,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
@@ -373,7 +379,7 @@ leo2_read_effective_configuration(
 if(direct_source_configuration STREQUAL changed_configuration OR
    NOT direct_source_build_type STREQUAL "Release" OR
    NOT direct_source_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Direct-source-plan selector was not uniquely and positionally "
         "attested")
@@ -396,6 +402,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
@@ -405,7 +412,7 @@ if(high_direct_configuration STREQUAL changed_configuration OR
    high_direct_configuration STREQUAL direct_source_configuration OR
    NOT high_direct_build_type STREQUAL "Release" OR
    NOT high_direct_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=ON\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "High-direct-encode selector was not uniquely and positionally "
         "attested")
@@ -428,6 +435,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=ON
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
@@ -438,7 +446,7 @@ if(high_t8_disable_configuration STREQUAL changed_configuration OR
    high_t8_disable_configuration STREQUAL high_direct_configuration OR
    NOT high_t8_disable_build_type STREQUAL "Release" OR
    NOT high_t8_disable_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=ON\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=ON\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "High-T8-vector diagnostic-disable selector was not uniquely and "
         "positionally attested")
@@ -461,6 +469,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
@@ -472,7 +481,7 @@ if(high_t8_partial_configuration STREQUAL changed_configuration OR
    high_t8_partial_configuration STREQUAL high_t8_disable_configuration OR
    NOT high_t8_partial_build_type STREQUAL "Release" OR
    NOT high_t8_partial_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "High-T8 partial-binding selector was not uniquely and positionally "
         "attested")
@@ -495,6 +504,47 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON
+    -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
+    -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
+leo2_read_effective_configuration(
+    "${fixture_build}" high_t8_two_block_configuration
+    high_t8_two_block_build_type high_t8_two_block_material)
+if(high_t8_two_block_configuration STREQUAL changed_configuration OR
+   high_t8_two_block_configuration STREQUAL
+       direct_source_configuration OR
+   high_t8_two_block_configuration STREQUAL high_direct_configuration OR
+   high_t8_two_block_configuration STREQUAL
+       high_t8_disable_configuration OR
+   high_t8_two_block_configuration STREQUAL
+       high_t8_partial_configuration OR
+   NOT high_t8_two_block_build_type STREQUAL "Release" OR
+   NOT high_t8_two_block_material MATCHES
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+    message(FATAL_ERROR
+        "High-T8 two-block-binding selector was not uniquely and "
+        "positionally attested")
+endif()
+leo2_build_and_check()
+file(TIMESTAMP "${standard_executable}"
+    high_t8_two_block_standard_time "%s" UTC)
+file(TIMESTAMP "${allk_executable}"
+    high_t8_two_block_allk_time "%s" UTC)
+if(high_t8_two_block_standard_time STREQUAL
+       high_t8_partial_standard_time OR
+   high_t8_two_block_allk_time STREQUAL high_t8_partial_allk_time)
+    message(FATAL_ERROR
+        "High-T8 two-block-binding change did not relink benchmarks")
+endif()
+
+leo2_run("${CMAKE_COMMAND}" -E sleep 1)
+leo2_run(${configure_command}
+    -DLEO2_TEST_EFFECTIVE_SUFFIX=TWO
+    -DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF
+    -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
+    -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0)
 leo2_read_effective_configuration(
@@ -505,9 +555,11 @@ if(general_one_loss_configuration STREQUAL changed_configuration OR
    general_one_loss_configuration STREQUAL high_direct_configuration OR
    general_one_loss_configuration STREQUAL high_t8_disable_configuration OR
    general_one_loss_configuration STREQUAL high_t8_partial_configuration OR
+   general_one_loss_configuration STREQUAL
+       high_t8_two_block_configuration OR
    NOT general_one_loss_build_type STREQUAL "Release" OR
    NOT general_one_loss_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "General one-loss selector was not uniquely and positionally "
         "attested")
@@ -517,8 +569,9 @@ file(TIMESTAMP "${standard_executable}"
     general_one_loss_standard_time "%s" UTC)
 file(TIMESTAMP "${allk_executable}"
     general_one_loss_allk_time "%s" UTC)
-if(general_one_loss_standard_time STREQUAL high_t8_partial_standard_time OR
-   general_one_loss_allk_time STREQUAL high_t8_partial_allk_time)
+if(general_one_loss_standard_time STREQUAL
+       high_t8_two_block_standard_time OR
+   general_one_loss_allk_time STREQUAL high_t8_two_block_allk_time)
     message(FATAL_ERROR
         "General one-loss selector change did not relink benchmarks")
 endif()
@@ -533,6 +586,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1)
 leo2_read_effective_configuration(
@@ -541,7 +595,7 @@ leo2_read_effective_configuration(
 if(mode_one_configuration STREQUAL changed_configuration OR
    NOT mode_one_build_type STREQUAL "Release" OR
    NOT mode_one_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1\n$")
     message(FATAL_ERROR
         "Small-direct mode 1 was not uniquely and positionally attested")
 endif()
@@ -554,6 +608,7 @@ leo2_run(${configure_command}
     -DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF
     -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF
     -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF
+    -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF
     -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF
     -DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2)
 leo2_read_effective_configuration(
@@ -563,7 +618,7 @@ if(mode_two_configuration STREQUAL changed_configuration OR
    mode_two_configuration STREQUAL mode_one_configuration OR
    NOT mode_two_build_type STREQUAL "Release" OR
    NOT mode_two_configuration_material MATCHES
-       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2\n$")
+       "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=OFF\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=2\n$")
     message(FATAL_ERROR
         "Small-direct mode 2 was not uniquely and positionally attested")
 endif()
@@ -1070,7 +1125,7 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
        NOT single_configuration_material MATCHES
            "CMAKE_GENERATOR=Ninja\nCMAKE_CONFIGURATION_TYPES=Debug;Release\n" OR
        NOT single_configuration_material MATCHES
-           "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
+           "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
         message(FATAL_ERROR
             "Ninja single-config sidecar was misclassified:\n"
             "${single_configuration_material}")
@@ -1107,7 +1162,7 @@ if(LEO2_TEST_NINJA_EXECUTABLE)
            NOT multi_configuration_material MATCHES
                "CMAKE_GENERATOR=Ninja Multi-Config\n" OR
            NOT multi_configuration_material MATCHES
-               "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$" OR
+               "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$" OR
            multi_debug_index EQUAL -1 OR multi_release_index EQUAL -1)
             message(FATAL_ERROR
                 "Multi-config sidecar did not declare an empty "

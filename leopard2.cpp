@@ -100,6 +100,19 @@
 #endif
 
 /*
+    Default-off candidate for the adjacent two-message-block T=8 family.
+    Reusable binding setup may map public K=9..16,R=5..8 onto a padded
+    K=16,R=8 call to the mature transform core.
+*/
+#ifndef LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+#define LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -305,6 +318,9 @@ struct leo2_encode_batch_binding
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     const leopard::backend::Ops* high_t8_partial_ops;
 #endif
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    const leopard::backend::Ops* high_t8_two_block_ops;
+#endif
 };
 
 struct leo2_direct_repair_term
@@ -456,6 +472,15 @@ static leo2_result EncodeInternal(
 
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
 static void ExecuteHighT8PartialBinding(
+    const leopard::backend::Ops& transform_ops,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    const void* const* original,
+    void* const* recovery);
+#endif
+
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+static void ExecuteHighT8TwoBlockBinding(
     const leopard::backend::Ops& transform_ops,
     uint32_t original_count,
     uint32_t recovery_count,
@@ -8156,6 +8181,57 @@ ExecuteHighT8PartialBatchPrevalidated(
 #undef LEO2_T8_PARTIAL_BATCH_NOINLINE
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+struct HighT8TwoBlockBatchContext
+{
+    const leopard::backend::Ops* ops;
+    const leo2_codec* codec;
+    const leo2_encode_batch_item* items;
+};
+
+static leo2_result RunHighT8TwoBlockBatchItem(void* context, size_t index)
+{
+    const HighT8TwoBlockBatchContext* batch =
+        static_cast<const HighT8TwoBlockBatchContext*>(context);
+    const leo2_encode_batch_item& item = batch->items[index];
+    ExecuteHighT8TwoBlockBinding(
+        *batch->ops, batch->codec->original_count,
+        batch->codec->recovery_count, item.original, item.recovery);
+    return LEO2_SUCCESS;
+}
+
+#if defined(_MSC_VER)
+#define LEO2_T8_TWO_BLOCK_BATCH_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T8_TWO_BLOCK_BATCH_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_t8_two_block_binding")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T8_TWO_BLOCK_BATCH_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_T8_TWO_BLOCK_BATCH_NOINLINE
+#endif
+
+static LEO2_T8_TWO_BLOCK_BATCH_NOINLINE leo2_result
+ExecuteHighT8TwoBlockBatchPrevalidated(
+    const leopard::backend::Ops* ops,
+    const leo2_codec* codec,
+    const leo2_encode_batch_item* items,
+    size_t item_count)
+{
+    if (!ops || !codec || !items || item_count == 0)
+        return LEO2_INTERNAL_ERROR;
+    HighT8TwoBlockBatchContext batch = { ops, codec, items };
+    if (codec->context->pool)
+        return codec->context->pool->Run(
+            item_count, RunHighT8TwoBlockBatchItem, &batch, NULL);
+    for (size_t i = 0; i < item_count; ++i)
+        RunHighT8TwoBlockBatchItem(&batch, i);
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_T8_TWO_BLOCK_BATCH_NOINLINE
+#endif
+
 static leo2_result ExecuteEncodeBatchPrevalidated(
     const leo2_codec* codec,
     const leo2_encode_batch_item* items,
@@ -9451,6 +9527,7 @@ bool GetCodecEncodePathInfo(
             codec, shard_bytes, requested_recovery_count);
     info.high_t8_vector_selected = false;
     info.high_t8_partial_binding_selected = false;
+    info.high_t8_two_block_binding_selected = false;
 #ifdef LEO_HAS_FF8
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
@@ -9481,6 +9558,22 @@ bool GetCodecEncodePathInfo(
             transform_ops.kind == LEO2_BACKEND_AVX2 &&
             transform_ops.ff8_high_encode_one_block != NULL &&
             (transform_ops.ff8_high_encode_one_block_sides & 8U) != 0;
+    }
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->original_count >= 9 && codec->original_count <= 16 &&
+        codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
+        codec->padded_side == 8 && shard_bytes == 64 &&
+        requested_recovery_count == codec->recovery_count)
+    {
+        const leopard::backend::Ops& transform_ops =
+            SelectTransformEncodeOps(codec, 64,
+                requested_recovery_count, requested_recovery_count);
+        info.high_t8_two_block_binding_selected =
+            transform_ops.kind == LEO2_BACKEND_AVX2 &&
+            transform_ops.ff8_high_encode_two_blocks_t8 != NULL;
     }
 #endif
 #endif
@@ -9575,6 +9668,50 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
 }
 
 #undef LEO2_T8_PARTIAL_NOINLINE
+#endif
+
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+#if defined(_MSC_VER)
+#define LEO2_T8_TWO_BLOCK_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_T8_TWO_BLOCK_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_t8_two_block_binding")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T8_TWO_BLOCK_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_T8_TWO_BLOCK_NOINLINE
+#endif
+
+/*
+    Keep the padded pointers and eight temporary transform rows out of every
+    ordinary encode stack frame.  The public binding has already validated all
+    source and destination ranges before selecting this helper.
+*/
+static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
+    const leopard::backend::Ops& transform_ops,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    const void* const* original,
+    void* const* recovery)
+{
+    alignas(32) static const uint8_t zero_shard[64] = {};
+    alignas(32) uint8_t discarded_recovery[3][64];
+    const void* padded_original[16];
+    void* work[8];
+    for (uint32_t i = 0; i < 16; ++i)
+        padded_original[i] =
+            i < original_count ? original[i] : zero_shard;
+    for (uint32_t i = 0; i < 8; ++i)
+    {
+        work[i] = i < recovery_count
+            ? recovery[i]
+            : discarded_recovery[i - recovery_count];
+    }
+    leopard::ff8::ReedSolomonEncodeTwoBlocksT8(
+        transform_ops, padded_original, work);
+}
+
+#undef LEO2_T8_TWO_BLOCK_NOINLINE
 #endif
 
 static leo2_result EncodeInternal(
@@ -10236,6 +10373,9 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     binding->high_t8_partial_ops = NULL;
 #endif
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    binding->high_t8_two_block_ops = NULL;
+#endif
 
     leo2_result result = LEO2_SUCCESS;
     try
@@ -10398,6 +10538,37 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
     }
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->original_count >= 9 && codec->original_count <= 16 &&
+        codec->recovery_count >= 5 && codec->recovery_count <= 8 &&
+        codec->padded_side == 8)
+    {
+        bool all_dense_64 = true;
+        for (size_t item_index = 0;
+             item_index < binding->items.size(); ++item_index)
+        {
+            const leo2_encode_batch_item& item =
+                binding->items[item_index];
+            all_dense_64 = all_dense_64 && item.shard_bytes == 64;
+            for (uint32_t parity = 0;
+                 parity < codec->recovery_count; ++parity)
+                all_dense_64 =
+                    all_dense_64 && item.recovery[parity] != NULL;
+        }
+        if (all_dense_64)
+        {
+            const leopard::backend::Ops& transform_ops =
+                SelectTransformEncodeOps(codec, 64,
+                    codec->recovery_count, codec->recovery_count);
+            if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
+                transform_ops.ff8_high_encode_two_blocks_t8)
+                binding->high_t8_two_block_ops = &transform_ops;
+        }
+    }
+#endif
+
     *binding_out = binding;
     return LEO2_SUCCESS;
 }
@@ -10419,6 +10590,14 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
 {
     if (!binding || !binding->codec || binding->items.empty())
         return LEO2_INVALID_ARGUMENT;
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    if (binding->high_t8_two_block_ops)
+    {
+        return leopard2_internal::ExecuteHighT8TwoBlockBatchPrevalidated(
+            binding->high_t8_two_block_ops, binding->codec,
+            binding->items.data(), binding->items.size());
+    }
+#endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     if (binding->high_t8_partial_ops)
     {

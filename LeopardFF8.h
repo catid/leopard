@@ -168,6 +168,13 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work); // m * 2 elements
 
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+void ReedSolomonEncodeTwoBlocksT8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work);
+#endif
+
 // Encodes the low-rate coordinate profile:
 //   [ data: 0 .. p-1 ][ recovery: p .. ]
 // original_count may be smaller than p; the remaining data coordinates are

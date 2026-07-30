@@ -298,6 +298,20 @@ typedef void (*FF8HighEncodeOneBlock)(
     const uint8_t* forward_skew,
     uint64_t byte_count);
 
+/*
+    Complete dense encode for exactly two T=8 message blocks and a 64-byte
+    shard.  data has 16 readable rows, work has eight pairwise-disjoint output
+    rows, and all input/output ranges are disjoint.  The callback accumulates
+    the two shifted inverse transforms and applies the final parity transform.
+*/
+typedef void (*FF8HighEncodeTwoBlocksT8)(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count);
+
 // Complete dense legacy-high GF8 encode for the two- and four-coordinate
 // redundancy transforms.  The implementation consumes all original shards
 // directly, accumulates each shifted inverse transform into work[0..side),
@@ -423,6 +437,7 @@ struct Ops
     Butterfly4Range ff16_fft_butterfly4_range;
     FF8HighEncodeOneBlock ff8_high_encode_one_block;
     uint32_t ff8_high_encode_one_block_sides;
+    FF8HighEncodeTwoBlocksT8 ff8_high_encode_two_blocks_t8;
     FF8HighEncodeSmall ff8_high_encode_small;
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;
