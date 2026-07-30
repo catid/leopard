@@ -64,6 +64,10 @@
 #define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+#define LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT 1
+#endif
+
 namespace {
 
 using leopard2_test::BinaryField;
@@ -792,9 +796,45 @@ void test_no_loss_no_op(leo2_context* context)
         context, 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
     std::vector<uint8_t> original_present(9, 1);
     std::vector<uint8_t> recovery_present(7, 0);
+
+    leo2_decode_plan* rejected = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    original_present.back() = 2;
+    require(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &rejected) == LEO2_INVALID_ARGUMENT,
+        "no-loss shortcut skipped late original-presence validation");
+    require(rejected == NULL,
+        "invalid original presence retained the plan output");
+    original_present.back() = 1;
+    rejected = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    recovery_present.back() = 2;
+    require(leo2_decode_plan_create(codec, &original_present[0],
+            &recovery_present[0], &rejected) == LEO2_INVALID_ARGUMENT,
+        "no-loss shortcut skipped late recovery-presence validation");
+    require(rejected == NULL,
+        "invalid recovery presence retained the plan output");
+    recovery_present.back() = 0;
+
     leo2_decode_plan* plan = NULL;
     require_result(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &plan), "no-loss plan create");
+    size_t original_capacity = static_cast<size_t>(-1);
+    size_t recovery_capacity = static_cast<size_t>(-1);
+    size_t erased_capacity = static_cast<size_t>(-1);
+    require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+            plan, &original_capacity, &recovery_capacity, &erased_capacity),
+        "no-loss storage introspection");
+#if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+    require(original_capacity == 0 && recovery_capacity == 0 &&
+            erased_capacity == 0,
+        "no-loss plan retained presence-dependent allocation");
+#else
+    require(original_capacity >= original_present.size() &&
+            recovery_capacity >= recovery_present.size() &&
+            erased_capacity >= leo2_codec_parent_count(codec),
+        "control no-loss plan did not retain expected presence storage");
+#endif
     size_t scratch_bytes = 99;
     require_result(leo2_decode_plan_scratch_size(plan, 17, &scratch_bytes),
         "no-loss scratch query");
@@ -818,6 +858,57 @@ void test_no_loss_no_op(leo2_context* context)
         "no-loss zero-byte no-op execute");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
+
+    struct NoLossShape
+    {
+        uint32_t k;
+        uint32_t r;
+        leo2_profile profile;
+        leo2_field field;
+        bool parity_present;
+        const char* name;
+    };
+    static const NoLossShape shapes[] = {
+        { 7, 9, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8, true,
+            "low GF8" },
+        { 9, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, true,
+            "high GF16" },
+        { 7, 9, LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF16, false,
+            "low GF16" }
+    };
+    for (size_t shape_index = 0;
+         shape_index < sizeof(shapes) / sizeof(shapes[0]); ++shape_index)
+    {
+        const NoLossShape& shape = shapes[shape_index];
+        codec = make_codec(
+            context, shape.k, shape.r, shape.profile, shape.field);
+        original_present.assign(shape.k, 1);
+        recovery_present.assign(shape.r, shape.parity_present ? 1 : 0);
+        plan = NULL;
+        require_result(leo2_decode_plan_create(codec,
+            &original_present[0], &recovery_present[0], &plan),
+            std::string(shape.name) + " no-loss plan create");
+        original_capacity = recovery_capacity = erased_capacity =
+            static_cast<size_t>(-1);
+        require(leopard2_internal::GetDecodePlanPresenceStorageInfo(
+                plan, &original_capacity, &recovery_capacity,
+                &erased_capacity),
+            std::string(shape.name) + " no-loss storage introspection");
+#if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+        require(original_capacity == 0 && recovery_capacity == 0 &&
+                erased_capacity == 0,
+            std::string(shape.name) +
+                " no-loss plan retained presence-dependent allocation");
+#else
+        require(original_capacity >= original_present.size() &&
+                recovery_capacity >= recovery_present.size() &&
+                erased_capacity >= leo2_codec_parent_count(codec),
+            std::string(shape.name) +
+                " control plan lost expected presence storage");
+#endif
+        leo2_decode_plan_destroy(plan);
+        leo2_codec_destroy(codec);
+    }
 }
 
 void test_direct_repair_dispatch_bounds(leo2_context* context)

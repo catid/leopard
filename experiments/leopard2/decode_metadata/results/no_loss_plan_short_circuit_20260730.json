@@ -1,0 +1,225 @@
+{
+  "schema": "leopard2.no_loss_plan_short_circuit.v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.36.1",
+  "decision": "promote_default_on",
+  "source": {
+    "base_commit": "b41f0394eeeaa5a0461061380de1dc6e96ff351a",
+    "branch": "codex/leopard2",
+    "control_define": "LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT=0",
+    "candidate_define": "LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT=1",
+    "default_object_matches_forced_candidate": true,
+    "production_object_sha256": "ea6c35a5dbc3a96da49c5f496726afb771f61bb7697c69c7aada391cde08654f"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "gcc": "13.3.0",
+    "clang": "18.1.3"
+  },
+  "memory_policy": {
+    "parallel_workers": 0,
+    "maximum_build_jobs": 2,
+    "sanitizer_build_jobs": 1,
+    "swap_allowed_per_scope": false,
+    "release_build_peak_kib": 283168,
+    "release_tests_peak_kib": 802264,
+    "asan_ubsan_build_peak_kib": 797096,
+    "asan_ubsan_test_peak_kib": 1613864,
+    "oom_events": 0
+  },
+  "correctness": {
+    "control_release_tests": {
+      "passed": 2,
+      "failed": 0,
+      "tests": [
+        "leopard2_api",
+        "leopard2_context_backends"
+      ]
+    },
+    "candidate_release_tests": {
+      "passed": 9,
+      "failed": 0,
+      "tests": [
+        "leopard2_api",
+        "leopard2_context_backends",
+        "leopard2_batch_aliasing",
+        "leopard2_initialization_threads_legacy",
+        "leopard2_initialization_threads_explicit",
+        "leopard2_initialization_threads_default",
+        "leopard2_initialization_threads_gf16_high_codec",
+        "leopard2_initialization_threads_gf16_high_plan",
+        "leopard2_initialization_threads_gf16_low_plan"
+      ]
+    },
+    "promoted_default_release_tests": {
+      "passed": 9,
+      "failed": 0
+    },
+    "clang_asan_ubsan_lsan": {
+      "passed": true,
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486
+    },
+    "validated_before_short_circuit": [
+      "plan output addressability and presence-array overlap",
+      "non-null presence vectors",
+      "every original and recovery presence byte",
+      "minimum K received symbols",
+      "forced diagnostic decoder-mode compatibility"
+    ],
+    "no_loss_plan_vector_capacities": {
+      "original_present": 0,
+      "recovery_present": 0,
+      "coordinate_erased": 0
+    },
+    "no_loss_scratch_bytes": 0,
+    "all_benchmark_round_trips_passed": true
+  },
+  "benchmark_method": {
+    "classification": "directional_pending_persistent_containment_bead_leopard-79h.38.5.10.31",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "pinned_cpu": 4,
+    "threads": 1,
+    "backend": "avx2",
+    "shard_bytes": 64,
+    "batch": 1,
+    "samples_per_reuse_cell": 31,
+    "reuse_counts": [
+      1,
+      2,
+      8,
+      64
+    ],
+    "control_binary_sha256": "5c8553a4137f539d148fdfb605977848179dcd24b0f88b2730719a5e0998f474",
+    "candidate_binary_sha256": "7d33e2cf47d5bce2a0157f2069fc664ef36d46bc3196ca1022c8f671ea6f1fb4",
+    "hashes_verified_before_and_after": true
+  },
+  "no_loss_plan_setup_pooled": [
+    {
+      "k": 9,
+      "r": 7,
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "control_median_us": 0.060,
+      "candidate_median_us": 0.030,
+      "control_over_candidate": 2.000,
+      "bootstrap_95_percent": [
+        2.000,
+        2.000
+      ],
+      "samples_per_variant": 124
+    },
+    {
+      "k": 128,
+      "r": 128,
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "control_median_us": 0.270,
+      "candidate_median_us": 0.090,
+      "control_over_candidate": 3.000,
+      "bootstrap_95_percent": [
+        2.778,
+        3.000
+      ],
+      "samples_per_variant": 124
+    },
+    {
+      "k": 240,
+      "r": 16,
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "control_median_us": 0.220,
+      "candidate_median_us": 0.100,
+      "control_over_candidate": 2.200,
+      "bootstrap_95_percent": [
+        2.200,
+        2.200
+      ],
+      "samples_per_variant": 124
+    },
+    {
+      "k": 64,
+      "r": 192,
+      "profile": "low_v1",
+      "field": "gf8",
+      "control_median_us": 0.270,
+      "candidate_median_us": 0.100,
+      "control_over_candidate": 2.700,
+      "bootstrap_95_percent": [
+        2.700,
+        2.800
+      ],
+      "samples_per_variant": 124
+    },
+    {
+      "k": 1000,
+      "r": 200,
+      "profile": "legacy_high_v1",
+      "field": "gf16",
+      "control_median_us": 0.870,
+      "candidate_median_us": 0.330,
+      "control_over_candidate": 2.636,
+      "bootstrap_95_percent": [
+        2.606,
+        2.636
+      ],
+      "samples_per_variant": 124
+    }
+  ],
+  "loss_one_neighbor_abba": {
+    "rounds": 12,
+    "samples_per_round": 31,
+    "result": "no credible decode execution regression",
+    "control_over_candidate_decode_execution": [
+      {
+        "shape": "K9_R7_GF8_high",
+        "ratio": 0.9796,
+        "bootstrap_95_percent": [
+          0.9796,
+          1.0103
+        ]
+      },
+      {
+        "shape": "K128_R128_GF8_high",
+        "ratio": 1.0047,
+        "bootstrap_95_percent": [
+          0.9963,
+          1.0276
+        ]
+      },
+      {
+        "shape": "K240_R16_GF8_high",
+        "ratio": 1.0086,
+        "bootstrap_95_percent": [
+          0.9979,
+          1.0163
+        ]
+      },
+      {
+        "shape": "K64_R192_GF8_low",
+        "ratio": 1.0058,
+        "bootstrap_95_percent": [
+          0.9943,
+          1.0188
+        ]
+      },
+      {
+        "shape": "K1000_R200_GF16_high",
+        "ratio": 0.9978,
+        "bootstrap_95_percent": [
+          0.9698,
+          1.0144
+        ]
+      }
+    ]
+  },
+  "promotion_reason": "The shortcut removes all K-, R-, and N-sized plan metadata allocation for a semantically true no-op after preserving complete input validation. It exceeds the five-percent target in every no-loss cell, leaves execution scratch at zero, passes scalar and available SIMD, batch, threading, GF8/GF16, high/low, and sanitizer gates, and shows no credible neighboring loss-one execution regression."
+}

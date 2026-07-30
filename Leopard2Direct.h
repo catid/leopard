@@ -198,6 +198,18 @@ bool GetDecodePlanPrunedScheduleInfo(
     const leo2_decode_plan* plan,
     DecodePlanPrunedScheduleInfo* info_out);
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+/*
+    Test-only storage accounting for presence-dependent no-op plan state.
+    Capacities distinguish an empty logical view from retained allocations.
+*/
+bool GetDecodePlanPresenceStorageInfo(
+    const leo2_decode_plan* plan,
+    size_t* original_capacity_out,
+    size_t* recovery_capacity_out,
+    size_t* erased_capacity_out);
+#endif
+
 } // namespace leopard2_internal
 
 #endif /* __cplusplus */

@@ -105,6 +105,19 @@
 #error "LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE must be 0 or 1"
 #endif
 
+/*
+    Presence validation and the opaque plan allocation remain unchanged.  A
+    no-loss plan omits pattern vectors that no-op execution can never observe.
+    The diagnostic override preserves the measured pre-promotion control.
+*/
+#ifndef LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+#define LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT 1
+#endif
+#if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT < 0 || \
+    LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT > 1
+#error "LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -9057,6 +9070,23 @@ bool GetDecodePlanPrunedScheduleInfo(
     return true;
 }
 
+#ifdef LEO2_ENABLE_TEST_HOOKS
+bool GetDecodePlanPresenceStorageInfo(
+    const leo2_decode_plan* plan,
+    size_t* original_capacity_out,
+    size_t* recovery_capacity_out,
+    size_t* erased_capacity_out)
+{
+    if (!plan || !original_capacity_out || !recovery_capacity_out ||
+        !erased_capacity_out)
+        return false;
+    *original_capacity_out = plan->original_present.capacity();
+    *recovery_capacity_out = plan->recovery_present.capacity();
+    *erased_capacity_out = plan->coordinate_erased.capacity();
+    return true;
+}
+#endif
+
 } // namespace leopard2_internal
 
 static leo2_result EncodeInternal(
@@ -9520,6 +9550,20 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_repair = false;
+
+#if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
+        /*
+            Both complete presence vectors, availability, output overlap, and
+            diagnostic decoder-mode constraints were validated above.  No-op
+            execution returns before consulting pattern metadata, so retaining
+            K, R, and N byte vectors cannot preserve observable information.
+        */
+        if (plan->no_op)
+        {
+            *plan_out = plan;
+            return LEO2_SUCCESS;
+        }
+#endif
 
         if (plan->direct_xor &&
             (codec->original_count == 1 ||
