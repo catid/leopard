@@ -52,6 +52,10 @@
 #define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#endif
+
 #ifndef LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
 #define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
 #endif
@@ -849,7 +853,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1, 1, true, true },
         { 17, 17, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          1, 4, false, false },
+          1, 4, LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0, true },
         { 17, 32, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 17, 33, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -909,7 +913,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 65, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 9, false, false },
         { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          64, 8, false, false },
+          64, 8, LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0, true },
         { 66, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 128, 65, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -917,7 +921,7 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           1024, 1, true, true },
         { 128, 128, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-          1024, 4, false, false },
+          1024, 4, LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0, true },
         { 128, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           64, 1, true, true },
         { 65, 64, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
@@ -1017,12 +1021,18 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
                 test.k == 65 && test.r >= 65 && test.r <= 128 &&
                 test.losses >= 2 &&
                 test.bytes >= 2048;
+            const bool experimental_equal_rounded_source_major =
+                LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS != 0 &&
+                test.k > 16 && padded_k == padded_r &&
+                test.losses >= 2 && test.bytes >= 2048;
             const bool experimental_small_source_major =
                 test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
                 LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2;
             const leopard2_internal::DirectRepairExecutor expected_executor =
-                expanded_k65_source_major || experimental_small_source_major
+                expanded_k65_source_major ||
+                experimental_equal_rounded_source_major ||
+                experimental_small_source_major
                     ? leopard2_internal::kDirectRepairExecutorSourceMajor
                     : leopard2_internal::kDirectRepairExecutorOutputMajor;
             require(path_info.direct_executor == expected_executor,
@@ -1874,6 +1884,39 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
                 counts);
         }
     }
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+    static const unsigned equal_rounded_counts[] = {
+        17, 31, 32, 33, 64, 66, 96, 127, 128
+    };
+    static const unsigned equal_rounded_losses[] = { 2, 4, 8 };
+    static const size_t equal_rounded_bytes[] = { 64, 2049 };
+    for (size_t count_i = 0;
+         count_i < sizeof(equal_rounded_counts) /
+             sizeof(equal_rounded_counts[0]); ++count_i)
+    {
+        const unsigned count = equal_rounded_counts[count_i];
+        for (size_t loss_i = 0;
+             loss_i < sizeof(equal_rounded_losses) /
+                 sizeof(equal_rounded_losses[0]); ++loss_i)
+        {
+            const unsigned loss_count = equal_rounded_losses[loss_i];
+            std::vector<unsigned> missing;
+            for (unsigned missing_index = 0;
+                 missing_index < loss_count; ++missing_index)
+                missing.push_back(missing_index);
+            for (size_t byte_i = 0;
+                 byte_i < sizeof(equal_rounded_bytes) /
+                     sizeof(equal_rounded_bytes[0]); ++byte_i)
+            {
+                run_decode_case(context, count, count,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                    equal_rounded_bytes[byte_i], missing,
+                    std::vector<unsigned>{0, count / 2, count - 1},
+                    counts);
+            }
+        }
+    }
+#endif
     test_concurrent_preformatted_source_major_plan(context, counts);
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,

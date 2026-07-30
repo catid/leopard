@@ -78,6 +78,20 @@
 #error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
 #endif
 
+/*
+    Default-off selector used to rescreen multi-loss direct repair for every
+    equal-rounded GF8 parent after the source-major backend was improved.
+    Production retains its measured one-loss boundary until a new crossover
+    map supports a narrower deterministic promotion.
+*/
+#ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+#define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 0
+#endif
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS < 0 || \
+    LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS > 1
+#error "LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -1833,7 +1847,11 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
         return kDirectMaxRepairLosses;
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+        return kDirectMaxRepairLosses;
+#else
         return 1;
+#endif
     if (IsGeneralDirectOneLossCodec(codec))
         return 1;
     return 4;
@@ -6059,7 +6077,15 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
 #else
         const bool measured_small = false;
 #endif
-        if (expanded_k65 || measured_small)
+        const bool experimental_equal_rounded =
+#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
+            shard_bytes >= 2048 &&
+            IsMeasuredEqualRoundedDirectRepairCodec(codec);
+#else
+            false;
+#endif
+        if (expanded_k65 || measured_small ||
+            experimental_equal_rounded)
             return leopard2_internal::kDirectRepairExecutorSourceMajor;
     }
 #else
