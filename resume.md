@@ -6,6 +6,23 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-30 OOM-safe source-plan negative result
+
+The default-off `LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN` candidate was screened
+from frozen same-source AVX2 binaries after Release and Clang 18
+ASan+UBSan+LSan gates passed 4/4.  Preformatting the K=65 multi-loss
+source-major schedule improved confirmed execution by only 1.05 to 4.43
+percent while making plan setup 1.58 to 1.82 times slower.  Even the best
+execution interval had an upper bound below the five-percent promotion gate.
+The candidate remains default-off and is rejected; evidence is in
+`experiments/leopard2/direct_repair/results/avx2_source_plan_negative_20260730.json`.
+
+The diagnostic used one process at a time, a one-GiB benchmark ceiling, CPU 4,
+and at most 42,496 KiB RSS.  Sanitizer tests were serial under a three-GiB
+ceiling and peaked at 1,612,700 KiB.  No OOM event occurred.  Continue the
+active AVX2 goal through another bounded avenue rather than running the
+deferred 16-MiB/reuse-64 campaign on this controller.
+
 ## 2026-07-30 OOM-safe AVX2 four-source checkpoint
 
 The generalized GF8/AVX2 one-loss path now isolates its bounded direct-repair

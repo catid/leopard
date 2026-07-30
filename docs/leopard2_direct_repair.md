@@ -193,6 +193,17 @@ The four-source callback has the same backend exclusions, so an AVX2-looking
 diagnostic table cannot accidentally interpret affine GFNI tables as nibble
 tables.
 
+An optional plan-time source-major transpose was also evaluated for the
+measured `K=R=65`, two-, four-, and eight-loss AVX2 region.  It removes the
+per-execution stack transpose, but reserves 65 20-byte source-row records,
+adds 3,012 bytes of object text, and makes plan setup about 1.44x to 1.83x
+slower.  In a 254-pair confirmation its best execution result was 1.0443x
+with a 95-percent interval of `[1.0398x, 1.0488x]`; the upper bound therefore
+misses the five-percent promotion threshold.  Plan-amortized gains were at
+most 2.81 percent in the confirmed cells.  The option remains default-off.
+Machine-readable negative evidence is
+`experiments/leopard2/direct_repair/results/avx2_source_plan_negative_20260730.json`.
+
 GF16 uses optimized complete-tile kernels and handles an even compact tail as
 `q` low bytes followed by `q` high bytes.  Odd GF16 byte counts remain
 unsupported.  No-loss, `R=1`, `K=1`, specialized LCH, and generic fallback

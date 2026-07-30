@@ -1,0 +1,180 @@
+{
+  "schema": "leopard2-avx2-source-plan-negative/v1",
+  "date_utc": "2026-07-30",
+  "source_commit": "e2e0f095cb916f2f4e3e764ae1a778283f8af5a4",
+  "source_tree": "b21d76e66c71367df7c40c20523ffeaa9cb5e835",
+  "bead": "leopard-79h.38.5.10.41",
+  "hypothesis": "format the K-by-L GF8 source-major coefficient schedule once in an immutable decode plan instead of rebuilding it for every execution",
+  "candidate_option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON",
+  "default_option": "OFF",
+  "host": {
+    "architecture": "x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timing_cpu": 4,
+    "smt_sibling": 20,
+    "numa_nodes": 1
+  },
+  "resource_policy": {
+    "controller_subworkers": 0,
+    "build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "benchmark_processes_at_once": 1,
+    "benchmark_memory_limit_bytes": 1073741824,
+    "sanitizer_memory_limit_bytes": 3221225472,
+    "diagnostic_maximum_rss_kib": 42496,
+    "confirmation_maximum_rss_kib": 15360,
+    "controller_oom_events": 0
+  },
+  "frozen_binaries": {
+    "control": {
+      "option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
+      "sha256": "9be06c04cff6662007f0200bcd7e9e3eb071b3e8bb6db00f404c89d9b768d5d1"
+    },
+    "candidate": {
+      "option": "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=ON",
+      "sha256": "392bdba1734c5ec0c0ce67862d3df2a86fd50244b86aabd56448ebf812c8e577"
+    },
+    "source_attestation_equal": true,
+    "hashes_verified_after_timing": true
+  },
+  "candidate_cost": {
+    "control_leopard2_object_text_bytes": 134157,
+    "candidate_leopard2_object_text_bytes": 137169,
+    "text_delta_bytes": 3012,
+    "text_delta_percent": 2.245,
+    "logical_source_rows_maximum": 65,
+    "source_row_payload_bytes": 20,
+    "reserved_plan_payload_bytes": 1300,
+    "allocator_overhead_included": false,
+    "decode_scratch_bytes_changed": false
+  },
+  "correctness": {
+    "workload_digests_equal": true,
+    "selected_path_both_variants": "direct/source_major",
+    "release": {
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_direct_repair"
+      ],
+      "passed": 4,
+      "build_maximum_rss_kib": 282556,
+      "test_maximum_rss_kib": 802068
+    },
+    "asan_ubsan_lsan": {
+      "compiler": "Clang 18.1.3",
+      "tests": [
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_api",
+        "leopard2_direct_repair"
+      ],
+      "passed": 4,
+      "build_maximum_rss_kib": 635836,
+      "test_maximum_rss_kib": 1612700
+    }
+  },
+  "diagnostic_screen": {
+    "method": "pinned ABBA, 31 samples per process, two processes per variant",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 65,
+    "R": 65,
+    "loss_counts": [
+      2,
+      4,
+      8
+    ],
+    "shard_bytes": [
+      2048,
+      4096,
+      65536
+    ],
+    "plan_reuse": 8,
+    "unique_cells": 9,
+    "execution_control_over_candidate_geomean_range": [
+      0.93907,
+      1.07039
+    ],
+    "candidate_over_control_plan_setup_slowdown_range": [
+      1.439,
+      1.832
+    ],
+    "note": "the apparent 4-KiB loss-4 regression and the two apparent loss-2 gains were repeated at higher confidence"
+  },
+  "confirmation_screen": {
+    "method": "pinned ABBA, 127 samples per process, two processes per variant, paired log-speedup intervals",
+    "paired_samples_per_cell": 254,
+    "plan_reuse": 8,
+    "cells": [
+      {
+        "loss_count": 2,
+        "shard_bytes": 2048,
+        "execution_geomean_speedup": 1.044275,
+        "execution_ci95": [
+          1.039782,
+          1.048787
+        ],
+        "plan_setup_control_over_candidate": 0.548570,
+        "plan_setup_ci95": [
+          0.545751,
+          0.551405
+        ],
+        "plan_amortized_geomean_speedup": 1.023498,
+        "plan_amortized_ci95": [
+          1.019206,
+          1.027808
+        ]
+      },
+      {
+        "loss_count": 2,
+        "shard_bytes": 4096,
+        "execution_geomean_speedup": 1.010491,
+        "execution_ci95": [
+          1.009164,
+          1.011820
+        ],
+        "plan_setup_control_over_candidate": 0.574053,
+        "plan_setup_ci95": [
+          0.571697,
+          0.576420
+        ],
+        "plan_amortized_geomean_speedup": 0.999655,
+        "plan_amortized_ci95": [
+          0.998360,
+          1.000953
+        ]
+      },
+      {
+        "loss_count": 4,
+        "shard_bytes": 4096,
+        "execution_geomean_speedup": 1.038038,
+        "execution_ci95": [
+          1.034503,
+          1.041586
+        ],
+        "plan_setup_control_over_candidate": 0.631882,
+        "plan_setup_ci95": [
+          0.626660,
+          0.637147
+        ],
+        "plan_amortized_geomean_speedup": 1.028067,
+        "plan_amortized_ci95": [
+          1.024609,
+          1.031537
+        ]
+      }
+    ],
+    "highest_execution_ci95_upper": 1.048787,
+    "credible_regressions": 0
+  },
+  "disposition": {
+    "promoted": false,
+    "reason": "the best confirmed execution interval remains below the required 1.05 speedup while plan construction is materially slower and plan metadata grows",
+    "production_default_changed": false,
+    "experimental_code_retained": true,
+    "next_candidate": "redesign source-major initialization and coefficient storage together so plan formatting removes an output pass instead of only moving transpose work"
+  }
+}
