@@ -906,28 +906,50 @@ void test_t8_one_block_mixed_binding(Context& avx2)
 {
     if (avx2.result() != LEO2_SUCCESS)
         return;
-    Codec codec(avx2.get(), 7, 7,
+    Codec codec(avx2.get(), 5, 5,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
-    static const size_t qualified[] = { 64, 128, 512, 1024 };
+    static const size_t qualified[] = { 64, 128, 320, 512 };
     leopard2_internal::CodecEncodePathInfo path = {};
     require(leopard2_internal::GetCodecEncodePathInfo(
-            codec.get(), 1024, 7, &path),
+            codec.get(), 512, 5, &path),
         "mixed T8 path query");
     const uint64_t expected_qualified_calls =
         path.high_t8_partial_binding_selected ? 4 : 0;
     run_t8_mixed_binding(
-        codec.get(), 7, 7, qualified,
+        codec.get(), 5, 5, qualified,
         sizeof(qualified) / sizeof(qualified[0]),
         expected_qualified_calls, 2);
+
+    /*
+        Exercise the fixed-shape K=5,R=5 kernel in one heterogeneous binding
+        with the original 64-byte tile.  Both items must select the same
+        immutable AVX2 callback while dispatching their byte-specific bodies.
+    */
+    static const size_t exact_kernel[] = { 64, 1088 };
+    path = leopard2_internal::CodecEncodePathInfo();
+    require(leopard2_internal::GetCodecEncodePathInfo(
+            codec.get(), 1088, 5, &path),
+        "mixed exact T8 path query");
+    const uint64_t expected_exact_calls =
+        path.high_t8_partial_binding_selected ? 2 : 0;
+    run_t8_mixed_binding(
+        codec.get(), 5, 5, exact_kernel,
+        sizeof(exact_kernel) / sizeof(exact_kernel[0]),
+        expected_exact_calls, 2);
 
     /*
         One unqualified item must disable the binding-level shortcut for the
         complete heterogeneous batch.  The mature per-item path still emits
         identical parity for both items.
     */
-    static const size_t boundary[] = { 64, 1025 };
+    static const size_t boundary[] = { 64, 513 };
+    path = leopard2_internal::CodecEncodePathInfo();
+    require(leopard2_internal::GetCodecEncodePathInfo(
+            codec.get(), 513, 5, &path) &&
+            !path.high_t8_partial_binding_selected,
+        "mixed T8 boundary unexpectedly selected the shortcut");
     run_t8_mixed_binding(
-        codec.get(), 7, 7, boundary,
+        codec.get(), 5, 5, boundary,
         sizeof(boundary) / sizeof(boundary[0]), 0, 2);
 }
 

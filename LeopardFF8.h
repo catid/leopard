@@ -179,6 +179,18 @@ void ReedSolomonEncodeOneBlockT8(
     void* const* work,
     uint64_t byte_count);
 
+/*
+    Execute the AVX2 T=8 callback with exactly five live systematic inputs and
+    five transmitted parity outputs.  Shortened input and punctured output
+    suffixes remain mathematical zeros/unobserved coordinates in registers;
+    callers provide no padding rows.
+*/
+void ReedSolomonEncodeK5R5T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count);
+
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,

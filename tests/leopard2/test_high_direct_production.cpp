@@ -126,8 +126,10 @@ bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
     };
     if (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512 != 0 ||
         k < 5 || k > 8 || r < 5 || r > 8 ||
-        bytes < 576 || bytes > 1024 || (bytes & 63U) != 0)
+        bytes < 576 || bytes > 1088 || (bytes & 63U) != 0)
         return false;
+    if (bytes == 1088)
+        return k == 5 && r == 5;
     const size_t byte_index = (bytes - 576) / 64;
     const unsigned shape_bit = 4U * (k - 5U) + (r - 5U);
     return (shape_masks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
@@ -466,7 +468,7 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
 {
     static const size_t byte_counts[] = {
         64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024
+        576, 640, 704, 768, 832, 896, 960, 1024, 1088
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -743,8 +745,8 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
 
 uint64_t ExerciseT8PartialThreadPool(size_t bytes)
 {
-    const unsigned k = bytes > 512 ? 7 : 5;
-    const unsigned r = bytes > 512 ? 7 : 5;
+    const unsigned k = bytes == 1088 ? 5 : (bytes > 512 ? 7 : 5);
+    const unsigned r = bytes == 1088 ? 5 : (bytes > 512 ? 7 : 5);
     static const size_t batch_count = 8;
 
     leo2_context_options options = {};
@@ -895,8 +897,8 @@ uint64_t ExerciseT8PartialUnaligned(
     leo2_context* context,
     size_t bytes)
 {
-    const unsigned k = bytes > 512 ? 7 : 5;
-    const unsigned r = bytes > 512 ? 7 : 5;
+    const unsigned k = bytes == 1088 ? 5 : (bytes > 512 ? 7 : 5);
+    const unsigned r = bytes == 1088 ? 5 : (bytes > 512 ? 7 : 5);
     static const uint8_t sentinel = 0xa5;
 
     leo2_codec* codec = NULL;
@@ -1048,7 +1050,7 @@ void ExerciseTinyFullOutputRegion(
         1, 2, 3, 4, 7, 8, 15, 16,
         17, 31, 32, 33, 63, 64, 65, 70,
         128, 192, 256, 320, 384, 448, 512, 513,
-        576, 640, 704, 768, 832, 896, 960, 1024, 1025
+        576, 640, 704, 768, 832, 896, 960, 1024, 1025, 1088
     };
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -1241,7 +1243,8 @@ int main()
             ExerciseT8PartialUnaligned(context, 832) +
             ExerciseT8PartialUnaligned(context, 896) +
             ExerciseT8PartialUnaligned(context, 960) +
-            ExerciseT8PartialUnaligned(context, 1024);
+            ExerciseT8PartialUnaligned(context, 1024) +
+            ExerciseT8PartialUnaligned(context, 1088);
         const uint64_t t8_two_block_unaligned_checks =
             ExerciseT8TwoBlockUnaligned(context, 64) +
             ExerciseT8TwoBlockUnaligned(context, 128) +
@@ -1276,7 +1279,8 @@ int main()
             ExerciseT8PartialThreadPool(832) +
             ExerciseT8PartialThreadPool(896) +
             ExerciseT8PartialThreadPool(960) +
-            ExerciseT8PartialThreadPool(1024);
+            ExerciseT8PartialThreadPool(1024) +
+            ExerciseT8PartialThreadPool(1088);
         const uint64_t t8_two_block_thread_pool_checks =
             ExerciseT8TwoBlockThreadPool(128) +
             ExerciseT8TwoBlockThreadPool(192) +

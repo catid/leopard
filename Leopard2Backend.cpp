@@ -1250,6 +1250,49 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
             std::memcmp(actual, expected, sizeof(actual)) != 0)
             return false;
         input_pointers[side - 1] = input[side - 1] + 1;
+
+        if (side == 8 && ops.kind == LEO2_BACKEND_AVX2)
+        {
+            /*
+                The partial contract exposes only five source and five output
+                rows.  Build the expected parent transform with explicit zero
+                suffix inputs, then require the callback to leave every
+                punctured output row untouched.
+            */
+            const void* partial_input[8];
+            static const uint8_t partial_inverse_skew[8] = {
+                255, 153, 17, 102, 85, 51, 34, 187
+            };
+            static const uint8_t partial_forward_skew[8] = {
+                0, 255, 255, 85, 255, 17, 85, 34
+            };
+            for (unsigned lane = 0; lane < side; ++lane)
+            {
+                std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+                std::memset(expected[lane], 0xc3, sizeof(expected[lane]));
+                partial_input[lane] = lane < 5
+                    ? static_cast<const void*>(input[lane] + 1)
+                    : static_cast<const void*>(zero + 1);
+            }
+            ReferenceFF8HighEncodeOneBlock(
+                ops, partial_input, expected_pointers, side,
+                partial_inverse_skew, partial_forward_skew, kBytes);
+            ops.ff8_high_encode_one_block(
+                input_pointers, actual_pointers,
+                side | kFF8HighEncodeK5R5Partial,
+                partial_inverse_skew, partial_forward_skew, kBytes);
+            if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                return false;
+            for (unsigned lane = 0; lane < 5; ++lane)
+                if (std::memcmp(
+                        actual[lane], expected[lane],
+                        sizeof(actual[lane])) != 0)
+                    return false;
+            for (unsigned lane = 5; lane < side; ++lane)
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                    if (actual[lane][i] != 0xc3)
+                        return false;
+        }
     }
     return true;
 }

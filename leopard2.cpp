@@ -607,9 +607,11 @@ static bool IsHighT8OneBlockBeyond512ShapeByteCount(
     if (g_high_t8_one_block_beyond_512_mode != 1U ||
         original_count < 5 || original_count > 8 ||
         recovery_count < 5 || recovery_count > 8 ||
-        shard_bytes < 576 || shard_bytes > 1024 ||
+        shard_bytes < 576 || shard_bytes > 1088 ||
         (shard_bytes & 63U) != 0)
         return false;
+    if (shard_bytes == 1088)
+        return original_count == 5 && recovery_count == 5;
     const size_t byte_index =
         static_cast<size_t>((shard_bytes - 576) / 64);
     const uint32_t shape_bit =
@@ -9924,6 +9926,13 @@ static LEO2_T8_PARTIAL_NOINLINE void ExecuteHighT8PartialBinding(
 {
     LEO_DEBUG_ASSERT(IsHighT8OneBlockByteCount(
         original_count, recovery_count, shard_bytes));
+    if (original_count == 5 && recovery_count == 5 &&
+        shard_bytes == 1088)
+    {
+        leopard::ff8::ReedSolomonEncodeK5R5T8(
+            transform_ops, original, recovery, shard_bytes);
+        return;
+    }
     alignas(32) static const uint8_t zero_shard[1024] = {};
     alignas(32) uint8_t discarded_recovery[3][1024];
     const void* padded_original[8];

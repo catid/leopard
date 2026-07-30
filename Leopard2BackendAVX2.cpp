@@ -6114,6 +6114,175 @@ static void AVX2FF8HighEncodeT8Vector(
 # define LEO2_AVX2_T8_ENTRY
 #endif
 
+/*
+    Exact shortened/punctured T=8 tile for the K=5,R=5 boundary.  Unlike the
+    padded callback, this keeps the three known-zero input lanes in registers
+    and never writes the three punctured parity lanes.  The arithmetic is the
+    same complete parent transform; only provably dead loads and stores are
+    removed.
+*/
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    /*
+        These are the deterministic legacy-GF8 T=8 message/parity coset
+        factors produced by FFTInitialize.  Making them integral constants
+        lets the compiler remove zero-skew branches and address the fixed
+        nibble tables directly in this versioned wire-profile kernel.
+        Backend qualification independently evaluates the same factors through
+        the generic reference transform.
+    */
+    static const uint16_t kInverse1 = 153;
+    static const uint16_t kInverse2 = 17;
+    static const uint16_t kInverse3 = 102;
+    static const uint16_t kInverse4 = 85;
+    static const uint16_t kInverse5 = 51;
+    static const uint16_t kInverse6 = 34;
+    static const uint16_t kInverse7 = 187;
+    static const uint16_t kForward1 = 255;
+    static const uint16_t kForward2 = 255;
+    static const uint16_t kForward3 = 85;
+    static const uint16_t kForward4 = 255;
+    static const uint16_t kForward5 = 17;
+    static const uint16_t kForward6 = 85;
+    static const uint16_t kForward7 = 34;
+    LEO_DEBUG_ASSERT(
+        inverse_skew[0] == 255 &&
+        inverse_skew[1] == kInverse1 &&
+        inverse_skew[2] == kInverse2 &&
+        inverse_skew[3] == kInverse3 &&
+        inverse_skew[4] == kInverse4 &&
+        inverse_skew[5] == kInverse5 &&
+        inverse_skew[6] == kInverse6 &&
+        inverse_skew[7] == kInverse7);
+    LEO_DEBUG_ASSERT(
+        forward_skew[0] == 0 &&
+        forward_skew[1] == kForward1 &&
+        forward_skew[2] == kForward2 &&
+        forward_skew[3] == kForward3 &&
+        forward_skew[4] == kForward4 &&
+        forward_skew[5] == kForward5 &&
+        forward_skew[6] == kForward6 &&
+        forward_skew[7] == kForward7);
+    (void)inverse_skew;
+    (void)forward_skew;
+    (void)kForward7;
+
+    const uint8_t* input[5];
+    uint8_t* output[5];
+    for (unsigned lane = 0; lane < 5; ++lane)
+    {
+        input[lane] = static_cast<const uint8_t*>(data[lane]);
+        output[lane] = static_cast<uint8_t*>(work[lane]);
+    }
+
+    uint64_t offset = 0;
+    while (byte_count - offset >= 32)
+    {
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[0] + offset));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[1] + offset));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[2] + offset));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[3] + offset));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[4] + offset));
+        __m256i value5 = _mm256_setzero_si256();
+        __m256i value6 = _mm256_setzero_si256();
+        __m256i value7 = _mm256_setzero_si256();
+
+        AVX2FF8T8VectorIFFTRadix4(
+            value0, value1, value2, value3,
+            kInverse1, kInverse3, kInverse2);
+        AVX2FF8T8VectorIFFTRadix4(
+            value4, value5, value6, value7,
+            kInverse5, kInverse7, kInverse6);
+        AVX2FF8T8VectorIFFTDistance4(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, kInverse4);
+
+        AVX2FF8T8VectorFFTRadix4Distance2(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7,
+            kForward2, kForward6, kForward4);
+        AVX2FF8T8VectorFFT2(value0, value1, kForward1);
+        AVX2FF8T8VectorFFT2(value2, value3, kForward3);
+        AVX2FF8T8VectorFFT2(value4, value5, kForward5);
+
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[0] + offset), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[1] + offset), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[2] + offset), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[3] + offset), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[4] + offset), value4);
+        offset += 32;
+    }
+
+    while (offset < byte_count)
+    {
+        uint8_t values[8] = {};
+        for (unsigned lane = 0; lane < 5; ++lane)
+            values[lane] = input[lane][offset];
+
+        AVX2FF8T8VectorScalarIFFT2(
+            values[0], values[1], kInverse1);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[2], values[3], kInverse3);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[0], values[2], kInverse2);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[1], values[3], kInverse2);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[4], values[5], kInverse5);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[6], values[7], kInverse7);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[4], values[6], kInverse6);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[5], values[7], kInverse6);
+        for (unsigned lane = 0; lane < 4; ++lane)
+            AVX2FF8T8VectorScalarIFFT2(
+                values[lane], values[lane + 4], kInverse4);
+
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[4], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[1], values[5], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[2], values[6], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[3], values[7], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[2], kForward2);
+        AVX2FF8T8VectorScalarFFT2(
+            values[1], values[3], kForward2);
+        AVX2FF8T8VectorScalarFFT2(
+            values[4], values[6], kForward6);
+        AVX2FF8T8VectorScalarFFT2(
+            values[5], values[7], kForward6);
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[1], kForward1);
+        AVX2FF8T8VectorScalarFFT2(
+            values[2], values[3], kForward3);
+        AVX2FF8T8VectorScalarFFT2(
+            values[4], values[5], kForward5);
+
+        for (unsigned lane = 0; lane < 5; ++lane)
+            output[lane][offset] = values[lane];
+        ++offset;
+    }
+}
+
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     const void* const* data,
     void* const* work,
@@ -6124,11 +6293,21 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
 {
     const bool shortened =
         (side_and_flags & kFF8HighEncodeShortenedInput) != 0;
+    const bool k5_r5_partial =
+        (side_and_flags & kFF8HighEncodeK5R5Partial) != 0;
     const uint32_t side =
-        side_and_flags & ~kFF8HighEncodeShortenedInput;
+        side_and_flags &
+        ~(kFF8HighEncodeShortenedInput | kFF8HighEncodeK5R5Partial);
     LEO_DEBUG_ASSERT(side == 8);
     if (side != 8)
         return;
+    if (k5_r5_partial)
+    {
+        LEO_DEBUG_ASSERT(!shortened);
+        AVX2FF8HighEncodeK5R5T8Vector(
+            data, work, inverse_skew, forward_skew, byte_count);
+        return;
+    }
     AVX2FF8HighEncodeT8Vector(
         data, work, shortened, inverse_skew, forward_skew, byte_count);
 }

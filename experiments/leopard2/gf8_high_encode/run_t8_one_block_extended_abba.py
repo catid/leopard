@@ -36,13 +36,16 @@ BYTE_NEIGHBORS = (
     64, 65, 127, 129, 191, 193, 255, 257, 319,
     321, 383, 385, 447, 449, 511, 513, 576, 640,
 )
-BEYOND_SCHEMA = "leopard2-gf8-t8-one-block-beyond512-abba/v1"
+BEYOND_SCHEMA = "leopard2-gf8-t8-one-block-beyond512-abba/v2"
 BEYOND_SUMMARY_SCHEMA = \
-    "leopard2-gf8-t8-one-block-beyond512-summary/v1"
-BEYOND_TARGET_BYTES = (576, 640, 704, 768, 832, 896, 960, 1024)
+    "leopard2-gf8-t8-one-block-beyond512-summary/v2"
+BEYOND_TARGET_BYTES = (
+    576, 640, 704, 768, 832, 896, 960, 1024, 1088,
+)
 BEYOND_BYTE_NEIGHBORS = (
     512, 513, 575, 577, 639, 641, 703, 705, 767,
-    769, 831, 833, 895, 897, 959, 961, 1023, 1025, 1088,
+    769, 831, 833, 895, 897, 959, 961, 1023, 1025,
+    1087, 1089, 1152,
 )
 BEYOND_PRODUCTION_MASKS = {
     576: 0xFFFF,
@@ -53,6 +56,7 @@ BEYOND_PRODUCTION_MASKS = {
     896: 0x0FD4,
     960: 0x4EFD,
     1024: 0x4FCC,
+    1088: 0x0001,
 }
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0

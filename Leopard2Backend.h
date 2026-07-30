@@ -275,8 +275,10 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 // established that data[0..data_count) and work[0..side) are disjoint and that
 // every transmitted parity coordinate is requested.  side_and_flags stores
 // side in the low bits and sets kFF8HighEncodeShortenedInput when data_count is
-// side - 1; otherwise data_count is side.  Keeping this one-bit fact in the
-// existing size argument preserves the six-register hot-call shape on x86-64.
+// side - 1; otherwise data_count is side.  The AVX2 T=8 implementation also
+// accepts kFF8HighEncodeK5R5Partial after its caller has established exactly
+// five input and five output rows.  Keeping these facts in the existing size
+// argument preserves the six-register hot-call shape on x86-64.
 // A missing final data coordinate is the shortened known zero;
 // a punctured final parity coordinate is still evaluated into the caller's
 // scratch-backed work row.  inverse_skew names the message-coset skew table,
@@ -287,6 +289,7 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 // side value itself as its bit, so a backend may publish a deliberately narrow
 // implementation without weakening the callback contract for other backends.
 static const uint32_t kFF8HighEncodeShortenedInput = 0x80000000U;
+static const uint32_t kFF8HighEncodeK5R5Partial = 0x40000000U;
 static const uint32_t kFF8HighEncodeSupportedSides =
     8U | 16U | 32U | 64U;
 
