@@ -11,7 +11,7 @@ bytes.  The final-map and all-K runners both use the same closure.
 from __future__ import annotations
 
 from collections import Counter
-from contextlib import ExitStack
+from contextlib import ExitStack, nullcontext
 import ctypes
 import errno
 import fcntl
@@ -49,6 +49,49 @@ MAX_REPLAY_RECIPE_TOTAL_BYTES = 128 * 1024 * 1024
 CHILD_REAP_TIMEOUT_SECONDS = 5.0
 PR_SET_CHILD_SUBREAPER = 36
 PR_GET_CHILD_SUBREAPER = 37
+PR_SET_NO_NEW_PRIVS = 38
+
+# Linux Landlock ABI 3 adds TRUNCATE mediation.  Canonical replay commands use
+# it to make every pathname write outside their runner-owned workspace fail,
+# even if a same-UID adversary transiently replaces an output with a symlink.
+LANDLOCK_CREATE_RULESET_VERSION = 1
+LANDLOCK_RULE_PATH_BENEATH = 1
+LANDLOCK_ACCESS_FS_WRITE_FILE = 1 << 1
+LANDLOCK_ACCESS_FS_REMOVE_DIR = 1 << 4
+LANDLOCK_ACCESS_FS_REMOVE_FILE = 1 << 5
+LANDLOCK_ACCESS_FS_MAKE_CHAR = 1 << 6
+LANDLOCK_ACCESS_FS_MAKE_DIR = 1 << 7
+LANDLOCK_ACCESS_FS_MAKE_REG = 1 << 8
+LANDLOCK_ACCESS_FS_MAKE_SOCK = 1 << 9
+LANDLOCK_ACCESS_FS_MAKE_FIFO = 1 << 10
+LANDLOCK_ACCESS_FS_MAKE_BLOCK = 1 << 11
+LANDLOCK_ACCESS_FS_MAKE_SYM = 1 << 12
+LANDLOCK_ACCESS_FS_REFER = 1 << 13
+LANDLOCK_ACCESS_FS_TRUNCATE = 1 << 14
+LANDLOCK_WRITE_ACCESS = (
+    LANDLOCK_ACCESS_FS_WRITE_FILE |
+    LANDLOCK_ACCESS_FS_REMOVE_DIR |
+    LANDLOCK_ACCESS_FS_REMOVE_FILE |
+    LANDLOCK_ACCESS_FS_MAKE_CHAR |
+    LANDLOCK_ACCESS_FS_MAKE_DIR |
+    LANDLOCK_ACCESS_FS_MAKE_REG |
+    LANDLOCK_ACCESS_FS_MAKE_SOCK |
+    LANDLOCK_ACCESS_FS_MAKE_FIFO |
+    LANDLOCK_ACCESS_FS_MAKE_BLOCK |
+    LANDLOCK_ACCESS_FS_MAKE_SYM |
+    LANDLOCK_ACCESS_FS_REFER |
+    LANDLOCK_ACCESS_FS_TRUNCATE
+)
+SYS_LANDLOCK_CREATE_RULESET = 444
+SYS_LANDLOCK_ADD_RULE = 445
+SYS_LANDLOCK_RESTRICT_SELF = 446
+CLONE_NEWNS = 0x00020000
+CLONE_NEWUSER = 0x10000000
+MS_NOSUID = 0x00000002
+MS_NODEV = 0x00000004
+MS_REC = 0x00004000
+MS_PRIVATE = 0x00040000
+PRIVATE_REPLAY_TMPFS_BYTES = 512 * 1024 * 1024
 
 # Linux inotify constants.  Provenance command containment is already
 # Linux-only; inotify gives retained pathname guards an event history, which
@@ -127,6 +170,8 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_BUILD_TESTS": frozenset(("BOOL",)),
     "LEO2_ENABLE_CUDA": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
+        frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
     "LEO2_FLAG_FALIGN_FUNCTIONS_64": frozenset(("INTERNAL",)),
@@ -161,6 +206,24 @@ GIT_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
 }
 
+PRODUCTION_BUILD_CLOSURE_SCHEMA_V1 = \
+    "leopard2-production-build-closure/v1"
+PRODUCTION_BUILD_CLOSURE_SCHEMA = \
+    "leopard2-production-build-closure/v2"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2 = \
+    "leopard2-benchmark-build-configuration/v2"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v3"
+REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
+    "leopard2-reproducible-build-proof/v2"
+REPRODUCIBLE_BUILD_PROOF_SCHEMA = \
+    "leopard2-reproducible-build-proof/v3"
+REPLAY_INVOCATION_SCHEMA_V1 = "leopard2-replay-invocation/v1"
+REPLAY_INVOCATION_SCHEMA = "leopard2-replay-invocation/v2"
+LEGACY_REPLAY_RECIPE_SCHEMA = "leopard2-replay-recipe-transport/v2"
+CANONICAL_REPLAY_RECIPE_SCHEMA = \
+    "leopard2-canonical-replay-build-plan/v2"
+
 
 class BuildProvenanceError(RuntimeError):
     """The candidate build is not valid benchmark evidence."""
@@ -169,6 +232,364 @@ class BuildProvenanceError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise BuildProvenanceError(message)
+
+
+_OWNER_TERMINAL_EXCEPTIONS = (KeyboardInterrupt, SystemExit)
+
+
+def _add_owner_failure_note(
+    target: BaseException,
+    context: str,
+    relation: str,
+    failure: BaseException,
+) -> None:
+    """Attach one cleanup diagnostic and its already-retained subfailures."""
+    try:
+        target.add_note(
+            f"{context}: {relation} was "
+            f"{type(failure).__name__}: {failure}")
+        for note in getattr(failure, "__notes__", ()):
+            target.add_note(f"{context}: nested cleanup detail: {note}")
+    except AttributeError:
+        pass
+
+
+def _owner_exception_precedence(
+    earlier: BaseException | None,
+    later: BaseException | None,
+    context: str,
+) -> BaseException | None:
+    """Select one authoritative owner failure without losing termination.
+
+    KeyboardInterrupt and SystemExit are control-flow requests, not ordinary
+    diagnostics.  An earlier terminal exception remains authoritative through
+    all later cleanup.  A later cleanup terminal supersedes an earlier
+    ordinary failure.  Ordinary-only callers retain their existing first-error
+    behavior and may wrap the result at their public boundary.
+    """
+    require(isinstance(context, str) and context,
+            "owner exception-precedence context is invalid")
+    if earlier is None:
+        return later
+    if later is None:
+        return earlier
+    earlier_terminal = isinstance(earlier, _OWNER_TERMINAL_EXCEPTIONS)
+    later_terminal = isinstance(later, _OWNER_TERMINAL_EXCEPTIONS)
+    if earlier_terminal:
+        _add_owner_failure_note(
+            earlier, context, "later cleanup failure", later)
+        return earlier
+    if later_terminal:
+        _add_owner_failure_note(
+            later, context, "earlier failure", earlier)
+        return later
+    _add_owner_failure_note(
+        earlier, context, "later cleanup failure", later)
+    return earlier
+
+
+def _ordinary_owner_cleanup_error(
+    cleanup: BaseException, message: str,
+) -> BaseException:
+    """Retain terminal cleanup verbatim and wrap an ordinary close failure."""
+    if isinstance(cleanup, _OWNER_TERMINAL_EXCEPTIONS):
+        return cleanup
+    failure = BuildProvenanceError(message)
+    failure.__cause__ = cleanup
+    return failure
+
+
+def _raise_owner_exit_failure(
+    primary: BaseException,
+    cleanup: BaseException,
+    context: str,
+    ordinary_message: str,
+) -> None:
+    """Apply owner precedence when cleanup fails during exception unwinding."""
+    authoritative = _owner_exception_precedence(primary, cleanup, context)
+    if isinstance(authoritative, _OWNER_TERMINAL_EXCEPTIONS):
+        raise authoritative.with_traceback(authoritative.__traceback__)
+    failure = BuildProvenanceError(ordinary_message)
+    raise failure from cleanup
+
+
+class _LandlockRulesetAttr(ctypes.Structure):
+    _fields_ = (("handled_access_fs", ctypes.c_uint64),)
+
+
+class _LandlockPathBeneathAttr(ctypes.Structure):
+    _pack_ = 1
+    _fields_ = (
+        ("allowed_access", ctypes.c_uint64),
+        ("parent_fd", ctypes.c_int32),
+    )
+
+
+def _landlock_restrict_writes_to(
+    root: Path | str, retained_root_descriptor: int,
+    additional_write_descriptors: Sequence[int] = (),
+) -> None:
+    """Restrict this process and its descendants to writes below ``root``.
+
+    This runs in the already single-threaded subprocess child immediately
+    before exec.  Reads and execution remain unrestricted; every pathname
+    mutation class supported by Landlock ABI 3 is handled and allowed only
+    below exact O_PATH directories retained by the parent.  Linux accepts only
+    directory FDs as LANDLOCK_RULE_PATH_BENEATH parents.  Additional regular
+    descriptors must therefore be writable anonymous memfds that were already
+    opened by the trusted parent; Landlock intentionally does not revoke
+    writes through such an inherited FD.  This is the descriptor-only
+    transport used for private replay artifact sinks.
+    """
+    requested = Path(os.path.abspath(os.fspath(root)))
+    require(sys.platform.startswith("linux") and requested.is_absolute(),
+            "canonical replay write sandbox requires Linux and an absolute root")
+    require(type(retained_root_descriptor) is int and
+            retained_root_descriptor >= 0,
+            "canonical replay write sandbox descriptor is invalid")
+    try:
+        retained_status = os.fstat(retained_root_descriptor)
+        lexical_status = os.stat(requested, follow_symlinks=False)
+    except OSError as error:
+        raise BuildProvenanceError(
+            f"canonical replay write sandbox root is unavailable: {error}") \
+            from error
+    require(
+        stat.S_ISDIR(retained_status.st_mode) and
+        (retained_status.st_dev, retained_status.st_ino) ==
+        (lexical_status.st_dev, lexical_status.st_ino),
+        "canonical replay write sandbox root changed before restriction")
+    library = ctypes.CDLL(None, use_errno=True)
+    syscall = library.syscall
+    syscall.restype = ctypes.c_long
+    ctypes.set_errno(0)
+    abi = syscall(
+        ctypes.c_long(SYS_LANDLOCK_CREATE_RULESET),
+        ctypes.c_void_p(), ctypes.c_size_t(0),
+        ctypes.c_uint(LANDLOCK_CREATE_RULESET_VERSION))
+    if abi < 3:
+        number = ctypes.get_errno()
+        raise BuildProvenanceError(
+            "canonical replay requires Landlock ABI 3 or later: " +
+            (os.strerror(number) if abi < 0 and number else f"ABI {abi}"))
+
+    ruleset = -1
+    try:
+        attributes = _LandlockRulesetAttr(LANDLOCK_WRITE_ACCESS)
+        ctypes.set_errno(0)
+        ruleset = syscall(
+            ctypes.c_long(SYS_LANDLOCK_CREATE_RULESET),
+            ctypes.byref(attributes), ctypes.sizeof(attributes),
+            ctypes.c_uint(0))
+        if ruleset < 0:
+            number = ctypes.get_errno()
+            raise BuildProvenanceError(
+                "cannot create canonical replay Landlock ruleset: " +
+                os.strerror(number or errno.EPERM))
+        rules = [(retained_root_descriptor, LANDLOCK_WRITE_ACCESS)]
+        for descriptor in additional_write_descriptors:
+            status = os.fstat(descriptor)
+            require(
+                stat.S_ISREG(status.st_mode) or stat.S_ISDIR(status.st_mode),
+                "canonical replay Landlock output descriptor is unsafe")
+            if stat.S_ISDIR(status.st_mode):
+                rules.append((descriptor, LANDLOCK_WRITE_ACCESS))
+                continue
+            flags = fcntl.fcntl(descriptor, fcntl.F_GETFL)
+            try:
+                descriptor_name = os.readlink(
+                    f"/proc/self/fd/{descriptor}")
+                fcntl.fcntl(
+                    descriptor, getattr(fcntl, "F_GET_SEALS", 1034))
+            except OSError as error:
+                raise BuildProvenanceError(
+                    "canonical replay regular output descriptor is not an "
+                    f"anonymous sealable memfd: {error}") from error
+            require(
+                status.st_nlink == 0 and
+                descriptor_name.startswith("/memfd:") and
+                descriptor_name.endswith(" (deleted)") and
+                flags & os.O_ACCMODE in (os.O_WRONLY, os.O_RDWR),
+                "canonical replay regular output descriptor is not a "
+                "writable anonymous memfd")
+        for descriptor, allowed_access in rules:
+            rule = _LandlockPathBeneathAttr(allowed_access, descriptor)
+            ctypes.set_errno(0)
+            result = syscall(
+                ctypes.c_long(SYS_LANDLOCK_ADD_RULE),
+                ctypes.c_int(ruleset),
+                ctypes.c_int(LANDLOCK_RULE_PATH_BENEATH),
+                ctypes.byref(rule), ctypes.c_uint(0))
+            if result != 0:
+                number = ctypes.get_errno()
+                raise BuildProvenanceError(
+                    "cannot add canonical replay Landlock path rule: " +
+                    os.strerror(number or errno.EPERM))
+        prctl = library.prctl
+        prctl.restype = ctypes.c_int
+        ctypes.set_errno(0)
+        if prctl(
+                ctypes.c_int(PR_SET_NO_NEW_PRIVS), ctypes.c_ulong(1),
+                ctypes.c_ulong(0), ctypes.c_ulong(0),
+                ctypes.c_ulong(0)) != 0:
+            number = ctypes.get_errno()
+            raise BuildProvenanceError(
+                "cannot enable no_new_privs for canonical replay: " +
+                os.strerror(number or errno.EPERM))
+        ctypes.set_errno(0)
+        result = syscall(
+            ctypes.c_long(SYS_LANDLOCK_RESTRICT_SELF),
+            ctypes.c_int(ruleset), ctypes.c_uint(0))
+        if result != 0:
+            number = ctypes.get_errno()
+            raise BuildProvenanceError(
+                "cannot enter canonical replay Landlock ruleset: " +
+                os.strerror(number or errno.EPERM))
+    finally:
+        if ruleset >= 0:
+            _close_raw_descriptor_with_precedence(
+                ruleset, sys.exception(),
+                "canonical replay Landlock ruleset",
+                "cannot close canonical replay Landlock ruleset")
+
+
+def _mount_private_replay_tmpfs(
+    root: Path | str, retained_root_descriptor: int,
+    directory_relatives: Sequence[str], outside_uid: int, outside_gid: int,
+) -> None:
+    """Enter a private user/mount namespace and cover ``root`` with tmpfs."""
+    requested = Path(os.path.abspath(os.fspath(root)))
+    require(
+        sys.platform.startswith("linux") and requested.is_absolute() and
+        type(retained_root_descriptor) is int and
+        retained_root_descriptor >= 0 and
+        type(outside_uid) is int and outside_uid >= 0 and
+        type(outside_gid) is int and outside_gid >= 0 and
+        all(
+            isinstance(relative, str) and
+            relative not in ("", ".", "..") and
+            not Path(relative).is_absolute() and
+            all(component not in ("", ".", "..")
+                for component in Path(relative).parts)
+            for relative in directory_relatives),
+        "private replay tmpfs request is malformed")
+    retained_status = os.fstat(retained_root_descriptor)
+    lexical_status = os.stat(requested, follow_symlinks=False)
+    require(
+        stat.S_ISDIR(retained_status.st_mode) and
+        (retained_status.st_dev, retained_status.st_ino) ==
+        (lexical_status.st_dev, lexical_status.st_ino),
+        "private replay tmpfs root changed before namespace creation")
+    library = ctypes.CDLL(None, use_errno=True)
+    unshare = library.unshare
+    unshare.argtypes = (ctypes.c_int,)
+    unshare.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    if unshare(ctypes.c_int(CLONE_NEWUSER | CLONE_NEWNS)) != 0:
+        number = ctypes.get_errno()
+        raise BuildProvenanceError(
+            "cannot create private replay user/mount namespace: " +
+            os.strerror(number or errno.EPERM))
+
+    def write_mapping(path: str, content: bytes, *, optional: bool = False) -> None:
+        descriptor = -1
+        try:
+            descriptor = os.open(
+                path, os.O_WRONLY | getattr(os, "O_CLOEXEC", 0))
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                require(written > 0,
+                        f"private replay namespace mapping write stalled: "
+                        f"{path}")
+                view = view[written:]
+        except FileNotFoundError:
+            if not optional:
+                raise
+        finally:
+            if descriptor >= 0:
+                _close_raw_descriptor_with_precedence(
+                    descriptor, sys.exception(),
+                    f"private replay namespace mapping {path}",
+                    f"cannot close private replay namespace mapping {path}")
+
+    try:
+        write_mapping("/proc/self/setgroups", b"deny\n", optional=True)
+        write_mapping(
+            "/proc/self/uid_map", f"0 {outside_uid} 1\n".encode("ascii"))
+        write_mapping(
+            "/proc/self/gid_map", f"0 {outside_gid} 1\n".encode("ascii"))
+        os.setresgid(0, 0, 0)
+        os.setresuid(0, 0, 0)
+    except OSError as error:
+        raise BuildProvenanceError(
+            f"cannot map private replay namespace credentials: {error}") \
+            from error
+
+    mount = library.mount
+    mount.argtypes = (
+        ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p,
+        ctypes.c_ulong, ctypes.c_void_p,
+    )
+    mount.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    if mount(
+            ctypes.c_char_p(), ctypes.c_char_p(b"/"), ctypes.c_char_p(),
+            ctypes.c_ulong(MS_REC | MS_PRIVATE), ctypes.c_void_p()) != 0:
+        number = ctypes.get_errno()
+        raise BuildProvenanceError(
+            "cannot privatize replay mount propagation: " +
+            os.strerror(number or errno.EPERM))
+    # mount(2) rejects procfs magic-link targets on some kernels.  The exact
+    # inode was retained and compared above; mount in this new namespace and
+    # compare the covered lexical path immediately afterwards.
+    target = os.fsencode(requested)
+    options = (
+        f"mode=0700,size={PRIVATE_REPLAY_TMPFS_BYTES},nr_inodes=8192"
+    ).encode("ascii")
+    ctypes.set_errno(0)
+    if mount(
+            ctypes.c_char_p(b"leopard2-private-replay"),
+            ctypes.c_char_p(target), ctypes.c_char_p(b"tmpfs"),
+            ctypes.c_ulong(MS_NOSUID | MS_NODEV),
+            ctypes.c_char_p(options)) != 0:
+        number = ctypes.get_errno()
+        raise BuildProvenanceError(
+            "cannot mount private replay tmpfs: " +
+            os.strerror(number or errno.EPERM))
+    try:
+        mounted = os.stat(requested, follow_symlinks=False)
+        require(
+            stat.S_ISDIR(mounted.st_mode) and
+            mounted.st_dev != retained_status.st_dev,
+            "private replay tmpfs did not cover its staging root")
+        mounted_descriptor = os.open(
+            requested,
+            getattr(os, "O_PATH", os.O_RDONLY) |
+            getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_DIRECTORY", 0) |
+            getattr(os, "O_NOFOLLOW", 0))
+        try:
+            mounted_status = os.fstat(mounted_descriptor)
+            require(
+                mounted_status.st_dev == mounted.st_dev and
+                mounted_status.st_ino == mounted.st_ino,
+                "private replay mounted-root descriptor differs")
+            os.dup2(
+                mounted_descriptor, retained_root_descriptor,
+                inheritable=True)
+        finally:
+            _close_raw_descriptor_with_precedence(
+                mounted_descriptor, sys.exception(),
+                "private replay mounted-root descriptor",
+                "cannot close private replay mounted-root descriptor")
+        for relative in sorted(set(directory_relatives)):
+            (Path(f"/proc/self/fd/{retained_root_descriptor}") /
+             relative).mkdir(
+                mode=0o700, parents=True, exist_ok=False)
+    except OSError as error:
+        raise BuildProvenanceError(
+            f"cannot initialize private replay tmpfs: {error}") from error
 
 
 def _linux_memfd_create(name: str, flags: int) -> int:
@@ -195,6 +616,140 @@ def _linux_memfd_create(name: str, flags: int) -> int:
         os.strerror(number or errno.EPERM))
 
 
+KCMP_FILE = 0
+_SYS_KCMP_BY_MACHINE = {
+    "x86_64": 312,
+    "amd64": 312,
+    "i386": 349,
+    "i486": 349,
+    "i586": 349,
+    "i686": 349,
+    "armv6l": 378,
+    "armv7l": 378,
+    "aarch64": 272,
+    "arm64": 272,
+    "riscv64": 272,
+    "loongarch64": 272,
+    "ppc": 354,
+    "ppc64": 354,
+    "ppc64le": 354,
+    "s390": 343,
+    "s390x": 343,
+}
+
+
+def _linux_same_open_file_description(
+    first: int, second: int,
+) -> bool:
+    """Compare exact open-file descriptions, not merely inode metadata."""
+    require(sys.platform.startswith("linux"),
+            "interruption-safe descriptor closure requires Linux")
+    try:
+        os.fstat(first)
+    except OSError as error:
+        if error.errno == errno.EBADF:
+            return False
+        raise
+    machine = os.uname().machine.lower()
+    number = _SYS_KCMP_BY_MACHINE.get(machine)
+    require(number is not None,
+            f"Linux kcmp syscall number is unknown for {machine!r}")
+    syscall = ctypes.CDLL(None, use_errno=True).syscall
+    syscall.restype = ctypes.c_long
+    ctypes.set_errno(0)
+    result = syscall(
+        ctypes.c_long(number),
+        ctypes.c_int(os.getpid()), ctypes.c_int(os.getpid()),
+        ctypes.c_int(KCMP_FILE),
+        ctypes.c_ulong(first), ctypes.c_ulong(second))
+    if result >= 0:
+        return result == 0
+    observed = ctypes.get_errno()
+    if observed == errno.EBADF:
+        return False
+    raise BuildProvenanceError(
+        "cannot compare retained open-file descriptions with Linux kcmp: " +
+        os.strerror(observed or errno.EPERM))
+
+
+def _linux_close_descriptor_once(descriptor: int) -> None:
+    """Issue one non-retried Linux close syscall.
+
+    Linux releases the numeric descriptor early in close(2).  Retrying after
+    any reported error can therefore close an unrelated descriptor recycled
+    by asynchronous code.  This helper deliberately issues exactly one raw
+    syscall and never retries its numeric argument.
+    """
+    require(sys.platform.startswith("linux"),
+            "interruption-safe descriptor closure requires Linux")
+    function = ctypes.CDLL(None, use_errno=True).close
+    function.argtypes = (ctypes.c_int,)
+    function.restype = ctypes.c_int
+    ctypes.set_errno(0)
+    result = function(ctypes.c_int(descriptor))
+    if result == 0:
+        return
+    observed = ctypes.get_errno()
+    if observed == errno.EBADF:
+        return
+    raise OSError(
+        observed or errno.EIO,
+        os.strerror(observed or errno.EIO))
+
+
+def _close_descriptor_with_ofd_guard(
+    descriptor: int,
+    context: str,
+    ownership_consumed: list[bool],
+) -> None:
+    """Close one FD while an OFD duplicate disambiguates close-time ABA.
+
+    An async handler can run after close(2), reopen the same inode into the
+    recycled numeric slot, and then raise.  stat fields cannot distinguish
+    that new open-file description from the one this owner held.  Keep a
+    duplicate of the original description until the first close returns.  On
+    an exception, Linux kcmp says whether the numeric slot still aliases that
+    duplicate.  Only a proven alias is force-closed; a recycled slot is left
+    untouched.  The duplicate is then released with one non-retried raw close.
+    """
+    require(type(descriptor) is int and descriptor >= 0 and
+            isinstance(context, str) and context and
+            isinstance(ownership_consumed, list) and
+            ownership_consumed == [False],
+            f"{context} descriptor-close guard arguments are invalid")
+    guard = os.dup(descriptor)
+    failure: BaseException | None = None
+    candidate_is_owned = False
+    try:
+        os.close(descriptor)
+    except BaseException as error:
+        failure = error
+        try:
+            candidate_is_owned = _linux_same_open_file_description(
+                descriptor, guard)
+        except BaseException as comparison_error:
+            failure = _owner_exception_precedence(
+                failure, comparison_error,
+                f"{context} open-file-description comparison")
+
+    if candidate_is_owned:
+        try:
+            _linux_close_descriptor_once(descriptor)
+        except BaseException as cleanup_error:
+            failure = _owner_exception_precedence(
+                failure, cleanup_error,
+                f"{context} retained descriptor close")
+    try:
+        _linux_close_descriptor_once(guard)
+    except BaseException as cleanup_error:
+        failure = _owner_exception_precedence(
+            failure, cleanup_error,
+            f"{context} guard descriptor close")
+    ownership_consumed[0] = True
+    if failure is not None:
+        raise failure.with_traceback(failure.__traceback__)
+
+
 class _OwnedDescriptor:
     """Own one raw descriptor across interruption-prone Python handoffs.
 
@@ -219,7 +774,25 @@ class _OwnedDescriptor:
             self._descriptor = os.open(path, flags, mode)
         else:
             self._descriptor = os.open(path, flags, mode, dir_fd=dir_fd)
-        status = os.fstat(self._descriptor)
+        try:
+            status = os.fstat(self._descriptor)
+        except BaseException as primary:
+            descriptor = self._descriptor
+            consumed = [False]
+            try:
+                _close_descriptor_with_ofd_guard(
+                    descriptor, "owned descriptor open cleanup", consumed)
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error, "owned descriptor open",
+                    "owned descriptor open cleanup failed: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
+            finally:
+                if consumed[0]:
+                    self._descriptor = -1
+                    self._identity = None
+            raise
         self._identity = (status.st_dev, status.st_ino, status.st_mode)
         return self._descriptor
 
@@ -242,29 +815,95 @@ class _OwnedDescriptor:
             self._descriptor = -1
             self._identity = None
             return
+        consumed = [False]
         try:
-            os.close(descriptor)
-        except BaseException:
-            # close(2) can be interrupted before or after taking effect.  Do
-            # not discard ownership merely because Python observed an
-            # exception: retain the same still-open file so cleanup can retry,
-            # but clear ownership when the original descriptor is gone or its
-            # numeric slot was recycled by an interruption handler.
-            try:
-                status = os.fstat(descriptor)
-            except OSError as probe_error:
-                if probe_error.errno == errno.EBADF:
-                    self._descriptor = -1
-                    self._identity = None
-            else:
-                observed = (status.st_dev, status.st_ino, status.st_mode)
-                if self._identity is not None and observed != self._identity:
-                    self._descriptor = -1
-                    self._identity = None
+            _close_descriptor_with_ofd_guard(
+                descriptor, "owned descriptor", consumed)
+        finally:
+            if consumed[0]:
+                self._descriptor = -1
+                self._identity = None
+
+    def __enter__(self) -> "_OwnedDescriptor":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            _raise_owner_exit_failure(
+                exc, cleanup_error, "owned descriptor",
+                f"owned descriptor cleanup failed: {cleanup_error}; "
+                f"primary failure: {type(exc).__name__}: {exc}")
+
+
+def _close_owned_descriptor_after_failure(
+    owner: _OwnedDescriptor,
+    primary: BaseException,
+    context: str,
+) -> None:
+    """Close one partially published descriptor under owner precedence."""
+    _close_owned_descriptors_after_failure(
+        (owner,), primary, context)
+
+
+def _close_owned_descriptors_after_failure(
+    owners: Sequence[_OwnedDescriptor],
+    primary: BaseException,
+    context: str,
+) -> None:
+    """Close every partial owner before applying terminal precedence."""
+    cleanup_failure: BaseException | None = None
+    cleanup_details: list[str] = []
+    for owner in owners:
+        try:
+            owner.close()
+        except BaseException as error:
+            cleanup_details.append(f"{type(error).__name__}: {error}")
+            observed = _ordinary_owner_cleanup_error(
+                error, f"{context} cleanup failed: {error}")
+            cleanup_failure = _owner_exception_precedence(
+                cleanup_failure, observed, f"{context} cleanup")
+    if cleanup_failure is None:
+        return
+    details = "; ".join(cleanup_details)
+    _raise_owner_exit_failure(
+        primary, cleanup_failure, context,
+        f"{context} cleanup failed: {details}; primary failure: "
+        f"{type(primary).__name__}: {primary}")
+
+
+def _close_raw_descriptor_with_precedence(
+    descriptor: int,
+    primary: BaseException | None,
+    context: str,
+    ordinary_message: str,
+    *,
+    ownership_consumed: list[bool] | None = None,
+) -> None:
+    """Close one raw descriptor without masking active terminal control flow."""
+    consumed = [False]
+    try:
+        _close_descriptor_with_ofd_guard(
+            descriptor, context, consumed)
+    except BaseException as cleanup_error:
+        detail = f"{ordinary_message}: {cleanup_error}"
+        observed = _ordinary_owner_cleanup_error(
+            cleanup_error, detail)
+        if primary is not None:
+            _raise_owner_exit_failure(
+                primary, observed, context,
+                f"{detail}; primary failure: "
+                f"{type(primary).__name__}: {primary}")
+        if observed is cleanup_error:
             raise
-        else:
-            self._descriptor = -1
-            self._identity = None
+        raise observed from cleanup_error
+    finally:
+        if ownership_consumed is not None and consumed[0]:
+            ownership_consumed[0] = True
 
 
 def _require_safe_unicode(value: str, label: str) -> None:
@@ -395,19 +1034,33 @@ class _InotifyMutationGuard:
             self._library = library
             self._file = retained_file
         except BaseException as error:
+            cleanup_error: BaseException | None = None
             try:
                 if retained_file is None and descriptor >= 0:
-                    os.close(descriptor)
+                    _close_raw_descriptor_with_precedence(
+                        descriptor, error,
+                        f"{label} pathname mutation guard raw descriptor",
+                        f"cannot close interrupted {label} pathname "
+                        "mutation guard raw descriptor")
                 elif retained_file is not None:
                     retained_file.close()
-            except OSError as cleanup_error:
-                raise BuildProvenanceError(
-                    f"cannot close interrupted {label} pathname mutation "
-                    f"guard: {cleanup_error}; primary failure: "
-                    f"{type(error).__name__}: {error}") from cleanup_error
+            except BaseException as observed:
+                cleanup_error = observed
             if self._file is retained_file:
                 self._file = None
-            self._close_without_verification()
+            try:
+                self._close_without_verification()
+            except BaseException as observed:
+                cleanup_error = _owner_exception_precedence(
+                    cleanup_error, observed,
+                    f"{label} pathname mutation guard constructor cleanup")
+            if cleanup_error is not None:
+                _raise_owner_exit_failure(
+                    error, cleanup_error,
+                    f"{label} pathname mutation guard constructor",
+                    f"cannot close interrupted {label} pathname mutation "
+                    f"guard: {cleanup_error}; primary failure: "
+                    f"{type(error).__name__}: {error}")
             if not isinstance(error, (AttributeError, OSError)):
                 raise
             raise BuildProvenanceError(
@@ -527,6 +1180,42 @@ class _InotifyMutationGuard:
         self._add_watch(
             absolute, self._DIRECTORY_MASK | IN_ONLYDIR, set())
 
+    def add_exact_directory_entries(
+        self, directory: Path | str, names: Sequence[str],
+    ) -> None:
+        """Watch only topology changes for selected child entry names."""
+        absolute = self._absolute_lexical(Path(directory))
+        encoded = {os.fsencode(name) for name in names}
+        require(absolute.is_absolute() and encoded and
+                all(name and b"/" not in name and b"\0" not in name
+                    for name in encoded),
+                f"{self.label} exact directory entry set is invalid")
+        mask = (
+            IN_MOVED_FROM | IN_MOVED_TO | IN_CREATE | IN_DELETE |
+            IN_DELETE_SELF | IN_MOVE_SELF | IN_UNMOUNT | IN_IGNORED |
+            IN_EXCL_UNLINK | IN_ONLYDIR)
+        self._add_watch(absolute, mask, encoded)
+
+    def accept_exact_regular_creation(self, name: str) -> None:
+        """Consume exactly one runner-owned IN_CREATE event.
+
+        All exact output names are watched before any reservation is created.
+        Therefore any additional event, including an adversarial create on a
+        different retained name, makes this operation fail closed.
+        """
+        require(isinstance(name, str) and name and "/" not in name,
+                f"{self.label} accepted creation name is invalid")
+        self._drain()
+        encoded = os.fsencode(name)
+        pattern = re.compile(
+            r"^wd=[0-9]+ mask=0x100 name=" +
+            re.escape(repr(encoded)) + r"$")
+        require(len(self.mutations) == 1 and
+                pattern.fullmatch(self.mutations[0]) is not None,
+                f"{self.label} reservation creation event differs: " +
+                "; ".join(self.mutations[:8]))
+        self.mutations.clear()
+
     def _drain(self) -> None:
         require(self.descriptor >= 0,
                 f"{self.label} pathname mutation guard is closed")
@@ -575,8 +1264,14 @@ class _InotifyMutationGuard:
         if retained is not None:
             try:
                 retained.close()
-            except OSError:
-                pass
+            except BaseException as error:
+                observed = _ordinary_owner_cleanup_error(
+                    error,
+                    f"cannot force-close {self.label} pathname mutation "
+                    f"guard: {error}")
+                if observed is error:
+                    raise
+                raise observed from error
             if retained.closed and self._file is retained:
                 self._file = None
 
@@ -593,14 +1288,205 @@ class _InotifyMutationGuard:
         try:
             retained.close()
         except BaseException as error:
-            if failure is None:
-                failure = BuildProvenanceError(
-                    f"cannot close {self.label} pathname mutation guard: "
-                    f"{error}")
+            close_failure = _ordinary_owner_cleanup_error(
+                error,
+                f"cannot close {self.label} pathname mutation guard: "
+                f"{error}")
+            failure = _owner_exception_precedence(
+                failure, close_failure,
+                f"{self.label} pathname mutation guard close")
         if retained.closed and self._file is retained:
             self._file = None
         if failure is not None:
             raise failure
+
+    def __enter__(self) -> "_InotifyMutationGuard":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            _raise_owner_exit_failure(
+                exc, cleanup_error,
+                f"{self.label} pathname mutation guard owner",
+                f"{self.label} pathname mutation guard cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(exc).__name__}: {exc}")
+
+
+class _ReplayArtifactSink:
+    """One parent-owned memfd populated only by the private replay child."""
+
+    def __init__(
+        self, logical_path: Path | str, label: str, *,
+        maximum_bytes: int = MAX_FILE_BYTES,
+    ) -> None:
+        self.logical_path = Path(os.path.abspath(os.fspath(logical_path)))
+        self.label = label
+        self.maximum_bytes = maximum_bytes
+        self._file: Any | None = None
+        self.content = b""
+        self.identity: dict[str, Any] = {}
+        self._fields: tuple[int, ...] | None = None
+        self._seals = 0
+        allow_sealing = getattr(os, "MFD_ALLOW_SEALING", 0x0002)
+        close_on_exec = getattr(os, "MFD_CLOEXEC", 0x0001)
+        descriptor = -1
+        retained = None
+        try:
+            descriptor = _linux_memfd_create(
+                "leo2-output-" + re.sub(
+                    r"[^A-Za-z0-9_.-]", "-", label)[:80],
+                allow_sealing | close_on_exec)
+            retained = os.fdopen(descriptor, "r+b", buffering=0)
+            os.fchmod(descriptor, 0o600)
+            self._file = retained
+        except BaseException as primary:
+            cleanup_error: BaseException | None = None
+            try:
+                if retained is not None:
+                    retained.close()
+                elif descriptor >= 0:
+                    _close_raw_descriptor_with_precedence(
+                        descriptor, primary,
+                        f"{label} replay output raw descriptor",
+                        f"cannot close interrupted {label} replay output "
+                        "raw descriptor")
+            except BaseException as observed:
+                cleanup_error = observed
+            if cleanup_error is not None:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"{label} replay output sink constructor",
+                    f"cannot close interrupted {label} replay output sink: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
+            raise
+
+    @property
+    def descriptor(self) -> int:
+        retained = self._file
+        if retained is None or retained.closed:
+            return -1
+        return retained.fileno()
+
+    @property
+    def proc_path(self) -> str:
+        require(self.descriptor >= 0,
+                f"{self.label} replay output sink is closed")
+        return f"/proc/self/fd/{self.descriptor}"
+
+    def seal(self, *, executable: bool = False, allow_empty: bool = False) -> None:
+        require(self.descriptor >= 0 and not self.identity,
+                f"{self.label} replay output sink was already sealed")
+        before = os.fstat(self.descriptor)
+        require(
+            stat.S_ISREG(before.st_mode) and
+            0 <= before.st_size <= self.maximum_bytes and
+            (allow_empty or before.st_size > 0),
+            f"{self.label} replay output sink is empty, malformed, or too "
+            "large")
+        os.fchmod(self.descriptor, 0o700 if executable else 0o600)
+        content = _read_bounded_descriptor(
+            self.descriptor, before.st_size, self.label, self.maximum_bytes)
+        seals = (
+            getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+            getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+            getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+            getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+        fcntl.fcntl(
+            self.descriptor, getattr(fcntl, "F_ADD_SEALS", 1033), seals)
+        after = os.fstat(self.descriptor)
+        observed_seals = fcntl.fcntl(
+            self.descriptor, getattr(fcntl, "F_GET_SEALS", 1034))
+        require(
+            after.st_size == len(content) and
+            observed_seals & seals == seals,
+            f"{self.label} replay output sink could not be frozen")
+        self.content = content
+        # A denied write to a fully sealed memfd may still advance mtime/ctime
+        # on Linux.  Those timestamps are therefore evidence metadata, not an
+        # immutable-property check.  Bind the exact inode and all stable
+        # ownership/type/size fields, then independently recheck the content
+        # digest and seal set in verify().
+        self._fields = (
+            after.st_dev, after.st_ino, after.st_mode,
+            after.st_uid, after.st_gid, after.st_nlink, after.st_size,
+        )
+        self._seals = observed_seals
+        self.identity = {
+            "path": str(self.logical_path),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "device": after.st_dev,
+            "inode": after.st_ino,
+            "mode": after.st_mode,
+            "uid": after.st_uid,
+            "gid": after.st_gid,
+            "links": after.st_nlink,
+            "size": after.st_size,
+            "mtime_ns": after.st_mtime_ns,
+            "ctime_ns": after.st_ctime_ns,
+        }
+
+    def verify(self) -> None:
+        require(self.descriptor >= 0 and self._fields is not None and
+                bool(self.identity),
+                f"{self.label} replay output sink is not sealed")
+        status = os.fstat(self.descriptor)
+        content = _read_bounded_descriptor(
+            self.descriptor, status.st_size, self.label, self.maximum_bytes)
+        observed_seals = fcntl.fcntl(
+            self.descriptor, getattr(fcntl, "F_GET_SEALS", 1034))
+        require(
+            (
+                status.st_dev, status.st_ino, status.st_mode,
+                status.st_uid, status.st_gid, status.st_nlink,
+                status.st_size,
+            ) == self._fields and
+            observed_seals == self._seals and
+            hashlib.sha256(content).hexdigest() ==
+                self.identity["sha256"] and
+            content == self.content,
+            f"{self.label} sealed replay output changed")
+
+    def close(self) -> None:
+        retained = self._file
+        if retained is None:
+            return
+        failure: BaseException | None = None
+        if self.identity:
+            try:
+                self.verify()
+            except BaseException as error:
+                failure = error
+        try:
+            retained.close()
+        except BaseException as error:
+            failure = _owner_exception_precedence(
+                failure, error, f"{self.label} replay output sink close")
+        if retained.closed and self._file is retained:
+            self._file = None
+        if failure is not None:
+            raise failure
+
+    def __enter__(self) -> "_ReplayArtifactSink":
+        return self
+
+    def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
+        del exc_type, tb
+        try:
+            self.close()
+        except BaseException as cleanup_error:
+            if exc is None:
+                raise
+            _raise_owner_exit_failure(
+                exc, cleanup_error, f"sealed {self.label} owner",
+                f"sealed {self.label} cleanup failed: {cleanup_error}; "
+                f"primary failure: {type(exc).__name__}: {exc}")
 
 
 class _RetainedFileSnapshot:
@@ -638,8 +1524,16 @@ class _RetainedFileSnapshot:
                 self._path_guard.add_file_path(expected_resolved)
             self._open(expected_resolved)
             self._path_guard.verify()
-        except BaseException:
-            self._close_without_verification()
+        except BaseException as primary:
+            try:
+                self._close_without_verification()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"retained {label} constructor",
+                    f"retained {label} constructor cleanup failed: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     def _verify_path(self, status: os.stat_result, action: str) -> None:
@@ -724,17 +1618,31 @@ class _RetainedFileSnapshot:
         except BaseException as primary:
             try:
                 if source_file is None and descriptor >= 0:
-                    os.close(descriptor)
+                    _close_raw_descriptor_with_precedence(
+                        descriptor, primary,
+                        f"retained {self.label} raw descriptor",
+                        f"cannot close interrupted retained {self.label} "
+                        "raw descriptor")
                 elif source_file is not None:
                     source_file.close()
-            except OSError as cleanup_error:
-                raise BuildProvenanceError(
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"retained {self.label} open",
                     f"cannot close interrupted retained {self.label}: "
                     f"{cleanup_error}; primary failure: "
-                    f"{type(primary).__name__}: {primary}") from cleanup_error
+                    f"{type(primary).__name__}: {primary}")
             if self._source_file is source_file:
                 self._source_file = None
-            self._close_without_verification()
+            try:
+                self._close_without_verification()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"retained {self.label} open cleanup",
+                    f"cannot finish interrupted retained {self.label} "
+                    f"cleanup: {cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             if isinstance(primary, BuildProvenanceError):
                 raise
             if not isinstance(primary, (OSError, RuntimeError)):
@@ -817,15 +1725,20 @@ class _RetainedFileSnapshot:
         except BaseException as primary:
             try:
                 if executable is None and descriptor >= 0:
-                    os.close(descriptor)
+                    _close_raw_descriptor_with_precedence(
+                        descriptor, primary,
+                        f"immutable {self.label} executable raw descriptor",
+                        f"cannot close interrupted immutable {self.label} "
+                        "executable raw descriptor")
                 elif executable is not None:
                     executable.close()
-            except OSError as cleanup_error:
-                raise BuildProvenanceError(
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"immutable {self.label} executable constructor",
                     f"cannot close interrupted immutable {self.label} "
                     f"executable: {cleanup_error}; primary failure: "
-                    f"{type(primary).__name__}: {primary}") from \
-                    cleanup_error
+                    f"{type(primary).__name__}: {primary}")
             if self._executable_file is executable:
                 self._executable_file = None
             self.executable_identity = {}
@@ -883,27 +1796,46 @@ class _RetainedFileSnapshot:
             self._verify_executable_descriptor()
 
     def _close_without_verification(self) -> None:
+        failure: BaseException | None = None
         executable = self._executable_file
         if executable is not None:
             try:
                 executable.close()
-            except OSError:
-                pass
+            except BaseException as error:
+                observed = _ordinary_owner_cleanup_error(
+                    error,
+                    f"cannot force-close immutable {self.label} "
+                    f"executable: {error}")
+                failure = _owner_exception_precedence(
+                    failure, observed,
+                    f"retained {self.label} forced executable close")
             if executable.closed and self._executable_file is executable:
                 self._executable_file = None
         source = self._source_file
         if source is not None:
             try:
                 source.close()
-            except OSError:
-                pass
+            except BaseException as error:
+                observed = _ordinary_owner_cleanup_error(
+                    error,
+                    f"cannot force-close retained {self.label}: {error}")
+                failure = _owner_exception_precedence(
+                    failure, observed,
+                    f"retained {self.label} forced source close")
             if source.closed and self._source_file is source:
                 self._source_file = None
         guard = self._path_guard
         if guard is not None:
-            guard._close_without_verification()
+            try:
+                guard._close_without_verification()
+            except BaseException as error:
+                failure = _owner_exception_precedence(
+                    failure, error,
+                    f"retained {self.label} forced guard close")
             if guard.descriptor < 0 and self._path_guard is guard:
                 self._path_guard = None
+        if failure is not None:
+            raise failure.with_traceback(failure.__traceback__)
 
     def close(self) -> None:
         if self._source_file is None and self._executable_file is None and \
@@ -920,8 +1852,9 @@ class _RetainedFileSnapshot:
             try:
                 guard.close()
             except BaseException as error:
-                if verification_error is None:
-                    verification_error = error
+                verification_error = _owner_exception_precedence(
+                    verification_error, error,
+                    f"retained {self.label} guard close")
             if guard.descriptor < 0 and self._path_guard is guard:
                 self._path_guard = None
         source = self._source_file
@@ -929,9 +1862,11 @@ class _RetainedFileSnapshot:
             try:
                 source.close()
             except BaseException as error:
-                if verification_error is None:
-                    verification_error = BuildProvenanceError(
-                        f"cannot close retained {self.label}: {error}")
+                close_failure = _ordinary_owner_cleanup_error(
+                    error, f"cannot close retained {self.label}: {error}")
+                verification_error = _owner_exception_precedence(
+                    verification_error, close_failure,
+                    f"retained {self.label} source close")
             if source.closed and self._source_file is source:
                 self._source_file = None
         executable = self._executable_file
@@ -939,10 +1874,13 @@ class _RetainedFileSnapshot:
             try:
                 executable.close()
             except BaseException as error:
-                if verification_error is None:
-                    verification_error = BuildProvenanceError(
-                        f"cannot close immutable {self.label} executable: "
-                        f"{error}")
+                close_failure = _ordinary_owner_cleanup_error(
+                    error,
+                    f"cannot close immutable {self.label} executable: "
+                    f"{error}")
+                verification_error = _owner_exception_precedence(
+                    verification_error, close_failure,
+                    f"retained {self.label} executable close")
             if executable.closed and self._executable_file is executable:
                 self._executable_file = None
         if verification_error is not None:
@@ -958,10 +1896,10 @@ class _RetainedFileSnapshot:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error, f"retained {self.label} owner",
                 f"retained {self.label} cleanup failed: {cleanup_error}; "
-                f"primary failure: {type(exc).__name__}: {exc}") from \
-                cleanup_error
+                f"primary failure: {type(exc).__name__}: {exc}")
 
 
 class _RetainedDirectoryTree:
@@ -993,8 +1931,16 @@ class _RetainedDirectoryTree:
             self.resolved = expected
             self._fields = _stable_fields(status)
             self.verify()
-        except BaseException:
-            self._close_without_verification()
+        except BaseException as primary:
+            try:
+                self._close_without_verification()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"retained {label} directory constructor",
+                    f"retained {label} directory constructor cleanup "
+                    f"failed: {cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     @property
@@ -1023,39 +1969,56 @@ class _RetainedDirectoryTree:
         self.guard.verify()
 
     def _close_without_verification(self) -> None:
-        try:
-            self._owner.close()
-        except OSError:
-            pass
-        guard = self.guard
-        if guard is not None:
-            guard._close_without_verification()
-            if guard.descriptor < 0 and self.guard is guard:
-                self.guard = None
-
-    def close(self) -> None:
-        if self.descriptor < 0:
-            return
         failure: BaseException | None = None
         try:
-            self.verify()
+            self._owner.close()
         except BaseException as error:
-            failure = error
+            failure = _ordinary_owner_cleanup_error(
+                error,
+                f"cannot force-close retained {self.label} directory: "
+                f"{error}")
+        guard = self.guard
+        if guard is not None:
+            try:
+                guard._close_without_verification()
+            except BaseException as error:
+                failure = _owner_exception_precedence(
+                    failure, error,
+                    f"retained {self.label} forced directory guard close")
+            if guard.descriptor < 0 and self.guard is guard:
+                self.guard = None
+        if failure is not None:
+            raise failure.with_traceback(failure.__traceback__)
+
+    def close(self) -> None:
+        if self.descriptor < 0 and self.guard is None:
+            return
+        failure: BaseException | None = None
+        if self.descriptor >= 0:
+            try:
+                self.verify()
+            except BaseException as error:
+                failure = error
         guard = self.guard
         if guard is not None:
             try:
                 guard.close()
             except BaseException as error:
-                if failure is None:
-                    failure = error
+                failure = _owner_exception_precedence(
+                    failure, error,
+                    f"retained {self.label} directory guard close")
             if guard.descriptor < 0 and self.guard is guard:
                 self.guard = None
-        try:
-            self._owner.close()
-        except OSError as error:
-            if failure is None:
-                failure = BuildProvenanceError(
+        if self.descriptor >= 0:
+            try:
+                self._owner.close()
+            except BaseException as error:
+                close_failure = _ordinary_owner_cleanup_error(
+                    error,
                     f"cannot close retained {self.label} directory: {error}")
+                failure = _owner_exception_precedence(
+                    failure, close_failure,
+                    f"retained {self.label} directory descriptor close")
         if failure is not None:
             raise failure
 
@@ -1069,10 +2032,12 @@ class _RetainedDirectoryTree:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error,
+                f"retained {self.label} directory owner",
                 f"retained {self.label} directory cleanup failed: "
                 f"{cleanup_error}; primary failure: "
-                f"{type(exc).__name__}: {exc}") from cleanup_error
+                f"{type(exc).__name__}: {exc}")
 
 
 def _retain_exact_symlink_directory(
@@ -1107,8 +2072,16 @@ def _retain_exact_symlink_directory(
                 f"{label} mappings changed before retention")
         guard.verify()
         return guard
-    except BaseException:
-        guard._close_without_verification()
+    except BaseException as primary:
+        try:
+            guard._close_without_verification()
+        except BaseException as cleanup_error:
+            _raise_owner_exit_failure(
+                primary, cleanup_error,
+                f"{label} exact symlink-directory retention",
+                f"{label} exact symlink-directory cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(primary).__name__}: {primary}")
         raise
 
 
@@ -1205,8 +2178,16 @@ class _RetainedGitMetadata:
                 require(not alternates.exists() and not alternates.is_symlink(),
                         "tracked source Git object alternates are unsupported")
             self.verify()
-        except BaseException:
-            self.stack.close()
+        except BaseException as primary:
+            try:
+                self.stack.close()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    "retained Git metadata constructor",
+                    "retained Git metadata constructor cleanup failed: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     @property
@@ -1235,8 +2216,8 @@ class _RetainedGitMetadata:
         try:
             self.stack.close()
         except BaseException as error:
-            if failure is None:
-                failure = error
+            failure = _owner_exception_precedence(
+                failure, error, "retained Git metadata stack close")
         if failure is not None:
             raise failure
 
@@ -1250,10 +2231,11 @@ class _RetainedGitMetadata:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error, "retained Git metadata owner",
                 "retained Git metadata cleanup failed: "
                 f"{cleanup_error}; primary failure: "
-                f"{type(exc).__name__}: {exc}") from cleanup_error
+                f"{type(exc).__name__}: {exc}")
 
 
 def file_snapshot(
@@ -1309,9 +2291,10 @@ class _OpenDirectoryTree:
                 os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
                 getattr(os, "O_DIRECTORY", 0) |
                 getattr(os, "O_NOFOLLOW", 0))
-            stack.callback(owner.close)
+            stack.enter_context(owner)
         except BaseException as error:
-            owner.close()
+            _close_owned_descriptor_after_failure(
+                owner, error, f"retained {label} root constructor")
             if not isinstance(error, OSError):
                 raise
             raise BuildProvenanceError(
@@ -1337,9 +2320,11 @@ class _OpenDirectoryTree:
                     getattr(os, "O_DIRECTORY", 0) |
                     getattr(os, "O_NOFOLLOW", 0),
                     dir_fd=current)
-                self.stack.callback(owner.close)
+                self.stack.enter_context(owner)
             except BaseException as error:
-                owner.close()
+                _close_owned_descriptor_after_failure(
+                    owner, error,
+                    f"{self.label} directory component constructor")
                 if not isinstance(error, OSError):
                     raise
                 raise BuildProvenanceError(
@@ -1368,20 +2353,27 @@ class _OpenDirectoryTree:
                 dir_fd=parent)
             status = os.fstat(descriptor)
         except BaseException as error:
-            owner.close()
+            _close_owned_descriptor_after_failure(
+                owner, error,
+                f"{self.label} regular-file descriptor constructor")
             if not isinstance(error, OSError):
                 raise
             raise BuildProvenanceError(
                 f"cannot open stable {self.label} file {relative!r}: "
                 f"{error}") from error
         if not stat.S_ISREG(status.st_mode):
-            owner.close()
-            raise BuildProvenanceError(
+            primary = BuildProvenanceError(
                 f"{self.label} file {relative!r} is not regular")
+            _close_owned_descriptor_after_failure(
+                owner, primary,
+                f"{self.label} non-regular descriptor cleanup")
+            raise primary
         try:
-            self.stack.callback(owner.close)
-        except BaseException:
-            owner.close()
+            self.stack.enter_context(owner)
+        except BaseException as primary:
+            _close_owned_descriptor_after_failure(
+                owner, primary,
+                f"{self.label} descriptor callback registration")
             raise
         self._owners.append(owner)
         return descriptor, status
@@ -1404,9 +2396,10 @@ class _CreateDirectoryTree:
                 os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
                 getattr(os, "O_DIRECTORY", 0) |
                 getattr(os, "O_NOFOLLOW", 0))
-            stack.callback(owner.close)
+            stack.enter_context(owner)
         except BaseException as error:
-            owner.close()
+            _close_owned_descriptor_after_failure(
+                owner, error, f"retained {label} root creation")
             if not isinstance(error, OSError):
                 raise
             raise BuildProvenanceError(
@@ -1440,9 +2433,11 @@ class _CreateDirectoryTree:
                     getattr(os, "O_DIRECTORY", 0) |
                     getattr(os, "O_NOFOLLOW", 0),
                     dir_fd=current)
-                self.stack.callback(owner.close)
+                self.stack.enter_context(owner)
             except BaseException as error:
-                owner.close()
+                _close_owned_descriptor_after_failure(
+                    owner, error,
+                    f"{self.label} created-directory descriptor")
                 if not isinstance(error, OSError):
                     raise
                 raise BuildProvenanceError(
@@ -1467,27 +2462,42 @@ class _CreateDirectoryTree:
             getattr(os, "O_CLOEXEC", 0) |
             getattr(os, "O_NOFOLLOW", 0))
         owner = _OwnedDescriptor()
+        primary: BaseException | None = None
         try:
             descriptor = owner.open(
                 parts[-1], flags, mode | 0o400, dir_fd=parent)
-            try:
-                os.fchmod(descriptor, mode)
-                view = memoryview(content)
-                while view:
-                    written = os.write(descriptor, view)
-                    require(written > 0,
-                            f"{self.label} write stalled")
-                    view = view[written:]
-                os.fsync(descriptor)
-            finally:
-                owner.close()
+            os.fchmod(descriptor, mode)
+            view = memoryview(content)
+            while view:
+                written = os.write(descriptor, view)
+                require(written > 0,
+                        f"{self.label} write stalled")
+                view = view[written:]
+            os.fsync(descriptor)
         except BaseException as error:
+            primary = error
+        try:
             owner.close()
-            if not isinstance(error, OSError):
+        except BaseException as cleanup_error:
+            if primary is not None:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    f"{self.label} exclusive-file owner",
+                    f"cannot close stable {self.label} file {relative!r}: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
+            if not isinstance(cleanup_error, OSError):
                 raise
             raise BuildProvenanceError(
                 f"cannot write stable {self.label} file {relative!r}: "
-                f"{error}") from error
+                f"{cleanup_error}") from cleanup_error
+        if primary is None:
+            return
+        if not isinstance(primary, OSError):
+            raise primary.with_traceback(primary.__traceback__)
+        raise BuildProvenanceError(
+            f"cannot write stable {self.label} file {relative!r}: "
+            f"{primary}") from primary
 
 
 def _git_source_state(
@@ -1692,8 +2702,16 @@ class _RetainedPrivateSourceTree:
             self.guard.add_tree(destination)
             self._verify_files()
             self.guard.verify()
-        except BaseException:
-            self.guard._close_without_verification()
+        except BaseException as primary:
+            try:
+                self.guard._close_without_verification()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    "runner-owned source constructor",
+                    "runner-owned source constructor cleanup failed: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     def _verify_files(self) -> None:
@@ -1740,8 +2758,8 @@ class _RetainedPrivateSourceTree:
         try:
             self.guard.close()
         except BaseException as error:
-            if failure is None:
-                failure = error
+            failure = _owner_exception_precedence(
+                failure, error, "runner-owned source guard close")
         if failure is not None:
             raise failure
 
@@ -1755,10 +2773,11 @@ class _RetainedPrivateSourceTree:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error, "runner-owned source owner",
                 "runner-owned source cleanup failed: "
                 f"{cleanup_error}; primary failure: "
-                f"{type(exc).__name__}: {exc}") from cleanup_error
+                f"{type(exc).__name__}: {exc}")
 
 
 def _verify_tracked_source_manifest(
@@ -1906,18 +2925,12 @@ def _read_proc_process_record_descriptor(
         raise BuildProvenanceError(
             f"cannot inspect Linux process {pid}: {error}") from error
     finally:
-        close_errors = []
-        for descriptor in (stat_descriptor,):
-            if descriptor < 0:
-                continue
-            try:
-                os.close(descriptor)
-            except OSError as error:
-                close_errors.append(str(error))
-        if close_errors and sys.exc_info()[0] is None:
-            raise BuildProvenanceError(
-                f"cannot close Linux process {pid} procfs descriptors: " +
-                "; ".join(close_errors))
+        primary = sys.exception()
+        if stat_descriptor >= 0:
+            _close_raw_descriptor_with_precedence(
+                stat_descriptor, primary,
+                f"Linux process {pid} procfs stat descriptor",
+                f"cannot close Linux process {pid} procfs stat descriptor")
     closing = data.rfind(b")")
     require(closing > 0 and closing + 2 < len(data),
             f"Linux process {pid} has malformed procfs stat data")
@@ -1952,7 +2965,11 @@ def _open_proc_process_record(
         record = _read_proc_process_record_descriptor(
             pid, directory_descriptor)
         if record is None:
-            os.close(directory_descriptor)
+            _close_raw_descriptor_with_precedence(
+                directory_descriptor, None,
+                f"vanished Linux process {pid} procfs directory",
+                f"cannot close vanished Linux process {pid} procfs "
+                "directory")
             return None
         path_status = os.stat(
             f"/proc/{pid}", follow_symlinks=False)
@@ -1963,26 +2980,29 @@ def _open_proc_process_record(
                 (descriptor_status.st_dev, descriptor_status.st_ino),
                 f"Linux process {pid} procfs pathname changed while opened")
         return record, directory_descriptor
-    except (FileNotFoundError, ProcessLookupError):
+    except (FileNotFoundError, ProcessLookupError) as primary:
         if directory_descriptor >= 0:
-            os.close(directory_descriptor)
+            _close_raw_descriptor_with_precedence(
+                directory_descriptor, primary,
+                f"Linux process {pid} procfs directory",
+                f"cannot close Linux process {pid} procfs directory")
         return None
     except OSError as error:
         if directory_descriptor >= 0:
-            try:
-                os.close(directory_descriptor)
-            except OSError:
-                pass
+            _close_raw_descriptor_with_precedence(
+                directory_descriptor, error,
+                f"Linux process {pid} procfs directory",
+                f"cannot close Linux process {pid} procfs directory")
         if error.errno in (errno.ENOENT, errno.ESRCH):
             return None
         raise BuildProvenanceError(
             f"cannot inspect Linux process {pid}: {error}") from error
-    except BaseException:
+    except BaseException as primary:
         if directory_descriptor >= 0:
-            try:
-                os.close(directory_descriptor)
-            except OSError:
-                pass
+            _close_raw_descriptor_with_precedence(
+                directory_descriptor, primary,
+                f"Linux process {pid} procfs directory",
+                f"cannot close Linux process {pid} procfs directory")
         raise
 
 
@@ -1997,36 +3017,23 @@ def _proc_process_record(
     try:
         return record
     finally:
-        os.close(descriptor)
+        _close_raw_descriptor_with_precedence(
+            descriptor, sys.exception(),
+            f"Linux process {pid} temporary procfs directory",
+            f"cannot close Linux process {pid} temporary procfs directory")
 
 
 def _close_retained_mapping_descriptor(
     mapping: dict[Any, int], key: Any,
 ) -> None:
-    """Close one mapped FD without dropping retry state before the syscall."""
+    """Close one mapped FD without same-inode numeric-descriptor ABA."""
     descriptor = mapping[key]
-    before: tuple[int, int, int] | None = None
+    consumed = [False]
     try:
-        status = os.fstat(descriptor)
-        before = (status.st_dev, status.st_ino, status.st_mode)
-    except OSError:
-        # Tests may use synthetic descriptor numbers with a mocked close.
-        pass
-    completed = False
-    try:
-        os.close(descriptor)
-        completed = True
+        _close_descriptor_with_ofd_guard(
+            descriptor, "retained mapping descriptor", consumed)
     finally:
-        relinquished = completed
-        if not relinquished and before is not None:
-            try:
-                status = os.fstat(descriptor)
-            except OSError as error:
-                relinquished = error.errno == errno.EBADF
-            else:
-                after = (status.st_dev, status.st_ino, status.st_mode)
-                relinquished = after != before
-        if relinquished and mapping.get(key) == descriptor:
+        if consumed[0] and mapping.get(key) == descriptor:
             del mapping[key]
 
 
@@ -2066,22 +3073,40 @@ class _ProcProcessSnapshot:
                     self.descriptors[pid] = descriptor
             require(os.getpid() in self.records,
                     "Linux procfs does not expose the provenance runner")
-        except BaseException:
-            self.close()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    "Linux procfs snapshot constructor",
+                    "Linux procfs snapshot constructor cleanup failed: "
+                    f"{cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     def close(self) -> None:
         errors = []
+        failure: BaseException | None = None
         for pid in list(self.descriptors):
             try:
                 _close_retained_mapping_descriptor(
                     self.descriptors, pid)
-            except OSError as error:
+            except BaseException as error:
                 errors.append(str(error))
+                observed = _ordinary_owner_cleanup_error(
+                    error,
+                    "cannot close Linux procfs snapshot descriptor "
+                    f"{pid}: {error}")
+                failure = _owner_exception_precedence(
+                    failure, observed,
+                    "Linux procfs snapshot descriptor cleanup")
             if pid not in self.descriptors:
                 self.records.pop(pid, None)
         if not self.descriptors:
             self.records.clear()
+        if isinstance(failure, _OWNER_TERMINAL_EXCEPTIONS):
+            raise failure.with_traceback(failure.__traceback__)
         require(not errors,
                 "cannot close Linux procfs snapshot descriptors: " +
                 "; ".join(errors))
@@ -2096,10 +3121,11 @@ class _ProcProcessSnapshot:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error, "procfs snapshot owner",
                 "procfs snapshot cleanup failed: "
                 f"{cleanup_error}; primary failure: "
-                f"{type(exc).__name__}: {exc}") from cleanup_error
+                f"{type(exc).__name__}: {exc}")
 
 
 def _proc_process_snapshot() -> _ProcProcessSnapshot:
@@ -2172,7 +3198,10 @@ def _validate_pidfd_support() -> None:
     try:
         _linux_pidfd_signal(descriptor, 0)
     finally:
-        os.close(descriptor)
+        _close_raw_descriptor_with_precedence(
+            descriptor, sys.exception(),
+            "Linux pidfd support probe",
+            "cannot close Linux pidfd support-probe descriptor")
 
 
 class _LinuxDescendantContainment:
@@ -2230,8 +3259,16 @@ class _LinuxDescendantContainment:
                         "children")
             self.active = True
             return self
-        except BaseException:
-            _set_child_subreaper(self.previous_subreaper)
+        except BaseException as primary:
+            try:
+                _set_child_subreaper(self.previous_subreaper)
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    "Linux descendant containment constructor",
+                    "Linux descendant containment constructor cleanup "
+                    f"failed: {cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             self.previous_subreaper = None
             raise
 
@@ -2251,7 +3288,11 @@ class _LinuxDescendantContainment:
                         observed_descriptor=observed_descriptor),
                     "spawned command escaped before its pidfd was retained")
         finally:
-            os.close(observed_descriptor)
+            _close_raw_descriptor_with_precedence(
+                observed_descriptor, sys.exception(),
+                "Linux descendant attachment procfs descriptor",
+                "cannot close Linux descendant attachment procfs "
+                "descriptor")
         self.known.add(self.leader)
 
     @staticmethod
@@ -2315,32 +3356,65 @@ class _LinuxDescendantContainment:
                         not self._same_process_record(after, expected)):
                     return False
             finally:
-                os.close(after_descriptor)
+                _close_raw_descriptor_with_precedence(
+                    after_descriptor, sys.exception(),
+                    "Linux descendant post-pidfd procfs descriptor",
+                    "cannot close Linux descendant post-pidfd procfs "
+                    "descriptor")
             self.pidfds[identity] = descriptor
             self.procfds[identity] = retained_proc
             retained_successfully = True
-        except BaseException:
-            raise
         finally:
-            if owned_observation >= 0:
-                os.close(owned_observation)
-            if not retained_successfully:
-                if descriptor >= 0:
-                    os.close(descriptor)
-                if retained_proc >= 0:
-                    os.close(retained_proc)
+            primary = sys.exception()
+            cleanup_failure: BaseException | None = None
+            for cleanup_descriptor in (
+                    owned_observation,
+                    descriptor if not retained_successfully else -1,
+                    retained_proc if not retained_successfully else -1):
+                if cleanup_descriptor < 0:
+                    continue
+                try:
+                    _close_raw_descriptor_with_precedence(
+                        cleanup_descriptor, primary,
+                        "Linux descendant retained raw descriptor",
+                        "cannot close Linux descendant retained raw "
+                        "descriptor")
+                except BaseException as error:
+                    cleanup_failure = _owner_exception_precedence(
+                        cleanup_failure, error,
+                        "Linux descendant retained-descriptor cleanup")
+            if cleanup_failure is not None:
+                if primary is not None:
+                    _raise_owner_exit_failure(
+                        primary, cleanup_failure,
+                        "Linux descendant retained-descriptor owner",
+                        "Linux descendant retained-descriptor cleanup "
+                        f"failed: {cleanup_failure}; primary failure: "
+                        f"{type(primary).__name__}: {primary}")
+                raise cleanup_failure.with_traceback(
+                    cleanup_failure.__traceback__)
         return retained_successfully
 
     def _close_pidfds(self) -> None:
         errors = []
+        failure: BaseException | None = None
         for mapping in (self.pidfds, self.procfds):
             for identity in list(mapping):
                 descriptor = mapping[identity]
                 try:
                     _close_retained_mapping_descriptor(
                         mapping, identity)
-                except OSError as error:
+                except BaseException as error:
                     errors.append(f"fd {descriptor}: {error}")
+                    observed = _ordinary_owner_cleanup_error(
+                        error,
+                        f"cannot close retained process descriptor "
+                        f"{descriptor}: {error}")
+                    failure = _owner_exception_precedence(
+                        failure, observed,
+                        "Linux descendant retained process cleanup")
+        if isinstance(failure, _OWNER_TERMINAL_EXCEPTIONS):
+            raise failure.with_traceback(failure.__traceback__)
         require(not errors, "cannot close retained process descriptors: " +
                 "; ".join(errors))
 
@@ -2499,7 +3573,12 @@ class _LinuxDescendantContainment:
                                     self.leader = identity
                                     self.known.add(identity)
                             finally:
-                                os.close(observed_descriptor)
+                                _close_raw_descriptor_with_precedence(
+                                    observed_descriptor, sys.exception(),
+                                    "Linux descendant exit procfs "
+                                    "descriptor",
+                                    "cannot close Linux descendant exit "
+                                    "procfs descriptor")
                     if self.leader is None:
                         # The direct child may already have been reaped by an
                         # installed SIGCHLD handler while detached descendants
@@ -2540,6 +3619,16 @@ class _LinuxDescendantContainment:
                 close_error = error
         if (cleanup_error is not None or restore_error is not None or
                 close_error is not None):
+            authoritative = (
+                exc if isinstance(exc, BaseException) else None)
+            for phase, error in (
+                    ("descendant cleanup", cleanup_error),
+                    ("subreaper restore", restore_error),
+                    ("pidfd close", close_error)):
+                if error is not None:
+                    authoritative = _owner_exception_precedence(
+                        authoritative, error,
+                        f"Linux descendant containment {phase}")
             details = []
             if cleanup_error is not None:
                 details.append(
@@ -2556,6 +3645,9 @@ class _LinuxDescendantContainment:
             if exc is not None:
                 details.append(
                     f"primary failure: {type(exc).__name__}: {exc}")
+            if isinstance(authoritative, _OWNER_TERMINAL_EXCEPTIONS):
+                raise authoritative.with_traceback(
+                    authoritative.__traceback__)
             raise BuildProvenanceError("; ".join(details)) from (
                 cleanup_error or restore_error or close_error)
 
@@ -2565,6 +3657,11 @@ def _run(
     timeout: float = 120, inherited_descriptors: Sequence[int] = (),
     executable_descriptor: int | None = None,
     environment_overrides: Mapping[str, str] | None = None,
+    write_sandbox_root: Path | str | None = None,
+    write_sandbox_descriptors: Sequence[int] = (),
+    private_tmpfs_root: Path | str | None = None,
+    private_tmpfs_directories: Sequence[str] = (),
+    private_tmpfs_descriptor: int | None = None,
 ) -> bytes:
     # This argv is passed directly to execve through Popen(shell=False), so
     # CR/LF and empty data arguments are not shell syntax.  Only argv[0] must
@@ -2581,7 +3678,97 @@ def _run(
             not isinstance(timeout, bool) and
             math.isfinite(float(timeout)) and timeout > 0,
             f"{label} timeout is invalid")
+    sandbox_owner: _OwnedDescriptor | None = None
+    sandbox_root: Path | None = None
+    tmpfs_owner: _OwnedDescriptor | None = None
+    tmpfs_root: Path | None = None
+    tmpfs_descriptor = -1
+    outside_uid = os.getuid()
+    outside_gid = os.getgid()
     descriptor_set = set(inherited_descriptors)
+    require(all(type(descriptor) is int and descriptor >= 0
+                for descriptor in write_sandbox_descriptors),
+            f"{label} additional write descriptor set is invalid")
+    descriptor_set.update(write_sandbox_descriptors)
+    if write_sandbox_root is not None:
+        sandbox_root = Path(os.path.abspath(os.fspath(write_sandbox_root)))
+        require(sys.platform.startswith("linux") and
+                sandbox_root.is_absolute(),
+                f"{label} write sandbox root is invalid")
+        sandbox_owner = _OwnedDescriptor()
+        try:
+            sandbox_descriptor = sandbox_owner.open(
+                sandbox_root,
+                getattr(os, "O_PATH", os.O_RDONLY) |
+                getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_NOFOLLOW", 0))
+            lexical_status = os.stat(
+                sandbox_root, follow_symlinks=False)
+            retained_status = os.fstat(sandbox_descriptor)
+            require(
+                stat.S_ISDIR(lexical_status.st_mode) and
+                (lexical_status.st_dev, lexical_status.st_ino) ==
+                (retained_status.st_dev, retained_status.st_ino),
+                f"{label} write sandbox root is unstable or unsafe")
+        except BaseException as primary:
+            _close_owned_descriptor_after_failure(
+                sandbox_owner, primary,
+                f"{label} write-sandbox descriptor")
+            raise
+        descriptor_set.add(sandbox_descriptor)
+    if private_tmpfs_root is not None:
+        require(sandbox_root is not None,
+                f"{label} private tmpfs requires a write sandbox")
+        tmpfs_root = Path(os.path.abspath(os.fspath(private_tmpfs_root)))
+        require(tmpfs_root.is_absolute() and
+                tmpfs_root.is_relative_to(sandbox_root) and
+                tmpfs_root != sandbox_root,
+                f"{label} private tmpfs root is invalid")
+        if private_tmpfs_descriptor is None:
+            tmpfs_owner = _OwnedDescriptor()
+            try:
+                tmpfs_descriptor = tmpfs_owner.open(
+                    tmpfs_root,
+                    getattr(os, "O_PATH", os.O_RDONLY) |
+                    getattr(os, "O_CLOEXEC", 0) |
+                    getattr(os, "O_DIRECTORY", 0) |
+                    getattr(os, "O_NOFOLLOW", 0))
+            except BaseException as primary:
+                owners = [tmpfs_owner]
+                if sandbox_owner is not None:
+                    owners.append(sandbox_owner)
+                _close_owned_descriptors_after_failure(
+                    owners, primary,
+                    f"{label} private-tmpfs descriptor")
+                raise
+        else:
+            require(type(private_tmpfs_descriptor) is int and
+                    private_tmpfs_descriptor >= 0,
+                    f"{label} private tmpfs descriptor is invalid")
+            tmpfs_descriptor = private_tmpfs_descriptor
+            try:
+                tmpfs_status = os.fstat(tmpfs_descriptor)
+                tmpfs_lexical = os.stat(
+                    tmpfs_root, follow_symlinks=False)
+            except OSError as error:
+                if sandbox_owner is not None:
+                    _close_owned_descriptor_after_failure(
+                        sandbox_owner, error,
+                        f"{label} private-tmpfs validation")
+                raise BuildProvenanceError(
+                    f"{label} private tmpfs descriptor is unavailable: "
+                    f"{error}") from error
+            require(
+                stat.S_ISDIR(tmpfs_status.st_mode) and
+                (tmpfs_status.st_dev, tmpfs_status.st_ino) ==
+                (tmpfs_lexical.st_dev, tmpfs_lexical.st_ino),
+                f"{label} private tmpfs descriptor differs from its root")
+        descriptor_set.add(tmpfs_descriptor)
+    else:
+        require(not private_tmpfs_directories and
+                private_tmpfs_descriptor is None,
+                f"{label} private tmpfs directories lack a root")
     if executable_descriptor is not None:
         require(type(executable_descriptor) is int and
                 executable_descriptor >= 0,
@@ -2618,6 +3805,21 @@ def _run(
     stderr = bytearray()
     failure: str | None = None
     returncode = -int(signal.SIGKILL)
+
+    def child_restrictions() -> None:
+        if tmpfs_root is not None:
+            _mount_private_replay_tmpfs(
+                tmpfs_root, tmpfs_descriptor,
+                private_tmpfs_directories, outside_uid, outside_gid)
+        if sandbox_root is not None and sandbox_owner is not None:
+            write_descriptors = tuple(dict.fromkeys((
+                *write_sandbox_descriptors,
+                *((tmpfs_descriptor,) if tmpfs_root is not None else ()),
+            )))
+            _landlock_restrict_writes_to(
+                sandbox_root, sandbox_owner.descriptor,
+                write_descriptors)
+
     try:
         with _LinuxDescendantContainment() as containment:
             process = subprocess.Popen(
@@ -2625,6 +3827,9 @@ def _run(
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=environment, pass_fds=pass_fds,
                 start_new_session=True,
+                preexec_fn=(
+                    child_restrictions
+                    if sandbox_root is not None else None),
                 executable=(
                     f"/proc/self/fd/{executable_descriptor}"
                     if executable_descriptor is not None else None))
@@ -2703,12 +3908,50 @@ def _run(
                         len(stderr) > maximum_bytes):
                     break
     finally:
-        selector.close()
+        primary = sys.exception()
+        cleanup_failure: BaseException | None = None
+        cleanup_details: list[str] = []
+
+        def close_resource(resource: Any, description: str) -> None:
+            nonlocal cleanup_failure
+            try:
+                resource.close()
+            except BaseException as error:
+                cleanup_details.append(
+                    f"{description}: {type(error).__name__}: {error}")
+                observed = _ordinary_owner_cleanup_error(
+                    error, f"cannot close {description}: {error}")
+                cleanup_failure = _owner_exception_precedence(
+                    cleanup_failure, observed,
+                    f"{label} command resource cleanup")
+
+        close_resource(selector, f"{label} output selector")
         if process is not None:
             if process.stdout is not None:
-                process.stdout.close()
+                close_resource(process.stdout, f"{label} stdout pipe")
             if process.stderr is not None:
-                process.stderr.close()
+                close_resource(process.stderr, f"{label} stderr pipe")
+        if sandbox_owner is not None:
+            close_resource(
+                sandbox_owner, f"{label} write-sandbox descriptor")
+        if tmpfs_owner is not None:
+            close_resource(
+                tmpfs_owner, f"{label} private-tmpfs descriptor")
+        if cleanup_failure is not None:
+            details = "; ".join(cleanup_details)
+            if primary is not None:
+                _raise_owner_exit_failure(
+                    primary, cleanup_failure,
+                    f"{label} command owner",
+                    f"{label} command cleanup failed: {details}; "
+                    f"primary failure: {type(primary).__name__}: {primary}")
+            if isinstance(
+                    cleanup_failure, _OWNER_TERMINAL_EXCEPTIONS):
+                raise cleanup_failure.with_traceback(
+                    cleanup_failure.__traceback__)
+            raise BuildProvenanceError(
+                f"{label} command cleanup failed: {details}") from (
+                    cleanup_failure)
 
     if failure is not None:
         raise BuildProvenanceError(failure)
@@ -2726,6 +3969,11 @@ def _replay_invocation_record(
     environment_overrides: Mapping[str, str] | None,
     maximum_bytes: int,
     timeout: float,
+    write_sandbox_root: Path | str,
+    write_sandbox_descriptors: Sequence[int] = (),
+    private_tmpfs_root: Path | str | None = None,
+    private_tmpfs_directories: Sequence[str] = (),
+    private_tmpfs_descriptor: int | None = None,
 ) -> dict[str, Any]:
     """Publish the exact argv, environment, and immutable exec binding."""
     require(isinstance(executable_label, str) and executable_label,
@@ -2735,8 +3983,35 @@ def _replay_invocation_record(
     environment = dict(GIT_ENVIRONMENT)
     if environment_overrides is not None:
         environment.update(environment_overrides)
+    sandbox_root = Path(os.path.abspath(os.fspath(write_sandbox_root)))
+    require(sandbox_root.is_absolute(),
+            "replay invocation write sandbox root is invalid")
+    require(all(type(descriptor) is int and descriptor >= 0
+                for descriptor in write_sandbox_descriptors),
+            "replay invocation write descriptor set is invalid")
+    private_tmpfs = None
+    if private_tmpfs_root is not None:
+        tmpfs_root = Path(os.path.abspath(os.fspath(private_tmpfs_root)))
+        require(
+            tmpfs_root.is_absolute() and
+            tmpfs_root.is_relative_to(sandbox_root) and
+            type(private_tmpfs_descriptor) is int and
+            private_tmpfs_descriptor >= 0 and
+            isinstance(private_tmpfs_directories, Sequence) and
+            not isinstance(private_tmpfs_directories, (str, bytes)),
+            "replay invocation private tmpfs is invalid")
+        private_tmpfs = {
+            "root": str(tmpfs_root),
+            "descriptor": private_tmpfs_descriptor,
+            "bytes": PRIVATE_REPLAY_TMPFS_BYTES,
+            "directories": sorted(set(private_tmpfs_directories)),
+        }
+    else:
+        require(not private_tmpfs_directories and
+                private_tmpfs_descriptor is None,
+                "replay invocation tmpfs directories lack a root")
     return {
-        "schema": "leopard2-replay-invocation/v1",
+        "schema": REPLAY_INVOCATION_SCHEMA,
         "argv": list(command),
         "environment": {
             name: environment[name] for name in sorted(environment)
@@ -2744,6 +4019,10 @@ def _replay_invocation_record(
         "pass_fds": pass_fds,
         "maximum_output_bytes": maximum_bytes,
         "timeout_seconds": timeout,
+        "write_sandbox_root": str(sandbox_root),
+        "write_sandbox_descriptors":
+            sorted(set(write_sandbox_descriptors)),
+        "private_tmpfs": private_tmpfs,
         "executable": {
             "label": executable_label,
             "logical_argv0": command[0],
@@ -2810,10 +4089,27 @@ def _resolve_build_operand(build: Path, directory: Path, value: str) -> Path:
     return resolved
 
 
+def _lexical_build_operand(build: Path, directory: Path, value: str) -> Path:
+    """Resolve a build operand lexically without consulting filesystem links."""
+    operand = Path(value)
+    lexical = Path(os.path.abspath(os.fspath(
+        operand if operand.is_absolute() else directory / operand)))
+    require(lexical.is_relative_to(build),
+            f"build operand escapes the candidate build: {value}")
+    return lexical
+
+
 def _require_shell_literal_tokens(
     tokens: Sequence[str], label: str,
 ) -> None:
     """Reject shell syntax even when shlex leaves it fused into one token."""
+    def response_indirection(token: str) -> bool:
+        return token.startswith("@") or token.startswith("-Wl,@")
+
+    require(tokens and all(
+                token and not response_indirection(token)
+                for token in tokens),
+            f"{label} contains response-file indirection")
     require(tokens and all(
                 token and not any(character in token
                                   for character in SHELL_RECIPE_META) and
@@ -2840,7 +4136,9 @@ def _recipe_commands(content: bytes, label: str) -> list[list[str]]:
         except ValueError as error:
             raise BuildProvenanceError(
                 f"cannot parse {label}: {error}") from error
-        require(tokens and all(token and "@" not in token for token in tokens),
+        require(tokens and all(
+                    token and not token.startswith(("@", "-Wl,@"))
+                    for token in tokens),
                 f"{label} contains an empty command or response file")
         _require_shell_literal_tokens(tokens, label)
         commands.append(tokens)
@@ -2966,6 +4264,8 @@ def _archive_recipe_semantics(
     archive: Path,
     archiver: Path,
     ranlib: Path,
+    *,
+    lexical_build_operands: bool = False,
 ) -> tuple[list[Path], list[list[str]]]:
     """Validate the exact two-command CMake static-archive recipe shape."""
     label = "candidate archive link recipe"
@@ -2978,7 +4278,10 @@ def _archive_recipe_semantics(
     _require_exact_driver(archive_command[0], archiver, label)
     require(archive_command[1] == "qc",
             f"{label} uses non-canonical archive flags")
-    archive_operand = _resolve_build_operand(
+    resolve_operand = (
+        _lexical_build_operand
+        if lexical_build_operands else _resolve_build_operand)
+    archive_operand = resolve_operand(
         build, build, archive_command[2])
     require(archive_operand == archive,
             f"{label} writes another archive")
@@ -2988,7 +4291,7 @@ def _archive_recipe_semantics(
                 for token in object_tokens),
             f"{label} contains a non-object or option-shaped archive operand")
     objects = [
-        _resolve_build_operand(build, build, token)
+        resolve_operand(build, build, token)
         for token in object_tokens
     ]
     require(objects and len(objects) == len(set(objects)),
@@ -2997,7 +4300,7 @@ def _archive_recipe_semantics(
     require(len(index_command) == 2,
             f"{label} index command has extra operands")
     _require_exact_driver(index_command[0], ranlib, label)
-    require(_resolve_build_operand(build, build, index_command[1]) == archive,
+    require(resolve_operand(build, build, index_command[1]) == archive,
             f"{label} indexes another archive")
     return objects, [
         _normalize_build_argv(command, build) for command in commands
@@ -3010,6 +4313,8 @@ def _executable_recipe_semantics(
     executable: Path,
     archive: Path,
     compiler: Path,
+    *,
+    lexical_build_operands: bool = False,
 ) -> tuple[list[Path], list[str]]:
     """Validate the one canonical GNU/CMake production benchmark link argv."""
     label = "candidate executable link recipe"
@@ -3055,9 +4360,12 @@ def _executable_recipe_semantics(
 
     system_runtime(tokens[-2], "libgomp.so")
     system_runtime(tokens[-1], "libpthread.a")
-    benchmark_object = _resolve_build_operand(build, build, object_token)
-    require(_resolve_build_operand(build, build, target) == executable and
-            _resolve_build_operand(build, build, archive.name) == archive,
+    resolve_operand = (
+        _lexical_build_operand
+        if lexical_build_operands else _resolve_build_operand)
+    benchmark_object = resolve_operand(build, build, object_token)
+    require(resolve_operand(build, build, target) == executable and
+            resolve_operand(build, build, archive.name) == archive,
             f"{label} writes or links another artifact")
     return [benchmark_object], _normalize_build_argv(tokens, build)
 
@@ -3093,19 +4401,25 @@ def _compile_tokens(entry: Mapping[str, Any]) -> list[str]:
 def _compile_recipe_identity(
     entry: Mapping[str, Any], build: Path, source: Path | None = None,
 ) -> dict[str, str]:
-    """Retain the exact compile_commands representation and safe variation."""
+    """Retain raw text plus a root-independent canonical argv rendering.
+
+    CMake changes shell quoting around an otherwise identical ``-D`` token
+    when a build root contains spaces.  Comparing raw text after pathname
+    replacement therefore rejects a semantically identical clean replay.
+    The command was already parsed with the strict no-shell-control grammar;
+    bind its exact parsed argv and retain the original string for diagnostics.
+    """
     if "arguments" in entry:
         return {"representation": "arguments"}
     command = entry.get("command")
     require(isinstance(command, str) and command,
             "compile command string is malformed")
+    tokens = _compile_tokens({"command": command})
+    normalized = _normalize_build_argv(tokens, build, source)
     return {
         "representation": "command",
         "command": command,
-        "normalized_command": _normalize_root_token(
-            _normalize_build_token(command, build),
-            source, "${SOURCE_ROOT}") if source is not None else
-        _normalize_build_token(command, build),
+        "normalized_command": shlex.join(normalized),
     }
 
 
@@ -3148,6 +4462,8 @@ def _validate_compile_flags(
     build_root: Path | None = None,
     cache: Mapping[str, Any] | None = None,
     library_sources: set[Path] | None = None,
+    benchmark_source: bool | None = None,
+    lexical_build_output: bool = False,
 ) -> str:
     """Accept only the direct GCC/Clang argv emitted by this CMake graph.
 
@@ -3162,14 +4478,22 @@ def _validate_compile_flags(
             tokens.count("-o") == 1 and tokens.count("-c") == 1,
             f"compile command has a non-canonical output/source tail for "
             f"{source.name}")
-    require(all(token and "@" not in token for token in tokens),
+    require(all(
+                token and not token.startswith(("@", "-Wl,@"))
+                for token in tokens),
             f"compile command uses an empty or response-file operand for "
             f"{source.name}")
     if build_root is not None:
-        require(build_root.is_absolute() and
-                _resolve_build_operand(
-                    build_root, build_root, tokens[-3]).is_relative_to(
-                        build_root),
+        output_operand = Path(tokens[-3])
+        if lexical_build_output:
+            lexical_output = Path(os.path.abspath(os.fspath(
+                output_operand if output_operand.is_absolute() else
+                build_root / output_operand)))
+            output_is_contained = lexical_output.is_relative_to(build_root)
+        else:
+            output_is_contained = _resolve_build_operand(
+                build_root, build_root, tokens[-3]).is_relative_to(build_root)
+        require(build_root.is_absolute() and output_is_contained,
                 f"compile command output escapes its build for {source.name}")
     cache = {} if cache is None else cache
     library_sources = set() if library_sources is None else library_sources
@@ -3254,9 +4578,11 @@ def _validate_compile_flags(
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_HAVE_GFNI_BACKEND=1",
             ))
-        elif source == (
-                source_root / "bench/leopard2/benchmark.cpp").resolve(
-                    strict=True):
+        elif (
+                benchmark_source is True or
+                (benchmark_source is None and source == (
+                    source_root / "bench/leopard2/benchmark.cpp").resolve(
+                        strict=True))):
             expected_header = (
                 build_root /
                 "generated/leopard2-benchmark-attestation/"
@@ -3274,11 +4600,19 @@ def _validate_compile_flags(
                 token for token in definitions
                 if token.startswith(
                     "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=")]
-            require(len(hashes) == 1 and re.fullmatch(
-                        r'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256='
-                        r'"[0-9a-f]{64}"', hashes[0]) is not None,
-                    "benchmark compile configuration digest is malformed")
-            expected_definitions.add(hashes[0])
+            configuration_digest = cache.get(
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256")
+            expected_hash = (
+                "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=" +
+                f'"{configuration_digest}"')
+            require(
+                isinstance(configuration_digest, str) and
+                re.fullmatch(r"[0-9a-f]{64}", configuration_digest)
+                    is not None and
+                hashes == [expected_hash],
+                "benchmark compile configuration digest is not bound to "
+                "the retained CMake cache")
+            expected_definitions.add(expected_hash)
 
     require(set(definitions) == expected_definitions,
             f"{profile} source has non-canonical compile definitions: "
@@ -3433,6 +4767,109 @@ def _require_compile_driver(
         tokens[0], expected, "candidate compile command")
 
 
+def _validate_candidate_required_cache(
+    cache: Mapping[str, Any],
+) -> dict[str, str]:
+    """Require every production-evidence cache value that cannot vary."""
+    required_exact = {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "CMAKE_GENERATOR": "Unix Makefiles",
+        "ENABLE_OPENMP": "ON",
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+        "LEO2_BUILD_BENCHMARKS": "ON",
+        "LEO2_BUILD_FUZZERS": "OFF",
+        "LEO2_ENABLE_CUDA": "OFF",
+        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEOPARD_ENABLE_GF8": "ON",
+        "LEOPARD_ENABLE_GF16": "ON",
+    }
+    require(isinstance(cache, Mapping),
+            "candidate CMake cache is malformed")
+    for name, expected in required_exact.items():
+        require(cache.get(name) == expected,
+                f"candidate CMake cache {name} is {cache.get(name)!r}, "
+                f"expected {expected!r}")
+    configuration_digest = cache.get(
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256")
+    require(isinstance(configuration_digest, str) and
+            re.fullmatch(r"[0-9a-f]{64}", configuration_digest) is not None,
+            "candidate CMake cache effective configuration digest is "
+            "malformed")
+    return {
+        **required_exact,
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+            configuration_digest,
+    }
+
+
+def _reproducible_replay_contract(
+    candidate: Mapping[str, Any],
+) -> dict[str, str]:
+    """Select one explicit, non-downgradable replay evidence contract.
+
+    The historical v1 closure remains readable only with the exact metadata
+    matrix it originally emitted.  Current candidates cannot infer an older
+    transport from a missing selector or a forged proof schema.
+    """
+    require(isinstance(candidate, Mapping),
+            "reproducible-build closure is malformed")
+    cache = candidate.get("validated_cache")
+    require(isinstance(cache, Mapping),
+            "reproducible-build closure lacks retained CMake semantics")
+    configuration_digest = cache.get(
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256")
+    require(isinstance(configuration_digest, str) and
+            re.fullmatch(r"[0-9a-f]{64}", configuration_digest) is not None,
+            "reproducible-build closure configuration digest is malformed")
+    closure_schema = candidate.get("schema")
+    if closure_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA:
+        require(
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
+            "current reproducible-build closure configuration contract "
+            "differs")
+        return {
+            "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "configuration_schema": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+            "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+            "invocation_schema": REPLAY_INVOCATION_SCHEMA,
+        }
+    if closure_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA_V1:
+        require(
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2 and
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache,
+            "historical reproducible-build closure configuration contract "
+            "differs")
+        return {
+            "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
+            "configuration_schema": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
+            "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2,
+            "recipe_schema": LEGACY_REPLAY_RECIPE_SCHEMA,
+            "invocation_schema": REPLAY_INVOCATION_SCHEMA_V1,
+        }
+    raise BuildProvenanceError(
+        "reproducible-build closure schema is unsupported")
+
+
+def _require_reproducible_replay_artifact_contract(
+    candidate: Mapping[str, Any], proof_schema: Any, recipe_schema: Any,
+) -> dict[str, str]:
+    contract = _reproducible_replay_contract(candidate)
+    require(
+        proof_schema == contract["proof_schema"] and
+        recipe_schema == contract["recipe_schema"],
+        "reproducible-build proof/recipe transport is incompatible with "
+        "its closure contract")
+    return contract
+
+
 def candidate_build_provenance(
     build_root: Path | str,
     source_root: Path | str,
@@ -3442,6 +4879,8 @@ def candidate_build_provenance(
     inherited_descriptors: Sequence[int] = (),
     tracked_source_manifest: Mapping[str, Any] | None = None,
     logical_source_root: Path | str | None = None,
+    sealed_artifacts: Mapping[
+        Path | str, _ReplayArtifactSink] | None = None,
 ) -> dict[str, Any]:
     """Capture and validate one pure-AVX2 production benchmark build."""
     build = Path(build_root).resolve(strict=True)
@@ -3453,6 +4892,28 @@ def candidate_build_provenance(
     require(source.is_dir(), "candidate source root is not a directory")
     require(executable_target in {"bench_leopard2", "bench_leopard2_allk"},
             "unsupported candidate benchmark target")
+    artifact_overrides: dict[Path, _ReplayArtifactSink] = {}
+    if sealed_artifacts is not None:
+        require(isinstance(sealed_artifacts, Mapping) and sealed_artifacts,
+                "candidate sealed-artifact map is malformed")
+        for raw_path, artifact in sealed_artifacts.items():
+            path = Path(os.path.abspath(os.fspath(raw_path)))
+            require(
+                path.is_relative_to(build) and
+                isinstance(artifact, _ReplayArtifactSink) and
+                artifact.logical_path == path and
+                path not in artifact_overrides,
+                "candidate sealed-artifact identity is malformed")
+            artifact.verify()
+            artifact_overrides[path] = artifact
+
+    def artifact_identity(path: Path, label: str) -> dict[str, Any]:
+        lexical = Path(os.path.abspath(os.fspath(path)))
+        artifact = artifact_overrides.get(lexical)
+        if artifact is None:
+            return file_identity(path, label)
+        artifact.verify()
+        return dict(artifact.identity)
     source_manifest = (
         _capture_tracked_source_tree(
             source, inherited_descriptors=inherited_descriptors)
@@ -3483,23 +4944,7 @@ def candidate_build_provenance(
     cache_identity, cache_bytes = file_snapshot(
         cache_path, "candidate CMake cache", maximum_bytes=MAX_METADATA_BYTES)
     cache = parse_cmake_cache(cache_bytes)
-    required_exact = {
-        "CMAKE_BUILD_TYPE": "Release",
-        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "CMAKE_GENERATOR": "Unix Makefiles",
-        "ENABLE_OPENMP": "ON",
-        "LEO2_BUILD_BENCHMARKS": "ON",
-        "LEO2_BUILD_FUZZERS": "OFF",
-        "LEO2_ENABLE_CUDA": "OFF",
-        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-        "LEOPARD_ENABLE_GF8": "ON",
-        "LEOPARD_ENABLE_GF16": "ON",
-    }
-    for name, expected in required_exact.items():
-        require(cache.get(name) == expected,
-                f"candidate CMake cache {name} is {cache.get(name)!r}, "
-                f"expected {expected!r}")
+    required_exact = _validate_candidate_required_cache(cache)
     benchmark_git_value = cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE")
     locator_git_value = cache.get("LEO2_LOCATOR_GIT_EXECUTABLE")
     require(isinstance(benchmark_git_value, str) and benchmark_git_value and
@@ -3700,7 +5145,8 @@ def candidate_build_provenance(
                 "size": source_record["size"],
                 "mode": source_record["mode"],
             }
-            object_identity = file_identity(obj, f"candidate {role} object")
+            object_identity = artifact_identity(
+                obj, f"candidate {role} object")
             flag_profile = _validate_compile_flags(
                 tokens, source_operand,
                 source_root=source, build_root=build, cache=cache,
@@ -3739,14 +5185,28 @@ def candidate_build_provenance(
         Path(record["object"]["path"]).name: record["object"]
         for record in archive_records
     }
-    with _RetainedFileSnapshot(
-            archive, "candidate production archive") as archive_snapshot, \
+    archive_override = artifact_overrides.get(
+        Path(os.path.abspath(os.fspath(archive))))
+    executable_override = artifact_overrides.get(
+        Path(os.path.abspath(os.fspath(expected_executable))))
+    archive_context = (
+        nullcontext(archive_override) if archive_override is not None else
+        _RetainedFileSnapshot(archive, "candidate production archive"))
+    executable_context = (
+        nullcontext(executable_override)
+        if executable_override is not None else
+        _RetainedFileSnapshot(
+            expected_executable, "candidate benchmark executable"))
+    with archive_context as archive_snapshot, \
             _RetainedFileSnapshot(
                 archiver,
                 "candidate archive inventory tool") as inventory_archiver, \
-            _RetainedFileSnapshot(
-                expected_executable,
-                "candidate benchmark executable") as executable_snapshot:
+            executable_context as executable_snapshot:
+        require(archive_snapshot is not None and
+                executable_snapshot is not None,
+                "candidate sealed artifact context is empty")
+        archive_snapshot.verify()
+        executable_snapshot.verify()
         require(inventory_archiver.identity == archiver_identity,
                 "candidate archiver changed before archive inspection")
         archive_identity = archive_snapshot.identity
@@ -3804,7 +5264,7 @@ def candidate_build_provenance(
             archive_member_identities.append(identity)
 
     return {
-        "schema": "leopard2-production-build-closure/v1",
+        "schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
         "build_root": str(build),
         "physical_source_root": str(source),
         "source_root": str(logical_source),
@@ -3820,6 +5280,8 @@ def candidate_build_provenance(
             "LEO2_BENCHMARK_GIT_EXECUTABLE": benchmark_git_value,
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
                 cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
+                cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"),
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
                 cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": small_direct_mode,
@@ -3871,10 +5333,13 @@ def compare_reproducible_builds(
     candidate: Mapping[str, Any], rebuilt: Mapping[str, Any],
 ) -> dict[str, Any]:
     """Require a clean rebuild to reproduce every linked project byte."""
-    require(candidate.get("schema") ==
-            "leopard2-production-build-closure/v1" and
-            rebuilt.get("schema") ==
-            "leopard2-production-build-closure/v1",
+    candidate_schema = candidate.get("schema")
+    require(
+            candidate_schema in {
+                PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
+                PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            } and
+            rebuilt.get("schema") == candidate_schema,
             "candidate/rebuild provenance schema differs")
     require(candidate.get("source_root") == rebuilt.get("source_root") and
             candidate.get("executable_target") ==
@@ -3990,15 +5455,13 @@ def compare_reproducible_builds(
                     original_normalized_command and
                     isinstance(rebuilt_normalized_command, str) and
                     rebuilt_normalized_command and
-                    _normalize_root_token(
-                        _normalize_build_token(
-                            original_command, candidate_build_root),
-                        candidate_physical_source, "${SOURCE_ROOT}") ==
+                    _compile_tokens({"command": original_command}) ==
+                    original_entry["arguments"] and
+                    _compile_tokens({"command": rebuilt_command}) ==
+                    rebuilt_entry["arguments"] and
+                    shlex.join(original_entry["normalized_arguments"]) ==
                     original_normalized_command and
-                    _normalize_root_token(
-                        _normalize_build_token(
-                            rebuilt_command, rebuilt_build_root),
-                        rebuilt_physical_source, "${SOURCE_ROOT}") ==
+                    shlex.join(rebuilt_entry["normalized_arguments"]) ==
                     rebuilt_normalized_command,
                     f"clean rebuild compile recipe normalization is invalid: "
                     f"{key[1]}")
@@ -4094,7 +5557,10 @@ def compare_reproducible_builds(
             rebuilt.get("compiler_subtools"),
             "clean rebuild compiler subtool identities differ")
     return {
-        "schema": "leopard2-reproducible-build-proof/v1",
+        "schema": (
+            REPRODUCIBLE_BUILD_PROOF_SCHEMA
+            if candidate_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA else
+            REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2),
         "method": "runner-owned-empty-directory-configure-build-byte-compare",
         "source_root": str(source),
         "executable_target": candidate["executable_target"],
@@ -4161,6 +5627,8 @@ def _reproducible_configure_argv(
         "LEO2_ENABLE_CUDA": "OFF",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
             cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"),
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
             cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE":
@@ -4315,8 +5783,17 @@ def _retarget_replay_git_transport(
                     "clean replay Git transport rewrite stalled")
             view = view[written:]
         os.fsync(descriptor)
-        os.close(descriptor)
-        descriptor = -1
+        consumed = [False]
+        try:
+            _close_raw_descriptor_with_precedence(
+                descriptor, None,
+                "clean replay Git transport temporary descriptor",
+                "cannot close clean replay Git transport temporary "
+                "descriptor",
+                ownership_consumed=consumed)
+        finally:
+            if consumed[0]:
+                descriptor = -1
         os.replace(temporary, recipe)
         directory_descriptor = os.open(
             recipe.parent,
@@ -4326,17 +5803,42 @@ def _retarget_replay_git_transport(
         try:
             os.fsync(directory_descriptor)
         finally:
-            os.close(directory_descriptor)
-    except BaseException:
+            _close_raw_descriptor_with_precedence(
+                directory_descriptor, sys.exception(),
+                "clean replay Git transport directory descriptor",
+                "cannot close clean replay Git transport directory "
+                "descriptor")
+    except BaseException as primary:
+        cleanup_failure: BaseException | None = None
         if descriptor >= 0:
+            consumed = [False]
             try:
-                os.close(descriptor)
-            except OSError:
-                pass
+                _close_raw_descriptor_with_precedence(
+                    descriptor, None,
+                    "interrupted clean replay Git transport descriptor",
+                    "cannot close interrupted clean replay Git transport "
+                    "descriptor",
+                    ownership_consumed=consumed)
+            except BaseException as error:
+                cleanup_failure = error
+            finally:
+                if consumed[0]:
+                    descriptor = -1
         try:
             temporary.unlink()
         except FileNotFoundError:
             pass
+        except BaseException as error:
+            cleanup_failure = _owner_exception_precedence(
+                cleanup_failure, error,
+                "clean replay Git transport cleanup")
+        if cleanup_failure is not None:
+            _raise_owner_exit_failure(
+                primary, cleanup_failure,
+                "clean replay Git transport owner",
+                "clean replay Git transport cleanup failed: "
+                f"{cleanup_failure}; primary failure: "
+                f"{type(primary).__name__}: {primary}")
         raise
     rewritten_identity, observed = file_snapshot(
         recipe, "retargeted clean replay benchmark refresh recipe",
@@ -4348,15 +5850,68 @@ def _retarget_replay_git_transport(
 
 
 def _write_private_executable(path: Path, content: bytes) -> None:
-    require(not path.exists() and path.parent.is_dir() and content,
+    """Create one private file without following its parent or final name.
+
+    Replay paths below the configured build tree are attacker-controlled
+    outputs until they are independently reduced to candidate semantics.
+    Opening ``path`` directly with ``O_NOFOLLOW`` protects only its final
+    component: a generated parent symlink could still redirect the write.
+    Retain and verify the literal parent directory first, then create the
+    basename relative to that descriptor.
+    """
+    require(content, "private replay executable content is empty")
+    requested = Path(os.path.abspath(os.fspath(path)))
+    parent = requested.parent
+    name = requested.name
+    require(requested.is_absolute() and name not in ("", ".", "..") and
+            "/" not in name and "\0" not in name,
             "private replay executable destination is invalid")
-    owner = _OwnedDescriptor()
+    directory = _OwnedDescriptor()
+    output = _OwnedDescriptor()
+    created = False
+    primary: BaseException | None = None
+    cleanup_failure: BaseException | None = None
+    cleanup_details: list[str] = []
+
+    def retain_cleanup_failure(error: BaseException, action: str) -> None:
+        nonlocal cleanup_failure
+        cleanup_details.append(
+            f"{action}: {type(error).__name__}: {error}")
+        observed = _ordinary_owner_cleanup_error(
+            error, f"{action}: {error}")
+        cleanup_failure = _owner_exception_precedence(
+            cleanup_failure, observed,
+            "private replay executable cleanup")
+
     try:
-        descriptor = owner.open(
-            path,
+        try:
+            resolved_parent = parent.resolve(strict=True)
+        except (OSError, RuntimeError) as error:
+            raise BuildProvenanceError(
+                f"private replay executable parent is invalid: {error}") \
+                from error
+        require(resolved_parent == parent,
+                "private replay executable parent follows a symlink")
+        directory_descriptor = directory.open(
+            parent,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+            getattr(os, "O_DIRECTORY", 0) |
+            getattr(os, "O_NOFOLLOW", 0))
+        opened_parent = os.fstat(directory_descriptor)
+        lexical_parent = parent.lstat()
+        require(stat.S_ISDIR(opened_parent.st_mode) and
+                stat.S_ISDIR(lexical_parent.st_mode) and
+                (opened_parent.st_dev, opened_parent.st_ino) ==
+                (lexical_parent.st_dev, lexical_parent.st_ino) and
+                parent.resolve(strict=True) == parent,
+                "private replay executable parent changed while opened")
+        descriptor = output.open(
+            name,
             os.O_WRONLY | os.O_CREAT | os.O_EXCL |
             getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
-            0o700)
+            0o700, dir_fd=directory_descriptor)
+        created = True
+        os.fchmod(descriptor, 0o700)
         view = memoryview(content)
         while view:
             written = os.write(descriptor, view)
@@ -4364,8 +5919,45 @@ def _write_private_executable(path: Path, content: bytes) -> None:
                     "private replay executable write stalled")
             view = view[written:]
         os.fsync(descriptor)
-    finally:
-        owner.close()
+        os.fsync(directory_descriptor)
+    except BaseException as error:
+        primary = error
+        if created and directory.descriptor >= 0:
+            try:
+                os.unlink(name, dir_fd=directory.descriptor)
+                os.fsync(directory.descriptor)
+            except FileNotFoundError:
+                pass
+            except BaseException as cleanup_error:
+                retain_cleanup_failure(
+                    cleanup_error,
+                    "cannot remove interrupted private replay executable")
+
+    for owner, description in (
+            (output, "cannot close private replay executable"),
+            (directory,
+             "cannot close private replay executable parent directory")):
+        try:
+            owner.close()
+        except BaseException as cleanup_error:
+            retain_cleanup_failure(cleanup_error, description)
+
+    if cleanup_failure is not None:
+        details = "; ".join(cleanup_details)
+        if primary is not None:
+            _raise_owner_exit_failure(
+                primary, cleanup_failure,
+                "private replay executable owner",
+                f"private replay executable cleanup failed: {details}; "
+                f"primary failure: {type(primary).__name__}: {primary}")
+        if isinstance(cleanup_failure, _OWNER_TERMINAL_EXCEPTIONS):
+            raise cleanup_failure.with_traceback(
+                cleanup_failure.__traceback__)
+        raise BuildProvenanceError(
+            "private replay executable cleanup failed: " + details) from (
+                cleanup_failure)
+    if primary is not None:
+        raise primary.with_traceback(primary.__traceback__)
 
 
 def _replay_exec_wrapper_bytes(
@@ -4418,6 +6010,46 @@ def _write_replay_exec_wrapper(
     return script
 
 
+def _private_replay_inventory_bytes(
+    interpreter_descriptor: int, expected_files: Sequence[str],
+) -> bytes:
+    """Render a sealed Bash-only exact inventory checker for private tmpfs."""
+    require(
+        type(interpreter_descriptor) is int and interpreter_descriptor >= 0 and
+        isinstance(expected_files, Sequence) and
+        not isinstance(expected_files, (str, bytes)) and expected_files and
+        len(expected_files) == len(set(expected_files)) and
+        all(
+            isinstance(relative, str) and relative and
+            not Path(relative).is_absolute() and
+            re.fullmatch(r"[A-Za-z0-9_.+/-]+", relative) is not None and
+            all(component not in ("", ".", "..")
+                for component in Path(relative).parts)
+            for relative in expected_files),
+        "private replay expected output inventory is malformed")
+    assignments = "\n".join(
+        f"expected[{shlex.quote(relative)}]=1"
+        for relative in sorted(expected_files))
+    return (
+        f"#!/proc/self/fd/{interpreter_descriptor}\n"
+        "set -euo pipefail\n"
+        "shopt -s globstar nullglob dotglob\n"
+        "declare -A expected=()\n"
+        f"{assignments}\n"
+        "observed=0\n"
+        "for path in **; do\n"
+        "  if [[ -d \"$path\" && ! -L \"$path\" ]]; then continue; fi\n"
+        "  [[ -f \"$path\" && ! -L \"$path\" && "
+        "${expected[$path]+present} == present ]] || exit 91\n"
+        "  ((observed += 1))\n"
+        "done\n"
+        f"(( observed == {len(expected_files)} )) || exit 92\n"
+        "for path in \"${!expected[@]}\"; do\n"
+        "  [[ -f \"$path\" && ! -L \"$path\" ]] || exit 93\n"
+        "done\n"
+    ).encode("utf-8", errors="strict")
+
+
 def _retain_exact_generated_executable(
     path: Path, expected_content: bytes, label: str,
 ) -> _RetainedFileSnapshot:
@@ -4430,8 +6062,16 @@ def _retain_exact_generated_executable(
                 f"{label} changed between generation and retention")
         snapshot.executable_descriptor
         return snapshot
-    except BaseException:
-        snapshot._close_without_verification()
+    except BaseException as primary:
+        try:
+            snapshot._close_without_verification()
+        except BaseException as cleanup_error:
+            _raise_owner_exit_failure(
+                primary, cleanup_error,
+                f"{label} exact generated executable retention",
+                f"{label} exact generated executable cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(primary).__name__}: {primary}")
         raise
 
 
@@ -4458,12 +6098,27 @@ def _replace_private_file(path: Path, content: bytes, mode: int) -> None:
         os.fsync(descriptor)
         owner.close()
         os.replace(temporary, path)
-    except BaseException:
-        owner.close()
+    except BaseException as primary:
+        cleanup_error: BaseException | None = None
+        try:
+            owner.close()
+        except BaseException as observed:
+            cleanup_error = observed
         try:
             temporary.unlink()
         except FileNotFoundError:
             pass
+        except BaseException as observed:
+            cleanup_error = _owner_exception_precedence(
+                cleanup_error, observed,
+                "private replay recipe replacement cleanup")
+        if cleanup_error is not None:
+            _raise_owner_exit_failure(
+                primary, cleanup_error,
+                "private replay recipe replacement owner",
+                "private replay recipe replacement cleanup failed: "
+                f"{cleanup_error}; primary failure: "
+                f"{type(primary).__name__}: {primary}")
         raise
 
 
@@ -5262,6 +6917,944 @@ def _validate_replay_compile_variable_closure(
     }
 
 
+_CANONICAL_REPLAY_PLAN_RELATIVE = (
+    "CMakeFiles/leopard2-canonical-replay.make")
+_CANONICAL_REPLAY_ATTESTATION_SOURCE = (
+    "cmake/GenerateBenchmarkSourceAttestation.cmake")
+_CANONICAL_REPLAY_ATTESTATION_TARGET = (
+    "leopard2-canonical-source-attestation")
+_CANONICAL_REPLAY_FORCE_TARGET = "leopard2-canonical-force"
+_CANONICAL_REPLAY_FREEZE_TARGET = "leopard2-canonical-freeze"
+
+
+def _canonical_replay_source_record(
+    candidate: Mapping[str, Any], relative: str,
+) -> Mapping[str, Any]:
+    """Return one exact candidate-bound tracked-source record."""
+    relative_path = Path(relative)
+    require(
+        isinstance(relative, str) and relative and
+        not relative_path.is_absolute() and
+        relative_path.as_posix() == relative and
+        all(component not in ("", ".", "..")
+            for component in relative_path.parts),
+        f"canonical replay tracked source path is unsafe: {relative!r}")
+    manifest = candidate.get("tracked_source_manifest")
+    require(isinstance(manifest, Mapping) and
+            isinstance(manifest.get("files"), list),
+            "canonical replay candidate source manifest is malformed")
+    matches = [
+        record for record in manifest["files"]
+        if isinstance(record, Mapping) and record.get("path") == relative
+    ]
+    require(len(matches) == 1,
+            f"canonical replay source closure does not contain {relative!r}")
+    record = matches[0]
+    require(set(record) == {"path", "sha256", "size", "mode"} and
+            isinstance(record["sha256"], str) and
+            re.fullmatch(r"[0-9a-f]{64}", record["sha256"]) is not None and
+            type(record["size"]) is int and
+            0 <= record["size"] <= MAX_TRACKED_SOURCE_FILE_BYTES and
+            type(record["mode"]) is int and
+            0 <= record["mode"] <= 0o7777,
+            f"canonical replay tracked source record is malformed: "
+            f"{relative!r}")
+    return record
+
+
+def _restore_canonical_replay_token(
+    token: str, build: Path, source: Path, *,
+    execution_build_root: str | None = None,
+) -> str:
+    """Materialize one candidate-normalized argv token in the private replay."""
+    require(isinstance(token, str) and token and
+            "\0" not in token and "\r" not in token and "\n" not in token,
+            "canonical replay argv token is malformed")
+    materialized_build = (
+        str(build) if execution_build_root is None else execution_build_root)
+    require(materialized_build and "\0" not in materialized_build,
+            "canonical replay execution build root is malformed")
+    restored = token.replace("${BUILD_ROOT}", materialized_build).replace(
+        "${SOURCE_ROOT}", str(source))
+    require("${BUILD_ROOT}" not in restored and
+            "${SOURCE_ROOT}" not in restored and "$" not in restored,
+            "canonical replay argv retains an unbound placeholder")
+    _require_safe_unicode(restored, "canonical replay argv token")
+    return restored
+
+
+def _canonical_replay_build_operand(
+    value: str, build: Path, source: Path,
+) -> str:
+    """Return one canonical build-relative target from normalized argv data."""
+    restored = _restore_canonical_replay_token(value, build, source)
+    operand = Path(restored)
+    require(build.is_absolute(),
+            "canonical replay build root is not absolute")
+    lexical = Path(os.path.abspath(os.fspath(
+        operand if operand.is_absolute() else build / operand)))
+    require(lexical.is_relative_to(build),
+            "canonical replay build operand escapes its private build")
+    relative = lexical.relative_to(build).as_posix()
+    require(relative and ".." not in Path(relative).parts and
+            re.fullmatch(r"[A-Za-z0-9_.+/-]+", relative) is not None,
+            "canonical replay build operand is not Make-safe")
+    return relative
+
+
+def _canonical_replay_output_paths(
+    candidate: Mapping[str, Any], source: Path, build: Path,
+) -> list[Path]:
+    """Derive every file path written by the sealed canonical replay."""
+    closure = candidate.get("source_object_compile_closure")
+    archive_commands = candidate.get("archive_link_commands")
+    target = candidate.get("executable_target")
+    require(isinstance(closure, list) and closure and
+            isinstance(archive_commands, list) and archive_commands and
+            isinstance(archive_commands[0], list) and
+            len(archive_commands[0]) >= 3 and
+            isinstance(target, str) and target,
+            "canonical replay output topology input is malformed")
+    relative_outputs = []
+    for item in closure:
+        require(isinstance(item, Mapping) and
+                isinstance(item.get("compile_entry"), Mapping),
+                "canonical replay output compile record is malformed")
+        arguments = item["compile_entry"].get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 4 and
+                all(isinstance(argument, str) for argument in arguments),
+                "canonical replay output compile argv is malformed")
+        relative_outputs.append(_canonical_replay_build_operand(
+            arguments[-3], build, source))
+    relative_outputs.extend((
+        _canonical_replay_build_operand(
+            str(archive_commands[0][2]), build, source),
+        _canonical_replay_build_operand(target, build, source),
+        _CANONICAL_REPLAY_PLAN_RELATIVE,
+        "generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h",
+        "generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h.lock",
+    ))
+    require(len(relative_outputs) == len(set(relative_outputs)),
+            "canonical replay output paths are duplicated")
+    return [build / relative for relative in sorted(relative_outputs)]
+
+
+def _canonical_replay_attestation_header_bytes(
+    candidate: Mapping[str, Any],
+) -> bytes:
+    """Render the exact unchanged header expected from the retained Git state."""
+    manifest = candidate.get("tracked_source_manifest")
+    git = manifest.get("git") if isinstance(manifest, Mapping) else None
+    require(
+        isinstance(git, Mapping) and
+        isinstance(git.get("commit"), str) and
+        re.fullmatch(r"[0-9a-f]+", git["commit"]) is not None and
+        isinstance(git.get("tree"), str) and
+        re.fullmatch(r"[0-9a-f]+", git["tree"]) is not None and
+        type(git.get("dirty")) is bool,
+        "canonical replay source identity is malformed")
+    dirty = 1 if git["dirty"] else 0
+    return (
+        "#ifndef LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "#define LEOPARD2_BENCHMARK_SOURCE_ATTESTATION_GENERATED_H\n"
+        "\n"
+        "#undef LEO2_BENCHMARK_SOURCE_COMMIT\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TREE\n"
+        "#undef LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY\n"
+        f"#define LEO2_BENCHMARK_SOURCE_COMMIT \"{git['commit']}\"\n"
+        f"#define LEO2_BENCHMARK_SOURCE_TREE \"{git['tree']}\"\n"
+        f"#define LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY {dirty}\n"
+        "\n"
+        "#endif\n"
+    ).encode("ascii")
+
+
+def _validate_sealed_replay_artifact_bindings(
+    candidate: Mapping[str, Any],
+    artifacts: Mapping[str, Mapping[str, Any]],
+    source: Path,
+    build: Path,
+    *,
+    label: str,
+) -> None:
+    """Bind every private-output memfd to the independently known result."""
+    require(source.is_absolute() and build.is_absolute() and
+            isinstance(artifacts, Mapping) and artifacts,
+            f"{label} sealed replay artifact binding input is malformed")
+    expected: dict[str, tuple[str, int, int]] = {}
+
+    def add(
+        relative: str, sha256: Any, size: Any, permissions: int,
+    ) -> None:
+        require(
+            relative not in expected and
+            isinstance(sha256, str) and
+            re.fullmatch(r"[0-9a-f]{64}", sha256) is not None and
+            type(size) is int and 0 <= size <= MAX_FILE_BYTES,
+            f"{label} expected sealed replay artifact identity is malformed")
+        expected[relative] = (sha256, size, permissions)
+
+    closure = candidate.get("source_object_compile_closure")
+    require(isinstance(closure, list) and closure,
+            f"{label} sealed replay object closure is malformed")
+    for item in closure:
+        require(isinstance(item, Mapping) and
+                isinstance(item.get("compile_entry"), Mapping) and
+                isinstance(item.get("object"), Mapping),
+                f"{label} sealed replay object identity is malformed")
+        arguments = item["compile_entry"].get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 4 and
+                all(isinstance(argument, str) for argument in arguments),
+                f"{label} sealed replay compile output is malformed")
+        relative = _canonical_replay_build_operand(
+            arguments[-3], build, source)
+        identity = item["object"]
+        add(relative, identity.get("sha256"), identity.get("size"), 0o600)
+
+    archive = candidate.get("archive")
+    executable = candidate.get("executable")
+    target = candidate.get("executable_target")
+    require(isinstance(archive, Mapping) and
+            isinstance(executable, Mapping) and
+            isinstance(target, str) and target,
+            f"{label} sealed replay linked-artifact identity is malformed")
+    add("libleopard.a", archive.get("sha256"), archive.get("size"), 0o600)
+    add(target, executable.get("sha256"), executable.get("size"), 0o700)
+
+    header_relative = (
+        "generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h")
+    header = _canonical_replay_attestation_header_bytes(candidate)
+    add(
+        header_relative, hashlib.sha256(header).hexdigest(),
+        len(header), 0o600)
+    add(
+        header_relative + ".lock", hashlib.sha256(b"").hexdigest(),
+        0, 0o600)
+
+    require(set(artifacts) == set(expected),
+            f"{label} sealed replay artifact path closure differs")
+    for relative, (sha256, size, permissions) in expected.items():
+        artifact = artifacts[relative]
+        require(
+            isinstance(artifact, Mapping) and
+            artifact.get("path") == relative and
+            artifact.get("sha256") == sha256 and
+            artifact.get("size") == size and
+            type(artifact.get("mode")) is int and
+            stat.S_ISREG(artifact["mode"]) and
+            stat.S_IMODE(artifact["mode"]) == permissions,
+            f"{label} sealed replay artifact differs from its independent "
+            f"identity: {relative}")
+
+
+def _retain_canonical_replay_output_topology(
+    candidate: Mapping[str, Any], source: Path, build: Path, stack: ExitStack,
+) -> dict[str, Any]:
+    """Reserve and retain every exact replay output inode before execution."""
+    outputs = _canonical_replay_output_paths(candidate, source, build)
+    tree = _OpenDirectoryTree(
+        build, stack, "canonical replay output topology")
+    parents: dict[Path, int] = {}
+    for output in outputs:
+        relative = output.relative_to(build)
+        parent_parts = relative.parts[:-1]
+        parent_descriptor = tree.directory(parent_parts)
+        parent = output.parent
+        parents[parent] = parent_descriptor
+
+    guard = _InotifyMutationGuard("canonical replay output topology")
+    entry_guard = _InotifyMutationGuard(
+        "canonical replay exact output entries")
+    try:
+        for parent in sorted(parents, key=str):
+            guard.add_directory_path(parent)
+            entry_guard.add_exact_directory_entries(
+                parent, [output.name for output in outputs
+                         if output.parent == parent])
+
+        plan = build / _CANONICAL_REPLAY_PLAN_RELATIVE
+        header = (
+            build / "generated/leopard2-benchmark-attestation/"
+            "leopard2_benchmark_source_attestation.h")
+        archive = build / "libleopard.a"
+        executable = build / str(candidate.get("executable_target", ""))
+        initial_content = {
+            archive: b"!<arch>\n",
+            header: _canonical_replay_attestation_header_bytes(candidate),
+        }
+        retained_outputs = []
+        for output in outputs:
+            relative = output.relative_to(build)
+            parent_descriptor = parents[output.parent]
+            name = relative.parts[-1]
+            descriptor = -1
+            retained_file = None
+            try:
+                if output == plan:
+                    descriptor = os.open(
+                        name,
+                        os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) |
+                        getattr(os, "O_NONBLOCK", 0) |
+                        getattr(os, "O_NOFOLLOW", 0),
+                        dir_fd=parent_descriptor)
+                    retained_file = os.fdopen(
+                        descriptor, "rb", buffering=0)
+                else:
+                    mode = 0o700 if output == executable else 0o600
+                    descriptor = os.open(
+                        name,
+                        os.O_RDWR | os.O_CREAT | os.O_EXCL |
+                        getattr(os, "O_CLOEXEC", 0) |
+                        getattr(os, "O_NOFOLLOW", 0),
+                        mode, dir_fd=parent_descriptor)
+                    retained_file = os.fdopen(
+                        descriptor, "r+b", buffering=0)
+                    content = initial_content.get(output, b"")
+                    view = memoryview(content)
+                    while view:
+                        written = os.write(descriptor, view)
+                        require(written > 0,
+                                f"canonical replay output reservation write "
+                                f"stalled: {output}")
+                        view = view[written:]
+                    os.fsync(descriptor)
+                    entry_guard.accept_exact_regular_creation(name)
+                metadata = os.fstat(descriptor)
+                lexical = os.stat(
+                    name, dir_fd=parent_descriptor,
+                    follow_symlinks=False)
+                require(
+                    stat.S_ISREG(metadata.st_mode) and
+                    metadata.st_nlink == 1 and
+                    (metadata.st_dev, metadata.st_ino,
+                     stat.S_IFMT(metadata.st_mode)) ==
+                    (lexical.st_dev, lexical.st_ino,
+                     stat.S_IFMT(lexical.st_mode)),
+                    f"canonical replay output is a symlink, hard link, or "
+                    f"non-regular file: {output}")
+                stack.callback(retained_file.close)
+                retained_outputs.append({
+                    "path": output,
+                    "parent_descriptor": parent_descriptor,
+                    "name": name,
+                    "file": retained_file,
+                    "identity": (
+                        metadata.st_dev, metadata.st_ino,
+                        stat.S_IFMT(metadata.st_mode),
+                        metadata.st_uid, metadata.st_gid, metadata.st_nlink,
+                    ),
+                })
+            except BaseException as primary:
+                cleanup_failure: BaseException | None = None
+                try:
+                    if retained_file is not None:
+                        retained_file.close()
+                    elif descriptor >= 0:
+                        consumed = [False]
+                        try:
+                            _close_raw_descriptor_with_precedence(
+                                descriptor, None,
+                                "canonical replay output raw descriptor",
+                                "cannot close canonical replay output raw "
+                                "descriptor",
+                                ownership_consumed=consumed)
+                        finally:
+                            if consumed[0]:
+                                descriptor = -1
+                except BaseException as error:
+                    cleanup_failure = error
+                if cleanup_failure is not None:
+                    _raise_owner_exit_failure(
+                        primary, cleanup_failure,
+                        "canonical replay output reservation",
+                        "canonical replay output reservation cleanup failed: "
+                        f"{cleanup_failure}; primary failure: "
+                        f"{type(primary).__name__}: {primary}")
+                if not isinstance(primary, OSError):
+                    raise
+                raise BuildProvenanceError(
+                    f"canonical replay output is preexisting, unstable or "
+                    f"unsafe: {output}: {primary}") from primary
+    except BaseException:
+        guard._close_without_verification()
+        entry_guard._close_without_verification()
+        raise
+    stack.callback(guard.close)
+    stack.callback(entry_guard.close)
+    retained = {
+        "guard": guard,
+        "entry_guard": entry_guard,
+        "parents": [
+            (parent, parents[parent]) for parent in sorted(parents, key=str)
+        ],
+        "outputs": retained_outputs,
+    }
+    _verify_canonical_replay_output_topology(retained, require_outputs=False)
+    return retained
+
+
+def _verify_canonical_replay_output_topology(
+    retained: Mapping[str, Any], *, require_outputs: bool,
+) -> None:
+    """Verify retained output parents and optional completed regular outputs."""
+    guard = retained.get("guard")
+    parents = retained.get("parents")
+    entry_guard = retained.get("entry_guard")
+    outputs = retained.get("outputs")
+    require(isinstance(guard, _InotifyMutationGuard) and
+            isinstance(entry_guard, _InotifyMutationGuard) and
+            isinstance(parents, list) and isinstance(outputs, list),
+            "canonical replay retained output topology is malformed")
+    guard.verify()
+    entry_guard.verify()
+    for parent, descriptor in parents:
+        try:
+            lexical = os.stat(parent, follow_symlinks=False)
+            retained_status = os.fstat(descriptor)
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"canonical replay output parent changed: {parent}: {error}") \
+                from error
+        require(
+            stat.S_ISDIR(lexical.st_mode) and
+            (lexical.st_dev, lexical.st_ino, stat.S_IFMT(lexical.st_mode)) ==
+            (retained_status.st_dev, retained_status.st_ino,
+             stat.S_IFMT(retained_status.st_mode)),
+            f"canonical replay output parent changed: {parent}")
+    for record in outputs:
+        require(isinstance(record, Mapping) and
+                set(record) == {
+                    "path", "parent_descriptor", "name", "file", "identity",
+                },
+                "canonical replay retained output record is malformed")
+        output = record["path"]
+        parent_descriptor = record["parent_descriptor"]
+        name = record["name"]
+        retained_file = record["file"]
+        require(isinstance(output, Path) and
+                type(parent_descriptor) is int and
+                isinstance(name, str) and name and
+                hasattr(retained_file, "fileno") and
+                isinstance(record["identity"], tuple),
+                "canonical replay retained output identity is malformed")
+        try:
+            metadata = os.stat(
+                name, dir_fd=parent_descriptor, follow_symlinks=False)
+            retained_status = os.fstat(retained_file.fileno())
+        except OSError as error:
+            raise BuildProvenanceError(
+                f"canonical replay output is missing or unsafe: "
+                f"{output}: {error}") from error
+        identity = (
+            retained_status.st_dev, retained_status.st_ino,
+            stat.S_IFMT(retained_status.st_mode),
+            retained_status.st_uid, retained_status.st_gid,
+            retained_status.st_nlink,
+        )
+        lexical_identity = (
+            metadata.st_dev, metadata.st_ino, stat.S_IFMT(metadata.st_mode),
+            metadata.st_uid, metadata.st_gid, metadata.st_nlink,
+        )
+        require(
+                identity == record["identity"] and
+                lexical_identity == record["identity"] and
+                stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1,
+                f"canonical replay output is a symlink, hard link, or "
+                f"non-regular/replaced file: {output}")
+    guard.verify()
+    entry_guard.verify()
+
+
+def _canonical_replay_makefile_bytes(
+    candidate: Mapping[str, Any],
+    source: Path,
+    build: Path,
+    transports: Mapping[str, str],
+    artifact_transports: Mapping[str, str] | None = None,
+    execution_build_root: str | None = None,
+) -> tuple[bytes, dict[str, int]]:
+    """Render the sole Make input used by a clean compiler replay.
+
+    CMake is still run in the private empty workspace so its effective
+    configuration is reproduced.  None of its generated Make/CMake programs
+    are executed, however.  This plan is derived only from the already-audited
+    candidate compile/archive/link semantics and the one tracked attestation
+    script.  Consequently its exact bytes can be regenerated by the offline
+    verifier rather than authenticated by a self-rooted inventory digest.
+    """
+    require(source.is_absolute() and build.is_absolute() and
+            source != build,
+            "canonical replay roots are malformed")
+    if execution_build_root is not None:
+        require(
+            re.fullmatch(
+                r"/proc/self/fd/[0-9]+", execution_build_root) is not None,
+            "canonical replay execution root is malformed")
+    required_transports = {"cxx", "archiver", "ranlib", "cmake", "git"}
+    if artifact_transports is not None:
+        required_transports.update(("copy", "inventory"))
+    require(isinstance(transports, Mapping) and
+            set(transports) == required_transports,
+            "canonical replay transport roles differ")
+    for label, value in transports.items():
+        require(isinstance(value, str) and
+                re.fullmatch(r"/proc/self/fd/[0-9]+", value) is not None,
+                f"canonical replay {label} transport is malformed")
+    if artifact_transports is not None:
+        require(
+            isinstance(artifact_transports, Mapping) and
+            artifact_transports and
+            all(
+                isinstance(relative, str) and relative and
+                not Path(relative).is_absolute() and
+                all(component not in ("", ".", "..")
+                    for component in Path(relative).parts) and
+                isinstance(destination, str) and
+                re.fullmatch(r"/proc/self/fd/[0-9]+", destination)
+                    is not None
+                for relative, destination in artifact_transports.items()),
+            "canonical replay artifact transports are malformed")
+
+    target = candidate.get("executable_target")
+    require(isinstance(target, str) and
+            re.fullmatch(r"[A-Za-z0-9_.+][A-Za-z0-9_.+-]*", target)
+            is not None,
+            "canonical replay executable target is malformed")
+    closure = candidate.get("source_object_compile_closure")
+    require(isinstance(closure, list) and closure,
+            "canonical replay compile closure is empty")
+    cache = candidate.get("validated_cache")
+    require(isinstance(cache, Mapping) and
+            isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
+            cache["CMAKE_CXX_COMPILER"],
+            "canonical replay candidate cache is malformed")
+
+    prepared_records: list[
+        tuple[Mapping[str, Any], str, list[str], str, Path]] = []
+    outputs: set[str] = set()
+    archive_outputs: set[str] = set()
+    benchmark_outputs: list[str] = []
+    for item in closure:
+        require(isinstance(item, Mapping) and
+                item.get("role") in ("archive", "benchmark") and
+                isinstance(item.get("compile_entry"), Mapping),
+                "canonical replay compile record is malformed")
+        arguments = item["compile_entry"].get("normalized_arguments")
+        require(isinstance(arguments, list) and len(arguments) >= 5 and
+                all(isinstance(argument, str) and argument
+                    for argument in arguments) and
+                arguments[-4] == "-o" and arguments[-2] == "-c",
+                "canonical replay compile argv is malformed")
+        restored = [
+            _restore_canonical_replay_token(argument, build, source)
+            for argument in arguments
+        ]
+        _require_shell_literal_tokens(
+            restored, "canonical replay raw compile command")
+        require(restored[0] == cache["CMAKE_CXX_COMPILER"],
+                "canonical replay compile command uses another driver")
+        output = _canonical_replay_build_operand(
+            arguments[-3], build, source)
+        require(output not in outputs,
+                "canonical replay compile outputs are duplicated")
+        outputs.add(output)
+        role = str(item["role"])
+        if role == "archive":
+            archive_outputs.add(output)
+        else:
+            benchmark_outputs.append(output)
+        source_operand = Path(restored[-1])
+        lexical_source = Path(os.path.abspath(os.fspath(source_operand)))
+        require(source_operand.is_absolute() and
+                lexical_source == source_operand and
+                source_operand.is_relative_to(source),
+                "canonical replay compile source escapes its private source")
+        relative_source = source_operand.relative_to(source).as_posix()
+        require(
+            relative_source and
+            all(component not in ("", ".", "..")
+                for component in Path(relative_source).parts),
+            "canonical replay compile source path is unsafe")
+        require(
+            (role == "benchmark") ==
+            (relative_source == "bench/leopard2/benchmark.cpp"),
+            "canonical replay compile source role differs")
+        _canonical_replay_source_record(candidate, relative_source)
+        prepared_records.append(
+            (item, output, restored, role, source_operand))
+    require(len(benchmark_outputs) == 1,
+            "canonical replay must compile exactly one benchmark object")
+
+    library_sources = {
+        source_operand for _item, _output, _restored, role, source_operand
+        in prepared_records if role == "archive"
+    }
+    require(library_sources,
+            "canonical replay archive compile source closure is empty")
+    compile_records: list[tuple[str, list[str], str]] = []
+    for item, output, restored, role, source_operand in prepared_records:
+        profile = _validate_compile_flags(
+            restored, source_operand, source_root=source, build_root=build,
+            cache=cache, library_sources=library_sources,
+            benchmark_source=(role == "benchmark"),
+            lexical_build_output=True)
+        require(item.get("flag_profile") == profile,
+                "canonical replay compile flag profile differs")
+        arguments = item["compile_entry"]["normalized_arguments"]
+        restored = [
+            _restore_canonical_replay_token(
+                argument, build, source,
+                execution_build_root=execution_build_root)
+            for argument in arguments
+        ]
+        restored[0] = transports["cxx"]
+        # The canonical plan does not consume generated dependency files.
+        # Omitting -MD/-MT/-MF avoids an otherwise unused writable pathname
+        # and does not change compiler object bytes.
+        recipe = restored
+        _require_shell_literal_tokens(
+            recipe, f"canonical replay compile recipe for {output}")
+        compile_records.append((output, recipe, role))
+
+    archive_commands = candidate.get("archive_link_commands")
+    require(isinstance(archive_commands, list) and
+            len(archive_commands) == 2 and
+            all(isinstance(command, list) and command and
+                all(isinstance(argument, str) and argument
+                    for argument in command)
+                for command in archive_commands),
+            "canonical replay archive recipe is malformed")
+    archive_command = [
+        _restore_canonical_replay_token(
+            argument, build, source,
+            execution_build_root=execution_build_root)
+        for argument in archive_commands[0]
+    ]
+    index_command = [
+        _restore_canonical_replay_token(
+            argument, build, source,
+            execution_build_root=execution_build_root)
+        for argument in archive_commands[1]
+    ]
+    _require_shell_literal_tokens(
+        archive_command, "canonical replay raw archive command")
+    _require_shell_literal_tokens(
+        index_command, "canonical replay raw archive index command")
+    require(len(archive_command) >= 4 and
+            archive_command[1] == "qc" and
+            len(index_command) == 2,
+            "canonical replay archive recipe shape differs")
+    archive_target = _canonical_replay_build_operand(
+        archive_command[2], build, source)
+    archive_dependencies = [
+        _canonical_replay_build_operand(value, build, source)
+        for value in archive_command[3:]
+    ]
+    require(archive_target == "libleopard.a" and
+            len(archive_dependencies) == len(set(archive_dependencies)) and
+            set(archive_dependencies) == archive_outputs and
+            _canonical_replay_build_operand(
+                index_command[1], build, source) == archive_target,
+            "canonical replay archive object/target closure differs")
+    require(isinstance(cache.get("CMAKE_AR"), str) and
+            isinstance(cache.get("CMAKE_RANLIB"), str),
+            "canonical replay archive tool cache is malformed")
+    archive_recipe = (
+        shlex.join(archive_command) + "\n" +
+        shlex.join(index_command) + "\n").encode("utf-8", errors="strict")
+    exact_archive_objects, _exact_archive_commands = \
+        _archive_recipe_semantics(
+            archive_recipe, build, build / archive_target,
+            Path(cache["CMAKE_AR"]), Path(cache["CMAKE_RANLIB"]),
+            lexical_build_operands=True)
+    require(
+        exact_archive_objects ==
+        [build / dependency for dependency in archive_dependencies],
+        "canonical replay archive recipe semantic closure differs")
+    archive_command[0] = transports["archiver"]
+    index_command[0] = transports["ranlib"]
+    _require_shell_literal_tokens(
+        archive_command, "canonical replay archive command")
+    _require_shell_literal_tokens(
+        index_command, "canonical replay archive index command")
+
+    raw_link = candidate.get("executable_link_command")
+    require(isinstance(raw_link, list) and raw_link and
+            all(isinstance(argument, str) and argument
+                for argument in raw_link),
+            "canonical replay executable link command is malformed")
+    link_command = [
+        _restore_canonical_replay_token(
+            argument, build, source,
+            execution_build_root=execution_build_root)
+        for argument in raw_link
+    ]
+    _require_shell_literal_tokens(
+        link_command, "canonical replay raw executable link command")
+    output_positions = [
+        index for index, argument in enumerate(link_command)
+        if argument == "-o"
+    ]
+    require(output_positions == [len(link_command) - 5] and
+            output_positions[0] + 1 < len(link_command) and
+            _canonical_replay_build_operand(
+                link_command[output_positions[0] + 1],
+                build, source) == target and
+            archive_target in link_command,
+            "canonical replay executable link closure differs")
+    benchmark_output = benchmark_outputs[0]
+    require(benchmark_output in {
+                _canonical_replay_build_operand(argument, build, source)
+                for argument in link_command
+                if (argument.endswith((".o", ".obj")) and
+                    (not Path(argument).is_absolute() or
+                     Path(argument).resolve(strict=False).is_relative_to(
+                         build)))
+            },
+            "canonical replay executable omits its benchmark object")
+    exact_link_objects, _exact_link_command = \
+        _executable_recipe_semantics(
+            (shlex.join(link_command) + "\n").encode(
+                "utf-8", errors="strict"),
+            build, build / target, build / archive_target,
+            Path(cache["CMAKE_CXX_COMPILER"]),
+            lexical_build_operands=True)
+    require(exact_link_objects == [build / benchmark_output],
+            "canonical replay executable semantic closure differs")
+    link_command[0] = transports["cxx"]
+    _require_shell_literal_tokens(
+        link_command, "canonical replay executable link command")
+
+    script_record = _canonical_replay_source_record(
+        candidate, _CANONICAL_REPLAY_ATTESTATION_SOURCE)
+    del script_record
+    script = source / _CANONICAL_REPLAY_ATTESTATION_SOURCE
+    materialized_build = (
+        str(build) if execution_build_root is None else execution_build_root)
+    header = (
+        materialized_build +
+        "/generated/leopard2-benchmark-attestation/"
+        "leopard2_benchmark_source_attestation.h")
+    attestation_command = [
+        transports["cmake"], "-E", "env",
+        "GIT_CONFIG_GLOBAL=/dev/null",
+        "GIT_CONFIG_NOSYSTEM=1",
+        "GIT_CONFIG_SYSTEM=/dev/null",
+        "GIT_NO_REPLACE_OBJECTS=1",
+        "GIT_OPTIONAL_LOCKS=0",
+        transports["cmake"],
+        f"-DLEO2_SOURCE_DIR={source}",
+        f"-DLEO2_OUTPUT_FILE={header}",
+        f"-DLEO2_GIT_EXECUTABLE={transports['git']}",
+        "-P", str(script),
+    ]
+    _require_shell_literal_tokens(
+        attestation_command, "canonical replay attestation command")
+    def recipe(tokens: Sequence[str]) -> str:
+        rendered = shlex.join(list(tokens))
+        require("$" not in rendered and "\n" not in rendered and
+                "\r" not in rendered,
+                "canonical replay recipe rendering is unsafe")
+        return "\t" + rendered
+
+    selected = f"CMakeFiles/{target}.dir/replay"
+    selected_dependency = (
+        _CANONICAL_REPLAY_FREEZE_TARGET
+        if artifact_transports is not None else target)
+    lines = [
+        "# Leopard2 canonical candidate-bound compiler replay.",
+        "# Generated by tools/leopard2_build_provenance.py; do not edit.",
+        ".DELETE_ON_ERROR:",
+        ".SUFFIXES:",
+        "",
+        f".PHONY: {selected} {_CANONICAL_REPLAY_ATTESTATION_TARGET} "
+        f"{_CANONICAL_REPLAY_FORCE_TARGET}" +
+        (f" {_CANONICAL_REPLAY_FREEZE_TARGET}"
+         if artifact_transports is not None else ""),
+        f"{selected}: {selected_dependency}",
+        "",
+        f"{_CANONICAL_REPLAY_FORCE_TARGET}:",
+        "",
+        f"{_CANONICAL_REPLAY_ATTESTATION_TARGET}:",
+        recipe(attestation_command),
+        "",
+    ]
+    for output, command, role in sorted(
+            compile_records, key=lambda record: record[0]):
+        # The source path is already carried as one shell-quoted compiler argv
+        # token and the complete tracked tree is retained independently.
+        # Do not parse that pathname as Make syntax: TMPDIR/source paths may
+        # legitimately contain spaces or other Make-special separators.
+        prerequisites = [_CANONICAL_REPLAY_FORCE_TARGET]
+        if role == "benchmark":
+            prerequisites.append(_CANONICAL_REPLAY_ATTESTATION_TARGET)
+        lines.append(f"{output}: {' '.join(prerequisites)}")
+        lines.append(recipe(command))
+        lines.append("")
+    lines.append(
+        f"{archive_target}: {_CANONICAL_REPLAY_FORCE_TARGET} "
+        f"{' '.join(archive_dependencies)}")
+    lines.append(recipe(archive_command))
+    lines.append(recipe(index_command))
+    lines.append("")
+    lines.append(
+        f"{target}: {_CANONICAL_REPLAY_FORCE_TARGET} "
+        f"{benchmark_output} {archive_target}")
+    lines.append(recipe(link_command))
+    lines.append("")
+    freeze_count = 0
+    if artifact_transports is not None:
+        header_relative = (
+            "generated/leopard2-benchmark-attestation/"
+            "leopard2_benchmark_source_attestation.h")
+        lock_relative = header_relative + ".lock"
+        expected_freeze = {
+            *(output for output, _command, _role in compile_records),
+            archive_target, target, header_relative, lock_relative,
+        }
+        require(set(artifact_transports) == expected_freeze,
+                "canonical replay artifact transport closure differs")
+        archive_compile_outputs = sorted(
+            output for output, _command, role in compile_records
+            if role == "archive")
+        benchmark_compile_outputs = sorted(
+            output for output, _command, role in compile_records
+            if role == "benchmark")
+        freeze_order = [
+            header_relative, lock_relative,
+            *archive_compile_outputs, *benchmark_compile_outputs,
+            archive_target, target,
+        ]
+        require(len(freeze_order) == len(set(freeze_order)) and
+                set(freeze_order) == expected_freeze,
+                "canonical replay artifact freeze order differs")
+        lines.append(f"{_CANONICAL_REPLAY_FREEZE_TARGET}: {target}")
+        lines.append(recipe([transports["inventory"]]))
+        for relative in freeze_order:
+            copy_command = [transports["copy"], "--", relative]
+            _require_shell_literal_tokens(
+                copy_command, "canonical replay artifact freeze command")
+            destination = artifact_transports[relative]
+            destination_descriptor = int(destination.rsplit("/", 1)[1])
+            rendered = shlex.join(copy_command)
+            require("$" not in rendered and "\n" not in rendered and
+                    "\r" not in rendered,
+                    "canonical replay artifact freeze rendering is unsafe")
+            # The shell duplicates an already-open memfd onto cat's stdout.
+            # Landlock therefore never needs to authorize reopening an
+            # anonymous inode through procfs.
+            lines.append(
+                "\t" + rendered + f" 1>&{destination_descriptor}")
+        lines.append("")
+        freeze_count = len(freeze_order)
+    encoded = ("\n".join(lines)).encode("utf-8", errors="strict")
+    require(encoded.endswith(b"\n") and
+            len(encoded) <= MAX_METADATA_BYTES,
+            "canonical replay plan exceeds its byte/framing contract")
+    return encoded, {
+        "object_count": len(compile_records),
+        "archive_object_count": len(archive_dependencies),
+        "command_count": len(compile_records) + 4 + freeze_count +
+            (1 if artifact_transports is not None else 0),
+        "target_count": len(compile_records) + 5 +
+            (1 if artifact_transports is not None else 0),
+        "recursive_make_count": 0,
+        "freeze_output_count": freeze_count,
+    }
+
+
+def _canonical_replay_inventory_sha256(
+    records: Sequence[Mapping[str, Any]],
+) -> str:
+    encoded = json.dumps(
+        list(records), sort_keys=True, separators=(",", ":"),
+        ensure_ascii=True).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_replay_plan_manifest(
+    candidate: Mapping[str, Any],
+    plan_path: Path,
+    plan_content: bytes,
+    plan_snapshot: _RetainedFileSnapshot,
+    counts: Mapping[str, int],
+    artifact_transports: Mapping[str, str] | None = None,
+    execution_root_descriptor: int | None = None,
+) -> dict[str, Any]:
+    """Publish the exact independently-recomputable replay input inventory."""
+    require(plan_path.name == Path(_CANONICAL_REPLAY_PLAN_RELATIVE).name and
+            plan_snapshot.content == plan_content,
+            "canonical replay plan snapshot differs")
+    descriptor = plan_snapshot.executable_descriptor
+    execution = plan_snapshot.executable_identity
+    plan_record = {
+        "role": "generated-plan",
+        "root": "build",
+        "path": _CANONICAL_REPLAY_PLAN_RELATIVE,
+        "sha256": hashlib.sha256(plan_content).hexdigest(),
+        "size": len(plan_content),
+        "mode": stat.S_IMODE(plan_snapshot.identity["mode"]),
+    }
+    source = _canonical_replay_source_record(
+        candidate, _CANONICAL_REPLAY_ATTESTATION_SOURCE)
+    source_record = {
+        "role": "tracked-cmake",
+        "root": "source",
+        "path": source["path"],
+        "sha256": source["sha256"],
+        "size": source["size"],
+        "mode": source["mode"],
+    }
+    retained = sorted(
+        (plan_record, source_record),
+        key=lambda record: (record["root"], record["path"], record["role"]))
+    count_keys = {
+        "object_count", "archive_object_count", "command_count",
+        "target_count", "recursive_make_count", "freeze_output_count",
+    }
+    require(isinstance(counts, Mapping) and set(counts) == count_keys and
+            all(type(value) is int and value >= 0
+                for value in counts.values()) and
+            counts["recursive_make_count"] == 0,
+            "canonical replay plan counts are malformed")
+    output_sinks = [] if artifact_transports is None else [
+        {
+            "path": relative,
+            "descriptor": int(destination.rsplit("/", 1)[1]),
+        }
+        for relative, destination in sorted(artifact_transports.items())
+    ]
+    require(counts["freeze_output_count"] == len(output_sinks),
+            "canonical replay output-sink count differs")
+    require(
+        (execution_root_descriptor is None and not output_sinks) or
+        (type(execution_root_descriptor) is int and
+         execution_root_descriptor >= 0 and bool(output_sinks)),
+        "canonical replay execution-root descriptor differs")
+    return {
+        "schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "selected_target":
+            f"CMakeFiles/{candidate['executable_target']}.dir/replay",
+        "file_count": len(retained),
+        "total_bytes": sum(record["size"] for record in retained),
+        "counts": {key: counts[key] for key in sorted(counts)},
+        "retained_inputs": retained,
+        "inventory_sha256":
+            _canonical_replay_inventory_sha256(retained),
+        "output_sinks": output_sinks,
+        "execution_root_descriptor": execution_root_descriptor,
+        "plan_execution": {
+            "sealed_descriptor": descriptor,
+            "sealed_sha256": execution["sha256"],
+            "sealed_size": execution["size"],
+            "sealed_seals": execution["seals"],
+        },
+    }
+
+
 class _TemporaryReplayRecipeTransport:
     """Route generated Make recipes through immutable sealed tool FDs."""
 
@@ -5557,25 +8150,40 @@ class _TemporaryReplayRecipeTransport:
                 "semantic_compile_closure": semantic_manifest,
                 "semantic_inputs": semantic_inputs,
             }
-        except BaseException:
-            self.close()
+        except BaseException as primary:
+            try:
+                self.close()
+            except BaseException as cleanup_error:
+                _raise_owner_exit_failure(
+                    primary, cleanup_error,
+                    "private replay recipe transport constructor",
+                    "private replay recipe transport constructor cleanup "
+                    f"failed: {cleanup_error}; primary failure: "
+                    f"{type(primary).__name__}: {primary}")
             raise
 
     def _cleanup_owned_state(self) -> list[str]:
         """Release every retained resource without dropping retry ownership."""
         failures: list[str] = []
+        failure: BaseException | None = None
         for guard in tuple(self._guards):
             try:
                 guard.close()
             except BaseException as error:
                 failures.append(
                     "cannot close transported recipe guard: " + str(error))
+                failure = _owner_exception_precedence(
+                    failure, error,
+                    "transported recipe guard cleanup")
                 try:
                     guard._close_without_verification()
                 except BaseException as close_error:
                     failures.append(
                         "cannot force-close transported recipe guard: " +
                         str(close_error))
+                    failure = _owner_exception_precedence(
+                        failure, close_error,
+                        "transported recipe forced guard cleanup")
             if guard.descriptor < 0 and guard in self._guards:
                 self._guards.remove(guard)
 
@@ -5591,11 +8199,16 @@ class _TemporaryReplayRecipeTransport:
                         "private replay generated recipe was not restored")
             except BaseException as error:
                 failures.append(f"{path}: {error}")
+                failure = _owner_exception_precedence(
+                    failure, error,
+                    "transported recipe restoration cleanup")
             else:
                 if record in self.originals:
                     self.originals.remove(record)
         if not self.originals and not self._guards:
             self._expected = {}
+        if isinstance(failure, _OWNER_TERMINAL_EXCEPTIONS):
+            raise failure.with_traceback(failure.__traceback__)
         return failures
 
     def close(self) -> None:
@@ -5610,6 +8223,9 @@ class _TemporaryReplayRecipeTransport:
                     failures.append(
                         "transported recipe changed while retained: " +
                         str(error))
+                    verification_error = _owner_exception_precedence(
+                        verification_error, error,
+                        "transported recipe guard verification")
             for path, (expected_identity, expected) in self._expected.items():
                 try:
                     identity, observed = file_snapshot(
@@ -5620,16 +8236,29 @@ class _TemporaryReplayRecipeTransport:
                             "transported recipe changed while retained")
                 except BaseException as error:
                     failures.append(f"{path}: {error}")
+                    verification_error = _owner_exception_precedence(
+                        verification_error, error,
+                        "transported recipe file verification")
         except BaseException as error:
-            verification_error = error
+            verification_error = _owner_exception_precedence(
+                verification_error, error,
+                "transported recipe verification")
         finally:
             # Cleanup is a separate retryable state machine.  In particular,
             # an asynchronous BaseException anywhere in verification must not
             # strand rewritten recipes or mutation-guard descriptors.
             try:
-                failures.extend(self._cleanup_owned_state())
+                observed_failures = self._cleanup_owned_state()
+                failures.extend(observed_failures)
+                if observed_failures:
+                    cleanup_error = _owner_exception_precedence(
+                        cleanup_error,
+                        BuildProvenanceError("; ".join(observed_failures)),
+                        "transported recipe cleanup diagnostics")
             except BaseException as error:
-                cleanup_error = error
+                cleanup_error = _owner_exception_precedence(
+                    cleanup_error, error,
+                    "transported recipe cleanup")
             # _cleanup_owned_state records per-resource BaseExceptions so it
             # can continue releasing unrelated resources.  Such a caught
             # interruption therefore does not reach the exception handler
@@ -5638,15 +8267,30 @@ class _TemporaryReplayRecipeTransport:
             # diagnostic.
             if self.originals or self._guards:
                 try:
-                    failures.extend(self._cleanup_owned_state())
+                    observed_failures = self._cleanup_owned_state()
+                    failures.extend(observed_failures)
+                    if observed_failures:
+                        cleanup_error = _owner_exception_precedence(
+                            cleanup_error,
+                            BuildProvenanceError(
+                                "; ".join(observed_failures)),
+                            "transported recipe cleanup retry diagnostics")
                 except BaseException as retry_error:
                     failures.append(
                         "interrupted replay transport cleanup retry failed: "
                         f"{type(retry_error).__name__}: {retry_error}")
+                    cleanup_error = _owner_exception_precedence(
+                        cleanup_error, retry_error,
+                        "transported recipe cleanup retry")
 
         if self.originals or self._guards:
             failures.append(
                 "replay transport still owns rewritten recipes or guards")
+        authoritative = _owner_exception_precedence(
+            verification_error, cleanup_error,
+            "private replay recipe transport close")
+        if isinstance(authoritative, _OWNER_TERMINAL_EXCEPTIONS):
+            raise authoritative.with_traceback(authoritative.__traceback__)
         if failures:
             contexts = []
             for error in (verification_error, cleanup_error):
@@ -5673,453 +8317,137 @@ class _TemporaryReplayRecipeTransport:
         except BaseException as cleanup_error:
             if exc is None:
                 raise
-            raise BuildProvenanceError(
+            _raise_owner_exit_failure(
+                exc, cleanup_error, "private replay recipe transport owner",
                 "private replay recipe transport cleanup failed: "
                 f"{cleanup_error}; primary failure: "
-                f"{type(exc).__name__}: {exc}") from cleanup_error
+                f"{type(exc).__name__}: {exc}")
 
 
-def verify_reproducible_candidate_build(
-    candidate: Mapping[str, Any], *, jobs: int | None = None,
-    inherited_descriptors: Sequence[int] = (),
-) -> dict[str, Any]:
-    """Reconfigure/build in an empty directory and compare all linked bytes."""
-    source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
-    target = str(candidate.get("executable_target", ""))
-    require(re.fullmatch(r"[A-Za-z0-9_.+][A-Za-z0-9_.+-]*", target)
-            is not None,
-            "candidate executable target is unsafe")
-    cache = candidate.get("validated_cache")
-    require(isinstance(cache, dict),
-            "candidate build has no retained CMake semantics")
-    cmake = Path("/usr/bin/cmake").resolve(strict=True)
-    shell = Path("/bin/sh").resolve(strict=True)
-    bash = Path("/bin/bash").resolve(strict=True)
-    retained_manifest = candidate.get("tracked_source_manifest")
-    require(isinstance(retained_manifest, dict),
-            "candidate build has no retained tracked source tree")
-    if jobs is None:
-        jobs = min(128, len(os.sched_getaffinity(0)))
-    require(type(jobs) is int and 1 <= jobs <= 128,
-            "clean rebuild job count must be in 1..128")
+def _validate_canonical_replay_plan_manifest(
+    raw: Any,
+    candidate: Mapping[str, Any],
+    source: Path,
+    build: Path,
+    transports: Mapping[str, str],
+    *,
+    label: str,
+) -> int:
+    """Bind a canonical replay plan to candidate semantics offline."""
+    top_keys = {
+        "schema", "selected_target", "file_count", "total_bytes", "counts",
+        "retained_inputs", "inventory_sha256", "output_sinks",
+        "execution_root_descriptor", "plan_execution",
+    }
+    require(isinstance(raw, Mapping) and set(raw) == top_keys and
+            raw.get("schema") == CANONICAL_REPLAY_RECIPE_SCHEMA,
+            f"{label} canonical replay plan manifest is malformed")
+    execution = raw["plan_execution"]
+    execution_keys = {
+        "sealed_descriptor", "sealed_sha256", "sealed_size", "sealed_seals",
+    }
+    require(isinstance(execution, Mapping) and
+            set(execution) == execution_keys and
+            type(execution["sealed_descriptor"]) is int and
+            execution["sealed_descriptor"] >= 0 and
+            isinstance(execution["sealed_sha256"], str) and
+            re.fullmatch(
+                r"[0-9a-f]{64}", execution["sealed_sha256"]) is not None and
+            type(execution["sealed_size"]) is int and
+            execution["sealed_size"] > 0 and
+            type(execution["sealed_seals"]) is int,
+            f"{label} canonical replay sealed plan identity is malformed")
+    required_seals = (
+        getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+        getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+        getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+        getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+    require(execution["sealed_seals"] & required_seals == required_seals,
+            f"{label} canonical replay plan is not fully sealed")
 
-    workspace = Path(tempfile.mkdtemp(prefix="leopard2-proof-workspace-"))
-    temporary = workspace / "build"
-    private_source = workspace / "source"
-    private_tools = workspace / "tools"
-    try:
-        with _RetainedPrivateSourceTree(
-                source, private_source,
-                inherited_descriptors=inherited_descriptors) as source_tree, \
-                ExitStack() as retained_tools:
-            require(source_tree.manifest == retained_manifest,
-                    "candidate tracked source tree changed before clean "
-                    "rebuild")
-            private_tools.mkdir(mode=0o700)
-            tool_records = (
-                ("CMAKE_C_COMPILER", "c_compiler", "candidate C compiler"),
-                ("CMAKE_CXX_COMPILER", "compiler",
-                 "candidate C++ compiler"),
-                ("CMAKE_AR", "archiver", "candidate archiver"),
-                ("CMAKE_RANLIB", "ranlib", "candidate ranlib"),
-                ("CMAKE_MAKE_PROGRAM", "make_program",
-                 "candidate make program"),
-                ("CMAKE_LINKER", "linker", "candidate linker"),
-                ("LEO2_BENCHMARK_GIT_EXECUTABLE", "benchmark_git",
-                 "candidate benchmark Git executable"),
-            )
-            tool_snapshots: dict[str, _RetainedFileSnapshot] = {}
-            for cache_name, record_name, label in tool_records:
-                path = cache.get(cache_name)
-                record = candidate.get(record_name)
-                require(isinstance(path, str) and path and
-                        isinstance(record, dict),
-                        f"candidate build lacks retained {label}")
-                snapshot = retained_tools.enter_context(
-                    _RetainedFileSnapshot(path, label))
-                require(snapshot.identity == record,
-                        f"{label} changed before clean rebuild")
-                snapshot.executable_descriptor
-                tool_snapshots[record_name] = snapshot
-            subtools = candidate.get("compiler_subtools")
-            require(isinstance(subtools, list) and subtools,
-                    "candidate build lacks retained compiler subtools")
-            subtool_snapshots: list[
-                tuple[Mapping[str, Any], _RetainedFileSnapshot]
-            ] = []
-            for index, record in enumerate(subtools):
-                require(isinstance(record, dict) and
-                        record.get("language") in ("c", "c++") and
-                        record.get("role") in (
-                            "cc1", "cc1plus", "as", "collect2", "ld") and
-                        isinstance(record.get("identity"), dict) and
-                        isinstance(record["identity"].get("path"), str),
-                        "candidate compiler subtool record is malformed")
-                snapshot = retained_tools.enter_context(
-                    _RetainedFileSnapshot(
-                        record["identity"]["path"],
-                        f"candidate compiler subtool {index}"))
-                require(snapshot.identity == record["identity"],
-                        "candidate compiler subtool changed before clean "
-                        "rebuild")
-                snapshot.executable_descriptor
-                subtool_snapshots.append((record, snapshot))
-            cmake_snapshot = retained_tools.enter_context(
-                _RetainedFileSnapshot(cmake, "clean replay CMake"))
-            shell_snapshot = retained_tools.enter_context(
-                _RetainedFileSnapshot(shell, "clean replay command shell"))
-            bash_snapshot = retained_tools.enter_context(
-                _RetainedFileSnapshot(bash, "clean replay Bash"))
-            for snapshot in (
-                    cmake_snapshot, shell_snapshot, bash_snapshot):
-                snapshot.executable_descriptor
-
-            configure = _reproducible_configure_argv(
-                private_source, temporary, cache)
-            configure_environment_overrides = {
-                "CC": str(cache["CMAKE_C_COMPILER"]),
-                "CXX": str(cache["CMAKE_CXX_COMPILER"]),
-            }
-            configure_inherited_descriptors = (
-                *inherited_descriptors,
-                cmake_snapshot.executable_descriptor,
-            )
-            configure_invocation = _replay_invocation_record(
-                configure, executable_label="cmake",
-                executable=cmake_snapshot,
-                inherited_descriptors=configure_inherited_descriptors,
-                environment_overrides=configure_environment_overrides,
-                maximum_bytes=16 << 20, timeout=300)
-            _run(
-                configure, "runner-owned candidate configure",
-                maximum_bytes=16 << 20, timeout=300,
-                inherited_descriptors=configure_inherited_descriptors,
-                executable_descriptor=cmake_snapshot.executable_descriptor,
-                environment_overrides=configure_environment_overrides)
-            for snapshot in (
-                    *tool_snapshots.values(),
-                    *(item[1] for item in subtool_snapshots),
-                    cmake_snapshot, shell_snapshot, bash_snapshot):
-                snapshot.verify()
-
-            replay_git = private_tools / "git"
-            replay_git_bytes, replay_git_specification = \
-                _write_replay_git_identity(
-                    replay_git, private_source, source_tree.manifest,
-                    interpreter_descriptor=
-                        bash_snapshot.executable_descriptor)
-            replay_git_snapshot = retained_tools.enter_context(
-                _retain_exact_generated_executable(
-                    replay_git, replay_git_bytes,
-                    "clean replay Git identity executable"))
-            empty_dependency_include = (
-                private_tools / "empty-dependency-include")
-            empty_dependency_bytes = REPLAY_EMPTY_DEPENDENCY_INCLUDE
-            _write_private_executable(
-                empty_dependency_include, empty_dependency_bytes)
-            empty_dependency_snapshot = retained_tools.enter_context(
-                _retain_exact_generated_executable(
-                    empty_dependency_include, empty_dependency_bytes,
-                    "clean replay empty dependency include"))
-
-            prefix_guards: dict[str, _RetainedDirectoryTree] = {}
-            prefix_records = []
-            for language, directory_name in (
-                    ("c", "c-prefix"), ("c++", "cxx-prefix")):
-                prefix = private_tools / directory_name
-                prefix.mkdir(mode=0o700)
-                roles: dict[str, _RetainedFileSnapshot] = {}
-                for record, snapshot in subtool_snapshots:
-                    if record["language"] != language:
-                        continue
-                    role = str(record["role"])
-                    previous = roles.get(role)
-                    require(previous is None or
-                            previous.identity == snapshot.identity,
-                            f"candidate {language} compiler exposed "
-                            f"conflicting {role} subtools")
-                    roles.setdefault(role, snapshot)
-                roles.setdefault("ld", tool_snapshots["linker"])
-                mappings = []
-                expected_targets = {}
-                for role, snapshot in sorted(roles.items()):
-                    target_path = (
-                        f"/proc/self/fd/{snapshot.executable_descriptor}")
-                    os.symlink(
-                        target_path, prefix / role)
-                    require(os.readlink(prefix / role) == target_path,
-                            f"clean replay {language} compiler prefix "
-                            f"mapping changed for {role}")
-                    expected_targets[role] = target_path
-                    mappings.append({
-                        "role": role,
-                        "target_descriptor":
-                            snapshot.executable_descriptor,
-                        "source_path": snapshot.identity["path"],
-                        "source_sha256": snapshot.identity["sha256"],
-                        "sealed_sha256":
-                            snapshot.executable_identity["sha256"],
-                        "sealed_size": snapshot.executable_identity["size"],
-                        "sealed_seals": snapshot.executable_identity["seals"],
-                    })
-                guard = retained_tools.enter_context(
-                    _retain_exact_symlink_directory(
-                        prefix, expected_targets,
-                        f"clean replay {language} compiler prefix"))
-                prefix_guards[language] = guard
-                prefix_records.append({
-                    "language": language,
-                    "path": str(prefix),
-                    "descriptor": guard.descriptor,
-                    "mode": os.fstat(guard.descriptor).st_mode,
-                    "mappings": mappings,
-                })
-
-            wrapper_records = []
-            def retain_wrapper(
-                name: str, lexical: str,
-                executable: _RetainedFileSnapshot,
-                extra_arguments: Sequence[str] = (),
-                underlying_label: str = "",
-            ) -> _RetainedFileSnapshot:
-                path = private_tools / name
-                expected_script = _write_replay_exec_wrapper(
-                    path, bash_snapshot.executable_descriptor, lexical,
-                    executable.executable_descriptor, extra_arguments)
-                wrapper = retained_tools.enter_context(
-                    _retain_exact_generated_executable(
-                        path, expected_script,
-                        f"clean replay {name} wrapper"))
-                wrapper_records.append({
-                    "label": name,
-                    "underlying_label": underlying_label,
-                    "logical_argv0": lexical,
-                    "injected_arguments": list(extra_arguments),
-                    "interpreter_descriptor":
-                        bash_snapshot.executable_descriptor,
-                    "interpreter_sha256":
-                        bash_snapshot.executable_identity["sha256"],
-                    "underlying_descriptor":
-                        executable.executable_descriptor,
-                    "underlying_source_path": executable.identity["path"],
-                    "underlying_source_sha256":
-                        executable.identity["sha256"],
-                    "underlying_sealed_sha256":
-                        executable.executable_identity["sha256"],
-                    "script_sha256":
-                        hashlib.sha256(expected_script).hexdigest(),
-                    "script_size": len(expected_script),
-                    "sealed_descriptor": wrapper.executable_descriptor,
-                    "sealed_sha256":
-                        wrapper.executable_identity["sha256"],
-                    "sealed_size": wrapper.executable_identity["size"],
-                    "sealed_seals": wrapper.executable_identity["seals"],
-                })
-                return wrapper
-
-            c_wrapper = retain_wrapper(
-                "cc", str(cache["CMAKE_C_COMPILER"]),
-                tool_snapshots["c_compiler"],
-                (f"-B/proc/self/fd/"
-                 f"{prefix_guards['c'].descriptor}/",),
-                "c_compiler")
-            cxx_wrapper = retain_wrapper(
-                "cxx", str(cache["CMAKE_CXX_COMPILER"]),
-                tool_snapshots["compiler"],
-                (f"-B/proc/self/fd/"
-                 f"{prefix_guards['c++'].descriptor}/",),
-                "compiler")
-            archiver_wrapper = retain_wrapper(
-                "ar", str(cache["CMAKE_AR"]),
-                tool_snapshots["archiver"],
-                underlying_label="archiver")
-            ranlib_wrapper = retain_wrapper(
-                "ranlib", str(cache["CMAKE_RANLIB"]),
-                tool_snapshots["ranlib"],
-                underlying_label="ranlib")
-            linker_wrapper = retain_wrapper(
-                "ld", str(cache["CMAKE_LINKER"]),
-                tool_snapshots["linker"],
-                underlying_label="linker")
-            cmake_wrapper = retain_wrapper(
-                "cmake", str(cmake), cmake_snapshot,
-                underlying_label="cmake")
-            make_wrapper = retain_wrapper(
-                "make", str(cache["CMAKE_MAKE_PROGRAM"]),
-                tool_snapshots["make_program"],
-                underlying_label="make_program")
-
-            replacements = {
-                "c-compiler": (
-                    str(cache["CMAKE_C_COMPILER"]),
-                    f"/proc/self/fd/{c_wrapper.executable_descriptor}"),
-                "cxx-compiler": (
-                    str(cache["CMAKE_CXX_COMPILER"]),
-                    f"/proc/self/fd/{cxx_wrapper.executable_descriptor}"),
-                "archiver": (
-                    str(cache["CMAKE_AR"]),
-                    f"/proc/self/fd/{archiver_wrapper.executable_descriptor}"),
-                "ranlib": (
-                    str(cache["CMAKE_RANLIB"]),
-                    f"/proc/self/fd/{ranlib_wrapper.executable_descriptor}"),
-                "linker": (
-                    str(cache["CMAKE_LINKER"]),
-                    f"/proc/self/fd/{linker_wrapper.executable_descriptor}"),
-                "cmake": (
-                    str(cmake),
-                    f"/proc/self/fd/{cmake_wrapper.executable_descriptor}"),
-                # CMake's Unix Makefiles normally spell recursive invocations
-                # as $(MAKE), but retain this exact lexical replacement for
-                # generator versions that emit CMAKE_MAKE_PROGRAM directly.
-                "make": (
-                    str(cache["CMAKE_MAKE_PROGRAM"]),
-                    f"/proc/self/fd/{make_wrapper.executable_descriptor}"),
-                "git": (
-                    str(cache["LEO2_BENCHMARK_GIT_EXECUTABLE"]),
-                    f"/proc/self/fd/"
-                    f"{replay_git_snapshot.executable_descriptor}"),
-                "dependency-includes": (
-                    "CMakeFiles/**/{compiler_,}depend.make",
-                    f"/proc/self/fd/"
-                    f"{empty_dependency_snapshot.executable_descriptor}"),
-            }
-            transport_descriptors = {
-                *inherited_descriptors,
-                *(snapshot.executable_descriptor
-                  for snapshot in tool_snapshots.values()),
-                *(snapshot.executable_descriptor
-                  for _record, snapshot in subtool_snapshots),
-                cmake_snapshot.executable_descriptor,
-                shell_snapshot.executable_descriptor,
-                bash_snapshot.executable_descriptor,
-                replay_git_snapshot.executable_descriptor,
-                empty_dependency_snapshot.executable_descriptor,
-                *(guard.descriptor for guard in prefix_guards.values()),
-                c_wrapper.executable_descriptor,
-                cxx_wrapper.executable_descriptor,
-                archiver_wrapper.executable_descriptor,
-                ranlib_wrapper.executable_descriptor,
-                linker_wrapper.executable_descriptor,
-                cmake_wrapper.executable_descriptor,
-                make_wrapper.executable_descriptor,
-            }
-            with _TemporaryReplayRecipeTransport(
-                    temporary, replacements,
-                    {"cxx-compiler", "archiver", "ranlib",
-                     "cmake", "make", "git",
-                     "dependency-includes"},
-                    expected_compile_closure=candidate.get(
-                        "source_object_compile_closure"),
-                    expected_source=private_source) as recipe_transport:
-                build_command = (
-                    str(cache["CMAKE_MAKE_PROGRAM"]),
-                    "-C", str(temporary),
-                    "-f", "CMakeFiles/Makefile2",
-                    "-j", str(jobs),
-                    f"SHELL=/proc/self/fd/"
-                    f"{shell_snapshot.executable_descriptor}",
-                    f"MAKE=/proc/self/fd/"
-                    f"{make_wrapper.executable_descriptor}",
-                    "--", f"CMakeFiles/{target}.dir/all")
-                build_invocation = _replay_invocation_record(
-                    build_command, executable_label="make_program",
-                    executable=tool_snapshots["make_program"],
-                    inherited_descriptors=tuple(transport_descriptors),
-                    environment_overrides=None,
-                    maximum_bytes=32 << 20, timeout=1800)
-                _run(
-                    build_command,
-                    "runner-owned candidate build",
-                    maximum_bytes=32 << 20, timeout=1800,
-                    inherited_descriptors=tuple(transport_descriptors),
-                    executable_descriptor=tool_snapshots[
-                        "make_program"].executable_descriptor)
-                recipe_transport_manifest = recipe_transport.manifest
-            rebuilt = candidate_build_provenance(
-                temporary, private_source, temporary / target, target,
-                inherited_descriptors=inherited_descriptors,
-                tracked_source_manifest=source_tree.manifest,
-                logical_source_root=source)
-            result = compare_reproducible_builds(candidate, rebuilt)
-            result["schema"] = "leopard2-reproducible-build-proof/v2"
-            immutable_tools = []
-            for label, snapshot in (
-                    *tuple(tool_snapshots.items()),
-                    ("cmake", cmake_snapshot),
-                    ("command_shell", shell_snapshot),
-                    ("wrapper_shell", bash_snapshot),
-                    ("replay_git_identity", replay_git_snapshot),
-                    ("empty_dependency_include",
-                     empty_dependency_snapshot)):
-                immutable_tools.append({
-                    "label": label,
-                    "source_path": snapshot.identity["path"],
-                    "sealed_descriptor": snapshot.executable_descriptor,
-                    **snapshot.executable_identity,
-                })
-            for record, snapshot in subtool_snapshots:
-                immutable_tools.append({
-                    "label": (
-                        f"{record['language']}-compiler-"
-                        f"{record['role']}"),
-                    "source_path": snapshot.identity["path"],
-                    "sealed_descriptor": snapshot.executable_descriptor,
-                    **snapshot.executable_identity,
-                })
-            result["immutable_replay"] = {
-                "schema": "leopard2-immutable-replay-tools/v2",
-                "tools": sorted(
-                    immutable_tools,
-                    key=lambda item: (item["label"], item["source_path"])),
-                "wrappers": sorted(
-                    wrapper_records, key=lambda item: item["label"]),
-                "compiler_prefixes": sorted(
-                    prefix_records, key=lambda item: item["language"]),
-                "recipe_transport": recipe_transport_manifest,
-                "git_identity": {
-                    **replay_git_specification,
-                    "script_sha256":
-                        hashlib.sha256(replay_git_bytes).hexdigest(),
-                    "script_size": len(replay_git_bytes),
-                    "sealed_descriptor":
-                        replay_git_snapshot.executable_descriptor,
-                    "sealed_sha256":
-                        replay_git_snapshot.executable_identity["sha256"],
-                    "sealed_size":
-                        replay_git_snapshot.executable_identity["size"],
-                    "sealed_seals":
-                        replay_git_snapshot.executable_identity["seals"],
-                },
-                "invocations": {
-                    "configure": configure_invocation,
-                    "build": build_invocation,
-                },
-                "replacements": [
-                    {
-                        "label": label,
-                        "logical_path": logical,
-                        "transport_path": transport,
-                    }
-                    for label, (logical, transport) in sorted(
-                        replacements.items())
-                ],
-            }
-            source_tree.verify()
-            validate_reproducible_build_proof(
-                result, candidate, label="generated candidate")
-            # ExitStack and source_tree now revalidate every held tool and
-            # source pathname, including the inotify event history that makes
-            # an A -> B -> A replacement observable.
-            return result
-    finally:
-        shutil.rmtree(workspace, ignore_errors=True)
+    raw_sinks = raw["output_sinks"]
+    require(
+        isinstance(raw_sinks, list) and
+        all(
+            isinstance(item, Mapping) and
+            set(item) == {"path", "descriptor"} and
+            isinstance(item["path"], str) and item["path"] and
+            type(item["descriptor"]) is int and item["descriptor"] >= 0
+            for item in raw_sinks) and
+        raw_sinks == sorted(raw_sinks, key=lambda item: item["path"]) and
+        len({item["path"] for item in raw_sinks}) == len(raw_sinks) and
+        len({item["descriptor"] for item in raw_sinks}) == len(raw_sinks),
+        f"{label} canonical replay output sinks are malformed")
+    artifact_transports = ({
+        item["path"]: f"/proc/self/fd/{item['descriptor']}"
+        for item in raw_sinks
+    } if raw_sinks else None)
+    execution_root_descriptor = raw["execution_root_descriptor"]
+    require(
+        (not raw_sinks and execution_root_descriptor is None) or
+        (raw_sinks and type(execution_root_descriptor) is int and
+         execution_root_descriptor >= 0),
+        f"{label} canonical replay execution root is malformed")
+    execution_root = (
+        f"/proc/self/fd/{execution_root_descriptor}"
+        if execution_root_descriptor is not None else None)
+    content, counts = _canonical_replay_makefile_bytes(
+        candidate, source, build, transports, artifact_transports,
+        execution_build_root=execution_root)
+    content_digest = hashlib.sha256(content).hexdigest()
+    source_record = _canonical_replay_source_record(
+        candidate, _CANONICAL_REPLAY_ATTESTATION_SOURCE)
+    retained = sorted((
+        {
+            "role": "generated-plan",
+            "root": "build",
+            "path": _CANONICAL_REPLAY_PLAN_RELATIVE,
+            "sha256": content_digest,
+            "size": len(content),
+            "mode": 0o700,
+        },
+        {
+            "role": "tracked-cmake",
+            "root": "source",
+            "path": source_record["path"],
+            "sha256": source_record["sha256"],
+            "size": source_record["size"],
+            "mode": source_record["mode"],
+        },
+    ), key=lambda record: (
+        record["root"], record["path"], record["role"]))
+    expected = {
+        "schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "selected_target":
+            f"CMakeFiles/{candidate.get('executable_target')}.dir/replay",
+        "file_count": len(retained),
+        "total_bytes": sum(record["size"] for record in retained),
+        "counts": {key: counts[key] for key in sorted(counts)},
+        "retained_inputs": retained,
+        "inventory_sha256":
+            _canonical_replay_inventory_sha256(retained),
+        "output_sinks": raw_sinks,
+        "execution_root_descriptor": execution_root_descriptor,
+        "plan_execution": {
+            "sealed_descriptor": execution["sealed_descriptor"],
+            "sealed_sha256": content_digest,
+            "sealed_size": len(content),
+            "sealed_seals": execution["sealed_seals"],
+        },
+    }
+    require(raw == expected,
+            f"{label} canonical replay retained input inventory differs")
+    return int(execution["sealed_descriptor"])
 
 
-def validate_reproducible_build_proof(
-    proof: Any, candidate: Mapping[str, Any], *,
-    label: str = "candidate",
+def _validate_legacy_replay_recipe_transport(
+    raw_recipe: Any,
+    candidate: Mapping[str, Any],
+    replacement_by_label: Mapping[str, Mapping[str, Any]],
+    *,
+    label: str,
 ) -> None:
-    """Strictly validate a complete v2 replay proof against its build closure."""
+    """Preserve exact validation of historical generated-recipe v2 proofs."""
 
     def exact(value: Any, keys: set[str], what: str) -> Mapping[str, Any]:
         require(isinstance(value, Mapping) and set(value) == keys,
@@ -6132,372 +8460,6 @@ def validate_reproducible_build_proof(
                 f"{label} {what} digest is malformed")
         return value
 
-    expected_core = compare_reproducible_builds(candidate, candidate)
-    expected_core["schema"] = "leopard2-reproducible-build-proof/v2"
-    proof_map = exact(
-        proof, {*expected_core, "immutable_replay"},
-        "clean reproducible-build proof")
-    for key, expected in expected_core.items():
-        require(proof_map[key] == expected,
-                f"{label} clean reproducible-build proof field {key!r} "
-                "is not bound to its closure")
-
-    replay = exact(
-        proof_map["immutable_replay"],
-        {
-            "schema", "tools", "wrappers", "compiler_prefixes",
-            "recipe_transport", "git_identity", "invocations",
-            "replacements",
-        },
-        "immutable replay proof")
-    require(replay["schema"] == "leopard2-immutable-replay-tools/v2",
-            f"{label} immutable replay schema is unsupported")
-
-    tool_keys = {
-        "label", "source_path", "sealed_descriptor", "sha256", "size",
-        "seals", "source_sha256",
-    }
-    tools = replay["tools"]
-    require(isinstance(tools, list) and tools,
-            f"{label} immutable replay tool list is empty")
-    tool_by_label: dict[str, Mapping[str, Any]] = {}
-    required_seals = (
-        getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
-        getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
-        getattr(fcntl, "F_SEAL_GROW", 0x0004) |
-        getattr(fcntl, "F_SEAL_WRITE", 0x0008))
-    for index, raw in enumerate(tools):
-        tool = exact(raw, tool_keys, f"immutable tool {index}")
-        tool_label = tool["label"]
-        require(isinstance(tool_label, str) and tool_label and
-                tool_label not in tool_by_label and
-                isinstance(tool["source_path"], str) and
-                Path(tool["source_path"]).is_absolute() and
-                type(tool["sealed_descriptor"]) is int and
-                tool["sealed_descriptor"] >= 0 and
-                type(tool["size"]) is int and tool["size"] > 0 and
-                type(tool["seals"]) is int and
-                tool["seals"] & required_seals == required_seals,
-                f"{label} immutable tool {index} identity is malformed")
-        digest(tool["sha256"], f"immutable tool {tool_label} sealed")
-        digest(
-            tool["source_sha256"],
-            f"immutable tool {tool_label} source")
-        require(tool["sha256"] == tool["source_sha256"],
-                f"{label} immutable tool {tool_label} differs from source")
-        tool_by_label[tool_label] = tool
-    require(tools == sorted(
-                tools, key=lambda item: (item["label"], item["source_path"])),
-            f"{label} immutable replay tools are not canonical")
-
-    base_tool_labels = {
-        "c_compiler": "c_compiler",
-        "compiler": "compiler",
-        "archiver": "archiver",
-        "ranlib": "ranlib",
-        "make_program": "make_program",
-        "linker": "linker",
-        "benchmark_git": "benchmark_git",
-    }
-    expected_tool_labels = set(base_tool_labels)
-    for tool_label, closure_key in base_tool_labels.items():
-        identity = candidate.get(closure_key)
-        require(isinstance(identity, Mapping),
-                f"{label} closure lacks {closure_key}")
-        tool = tool_by_label.get(tool_label)
-        require(tool is not None and
-                tool["source_path"] == identity.get("path") and
-                tool["source_sha256"] == identity.get("sha256") and
-                tool["size"] == identity.get("size"),
-                f"{label} immutable {tool_label} is not bound to closure")
-    subtool_roles: dict[str, dict[str, str]] = {"c": {}, "c++": {}}
-    subtools = candidate.get("compiler_subtools")
-    require(isinstance(subtools, list) and subtools,
-            f"{label} closure lacks compiler subtools")
-    for record in subtools:
-        require(isinstance(record, Mapping) and
-                record.get("language") in subtool_roles and
-                isinstance(record.get("role"), str) and
-                isinstance(record.get("identity"), Mapping),
-                f"{label} compiler subtool record is malformed")
-        language = str(record["language"])
-        role = str(record["role"])
-        tool_label = f"{language}-compiler-{role}"
-        require(role not in subtool_roles[language],
-                f"{label} compiler subtool role is duplicated")
-        subtool_roles[language][role] = tool_label
-        expected_tool_labels.add(tool_label)
-        identity = record["identity"]
-        tool = tool_by_label.get(tool_label)
-        require(tool is not None and
-                tool["source_path"] == identity.get("path") and
-                tool["source_sha256"] == identity.get("sha256") and
-                tool["size"] == identity.get("size"),
-                f"{label} immutable {tool_label} is not bound to closure")
-    expected_tool_labels.update({
-        "cmake", "command_shell", "wrapper_shell", "replay_git_identity",
-        "empty_dependency_include",
-    })
-    require(set(tool_by_label) == expected_tool_labels,
-            f"{label} immutable replay tool roles differ")
-    empty_dependency_tool = tool_by_label["empty_dependency_include"]
-    require(
-        empty_dependency_tool["sha256"] ==
-            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
-        empty_dependency_tool["source_sha256"] ==
-            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
-        empty_dependency_tool["size"] ==
-            len(REPLAY_EMPTY_DEPENDENCY_INCLUDE),
-        f"{label} immutable dependency include is not inert")
-    prefix_keys = {
-        "language", "path", "descriptor", "mode",
-        "mappings",
-    }
-    mapping_keys = {
-        "role", "target_descriptor", "source_path", "source_sha256",
-        "sealed_sha256", "sealed_size", "sealed_seals",
-    }
-    prefixes = replay["compiler_prefixes"]
-    require(isinstance(prefixes, list) and len(prefixes) == 2,
-            f"{label} compiler-prefix proof is malformed")
-    prefix_by_language: dict[str, Mapping[str, Any]] = {}
-    for raw in prefixes:
-        prefix = exact(raw, prefix_keys, "compiler-prefix record")
-        language = prefix["language"]
-        require(isinstance(language, str) and
-                language in ("c", "c++") and
-                language not in prefix_by_language and
-                isinstance(prefix["path"], str) and
-                Path(prefix["path"]).is_absolute() and
-                type(prefix["descriptor"]) is int and
-                prefix["descriptor"] >= 0 and
-                type(prefix["mode"]) is int and prefix["mode"] >= 0 and
-                stat.S_ISDIR(prefix["mode"]),
-                f"{label} compiler-prefix identity is malformed")
-        role_tools = dict(subtool_roles[language])
-        role_tools.setdefault("ld", "linker")
-        mappings = prefix["mappings"]
-        require(isinstance(mappings, list) and
-                len(mappings) == len(role_tools),
-                f"{label} {language} compiler-prefix mappings differ")
-        observed_roles = set()
-        for raw_mapping in mappings:
-            mapping = exact(
-                raw_mapping, mapping_keys,
-                f"{language} compiler-prefix mapping")
-            role = mapping["role"]
-            require(isinstance(role, str),
-                    f"{label} {language} compiler-prefix role differs")
-            tool_label = role_tools.get(role)
-            require(tool_label is not None and role not in observed_roles,
-                    f"{label} {language} compiler-prefix role differs")
-            observed_roles.add(role)
-            tool = tool_by_label[tool_label]
-            require(
-                mapping["target_descriptor"] ==
-                    tool["sealed_descriptor"] and
-                mapping["source_path"] == tool["source_path"] and
-                mapping["source_sha256"] == tool["source_sha256"] and
-                mapping["sealed_sha256"] == tool["sha256"] and
-                mapping["sealed_size"] == tool["size"] and
-                mapping["sealed_seals"] == tool["seals"],
-                f"{label} {language} compiler-prefix role {role} is "
-                "not bound to its immutable tool")
-        require(observed_roles == set(role_tools),
-                f"{label} {language} compiler-prefix roles differ")
-        require(mappings == sorted(
-                    mappings, key=lambda item: item["role"]),
-                f"{label} {language} compiler-prefix mappings are not "
-                "canonical")
-        prefix_by_language[language] = prefix
-    require(prefixes == sorted(prefixes, key=lambda item: item["language"]),
-            f"{label} compiler-prefix records are not canonical")
-
-    wrapper_keys = {
-        "label", "underlying_label", "logical_argv0",
-        "injected_arguments", "interpreter_descriptor",
-        "interpreter_sha256", "underlying_descriptor",
-        "underlying_source_path", "underlying_source_sha256",
-        "underlying_sealed_sha256", "script_sha256", "script_size",
-        "sealed_descriptor", "sealed_sha256", "sealed_size",
-        "sealed_seals",
-    }
-    wrapper_roles = {
-        "cc": "c_compiler",
-        "cxx": "compiler",
-        "ar": "archiver",
-        "ranlib": "ranlib",
-        "ld": "linker",
-        "cmake": "cmake",
-        "make": "make_program",
-    }
-    wrappers = replay["wrappers"]
-    require(isinstance(wrappers, list) and len(wrappers) == len(wrapper_roles),
-            f"{label} immutable replay wrappers are malformed")
-    wrapper_by_label: dict[str, Mapping[str, Any]] = {}
-    cache = candidate.get("validated_cache")
-    require(isinstance(cache, Mapping),
-            f"{label} closure lacks retained CMake cache semantics")
-    logical_wrapper_paths = {
-        "cc": cache.get("CMAKE_C_COMPILER"),
-        "cxx": cache.get("CMAKE_CXX_COMPILER"),
-        "ar": cache.get("CMAKE_AR"),
-        "ranlib": cache.get("CMAKE_RANLIB"),
-        "ld": cache.get("CMAKE_LINKER"),
-        "cmake": tool_by_label["cmake"]["source_path"],
-        "make": cache.get("CMAKE_MAKE_PROGRAM"),
-    }
-    for raw in wrappers:
-        wrapper = exact(raw, wrapper_keys, "immutable replay wrapper")
-        wrapper_label = wrapper["label"]
-        require(isinstance(wrapper_label, str),
-                f"{label} immutable wrapper role is malformed")
-        underlying_label = wrapper_roles.get(wrapper_label)
-        require(underlying_label is not None and
-                wrapper_label not in wrapper_by_label and
-                wrapper["underlying_label"] == underlying_label and
-                wrapper["logical_argv0"] ==
-                    logical_wrapper_paths[wrapper_label] and
-                isinstance(wrapper["injected_arguments"], list) and
-                all(isinstance(argument, str) and argument
-                    for argument in wrapper["injected_arguments"]),
-                f"{label} immutable wrapper role is malformed")
-        expected_arguments: list[str] = []
-        if wrapper_label == "cc":
-            expected_arguments = [
-                f"-B/proc/self/fd/"
-                f"{prefix_by_language['c']['descriptor']}/"]
-        elif wrapper_label == "cxx":
-            expected_arguments = [
-                f"-B/proc/self/fd/"
-                f"{prefix_by_language['c++']['descriptor']}/"]
-        require(wrapper["injected_arguments"] == expected_arguments,
-                f"{label} immutable {wrapper_label} wrapper arguments differ")
-        interpreter = tool_by_label["wrapper_shell"]
-        underlying = tool_by_label[underlying_label]
-        require(
-            wrapper["interpreter_descriptor"] ==
-                interpreter["sealed_descriptor"] and
-            wrapper["interpreter_sha256"] == interpreter["sha256"] and
-            wrapper["underlying_descriptor"] ==
-                underlying["sealed_descriptor"] and
-            wrapper["underlying_source_path"] ==
-                underlying["source_path"] and
-            wrapper["underlying_source_sha256"] ==
-                underlying["source_sha256"] and
-            wrapper["underlying_sealed_sha256"] ==
-                underlying["sha256"],
-            f"{label} immutable {wrapper_label} wrapper binding differs")
-        script = _replay_exec_wrapper_bytes(
-            wrapper["interpreter_descriptor"],
-            wrapper["logical_argv0"],
-            wrapper["underlying_descriptor"],
-            wrapper["injected_arguments"])
-        script_sha256 = hashlib.sha256(script).hexdigest()
-        require(
-            wrapper["script_sha256"] == script_sha256 and
-            wrapper["script_size"] == len(script) and
-            wrapper["sealed_sha256"] == script_sha256 and
-            wrapper["sealed_size"] == len(script) and
-            type(wrapper["sealed_descriptor"]) is int and
-            wrapper["sealed_descriptor"] >= 0 and
-            type(wrapper["sealed_seals"]) is int and
-            wrapper["sealed_seals"] & required_seals == required_seals,
-            f"{label} immutable {wrapper_label} wrapper bytes differ")
-        wrapper_by_label[wrapper_label] = wrapper
-    require(set(wrapper_by_label) == set(wrapper_roles) and
-            wrappers == sorted(wrappers, key=lambda item: item["label"]),
-            f"{label} immutable replay wrapper roles differ")
-
-    replacement_keys = {"label", "logical_path", "transport_path"}
-    replacements = replay["replacements"]
-    replacement_wrappers = {
-        "c-compiler": "cc", "cxx-compiler": "cxx", "archiver": "ar",
-        "ranlib": "ranlib", "linker": "ld", "cmake": "cmake",
-        "make": "make",
-    }
-    logical_replacements = {
-        "c-compiler": cache.get("CMAKE_C_COMPILER"),
-        "cxx-compiler": cache.get("CMAKE_CXX_COMPILER"),
-        "archiver": cache.get("CMAKE_AR"),
-        "ranlib": cache.get("CMAKE_RANLIB"),
-        "linker": cache.get("CMAKE_LINKER"),
-        "cmake": tool_by_label["cmake"]["source_path"],
-        "make": cache.get("CMAKE_MAKE_PROGRAM"),
-        "git": cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE"),
-        "dependency-includes":
-            "CMakeFiles/**/{compiler_,}depend.make",
-    }
-    replacement_by_label: dict[str, Mapping[str, Any]] = {}
-    require(isinstance(replacements, list),
-            f"{label} immutable replacement list is malformed")
-    for raw in replacements:
-        replacement = exact(
-            raw, replacement_keys, "immutable replay replacement")
-        replacement_label = replacement["label"]
-        require(isinstance(replacement_label, str) and
-                replacement_label in logical_replacements and
-                replacement_label not in replacement_by_label and
-                replacement["logical_path"] ==
-                    logical_replacements[replacement_label],
-                f"{label} immutable replay replacement identity differs")
-        if replacement_label == "git":
-            descriptor = tool_by_label[
-                "replay_git_identity"]["sealed_descriptor"]
-        elif replacement_label == "dependency-includes":
-            descriptor = tool_by_label[
-                "empty_dependency_include"]["sealed_descriptor"]
-        else:
-            descriptor = wrapper_by_label[
-                replacement_wrappers[replacement_label]][
-                    "sealed_descriptor"]
-        require(replacement["transport_path"] ==
-                f"/proc/self/fd/{descriptor}",
-                f"{label} immutable {replacement_label} transport differs")
-        replacement_by_label[replacement_label] = replacement
-    require(set(replacement_by_label) == set(logical_replacements) and
-            replacements == sorted(
-                replacements, key=lambda item: item["label"]),
-            f"{label} immutable replay replacement roles differ")
-
-    git_keys = {
-        "source_root", "commit", "tree", "dirty",
-        "interpreter_descriptor", "script_sha256", "script_size",
-        "sealed_descriptor", "sealed_sha256", "sealed_size",
-        "sealed_seals",
-    }
-    git_identity = exact(
-        replay["git_identity"], git_keys, "replay Git identity")
-    manifest = candidate.get("tracked_source_manifest")
-    require(isinstance(manifest, Mapping) and
-            isinstance(manifest.get("git"), Mapping) and
-            isinstance(git_identity["source_root"], str) and
-            Path(git_identity["source_root"]).is_absolute() and
-            git_identity["commit"] == manifest["git"].get("commit") and
-            git_identity["tree"] == manifest["git"].get("tree") and
-            git_identity["dirty"] == manifest["git"].get("dirty") and
-            git_identity["interpreter_descriptor"] ==
-                tool_by_label["wrapper_shell"]["sealed_descriptor"],
-            f"{label} replay Git semantic identity differs")
-    git_script, git_specification = _replay_git_identity_bytes(
-        Path(git_identity["source_root"]), manifest,
-        interpreter_descriptor=git_identity["interpreter_descriptor"])
-    require(all(git_identity[key] == value
-                for key, value in git_specification.items()),
-            f"{label} replay Git specification differs")
-    git_digest = hashlib.sha256(git_script).hexdigest()
-    replay_git_tool = tool_by_label["replay_git_identity"]
-    require(
-        git_identity["script_sha256"] == git_digest and
-        git_identity["script_size"] == len(git_script) and
-        git_identity["sealed_descriptor"] ==
-            replay_git_tool["sealed_descriptor"] and
-        git_identity["sealed_sha256"] == git_digest and
-        git_identity["sealed_size"] == len(git_script) and
-        git_identity["sealed_seals"] == replay_git_tool["seals"] and
-        replay_git_tool["sha256"] == git_digest,
-        f"{label} replay Git executable bytes differ")
-
     recipe_keys = {
         "schema", "file_count", "total_bytes", "required_labels",
         "replacement_counts", "rewrites", "retained_recipes",
@@ -6505,8 +8467,7 @@ def validate_reproducible_build_proof(
         "semantic_inputs",
     }
     recipe = exact(
-        replay["recipe_transport"], recipe_keys,
-        "replay recipe transport")
+        raw_recipe, recipe_keys, "replay recipe transport")
     require(recipe["schema"] == "leopard2-replay-recipe-transport/v2" and
             recipe["required_labels"] ==
                 sorted({"cxx-compiler", "archiver", "ranlib",
@@ -6667,10 +8628,1073 @@ def validate_reproducible_build_proof(
                 _replay_recipe_inventory_sha256(retained),
             f"{label} retained replay recipe path set differs")
 
+
+def verify_reproducible_candidate_build(
+    candidate: Mapping[str, Any], *, jobs: int | None = None,
+    inherited_descriptors: Sequence[int] = (),
+) -> dict[str, Any]:
+    """Reconfigure/build in an empty directory and compare all linked bytes."""
+    replay_contract = _reproducible_replay_contract(candidate)
+    require(
+        replay_contract["closure_schema"] ==
+            PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "clean replay generation requires a current production-build closure")
+    source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
+    target = str(candidate.get("executable_target", ""))
+    require(re.fullmatch(r"[A-Za-z0-9_.+][A-Za-z0-9_.+-]*", target)
+            is not None,
+            "candidate executable target is unsafe")
+    cache = candidate.get("validated_cache")
+    require(isinstance(cache, dict),
+            "candidate build has no retained CMake semantics")
+    cmake = Path("/usr/bin/cmake").resolve(strict=True)
+    shell = Path("/bin/sh").resolve(strict=True)
+    bash = Path("/bin/bash").resolve(strict=True)
+    copy_tool = Path("/usr/bin/cat").resolve(strict=True)
+    retained_manifest = candidate.get("tracked_source_manifest")
+    require(isinstance(retained_manifest, dict),
+            "candidate build has no retained tracked source tree")
+    if jobs is None:
+        jobs = min(128, len(os.sched_getaffinity(0)))
+    require(type(jobs) is int and 1 <= jobs <= 128,
+            "clean rebuild job count must be in 1..128")
+
+    workspace = Path(tempfile.mkdtemp(prefix="leopard2-proof-workspace-"))
+    temporary = workspace / "build"
+    private_source = workspace / "source"
+    private_tools = workspace / "tools"
+    private_tmp = workspace / "tmp"
+    private_stage = workspace / "stage"
+    try:
+        private_tmp.mkdir(mode=0o700)
+        private_stage.mkdir(mode=0o700)
+        with _RetainedPrivateSourceTree(
+                source, private_source,
+                inherited_descriptors=inherited_descriptors) as source_tree, \
+                ExitStack() as retained_tools:
+            require(source_tree.manifest == retained_manifest,
+                    "candidate tracked source tree changed before clean "
+                    "rebuild")
+            private_tools.mkdir(mode=0o700)
+            tool_records = (
+                ("CMAKE_C_COMPILER", "c_compiler", "candidate C compiler"),
+                ("CMAKE_CXX_COMPILER", "compiler",
+                 "candidate C++ compiler"),
+                ("CMAKE_AR", "archiver", "candidate archiver"),
+                ("CMAKE_RANLIB", "ranlib", "candidate ranlib"),
+                ("CMAKE_MAKE_PROGRAM", "make_program",
+                 "candidate make program"),
+                ("CMAKE_LINKER", "linker", "candidate linker"),
+                ("LEO2_BENCHMARK_GIT_EXECUTABLE", "benchmark_git",
+                 "candidate benchmark Git executable"),
+            )
+            tool_snapshots: dict[str, _RetainedFileSnapshot] = {}
+            for cache_name, record_name, label in tool_records:
+                path = cache.get(cache_name)
+                record = candidate.get(record_name)
+                require(isinstance(path, str) and path and
+                        isinstance(record, dict),
+                        f"candidate build lacks retained {label}")
+                snapshot = retained_tools.enter_context(
+                    _RetainedFileSnapshot(path, label))
+                require(snapshot.identity == record,
+                        f"{label} changed before clean rebuild")
+                snapshot.executable_descriptor
+                tool_snapshots[record_name] = snapshot
+            subtools = candidate.get("compiler_subtools")
+            require(isinstance(subtools, list) and subtools,
+                    "candidate build lacks retained compiler subtools")
+            subtool_snapshots: list[
+                tuple[Mapping[str, Any], _RetainedFileSnapshot]
+            ] = []
+            for index, record in enumerate(subtools):
+                require(isinstance(record, dict) and
+                        record.get("language") in ("c", "c++") and
+                        record.get("role") in (
+                            "cc1", "cc1plus", "as", "collect2", "ld") and
+                        isinstance(record.get("identity"), dict) and
+                        isinstance(record["identity"].get("path"), str),
+                        "candidate compiler subtool record is malformed")
+                snapshot = retained_tools.enter_context(
+                    _RetainedFileSnapshot(
+                        record["identity"]["path"],
+                        f"candidate compiler subtool {index}"))
+                require(snapshot.identity == record["identity"],
+                        "candidate compiler subtool changed before clean "
+                        "rebuild")
+                snapshot.executable_descriptor
+                subtool_snapshots.append((record, snapshot))
+            cmake_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(cmake, "clean replay CMake"))
+            shell_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(shell, "clean replay command shell"))
+            bash_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(bash, "clean replay Bash"))
+            copy_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(
+                    copy_tool, "clean replay artifact stream tool"))
+            for snapshot in (
+                    cmake_snapshot, shell_snapshot, bash_snapshot,
+                    copy_snapshot):
+                snapshot.executable_descriptor
+
+            configure = _reproducible_configure_argv(
+                private_source, temporary, cache)
+            configure_environment_overrides = {
+                "CC": str(cache["CMAKE_C_COMPILER"]),
+                "CXX": str(cache["CMAKE_CXX_COMPILER"]),
+                "TMPDIR": str(private_tmp),
+            }
+            configure_inherited_descriptors = (
+                *inherited_descriptors,
+                cmake_snapshot.executable_descriptor,
+            )
+            configure_invocation = _replay_invocation_record(
+                configure, executable_label="cmake",
+                executable=cmake_snapshot,
+                inherited_descriptors=configure_inherited_descriptors,
+                environment_overrides=configure_environment_overrides,
+                maximum_bytes=16 << 20, timeout=300,
+                write_sandbox_root=workspace)
+            _run(
+                configure, "runner-owned candidate configure",
+                maximum_bytes=16 << 20, timeout=300,
+                inherited_descriptors=configure_inherited_descriptors,
+                executable_descriptor=cmake_snapshot.executable_descriptor,
+                environment_overrides=configure_environment_overrides,
+                write_sandbox_root=workspace)
+            for snapshot in (
+                    *tool_snapshots.values(),
+                    *(item[1] for item in subtool_snapshots),
+                    cmake_snapshot, shell_snapshot, bash_snapshot,
+                    copy_snapshot):
+                snapshot.verify()
+
+            replay_git = private_tools / "git"
+            replay_git_bytes, replay_git_specification = \
+                _write_replay_git_identity(
+                    replay_git, private_source, source_tree.manifest,
+                    interpreter_descriptor=
+                        bash_snapshot.executable_descriptor)
+            replay_git_snapshot = retained_tools.enter_context(
+                _retain_exact_generated_executable(
+                    replay_git, replay_git_bytes,
+                    "clean replay Git identity executable"))
+            empty_dependency_include = (
+                private_tools / "empty-dependency-include")
+            empty_dependency_bytes = REPLAY_EMPTY_DEPENDENCY_INCLUDE
+            _write_private_executable(
+                empty_dependency_include, empty_dependency_bytes)
+            empty_dependency_snapshot = retained_tools.enter_context(
+                _retain_exact_generated_executable(
+                    empty_dependency_include, empty_dependency_bytes,
+                    "clean replay empty dependency include"))
+
+            prefix_guards: dict[str, _RetainedDirectoryTree] = {}
+            prefix_records = []
+            for language, directory_name in (
+                    ("c", "c-prefix"), ("c++", "cxx-prefix")):
+                prefix = private_tools / directory_name
+                prefix.mkdir(mode=0o700)
+                roles: dict[str, _RetainedFileSnapshot] = {}
+                for record, snapshot in subtool_snapshots:
+                    if record["language"] != language:
+                        continue
+                    role = str(record["role"])
+                    previous = roles.get(role)
+                    require(previous is None or
+                            previous.identity == snapshot.identity,
+                            f"candidate {language} compiler exposed "
+                            f"conflicting {role} subtools")
+                    roles.setdefault(role, snapshot)
+                roles.setdefault("ld", tool_snapshots["linker"])
+                mappings = []
+                expected_targets = {}
+                for role, snapshot in sorted(roles.items()):
+                    target_path = (
+                        f"/proc/self/fd/{snapshot.executable_descriptor}")
+                    os.symlink(
+                        target_path, prefix / role)
+                    require(os.readlink(prefix / role) == target_path,
+                            f"clean replay {language} compiler prefix "
+                            f"mapping changed for {role}")
+                    expected_targets[role] = target_path
+                    mappings.append({
+                        "role": role,
+                        "target_descriptor":
+                            snapshot.executable_descriptor,
+                        "source_path": snapshot.identity["path"],
+                        "source_sha256": snapshot.identity["sha256"],
+                        "sealed_sha256":
+                            snapshot.executable_identity["sha256"],
+                        "sealed_size": snapshot.executable_identity["size"],
+                        "sealed_seals": snapshot.executable_identity["seals"],
+                    })
+                guard = retained_tools.enter_context(
+                    _retain_exact_symlink_directory(
+                        prefix, expected_targets,
+                        f"clean replay {language} compiler prefix"))
+                prefix_guards[language] = guard
+                prefix_records.append({
+                    "language": language,
+                    "path": str(prefix),
+                    "descriptor": guard.descriptor,
+                    "mode": os.fstat(guard.descriptor).st_mode,
+                    "mappings": mappings,
+                })
+
+            wrapper_records = []
+            def retain_wrapper(
+                name: str, lexical: str,
+                executable: _RetainedFileSnapshot,
+                extra_arguments: Sequence[str] = (),
+                underlying_label: str = "",
+            ) -> _RetainedFileSnapshot:
+                path = private_tools / name
+                expected_script = _write_replay_exec_wrapper(
+                    path, bash_snapshot.executable_descriptor, lexical,
+                    executable.executable_descriptor, extra_arguments)
+                wrapper = retained_tools.enter_context(
+                    _retain_exact_generated_executable(
+                        path, expected_script,
+                        f"clean replay {name} wrapper"))
+                wrapper_records.append({
+                    "label": name,
+                    "underlying_label": underlying_label,
+                    "logical_argv0": lexical,
+                    "injected_arguments": list(extra_arguments),
+                    "interpreter_descriptor":
+                        bash_snapshot.executable_descriptor,
+                    "interpreter_sha256":
+                        bash_snapshot.executable_identity["sha256"],
+                    "underlying_descriptor":
+                        executable.executable_descriptor,
+                    "underlying_source_path": executable.identity["path"],
+                    "underlying_source_sha256":
+                        executable.identity["sha256"],
+                    "underlying_sealed_sha256":
+                        executable.executable_identity["sha256"],
+                    "script_sha256":
+                        hashlib.sha256(expected_script).hexdigest(),
+                    "script_size": len(expected_script),
+                    "sealed_descriptor": wrapper.executable_descriptor,
+                    "sealed_sha256":
+                        wrapper.executable_identity["sha256"],
+                    "sealed_size": wrapper.executable_identity["size"],
+                    "sealed_seals": wrapper.executable_identity["seals"],
+                })
+                return wrapper
+
+            c_wrapper = retain_wrapper(
+                "cc", str(cache["CMAKE_C_COMPILER"]),
+                tool_snapshots["c_compiler"],
+                (f"-B/proc/self/fd/"
+                 f"{prefix_guards['c'].descriptor}/",),
+                "c_compiler")
+            cxx_wrapper = retain_wrapper(
+                "cxx", str(cache["CMAKE_CXX_COMPILER"]),
+                tool_snapshots["compiler"],
+                (f"-B/proc/self/fd/"
+                 f"{prefix_guards['c++'].descriptor}/",),
+                "compiler")
+            archiver_wrapper = retain_wrapper(
+                "ar", str(cache["CMAKE_AR"]),
+                tool_snapshots["archiver"],
+                underlying_label="archiver")
+            ranlib_wrapper = retain_wrapper(
+                "ranlib", str(cache["CMAKE_RANLIB"]),
+                tool_snapshots["ranlib"],
+                underlying_label="ranlib")
+            linker_wrapper = retain_wrapper(
+                "ld", str(cache["CMAKE_LINKER"]),
+                tool_snapshots["linker"],
+                underlying_label="linker")
+            cmake_wrapper = retain_wrapper(
+                "cmake", str(cmake), cmake_snapshot,
+                underlying_label="cmake")
+            make_wrapper = retain_wrapper(
+                "make", str(cache["CMAKE_MAKE_PROGRAM"]),
+                tool_snapshots["make_program"],
+                underlying_label="make_program")
+            copy_wrapper = retain_wrapper(
+                "copy", str(copy_tool), copy_snapshot,
+                underlying_label="copy")
+
+            replacements = {
+                "c-compiler": (
+                    str(cache["CMAKE_C_COMPILER"]),
+                    f"/proc/self/fd/{c_wrapper.executable_descriptor}"),
+                "cxx-compiler": (
+                    str(cache["CMAKE_CXX_COMPILER"]),
+                    f"/proc/self/fd/{cxx_wrapper.executable_descriptor}"),
+                "archiver": (
+                    str(cache["CMAKE_AR"]),
+                    f"/proc/self/fd/{archiver_wrapper.executable_descriptor}"),
+                "ranlib": (
+                    str(cache["CMAKE_RANLIB"]),
+                    f"/proc/self/fd/{ranlib_wrapper.executable_descriptor}"),
+                "linker": (
+                    str(cache["CMAKE_LINKER"]),
+                    f"/proc/self/fd/{linker_wrapper.executable_descriptor}"),
+                "cmake": (
+                    str(cmake),
+                    f"/proc/self/fd/{cmake_wrapper.executable_descriptor}"),
+                # CMake's Unix Makefiles normally spell recursive invocations
+                # as $(MAKE), but retain this exact lexical replacement for
+                # generator versions that emit CMAKE_MAKE_PROGRAM directly.
+                "make": (
+                    str(cache["CMAKE_MAKE_PROGRAM"]),
+                    f"/proc/self/fd/{make_wrapper.executable_descriptor}"),
+                "git": (
+                    str(cache["LEO2_BENCHMARK_GIT_EXECUTABLE"]),
+                    f"/proc/self/fd/"
+                    f"{replay_git_snapshot.executable_descriptor}"),
+                "dependency-includes": (
+                    "CMakeFiles/**/{compiler_,}depend.make",
+                    f"/proc/self/fd/"
+                    f"{empty_dependency_snapshot.executable_descriptor}"),
+            }
+            stage_outputs = _canonical_replay_output_paths(
+                candidate, private_source, private_stage)
+            stage_owner = _OwnedDescriptor()
+            stage_descriptor = stage_owner.open(
+                private_stage,
+                getattr(os, "O_PATH", os.O_RDONLY) |
+                getattr(os, "O_CLOEXEC", 0) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_NOFOLLOW", 0))
+            retained_tools.callback(stage_owner.close)
+            execution_stage_root = f"/proc/self/fd/{stage_descriptor}"
+            stage_artifacts = [
+                path for path in stage_outputs
+                if path.relative_to(private_stage).as_posix() !=
+                    _CANONICAL_REPLAY_PLAN_RELATIVE
+            ]
+            require(stage_artifacts,
+                    "canonical replay private artifact closure is empty")
+            artifact_sinks: dict[str, _ReplayArtifactSink] = {}
+            for stage_path in stage_artifacts:
+                relative = stage_path.relative_to(private_stage).as_posix()
+                final_path = temporary / relative
+                artifact_sinks[relative] = retained_tools.enter_context(
+                    _ReplayArtifactSink(
+                        final_path, f"canonical replay artifact {relative}"))
+            inventory_path = private_tools / "verify-output-inventory"
+            inventory_bytes = _private_replay_inventory_bytes(
+                bash_snapshot.executable_descriptor,
+                sorted(artifact_sinks))
+            _write_private_executable(inventory_path, inventory_bytes)
+            inventory_snapshot = retained_tools.enter_context(
+                _retain_exact_generated_executable(
+                    inventory_path, inventory_bytes,
+                    "clean replay private-output inventory verifier"))
+            artifact_transports = {
+                relative: sink.proc_path
+                for relative, sink in artifact_sinks.items()
+            }
+            transport_descriptors = {
+                *inherited_descriptors,
+                *(snapshot.executable_descriptor
+                  for snapshot in tool_snapshots.values()),
+                *(snapshot.executable_descriptor
+                  for _record, snapshot in subtool_snapshots),
+                cmake_snapshot.executable_descriptor,
+                shell_snapshot.executable_descriptor,
+                bash_snapshot.executable_descriptor,
+                copy_snapshot.executable_descriptor,
+                replay_git_snapshot.executable_descriptor,
+                empty_dependency_snapshot.executable_descriptor,
+                inventory_snapshot.executable_descriptor,
+                *(guard.descriptor for guard in prefix_guards.values()),
+                c_wrapper.executable_descriptor,
+                cxx_wrapper.executable_descriptor,
+                archiver_wrapper.executable_descriptor,
+                ranlib_wrapper.executable_descriptor,
+                linker_wrapper.executable_descriptor,
+                cmake_wrapper.executable_descriptor,
+                make_wrapper.executable_descriptor,
+                copy_wrapper.executable_descriptor,
+                *(sink.descriptor for sink in artifact_sinks.values()),
+                stage_descriptor,
+            }
+            canonical_transports = {
+                "cxx":
+                    f"/proc/self/fd/{cxx_wrapper.executable_descriptor}",
+                "archiver":
+                    f"/proc/self/fd/{archiver_wrapper.executable_descriptor}",
+                "ranlib":
+                    f"/proc/self/fd/{ranlib_wrapper.executable_descriptor}",
+                "cmake":
+                    f"/proc/self/fd/{cmake_wrapper.executable_descriptor}",
+                "git":
+                    f"/proc/self/fd/"
+                    f"{replay_git_snapshot.executable_descriptor}",
+                "copy":
+                    f"/proc/self/fd/{copy_wrapper.executable_descriptor}",
+                "inventory":
+                    f"/proc/self/fd/{inventory_snapshot.executable_descriptor}",
+            }
+            plan_content, plan_counts = _canonical_replay_makefile_bytes(
+                candidate, private_source, private_stage,
+                canonical_transports, artifact_transports,
+                execution_build_root=execution_stage_root)
+            plan_path = temporary / _CANONICAL_REPLAY_PLAN_RELATIVE
+            _write_private_executable(plan_path, plan_content)
+            plan_snapshot = retained_tools.enter_context(
+                _RetainedFileSnapshot(
+                    plan_path, "canonical clean replay build plan"))
+            plan_descriptor = plan_snapshot.executable_descriptor
+            output_topology = _retain_canonical_replay_output_topology(
+                candidate, private_source, temporary, retained_tools)
+            recipe_transport_manifest = _canonical_replay_plan_manifest(
+                candidate, plan_path, plan_content, plan_snapshot, plan_counts,
+                artifact_transports, stage_descriptor)
+            transport_descriptors.add(plan_descriptor)
+            build_command = (
+                str(cache["CMAKE_MAKE_PROGRAM"]),
+                "-C", execution_stage_root,
+                "-f", f"/proc/self/fd/{plan_descriptor}",
+                "-j", str(jobs),
+                f"SHELL=/proc/self/fd/"
+                f"{bash_snapshot.executable_descriptor}",
+                "--", f"CMakeFiles/{target}.dir/replay")
+            stage_directories = sorted({
+                parent.as_posix()
+                for relative in artifact_sinks
+                for parent in (Path(relative).parent,)
+                if parent.as_posix() != "."
+            })
+            build_invocation = _replay_invocation_record(
+                build_command, executable_label="make_program",
+                executable=tool_snapshots["make_program"],
+                inherited_descriptors=tuple(transport_descriptors),
+                environment_overrides={"TMPDIR": str(private_tmp)},
+                maximum_bytes=32 << 20, timeout=1800,
+                write_sandbox_root=workspace,
+                write_sandbox_descriptors=tuple(
+                    sink.descriptor for sink in artifact_sinks.values()),
+                private_tmpfs_root=private_stage,
+                private_tmpfs_directories=stage_directories,
+                private_tmpfs_descriptor=stage_descriptor)
+            _run(
+                build_command,
+                "runner-owned candidate build",
+                maximum_bytes=32 << 20, timeout=1800,
+                inherited_descriptors=tuple(transport_descriptors),
+                executable_descriptor=tool_snapshots[
+                    "make_program"].executable_descriptor,
+                environment_overrides={"TMPDIR": str(private_tmp)},
+                write_sandbox_root=workspace,
+                write_sandbox_descriptors=tuple(
+                    sink.descriptor for sink in artifact_sinks.values()),
+                private_tmpfs_root=private_stage,
+                private_tmpfs_directories=stage_directories,
+                private_tmpfs_descriptor=stage_descriptor)
+            header_relative = (
+                "generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h")
+            for relative, sink in artifact_sinks.items():
+                sink.seal(
+                    executable=(relative == target),
+                    allow_empty=(relative == header_relative + ".lock"))
+            plan_snapshot.verify()
+            _verify_canonical_replay_output_topology(
+                output_topology, require_outputs=True)
+            final_sinks = {
+                sink.logical_path: sink for sink in artifact_sinks.values()
+            }
+            for record in output_topology["outputs"]:
+                output = record["path"]
+                if output == plan_path:
+                    continue
+                sink = final_sinks.get(output)
+                require(sink is not None,
+                        f"canonical replay output has no sealed artifact: "
+                        f"{output}")
+                descriptor = record["file"].fileno()
+                os.ftruncate(descriptor, 0)
+                os.lseek(descriptor, 0, os.SEEK_SET)
+                view = memoryview(sink.content)
+                while view:
+                    written = os.write(descriptor, view)
+                    require(written > 0,
+                            f"canonical replay output materialization "
+                            f"stalled: {output}")
+                    view = view[written:]
+                os.fsync(descriptor)
+            _verify_canonical_replay_output_topology(
+                output_topology, require_outputs=True)
+            rebuilt = candidate_build_provenance(
+                temporary, private_source, temporary / target, target,
+                inherited_descriptors=inherited_descriptors,
+                tracked_source_manifest=source_tree.manifest,
+                logical_source_root=source,
+                sealed_artifacts=final_sinks)
+            result = compare_reproducible_builds(candidate, rebuilt)
+            _verify_canonical_replay_output_topology(
+                output_topology, require_outputs=True)
+            result["schema"] = REPRODUCIBLE_BUILD_PROOF_SCHEMA
+            immutable_tools = []
+            for label, snapshot in (
+                    *tuple(tool_snapshots.items()),
+                    ("cmake", cmake_snapshot),
+                    ("command_shell", shell_snapshot),
+                    ("wrapper_shell", bash_snapshot),
+                    ("copy", copy_snapshot),
+                    ("replay_git_identity", replay_git_snapshot),
+                    ("empty_dependency_include",
+                     empty_dependency_snapshot),
+                    ("private_output_inventory", inventory_snapshot)):
+                immutable_tools.append({
+                    "label": label,
+                    "source_path": snapshot.identity["path"],
+                    "sealed_descriptor": snapshot.executable_descriptor,
+                    **snapshot.executable_identity,
+                })
+            for record, snapshot in subtool_snapshots:
+                immutable_tools.append({
+                    "label": (
+                        f"{record['language']}-compiler-"
+                        f"{record['role']}"),
+                    "source_path": snapshot.identity["path"],
+                    "sealed_descriptor": snapshot.executable_descriptor,
+                    **snapshot.executable_identity,
+                })
+            result["immutable_replay"] = {
+                "schema": "leopard2-immutable-replay-tools/v2",
+                "tools": sorted(
+                    immutable_tools,
+                    key=lambda item: (item["label"], item["source_path"])),
+                "wrappers": sorted(
+                    wrapper_records, key=lambda item: item["label"]),
+                "compiler_prefixes": sorted(
+                    prefix_records, key=lambda item: item["language"]),
+                "recipe_transport": recipe_transport_manifest,
+                "artifacts": [
+                    {
+                        "path": relative,
+                        "sealed_descriptor": sink.descriptor,
+                        "sha256": sink.identity["sha256"],
+                        "size": sink.identity["size"],
+                        "mode": sink.identity["mode"],
+                        "seals": fcntl.fcntl(
+                            sink.descriptor,
+                            getattr(fcntl, "F_GET_SEALS", 1034)),
+                    }
+                    for relative, sink in sorted(artifact_sinks.items())
+                ],
+                "git_identity": {
+                    **replay_git_specification,
+                    "script_sha256":
+                        hashlib.sha256(replay_git_bytes).hexdigest(),
+                    "script_size": len(replay_git_bytes),
+                    "sealed_descriptor":
+                        replay_git_snapshot.executable_descriptor,
+                    "sealed_sha256":
+                        replay_git_snapshot.executable_identity["sha256"],
+                    "sealed_size":
+                        replay_git_snapshot.executable_identity["size"],
+                    "sealed_seals":
+                        replay_git_snapshot.executable_identity["seals"],
+                },
+                "invocations": {
+                    "configure": configure_invocation,
+                    "build": build_invocation,
+                },
+                "replacements": [
+                    {
+                        "label": label,
+                        "logical_path": logical,
+                        "transport_path": transport,
+                    }
+                    for label, (logical, transport) in sorted(
+                        replacements.items())
+                ],
+            }
+            source_tree.verify()
+            validate_reproducible_build_proof(
+                result, candidate, label="generated candidate")
+            # ExitStack and source_tree now revalidate every held tool and
+            # source pathname, including the inotify event history that makes
+            # an A -> B -> A replacement observable.
+            return result
+    finally:
+        shutil.rmtree(workspace, ignore_errors=True)
+
+
+def validate_reproducible_build_proof(
+    proof: Any, candidate: Mapping[str, Any], *,
+    label: str = "candidate",
+) -> None:
+    """Strictly validate one exact current or historical replay contract."""
+
+    def exact(value: Any, keys: set[str], what: str) -> Mapping[str, Any]:
+        require(isinstance(value, Mapping) and set(value) == keys,
+                f"{label} {what} is malformed")
+        return value
+
+    def digest(value: Any, what: str) -> str:
+        require(isinstance(value, str) and
+                re.fullmatch(r"[0-9a-f]{64}", value) is not None,
+                f"{label} {what} digest is malformed")
+        return value
+
+    contract = _reproducible_replay_contract(candidate)
+    expected_core = compare_reproducible_builds(candidate, candidate)
+    require(expected_core.get("schema") == contract["proof_schema"],
+            f"{label} clean reproducible-build core schema differs")
+    proof_map = exact(
+        proof, {*expected_core, "immutable_replay"},
+        "clean reproducible-build proof")
+    for key, expected in expected_core.items():
+        require(proof_map[key] == expected,
+                f"{label} clean reproducible-build proof field {key!r} "
+                "is not bound to its closure")
+
+    replay_keys = {
+        "schema", "tools", "wrappers", "compiler_prefixes",
+        "recipe_transport", "git_identity", "invocations",
+        "replacements",
+    }
+    if contract["closure_schema"] == PRODUCTION_BUILD_CLOSURE_SCHEMA:
+        replay_keys.add("artifacts")
+    replay = exact(
+        proof_map["immutable_replay"],
+        replay_keys,
+        "immutable replay proof")
+    require(replay["schema"] == "leopard2-immutable-replay-tools/v2",
+            f"{label} immutable replay schema is unsupported")
+
+    tool_keys = {
+        "label", "source_path", "sealed_descriptor", "sha256", "size",
+        "seals", "source_sha256",
+    }
+    tools = replay["tools"]
+    require(isinstance(tools, list) and tools,
+            f"{label} immutable replay tool list is empty")
+    tool_by_label: dict[str, Mapping[str, Any]] = {}
+    required_seals = (
+        getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+        getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+        getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+        getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+    for index, raw in enumerate(tools):
+        tool = exact(raw, tool_keys, f"immutable tool {index}")
+        tool_label = tool["label"]
+        require(isinstance(tool_label, str) and tool_label and
+                tool_label not in tool_by_label and
+                isinstance(tool["source_path"], str) and
+                Path(tool["source_path"]).is_absolute() and
+                type(tool["sealed_descriptor"]) is int and
+                tool["sealed_descriptor"] >= 0 and
+                type(tool["size"]) is int and tool["size"] > 0 and
+                type(tool["seals"]) is int and
+                tool["seals"] & required_seals == required_seals,
+                f"{label} immutable tool {index} identity is malformed")
+        digest(tool["sha256"], f"immutable tool {tool_label} sealed")
+        digest(
+            tool["source_sha256"],
+            f"immutable tool {tool_label} source")
+        require(tool["sha256"] == tool["source_sha256"],
+                f"{label} immutable tool {tool_label} differs from source")
+        tool_by_label[tool_label] = tool
+    require(tools == sorted(
+                tools, key=lambda item: (item["label"], item["source_path"])),
+            f"{label} immutable replay tools are not canonical")
+
+    base_tool_labels = {
+        "c_compiler": "c_compiler",
+        "compiler": "compiler",
+        "archiver": "archiver",
+        "ranlib": "ranlib",
+        "make_program": "make_program",
+        "linker": "linker",
+        "benchmark_git": "benchmark_git",
+    }
+    expected_tool_labels = set(base_tool_labels)
+    for tool_label, closure_key in base_tool_labels.items():
+        identity = candidate.get(closure_key)
+        require(isinstance(identity, Mapping),
+                f"{label} closure lacks {closure_key}")
+        tool = tool_by_label.get(tool_label)
+        require(tool is not None and
+                tool["source_path"] == identity.get("path") and
+                tool["source_sha256"] == identity.get("sha256") and
+                tool["size"] == identity.get("size"),
+                f"{label} immutable {tool_label} is not bound to closure")
+    subtool_roles: dict[str, dict[str, str]] = {"c": {}, "c++": {}}
+    subtools = candidate.get("compiler_subtools")
+    require(isinstance(subtools, list) and subtools,
+            f"{label} closure lacks compiler subtools")
+    for record in subtools:
+        require(isinstance(record, Mapping) and
+                record.get("language") in subtool_roles and
+                isinstance(record.get("role"), str) and
+                isinstance(record.get("identity"), Mapping),
+                f"{label} compiler subtool record is malformed")
+        language = str(record["language"])
+        role = str(record["role"])
+        tool_label = f"{language}-compiler-{role}"
+        require(role not in subtool_roles[language],
+                f"{label} compiler subtool role is duplicated")
+        subtool_roles[language][role] = tool_label
+        expected_tool_labels.add(tool_label)
+        identity = record["identity"]
+        tool = tool_by_label.get(tool_label)
+        require(tool is not None and
+                tool["source_path"] == identity.get("path") and
+                tool["source_sha256"] == identity.get("sha256") and
+                tool["size"] == identity.get("size"),
+                f"{label} immutable {tool_label} is not bound to closure")
+    expected_tool_labels.update({
+        "cmake", "command_shell", "wrapper_shell", "replay_git_identity",
+        "empty_dependency_include",
+    })
+    if contract["closure_schema"] == PRODUCTION_BUILD_CLOSURE_SCHEMA:
+        expected_tool_labels.update(("copy", "private_output_inventory"))
+    require(set(tool_by_label) == expected_tool_labels,
+            f"{label} immutable replay tool roles differ")
+    empty_dependency_tool = tool_by_label["empty_dependency_include"]
+    require(
+        empty_dependency_tool["sha256"] ==
+            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
+        empty_dependency_tool["source_sha256"] ==
+            hashlib.sha256(REPLAY_EMPTY_DEPENDENCY_INCLUDE).hexdigest() and
+        empty_dependency_tool["size"] ==
+            len(REPLAY_EMPTY_DEPENDENCY_INCLUDE),
+        f"{label} immutable dependency include is not inert")
+    prefix_keys = {
+        "language", "path", "descriptor", "mode",
+        "mappings",
+    }
+    mapping_keys = {
+        "role", "target_descriptor", "source_path", "source_sha256",
+        "sealed_sha256", "sealed_size", "sealed_seals",
+    }
+    prefixes = replay["compiler_prefixes"]
+    require(isinstance(prefixes, list) and len(prefixes) == 2,
+            f"{label} compiler-prefix proof is malformed")
+    prefix_by_language: dict[str, Mapping[str, Any]] = {}
+    for raw in prefixes:
+        prefix = exact(raw, prefix_keys, "compiler-prefix record")
+        language = prefix["language"]
+        require(isinstance(language, str) and
+                language in ("c", "c++") and
+                language not in prefix_by_language and
+                isinstance(prefix["path"], str) and
+                Path(prefix["path"]).is_absolute() and
+                type(prefix["descriptor"]) is int and
+                prefix["descriptor"] >= 0 and
+                type(prefix["mode"]) is int and prefix["mode"] >= 0 and
+                stat.S_ISDIR(prefix["mode"]),
+                f"{label} compiler-prefix identity is malformed")
+        role_tools = dict(subtool_roles[language])
+        role_tools.setdefault("ld", "linker")
+        mappings = prefix["mappings"]
+        require(isinstance(mappings, list) and
+                len(mappings) == len(role_tools),
+                f"{label} {language} compiler-prefix mappings differ")
+        observed_roles = set()
+        for raw_mapping in mappings:
+            mapping = exact(
+                raw_mapping, mapping_keys,
+                f"{language} compiler-prefix mapping")
+            role = mapping["role"]
+            require(isinstance(role, str),
+                    f"{label} {language} compiler-prefix role differs")
+            tool_label = role_tools.get(role)
+            require(tool_label is not None and role not in observed_roles,
+                    f"{label} {language} compiler-prefix role differs")
+            observed_roles.add(role)
+            tool = tool_by_label[tool_label]
+            require(
+                mapping["target_descriptor"] ==
+                    tool["sealed_descriptor"] and
+                mapping["source_path"] == tool["source_path"] and
+                mapping["source_sha256"] == tool["source_sha256"] and
+                mapping["sealed_sha256"] == tool["sha256"] and
+                mapping["sealed_size"] == tool["size"] and
+                mapping["sealed_seals"] == tool["seals"],
+                f"{label} {language} compiler-prefix role {role} is "
+                "not bound to its immutable tool")
+        require(observed_roles == set(role_tools),
+                f"{label} {language} compiler-prefix roles differ")
+        require(mappings == sorted(
+                    mappings, key=lambda item: item["role"]),
+                f"{label} {language} compiler-prefix mappings are not "
+                "canonical")
+        prefix_by_language[language] = prefix
+    require(prefixes == sorted(prefixes, key=lambda item: item["language"]),
+            f"{label} compiler-prefix records are not canonical")
+
+    wrapper_keys = {
+        "label", "underlying_label", "logical_argv0",
+        "injected_arguments", "interpreter_descriptor",
+        "interpreter_sha256", "underlying_descriptor",
+        "underlying_source_path", "underlying_source_sha256",
+        "underlying_sealed_sha256", "script_sha256", "script_size",
+        "sealed_descriptor", "sealed_sha256", "sealed_size",
+        "sealed_seals",
+    }
+    wrapper_roles = {
+        "cc": "c_compiler",
+        "cxx": "compiler",
+        "ar": "archiver",
+        "ranlib": "ranlib",
+        "ld": "linker",
+        "cmake": "cmake",
+        "make": "make_program",
+    }
+    if contract["closure_schema"] == PRODUCTION_BUILD_CLOSURE_SCHEMA:
+        wrapper_roles["copy"] = "copy"
+    wrappers = replay["wrappers"]
+    require(isinstance(wrappers, list) and len(wrappers) == len(wrapper_roles),
+            f"{label} immutable replay wrappers are malformed")
+    wrapper_by_label: dict[str, Mapping[str, Any]] = {}
+    cache = candidate.get("validated_cache")
+    require(isinstance(cache, Mapping),
+            f"{label} closure lacks retained CMake cache semantics")
+    logical_wrapper_paths = {
+        "cc": cache.get("CMAKE_C_COMPILER"),
+        "cxx": cache.get("CMAKE_CXX_COMPILER"),
+        "ar": cache.get("CMAKE_AR"),
+        "ranlib": cache.get("CMAKE_RANLIB"),
+        "ld": cache.get("CMAKE_LINKER"),
+        "cmake": tool_by_label["cmake"]["source_path"],
+        "make": cache.get("CMAKE_MAKE_PROGRAM"),
+    }
+    if "copy" in wrapper_roles:
+        logical_wrapper_paths["copy"] = tool_by_label["copy"]["source_path"]
+    for raw in wrappers:
+        wrapper = exact(raw, wrapper_keys, "immutable replay wrapper")
+        wrapper_label = wrapper["label"]
+        require(isinstance(wrapper_label, str),
+                f"{label} immutable wrapper role is malformed")
+        underlying_label = wrapper_roles.get(wrapper_label)
+        require(underlying_label is not None and
+                wrapper_label not in wrapper_by_label and
+                wrapper["underlying_label"] == underlying_label and
+                wrapper["logical_argv0"] ==
+                    logical_wrapper_paths[wrapper_label] and
+                isinstance(wrapper["injected_arguments"], list) and
+                all(isinstance(argument, str) and argument
+                    for argument in wrapper["injected_arguments"]),
+                f"{label} immutable wrapper role is malformed")
+        expected_arguments: list[str] = []
+        if wrapper_label == "cc":
+            expected_arguments = [
+                f"-B/proc/self/fd/"
+                f"{prefix_by_language['c']['descriptor']}/"]
+        elif wrapper_label == "cxx":
+            expected_arguments = [
+                f"-B/proc/self/fd/"
+                f"{prefix_by_language['c++']['descriptor']}/"]
+        require(wrapper["injected_arguments"] == expected_arguments,
+                f"{label} immutable {wrapper_label} wrapper arguments differ")
+        interpreter = tool_by_label["wrapper_shell"]
+        underlying = tool_by_label[underlying_label]
+        require(
+            wrapper["interpreter_descriptor"] ==
+                interpreter["sealed_descriptor"] and
+            wrapper["interpreter_sha256"] == interpreter["sha256"] and
+            wrapper["underlying_descriptor"] ==
+                underlying["sealed_descriptor"] and
+            wrapper["underlying_source_path"] ==
+                underlying["source_path"] and
+            wrapper["underlying_source_sha256"] ==
+                underlying["source_sha256"] and
+            wrapper["underlying_sealed_sha256"] ==
+                underlying["sha256"],
+            f"{label} immutable {wrapper_label} wrapper binding differs")
+        script = _replay_exec_wrapper_bytes(
+            wrapper["interpreter_descriptor"],
+            wrapper["logical_argv0"],
+            wrapper["underlying_descriptor"],
+            wrapper["injected_arguments"])
+        script_sha256 = hashlib.sha256(script).hexdigest()
+        require(
+            wrapper["script_sha256"] == script_sha256 and
+            wrapper["script_size"] == len(script) and
+            wrapper["sealed_sha256"] == script_sha256 and
+            wrapper["sealed_size"] == len(script) and
+            type(wrapper["sealed_descriptor"]) is int and
+            wrapper["sealed_descriptor"] >= 0 and
+            type(wrapper["sealed_seals"]) is int and
+            wrapper["sealed_seals"] & required_seals == required_seals,
+            f"{label} immutable {wrapper_label} wrapper bytes differ")
+        wrapper_by_label[wrapper_label] = wrapper
+    require(set(wrapper_by_label) == set(wrapper_roles) and
+            wrappers == sorted(wrappers, key=lambda item: item["label"]),
+            f"{label} immutable replay wrapper roles differ")
+
+    replacement_keys = {"label", "logical_path", "transport_path"}
+    replacements = replay["replacements"]
+    replacement_wrappers = {
+        "c-compiler": "cc", "cxx-compiler": "cxx", "archiver": "ar",
+        "ranlib": "ranlib", "linker": "ld", "cmake": "cmake",
+        "make": "make",
+    }
+    logical_replacements = {
+        "c-compiler": cache.get("CMAKE_C_COMPILER"),
+        "cxx-compiler": cache.get("CMAKE_CXX_COMPILER"),
+        "archiver": cache.get("CMAKE_AR"),
+        "ranlib": cache.get("CMAKE_RANLIB"),
+        "linker": cache.get("CMAKE_LINKER"),
+        "cmake": tool_by_label["cmake"]["source_path"],
+        "make": cache.get("CMAKE_MAKE_PROGRAM"),
+        "git": cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE"),
+        "dependency-includes":
+            "CMakeFiles/**/{compiler_,}depend.make",
+    }
+    replacement_by_label: dict[str, Mapping[str, Any]] = {}
+    require(isinstance(replacements, list),
+            f"{label} immutable replacement list is malformed")
+    for raw in replacements:
+        replacement = exact(
+            raw, replacement_keys, "immutable replay replacement")
+        replacement_label = replacement["label"]
+        require(isinstance(replacement_label, str) and
+                replacement_label in logical_replacements and
+                replacement_label not in replacement_by_label and
+                replacement["logical_path"] ==
+                    logical_replacements[replacement_label],
+                f"{label} immutable replay replacement identity differs")
+        if replacement_label == "git":
+            descriptor = tool_by_label[
+                "replay_git_identity"]["sealed_descriptor"]
+        elif replacement_label == "dependency-includes":
+            descriptor = tool_by_label[
+                "empty_dependency_include"]["sealed_descriptor"]
+        else:
+            descriptor = wrapper_by_label[
+                replacement_wrappers[replacement_label]][
+                    "sealed_descriptor"]
+        require(replacement["transport_path"] ==
+                f"/proc/self/fd/{descriptor}",
+                f"{label} immutable {replacement_label} transport differs")
+        replacement_by_label[replacement_label] = replacement
+    require(set(replacement_by_label) == set(logical_replacements) and
+            replacements == sorted(
+                replacements, key=lambda item: item["label"]),
+            f"{label} immutable replay replacement roles differ")
+
+    git_keys = {
+        "source_root", "commit", "tree", "dirty",
+        "interpreter_descriptor", "script_sha256", "script_size",
+        "sealed_descriptor", "sealed_sha256", "sealed_size",
+        "sealed_seals",
+    }
+    git_identity = exact(
+        replay["git_identity"], git_keys, "replay Git identity")
+    manifest = candidate.get("tracked_source_manifest")
+    require(isinstance(manifest, Mapping) and
+            isinstance(manifest.get("git"), Mapping) and
+            isinstance(git_identity["source_root"], str) and
+            Path(git_identity["source_root"]).is_absolute() and
+            git_identity["commit"] == manifest["git"].get("commit") and
+            git_identity["tree"] == manifest["git"].get("tree") and
+            git_identity["dirty"] == manifest["git"].get("dirty") and
+            git_identity["interpreter_descriptor"] ==
+                tool_by_label["wrapper_shell"]["sealed_descriptor"],
+            f"{label} replay Git semantic identity differs")
+    git_script, git_specification = _replay_git_identity_bytes(
+        Path(git_identity["source_root"]), manifest,
+        interpreter_descriptor=git_identity["interpreter_descriptor"])
+    require(all(git_identity[key] == value
+                for key, value in git_specification.items()),
+            f"{label} replay Git specification differs")
+    git_digest = hashlib.sha256(git_script).hexdigest()
+    replay_git_tool = tool_by_label["replay_git_identity"]
+    require(
+        git_identity["script_sha256"] == git_digest and
+        git_identity["script_size"] == len(git_script) and
+        git_identity["sealed_descriptor"] ==
+            replay_git_tool["sealed_descriptor"] and
+        git_identity["sealed_sha256"] == git_digest and
+        git_identity["sealed_size"] == len(git_script) and
+        git_identity["sealed_seals"] == replay_git_tool["seals"] and
+        replay_git_tool["sha256"] == git_digest,
+        f"{label} replay Git executable bytes differ")
+
+    recipe_transport = replay["recipe_transport"]
+    require(isinstance(recipe_transport, Mapping) and
+            isinstance(recipe_transport.get("schema"), str),
+            f"{label} replay recipe transport is malformed")
+    _require_reproducible_replay_artifact_contract(
+        candidate, proof_map["schema"], recipe_transport["schema"])
+    canonical_recipe = (
+        recipe_transport
+        if recipe_transport["schema"] == CANONICAL_REPLAY_RECIPE_SCHEMA
+        else None)
+    if contract["recipe_schema"] == LEGACY_REPLAY_RECIPE_SCHEMA:
+        _validate_legacy_replay_recipe_transport(
+            recipe_transport, candidate, replacement_by_label, label=label)
+    else:
+        require(canonical_recipe is not None,
+                f"{label} current replay requires a canonical build plan")
+
+    artifact_by_path: dict[str, Mapping[str, Any]] = {}
+    if contract["closure_schema"] == PRODUCTION_BUILD_CLOSURE_SCHEMA:
+        artifact_keys = {
+            "path", "sealed_descriptor", "sha256", "size", "mode", "seals",
+        }
+        artifacts = replay["artifacts"]
+        require(isinstance(artifacts, list) and artifacts,
+                f"{label} sealed replay artifact list is empty")
+        for raw_artifact in artifacts:
+            artifact = exact(
+                raw_artifact, artifact_keys, "sealed replay artifact")
+            path = artifact["path"]
+            require(
+                isinstance(path, str) and path and
+                not Path(path).is_absolute() and
+                all(component not in ("", ".", "..")
+                    for component in Path(path).parts) and
+                path not in artifact_by_path and
+                type(artifact["sealed_descriptor"]) is int and
+                artifact["sealed_descriptor"] >= 0 and
+                type(artifact["size"]) is int and artifact["size"] >= 0 and
+                type(artifact["mode"]) is int and
+                stat.S_ISREG(artifact["mode"]) and
+                type(artifact["seals"]) is int and
+                artifact["seals"] & required_seals == required_seals,
+                f"{label} sealed replay artifact identity is malformed")
+            digest(artifact["sha256"], f"sealed replay artifact {path}")
+            artifact_by_path[path] = artifact
+        require(
+            artifacts == sorted(artifacts, key=lambda item: item["path"]) and
+            canonical_recipe is not None and
+            canonical_recipe["output_sinks"] == [
+                {
+                    "path": path,
+                    "descriptor":
+                        artifact_by_path[path]["sealed_descriptor"],
+                }
+                for path in sorted(artifact_by_path)
+            ] and
+            canonical_recipe["counts"]["freeze_output_count"] ==
+                len(artifact_by_path),
+            f"{label} sealed artifacts are not bound to canonical sinks")
+        inventory_script = _private_replay_inventory_bytes(
+            tool_by_label["wrapper_shell"]["sealed_descriptor"],
+            sorted(artifact_by_path))
+        inventory_tool = tool_by_label["private_output_inventory"]
+        inventory_digest = hashlib.sha256(inventory_script).hexdigest()
+        require(
+            inventory_tool["sha256"] == inventory_digest and
+            inventory_tool["source_sha256"] == inventory_digest and
+            inventory_tool["size"] == len(inventory_script),
+            f"{label} private replay inventory verifier bytes differ")
+
     invocation_keys = {
         "schema", "argv", "environment", "pass_fds",
         "maximum_output_bytes", "timeout_seconds", "executable",
     }
+    if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA:
+        invocation_keys.update({
+            "write_sandbox_root", "write_sandbox_descriptors",
+            "private_tmpfs",
+        })
     executable_keys = {
         "label", "logical_argv0", "sealed_descriptor", "sealed_sha256",
         "sealed_size", "sealed_seals",
@@ -6679,6 +9703,9 @@ def validate_reproducible_build_proof(
     def invocation(
         raw: Any, name: str, tool_label: str, environment: Mapping[str, str],
         maximum_bytes: int, timeout: int,
+        *, write_sandbox_root: Path | None = None,
+        write_sandbox_descriptors: Sequence[int] = (),
+        private_tmpfs: Mapping[str, Any] | None = None,
     ) -> Mapping[str, Any]:
         value = exact(raw, invocation_keys, f"{name} invocation")
         executable = exact(
@@ -6687,7 +9714,7 @@ def validate_reproducible_build_proof(
         tool = tool_by_label[tool_label]
         pass_fds = value["pass_fds"]
         require(
-            value["schema"] == "leopard2-replay-invocation/v1" and
+            value["schema"] == contract["invocation_schema"] and
             isinstance(value["argv"], list) and value["argv"] and
             all(isinstance(argument, str) and "\0" not in argument
                 for argument in value["argv"]) and
@@ -6709,19 +9736,36 @@ def validate_reproducible_build_proof(
             executable["sealed_seals"] == tool["seals"] and
             executable["sealed_descriptor"] in pass_fds,
             f"{label} {name} replay invocation differs")
+        if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA:
+            require(
+                write_sandbox_root is not None and
+                value["write_sandbox_root"] ==
+                    str(write_sandbox_root) and
+                value["write_sandbox_descriptors"] ==
+                    sorted(set(write_sandbox_descriptors)) and
+                value["private_tmpfs"] == private_tmpfs,
+                f"{label} {name} replay isolation differs")
         return value
 
     invocations = exact(
         replay["invocations"], {"configure", "build"},
         "replay invocation set")
+    replay_source_root = Path(str(git_identity["source_root"]))
+    replay_workspace = replay_source_root.parent
     configure_environment = dict(GIT_ENVIRONMENT)
     configure_environment.update({
         "CC": str(cache.get("CMAKE_C_COMPILER")),
         "CXX": str(cache.get("CMAKE_CXX_COMPILER")),
     })
+    if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA:
+        configure_environment["TMPDIR"] = str(replay_workspace / "tmp")
     configure_record = invocation(
         invocations["configure"], "configure", "cmake",
-        configure_environment, 16 << 20, 300)
+        configure_environment, 16 << 20, 300,
+        write_sandbox_root=(
+            replay_workspace
+            if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA
+            else None))
     configure_argv = configure_record["argv"]
     require(len(configure_argv) >= 7 and
             configure_argv[1] == "-S" and
@@ -6729,14 +9773,12 @@ def validate_reproducible_build_proof(
             configure_argv[3] == "-B",
             f"{label} replay configure roots are malformed")
     replay_build_root = Path(configure_argv[4])
-    replay_source_root = Path(git_identity["source_root"])
     require(replay_source_root.is_absolute() and
             replay_build_root.is_absolute() and
             replay_source_root.name == "source" and
             replay_build_root.name == "build" and
             replay_source_root.parent == replay_build_root.parent,
             f"{label} replay workspace roots are malformed")
-    replay_workspace = replay_source_root.parent
     replay_tools_root = replay_workspace / "tools"
     require(
         Path(prefix_by_language["c"]["path"]) ==
@@ -6748,7 +9790,16 @@ def validate_reproducible_build_proof(
         Path(tool_by_label["replay_git_identity"]["source_path"]) ==
             replay_tools_root / "git" and
         Path(tool_by_label["empty_dependency_include"]["source_path"]) ==
-            replay_tools_root / "empty-dependency-include",
+            replay_tools_root / "empty-dependency-include" and
+        (
+            contract["closure_schema"] != PRODUCTION_BUILD_CLOSURE_SCHEMA or
+            (
+                Path(tool_by_label[
+                    "private_output_inventory"]["source_path"]) ==
+                    replay_tools_root / "verify-output-inventory" and
+                Path(tool_by_label["copy"]["source_path"]).name == "cat"
+            )
+        ),
         f"{label} replay private-tool topology differs")
     expected_configure = _reproducible_configure_argv(
         Path(git_identity["source_root"]), replay_build_root, cache,
@@ -6756,33 +9807,125 @@ def validate_reproducible_build_proof(
     require(configure_argv == expected_configure,
             f"{label} replay configure argv differs")
 
+    canonical_plan_descriptor: int | None = None
+    replay_stage_root = replay_workspace / "stage"
+    if canonical_recipe is not None:
+        canonical_transports = {
+            "cxx":
+                f"/proc/self/fd/"
+                f"{wrapper_by_label['cxx']['sealed_descriptor']}",
+            "archiver":
+                f"/proc/self/fd/"
+                f"{wrapper_by_label['ar']['sealed_descriptor']}",
+            "ranlib":
+                f"/proc/self/fd/"
+                f"{wrapper_by_label['ranlib']['sealed_descriptor']}",
+            "cmake":
+                f"/proc/self/fd/"
+                f"{wrapper_by_label['cmake']['sealed_descriptor']}",
+            "git":
+                f"/proc/self/fd/"
+                f"{tool_by_label['replay_git_identity']['sealed_descriptor']}",
+            "copy":
+                f"/proc/self/fd/"
+                f"{wrapper_by_label['copy']['sealed_descriptor']}",
+            "inventory":
+                f"/proc/self/fd/"
+                f"{tool_by_label[
+                    'private_output_inventory']['sealed_descriptor']}",
+        }
+        canonical_plan_descriptor = \
+            _validate_canonical_replay_plan_manifest(
+                canonical_recipe, candidate, replay_source_root,
+                replay_stage_root, canonical_transports, label=label)
+        _validate_sealed_replay_artifact_bindings(
+            candidate, artifact_by_path, replay_source_root,
+            replay_stage_root, label=label)
+
+    build_environment = dict(GIT_ENVIRONMENT)
+    artifact_descriptors = [
+        artifact["sealed_descriptor"]
+        for artifact in artifact_by_path.values()
+    ]
+    stage_directories = sorted({
+        Path(path).parent.as_posix()
+        for path in artifact_by_path
+        if Path(path).parent.as_posix() != "."
+    })
+    expected_private_tmpfs = None
+    if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA:
+        build_environment["TMPDIR"] = str(replay_workspace / "tmp")
+        expected_private_tmpfs = {
+            "root": str(replay_stage_root),
+            "descriptor":
+                canonical_recipe["execution_root_descriptor"]
+                if canonical_recipe is not None else None,
+            "bytes": PRIVATE_REPLAY_TMPFS_BYTES,
+            "directories": stage_directories,
+        }
     build_record = invocation(
         invocations["build"], "build", "make_program",
-        GIT_ENVIRONMENT, 32 << 20, 1800)
+        build_environment, 32 << 20, 1800,
+        write_sandbox_root=(
+            replay_workspace
+            if contract["invocation_schema"] == REPLAY_INVOCATION_SCHEMA
+            else None),
+        write_sandbox_descriptors=artifact_descriptors,
+        private_tmpfs=expected_private_tmpfs)
     build_argv = build_record["argv"]
-    require(len(build_argv) == 11 and
-            build_argv[0] == cache.get("CMAKE_MAKE_PROGRAM") and
-            build_argv[1:6] == [
-                "-C", str(replay_build_root),
-                "-f", "CMakeFiles/Makefile2", "-j"] and
-            re.fullmatch(r"[1-9][0-9]{0,2}", build_argv[6]) is not None and
-            1 <= int(build_argv[6]) <= 128 and
-            build_argv[7] ==
-                f"SHELL=/proc/self/fd/"
-                f"{tool_by_label['command_shell']['sealed_descriptor']}" and
-            build_argv[8] ==
-                f"MAKE=/proc/self/fd/"
-                f"{wrapper_by_label['make']['sealed_descriptor']}" and
-            build_argv[9:] == [
-                "--",
-                f"CMakeFiles/{candidate.get('executable_target')}.dir/all"],
-            f"{label} replay build argv differs")
+    if canonical_plan_descriptor is None:
+        require(len(build_argv) == 11 and
+                build_argv[0] == cache.get("CMAKE_MAKE_PROGRAM") and
+                build_argv[1:6] == [
+                    "-C", str(replay_build_root),
+                    "-f", "CMakeFiles/Makefile2", "-j"] and
+                re.fullmatch(
+                    r"[1-9][0-9]{0,2}", build_argv[6]) is not None and
+                1 <= int(build_argv[6]) <= 128 and
+                build_argv[7] ==
+                    f"SHELL=/proc/self/fd/"
+                    f"{tool_by_label['command_shell']['sealed_descriptor']}"
+                and
+                build_argv[8] ==
+                    f"MAKE=/proc/self/fd/"
+                    f"{wrapper_by_label['make']['sealed_descriptor']}" and
+                build_argv[9:] == [
+                    "--",
+                    f"CMakeFiles/"
+                    f"{candidate.get('executable_target')}.dir/all"],
+                f"{label} replay build argv differs")
+    else:
+        require(len(build_argv) == 10 and
+                build_argv[0] == cache.get("CMAKE_MAKE_PROGRAM") and
+                build_argv[1:6] == [
+                    "-C",
+                    f"/proc/self/fd/"
+                    f"{canonical_recipe['execution_root_descriptor']}",
+                    "-f", f"/proc/self/fd/{canonical_plan_descriptor}", "-j"]
+                and
+                re.fullmatch(
+                    r"[1-9][0-9]{0,2}", build_argv[6]) is not None and
+                1 <= int(build_argv[6]) <= 128 and
+                build_argv[7] ==
+                    f"SHELL=/proc/self/fd/"
+                    f"{tool_by_label['wrapper_shell']['sealed_descriptor']}"
+                and
+                build_argv[8:] == [
+                    "--",
+                    f"CMakeFiles/"
+                    f"{candidate.get('executable_target')}.dir/replay"],
+                f"{label} canonical replay build argv differs")
     required_build_fds = {
         *(tool["sealed_descriptor"] for tool in tool_by_label.values()),
         *(wrapper["sealed_descriptor"]
           for wrapper in wrapper_by_label.values()),
         *(prefix["descriptor"] for prefix in prefix_by_language.values()),
     }
+    if canonical_plan_descriptor is not None:
+        required_build_fds.add(canonical_plan_descriptor)
+        required_build_fds.add(
+            canonical_recipe["execution_root_descriptor"])
+        required_build_fds.update(artifact_descriptors)
     require(required_build_fds.issubset(set(build_record["pass_fds"])),
             f"{label} replay build descriptor transport is incomplete")
 
@@ -6792,6 +9935,11 @@ def validate_reproducible_build_proof(
           for wrapper in wrapper_by_label.values()),
         *(prefix["descriptor"] for prefix in prefix_by_language.values()),
     ]
+    if canonical_plan_descriptor is not None:
+        all_internal_descriptors.append(canonical_plan_descriptor)
+        all_internal_descriptors.append(
+            canonical_recipe["execution_root_descriptor"])
+        all_internal_descriptors.extend(artifact_descriptors)
     require(len(all_internal_descriptors) ==
             len(set(all_internal_descriptors)),
             f"{label} immutable replay descriptor identities collide")

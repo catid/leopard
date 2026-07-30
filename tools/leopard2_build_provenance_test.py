@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import ExitStack
 import errno
 import fcntl
 import hashlib
@@ -12,6 +13,7 @@ import os
 from pathlib import Path
 import shutil
 import shlex
+import stat
 import subprocess
 import sys
 import tempfile
@@ -105,6 +107,139 @@ def process_gone(pid: int, timeout: float = 2.0) -> bool:
             return True
         time.sleep(0.01)
     return not Path("/proc", str(pid)).exists()
+
+
+def canonical_replay_fixture(
+    source: Path, build: Path, *,
+    executable_target: str = "bench_leopard2",
+) -> tuple[dict[str, object], dict[str, str]]:
+    """Return minimal independently bound inputs for a canonical replay."""
+    source = source.resolve(strict=True)
+    build = build.resolve(strict=True)
+    script = source / provenance._CANONICAL_REPLAY_ATTESTATION_SOURCE
+    script.parent.mkdir(parents=True, exist_ok=True)
+    if not script.exists():
+        script.write_bytes(b"# canonical replay test attestation\n")
+    library_source = source / "leopard2.cpp"
+    benchmark_source = source / "bench/leopard2/benchmark.cpp"
+    benchmark_source.parent.mkdir(parents=True, exist_ok=True)
+    if not library_source.exists():
+        library_source.write_bytes(b"// canonical replay library fixture\n")
+    if not benchmark_source.exists():
+        benchmark_source.write_bytes(
+            b"// canonical replay benchmark fixture\n")
+
+    library_object = "CMakeFiles/leopard.dir/leopard2.cpp.o"
+    benchmark_object = (
+        f"CMakeFiles/{executable_target}.dir/"
+        "bench/leopard2/benchmark.cpp.o")
+    (build / Path(library_object).parent).mkdir(
+        parents=True, exist_ok=True)
+    (build / Path(benchmark_object).parent).mkdir(
+        parents=True, exist_ok=True)
+    (build / "generated/leopard2-benchmark-attestation").mkdir(
+        parents=True, exist_ok=True)
+
+    compiler = str(tool_path("c++"))
+    archiver = str(tool_path("ar"))
+    ranlib = str(tool_path("ranlib"))
+    common_options = [
+        "-Wall", "-Wextra", "-fopenmp", "-fopenmp", "-O3",
+        "-std=gnu++11", "-I${SOURCE_ROOT}",
+    ]
+
+    def compile_record(
+        role: str, output: str, relative_source: str,
+    ) -> dict[str, object]:
+        definitions = ["-DNDEBUG"]
+        if role == "archive":
+            definitions.extend((
+                "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+                "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            ))
+        else:
+            header = (
+                "${BUILD_ROOT}/generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h")
+            definitions.extend((
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                '-DLEO2_BENCHMARK_BUILD_TYPE="Release"',
+                "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=" +
+                '"' + ("a" * 64) + '"',
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=" +
+                '"' + header + '"',
+            ))
+        return {
+            "role": role,
+            "flag_profile": "portable-core",
+            "compile_entry": {
+                "normalized_arguments": [
+                    compiler, *common_options, *definitions, "-O3",
+                    "-o", output, "-c",
+                    "${SOURCE_ROOT}/" + relative_source,
+                ],
+            },
+        }
+
+    def source_record(path: Path) -> dict[str, object]:
+        content = path.read_bytes()
+        return {
+            "path": path.relative_to(source).as_posix(),
+            "sha256": hashlib.sha256(content).hexdigest(),
+            "size": len(content),
+            "mode": 0o644,
+        }
+
+    candidate: dict[str, object] = {
+        "executable_target": executable_target,
+        "validated_cache": {
+            "CMAKE_CXX_COMPILER": compiler,
+            "CMAKE_AR": archiver,
+            "CMAKE_RANLIB": ranlib,
+            "LEO2_BACKEND_VARIANT": "auto",
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "a" * 64,
+            "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+            "LEO2_FLAG_FALIGN_FUNCTIONS_64": "FALSE",
+        },
+        "tracked_source_manifest": {
+            "git": {
+                "commit": "1" * 40,
+                "tree": "2" * 40,
+                "dirty": False,
+            },
+            "files": sorted((
+                source_record(script),
+                source_record(library_source),
+                source_record(benchmark_source),
+            ), key=lambda record: str(record["path"])),
+        },
+        "source_object_compile_closure": [
+            compile_record(
+                "archive", library_object, "leopard2.cpp"),
+            compile_record(
+                "benchmark", benchmark_object,
+                "bench/leopard2/benchmark.cpp"),
+        ],
+        "archive_link_commands": [
+            [archiver, "qc", "libleopard.a", library_object],
+            [ranlib, "libleopard.a"],
+        ],
+        "executable_link_command": [
+            compiler, "-Wall", "-Wextra", "-fopenmp",
+            "-O3", "-DNDEBUG", "-O3", benchmark_object,
+            "-o", executable_target, "libleopard.a",
+            str(compiler_runtime_path("libgomp.so")),
+            str(compiler_runtime_path("libpthread.a")),
+        ],
+    }
+    transports = {
+        "cxx": "/proc/self/fd/101",
+        "archiver": "/proc/self/fd/102",
+        "ranlib": "/proc/self/fd/103",
+        "cmake": "/proc/self/fd/104",
+        "git": "/proc/self/fd/105",
+    }
+    return candidate, transports
 
 
 class StrictMetadataTests(unittest.TestCase):
@@ -205,6 +340,165 @@ class StableFileSnapshotTests(unittest.TestCase):
                 os.close(descriptor)
             if native is not None:
                 provenance.os.memfd_create = native
+
+    def test_replay_artifact_sink_is_frozen_against_same_inode_mutation(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-provenance-output-sink-") as directory, \
+                provenance._ReplayArtifactSink(
+                    Path(directory) / "artifact", "test artifact") as sink:
+            os.write(sink.descriptor, b"trusted replay output")
+            sink.seal()
+            required_seals = (
+                getattr(fcntl, "F_SEAL_SEAL", 0x0001) |
+                getattr(fcntl, "F_SEAL_SHRINK", 0x0002) |
+                getattr(fcntl, "F_SEAL_GROW", 0x0004) |
+                getattr(fcntl, "F_SEAL_WRITE", 0x0008))
+            self.assertEqual(
+                fcntl.fcntl(
+                    sink.descriptor, getattr(fcntl, "F_GET_SEALS", 1034)) &
+                required_seals,
+                required_seals)
+            with self.assertRaises(OSError):
+                os.pwrite(sink.descriptor, b"untrusted", 0)
+            self.assertEqual(sink.content, b"trusted replay output")
+            sink.verify()
+
+    def test_private_tmpfs_descriptor_survives_lexical_root_swap(
+            self) -> None:
+        """A post-mount pathname replacement cannot redirect stage writes."""
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-provenance-private-root-") as directory:
+            workspace = Path(directory)
+            stage = workspace / "stage"
+            saved = workspace / "saved-stage"
+            victim = workspace / "victim"
+            stage.mkdir()
+            victim.write_bytes(b"victim-is-unchanged")
+            stage_descriptor = os.open(
+                stage,
+                getattr(os, "O_PATH", os.O_RDONLY) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_CLOEXEC", 0))
+            ready_read, ready_write = os.pipe()
+            continue_read, continue_write = os.pipe()
+            error_read, error_write = os.pipe()
+            child = os.fork()
+            if child == 0:
+                try:
+                    os.close(ready_read)
+                    os.close(continue_write)
+                    os.close(error_read)
+                    provenance._mount_private_replay_tmpfs(
+                        stage, stage_descriptor, ("out",),
+                        os.getuid(), os.getgid())
+                    os.write(ready_write, b"1")
+                    if os.read(continue_read, 1) != b"1":
+                        raise RuntimeError("parent did not release child")
+                    output = os.open(
+                        f"/proc/self/fd/{stage_descriptor}/out/object",
+                        os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    try:
+                        os.write(output, b"private-output")
+                    finally:
+                        os.close(output)
+                    os._exit(0)
+                except BaseException as error:
+                    try:
+                        os.write(
+                            error_write,
+                            (type(error).__name__ + ": " + str(error)).
+                            encode("utf-8", errors="replace"))
+                    finally:
+                        os._exit(1)
+
+            os.close(ready_write)
+            os.close(continue_read)
+            os.close(error_write)
+            try:
+                ready = os.read(ready_read, 1)
+                if ready == b"1":
+                    stage.rename(saved)
+                    (stage / "out").mkdir(parents=True)
+                    os.link(victim, stage / "out/object")
+                    os.write(continue_write, b"1")
+                else:
+                    try:
+                        os.write(continue_write, b"0")
+                    except BrokenPipeError:
+                        pass
+                _pid, wait_status = os.waitpid(child, 0)
+                error = os.read(error_read, 65536).decode(
+                    "utf-8", errors="replace")
+                self.assertEqual(
+                    ready, b"1",
+                    "private tmpfs child failed before synchronization: " +
+                    error)
+                self.assertTrue(
+                    os.WIFEXITED(wait_status) and
+                    os.WEXITSTATUS(wait_status) == 0,
+                    "private tmpfs child failed: " + error)
+                self.assertEqual(victim.read_bytes(), b"victim-is-unchanged")
+                self.assertEqual(
+                    (stage / "out/object").read_bytes(),
+                    b"victim-is-unchanged")
+                self.assertFalse((saved / "out/object").exists())
+            finally:
+                os.close(ready_read)
+                os.close(continue_write)
+                os.close(error_read)
+                os.close(stage_descriptor)
+
+    def test_landlocked_cat_populates_only_inherited_memfd_sink(self) -> None:
+        """Private-stage aliases cannot redirect the retained sink write."""
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-provenance-landlock-sink-") as directory:
+            workspace = Path(directory)
+            stage = workspace / "stage"
+            victim = workspace / "victim"
+            stage.mkdir()
+            victim.write_bytes(b"victim-is-unchanged")
+            stage_descriptor = os.open(
+                stage,
+                getattr(os, "O_PATH", os.O_RDONLY) |
+                getattr(os, "O_DIRECTORY", 0) |
+                getattr(os, "O_CLOEXEC", 0))
+            try:
+                with provenance._ReplayArtifactSink(
+                        workspace / "artifact", "Landlock artifact") as sink, \
+                        provenance._RetainedFileSnapshot(
+                            tool_path("bash"), "Landlock test Bash") as bash, \
+                        provenance._RetainedFileSnapshot(
+                            tool_path("cat"), "Landlock test cat") as cat:
+                    command = (
+                        f"cd /proc/self/fd/{stage_descriptor}; "
+                        f"if ln {shlex.quote(str(victim))} out/object; then "
+                        f"printf corrupt > out/object; "
+                        f"else printf sealed-output > out/object; fi; "
+                        f"/proc/self/fd/{cat.executable_descriptor} "
+                        f"-- out/object 1>&{sink.descriptor}")
+                    provenance._run(
+                        [str(tool_path("bash")), "-c", command],
+                        "Landlocked inherited artifact sink",
+                        inherited_descriptors=(
+                            bash.executable_descriptor,
+                            cat.executable_descriptor,
+                            sink.descriptor,
+                            stage_descriptor),
+                        executable_descriptor=bash.executable_descriptor,
+                        write_sandbox_root=workspace,
+                        write_sandbox_descriptors=(sink.descriptor,),
+                        private_tmpfs_root=stage,
+                        private_tmpfs_directories=("out",),
+                        private_tmpfs_descriptor=stage_descriptor,
+                        timeout=10)
+                    sink.seal()
+                    self.assertEqual(sink.content, b"sealed-output")
+                    self.assertEqual(
+                        victim.read_bytes(), b"victim-is-unchanged")
+                    self.assertFalse((stage / "out/object").exists())
+            finally:
+                os.close(stage_descriptor)
 
     def test_owned_descriptor_callers_close_post_open_interruptions(
             self) -> None:
@@ -314,7 +608,7 @@ class StableFileSnapshotTests(unittest.TestCase):
         finally:
             real_close(replacement)
 
-    def test_owned_descriptor_retains_same_fd_when_close_did_not_run(
+    def test_owned_descriptor_guard_closes_fd_when_close_did_not_run(
             self) -> None:
         target = tool_path("bash")
         owner = provenance._OwnedDescriptor()
@@ -330,12 +624,60 @@ class StableFileSnapshotTests(unittest.TestCase):
             with self.assertRaisesRegex(
                     KeyboardInterrupt, "pre-close interruption"):
                 owner.close()
-        self.assertEqual(owner.descriptor, descriptor)
-        os.fstat(descriptor)
-        owner.close()
         self.assertEqual(owner.descriptor, -1)
         with self.assertRaises(OSError):
             os.fstat(descriptor)
+
+    def test_owned_descriptor_same_inode_recycle_is_never_retry_closed(
+            self) -> None:
+        for failure_type in (OSError, KeyboardInterrupt, SystemExit):
+            with self.subTest(failure=failure_type.__name__), \
+                    tempfile.TemporaryDirectory(
+                        prefix="leo2-owned-same-inode-aba-") as directory:
+                path = Path(directory) / "same-inode"
+                path.write_bytes(b"same inode, distinct descriptions")
+                owner = provenance._OwnedDescriptor()
+                descriptor = owner.open(path, os.O_RDONLY)
+                replacement = -1
+                guards: list[int] = []
+                real_close = os.close
+                real_dup = os.dup
+                failure = failure_type(
+                    f"injected same-inode {failure_type.__name__}")
+
+                def tracked_dup(value: int) -> int:
+                    self.assertEqual(value, descriptor)
+                    guard = real_dup(value)
+                    guards.append(guard)
+                    return guard
+
+                def close_reopen_same_inode(value: int) -> None:
+                    nonlocal replacement
+                    self.assertEqual(value, descriptor)
+                    real_close(value)
+                    replacement = os.open(path, os.O_RDONLY)
+                    self.assertEqual(replacement, descriptor)
+                    raise failure
+
+                try:
+                    with mock.patch.object(
+                            provenance.os, "dup",
+                            side_effect=tracked_dup), mock.patch.object(
+                                provenance.os, "close",
+                                side_effect=close_reopen_same_inode):
+                        with self.assertRaises(failure_type) as raised:
+                            owner.close()
+                    self.assertIs(raised.exception, failure)
+                    self.assertEqual(owner.descriptor, -1)
+                    os.fstat(replacement)
+                    owner.close()
+                    os.fstat(replacement)
+                    self.assertEqual(len(guards), 1)
+                    with self.assertRaises(OSError):
+                        os.fstat(guards[0])
+                finally:
+                    if replacement >= 0:
+                        real_close(replacement)
 
     def test_owned_descriptor_clears_fd_when_close_preceded_interruption(
             self) -> None:
@@ -1086,6 +1428,764 @@ class StableFileSnapshotTests(unittest.TestCase):
         self.assertEqual(output, lexical_name.encode("ascii"))
 
 
+class CanonicalReplayPlanTests(unittest.TestCase):
+    def _render_plan(
+        self, root: Path,
+    ) -> tuple[
+        Path, Path, dict[str, object], dict[str, str], bytes, dict[str, int],
+    ]:
+        source = root / "source tree"
+        build = root / "build tree"
+        source.mkdir()
+        (build / "CMakeFiles").mkdir(parents=True)
+        candidate, transports = canonical_replay_fixture(source, build)
+        content, counts = provenance._canonical_replay_makefile_bytes(
+            candidate, source.resolve(), build.resolve(), transports)
+        return (
+            source.resolve(), build.resolve(), candidate, transports,
+            content, counts)
+
+    def _run_while_ignoring_generated_input(
+        self, relative: str, payload: bytes,
+    ) -> tuple[bytes, subprocess.CompletedProcess[bytes]]:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2 canonical replay exploits ") as directory:
+            root = Path(directory)
+            (source, build, candidate, _transports,
+             _content, _counts) = self._render_plan(root)
+            helper = root / "unretained-helper"
+            marker = root / "unexpected-marker"
+            helper.write_text(
+                "#!/bin/sh\n"
+                f"printf executed > {shlex.quote(str(marker))}\n",
+                encoding="utf-8")
+            helper.chmod(0o700)
+            generated = build / relative
+            generated.parent.mkdir(parents=True, exist_ok=True)
+            generated.write_bytes(
+                payload.replace(b"@HELPER@", os.fsencode(helper)))
+
+            true_descriptor = os.open(
+                tool_path("true"), os.O_RDONLY |
+                getattr(os, "O_CLOEXEC", 0))
+            try:
+                transports = {
+                    role: f"/proc/self/fd/{true_descriptor}"
+                    for role in ("cxx", "archiver", "ranlib", "cmake", "git")
+                }
+                content, _counts = \
+                    provenance._canonical_replay_makefile_bytes(
+                        candidate, source, build, transports)
+                plan_path = (
+                    build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE)
+                provenance._write_private_executable(plan_path, content)
+                with provenance._RetainedFileSnapshot(
+                        plan_path, "canonical replay exploit test plan"
+                        ) as plan:
+                    completed = subprocess.run(
+                        [
+                            str(tool_path("make")), "-C", str(build),
+                            "-f",
+                            f"/proc/self/fd/{plan.executable_descriptor}",
+                            "--",
+                            "CMakeFiles/bench_leopard2.dir/replay",
+                        ],
+                        stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.PIPE,
+                        env=dict(provenance.GIT_ENVIRONMENT),
+                        pass_fds=(
+                            true_descriptor,
+                            plan.executable_descriptor,
+                        ),
+                        timeout=30, check=False)
+                    plan.verify()
+            finally:
+                os.close(true_descriptor)
+            self.assertEqual(
+                completed.returncode, 0,
+                completed.stderr.decode("utf-8", errors="replace"))
+            self.assertFalse(
+                marker.exists(),
+                "an unbound generated CMake/Make input executed")
+            self.assertNotIn(os.fsencode(helper), content)
+            return content, completed
+
+    def test_plan_is_candidate_derived_and_handles_space_paths(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2 canonical replay paths ") as directory:
+            (source, _build, _candidate, _transports,
+             content, counts) = self._render_plan(Path(directory))
+            text = content.decode("utf-8", errors="strict")
+            self.assertIn(shlex.quote(str(source / "leopard2.cpp")), text)
+            self.assertNotIn("Makefile2", text)
+            self.assertNotIn("DependInfo.cmake", text)
+            self.assertNotIn("cmake_depends", text)
+            self.assertNotIn("cmake_link_script", text)
+            self.assertNotIn("link.txt", text)
+            self.assertEqual(counts["recursive_make_count"], 0)
+            self.assertEqual(counts["object_count"], 2)
+            for line in text.splitlines():
+                if line.startswith("CMakeFiles/") and ":" in line:
+                    self.assertNotIn(str(source), line)
+
+    def test_plan_ignores_selected_target_added_prerequisite(self) -> None:
+        self._run_while_ignoring_generated_input(
+            "CMakeFiles/Makefile2",
+            b"CMakeFiles/bench_leopard2.dir/all: injected-helper\n"
+            b"injected-helper:\n"
+            b"\t@HELPER@\n")
+
+    def test_plan_ignores_cmake_env_helper_recipe(self) -> None:
+        self._run_while_ignoring_generated_input(
+            "CMakeFiles/bench_leopard2.dir/build.make",
+            b"CMAKE_COMMAND = /usr/bin/cmake\n"
+            b"all:\n"
+            b"\t$(CMAKE_COMMAND) -E env @HELPER@\n")
+
+    def test_plan_ignores_dependinfo_execute_process(self) -> None:
+        self._run_while_ignoring_generated_input(
+            "CMakeFiles/leopard.dir/DependInfo.cmake",
+            b"execute_process(COMMAND \"@HELPER@\")\n")
+
+    def test_plan_ignores_exported_ld_preload(self) -> None:
+        content, completed = self._run_while_ignoring_generated_input(
+            "CMakeFiles/leopard.dir/build.make",
+            b"export LD_PRELOAD = /tmp/unretained-leo2.so\n"
+            b"all:\n"
+            b"\t/bin/true\n")
+        self.assertNotIn(b"LD_PRELOAD", content)
+        self.assertNotIn(b"LD_PRELOAD", completed.stderr)
+
+    def test_plan_rejects_response_file_indirection(self) -> None:
+        def compile_response(candidate):
+            candidate["source_object_compile_closure"][0][
+                "compile_entry"]["normalized_arguments"].insert(
+                    1, "@/tmp/unretained-compile-response")
+
+        def archive_response(candidate):
+            candidate["archive_link_commands"][0].append(
+                "@/tmp/unretained-archive-response")
+
+        def link_response(candidate):
+            candidate["executable_link_command"].insert(
+                1, "-Wl,@/tmp/unretained-link-response")
+
+        for name, mutate in (
+                ("compile", compile_response),
+                ("archive", archive_response),
+                ("link", link_response)):
+            with self.subTest(location=name):
+                with tempfile.TemporaryDirectory(
+                        prefix="leo2-canonical-response-") as directory:
+                    root = Path(directory)
+                    source = root / "source"
+                    build = root / "build"
+                    source.mkdir()
+                    build.mkdir()
+                    candidate, transports = canonical_replay_fixture(
+                        source, build)
+                    mutate(candidate)
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "response-file indirection"):
+                        provenance._canonical_replay_makefile_bytes(
+                            candidate, source.resolve(), build.resolve(),
+                            transports)
+
+    def test_plan_rejects_indirect_compile_and_link_options(self) -> None:
+        mutations = (
+            (
+                "compile-wrapper",
+                lambda candidate:
+                    candidate["source_object_compile_closure"][0][
+                        "compile_entry"]["normalized_arguments"].insert(
+                            1, "-wrapper"),
+            ),
+            (
+                "compile-specs",
+                lambda candidate:
+                    candidate["source_object_compile_closure"][0][
+                        "compile_entry"]["normalized_arguments"].insert(
+                            1, "-specs=/tmp/unretained.specs"),
+            ),
+            (
+                "compile-plugin",
+                lambda candidate:
+                    candidate["source_object_compile_closure"][0][
+                        "compile_entry"]["normalized_arguments"].insert(
+                            1, "-fplugin=/tmp/unretained.so"),
+            ),
+            (
+                "compile-prefix",
+                lambda candidate:
+                    candidate["source_object_compile_closure"][0][
+                        "compile_entry"]["normalized_arguments"].insert(
+                            1, "-B/tmp/unretained-prefix"),
+            ),
+            (
+                "link-wrapper",
+                lambda candidate:
+                    candidate["executable_link_command"].insert(
+                        1, "-wrapper"),
+            ),
+            (
+                "link-specs",
+                lambda candidate:
+                    candidate["executable_link_command"].insert(
+                        1, "-specs=/tmp/unretained.specs"),
+            ),
+            (
+                "link-plugin",
+                lambda candidate:
+                    candidate["executable_link_command"].insert(
+                        1, "-fplugin=/tmp/unretained.so"),
+            ),
+            (
+                "link-prefix",
+                lambda candidate:
+                    candidate["executable_link_command"].insert(
+                        1, "-B/tmp/unretained-prefix"),
+            ),
+        )
+        for label, mutate in mutations:
+            with self.subTest(location=label):
+                with tempfile.TemporaryDirectory(
+                        prefix="leo2-canonical-indirect-") as directory:
+                    root = Path(directory)
+                    source = root / "source"
+                    build = root / "build"
+                    source.mkdir()
+                    build.mkdir()
+                    candidate, transports = canonical_replay_fixture(
+                        source, build)
+                    mutate(candidate)
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "non-canonical|canonical CMake"):
+                        provenance._canonical_replay_makefile_bytes(
+                            candidate, source.resolve(), build.resolve(),
+                            transports)
+
+    def test_plan_accepts_at_signs_inside_ordinary_paths(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2@canonical@") as directory:
+            root = Path(directory)
+            source = root / "source@tree"
+            build = root / "build@tree"
+            source.mkdir()
+            build.mkdir()
+            candidate, transports = canonical_replay_fixture(source, build)
+            content, counts = provenance._canonical_replay_makefile_bytes(
+                candidate, source.resolve(), build.resolve(), transports)
+            self.assertTrue(content.endswith(b"\n"))
+            self.assertEqual(counts["object_count"], 2)
+
+    def test_plan_rejects_source_parent_traversal(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-source-traversal-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            source.mkdir()
+            build.mkdir()
+            candidate, transports = canonical_replay_fixture(source, build)
+            candidate["source_object_compile_closure"][0][
+                "compile_entry"]["normalized_arguments"][-1] = (
+                    "${SOURCE_ROOT}/../evil.cpp")
+            candidate["tracked_source_manifest"]["files"].append({
+                "path": "../evil.cpp",
+                "sha256": "0" * 64,
+                "size": 0,
+                "mode": 0o644,
+            })
+            with self.assertRaisesRegex(
+                    provenance.BuildProvenanceError, "escapes|unsafe"):
+                provenance._canonical_replay_makefile_bytes(
+                    candidate, source.resolve(), build.resolve(), transports)
+
+    def test_plan_rejects_symlinked_build_operands(self) -> None:
+        for location in ("parent", "final", "hardlink"):
+            with self.subTest(location=location):
+                with tempfile.TemporaryDirectory(
+                        prefix="leo2-canonical-build-symlink-") as directory:
+                    root = Path(directory)
+                    source = root / "source"
+                    build = root / "build"
+                    outside = root / "outside"
+                    source.mkdir()
+                    build.mkdir()
+                    outside.mkdir()
+                    candidate, transports = canonical_replay_fixture(
+                        source, build)
+                    object_path = (
+                        build / "CMakeFiles/leopard.dir/leopard2.cpp.o")
+                    if location == "parent":
+                        object_path.parent.rmdir()
+                        object_path.parent.symlink_to(
+                            outside, target_is_directory=True)
+                    elif location == "final":
+                        target = outside / "object"
+                        target.write_bytes(b"outside")
+                        object_path.symlink_to(target)
+                    else:
+                        target = outside / "object"
+                        target.write_bytes(b"outside")
+                        os.link(target, object_path)
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "unstable or unsafe|symlink|hard link|non-regular"):
+                        with ExitStack() as stack:
+                            provenance._retain_canonical_replay_output_topology(
+                                candidate, source.resolve(), build.resolve(),
+                                stack)
+
+    def test_live_output_topology_rejects_parent_aba_swap(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-output-aba-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            outside = root / "outside"
+            source.mkdir()
+            build.mkdir()
+            outside.mkdir()
+            candidate, transports = canonical_replay_fixture(source, build)
+            plan_content, _counts = \
+                provenance._canonical_replay_makefile_bytes(
+                    candidate, source.resolve(), build.resolve(), transports)
+            provenance._write_private_executable(
+                build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE,
+                plan_content)
+            parent = build / "CMakeFiles/leopard.dir"
+            saved = build / "CMakeFiles/leopard.dir.saved"
+            with ExitStack() as stack:
+                retained = \
+                    provenance._retain_canonical_replay_output_topology(
+                        candidate, source.resolve(), build.resolve(), stack)
+                parent.rename(saved)
+                parent.symlink_to(outside, target_is_directory=True)
+                parent.unlink()
+                saved.rename(parent)
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "pathname changed"):
+                    provenance._verify_canonical_replay_output_topology(
+                        retained, require_outputs=False)
+                retained["guard"]._close_without_verification()
+                retained["entry_guard"]._close_without_verification()
+
+    def test_descriptor_materialization_cannot_modify_transient_victims(
+            self) -> None:
+        """Every mutable output role is populated through its retained FD."""
+        roles = ("object", "archive", "executable", "header", "lock")
+        for role in roles:
+            with self.subTest(role=role), tempfile.TemporaryDirectory(
+                    prefix=f"leo2-canonical-{role}-aba-") as directory:
+                root = Path(directory)
+                source = root / "source"
+                build = root / "build"
+                source.mkdir()
+                build.mkdir()
+                candidate, transports = canonical_replay_fixture(
+                    source, build)
+                plan_content, _counts = \
+                    provenance._canonical_replay_makefile_bytes(
+                        candidate, source.resolve(), build.resolve(),
+                        transports)
+                provenance._write_private_executable(
+                    build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE,
+                    plan_content)
+                victim = root / "victim"
+                victim.write_bytes(b"external-victim")
+                with ExitStack() as stack:
+                    retained = \
+                        provenance._retain_canonical_replay_output_topology(
+                            candidate, source.resolve(), build.resolve(),
+                            stack)
+
+                    def output_role(path: Path) -> str | None:
+                        if path.suffix == ".o":
+                            return "object"
+                        if path.name == "libleopard.a":
+                            return "archive"
+                        if path.name == candidate["executable_target"]:
+                            return "executable"
+                        if path.name.endswith(".h.lock"):
+                            return "lock"
+                        if path.name.endswith(".h"):
+                            return "header"
+                        return None
+
+                    record = next(
+                        item for item in retained["outputs"]
+                        if output_role(item["path"]) == role)
+                    output = record["path"]
+                    saved = output.with_name(output.name + ".reserved")
+                    output.rename(saved)
+                    os.link(victim, output)
+                    descriptor = record["file"].fileno()
+                    os.lseek(descriptor, 0, os.SEEK_SET)
+                    os.write(descriptor, b"descriptor-only-output")
+                    os.ftruncate(descriptor, len(b"descriptor-only-output"))
+                    self.assertEqual(
+                        victim.read_bytes(), b"external-victim",
+                        f"{role} materialization followed a transient link")
+                    output.unlink()
+                    saved.rename(output)
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "pathname changed"):
+                        provenance._verify_canonical_replay_output_topology(
+                            retained, require_outputs=True)
+                    retained["guard"]._close_without_verification()
+                    retained["entry_guard"]._close_without_verification()
+
+    def test_sealed_artifacts_bind_every_private_output_identity(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-artifact-binding-") as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            source.mkdir()
+            build.mkdir()
+            candidate, _transports = canonical_replay_fixture(source, build)
+            object_digests = ("3" * 64, "4" * 64)
+            for item, digest in zip(
+                    candidate["source_object_compile_closure"],
+                    object_digests):
+                item["object"] = {"sha256": digest, "size": 101}
+            candidate["archive"] = {"sha256": "5" * 64, "size": 202}
+            candidate["executable"] = {"sha256": "6" * 64, "size": 303}
+            header_relative = (
+                "generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h")
+            header = provenance._canonical_replay_attestation_header_bytes(
+                candidate)
+            identities = {
+                "CMakeFiles/leopard.dir/leopard2.cpp.o":
+                    (object_digests[0], 101, 0o600),
+                (
+                    "CMakeFiles/bench_leopard2.dir/"
+                    "bench/leopard2/benchmark.cpp.o"
+                ): (object_digests[1], 101, 0o600),
+                "libleopard.a": ("5" * 64, 202, 0o600),
+                "bench_leopard2": ("6" * 64, 303, 0o700),
+                header_relative: (
+                    hashlib.sha256(header).hexdigest(), len(header), 0o600),
+                header_relative + ".lock": (
+                    hashlib.sha256(b"").hexdigest(), 0, 0o600),
+            }
+            artifacts = {
+                path: {
+                    "path": path,
+                    "sha256": digest,
+                    "size": size,
+                    "mode": stat.S_IFREG | mode,
+                }
+                for path, (digest, size, mode) in identities.items()
+            }
+            provenance._validate_sealed_replay_artifact_bindings(
+                candidate, artifacts, source.resolve(), build.resolve(),
+                label="test")
+            mutations = (
+                lambda value: value[header_relative].update(
+                    sha256="0" * 64),
+                lambda value: value[
+                    "CMakeFiles/leopard.dir/leopard2.cpp.o"].update(size=102),
+                lambda value: value["bench_leopard2"].update(
+                    mode=stat.S_IFREG | 0o600),
+                lambda value: value.update({
+                    "extra": {
+                        "path": "extra", "sha256": "0" * 64,
+                        "size": 0, "mode": stat.S_IFREG | 0o600,
+                    },
+                }),
+            )
+            for mutate in mutations:
+                changed = copy.deepcopy(artifacts)
+                mutate(changed)
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "sealed replay artifact"):
+                    provenance._validate_sealed_replay_artifact_bindings(
+                        candidate, changed, source.resolve(), build.resolve(),
+                        label="test")
+
+    def test_plan_force_rebuilds_precreated_future_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2 canonical force ") as directory:
+            root = Path(directory)
+            source = root / "source"
+            build = root / "build"
+            source.mkdir()
+            build.mkdir()
+            candidate, _transports = canonical_replay_fixture(source, build)
+            log = root / "invocations.log"
+            helper = root / "transport"
+            helper.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "printf '%s\\n' \"$*\" >> \"$LEO2_TEST_LOG\"\n"
+                "if [ \"${1-}\" = -E ] && [ \"${2-}\" = rm ]; then\n"
+                "  shift 3; rm -f -- \"$@\"; exit 0\n"
+                "fi\n"
+                "if [ \"${1-}\" = qc ]; then\n"
+                "  : > \"$2\"; exit 0\n"
+                "fi\n"
+                "output=\n"
+                "previous=\n"
+                "for argument in \"$@\"; do\n"
+                "  if [ \"$previous\" = -o ]; then output=$argument; break; fi\n"
+                "  previous=$argument\n"
+                "done\n"
+                "if [ -n \"$output\" ]; then\n"
+                "  mkdir -p -- \"$(dirname -- \"$output\")\"\n"
+                "  : > \"$output\"\n"
+                "fi\n",
+                encoding="utf-8")
+            helper.chmod(0o700)
+            descriptor = os.open(
+                helper, os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+            try:
+                transports = {
+                    role: f"/proc/self/fd/{descriptor}"
+                    for role in ("cxx", "archiver", "ranlib", "cmake", "git")
+                }
+                content, _counts = \
+                    provenance._canonical_replay_makefile_bytes(
+                        candidate, source.resolve(), build.resolve(),
+                        transports)
+                text = content.decode("utf-8", errors="strict")
+                self.assertIn(
+                    f".PHONY: CMakeFiles/bench_leopard2.dir/replay "
+                    f"{provenance._CANONICAL_REPLAY_ATTESTATION_TARGET} "
+                    f"{provenance._CANONICAL_REPLAY_FORCE_TARGET}",
+                    text)
+                for target in (
+                        "CMakeFiles/leopard.dir/leopard2.cpp.o",
+                        "CMakeFiles/bench_leopard2.dir/"
+                        "bench/leopard2/benchmark.cpp.o",
+                        "libleopard.a", "bench_leopard2"):
+                    rule = next(
+                        line for line in text.splitlines()
+                        if line.startswith(target + ":"))
+                    self.assertIn(
+                        provenance._CANONICAL_REPLAY_FORCE_TARGET, rule)
+
+                future = time.time() + 3600
+                for artifact in (
+                        build / "CMakeFiles/leopard.dir/leopard2.cpp.o",
+                        build / "CMakeFiles/bench_leopard2.dir/"
+                        "bench/leopard2/benchmark.cpp.o",
+                        build / "libleopard.a",
+                        build / "bench_leopard2"):
+                    artifact.parent.mkdir(parents=True, exist_ok=True)
+                    artifact.write_bytes(b"precreated")
+                    os.utime(artifact, (future, future))
+                plan = build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE
+                provenance._write_private_executable(plan, content)
+                completed = subprocess.run(
+                    [
+                        str(tool_path("make")), "-C", str(build),
+                        "-f", str(plan), "-j1", "--",
+                        "CMakeFiles/bench_leopard2.dir/replay",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    env={
+                        **provenance.GIT_ENVIRONMENT,
+                        "LEO2_TEST_LOG": str(log),
+                    },
+                    pass_fds=(descriptor,), timeout=30, check=False)
+            finally:
+                os.close(descriptor)
+            self.assertEqual(
+                completed.returncode, 0,
+                completed.stderr.decode("utf-8", errors="replace"))
+            invocations = log.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(
+                sum(" -c " in (" " + line + " ") for line in invocations), 2)
+            self.assertEqual(
+                sum(line.startswith("qc libleopard.a ") for line in invocations),
+                1)
+            self.assertEqual(
+                sum(line == "libleopard.a" for line in invocations), 1)
+            self.assertEqual(
+                sum(line.startswith("-E rm -f libleopard.a")
+                    for line in invocations), 0)
+            self.assertEqual(
+                sum(" -o bench_leopard2 " in (" " + line + " ")
+                    for line in invocations), 1)
+
+    def test_private_plan_parent_symlink_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-parent-symlink-") as directory:
+            root = Path(directory)
+            build = root / "build"
+            outside = root / "outside"
+            build.mkdir()
+            outside.mkdir()
+            (build / "CMakeFiles").symlink_to(
+                outside, target_is_directory=True)
+            destination = (
+                build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE)
+            with self.assertRaisesRegex(
+                    provenance.BuildProvenanceError,
+                    "parent follows a symlink"):
+                provenance._write_private_executable(
+                    destination, b"# sealed plan\n")
+            self.assertFalse(
+                (outside / destination.name).exists(),
+                "symlinked plan parent received replay bytes")
+
+    def test_manifest_inventory_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-inventory-") as directory:
+            (source, build, candidate, transports,
+             content, counts) = self._render_plan(Path(directory))
+            plan_path = build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE
+            provenance._write_private_executable(plan_path, content)
+            with provenance._RetainedFileSnapshot(
+                    plan_path, "canonical replay inventory test plan"
+                    ) as snapshot:
+                manifest = provenance._canonical_replay_plan_manifest(
+                    candidate, plan_path, content, snapshot, counts)
+                descriptor = \
+                    provenance._validate_canonical_replay_plan_manifest(
+                        manifest, candidate, source, build, transports,
+                        label="test")
+                self.assertEqual(
+                    descriptor, snapshot.executable_descriptor)
+
+                def coherent_inventory(
+                    mutation,
+                ) -> dict[str, object]:
+                    changed = copy.deepcopy(manifest)
+                    mutation(changed["retained_inputs"])
+                    changed["file_count"] = len(changed["retained_inputs"])
+                    changed["total_bytes"] = sum(
+                        record["size"]
+                        for record in changed["retained_inputs"])
+                    changed["inventory_sha256"] = \
+                        provenance._canonical_replay_inventory_sha256(
+                            changed["retained_inputs"])
+                    return changed
+
+                mutations: dict[str, dict[str, object]] = {
+                    "omission": coherent_inventory(
+                        lambda records: records.pop()),
+                    "addition": coherent_inventory(
+                        lambda records: records.append({
+                            "role": "generated-plan",
+                            "root": "build",
+                            "path": "CMakeFiles/forged.make",
+                            "sha256": "0" * 64,
+                            "size": 0,
+                            "mode": 0o700,
+                        })),
+                    "reorder": coherent_inventory(
+                        lambda records: records.reverse()),
+                    "file-count": copy.deepcopy(manifest),
+                    "recursive-make-count": copy.deepcopy(manifest),
+                    "command-count": copy.deepcopy(manifest),
+                }
+                mutations["file-count"]["file_count"] += 1
+                mutations["recursive-make-count"]["counts"][
+                    "recursive_make_count"] = 1
+                mutations["command-count"]["counts"]["command_count"] += 1
+                validator = (
+                    provenance._validate_canonical_replay_plan_manifest)
+                for name, changed in mutations.items():
+                    with self.subTest(mutation=name):
+                        with self.assertRaisesRegex(
+                                provenance.BuildProvenanceError,
+                                "retained input inventory differs"):
+                            validator(
+                                changed, candidate, source, build,
+                                transports, label="test")
+
+    def test_manifest_validation_is_offline_after_roots_are_deleted(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-offline-") as directory:
+            root = Path(directory)
+            (source_root, build_root, candidate, transports,
+             content, counts) = self._render_plan(root)
+            plan = build_root / provenance._CANONICAL_REPLAY_PLAN_RELATIVE
+            provenance._write_private_executable(plan, content)
+            with provenance._RetainedFileSnapshot(
+                    plan, "offline canonical plan") as snapshot:
+                manifest = provenance._canonical_replay_plan_manifest(
+                    candidate, plan, content, snapshot, counts)
+                expected_descriptor = snapshot.executable_descriptor
+        self.assertFalse(source_root.exists())
+        self.assertFalse(build_root.exists())
+        self.assertEqual(
+            provenance._validate_canonical_replay_plan_manifest(
+                manifest, candidate, source_root, build_root, transports,
+                label="offline test"),
+            expected_descriptor)
+
+    def test_manifest_validation_rejects_tampering_under_python_o(
+            self) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-canonical-optimized-python-") as directory:
+            root = Path(directory)
+            (source, build, candidate, transports,
+             content, counts) = self._render_plan(root)
+            plan_path = build / provenance._CANONICAL_REPLAY_PLAN_RELATIVE
+            provenance._write_private_executable(plan_path, content)
+            with provenance._RetainedFileSnapshot(
+                    plan_path, "optimized canonical replay test plan"
+                    ) as snapshot:
+                manifest = provenance._canonical_replay_plan_manifest(
+                    candidate, plan_path, content, snapshot, counts)
+            changed = copy.deepcopy(manifest)
+            changed["counts"]["recursive_make_count"] = 1
+            payload = root / "payload.json"
+            payload.write_text(json.dumps({
+                "candidate": candidate,
+                "manifest": manifest,
+                "changed": changed,
+                "source": str(source),
+                "build": str(build),
+                "transports": transports,
+            }), encoding="utf-8")
+            program = (
+                "import json, pathlib, sys\n"
+                "sys.path.insert(0, sys.argv[1])\n"
+                "import leopard2_build_provenance as p\n"
+                "value=json.loads(pathlib.Path(sys.argv[2]).read_text("
+                "encoding='utf-8'))\n"
+                "arguments=(value['candidate'],"
+                "pathlib.Path(value['source']),"
+                "pathlib.Path(value['build']),value['transports'])\n"
+                "try:\n"
+                " p._validate_canonical_replay_plan_manifest("
+                "value['manifest'],*arguments,label='python-o-valid')\n"
+                "except p.BuildProvenanceError as error:\n"
+                " print(error,file=sys.stderr); raise SystemExit(3)\n"
+                "try:\n"
+                " p._validate_canonical_replay_plan_manifest("
+                "value['changed'],*arguments,label='python-o-tampered')\n"
+                "except p.BuildProvenanceError:\n"
+                " raise SystemExit(0)\n"
+                "raise SystemExit(4)\n")
+            environment = dict(os.environ)
+            environment["PYTHONDONTWRITEBYTECODE"] = "1"
+            completed = subprocess.run(
+                [sys.executable, "-O", "-c", program,
+                 str(SOURCE_ROOT / "tools"), str(payload)],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=environment, timeout=30, check=False)
+            self.assertEqual(
+                completed.returncode, 0,
+                completed.stderr.decode("utf-8", errors="replace"))
+
+
 class ReproducibleCompilerReplayTests(unittest.TestCase):
     def test_recursive_make_uses_sealed_image_after_same_inode_mutation(
             self) -> None:
@@ -1187,6 +2287,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BUILD_ALLK_DIAGNOSTIC": "OFF",
             "LEO2_BUILD_TESTS": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             "LEOPARD_ENABLE_GF16": "ON",
@@ -1217,6 +2318,9 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             self.assertIn(
                 "-DLEO2_LOCATOR_GIT_EXECUTABLE:FILEPATH=" +
                 str(tool_path("git")), configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=OFF",
+                configure)
             configure_environment = dict(provenance.GIT_ENVIRONMENT)
             configure_environment.update({
                 "CC": str(c_compiler), "CXX": str(cxx_compiler)})
@@ -2111,7 +3215,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     provenance, "_replace_private_file",
                     side_effect=interrupt_one_restore):
                 with self.assertRaisesRegex(
-                        provenance.BuildProvenanceError,
+                        KeyboardInterrupt,
                         "caught cleanup interruption"):
                     transport.close()
             self.assertTrue(interrupted)
@@ -2151,15 +3255,21 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "git_tool": identity,
             }
             candidate = {
+                "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
                 "source_root": str(SOURCE_ROOT),
                 "executable_target": "bench_leopard2",
                 "tracked_source_manifest": manifest,
                 "validated_cache": {
-                    name: str(tool) for name in (
+                    **{name: str(tool) for name in (
                         "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER",
                         "CMAKE_AR", "CMAKE_RANLIB",
                         "CMAKE_MAKE_PROGRAM", "CMAKE_LINKER",
-                        "LEO2_BENCHMARK_GIT_EXECUTABLE")
+                        "LEO2_BENCHMARK_GIT_EXECUTABLE")},
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                        provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                        "a" * 64,
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
                 },
                 "c_compiler": identity,
                 "compiler": identity,
@@ -2231,6 +3341,159 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
 
 
 class ExactCommandValidationTests(unittest.TestCase):
+    def test_general_one_loss_cache_is_exactly_off(self) -> None:
+        cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "ENABLE_OPENMP": "ON",
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "a" * 64,
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_FUZZERS": "OFF",
+            "LEO2_ENABLE_CUDA": "OFF",
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEOPARD_ENABLE_GF8": "ON",
+            "LEOPARD_ENABLE_GF16": "ON",
+        }
+        validated = provenance._validate_candidate_required_cache(cache)
+        self.assertEqual(
+            validated["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
+        for value in ("ON", "TRUE", "", None, False):
+            with self.subTest(value=value):
+                changed = dict(cache)
+                if value is None:
+                    del changed[
+                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"]
+                else:
+                    changed[
+                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = value
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "GENERAL_ONE_LOSS_DIRECT"):
+                    provenance._validate_candidate_required_cache(changed)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "expected one of \\['BOOL'\\]"):
+            provenance.parse_cmake_cache(
+                b"LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:STRING=OFF\n")
+
+    def test_replay_contract_cannot_downgrade_current_closures(self) -> None:
+        digest = "a" * 64
+        current = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+            },
+        }
+        historical = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+            },
+        }
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                current, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "invocation_schema"],
+            provenance.REPLAY_INVOCATION_SCHEMA)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                historical,
+                provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2,
+                provenance.LEGACY_REPLAY_RECIPE_SCHEMA)[
+                    "invocation_schema"],
+            provenance.REPLAY_INVOCATION_SCHEMA_V1)
+        for candidate, proof, recipe in (
+            (
+                current,
+                provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2,
+                provenance.LEGACY_REPLAY_RECIPE_SCHEMA,
+            ),
+            (
+                historical,
+                provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA,
+            ),
+        ):
+            with self.subTest(schema=candidate["schema"]):
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "incompatible with its closure contract"):
+                    provenance._require_reproducible_replay_artifact_contract(
+                        candidate, proof, recipe)
+
+        missing_selector = copy.deepcopy(current)
+        del missing_selector["validated_cache"][
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"]
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "current reproducible-build closure configuration"):
+            provenance._reproducible_replay_contract(missing_selector)
+        historical_with_selector = copy.deepcopy(historical)
+        historical_with_selector["validated_cache"][
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "historical reproducible-build closure configuration"):
+            provenance._reproducible_replay_contract(
+                historical_with_selector)
+
+    def test_benchmark_compile_digest_is_bound_to_retained_cache(self) -> None:
+        source = (
+            SOURCE_ROOT / "bench/leopard2/benchmark.cpp").resolve(strict=True)
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-provenance-config-digest-") as directory:
+            build = Path(directory).resolve(strict=True)
+            digest = "a" * 64
+            header = (
+                build / "generated/leopard2-benchmark-attestation/"
+                "leopard2_benchmark_source_attestation.h")
+            tokens = [
+                str(tool_path("c++")),
+                "-Wall", "-Wextra", "-fopenmp", "-fopenmp",
+                "-O3", "-DNDEBUG", "-O3", "-std=gnu++11",
+                f"-I{SOURCE_ROOT}",
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
+                '-DLEO2_BENCHMARK_BUILD_TYPE=\"Release\"',
+                "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=" +
+                f'\"{header}\"',
+                "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=" +
+                f'\"{digest}\"',
+                "-o", "benchmark.cpp.o", "-c", str(source),
+            ]
+            self.assertEqual(
+                provenance._validate_compile_flags(
+                    tokens, source, source_root=SOURCE_ROOT,
+                    build_root=build,
+                    cache={
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                            digest,
+                    },
+                    benchmark_source=True,
+                    lexical_build_output=True),
+                "portable-core")
+            changed_cache = {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "b" * 64,
+            }
+            with self.assertRaisesRegex(
+                    provenance.BuildProvenanceError,
+                    "configuration digest is not bound"):
+                provenance._validate_compile_flags(
+                    tokens, source, source_root=SOURCE_ROOT,
+                    build_root=build, cache=changed_cache,
+                    benchmark_source=True,
+                    lexical_build_output=True)
+
     def test_build_root_normalization_requires_path_boundaries(self) -> None:
         build = Path("/tmp/leopard2-build-A")
         self.assertEqual(
@@ -2408,10 +3671,26 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ff8_tokens, ff8_source, source_root=SOURCE_ROOT,
                 cache={
                     "LEO2_BACKEND_VARIANT": "auto",
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
                     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
                 },
                 library_sources=backend_sources),
             "portable-core")
+        experimental_tokens = list(ff8_tokens)
+        experimental_tokens.insert(
+            1, "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "non-canonical compile definitions"):
+            provenance._validate_compile_flags(
+                experimental_tokens, ff8_source,
+                source_root=SOURCE_ROOT,
+                cache={
+                    "LEO2_BACKEND_VARIANT": "auto",
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+                },
+                library_sources=backend_sources)
 
         adversaries = {
             "portable umbrella": (
@@ -2615,10 +3894,59 @@ class PidfdWrapperTests(unittest.TestCase):
                     KeyboardInterrupt, "pre-close interruption"):
                 provenance._close_retained_mapping_descriptor(
                     mapping, "descriptor")
-        self.assertEqual(mapping, {"descriptor": descriptor})
-        provenance._close_retained_mapping_descriptor(
-            mapping, "descriptor")
         self.assertFalse(mapping)
+        with self.assertRaises(OSError):
+            os.fstat(descriptor)
+
+    def test_mapping_descriptor_same_inode_recycle_is_not_closed(
+            self) -> None:
+        for failure_type in (OSError, KeyboardInterrupt, SystemExit):
+            with self.subTest(failure=failure_type.__name__), \
+                    tempfile.TemporaryDirectory(
+                        prefix="leo2-mapping-same-inode-aba-") as directory:
+                path = Path(directory) / "same-inode"
+                path.write_bytes(b"mapping descriptor")
+                descriptor = os.open(path, os.O_RDONLY)
+                mapping = {"descriptor": descriptor}
+                replacement = -1
+                guards: list[int] = []
+                real_close = os.close
+                real_dup = os.dup
+                failure = failure_type(
+                    f"injected mapping {failure_type.__name__}")
+
+                def tracked_dup(value: int) -> int:
+                    self.assertEqual(value, descriptor)
+                    guard = real_dup(value)
+                    guards.append(guard)
+                    return guard
+
+                def close_reopen_same_inode(value: int) -> None:
+                    nonlocal replacement
+                    self.assertEqual(value, descriptor)
+                    real_close(value)
+                    replacement = os.open(path, os.O_RDONLY)
+                    self.assertEqual(replacement, descriptor)
+                    raise failure
+
+                try:
+                    with mock.patch.object(
+                            provenance.os, "dup",
+                            side_effect=tracked_dup), mock.patch.object(
+                                provenance.os, "close",
+                                side_effect=close_reopen_same_inode):
+                        with self.assertRaises(failure_type) as raised:
+                            provenance._close_retained_mapping_descriptor(
+                                mapping, "descriptor")
+                    self.assertIs(raised.exception, failure)
+                    self.assertFalse(mapping)
+                    os.fstat(replacement)
+                    self.assertEqual(len(guards), 1)
+                    with self.assertRaises(OSError):
+                        os.fstat(guards[0])
+                finally:
+                    if replacement >= 0:
+                        real_close(replacement)
 
     def test_proc_record_binds_exact_task_directory_inode(self) -> None:
         record = provenance._proc_process_record(os.getpid())
@@ -2723,6 +4051,493 @@ class PidfdWrapperTests(unittest.TestCase):
                     provenance.BuildProvenanceError,
                     "cannot open pidfd"):
                 provenance._linux_pidfd_open(789)
+
+
+class OwnerExceptionPrecedenceTests(unittest.TestCase):
+    """Every retained-owner family obeys one terminal-exception policy."""
+
+    _SIMPLE_OWNER_EXITS = (
+        ("descriptor", provenance._OwnedDescriptor.__exit__),
+        ("inotify", provenance._InotifyMutationGuard.__exit__),
+        ("artifact", provenance._ReplayArtifactSink.__exit__),
+        ("file", provenance._RetainedFileSnapshot.__exit__),
+        ("directory", provenance._RetainedDirectoryTree.__exit__),
+        ("git", provenance._RetainedGitMetadata.__exit__),
+        ("source", provenance._RetainedPrivateSourceTree.__exit__),
+        ("proc", provenance._ProcProcessSnapshot.__exit__),
+        ("recipe", provenance._TemporaryReplayRecipeTransport.__exit__),
+    )
+
+    @staticmethod
+    def _simple_owner(cleanup: BaseException) -> object:
+        class Owner:
+            label = "injected owner"
+
+            def close(self) -> None:
+                raise cleanup
+
+        return Owner()
+
+    def test_every_simple_owner_retains_earlier_terminal(self) -> None:
+        for name, owner_exit in self._SIMPLE_OWNER_EXITS:
+            with self.subTest(owner=name, primary="KeyboardInterrupt"):
+                primary = KeyboardInterrupt(f"{name} primary interrupt")
+                cleanup = OSError(f"{name} ordinary cleanup")
+                owner = self._simple_owner(cleanup)
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    owner_exit(
+                        owner, type(primary), primary,
+                        primary.__traceback__)
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(any(
+                    "later cleanup failure" in note and
+                    "ordinary cleanup" in note
+                    for note in getattr(primary, "__notes__", ())))
+
+            with self.subTest(owner=name, primary="SystemExit"):
+                primary = SystemExit(f"{name} primary exit")
+                cleanup = KeyboardInterrupt(f"{name} later interrupt")
+                owner = self._simple_owner(cleanup)
+                with self.assertRaises(SystemExit) as raised:
+                    owner_exit(
+                        owner, type(primary), primary,
+                        primary.__traceback__)
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(any(
+                    "later cleanup failure" in note and
+                    "later interrupt" in note
+                    for note in getattr(primary, "__notes__", ())))
+
+    def test_every_simple_owner_promotes_later_terminal(self) -> None:
+        for terminal_type in (KeyboardInterrupt, SystemExit):
+            for name, owner_exit in self._SIMPLE_OWNER_EXITS:
+                with self.subTest(
+                        owner=name, cleanup=terminal_type.__name__):
+                    primary = ValueError(f"{name} ordinary primary")
+                    cleanup = terminal_type(
+                        f"{name} terminal cleanup")
+                    owner = self._simple_owner(cleanup)
+                    with self.assertRaises(terminal_type) as raised:
+                        owner_exit(
+                            owner, type(primary), primary,
+                            primary.__traceback__)
+                    self.assertIs(raised.exception, cleanup)
+                    self.assertTrue(any(
+                        "earlier failure" in note and
+                        "ordinary primary" in note
+                        for note in getattr(cleanup, "__notes__", ())))
+
+    def test_every_simple_owner_keeps_ordinary_failures_fail_closed(
+            self) -> None:
+        for name, owner_exit in self._SIMPLE_OWNER_EXITS:
+            with self.subTest(owner=name):
+                primary = ValueError(f"{name} ordinary primary")
+                cleanup = OSError(f"{name} ordinary cleanup")
+                owner = self._simple_owner(cleanup)
+                with self.assertRaises(
+                        provenance.BuildProvenanceError) as raised:
+                    owner_exit(
+                        owner, type(primary), primary,
+                        primary.__traceback__)
+                self.assertIn("ordinary primary", str(raised.exception))
+                self.assertIn("ordinary cleanup", str(raised.exception))
+                self.assertIs(raised.exception.__cause__, cleanup)
+
+    def test_every_simple_owner_propagates_cleanup_without_primary(
+            self) -> None:
+        for cleanup_type in (OSError, KeyboardInterrupt, SystemExit):
+            for name, owner_exit in self._SIMPLE_OWNER_EXITS:
+                with self.subTest(
+                        owner=name, cleanup=cleanup_type.__name__):
+                    cleanup = cleanup_type(
+                        f"{name} unaccompanied cleanup")
+                    owner = self._simple_owner(cleanup)
+                    with self.assertRaises(cleanup_type) as raised:
+                        owner_exit(owner, None, None, None)
+                    self.assertIs(raised.exception, cleanup)
+
+    @staticmethod
+    def _construct_descriptor(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        owner = provenance._OwnedDescriptor()
+        with mock.patch.object(
+                provenance.os, "open", return_value=91), \
+                mock.patch.object(
+                    provenance.os, "fstat", side_effect=primary), \
+                mock.patch.object(
+                    provenance.os, "close", side_effect=cleanup):
+            owner.open("/injected/descriptor", os.O_RDONLY)
+
+    @staticmethod
+    def _construct_inotify(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        library = mock.Mock()
+        library.inotify_init1.return_value = 91
+        with mock.patch.object(
+                provenance.ctypes, "CDLL", return_value=library), \
+                mock.patch.object(
+                    provenance.os, "fdopen", side_effect=primary), \
+                mock.patch.object(
+                    provenance.os, "close", side_effect=cleanup):
+            provenance._InotifyMutationGuard("injected inotify")
+
+    @staticmethod
+    def _construct_artifact(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        with mock.patch.object(
+                provenance, "_linux_memfd_create", return_value=91), \
+                mock.patch.object(
+                    provenance.os, "fdopen", side_effect=primary), \
+                mock.patch.object(
+                    provenance.os, "close", side_effect=cleanup):
+            provenance._ReplayArtifactSink(
+                "/injected/artifact", "injected artifact")
+
+    @staticmethod
+    def _construct_file(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        class Guard:
+            descriptor = 91
+
+            @staticmethod
+            def _absolute_lexical(path: Path) -> Path:
+                return path
+
+            @staticmethod
+            def add_file_path(path: Path) -> None:
+                del path
+                raise primary
+
+            @staticmethod
+            def _close_without_verification() -> None:
+                raise cleanup
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-owner-file-constructor-") as directory:
+            path = Path(directory) / "input"
+            path.write_bytes(b"input")
+            with mock.patch.object(
+                    provenance, "_InotifyMutationGuard",
+                    return_value=Guard()):
+                provenance._RetainedFileSnapshot(path, "injected file")
+
+    @staticmethod
+    def _construct_directory(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        class Guard:
+            descriptor = 91
+
+            @staticmethod
+            def _absolute_lexical(path: Path) -> Path:
+                return path
+
+            @staticmethod
+            def add_directory_path(path: Path) -> None:
+                del path
+                raise primary
+
+            @staticmethod
+            def _close_without_verification() -> None:
+                raise cleanup
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-owner-directory-constructor-") as directory:
+            with mock.patch.object(
+                    provenance, "_InotifyMutationGuard",
+                    return_value=Guard()):
+                provenance._RetainedDirectoryTree(
+                    Path(directory), "injected directory")
+
+    @staticmethod
+    def _construct_git(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        class RetainedGitDirectory:
+            descriptor = 91
+
+            def __init__(self, path: Path, label: str) -> None:
+                del label
+                self.resolved = path.resolve(strict=True)
+
+            def __enter__(self) -> "RetainedGitDirectory":
+                return self
+
+            def __exit__(
+                self, exc_type: object, exc: object, tb: object,
+            ) -> None:
+                del exc_type, exc, tb
+                raise cleanup
+
+            @staticmethod
+            def verify() -> None:
+                raise primary
+
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-owner-git-constructor-") as directory:
+            source = Path(directory)
+            (source / ".git").mkdir()
+            with mock.patch.object(
+                    provenance, "_RetainedDirectoryTree",
+                    RetainedGitDirectory):
+                provenance._RetainedGitMetadata(source)
+
+    @staticmethod
+    def _construct_source(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        class Guard:
+            descriptor = 91
+
+            @staticmethod
+            def add_tree(path: Path) -> None:
+                del path
+                raise primary
+
+            @staticmethod
+            def _close_without_verification() -> None:
+                raise cleanup
+
+        with mock.patch.object(
+                provenance, "_capture_tracked_source_tree",
+                return_value={"files": [], "total_bytes": 0}), \
+                mock.patch.object(
+                    provenance, "_InotifyMutationGuard",
+                    return_value=Guard()):
+            provenance._RetainedPrivateSourceTree(
+                Path("/injected/source"), Path("/injected/destination"))
+
+    @staticmethod
+    def _construct_proc(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        with mock.patch.object(
+                provenance.os, "listdir", return_value=[]), \
+                mock.patch.object(
+                    provenance.os, "getpid", side_effect=primary), \
+                mock.patch.object(
+                    provenance._ProcProcessSnapshot, "close",
+                    side_effect=cleanup):
+            provenance._ProcProcessSnapshot()
+
+    @staticmethod
+    def _construct_recipe(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+                prefix="leo2-owner-recipe-constructor-") as directory:
+            with mock.patch.object(
+                    provenance, "_replay_recipe_candidates",
+                    side_effect=primary), mock.patch.object(
+                        provenance._TemporaryReplayRecipeTransport, "close",
+                        side_effect=cleanup):
+                provenance._TemporaryReplayRecipeTransport(
+                    Path(directory), {}, set())
+
+    @staticmethod
+    def _construct_containment(
+        primary: BaseException, cleanup: BaseException,
+    ) -> None:
+        with mock.patch.object(
+                provenance.os, "listdir", return_value=["1"]), \
+                mock.patch.object(
+                    provenance, "_validate_pidfd_support"), \
+                mock.patch.object(
+                    provenance, "_get_child_subreaper", return_value=0), \
+                mock.patch.object(
+                    provenance, "_set_child_subreaper",
+                    side_effect=(primary, cleanup)):
+            provenance._LinuxDescendantContainment().__enter__()
+
+    _CONSTRUCTORS = (
+        ("descriptor", _construct_descriptor),
+        ("inotify", _construct_inotify),
+        ("artifact", _construct_artifact),
+        ("file", _construct_file),
+        ("directory", _construct_directory),
+        ("git", _construct_git),
+        ("source", _construct_source),
+        ("proc", _construct_proc),
+        ("recipe", _construct_recipe),
+        ("containment", _construct_containment),
+    )
+
+    def test_every_constructor_retains_earlier_terminal(self) -> None:
+        for name, construct in self._CONSTRUCTORS:
+            with self.subTest(owner=name):
+                primary = KeyboardInterrupt(
+                    f"{name} constructor interrupt")
+                cleanup = OSError(f"{name} constructor cleanup")
+                with self.assertRaises(KeyboardInterrupt) as raised:
+                    construct(primary, cleanup)
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(any(
+                    "later cleanup failure" in note and
+                    "constructor cleanup" in note
+                    for note in getattr(primary, "__notes__", ())))
+
+    def test_every_constructor_promotes_cleanup_terminal(self) -> None:
+        for name, construct in self._CONSTRUCTORS:
+            with self.subTest(owner=name):
+                primary = ValueError(
+                    f"{name} ordinary constructor failure")
+                cleanup = SystemExit(
+                    f"{name} constructor terminal cleanup")
+                with self.assertRaises(SystemExit) as raised:
+                    construct(primary, cleanup)
+                self.assertIs(raised.exception, cleanup)
+                self.assertTrue(any(
+                    "earlier failure" in note and
+                    "ordinary constructor failure" in note
+                    for note in getattr(cleanup, "__notes__", ())))
+
+    def test_every_constructor_retains_first_of_two_terminals(self) -> None:
+        for name, construct in self._CONSTRUCTORS:
+            with self.subTest(owner=name):
+                primary = SystemExit(
+                    f"{name} constructor primary exit")
+                cleanup = KeyboardInterrupt(
+                    f"{name} constructor later interrupt")
+                with self.assertRaises(SystemExit) as raised:
+                    construct(primary, cleanup)
+                self.assertIs(raised.exception, primary)
+                self.assertTrue(any(
+                    "later cleanup failure" in note and
+                    "later interrupt" in note
+                    for note in getattr(primary, "__notes__", ())))
+
+    def test_every_constructor_ordinary_failures_remain_fail_closed(
+            self) -> None:
+        for name, construct in self._CONSTRUCTORS:
+            with self.subTest(owner=name):
+                primary = ValueError(
+                    f"{name} ordinary constructor primary")
+                cleanup = OSError(
+                    f"{name} ordinary constructor cleanup")
+                with self.assertRaises(
+                        provenance.BuildProvenanceError) as raised:
+                    construct(primary, cleanup)
+                self.assertIn(
+                    "ordinary constructor primary",
+                    str(raised.exception))
+                self.assertIn(
+                    "ordinary constructor cleanup",
+                    str(raised.exception))
+
+    @staticmethod
+    def _containment() -> object:
+        containment = object.__new__(
+            provenance._LinuxDescendantContainment)
+        containment.active = True
+        containment.process = None
+        containment.proven_empty = False
+        containment.previous_subreaper = 0
+        containment.leader = None
+        containment.known = set()
+        containment.pidfds = {}
+        containment.procfds = {}
+        return containment
+
+    def test_containment_retains_first_terminal_across_every_phase(
+            self) -> None:
+        primary = KeyboardInterrupt("containment primary interrupt")
+        cleanup = ValueError("containment ordinary cleanup")
+        restore = SystemExit("containment later exit")
+        descriptor = OSError("containment descriptor cleanup")
+        containment = self._containment()
+        with mock.patch.object(
+                provenance._LinuxDescendantContainment,
+                "terminate_unattached_and_reap",
+                side_effect=cleanup), mock.patch.object(
+                    provenance, "_set_child_subreaper",
+                    side_effect=restore), mock.patch.object(
+                        provenance._LinuxDescendantContainment,
+                        "_close_pidfds", side_effect=descriptor):
+            with self.assertRaises(KeyboardInterrupt) as raised:
+                provenance._LinuxDescendantContainment.__exit__(
+                    containment, type(primary), primary,
+                    primary.__traceback__)
+        self.assertIs(raised.exception, primary)
+        notes = getattr(primary, "__notes__", ())
+        self.assertTrue(any("ordinary cleanup" in note for note in notes))
+        self.assertTrue(any("later exit" in note for note in notes))
+        self.assertTrue(any("descriptor cleanup" in note for note in notes))
+
+    def test_containment_promotes_first_cleanup_terminal(self) -> None:
+        primary = ValueError("containment ordinary primary")
+        cleanup = SystemExit("containment terminal cleanup")
+        restore = KeyboardInterrupt("containment later interrupt")
+        descriptor = OSError("containment descriptor cleanup")
+        containment = self._containment()
+        with mock.patch.object(
+                provenance._LinuxDescendantContainment,
+                "terminate_unattached_and_reap",
+                side_effect=cleanup), mock.patch.object(
+                    provenance, "_set_child_subreaper",
+                    side_effect=restore), mock.patch.object(
+                        provenance._LinuxDescendantContainment,
+                        "_close_pidfds", side_effect=descriptor):
+            with self.assertRaises(SystemExit) as raised:
+                provenance._LinuxDescendantContainment.__exit__(
+                    containment, type(primary), primary,
+                    primary.__traceback__)
+        self.assertIs(raised.exception, cleanup)
+        notes = getattr(cleanup, "__notes__", ())
+        self.assertTrue(any("ordinary primary" in note for note in notes))
+        self.assertTrue(any("later interrupt" in note for note in notes))
+        self.assertTrue(any("descriptor cleanup" in note for note in notes))
+
+    def test_containment_ordinary_phases_remain_fail_closed(self) -> None:
+        primary = ValueError("containment ordinary primary")
+        cleanup = RuntimeError("containment ordinary cleanup")
+        restore = OSError("containment ordinary restore")
+        descriptor = LookupError("containment ordinary descriptor")
+        containment = self._containment()
+        with mock.patch.object(
+                provenance._LinuxDescendantContainment,
+                "terminate_unattached_and_reap",
+                side_effect=cleanup), mock.patch.object(
+                    provenance, "_set_child_subreaper",
+                    side_effect=restore), mock.patch.object(
+                        provenance._LinuxDescendantContainment,
+                        "_close_pidfds", side_effect=descriptor):
+            with self.assertRaises(
+                    provenance.BuildProvenanceError) as raised:
+                provenance._LinuxDescendantContainment.__exit__(
+                    containment, type(primary), primary,
+                    primary.__traceback__)
+        message = str(raised.exception)
+        for expected in (
+                "ordinary primary", "ordinary cleanup",
+                "ordinary restore", "ordinary descriptor"):
+            self.assertIn(expected, message)
+
+    def test_containment_cleanup_without_primary_is_fail_closed(self) -> None:
+        for cleanup_type, expected_type in (
+                (OSError, provenance.BuildProvenanceError),
+                (KeyboardInterrupt, KeyboardInterrupt),
+                (SystemExit, SystemExit)):
+            with self.subTest(cleanup=cleanup_type.__name__):
+                cleanup = cleanup_type(
+                    "containment unaccompanied cleanup")
+                containment = self._containment()
+                with mock.patch.object(
+                        provenance._LinuxDescendantContainment,
+                        "terminate_unattached_and_reap",
+                        side_effect=cleanup), mock.patch.object(
+                            provenance, "_set_child_subreaper"), \
+                        mock.patch.object(
+                            provenance._LinuxDescendantContainment,
+                            "_close_pidfds"):
+                    with self.assertRaises(expected_type) as raised:
+                        provenance._LinuxDescendantContainment.__exit__(
+                            containment, None, None, None)
+                if cleanup_type is not OSError:
+                    self.assertIs(raised.exception, cleanup)
 
 
 class BoundedDescendantContainmentTests(unittest.TestCase):
@@ -3203,6 +5018,7 @@ def reproducible_record() -> dict[str, object]:
         }],
         "archiver": identity("i"),
         "ranlib": identity("n"),
+        "benchmark_git": identity("g"),
     }
 
 
@@ -3271,30 +5087,51 @@ class ExactRecipeComparisonTests(unittest.TestCase):
                 "compile argv differs"):
             provenance.compare_reproducible_builds(candidate, rebuilt)
 
-    def test_raw_compile_recipe_changes_and_representation_changes_fail(
+    def test_compile_recipe_canonicalizes_safe_spelling_only(
             self) -> None:
         candidate = reproducible_record()
         entry = candidate["source_object_compile_closure"][0][
             "compile_entry"]
         entry["representation"] = "command"
         entry["command"] = shlex.join(entry["arguments"])
-        entry["normalized_command"] = provenance._normalize_root_token(
-            provenance._normalize_build_token(
-                entry["command"], Path(candidate["build_root"])),
-            Path(candidate["physical_source_root"]), "${SOURCE_ROOT}")
+        entry["normalized_command"] = shlex.join(
+            entry["normalized_arguments"])
 
         rebuilt = copy.deepcopy(candidate)
         rebuilt_entry = rebuilt["source_object_compile_closure"][0][
             "compile_entry"]
         rebuilt_entry["command"] = rebuilt_entry["command"].replace(
             " -Wall ", "  -Wall ", 1)
-        rebuilt_entry["normalized_command"] = provenance._normalize_root_token(
-            provenance._normalize_build_token(
-                rebuilt_entry["command"], Path(rebuilt["build_root"])),
-            Path(rebuilt["physical_source_root"]), "${SOURCE_ROOT}")
+        provenance.compare_reproducible_builds(candidate, rebuilt)
+
+        rebuilt = copy.deepcopy(candidate)
+        rebuilt_entry = rebuilt["source_object_compile_closure"][0][
+            "compile_entry"]
+        rebuilt_entry["command"] = rebuilt_entry["command"].replace(
+            " -Wall ", " -Wextra ", 1)
         with self.assertRaisesRegex(
                 provenance.BuildProvenanceError,
-                "raw compile recipe differs"):
+                "compile recipe normalization is invalid"):
+            provenance.compare_reproducible_builds(candidate, rebuilt)
+
+        rebuilt = copy.deepcopy(candidate)
+        rebuilt_entry = rebuilt["source_object_compile_closure"][0][
+            "compile_entry"]
+        rebuilt_entry["command"] = rebuilt_entry["command"].replace(
+            " -Wall ", " '-Wall -Wextra' ", 1)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "compile recipe normalization is invalid"):
+            provenance.compare_reproducible_builds(candidate, rebuilt)
+
+        rebuilt = copy.deepcopy(candidate)
+        rebuilt_entry = rebuilt["source_object_compile_closure"][0][
+            "compile_entry"]
+        rebuilt_entry["command"] = rebuilt_entry["command"].replace(
+            " -Wall ", " -Wall; /usr/bin/true ", 1)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "shell control"):
             provenance.compare_reproducible_builds(candidate, rebuilt)
 
         rebuilt = copy.deepcopy(candidate)
