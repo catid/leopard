@@ -77,12 +77,15 @@ def executable_sections_identity(executable: Path) -> dict[str, Any]:
         root = Path(directory)
         for index, section_name in enumerate(section_names):
             output = root / f"section-{index}.bin"
+            copied_elf = root / f"copy-{index}.elf"
             completed = subprocess.run(
                 [str(objcopy), "--dump-section",
-                 f"{section_name}={output}", str(executable)],
+                 f"{section_name}={output}", str(executable),
+                 str(copied_elf)],
                 env=base.CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE, timeout=10.0, check=False)
-            base.require(completed.returncode == 0 and output.is_file(),
+            base.require(completed.returncode == 0 and output.is_file() and
+                         copied_elf.is_file(),
                          f"objcopy failed for {section_name}: " +
                          completed.stderr.decode(
                              "utf-8", errors="replace")[-1000:])
