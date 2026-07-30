@@ -1,0 +1,183 @@
+{
+  "schema": "leopard2-small-direct-exact-main/v1",
+  "date_utc": "2026-07-30",
+  "bead": "leopard-79h.38.5.10.38",
+  "status": "directional exact-main comparison pending canonical coordinator exclusion",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "candidate_backend": "avx2",
+    "K": "5..16",
+    "R": "5..min(K,8)",
+    "loss_count": "5..R",
+    "shard_bytes": [
+      64,
+      1024,
+      4096,
+      65536
+    ],
+    "plan_reuse": [
+      1,
+      8,
+      64
+    ],
+    "unique_K_R_loss_shapes": 100,
+    "paired_cells": 1200,
+    "benchmark_invocations": 4800,
+    "order": "exact_main, leopard2, leopard2, exact_main",
+    "iterations_per_invocation": 7,
+    "warmups_per_invocation": 3,
+    "timing_cpu": 4
+  },
+  "identity": {
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "leopard2_source_commit": "8b837754e00ce89b2ad47e8818eab241bb7d5426",
+    "leopard2_executable_sha256": "03598cbab32c73ed9ca9e3e5436fc2dd8d514ba5573ca8c9f8ab62967e0452c7",
+    "result_hash_manifest_sha256": "6edff78418c48c149478e7684ef8a07c355693e53965853bfa8919b680800d33",
+    "raw_artifact_directory": "/tmp/leopard-small-direct-vs-exact-main-20260730",
+    "frozen_binary_hashes_verified_after_each_lane": true
+  },
+  "comparison_semantics": {
+    "ratio_orientation": "exact_main_time_over_leopard2_time",
+    "exact_main_decode": "legacy leo_decode, including pattern-dependent locator and decode setup on every call",
+    "leopard2_decode_execution": "reused immutable direct plan execution",
+    "leopard2_decode_amortized": "execution plus median plan setup divided by requested reuse",
+    "encode": "execution only after code-independent allocation and initialization",
+    "value_above_one": "Leopard2 is faster"
+  },
+  "correctness": {
+    "exact_main_round_trip_failures": 0,
+    "leopard2_round_trip_failures": 0,
+    "workload_digest_mismatches": 0,
+    "route_failures": 0,
+    "candidate_route": "direct/source_major"
+  },
+  "decode_summary": [
+    {
+      "shard_bytes": 64,
+      "reuse": 1,
+      "cells": 100,
+      "minimum_amortized_speedup": 0.293,
+      "geomean_amortized_speedup": 0.547,
+      "cells_slower_than_exact_main": 100,
+      "geomean_execution_speedup": 3.575
+    },
+    {
+      "shard_bytes": 64,
+      "reuse": 8,
+      "cells": 100,
+      "minimum_amortized_speedup": 1.269,
+      "geomean_amortized_speedup": 2.127,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 3.691
+    },
+    {
+      "shard_bytes": 64,
+      "reuse": 64,
+      "cells": 100,
+      "minimum_amortized_speedup": 2.265,
+      "geomean_amortized_speedup": 3.425,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 3.743
+    },
+    {
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "cells": 100,
+      "minimum_amortized_speedup": 0.599,
+      "geomean_amortized_speedup": 1.175,
+      "cells_slower_than_exact_main": 28,
+      "geomean_execution_speedup": 2.898
+    },
+    {
+      "shard_bytes": 1024,
+      "reuse": 8,
+      "cells": 100,
+      "minimum_amortized_speedup": 1.516,
+      "geomean_amortized_speedup": 2.480,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 2.927
+    },
+    {
+      "shard_bytes": 4096,
+      "reuse": 1,
+      "cells": 100,
+      "minimum_amortized_speedup": 1.149,
+      "geomean_amortized_speedup": 2.445,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 3.386
+    },
+    {
+      "shard_bytes": 65536,
+      "reuse": 1,
+      "cells": 100,
+      "minimum_amortized_speedup": 1.553,
+      "geomean_amortized_speedup": 3.166,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 3.241
+    },
+    {
+      "shard_bytes": 65536,
+      "reuse": 64,
+      "cells": 100,
+      "minimum_amortized_speedup": 1.905,
+      "geomean_amortized_speedup": 3.970,
+      "cells_slower_than_exact_main": 0,
+      "geomean_execution_speedup": 3.972
+    }
+  ],
+  "encode_finding": [
+    {
+      "shard_bytes": 64,
+      "geomean_exact_main_over_leopard2_range_across_reuse": [
+        0.377,
+        0.429
+      ],
+      "interpretation": "Leopard2 tiny encode is about 2.3 to 2.7 times slower; fixed API, validation, and transform setup dominate"
+    },
+    {
+      "shard_bytes": 1024,
+      "geomean_exact_main_over_leopard2_range_across_reuse": [
+        0.919,
+        0.975
+      ],
+      "interpretation": "Leopard2 remains slightly slower or near parity"
+    },
+    {
+      "shard_bytes": 4096,
+      "geomean_exact_main_over_leopard2_range_across_reuse": [
+        1.097,
+        1.122
+      ],
+      "interpretation": "Leopard2 is faster"
+    },
+    {
+      "shard_bytes": 65536,
+      "geomean_exact_main_over_leopard2_range_across_reuse": [
+        1.154,
+        1.331
+      ],
+      "interpretation": "Leopard2 is faster"
+    }
+  ],
+  "resource_policy": {
+    "subworkers": 0,
+    "substantial_processes_at_once": 1,
+    "benchmark_processes_at_once": 1,
+    "benchmark_scope_memory_limit_bytes": 402653184,
+    "benchmark_process_address_space_limit_bytes": 201326592,
+    "new_oom_events": 0
+  },
+  "decision": {
+    "direct_kernel_hypothesis_confirmed": true,
+    "production_promotion": false,
+    "reason": "byte-independent plan construction is still unsafe for tiny one-use calls, and 1..63-byte execution was separately rejected",
+    "next_high_value_work": [
+      "remove or bypass direct-plan setup from tiny one-shot decode",
+      "retain reusable plans for reuse-eight-and-higher workloads",
+      "optimize the legacy-high GF8 encoder fixed overhead below 4 KiB",
+      "repeat final candidate timings after canonical coordinator exclusion"
+    ]
+  }
+}
