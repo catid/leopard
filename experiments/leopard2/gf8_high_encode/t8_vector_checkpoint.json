@@ -1,0 +1,88 @@
+{
+  "schema": "leopard2-high-t8-vector-checkpoint-v1",
+  "date_utc": "2026-07-30",
+  "source": {
+    "commit": "00381f8ef4ad33e0b883034917c76986fdb950a2",
+    "tracked_dirty": false,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "cmake_option": "LEO2_EXPERIMENT_HIGH_T8_VECTOR"
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "pinned_logical_cpu": 4,
+    "numa_node": 0
+  },
+  "method": {
+    "process_rounds": 3,
+    "samples_per_process": 21,
+    "warmups": 6,
+    "reuse": 256,
+    "threads": 1,
+    "address_space_limit_bytes": 201326592,
+    "cgroup_memory_limit_bytes": 268435456,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock"
+  },
+  "binaries": {
+    "candidate_sha256": "6438fc0e1553de7364df07bc2527d9838800815e98e4ec47712f1e187b62bff2",
+    "control_sha256": "1ac01b349576a53a0481bb598500488f8ccfd546b00b4efab63e1e4d3a255d59",
+    "exact_main_sha256": "be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e",
+    "exact_main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "target_k8_r8_bytes64": [
+    {
+      "batch": 1,
+      "main_median_us": 0.049102,
+      "control_median_us": 0.078090,
+      "candidate_median_us": 0.027656,
+      "main_over_candidate": 1.775,
+      "control_over_candidate": 2.824
+    },
+    {
+      "batch": 8,
+      "main_median_us": 0.399930,
+      "control_median_us": 0.600711,
+      "candidate_median_us": 0.214180,
+      "main_over_candidate": 1.867,
+      "control_over_candidate": 2.805
+    },
+    {
+      "batch": 64,
+      "main_median_us": 3.039410,
+      "control_median_us": 4.775129,
+      "candidate_median_us": 1.763379,
+      "main_over_candidate": 1.724,
+      "control_over_candidate": 2.708
+    },
+    {
+      "batch": 1024,
+      "main_median_us": 62.627332,
+      "control_median_us": 83.027086,
+      "candidate_median_us": 36.784937,
+      "main_over_candidate": 1.703,
+      "control_over_candidate": 2.257
+    }
+  ],
+  "neighbor_control_over_candidate": {
+    "k8_r8_bytes32": 1.369,
+    "k8_r8_bytes33": 1.346,
+    "k8_r8_bytes63": 1.402,
+    "k8_r8_bytes65": 1.507,
+    "k7_r7_bytes64": 1.101,
+    "k8_r7_bytes64": 1.057,
+    "k9_r8_bytes64": 1.506
+  },
+  "correctness": {
+    "benchmark_processes": 78,
+    "benchmark_round_trips_passed": 78,
+    "release_tiny_transform_cells_per_configuration": 672,
+    "binding_oracle_checks_per_configuration": 136,
+    "asan_ubsan": "passed",
+    "asan_ubsan_peak_rss_kib": 36608
+  },
+  "code_generation": {
+    "avx2_object_text_delta_bytes": 3911,
+    "isolated_t8_section_bytes": 3811,
+    "transform_value_vector_spills": 0
+  }
+}

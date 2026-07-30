@@ -133,6 +133,56 @@ the exact-main executable SHA-256 was
 `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
 Both hashes were verified after the serialized run.
 
+### Register-light T=8 follow-up
+
+The default-off `LEO2_EXPERIMENT_HIGH_T8_VECTOR` follow-up closes the remaining
+64-byte `K=8,R=8` gap. The AVX2 kernel processes one 32-byte vector from each of
+the eight transform coordinates at a time. This keeps the eight live values and
+nibble-table temporaries within AVX2's 16-register file; the earlier two-vector
+form spilled. A dense, prevalidated 64-byte binding also enters this concrete
+transform directly instead of reconstructing the general sparse/tiled layout
+for every stripe. One-shot calls, sparse parity masks, other profiles, fields,
+backends, counts, and byte lengths retain their established paths.
+
+The final source was commit `00381f8ef4ad33e0b883034917c76986fdb950a2`.
+Candidate and same-source control JSON both attested a clean tree. Frozen
+SHA-256 values were:
+
+- T=8 candidate:
+  `6438fc0e1553de7364df07bc2527d9838800815e98e4ec47712f1e187b62bff2`;
+- same-source option-OFF control:
+  `1ac01b349576a53a0481bb598500488f8ccfd546b00b4efab63e1e4d3a255d59`;
+- exact Leopard main:
+  `be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e`.
+
+Three counterbalanced process rounds ran on pinned CPU 4 under the canonical
+lock. Each process used 21 samples, six warmups, reuse 256, one thread, a
+192-MiB address-space limit, and immutable lane-owned executables. Times below
+are the median of the three process medians in microseconds per batch call:
+
+| Batch | Leopard main | same-source control | T=8 candidate | main / candidate |
+|---:|---:|---:|---:|---:|
+| 1 | 0.049102 | 0.078090 | 0.027656 | 1.775x |
+| 8 | 0.399930 | 0.600711 | 0.214180 | 1.867x |
+| 64 | 3.039410 | 4.775129 | 1.763379 | 1.724x |
+| 1024 | 62.627332 | 83.027086 | 36.784937 | 1.703x |
+
+The adjacent-cell screen found no regression: candidate/control ratios were
+1.369x, 1.346x, 1.402x, and 1.507x at 32, 33, 63, and 65 bytes respectively;
+the `K=7,R=7`, `K=8,R=7`, and `K=9,R=8` 64-byte ratios were 1.101x, 1.057x,
+and 1.506x. All 78 benchmark processes completed their round-trip check.
+Enabled and disabled Release builds each passed the 672-cell tiny-transform
+matrix and 136 binding-oracle checks. The enabled target also passed Clang 18
+ASan+UBSan at 36 MiB RSS.
+
+The AVX2 object grows by 3,911 text bytes; its isolated `.text.leo2_t8`
+section is 3,811 bytes. Disassembly has four entry-time stack vector stores for
+pointer packing and no transform-value vector spills. The attestation
+regression separately proves that toggling this CMake option changes the
+effective build-configuration digest and relinks benchmarks. The compact
+machine-readable checkpoint is
+`experiments/leopard2/gf8_high_encode/t8_vector_checkpoint.json`.
+
 Unsupported overlap and any ordinary later-item validation error reject the
 whole batch before an earlier item executes. The preflight workspace contents
 are unspecified on return, but item scratch, shard outputs, and immutable
