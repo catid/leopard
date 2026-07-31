@@ -207,13 +207,13 @@
 #endif
 
 /*
-    Default-off extension for the remaining 1-KiB GF8 T=8 binding cells.
-    Candidate and control builds both compile this code.  The diagnostic
-    marker below changes only a nonzero initialized data word, preserving
-    instruction layout for same-source attribution.
+    Promoted extension for the independently qualified 1-KiB GF8 T=8 binding
+    cells.  Candidate and control builds both compile this code.  The
+    diagnostic marker below changes only a nonzero initialized data word,
+    preserving instruction layout for same-source attribution.
 */
 #ifndef LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
-#define LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION 0
+#define LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION 1
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION < 0 || \
     LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION > 1
