@@ -1,0 +1,269 @@
+{
+  "schema": "leopard2-gf8-t4-batch-checkpoint/v1",
+  "date_utc": "2026-07-31",
+  "disposition": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "T": 4,
+    "original_counts": [
+      3,
+      4,
+      5,
+      6,
+      7,
+      9,
+      10,
+      11
+    ],
+    "recovery_counts": [
+      3,
+      4
+    ],
+    "binding_shard_bytes": "32 through 2048 inclusive, divisible by 32",
+    "binding_requirements": "homogeneous byte count, every transmitted parity output present, one-thread context without a worker pool",
+    "measured_batches": [
+      1,
+      8,
+      64
+    ],
+    "measured_selected_byte_counts": [
+      64,
+      512,
+      1024,
+      1984,
+      2048
+    ],
+    "measured_route_off_boundary_bytes": 2112
+  },
+  "source": {
+    "candidate_commit": "643407ff525b59e11ccecab74041c9d04d459f8e",
+    "candidate_tree": "90e2e2a9c2aeb47445e8016adfe0c9c967d48787",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_tracked_dirty": false,
+    "control_tracked_dirty": false
+  },
+  "frozen_binaries": {
+    "candidate_sha256": "4b1359044ec3366e28509daa303347ae203ea30f7b7123080f1ea8ce18d07b66",
+    "same_source_control_sha256": "3a543dfe17a648886969a24194293b847a5d40a37877b8c8cd8cc97f9de6ca7e",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_executable_sections_sha256": "7698e9d80d5505562995c6168787a08d5ce06d2d91c603626dc7a60f4135ac9f",
+    "candidate_control_executable_sections_identical": true,
+    "verified_before_and_after_timing": true,
+    "diagnostic_delta": "one initialized-data selector word; executable instructions are identical"
+  },
+  "implementation": {
+    "structural_change": "The reusable encode binding prepares the four code-dependent AVX2 nibble-table groups once, then executes every item through the register-resident T=4 inverse-accumulate-forward kernel.",
+    "per_stripe_work_removed": [
+      "six or more repeated AVX2 table-preparation broadcasts/shuffles",
+      "general per-stripe scratch-geometry execution",
+      "the fourth parity store when R=3 punctures coordinate 3"
+    ],
+    "one_shot_change": "Complete AVX2 vector passes below 2 KiB also use the existing register-resident T=4 kernel; padded arbitrary-byte tails are explicitly excluded from a second coarse pass.",
+    "wire_format_changed": false,
+    "public_scratch_contract_changed": false,
+    "hot_path_allocations": 0,
+    "thread_pool_policy": "Contexts with a worker pool retain ordinary independent-stripe scheduling."
+  },
+  "correctness": {
+    "backend_startup_kat": "passed for K=3,4,5,6,7,9,10,11; R=3,4; two unaligned guarded items",
+    "independent_systematic_generator_checks": 201,
+    "legacy_parity": "matched",
+    "r3_punctured_output": "matched without storing parity coordinate 3",
+    "changed_source_reexecution": "passed",
+    "sparse_null_output_fallback": "passed",
+    "arbitrary_tail_fallback_2049_2080": "passed",
+    "explicit_binding_allocation_audit": "passed for four shapes, five byte counts, and three items per binding",
+    "all_timed_candidate_control_main_workload_digests_matched": true
+  },
+  "validation_exact_candidate_source": {
+    "gcc_13_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_batch_aliasing"
+      ],
+      "passed": 4,
+      "failed": 0,
+      "maximum_rss_kib": 214072
+    },
+    "clang_18_address_undefined_leak": {
+      "same_four_tests_passed": 4,
+      "failed": 0,
+      "maximum_rss_kib": 443676,
+      "memory_max_bytes": 536870912,
+      "asan_options": "detect_leaks=1:quarantine_size_mb=16:thread_local_quarantine_size_kb=256",
+      "ubsan_options": "halt_on_error=1:print_stacktrace=1"
+    },
+    "strict_warnings": {
+      "gcc_13": "passed",
+      "clang_18": "passed",
+      "flags": "-Wall -Wextra -Wpedantic -Werror"
+    },
+    "reduced_field_builds": {
+      "gf8_only_gcc_13_werror": "passed",
+      "gf16_only_gcc_13_werror": "passed"
+    },
+    "benchmark_json_regression": "passed"
+  },
+  "performance": {
+    "ratio_orientation": "baseline_time_over_candidate_time",
+    "statistics": "Geometric mean of paired log-time contrasts; two-sided Student-t 95 percent confidence interval.",
+    "host": "AMD Ryzen 9 9950X3D",
+    "benchmark_cpu": 4,
+    "reserved_idle_smt_sibling": 20,
+    "checkpoint": {
+      "unique_cells": 116,
+      "selected_target_cells": 104,
+      "route_off_boundary_cells": 12,
+      "processes": 2058,
+      "rounds_per_cell": 3,
+      "iterations_per_process": 9,
+      "warmups_per_process": 4,
+      "status_before_holdout": "Three selected cells had point gains above 5 percent but lower confidence bounds below 5 percent."
+    },
+    "fresh_holdout": {
+      "cells": 3,
+      "processes": 162,
+      "rounds_per_cell": 9,
+      "iterations_per_process": 15,
+      "warmups_per_process": 6,
+      "independent_seed_range": "0x7434e000 through 0x7434e002",
+      "status": "accepted"
+    },
+    "merged_selected_same_source": {
+      "cell_count": 104,
+      "minimum_speedup": 1.0620333843265675,
+      "median_speedup": 1.270283844151412,
+      "maximum_speedup": 6.833952416119575,
+      "minimum_ci95_lower_bound": 1.051119325604996
+    },
+    "merged_selected_vs_exact_leopard_main": {
+      "comparable_cell_count": 99,
+      "unavailable_cells": "Five K=3,R=4 cells; the exact Leopard1 API rejects R>K.",
+      "minimum_speedup": 1.1313601557046664,
+      "median_speedup": 1.729156995497045,
+      "maximum_speedup": 4.473872010322737,
+      "minimum_ci95_lower_bound": 1.1213549625502774,
+      "point_estimate_losses": 0
+    },
+    "representative_cells": [
+      {
+        "K": 4,
+        "R": 4,
+        "shard_bytes": 64,
+        "batch": 1,
+        "same_source_speedup": 3.1121760906270284,
+        "same_source_ci95": [
+          2.7645838381090964,
+          3.5034712586959422
+        ],
+        "exact_main_speedup": 1.70629408496493,
+        "exact_main_ci95": [
+          1.560847160339889,
+          1.865294423672023
+        ]
+      },
+      {
+        "K": 4,
+        "R": 4,
+        "shard_bytes": 64,
+        "batch": 64,
+        "same_source_speedup": 5.70369376177039,
+        "same_source_ci95": [
+          5.437303665673091,
+          5.983135121446501
+        ],
+        "exact_main_speedup": 3.724533431646802,
+        "exact_main_ci95": [
+          3.5951053281247827,
+          3.8586211021223273
+        ]
+      },
+      {
+        "K": 4,
+        "R": 4,
+        "shard_bytes": 1024,
+        "batch": 1,
+        "same_source_speedup": 1.3114256922021832,
+        "same_source_ci95": [
+          1.3005702127897545,
+          1.3223717791282354
+        ],
+        "exact_main_speedup": 1.217486742854184,
+        "exact_main_ci95": [
+          1.206265453027068,
+          1.2288124187806186
+        ]
+      },
+      {
+        "K": 4,
+        "R": 4,
+        "shard_bytes": 1024,
+        "batch": 64,
+        "same_source_speedup": 1.3499436776261262,
+        "same_source_ci95": [
+          1.346131512434287,
+          1.3537666386453535
+        ],
+        "exact_main_speedup": 1.6185223395074058,
+        "exact_main_ci95": [
+          1.6043277133654812,
+          1.6328425555831265
+        ]
+      },
+      {
+        "K": 11,
+        "R": 4,
+        "shard_bytes": 2048,
+        "batch": 1,
+        "same_source_speedup": 1.0620333843265675,
+        "same_source_ci95": [
+          1.052585156769254,
+          1.0715664211778375
+        ],
+        "exact_main_speedup": 1.1964385098981352,
+        "exact_main_ci95": [
+          1.181301094060751,
+          1.211769899447544
+        ]
+      }
+    ],
+    "route_off_boundary": {
+      "shard_bytes": 2112,
+      "cell_count": 12,
+      "same_source_point_ratio_range": [
+        0.9859650296878891,
+        1.0115290584910108
+      ],
+      "credible_regressions_greater_than_2_percent": 0
+    },
+    "comparison_semantics": "Leopard2 executes one reusable prevalidated binding call containing the stated batch. Exact Leopard main executes the same number of legacy encode calls. Setup is excluded from execution timing, as required by the codec/plan architecture; this is an end-to-end execution API comparison, not a kernel-only comparison."
+  },
+  "raw_evidence": {
+    "checkpoint_summary_sha256": "e2ff5190086ea5db5f787aa7bfb09900341dcb03e982e0a373f7dd934bfa953f",
+    "checkpoint_raw_sha256": "1b5650fd7c26037e9eba707e204dc16bad07be240d8470ad59d70521c90d3635",
+    "holdout_summary_sha256": "722cb04c4c3670d902fde33f85ee3bf01454533fd9826fb31a22933c93c24d25",
+    "holdout_raw_sha256": "e3236deb9bfc5b9667a4bb441c26b27ca009c501d7713836db85a4578ac05e94",
+    "runner_sha256": "a41a1a74b43a36317242d93e45b65bed90c5247f040297171011ace0528c1211",
+    "retention": "Full per-process JSON remains in the ignored /tmp checkpoint and holdout directories; this compact checkpoint is the committed durable result."
+  },
+  "limitations": {
+    "ordinary_call_scope": "The strongest gains come from reusable binding execution. Ordinary one-shot calls still pay validation and per-call table setup; this result does not claim that every non-binding tiny call beats Leopard1.",
+    "worker_pool_scope": "The shortcut intentionally does not run inside a context worker pool.",
+    "non_avx2_scope": "Scalar, SSSE3, AVX512, GFNI, NEON, and GF16 dispatch are unchanged.",
+    "hardware_counters": "Unavailable because kernel.perf_event_paranoid=4.",
+    "larger_bytes": "The production selector ends at 2048 bytes. Per-shape extension beyond 2 KiB remains a separate measured task."
+  },
+  "reproduction": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t4_batch_abba.py",
+    "coordination_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "build_parallelism": 2,
+    "sanitizer_parallelism": 1,
+    "timing_affinity": "taskset -c 4; SMT sibling CPU 20 reserved and observed idle",
+    "checkpoint_arguments": "--preset checkpoint --rounds 3 --iterations 9 --warmup 4",
+    "holdout_arguments": "--preset holdout --rounds 9 --iterations 15 --warmup 6"
+  }
+}

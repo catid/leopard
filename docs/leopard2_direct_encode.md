@@ -439,6 +439,79 @@ tail, forced source-loop unrolling, and a generated coefficient-major
 `K=5,R=5` circuit. Each either failed the five-percent whole-call gate or
 regressed through extra source loads, register pressure, or code size.
 
+## Promoted GF8/AVX2 T=4 batch-table amortization
+
+Dense reusable legacy-high bindings now amortize the fixed AVX2 preparation
+cost of the register-resident T=4 encoder. The selector requires GF8, AVX2, no
+context worker pool, `R` equal to 3 or 4, `K` in
+`{3,4,5,6,7,9,10,11}`, a homogeneous shard length divisible by 32 from 32
+through 2,048 bytes, and every transmitted parity output present. Any sparse
+output, heterogeneous byte count, unsupported shape, larger shard, or pooled
+context retains the ordinary prevalidated executor.
+
+The arithmetic kernel was already capable of keeping the four inverse
+accumulators and final forward transform in registers. The previous binding
+loop nevertheless entered that complete encoder once per stripe, rebuilding
+the same code-dependent nibble tables each time. The new callback prepares the
+three possible inverse-block table groups and the forward table group once per
+binding execution, then walks flat item-major pointer arrays. An `R=3`
+instantiation stores only the transmitted three-coordinate parity prefix.
+Neither variant changes the field, coordinate order, skew constants,
+shortening, puncturing, or parity bytes.
+
+Complete AVX2 passes in ordinary encoding below 2 KiB also enter the existing
+register-resident kernel. A ragged final public-byte tail is deliberately
+excluded from that coarse route: it is padded and executed exactly once by the
+tail path, not mistaken for another independent 64-byte encode. Backend startup
+tests cover every promoted `K,R` combination with two unaligned guarded
+stripes. The production test contributes 201 independent systematic-generator
+checks, including 2,049- and 2,080-byte fallbacks, changed source bytes,
+punctured `R=3`, and sparse null outputs. A separate allocation counter proves
+that repeated binding execution allocates no memory.
+
+The exact candidate source passed four focused GNU 13 Release tests and the
+same four tests under Clang 18 ASan, UBSan, and leak detection. GCC 13 and
+Clang 18 `-Werror` builds passed, as did GF8-only and GF16-only `-Werror`
+libraries. Candidate and diagnostic control binaries reported the same clean
+commit and tree and had byte-identical executable ELF sections; only a nonzero
+initialized-data selector word differed.
+
+Authoritative timing used CPU 4 with SMT sibling 20 reserved and idle. The
+checkpoint ran 2,058 processes over 104 selected cells and twelve 2,112-byte
+route-off boundaries. Three noisy cells whose point gains exceeded five
+percent received a fresh independent-seed, nine-round holdout of 162 more
+processes. After replacing only those predeclared estimates, every selected
+same-source cell cleared the five-percent lower-confidence gate: speedups
+ranged from 1.062x to 6.834x, the median was 1.270x, and the smallest lower
+95-percent bound was 1.051x. Exact Leopard main was available for 99 cells
+(`K=3,R=4` is rejected by its `R<=K` API); Leopard2 won all 99, from 1.131x
+to 4.474x with a 1.729x median. The smallest exact-main lower confidence bound
+was 1.121x.
+
+| K,R | bytes | batch | control / candidate | Leopard main / candidate |
+| --- | ---: | ---: | ---: | ---: |
+| 4,4 | 64 | 1 | 3.112x | 1.706x |
+| 4,4 | 64 | 64 | 5.704x | 3.725x |
+| 4,4 | 1,024 | 1 | 1.311x | 1.217x |
+| 4,4 | 1,024 | 64 | 1.350x | 1.619x |
+| 11,4 | 2,048 | 1 | 1.062x | 1.196x |
+
+These are execution comparisons after reusable setup. Leopard2 executes one
+prevalidated binding call containing the stated batch, while exact Leopard
+main executes the same number of legacy encode calls. Ordinary one-shot calls
+still pay validation and table setup, so this result is not generalized to
+every tiny non-binding invocation. At the excluded 2,112-byte boundary,
+same-source point ratios ranged from 0.986x to 1.012x and no cell had a
+credible regression greater than two percent.
+
+The compact result is
+`experiments/leopard2/gf8_high_encode/results/`
+`t4_batch_checkpoint_20260731.json`. The reproducible runner is
+`experiments/leopard2/gf8_high_encode/run_t4_batch_abba.py`; it rejects
+changed binary hashes, executable-section differences, dirty or mismatched
+source attestation, wrong dispatch, parity-digest differences, incorrect CPU
+topology, and any non-idle work observed on the reserved sibling.
+
 ## Promoted GF8/AVX2 T=8 one-block binding
 
 The reusable prevalidated encode-batch binding now enters the existing
