@@ -539,3 +539,63 @@ including frozen hashes, confidence intervals, test commands, and raw-result
 hashes, is
 `experiments/leopard2/gf8_high_encode/results/`
 `t8_k5r5_1088_checkpoint_20260730.json`.
+
+## Spill-free fused K=5,R=5 T=8 circuit
+
+The first fixed-profile kernel above retained two pairs of YMM spills in its
+32-byte loop. A direct dependency derivation removes those spills without
+changing the parent transform. Write `Mx(v)` for bytewise multiplication by
+the legacy GF8 element at log-table index `x`. After the lower inverse
+radix-4, the shortened upper input has the exact form
+
+    [E, 0, 0, 0] -> [M119(E), M136(E), M238(E), E].
+
+For each distance-four inverse/forward pair, the intermediate values needed by
+the requested outputs reduce to
+
+    t = u XOR s
+    z = u XOR M85(t)
+    b = t XOR z.
+
+The four lower outputs then use
+
+    o0  = u0
+    o1  = u1 XOR u0
+    l02 = u2 XOR u0
+    l13 = u3 XOR u1
+    o2  = l02 XOR M85(l13)
+    o3  = l13 XOR o2,
+
+and the sole requested upper output uses
+
+    c4 = b0 XOR M85(b2)
+    c5 = b1 XOR M85(b3)
+    o4 = c4 XOR M17(c5).
+
+The implementation scatters `o0..o3` while the log-85 tables are live, ending
+those vector lifetimes before computing `o4`. GCC 13 therefore emits an
+835-byte multiple-of-32 core with no stack frame, stack canary, or vector
+spill. The predecessor was 1,954 bytes with a 256-byte frame and 128 bytes of
+hot stack traffic per 32 input bytes. A separate scalar-tail function retains
+arbitrary positive byte lengths and the backend KAT covers an unaligned
+65-byte row. The 3,232-byte padded top-level caller frame remains: splitting
+it measured approximately neutral and was reverted.
+
+A clean nine-round, pinned holdout at 1088 bytes measured `1.0509x`
+`[1.0455,1.0563]` over the prior Leopard2 kernel and `1.5237x`
+`[1.5107,1.5369]` over exact Leopard main. The latter compares one
+prevalidated Leopard2 call for 64 stripes with 64 legacy API calls, so it is an
+end-to-end API result rather than an inner-kernel ratio. Neighbor campaigns at
+1024, 1087, 1089, and 1152 bytes found no credible regression greater than two
+percent. The mean gain clears five percent, while the lower confidence bound
+misses it narrowly at 4.55 percent; promotion uses the task's simple-circuit
+exception because the assembly defect is eliminated, the exact-main win is
+large, and dispatch outside the exact target cell is unchanged.
+
+The final source passes the three focused GNU 13 Release tests, the same tests
+under Clang 18 ASan+UBSan+LSan, and strict GCC/Clang warning builds. The
+machine-readable derivation, frozen binary identities, raw-manifest hashes,
+round results, neighbor screen, validation commands, and rejected variants are
+in
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_k5r5_spillfree_checkpoint_20260731.json`.

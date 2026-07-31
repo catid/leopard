@@ -1,0 +1,263 @@
+{
+  "schema": "leopard2-gf8-t8-k5r5-spillfree-checkpoint/v1",
+  "date_utc": "2026-07-31",
+  "disposition": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 5,
+    "R": 5,
+    "T": 8,
+    "shard_bytes": 1088,
+    "batch": 64,
+    "reuse": 256,
+    "iterations_per_process": 101,
+    "warmups_per_process": 8
+  },
+  "source": {
+    "candidate_commit": "664f4f6530a72429b259e6d1bc0a53ed51be05ed",
+    "candidate_tree": "050f152077aa8ca1312936747a291121ed618567",
+    "promoted_predecessor_commit": "1c31e86f747776ebdee37f403637671589e29c74",
+    "promoted_predecessor_tree": "ebd3e23cc16d5ec16c4b8c3bd41bfb82da7118d9",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_tracked_dirty": false,
+    "predecessor_tracked_dirty": false
+  },
+  "frozen_binaries": {
+    "candidate_sha256": "719c73581b5c4b6e2b5dc467a35830b4e5654701810728246600918bf0c0e859",
+    "promoted_predecessor_sha256": "4f6429684201f351c2a0b1f6458cf7ddf7e29809b1b4eae0147b07086a8182c2",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_build_id": "dcc8bad5dd5fdc1700c37eb7c772ee622b4b27d7",
+    "candidate_isa_note": "x86-64-baseline; AVX2 is confined to the dispatched translation unit",
+    "verified_before_and_after_timing": true
+  },
+  "algebra": {
+    "notation": "Mx(v) denotes multiplication of every GF8 byte in v by the legacy field element whose log-table index is x.",
+    "shortened_upper_inverse": "[E,0,0,0] -> [M119(E),M136(E),M238(E),E]",
+    "fused_cross_forward_pair": [
+      "t = u XOR s",
+      "z = u XOR M85(t)",
+      "b = t XOR z"
+    ],
+    "requested_lower_outputs": [
+      "o0 = u0",
+      "o1 = u1 XOR u0",
+      "l02 = u2 XOR u0",
+      "l13 = u3 XOR u1",
+      "o2 = l02 XOR M85(l13)",
+      "o3 = l13 XOR o2"
+    ],
+    "requested_upper_output": [
+      "c4 = b0 XOR M85(b2)",
+      "c5 = b1 XOR M85(b3)",
+      "o4 = c4 XOR M17(c5)"
+    ],
+    "wire_format_changed": false,
+    "independent_oracles": [
+      "generic padded legacy-high transform",
+      "direct systematic generator matrix"
+    ]
+  },
+  "implementation_footprint_gcc_13": {
+    "predecessor_kernel_text_bytes": 1954,
+    "predecessor_kernel_stack_frame_bytes": 256,
+    "predecessor_hot_loop_ymm_spill_bytes_per_32_input_bytes": 128,
+    "candidate_multiple_of_32_core_text_bytes": 835,
+    "candidate_multiple_of_32_core_stack_frame_bytes": 0,
+    "candidate_multiple_of_32_core_stack_canary": false,
+    "candidate_multiple_of_32_core_vector_spills": 0,
+    "candidate_scalar_tail_text_bytes": 999,
+    "candidate_dispatch_wrapper_text_bytes": 25,
+    "padded_top_level_caller_frame_bytes": 3232,
+    "padded_top_level_caller_frame_changed": false,
+    "note": "The hot vector core is spill-free. A separate attempt to split the padded top-level caller frame measured approximately 1.00x and was reverted."
+  },
+  "correctness": {
+    "backend_partial_contract_kat": "passed",
+    "independent_systematic_generator_parity": "passed",
+    "unaligned_65_byte_two_vector_plus_scalar_tail": "passed",
+    "mixed_64_1088_binding": "passed",
+    "atomic_fallback_64_513_binding": "passed",
+    "changed_source_reexecution": "passed",
+    "sparse_output_fallback": "passed",
+    "thread_pool_execution": "passed",
+    "all_timed_candidate_predecessor_main_workload_digests_matched": true
+  },
+  "validation_exact_candidate_source": {
+    "gcc_13_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend"
+      ],
+      "passed": 3,
+      "failed": 0,
+      "combined_ctest_maximum_rss_kib": 213340,
+      "note": "The AUTO test was temporarily soft-throttled below its working set; this affected wall time, not correctness."
+    },
+    "clang_18_address_undefined_leak": {
+      "production_and_backend_passed": 2,
+      "production_and_backend_failed": 0,
+      "production_and_backend_combined_maximum_rss_kib": 88832,
+      "auto_encode_backend_passed": 1,
+      "auto_encode_backend_failed": 0,
+      "auto_encode_backend_maximum_rss_kib": 439492,
+      "auto_encode_backend_memory_max_bytes": 536870912,
+      "asan_options": "detect_leaks=1:halt_on_error=1:quarantine_size_mb=16:thread_local_quarantine_size_kb=64",
+      "ubsan_options": "halt_on_error=1:print_stacktrace=1"
+    },
+    "strict_warnings": {
+      "gcc_13": "passed",
+      "clang_18": "passed",
+      "flags": "-Wall -Wextra -Wpedantic -Werror"
+    }
+  },
+  "performance": {
+    "ratio_orientation": "baseline_time_over_candidate_time",
+    "statistics": "Geometric mean of one log-time contrast per round; two-sided Student-t 95 percent confidence interval.",
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_idle_smt_sibling": 20,
+    "holdout_rounds": 9,
+    "order": "rotated mirrored three-arm order",
+    "candidate_vs_promoted_predecessor": {
+      "speedup": 1.0508898903742656,
+      "ci95": [
+        1.0454664211163693,
+        1.0563414944609786
+      ],
+      "round_speedups": [
+        1.0590954671,
+        1.0608356509,
+        1.0422912071,
+        1.0478456046,
+        1.0535363060,
+        1.0511935489,
+        1.0564853800,
+        1.0424168514,
+        1.0444994917
+      ]
+    },
+    "candidate_vs_exact_leopard_main": {
+      "speedup": 1.5237265227088725,
+      "ci95": [
+        1.5106987663185274,
+        1.53686662607424
+      ],
+      "comparison_semantics": "Leopard2 executes one prevalidated 64-stripe batch call; exact Leopard main executes 64 legacy encode calls. This is an end-to-end API comparison, not a kernel-only comparison."
+    },
+    "typical_median_us_per_64_stripe_batch": {
+      "candidate_range": [
+        15.2,
+        15.5
+      ],
+      "promoted_predecessor_range": [
+        16.0,
+        16.3
+      ],
+      "exact_leopard_main_range": [
+        23.0,
+        23.7
+      ]
+    },
+    "acceptance_note": "The 4.55 percent CI lower bound narrowly misses the task's strict 5 percent lower-bound target. Promotion uses its explicit exceptionally-simple-gain exception: the mean is 5.09 percent, the circuit removes all measured hot-loop spills, exact Leopard1 improves by 52.37 percent, and no neighbor has a credible regression."
+  },
+  "neighbor_screen_candidate_vs_promoted_predecessor": {
+    "rounds_per_cell": 3,
+    "cells": [
+      {
+        "shard_bytes": 1024,
+        "speedup": 1.0021145683,
+        "ci95": [
+          0.9908341,
+          1.0135234
+        ]
+      },
+      {
+        "shard_bytes": 1087,
+        "speedup": 1.0051086696,
+        "ci95": [
+          0.9871989,
+          1.0233434
+        ]
+      },
+      {
+        "shard_bytes": 1089,
+        "speedup": 0.9959628467,
+        "ci95": [
+          0.9768095,
+          1.0154917
+        ]
+      },
+      {
+        "shard_bytes": 1152,
+        "speedup": 1.0046132644,
+        "ci95": [
+          0.9757141,
+          1.0343684
+        ]
+      }
+    ],
+    "credible_regressions_greater_than_2_percent": 0,
+    "all_workload_digests_matched": true
+  },
+  "raw_evidence": {
+    "holdout_file_count": 54,
+    "holdout_relative_name_sha256_manifest": "a559fcf75d11fb873705d4dea9882fe6d99daf8e85586ea63afdf7f4ed6d96b9",
+    "neighbor_file_count": 48,
+    "neighbor_relative_name_sha256_manifest": "16336fd82e761025012b3e0ac5c9bc113cade82b8dba387fdf38651afe3fe542",
+    "manifest_method": "Within each raw directory: sha256sum *.json | sort | sha256sum.",
+    "retention": "Raw per-process JSON remains in the ignored /tmp campaign directories; this compact checkpoint is the committed durable result."
+  },
+  "rejected_followups": [
+    {
+      "candidate": "naive hand-scheduled dead-output forward",
+      "result": "GCC hot-loop spills increased from two YMM pairs to three; reverted."
+    },
+    {
+      "candidate": "split padded top-level caller frame",
+      "result": "Approximately 1.00x whole-call timing; reverted."
+    },
+    {
+      "candidate": "compile-time fixed 1088-byte core",
+      "speedup": 1.0004228,
+      "ci95": [
+        0.99185,
+        1.00907
+      ],
+      "result": "reverted"
+    },
+    {
+      "candidate": "cross-iteration log-85 table hoist",
+      "speedup": 1.0015545,
+      "ci95": [
+        0.99628,
+        1.00686
+      ],
+      "result": "reverted"
+    },
+    {
+      "candidate": "two-way loop unroll",
+      "speedup": 0.99877,
+      "candidate_core_text_bytes": 3004,
+      "control_core_text_bytes": 835,
+      "result": "reverted"
+    }
+  ],
+  "limitations": {
+    "hardware_counters": "Unavailable because kernel.perf_event_paranoid=4.",
+    "authoritative_scope": "This checkpoint qualifies only K=5,R=5,T=8 at 1088 bytes on the tested AVX2 host and leaves dispatch outside that cell unchanged."
+  },
+  "reproduction": {
+    "coordination_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "build_parallelism": 2,
+    "release_build_memory_max_bytes": 536870912,
+    "sanitizer_build_parallelism": 1,
+    "sanitizer_memory_max_bytes": 536870912,
+    "timing_affinity": "taskset -c 4 with SMT sibling CPU 20 held idle",
+    "frozen_candidate": "/tmp/leopard-t8-k5r5-664f4f6-artifacts/candidate",
+    "frozen_predecessor": "/tmp/leopard-t8-k5r5-1c31e86-artifacts/candidate",
+    "frozen_exact_main": "/tmp/leopard-t8-k5r5-1c31e86-artifacts/main"
+  }
+}
