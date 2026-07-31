@@ -61,6 +61,11 @@ def production_selected(k: int, r: int, shard_bytes: int) -> bool:
     return 32 <= shard_bytes <= maximum and shard_bytes % 32 == 0
 
 
+def main_supported(cell: Mapping[str, Any]) -> bool:
+    return int(cell["R"]) <= int(cell["K"]) and \
+        int(cell["bytes"]) % 64 == 0
+
+
 def shared_candidate_control() -> bool:
     try:
         candidate_index = sys.argv.index("--candidate") + 1
@@ -236,6 +241,7 @@ def key_main_cell(cell: Mapping[str, Any]) -> bool:
 
 
 BASE.production_selected = production_selected
+BASE.main_supported = main_supported
 BASE.require = require
 BASE.benchmark_command = benchmark_command
 BASE.validate_result = validate_result
