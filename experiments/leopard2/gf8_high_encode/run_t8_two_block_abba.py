@@ -33,8 +33,8 @@ SUMMARY_SCHEMA = "leopard2-gf8-t8-two-block-summary/v1"
 ONE_KIB_SCHEMA = "leopard2-gf8-t8-one-kib-extension-abba/v1"
 ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
-TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v2"
-TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v2"
+TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v3"
+TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v3"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -81,6 +81,7 @@ ONE_KIB_TWO_BLOCK_PRIOR_MASK = EXTENDED_PRODUCTION_MASKS[1024]
 ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000080
 TINY_BYTE_COUNTS = (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63)
 TINY_NEIGHBOR_BYTE_COUNTS = (64, 65)
+TINY_MAX_ISOLATION_ATTEMPTS = 3
 
 
 class EvidenceError(RuntimeError):
@@ -938,6 +939,17 @@ def main() -> int:
             if campaign == "tiny-extension"
             else "embedded full invocation records"
         ),
+        "isolation_retry_policy": {
+            "maximum_attempts_per_round": (
+                TINY_MAX_ISOLATION_ATTEMPTS
+                if campaign == "tiny-extension" else 1
+            ),
+            "retry_trigger": (
+                "objective CPU-pair isolation rejection only; timing values "
+                "are never consulted"
+            ),
+            "rejected_attempts_retained": campaign == "tiny-extension",
+        },
         "cells": [],
     }
     lock_descriptor: int | None = None
@@ -998,45 +1010,76 @@ def main() -> int:
                     if cell["role"] == "target"
                     else NEIGHBOR_ORDER
                 )
-                cell_raw = {"cell": dict(cell), "rounds": []}
+                cell_raw: dict[str, Any] = {
+                    "cell": dict(cell),
+                    "rounds": [],
+                }
+                if campaign == "tiny-extension":
+                    cell_raw["rejected_isolation_attempts"] = []
                 for round_index, order in enumerate(orders):
-                    before_cpu = SUPPORT.cpu_stat_snapshot(options.cpu)
-                    before_sibling = SUPPORT.cpu_stat_snapshot(options.sibling)
-                    before_ns = time.monotonic_ns()
-                    invocations = []
-                    for slot_index, label in enumerate(order):
-                        invocation = run_one(
-                            label, identities[label], cell, options.cpu,
-                            options.source_commit, options.source_tree,
-                            options.iterations, options.warmup,
-                            target_bytes,
-                            campaign=campaign,
-                            final_selector=options.final_selector,
-                            failure_output=options.output)
-                        artifact = options.output / (
-                            f"partial-{cell['id']}-round-{round_index}-"
-                            f"slot-{slot_index}.json"
-                        )
-                        write_exclusive(artifact, invocation)
-                        invocations.append(
-                            compact_invocation(invocation, artifact)
-                            if campaign == "tiny-extension"
-                            else invocation
-                        )
-                    isolation = SUPPORT.isolation_record(
-                        options.cpu, options.sibling, pair_lease,
-                        before_ns, time.monotonic_ns(),
-                        before_cpu, SUPPORT.cpu_stat_snapshot(options.cpu),
-                        before_sibling,
-                        SUPPORT.cpu_stat_snapshot(options.sibling))
-                    cell_raw["rounds"].append({
-                        "round": round_index,
-                        "order": list(order),
-                        "invocations": invocations,
-                        "isolation": isolation,
-                    })
-                    require(isolation["accepted"],
-                            f"contaminated {cell['id']} round {round_index}")
+                    maximum_attempts = (
+                        TINY_MAX_ISOLATION_ATTEMPTS
+                        if campaign == "tiny-extension" else 1
+                    )
+                    accepted = False
+                    for attempt in range(maximum_attempts):
+                        before_cpu = SUPPORT.cpu_stat_snapshot(options.cpu)
+                        before_sibling = SUPPORT.cpu_stat_snapshot(
+                            options.sibling)
+                        before_ns = time.monotonic_ns()
+                        invocations = []
+                        for slot_index, label in enumerate(order):
+                            invocation = run_one(
+                                label, identities[label], cell, options.cpu,
+                                options.source_commit, options.source_tree,
+                                options.iterations, options.warmup,
+                                target_bytes,
+                                campaign=campaign,
+                                final_selector=options.final_selector,
+                                failure_output=options.output)
+                            attempt_suffix = (
+                                f"-attempt-{attempt}"
+                                if campaign == "tiny-extension" else ""
+                            )
+                            artifact = options.output / (
+                                f"partial-{cell['id']}-round-{round_index}"
+                                f"{attempt_suffix}-slot-{slot_index}.json"
+                            )
+                            write_exclusive(artifact, invocation)
+                            invocations.append(
+                                compact_invocation(invocation, artifact)
+                                if campaign == "tiny-extension"
+                                else invocation
+                            )
+                        isolation = SUPPORT.isolation_record(
+                            options.cpu, options.sibling, pair_lease,
+                            before_ns, time.monotonic_ns(),
+                            before_cpu, SUPPORT.cpu_stat_snapshot(options.cpu),
+                            before_sibling,
+                            SUPPORT.cpu_stat_snapshot(options.sibling))
+                        round_record = {
+                            "round": round_index,
+                            "order": list(order),
+                            "invocations": invocations,
+                            "isolation": isolation,
+                        }
+                        if campaign == "tiny-extension":
+                            round_record["attempt"] = attempt
+                        if isolation["accepted"]:
+                            cell_raw["rounds"].append(round_record)
+                            accepted = True
+                            break
+                        if campaign == "tiny-extension":
+                            cell_raw[
+                                "rejected_isolation_attempts"
+                            ].append(round_record)
+                        else:
+                            cell_raw["rounds"].append(round_record)
+                    if not accepted:
+                        raw["cells"].append(cell_raw)
+                        raise EvidenceError(
+                            f"contaminated {cell['id']} round {round_index} "
+                            f"for all {maximum_attempts} attempts")
                 raw["cells"].append(cell_raw)
                 print(
                     f"{cell_index + 1}/{len(cells)} {cell['id']}",
@@ -1057,6 +1100,16 @@ def main() -> int:
                 neighbor_failures.append(result["cell"]["id"])
         raw["completed_utc"] = SUPPORT.utc_now()
         write_exclusive(options.output / "raw.json", raw)
+        accepted_process_count = sum(
+            len(round_value["invocations"])
+            for item in raw["cells"] for round_value in item["rounds"])
+        rejected_isolation_attempt_count = sum(
+            len(item.get("rejected_isolation_attempts", []))
+            for item in raw["cells"])
+        rejected_process_count = sum(
+            len(round_value["invocations"])
+            for item in raw["cells"]
+            for round_value in item.get("rejected_isolation_attempts", []))
         summary = {
             "schema": summary_schema,
             "status": "accepted" if not target_failures and
@@ -1075,6 +1128,7 @@ def main() -> int:
             "main_comparison_semantics": raw["main_comparison_semantics"],
             "runner": raw["runner"],
             "invocation_storage": raw["invocation_storage"],
+            "isolation_retry_policy": raw["isolation_retry_policy"],
             "campaign": campaign,
             "target_rounds": options.target_rounds,
             "neighbor_rounds": len(NEIGHBOR_ORDER),
@@ -1086,11 +1140,23 @@ def main() -> int:
                 result["cell"]["role"] != "target"
                 for result in analyses),
             "final_selector": options.final_selector,
-            "process_count": sum(
-                len(round_value["invocations"])
-                for item in raw["cells"] for round_value in item["rounds"]),
+            "process_count": (
+                accepted_process_count + rejected_process_count
+            ),
+            "accepted_process_count": accepted_process_count,
+            "rejected_isolation_process_count": rejected_process_count,
+            "rejected_isolation_attempt_count":
+                rejected_isolation_attempt_count,
             "all_digests_matched": True,
-            "all_rounds_zero_sibling_nonidle": True,
+            "all_accepted_rounds_isolated": all(
+                round_value["isolation"]["accepted"] is True
+                for item in raw["cells"] for round_value in item["rounds"]
+            ),
+            "all_rounds_zero_sibling_nonidle": all(
+                round_value["isolation"]["delta"][
+                    "reserved_sibling"]["nonidle_jiffies"] == 0
+                for item in raw["cells"] for round_value in item["rounds"]
+            ),
             "target_failures": target_failures,
             "neighbor_failures": neighbor_failures,
             "cells": analyses,
