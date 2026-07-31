@@ -33,8 +33,8 @@ SUMMARY_SCHEMA = "leopard2-gf8-t8-two-block-summary/v1"
 ONE_KIB_SCHEMA = "leopard2-gf8-t8-one-kib-extension-abba/v1"
 ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
-TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v1"
-TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v1"
+TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v2"
+TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v2"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -143,6 +143,19 @@ def file_identity(path: Path) -> dict[str, Any]:
     status = resolved.stat()
     require(status.st_size > 0 and os.access(resolved, os.X_OK),
             f"benchmark is not executable: {resolved}")
+    return {
+        "path": str(resolved),
+        "size": status.st_size,
+        "mode": status.st_mode & 0o777,
+        "sha256": sha256(resolved),
+    }
+
+
+def regular_file_identity(path: Path) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    status = resolved.stat()
+    require(status.st_size > 0 and resolved.is_file(),
+            f"evidence input is not a nonempty regular file: {resolved}")
     return {
         "path": str(resolved),
         "size": status.st_size,
@@ -716,6 +729,32 @@ def run_one(
     }
 
 
+def compact_invocation(
+    invocation: Mapping[str, Any],
+    artifact: Path,
+) -> dict[str, Any]:
+    """
+    Retain only analysis/provenance fields in the in-memory campaign record.
+
+    The complete benchmark JSON remains in the exclusive per-invocation
+    artifact.  This avoids growing resident memory with thousands of retained
+    sample arrays while preserving a hash-bound audit trail.
+    """
+    status = artifact.stat()
+    return {
+        "implementation": invocation["implementation"],
+        "elapsed_ns": invocation["elapsed_ns"],
+        "stdout_sha256": invocation["stdout_sha256"],
+        "stderr_sha256": invocation["stderr_sha256"],
+        "normalized": invocation["normalized"],
+        "result_artifact": {
+            "name": artifact.name,
+            "size": status.st_size,
+            "sha256": sha256(artifact),
+        },
+    }
+
+
 def confidence_interval(round_log_ratios: Sequence[float]) -> dict[str, Any]:
     round_count = len(round_log_ratios)
     require(round_count in (3, 9),
@@ -893,6 +932,12 @@ def main() -> int:
         "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
+        "runner": regular_file_identity(Path(__file__)),
+        "invocation_storage": (
+            "hash-bound per-invocation artifacts with compact in-memory index"
+            if campaign == "tiny-extension"
+            else "embedded full invocation records"
+        ),
         "cells": [],
     }
     lock_descriptor: int | None = None
@@ -968,12 +1013,16 @@ def main() -> int:
                             campaign=campaign,
                             final_selector=options.final_selector,
                             failure_output=options.output)
-                        invocations.append(invocation)
-                        write_exclusive(
-                            options.output /
+                        artifact = options.output / (
                             f"partial-{cell['id']}-round-{round_index}-"
-                            f"slot-{slot_index}.json",
-                            invocation)
+                            f"slot-{slot_index}.json"
+                        )
+                        write_exclusive(artifact, invocation)
+                        invocations.append(
+                            compact_invocation(invocation, artifact)
+                            if campaign == "tiny-extension"
+                            else invocation
+                        )
                     isolation = SUPPORT.isolation_record(
                         options.cpu, options.sibling, pair_lease,
                         before_ns, time.monotonic_ns(),
@@ -1024,6 +1073,8 @@ def main() -> int:
                 64 if campaign == "tiny-extension" else target_bytes
             ),
             "main_comparison_semantics": raw["main_comparison_semantics"],
+            "runner": raw["runner"],
+            "invocation_storage": raw["invocation_storage"],
             "campaign": campaign,
             "target_rounds": options.target_rounds,
             "neighbor_rounds": len(NEIGHBOR_ORDER),
