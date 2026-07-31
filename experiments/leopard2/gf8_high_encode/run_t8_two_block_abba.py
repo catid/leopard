@@ -33,8 +33,8 @@ SUMMARY_SCHEMA = "leopard2-gf8-t8-two-block-summary/v1"
 ONE_KIB_SCHEMA = "leopard2-gf8-t8-one-kib-extension-abba/v1"
 ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
-TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v3"
-TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v3"
+TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v4"
+TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v4"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -865,6 +865,12 @@ def parse_arguments() -> argparse.Namespace:
             "K=5..16/R=5..8 shape; exact main performs an explicitly "
             "labeled zero-padded 64-byte call with matching logical digests"
         ))
+    parser.add_argument(
+        "--cell-id", action="append", default=[],
+        help=(
+            "run only the named generated cell; repeat for a predeclared "
+            "holdout subset (tiny-extension campaigns only)"
+        ))
     return parser.parse_args()
 
 
@@ -880,6 +886,10 @@ def main() -> int:
         )) <= 1,
         "--one-kib-extension, --tiny-extension, and --final-selector "
         "are distinct campaigns")
+    require(not options.cell_id or options.tiny_extension,
+            "--cell-id is supported only with --tiny-extension")
+    require(len(options.cell_id) == len(set(options.cell_id)),
+            "--cell-id values must be unique")
     require(not options.output.exists(), "output path already exists")
     options.output.mkdir(parents=True)
     if options.tiny_extension:
@@ -902,6 +912,11 @@ def main() -> int:
         cells = target_cells(
             target_bytes, options.final_selector) + \
             neighbor_cells(target_bytes, options.final_selector)
+    if options.cell_id:
+        cells_by_id = {str(cell["id"]): cell for cell in cells}
+        unknown = sorted(set(options.cell_id) - set(cells_by_id))
+        require(not unknown, f"unknown --cell-id values: {unknown}")
+        cells = [cells_by_id[cell_id] for cell_id in options.cell_id]
     raw: dict[str, Any] = {
         "schema": schema,
         "created_utc": SUPPORT.utc_now(),
@@ -930,6 +945,7 @@ def main() -> int:
             else "equal physical and logical shard bytes"
         ),
         "campaign": campaign,
+        "cell_filter": list(options.cell_id),
         "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
@@ -1130,6 +1146,7 @@ def main() -> int:
             "invocation_storage": raw["invocation_storage"],
             "isolation_retry_policy": raw["isolation_retry_policy"],
             "campaign": campaign,
+            "cell_filter": raw["cell_filter"],
             "target_rounds": options.target_rounds,
             "neighbor_rounds": len(NEIGHBOR_ORDER),
             "cell_count": len(analyses),
