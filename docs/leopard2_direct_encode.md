@@ -761,3 +761,40 @@ Clang 18 ASan+UBSan+LSan. The compact current-source checkpoint is
 `experiments/leopard2/gf8_high_encode/results/`
 `t8_one_kib_checkpoint_20260731.json`; the checked-in runner is
 `experiments/leopard2/gf8_high_encode/run_t8_two_block_abba.py`.
+
+## Promoted T=8 arbitrary-tail selector
+
+The reusable legacy-high GF8/AVX2 binding now covers every legal
+`K=5..16`, `R=5..min(K,8)` profile for shard byte counts
+`1,2,3,7,8,15,16,17,31,32,33,63`. The one-block callback executes one
+shifted inverse transform and one forward transform. The two-block callback
+fuses both shifted inverse transforms, their coefficient XOR, and the final
+forward transform. For 33 through 63 bytes, an overlapping final in-range
+32-byte vector avoids temporary tail storage; shorter inputs use bounded
+staging.
+
+The three-round frozen campaign covered 504 target cells and 84 route
+neighbors in 10,080 accepted processes. Two exact-main comparisons were
+statistically inconclusive, so only those two predeclared cells were repeated
+for nine rounds. The combined disposition has no target or neighbor failure:
+
+| comparison | geometric-mean speedup | minimum point | minimum 95% lower bound |
+| --- | ---: | ---: | ---: |
+| Same-source selector-off control / Leopard2 | 2.9609x | 1.8349x | 1.6586x |
+| Padded exact Leopard main / Leopard2 | 1.5669x | 1.1947x | 1.0263x |
+
+Exact Leopard main cannot process a sub-64-byte shard. The second row
+therefore times a legal, zero-padded 64-byte legacy call while using the same
+logical input stream and comparing original, parity, and recovered-output
+digests over the requested prefix. It is an application-equivalent comparison,
+not a claim that both codecs physically processed the same number of bytes.
+The same-source comparison does use the exact requested byte count in both
+executables.
+
+The production-default binary from commit
+`59a745da8c6ecbc4342c64da428f762c3e16df36` has the same executable-section
+digest as the frozen candidate. Fresh default Release, feature-off, GF8-only,
+GF16-only, and Clang 18 ASan+UBSan+LSan gates passed. Full provenance,
+confidence intervals, rejected preliminary runs, and raw-result hashes are in
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_tiny_checkpoint_20260731.json`.

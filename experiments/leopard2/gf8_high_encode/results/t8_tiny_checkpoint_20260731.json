@@ -1,0 +1,218 @@
+{
+  "schema": "leopard2-gf8-t8-tiny-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-07-31",
+  "scope": {
+    "operation": "encode",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "padded_side_T": 8,
+    "original_count": "5..16",
+    "recovery_count": "5..min(K,8)",
+    "target_shard_bytes": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63],
+    "neighbor_shard_bytes": [64, 65],
+    "batch": 64,
+    "reuse": 64,
+    "selection": "Every legal target K/R/byte cell",
+    "wire_format_changed": false,
+    "hot_path_allocations": 0
+  },
+  "implementation": {
+    "description": "The AVX2 one-block T=8 callback handles arbitrary tails; the two-block callback fuses two shifted inverse transforms, coefficient XOR, and one forward transform. Byte counts 33..63 use an overlapping final in-range 32-byte vector and byte counts 1..31 use bounded staging.",
+    "kernel_commit": "5f4cedbae5a372b192e4c6c2d755dd7b2fd79375",
+    "logical_main_adapter_commit": "dc4cec762fe768704a0b7876ec433add3b62963d",
+    "bounded_runner_commit": "702add0faaaac3f7246eb250067192d14c6a7d2d",
+    "isolation_retry_commit": "ae7fc91fdd707741f799ff58ee17644075fa216c",
+    "holdout_filter_commit": "aac90bf45b9dd4a69529bfc895129c3855eefd24",
+    "promotion_commit": "59a745da8c6ecbc4342c64da428f762c3e16df36",
+    "promotion_tree": "4201a2afba6648830bdbeba0a11ae02fed896af4",
+    "diagnostic_control": "Define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING=0; candidate and control retain identical executable instruction sections."
+  },
+  "frozen_binaries": {
+    "benchmark_source_commit": "ae7fc91fdd707741f799ff58ee17644075fa216c",
+    "benchmark_source_tree": "cd640d2859a9ae7c115761b58bb18dbbaadda7cb",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_sha256": "04146da4f9a5031474e4cfd5ee661085a7df9626c9bee87bbf7dc947e68034d1",
+    "control_sha256": "1ea1969b20a223e120726a82795828d8a2c8874c89e41972c6191b04b9a77e53",
+    "exact_leopard_main_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+    "candidate_control_executable_sections_sha256": "ce84ab7f061f1aab37457d379d9c464f22392027cbe21d43ebe3b0e2ef9a768f",
+    "candidate_control_instruction_sections_identical": true,
+    "promotion_default_binary_sha256": "38f4f0e4644e201a556c0be0080d6dde0739e506059b556abf202a88b75912cd",
+    "promotion_default_executable_sections_sha256": "ce84ab7f061f1aab37457d379d9c464f22392027cbe21d43ebe3b0e2ef9a768f",
+    "promotion_default_instruction_sections_match_timed_candidate": true
+  },
+  "measurement": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "benchmark_cpu": 4,
+    "reserved_idle_smt_sibling": 20,
+    "statistics": "Geometric mean of paired per-round log contrasts with two-sided Student-t 95 percent confidence intervals",
+    "ratio_orientation": "baseline time divided by candidate time",
+    "same_source_control": "The control is the same source and executable instruction sections with only setup-time binding selection disabled.",
+    "exact_main_semantics": "Leopard main physically processes a legal zero-padded 64-byte shard. It consumes the same logical RNG stream, and input, parity, and recovery digests cover only the logical prefix. Therefore sub-64-byte results compare application-equivalent work but not identical physical byte counts."
+  },
+  "full_campaign": {
+    "schema": "leopard2-gf8-t8-tiny-extension-summary/v3",
+    "rounds_per_cell": 3,
+    "target_cells": 504,
+    "neighbor_cells": 84,
+    "accepted_processes": 10080,
+    "rejected_isolation_attempts": 0,
+    "all_digests_matched": true,
+    "all_accepted_rounds_isolated": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "neighbor_failures": [],
+    "initial_disposition": "Two target cells had exact-main point wins but inconclusive three-round lower confidence bounds; no production decision used those two measurements.",
+    "inconclusive_cells": [
+      {
+        "id": "tiny-k5-r5-b17",
+        "same_source_speedup": 2.32039,
+        "same_source_ci95_lower": 1.87213,
+        "padded_main_speedup": 1.22466,
+        "padded_main_ci95_lower": 0.97028
+      },
+      {
+        "id": "tiny-k7-r6-b8",
+        "same_source_speedup": 2.72831,
+        "same_source_ci95_lower": 2.13719,
+        "padded_main_speedup": 1.35349,
+        "padded_main_ci95_lower": 0.97447
+      }
+    ],
+    "raw_sha256": "a385eda07d943b64b61bba183d0b4447a3e11ef29a5453af3cd29333fcdbfbd0",
+    "summary_sha256": "36a3e59d78163cbf54d4baf61d712a9acd307f91ef33a7aba2ffd03f8b8ee5fa",
+    "runner_sha256": "8b789e4c91e30cea1351a2f2e8b215844b44b3c4ace815e4a101d7c57e72681b"
+  },
+  "predeclared_holdout": {
+    "schema": "leopard2-gf8-t8-tiny-extension-summary/v4",
+    "rounds_per_cell": 9,
+    "target_cells": 2,
+    "accepted_processes": 108,
+    "rejected_isolation_attempts": 0,
+    "all_digests_matched": true,
+    "all_accepted_rounds_isolated": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "target_failures": [],
+    "cells": [
+      {
+        "id": "tiny-k5-r5-b17",
+        "same_source_speedup": 2.4078148851326824,
+        "same_source_ci95": [2.311594744978831, 2.5080401889906554],
+        "padded_main_speedup": 1.2726657082087098,
+        "padded_main_ci95": [1.2156932968334924, 1.3323080822022637]
+      },
+      {
+        "id": "tiny-k7-r6-b8",
+        "same_source_speedup": 2.689452746612065,
+        "same_source_ci95": [2.5390588105890424, 2.848754840216223],
+        "padded_main_speedup": 1.3421566591939007,
+        "padded_main_ci95": [1.2696242090208834, 1.4188328207822496]
+      }
+    ],
+    "raw_sha256": "e8fdea0bc52e140c00601eec8e5ecc81fdecacb72c23746d042086adb80e50a5",
+    "summary_sha256": "60eefdc7ea2aa2026230d75e85190fc4f07db0aca2c2fc5b8fb9608d02011bb2",
+    "runner_sha256": "26920f3d189efd017111e0a4258fd84cff49637bb7a6022f145765696a0b07ee"
+  },
+  "combined_disposition": {
+    "method": "Use the full campaign for 502 targets and all 84 neighbors; replace only the two predeclared inconclusive targets with their nine-round holdout measurements.",
+    "status": "accepted",
+    "target_cells": 504,
+    "neighbor_cells": 84,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "same_source_speedup": {
+      "geomean": 2.960864536521637,
+      "minimum": 1.8348707562554727,
+      "minimum_ci95_lower": 1.658609132989599
+    },
+    "padded_exact_main_speedup": {
+      "geomean": 1.5669364918506727,
+      "minimum": 1.1947440890746,
+      "minimum_ci95_lower": 1.0263227176995844
+    }
+  },
+  "correctness_and_quality": {
+    "gnu13_release_default": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_batch_aliasing"
+      ],
+      "result": "4/4 passed"
+    },
+    "feature_off_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops"
+      ],
+      "result": "2/2 passed"
+    },
+    "gf8_only_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_field_options"
+      ],
+      "result": "2/2 passed"
+    },
+    "gf16_only_release": {
+      "test": "leopard2_field_options",
+      "result": "1/1 passed"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops"
+      ],
+      "result": "2/2 passed"
+    },
+    "backend_known_answer_tail_bytes": [1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63],
+    "independent_oracle": "The production test compares parity with the direct systematic generator and covers full/partial outputs, arbitrary tails, unaligned guards, repeated bindings, and threaded execution.",
+    "promotion_default_smoke": [
+      {
+        "K": 5,
+        "R": 5,
+        "bytes": 1,
+        "tiny_binding_enabled": true,
+        "one_block_selected": true,
+        "round_trip": true
+      },
+      {
+        "K": 16,
+        "R": 8,
+        "bytes": 63,
+        "tiny_binding_enabled": true,
+        "two_block_selected": true,
+        "round_trip": true
+      }
+    ]
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.0,
+    "neighbor_regression_floor": 0.98,
+    "online_benchmarking": false,
+    "profile_or_field_change": false
+  },
+  "rejected_preruns": [
+    {
+      "reason": "The first runner retained complete benchmark JSON and its 256 MiB cgroup killed only the runner at cell 553.",
+      "disposition": "No timing conclusion; 9,498 partial files without durable round-isolation records are invalid."
+    },
+    {
+      "reason": "The second runner correctly rejected one externally contaminated CPU-pair round at cell 324.",
+      "disposition": "No timing conclusion; this motivated objective, timing-blind isolation retries."
+    }
+  ],
+  "resource_policy": {
+    "release_build_memory_max_mib": 512,
+    "release_test_memory_max_mib": 256,
+    "sanitizer_build_memory_max_mib": 512,
+    "sanitizer_test_memory_max_mib": 256,
+    "build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "subworkers": 0
+  }
+}

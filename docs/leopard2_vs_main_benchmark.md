@@ -1,5 +1,32 @@
 # Leopard2 versus exact Leopard main
 
+## GF8 T=8 arbitrary-tail update: 2026-07-31
+
+Every dense legacy-high GF8/AVX2 T=8 profile with `K=5..16` and
+`R=5..min(K,8)` now uses the fused prepared binding at byte counts
+`1,2,3,7,8,15,16,17,31,32,33,63`. The combined frozen campaign contains 504
+target cells, 84 64/65-byte route neighbors, and a predeclared nine-round
+holdout for the only two initially inconclusive cells.
+
+| comparison | geometric-mean speedup | minimum point | minimum 95% lower bound |
+| --- | ---: | ---: | ---: |
+| Same-source selector-off control / Leopard2 | 2.9609x | 1.8349x | 1.6586x |
+| Padded exact Leopard main / Leopard2 | 1.5669x | 1.1947x | 1.0263x |
+
+All original, parity, and recovery digests matched, every accepted round had
+an idle reserved SMT sibling, and no neighbor failed the two-percent
+regression gate. Candidate and control executable instruction sections were
+identical. The final production-default binary has that same executable-section
+digest.
+
+Leopard main requires a physical shard length divisible by 64. For the
+sub-64-byte row it therefore processes a zero-padded 64-byte shard; input,
+parity, and recovery digests cover only the matching logical prefix. This is
+an application-equivalent comparison, whereas the same-source ratio times the
+exact requested byte count in both paths. The compact checkpoint is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_tiny_checkpoint_20260731.json`.
+
 ## GF8 T=8 one-kibibyte update: 2026-07-31
 
 Four additional dense legacy-high GF8/AVX2 encode profiles now use the

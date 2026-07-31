@@ -6,6 +6,34 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 T=8 arbitrary-tail checkpoint
+
+The production selector is commit
+`59a745da8c6ecbc4342c64da428f762c3e16df36`, tree
+`4201a2afba6648830bdbeba0a11ae02fed896af4`. Every dense legacy-high GF8/AVX2
+T=8 profile with `K=5..16`, `R=5..min(K,8)` now uses the fused prepared
+binding at byte counts `1,2,3,7,8,15,16,17,31,32,33,63`.
+
+The frozen three-round campaign covered 504 targets and 84 64/65-byte
+neighbors in 10,080 accepted processes. A predeclared nine-round holdout
+resolved the only two initially inconclusive exact-main cells. The combined
+same-source geomean is 2.9609x with a 1.6586x minimum lower confidence bound;
+the padded-64 exact-main geomean is 1.5669x with a 1.0263x minimum lower
+bound. Exact Leopard main physically processes 64 bytes for the sub-64-byte
+comparison, while all logical input/parity/recovery digests match.
+
+Fresh Release default, feature-off, GF8-only, GF16-only, and Clang 18
+ASan+UBSan+LSan gates passed. The final default binary's executable sections
+are byte-identical to the timed candidate. Compact evidence is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_tiny_checkpoint_20260731.json`.
+
+Attach the evidence to `leopard-79h.38.5.10.43.15`, close that child, and keep
+the parent `leopard-79h.38.5.10.43` open for the remaining sub-4-KiB high-rate
+GF8/AVX2 gap. Continue to use one substantial process at a time, Release
+`MemoryMax=512M` with `-j2`, sanitizer `-j1`, and narrow-test/timing
+`MemoryMax=256M`.
+
 ## 2026-07-31 GF8/AVX2 T=8 one-kibibyte checkpoint
 
 The final selector source is commit
