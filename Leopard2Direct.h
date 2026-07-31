@@ -245,6 +245,9 @@ bool HighT8RaggedBindingEnabled();
 /* Text-layout-neutral marker for equal-rounded GF8/AVX2 multi-loss repair. */
 bool EqualRoundedMultiLossEnabled();
 
+/* Equivalent marker for the bounded public one-shot repair path. */
+bool OneShotEqualRoundedDirectEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

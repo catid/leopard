@@ -275,6 +275,11 @@
 #error "LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES must be positive"
 #endif
 
+/*
+    Keep the one-shot direct-repair control in initialized data.  Both values
+    are nonzero and the routine remains compiled, so ON/OFF evidence changes
+    routing without changing executable instruction layout.
+*/
 #ifndef LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
 #define LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT 1
 #endif
@@ -657,6 +662,8 @@ static const size_t kScratchAlignment = 64;
 */
 static volatile uint32_t g_equal_rounded_multi_loss_mode =
     2U - LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS;
+static volatile uint32_t g_one_shot_equal_rounded_direct_mode =
+    2U - LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT;
 
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_high_t4_batch_binding_mode =
@@ -6175,7 +6182,7 @@ static leo2_result ValidateDecodeBuffers(
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
 }
 
-#if LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT && defined(LEO_HAS_FF8)
+#ifdef LEO_HAS_FF8
 static const uint64_t kOneShotEqualRoundedMaximumBytes = 514;
 static const size_t kOneShotEqualRoundedTileBytes = 256;
 
@@ -6205,7 +6212,8 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
     bool& handled)
 {
     handled = false;
-    if (!codec || shard_bytes == 0 ||
+    if (g_one_shot_equal_rounded_direct_mode != 1U ||
+        !codec || shard_bytes == 0 ||
         shard_bytes > kOneShotEqualRoundedMaximumBytes ||
         !IsEqualRoundedMultiLossDirectRepairCodec(codec) ||
         !codec->context || !codec->context->ops ||
@@ -10608,6 +10616,15 @@ bool EqualRoundedMultiLossEnabled()
 #endif
 }
 
+bool OneShotEqualRoundedDirectEnabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_one_shot_equal_rounded_direct_mode == 1U;
+#else
+    return false;
+#endif
+}
+
 bool HighT8TwoBlock320Enabled()
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -12683,7 +12700,7 @@ LEO2_EXPORT leo2_result leo2_decode(
     }
 #endif
 
-#if LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT && defined(LEO_HAS_FF8)
+#ifdef LEO_HAS_FF8
 #if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
     DecodePresencePrefix* const one_shot_direct_prefix =
         validated_prefix ? &presence_prefix : NULL;

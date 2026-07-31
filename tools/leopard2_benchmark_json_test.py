@@ -371,6 +371,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_build.add("equal_rounded_multi_loss_enabled")
+    if document["schema"] == "leopard2-benchmark-v8":
+        expected_build.add("one_shot_equal_rounded_direct_enabled")
     require(set(document["build"]) == expected_build, "build keys changed")
     require(type(document["build"]["compiler"]) is str and
             type(document["build"]["compiler_version"]) is str and
@@ -382,6 +384,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(type(document["build"][
                     "equal_rounded_multi_loss_enabled"]) is bool,
                 "equal-rounded build selector is not Boolean")
+    if document["schema"] == "leopard2-benchmark-v8":
+        require(type(document["build"][
+                    "one_shot_equal_rounded_direct_enabled"]) is bool,
+                "one-shot build selector is not Boolean")
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         for name in ("source_commit", "source_tree"):

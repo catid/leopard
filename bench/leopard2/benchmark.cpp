@@ -1600,6 +1600,13 @@ static int Run(const Options& options)
              << (leopard2_internal::EqualRoundedMultiLossEnabled() ?
                     "true" : "false");
     }
+    if (options.measure_one_shot_decode)
+    {
+        json << ",\n"
+             << "    \"one_shot_equal_rounded_direct_enabled\": "
+             << (leopard2_internal::OneShotEqualRoundedDirectEnabled() ?
+                    "true" : "false");
+    }
     json << "\n"
          << "  },\n"
          << "  \"parameters\": {\n"
