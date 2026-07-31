@@ -30,6 +30,9 @@ from typing import Any, Mapping, Sequence
 
 SCHEMA = "leopard2-gf8-t8-two-block-abba/v1"
 SUMMARY_SCHEMA = "leopard2-gf8-t8-two-block-summary/v1"
+ONE_KIB_SCHEMA = "leopard2-gf8-t8-one-kib-extension-abba/v1"
+ONE_KIB_SUMMARY_SCHEMA = \
+    "leopard2-gf8-t8-one-kib-extension-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 TARGET_CONTROL_FLOOR = 1.05
@@ -69,6 +72,10 @@ EXTENDED_PRODUCTION_MASKS = {
     960: 0x5FFF0D40,
     1024: 0x6FF70C00,
 }
+ONE_KIB_ONE_BLOCK_PRIOR_MASK = 0x4FCC
+ONE_KIB_ONE_BLOCK_EXTENSION_MASK = 0x0030
+ONE_KIB_TWO_BLOCK_PRIOR_MASK = EXTENDED_PRODUCTION_MASKS[1024]
+ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000380
 
 
 class EvidenceError(RuntimeError):
@@ -214,6 +221,54 @@ def production_selected(k: int, r: int, shard_bytes: int) -> bool:
         return False
     bit = 4 * (k - 9) + (r - 5)
     return (mask & (1 << bit)) != 0
+
+
+def one_kib_selection(
+    k: int,
+    r: int,
+    extension_enabled: bool,
+) -> bool:
+    if 5 <= k <= 8 and 5 <= r <= min(k, 8):
+        bit = 4 * (k - 5) + (r - 5)
+        mask = ONE_KIB_ONE_BLOCK_PRIOR_MASK
+        if extension_enabled:
+            mask |= ONE_KIB_ONE_BLOCK_EXTENSION_MASK
+        return (mask & (1 << bit)) != 0
+    if 9 <= k <= 16 and 5 <= r <= 8:
+        bit = 4 * (k - 9) + (r - 5)
+        mask = ONE_KIB_TWO_BLOCK_PRIOR_MASK
+        if extension_enabled:
+            mask |= ONE_KIB_TWO_BLOCK_EXTENSION_MASK
+        return (mask & (1 << bit)) != 0
+    return False
+
+
+def one_kib_extension_cells() -> list[dict[str, Any]]:
+    cells: list[dict[str, Any]] = []
+    index = 0
+    for k in range(5, 17):
+        for r in range(5, min(k, 8) + 1):
+            control_selected = one_kib_selection(k, r, False)
+            candidate_selected = one_kib_selection(k, r, True)
+            cells.append({
+                "id": f"one-kib-k{k}-r{r}",
+                "K": k,
+                "R": r,
+                "bytes": 1024,
+                "role": (
+                    "target"
+                    if candidate_selected and not control_selected
+                    else "neighbor"
+                ),
+                "seed": 0x172E000 + index,
+                "candidate_selected": candidate_selected,
+                "control_selected": control_selected,
+            })
+            index += 1
+    require(len(cells) == 42, "one-kib shape matrix is incomplete")
+    require(sum(cell["role"] == "target" for cell in cells) == 6,
+            "one-kib target intersection changed")
+    return cells
 
 
 def target_cells(
@@ -391,11 +446,30 @@ def validate_result(
                     "two-block",
                     "one-block-extended",
                     "one-block-beyond512",
+                    "one-kib-extension",
                 ),
                 f"unsupported campaign identity: {campaign}")
         require(isinstance(build, dict),
                 "Leopard2 build identity is absent")
-        if campaign == "two-block":
+        if campaign == "one-kib-extension":
+            expected_extension = implementation == "candidate"
+            expected_selected = cell.get(
+                f"{implementation}_selected") is True
+            one_block_shape = int(cell["K"]) <= 8
+            marker_valid = (
+                build.get("high_t8_one_block_extended_enabled") is True and
+                build.get("high_t8_one_block_beyond_512_enabled") is True and
+                build.get("high_t8_one_kilobyte_extension_enabled") is
+                    expected_extension and
+                build.get("high_t8_two_block_128_192_enabled") is True and
+                build.get("high_t8_two_block_320_enabled") is True and
+                build.get("high_t8_two_block_extended_enabled") is True and
+                build.get("high_t8_one_block_selected") is
+                    (expected_selected and one_block_shape) and
+                build.get("high_t8_two_block_selected") is
+                    (expected_selected and not one_block_shape)
+            )
+        elif campaign == "two-block":
             expected_128_192 = (
                 implementation == "candidate" or
                 target_bytes not in (128, 192)
@@ -639,6 +713,12 @@ def parse_arguments() -> argparse.Namespace:
             "validate the narrowed production selector: selected shapes are "
             "targets and excluded shapes are same-source regression neighbors"
         ))
+    parser.add_argument(
+        "--one-kib-extension", action="store_true",
+        help=(
+            "qualify only the six new 1024-byte T=8 selector shapes while "
+            "treating every other legal K=5..16/R=5..8 shape as a neighbor"
+        ))
     return parser.parse_args()
 
 
@@ -646,13 +726,26 @@ def main() -> int:
     options = parse_arguments()
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient benchmark repetitions")
+    require(not (options.one_kib_extension and options.final_selector),
+            "--one-kib-extension and --final-selector are distinct campaigns")
     require(not options.output.exists(), "output path already exists")
     options.output.mkdir(parents=True)
-    cells = target_cells(
-        options.target_bytes, options.final_selector) + \
-        neighbor_cells(options.target_bytes, options.final_selector)
+    if options.one_kib_extension:
+        target_bytes = 1024
+        campaign = "one-kib-extension"
+        schema = ONE_KIB_SCHEMA
+        summary_schema = ONE_KIB_SUMMARY_SCHEMA
+        cells = one_kib_extension_cells()
+    else:
+        target_bytes = options.target_bytes
+        campaign = "two-block"
+        schema = SCHEMA
+        summary_schema = SUMMARY_SCHEMA
+        cells = target_cells(
+            target_bytes, options.final_selector) + \
+            neighbor_cells(target_bytes, options.final_selector)
     raw: dict[str, Any] = {
-        "schema": SCHEMA,
+        "schema": schema,
         "created_utc": SUPPORT.utc_now(),
         "source_commit": options.source_commit,
         "source_tree": options.source_tree,
@@ -661,7 +754,8 @@ def main() -> int:
         "reserved_sibling": options.sibling,
         "iterations": options.iterations,
         "warmup": options.warmup,
-        "target_bytes": options.target_bytes,
+        "target_bytes": target_bytes,
+        "campaign": campaign,
         "final_selector": options.final_selector,
         "batch": 64,
         "reuse": 64,
@@ -733,7 +827,8 @@ def main() -> int:
                             label, identities[label], cell, options.cpu,
                             options.source_commit, options.source_tree,
                             options.iterations, options.warmup,
-                            options.target_bytes,
+                            target_bytes,
+                            campaign=campaign,
                             final_selector=options.final_selector,
                             failure_output=options.output)
                         invocations.append(invocation)
@@ -777,13 +872,14 @@ def main() -> int:
         raw["completed_utc"] = SUPPORT.utc_now()
         write_exclusive(options.output / "raw.json", raw)
         summary = {
-            "schema": SUMMARY_SCHEMA,
+            "schema": summary_schema,
             "status": "accepted" if not target_failures and
                 not neighbor_failures else "rejected",
             "source_commit": options.source_commit,
             "source_tree": options.source_tree,
             "main_commit": MAIN_COMMIT,
-            "target_bytes": options.target_bytes,
+            "target_bytes": target_bytes,
+            "campaign": campaign,
             "cell_count": len(analyses),
             "target_count": sum(
                 result["cell"]["role"] == "target"
