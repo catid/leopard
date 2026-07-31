@@ -101,6 +101,20 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_EXTENDED must be 0 or 1"
 #endif
+#ifndef LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
+#define LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION must be 0 or 1"
+#endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION must be 0 or 1"
+#endif
 
 namespace {
 
@@ -132,7 +146,12 @@ bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
         return k == 5 && r == 5;
     const size_t byte_index = (bytes - 576) / 64;
     const unsigned shape_bit = 4U * (k - 5U) + (r - 5U);
-    return (shape_masks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
+    uint16_t shape_mask = shape_masks[byte_index];
+    if (LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION != 0 &&
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION == 0 &&
+        bytes == 1024)
+        shape_mask |= UINT16_C(0x0030);
+    return (shape_mask & (UINT16_C(1) << shape_bit)) != 0;
 }
 
 bool IsExpectedT8OneBlockByteCount(
@@ -165,7 +184,12 @@ bool IsExpectedT8TwoBlockExtendedShapeByteCount(
         return false;
     const size_t byte_index = (bytes - 384) / 64;
     const unsigned shape_bit = 4U * (k - 9U) + (r - 5U);
-    return (shape_masks[byte_index] & (UINT32_C(1) << shape_bit)) != 0;
+    uint32_t shape_mask = shape_masks[byte_index];
+    if (LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION != 0 &&
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION == 0 &&
+        bytes == 1024)
+        shape_mask |= UINT32_C(0x10000380);
+    return (shape_mask & (UINT32_C(1) << shape_bit)) != 0;
 }
 
 bool IsExpectedT8TwoBlockByteCount(
@@ -1356,6 +1380,13 @@ int main()
         Require(context != NULL &&
             leo2_context_backend(context) == LEO2_BACKEND_AVX2,
             "explicit AVX2 context selected another backend");
+        const bool expected_one_kib_extension =
+            LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION != 0 &&
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION == 0;
+        Require(
+            leopard2_internal::HighT8OneKilobyteExtensionEnabled() ==
+                expected_one_kib_extension,
+            "T=8 one-kilobyte provenance marker differs from build policy");
         const uint64_t t4_diagnostic_checks =
             ExerciseT4DiagnosticControl();
 

@@ -1504,6 +1504,9 @@ static int Run(const Options& options)
          << "    \"high_t8_one_block_beyond_512_enabled\": "
          << (leopard2_internal::HighT8OneBlockBeyond512Enabled() ?
                 "true" : "false") << ",\n"
+         << "    \"high_t8_one_kilobyte_extension_enabled\": "
+         << (leopard2_internal::HighT8OneKilobyteExtensionEnabled() ?
+                "true" : "false") << ",\n"
          << "    \"high_t8_one_block_selected\": "
          << (high_t8_one_block_selected ? "true" : "false") << ",\n"
          << "    \"high_t8_two_block_128_192_enabled\": "

@@ -207,6 +207,27 @@
 #endif
 
 /*
+    Default-off extension for the remaining 1-KiB GF8 T=8 binding cells.
+    Candidate and control builds both compile this code.  The diagnostic
+    marker below changes only a nonzero initialized data word, preserving
+    instruction layout for same-source attribution.
+*/
+#ifndef LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
+#define LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION must be 0 or 1"
+#endif
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -600,6 +621,10 @@ static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
 static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_BEYOND_512;
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
+static volatile uint32_t g_high_t8_1024_extension_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION;
+#endif
 
 static bool IsHighT8OneBlockBeyond512ShapeByteCount(
     uint32_t original_count,
@@ -637,7 +662,17 @@ static bool IsHighT8OneBlockBeyond512ShapeByteCount(
         static_cast<size_t>((shard_bytes - 576) / 64);
     const uint32_t shape_bit =
         4U * (original_count - 5U) + (recovery_count - 5U);
-    return (kShapeMasks[byte_index] & (UINT16_C(1) << shape_bit)) != 0;
+    uint16_t shape_mask = kShapeMasks[byte_index];
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
+    /*
+        Independent nine-round holdout winners not selected by the prior
+        1024-byte mask: K=6/R=5..6.  Every other formerly excluded shape
+        stays on the mature executor.
+    */
+    if (shard_bytes == 1024 && g_high_t8_1024_extension_mode == 1U)
+        shape_mask |= UINT16_C(0x0030);
+#endif
+    return (shape_mask & (UINT16_C(1) << shape_bit)) != 0;
 }
 
 static bool IsHighT8OneBlockByteCount(
@@ -709,7 +744,16 @@ static bool IsHighT8TwoBlockExtendedShapeByteCount(
         static_cast<size_t>((shard_bytes - 384) / 64);
     const uint32_t shape_bit =
         4U * (original_count - 9U) + (recovery_count - 5U);
-    return (kShapeMasks[byte_index] & (UINT32_C(1) << shape_bit)) != 0;
+    uint32_t shape_mask = kShapeMasks[byte_index];
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
+    /*
+        Independent nine-round holdout winners not selected by the prior
+        1024-byte mask: K=10/R=8, K=11/R=5..6, and K=16/R=5.
+    */
+    if (shard_bytes == 1024 && g_high_t8_1024_extension_mode == 1U)
+        shape_mask |= UINT32_C(0x10000380);
+#endif
+    return (shape_mask & (UINT32_C(1) << shape_bit)) != 0;
 }
 
 static bool IsHighT8TwoBlockByteCount(
@@ -9944,6 +9988,15 @@ bool HighT8OneBlockBeyond512Enabled()
 {
 #ifdef LEO_HAS_FF8
     return g_high_t8_one_block_beyond_512_mode == 1U;
+#else
+    return false;
+#endif
+}
+
+bool HighT8OneKilobyteExtensionEnabled()
+{
+#if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION && defined(LEO_HAS_FF8)
+    return g_high_t8_1024_extension_mode == 1U;
 #else
     return false;
 #endif

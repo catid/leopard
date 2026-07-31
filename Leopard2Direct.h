@@ -233,6 +233,9 @@ bool HighT8OneBlockExtendedEnabled();
 /* Provisional marker for the measured one-block extension above 512 bytes. */
 bool HighT8OneBlockBeyond512Enabled();
 
+/* Marker for the independently qualified T=8 1024-byte shape extension. */
+bool HighT8OneKilobyteExtensionEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */
