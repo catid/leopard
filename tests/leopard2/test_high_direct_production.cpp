@@ -1300,7 +1300,7 @@ void ExerciseTinyFullOutputRegion(
         95, 96, 97, 127, 128, 129,
         191, 192, 193, 255, 256, 257,
         320, 384, 448, 511, 512, 513,
-        576, 640, 704, 768, 832, 896, 960, 1024, 1025, 1088
+        576, 640, 704, 768, 832, 896, 960, 1023, 1024, 1025, 1088
     };
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
@@ -1490,13 +1490,25 @@ int main()
             ExerciseT8BatchBinding(context, 63) +
             ExerciseT8BatchBinding(context, 64) +
             ExerciseT8BatchBinding(context, 65) +
+            ExerciseT8BatchBinding(context, 66) +
+            ExerciseT8BatchBinding(context, 95) +
+            ExerciseT8BatchBinding(context, 96) +
+            ExerciseT8BatchBinding(context, 97) +
+            ExerciseT8BatchBinding(context, 127) +
             ExerciseT8BatchBinding(context, 128) +
+            ExerciseT8BatchBinding(context, 129) +
+            ExerciseT8BatchBinding(context, 191) +
             ExerciseT8BatchBinding(context, 192) +
+            ExerciseT8BatchBinding(context, 193) +
+            ExerciseT8BatchBinding(context, 255) +
             ExerciseT8BatchBinding(context, 256) +
+            ExerciseT8BatchBinding(context, 257) +
             ExerciseT8BatchBinding(context, 320) +
             ExerciseT8BatchBinding(context, 384) +
             ExerciseT8BatchBinding(context, 448) +
+            ExerciseT8BatchBinding(context, 511) +
             ExerciseT8BatchBinding(context, 512) +
+            ExerciseT8BatchBinding(context, 513) +
             ExerciseT8BatchBinding(context, 576) +
             ExerciseT8BatchBinding(context, 640) +
             ExerciseT8BatchBinding(context, 704) +
@@ -1504,6 +1516,7 @@ int main()
             ExerciseT8BatchBinding(context, 832) +
             ExerciseT8BatchBinding(context, 896) +
             ExerciseT8BatchBinding(context, 960) +
+            ExerciseT8BatchBinding(context, 1023) +
             ExerciseT8BatchBinding(context, 1024);
         const uint64_t t8_partial_binding_checks =
             ExerciseT8PartialBindings(context);
@@ -1516,13 +1529,20 @@ int main()
             ExerciseT8PartialUnaligned(context, 63) +
             ExerciseT8PartialUnaligned(context, 64) +
             ExerciseT8PartialUnaligned(context, 65) +
+            ExerciseT8PartialUnaligned(context, 97) +
+            ExerciseT8PartialUnaligned(context, 127) +
             ExerciseT8PartialUnaligned(context, 128) +
+            ExerciseT8PartialUnaligned(context, 129) +
             ExerciseT8PartialUnaligned(context, 192) +
+            ExerciseT8PartialUnaligned(context, 193) +
             ExerciseT8PartialUnaligned(context, 256) +
+            ExerciseT8PartialUnaligned(context, 257) +
             ExerciseT8PartialUnaligned(context, 320) +
             ExerciseT8PartialUnaligned(context, 384) +
             ExerciseT8PartialUnaligned(context, 448) +
+            ExerciseT8PartialUnaligned(context, 511) +
             ExerciseT8PartialUnaligned(context, 512) +
+            ExerciseT8PartialUnaligned(context, 513) +
             ExerciseT8PartialUnaligned(context, 576) +
             ExerciseT8PartialUnaligned(context, 640) +
             ExerciseT8PartialUnaligned(context, 704) +
@@ -1530,6 +1550,7 @@ int main()
             ExerciseT8PartialUnaligned(context, 832) +
             ExerciseT8PartialUnaligned(context, 896) +
             ExerciseT8PartialUnaligned(context, 960) +
+            ExerciseT8PartialUnaligned(context, 1023) +
             ExerciseT8PartialUnaligned(context, 1024) +
             ExerciseT8PartialUnaligned(context, 1088);
         const uint64_t t8_two_block_unaligned_checks =
@@ -1539,13 +1560,20 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 63) +
             ExerciseT8TwoBlockUnaligned(context, 64) +
             ExerciseT8TwoBlockUnaligned(context, 65) +
+            ExerciseT8TwoBlockUnaligned(context, 97) +
+            ExerciseT8TwoBlockUnaligned(context, 127) +
             ExerciseT8TwoBlockUnaligned(context, 128) +
+            ExerciseT8TwoBlockUnaligned(context, 129) +
             ExerciseT8TwoBlockUnaligned(context, 192) +
+            ExerciseT8TwoBlockUnaligned(context, 193) +
             ExerciseT8TwoBlockUnaligned(context, 256) +
+            ExerciseT8TwoBlockUnaligned(context, 257) +
             ExerciseT8TwoBlockUnaligned(context, 320) +
             ExerciseT8TwoBlockUnaligned(context, 384) +
             ExerciseT8TwoBlockUnaligned(context, 448) +
+            ExerciseT8TwoBlockUnaligned(context, 511) +
             ExerciseT8TwoBlockUnaligned(context, 512) +
+            ExerciseT8TwoBlockUnaligned(context, 513) +
             ExerciseT8TwoBlockUnaligned(context, 576) +
             ExerciseT8TwoBlockUnaligned(context, 640) +
             ExerciseT8TwoBlockUnaligned(context, 704) +
@@ -1553,6 +1581,7 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 832) +
             ExerciseT8TwoBlockUnaligned(context, 896) +
             ExerciseT8TwoBlockUnaligned(context, 960) +
+            ExerciseT8TwoBlockUnaligned(context, 1023) +
             ExerciseT8TwoBlockUnaligned(context, 1024);
         leo2_context_destroy(context);
         const uint64_t t8_partial_thread_pool_checks =
@@ -1562,13 +1591,16 @@ int main()
             ExerciseT8PartialThreadPool(63) +
             ExerciseT8PartialThreadPool(64) +
             ExerciseT8PartialThreadPool(65) +
+            ExerciseT8PartialThreadPool(97) +
             ExerciseT8PartialThreadPool(128) +
+            ExerciseT8PartialThreadPool(257) +
             ExerciseT8PartialThreadPool(192) +
             ExerciseT8PartialThreadPool(256) +
             ExerciseT8PartialThreadPool(320) +
             ExerciseT8PartialThreadPool(384) +
             ExerciseT8PartialThreadPool(448) +
             ExerciseT8PartialThreadPool(512) +
+            ExerciseT8PartialThreadPool(513) +
             ExerciseT8PartialThreadPool(576) +
             ExerciseT8PartialThreadPool(640) +
             ExerciseT8PartialThreadPool(704) +
@@ -1576,6 +1608,7 @@ int main()
             ExerciseT8PartialThreadPool(832) +
             ExerciseT8PartialThreadPool(896) +
             ExerciseT8PartialThreadPool(960) +
+            ExerciseT8PartialThreadPool(1023) +
             ExerciseT8PartialThreadPool(1024) +
             ExerciseT8PartialThreadPool(1088);
         const uint64_t t8_two_block_thread_pool_checks =
@@ -1585,13 +1618,16 @@ int main()
             ExerciseT8TwoBlockThreadPool(63) +
             ExerciseT8TwoBlockThreadPool(64) +
             ExerciseT8TwoBlockThreadPool(65) +
+            ExerciseT8TwoBlockThreadPool(97) +
             ExerciseT8TwoBlockThreadPool(128) +
+            ExerciseT8TwoBlockThreadPool(257) +
             ExerciseT8TwoBlockThreadPool(192) +
             ExerciseT8TwoBlockThreadPool(256) +
             ExerciseT8TwoBlockThreadPool(320) +
             ExerciseT8TwoBlockThreadPool(384) +
             ExerciseT8TwoBlockThreadPool(448) +
             ExerciseT8TwoBlockThreadPool(512) +
+            ExerciseT8TwoBlockThreadPool(513) +
             ExerciseT8TwoBlockThreadPool(576) +
             ExerciseT8TwoBlockThreadPool(640) +
             ExerciseT8TwoBlockThreadPool(704) +
@@ -1599,6 +1635,7 @@ int main()
             ExerciseT8TwoBlockThreadPool(832) +
             ExerciseT8TwoBlockThreadPool(896) +
             ExerciseT8TwoBlockThreadPool(960) +
+            ExerciseT8TwoBlockThreadPool(1023) +
             ExerciseT8TwoBlockThreadPool(1024);
 #if LEO2_EXPECT_HIGH_DIRECT_PRODUCTION
         const char* const table_state = "ON";
