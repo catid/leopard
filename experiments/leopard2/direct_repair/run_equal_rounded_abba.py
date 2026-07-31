@@ -25,15 +25,16 @@ import os
 import shutil
 import statistics
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v1"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v1"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v1"
+SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v2"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v2"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v2"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -53,7 +54,7 @@ T95 = {
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
-MAX_ATTEMPTS = 3
+MAX_ATTEMPTS = 5
 MAX_JSON_BYTES = 32 << 20
 TARGET_ENDPOINT_TOLERANCE_NS = 10_000
 CHILD_ENVIRONMENT = {
@@ -109,7 +110,7 @@ def digest_object(value: object) -> str:
 
 
 def stable_seed(identifier: str) -> int:
-    material = (SCHEMA + ":" + identifier).encode("ascii")
+    material = (SEED_SCHEMA + ":" + identifier).encode("ascii")
     return int.from_bytes(hashlib.sha256(material).digest()[:8], "big")
 
 
@@ -232,6 +233,29 @@ def retained_file_identity(
         "mode": status.st_mode & 0o777,
         "sha256": T8.sha256(resolved),
     }
+
+
+def allocate_raw_run_directory(
+    raw_root: Path,
+    identifier: str,
+) -> tuple[Path, list[str]]:
+    """Retain incomplete attempts while giving each resume fresh filenames."""
+    cell_root = raw_root / identifier
+    cell_root.mkdir(mode=0o700, exist_ok=True)
+    prior = []
+    for entry in sorted(cell_root.iterdir(), key=lambda value: value.name):
+        require(entry.is_dir() and not entry.is_symlink(),
+                f"unexpected raw cell entry: {entry}")
+        prior.append(str(entry.relative_to(raw_root.parent)))
+    for _ in range(100):
+        directory = cell_root / (
+            f"run-{os.getpid()}-{time.monotonic_ns()}")
+        try:
+            directory.mkdir(mode=0o700)
+            return directory, prior
+        except FileExistsError:
+            continue
+    raise EvidenceError(f"cannot allocate raw run directory: {identifier}")
 
 
 def freeze_executable(origin: Path, directory: Path, name: str) -> dict[str, Any]:
@@ -593,6 +617,19 @@ def validate_cell_record(
         isinstance(value.get("rounds"), list) and
         isinstance(value.get("analysis"), dict),
         "cell record identity changed")
+    raw_run_directory = value.get("raw_run_directory")
+    prior_raw_directories = value.get("prior_incomplete_raw_directories")
+    raw_prefix = f"raw/{expected['id']}/run-"
+    require(
+        isinstance(raw_run_directory, str) and
+        raw_run_directory.startswith(raw_prefix) and
+        isinstance(prior_raw_directories, list) and
+        all(isinstance(path, str) and path.startswith(raw_prefix)
+            for path in prior_raw_directories) and
+        prior_raw_directories == sorted(prior_raw_directories) and
+        len(set(prior_raw_directories)) == len(prior_raw_directories) and
+        raw_run_directory not in prior_raw_directories,
+        "cell raw-run identity changed")
     require(value.get("target_rounds") == target_rounds,
             "cell record target-round policy changed")
     expected_rounds = 3 if expected["role"] == "neighbor" else target_rounds
@@ -795,8 +832,8 @@ def run(options: argparse.Namespace) -> int:
                         f"{index + 1}/{len(cells)} {item['id']} resumed",
                         file=sys.stderr, flush=True)
                     continue
-                raw_directory = raw_root / item["id"]
-                raw_directory.mkdir(mode=0o700)
+                raw_directory, prior_raw_directories = \
+                    allocate_raw_run_directory(raw_root, item["id"])
                 orders = TARGET_ORDER * (
                     options.target_rounds // len(TARGET_ORDER)
                 ) if item["role"] == "target" else NEIGHBOR_ORDER
@@ -836,6 +873,10 @@ def run(options: argparse.Namespace) -> int:
                     "pair_lease": pair_lease,
                     "cell": item,
                     "target_rounds": options.target_rounds,
+                    "raw_run_directory": str(
+                        raw_directory.relative_to(options.output)),
+                    "prior_incomplete_raw_directories":
+                        prior_raw_directories,
                     "rounds": rounds,
                     "rejected_attempts": rejected,
                     "analysis": analysis,
@@ -932,6 +973,17 @@ def self_test() -> int:
         abs(TARGET_ENDPOINT_TOLERANCE_NS) == 10_000 and
         abs(10_001) > TARGET_ENDPOINT_TOLERANCE_NS,
         "target endpoint tolerance changed")
+    require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
+    with tempfile.TemporaryDirectory(
+            prefix="leopard2-equal-rounded-self-test-") as temporary:
+        raw_root = Path(temporary) / "raw"
+        raw_root.mkdir(mode=0o700)
+        first, first_prior = allocate_raw_run_directory(raw_root, "cell")
+        second, second_prior = allocate_raw_run_directory(raw_root, "cell")
+        require(
+            first_prior == [] and first != second and
+            second_prior == [str(first.relative_to(raw_root.parent))],
+            "resumable raw-run allocation changed")
     print("equal-rounded runner self-test passed")
     return 0
 
