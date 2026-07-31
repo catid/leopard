@@ -1,0 +1,227 @@
+{
+  "schema": "leopard2-gf8-t4-extended-checkpoint/v1",
+  "date_utc": "2026-07-31",
+  "disposition": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "T": 4,
+    "execution": "reusable dense prevalidated encode binding",
+    "minimum_shard_bytes": 32,
+    "required_byte_multiple": 32,
+    "required_outputs": "all transmitted parity coordinates",
+    "thread_pool": "absent",
+    "maximum_shard_bytes_by_shape": [
+      { "K": 3, "R": 3, "bytes": 16384 },
+      { "K": 3, "R": 4, "bytes": 2048 },
+      { "K": 4, "R": 3, "bytes": 12288 },
+      { "K": 4, "R": 4, "bytes": 6144 },
+      { "K": 5, "R": 3, "bytes": 6144 },
+      { "K": 5, "R": 4, "bytes": 4096 },
+      { "K": 6, "R": 3, "bytes": 16384 },
+      { "K": 6, "R": 4, "bytes": 8192 },
+      { "K": 7, "R": 3, "bytes": 16384 },
+      { "K": 7, "R": 4, "bytes": 4096 },
+      { "K": 9, "R": 3, "bytes": 4096 },
+      { "K": 9, "R": 4, "bytes": 3072 },
+      { "K": 10, "R": 3, "bytes": 8192 },
+      { "K": 10, "R": 4, "bytes": 4096 },
+      { "K": 11, "R": 3, "bytes": 6144 },
+      { "K": 11, "R": 4, "bytes": 2048 }
+    ]
+  },
+  "source": {
+    "final_selector_commit": "789d25da08a71f8479df78b2d1cdccbc8d9ef6c8",
+    "final_selector_tree": "ac16be392cdbcabc919e545fabe934bac8d5d4e0",
+    "screen_commit": "cdfb115a898b8bee8b017b86cf1c0e51728f31a9",
+    "screen_tree": "5de6f20ede061707f0a43187f12e4b70808f71d3",
+    "independent_holdout_commit": "e48caad369dd4192337109e0e0ce733edb714922",
+    "independent_holdout_tree": "dc5827904b7627bfa91c2ab40da21dd93434e563",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "tracked_dirty": false
+  },
+  "frozen_final_binaries": {
+    "candidate_sha256": "4a75bb39cbc556f2172f6a84039083a8d44ce9b6125d667f5af6d13b4bca241c",
+    "same_executable_control_sha256": "4a75bb39cbc556f2172f6a84039083a8d44ce9b6125d667f5af6d13b4bca241c",
+    "candidate_control_same_inode": true,
+    "candidate_control_executable_sections_sha256": "972c956b551bb24956af070d7073488f4e9a13cd5e3349cad266fc5f8202f6d8",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "verified_after_timing": true
+  },
+  "measurement_method": {
+    "ratio_orientation": "baseline_time_over_candidate_time",
+    "statistics": "geometric mean of paired per-round log contrasts with two-sided Student-t 95 percent confidence intervals",
+    "same_executable_control": "the immutable codec snapshots a context-local setup-only diagnostic flag; candidate and control execute from hard links to the same inode",
+    "reason": "separate ELF files exhibited repeatable page-placement bias even when executable sections and routes were identical",
+    "host": "AMD Ryzen 9 9950X3D",
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "final_benchmark_cpu": 13,
+    "reserved_idle_smt_sibling": 29,
+    "hardware_counters": "unavailable because kernel.perf_event_paranoid=4"
+  },
+  "performance": {
+    "screen": {
+      "cells": 102,
+      "processes": 1740,
+      "rounds_per_cell": 3,
+      "status": "rejected before threshold reduction",
+      "reason": "thirteen predeclared targets had a same-source lower confidence bound below 1.05; no key exact-main failure, credible route-off regression, or Leopard1 point loss occurred"
+    },
+    "completed_independent_holdout": {
+      "usable_completed_cells": 12,
+      "usable_completed_processes": 648,
+      "rounds_per_cell": 9,
+      "discarded_work": "the thirteenth cell was interrupted at round four by CPU contamination and was not analyzed",
+      "result": "eight retained final-map cells cleared the same-source promotion floor; unsupported ceilings were reduced"
+    },
+    "final_source_holdout": {
+      "cells": 8,
+      "processes": 360,
+      "rounds_per_cell": 9,
+      "iterations_per_process": 9,
+      "warmups_per_process": 4,
+      "status": "accepted",
+      "target_control_failures": 0,
+      "exact_main_failures": 0,
+      "credible_route_off_regressions": 0,
+      "workload_digest_mismatches": 0,
+      "sibling_nonidle_rounds": 0
+    },
+    "merged_extended_selected_targets": {
+      "definition": "all selected 3072-through-16384-byte target cells from the screen, replacing only predeclared independent-holdout cells",
+      "cells": 49,
+      "same_source_speedup": {
+        "minimum": 1.059445273834117,
+        "median": 1.1010380198310672,
+        "maximum": 1.2647556736956342,
+        "minimum_ci95_lower_bound": 1.0504309907086256
+      },
+      "exact_leopard_main_speedup": {
+        "comparable_cells": 49,
+        "minimum": 1.3545507051202146,
+        "median": 1.6318776440799623,
+        "maximum": 1.896705188923196,
+        "minimum_ci95_lower_bound": 1.3343021197160707,
+        "point_estimate_losses": 0
+      }
+    },
+    "final_source_representative_targets": [
+      {
+        "K": 9,
+        "R": 3,
+        "bytes": 4096,
+        "same_source_speedup": 1.0943565362600676,
+        "same_source_ci95": [1.0790427463561847, 1.1098876596866607],
+        "exact_main_speedup": 1.5681878828718756,
+        "exact_main_ci95": [1.5412076014902738, 1.59564047932818]
+      },
+      {
+        "K": 9,
+        "R": 4,
+        "bytes": 3072,
+        "same_source_speedup": 1.0618666035689477,
+        "same_source_ci95": [1.0542999824578407, 1.06948752967483],
+        "exact_main_speedup": 1.6747967981044365,
+        "exact_main_ci95": [1.6593457978125137, 1.6903916704032287]
+      },
+      {
+        "K": 10,
+        "R": 4,
+        "bytes": 4096,
+        "same_source_speedup": 1.0802028469072564,
+        "same_source_ci95": [1.074426221794109, 1.086010529897642],
+        "exact_main_speedup": 1.426208648789249,
+        "exact_main_ci95": [1.4164084913113795, 1.436076613744396]
+      },
+      {
+        "K": 11,
+        "R": 4,
+        "bytes": 2048,
+        "same_source_speedup": 1.0955515827434146,
+        "same_source_ci95": [1.0895690522692503, 1.1015669616825752],
+        "exact_main_speedup": 1.4646514510618338,
+        "exact_main_ci95": [1.4568938977427497, 1.4724503111868505]
+      }
+    ],
+    "final_source_route_off_neighbors": {
+      "cells": 4,
+      "same_source_point_ratio_range": [1.0012888853870343, 1.0053834060859128],
+      "credible_regressions_greater_than_2_percent": 0
+    }
+  },
+  "correctness_and_quality": {
+    "independent_direct_generator": "passed",
+    "production_t4_binding_checks": 1213,
+    "release_tests": {
+      "passed": 4,
+      "failed": 0,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_batch_aliasing"
+      ],
+      "maximum_rss_kib": 213828
+    },
+    "clang_18_asan_ubsan_lsan": {
+      "passed": 3,
+      "failed": 0,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_batch_aliasing"
+      ],
+      "maximum_rss_kib": 110840,
+      "memory_max_bytes": 536870912,
+      "asan_options": "quarantine_size_mb=16:malloc_context_size=20:detect_leaks=1:halt_on_error=1",
+      "ubsan_options": "halt_on_error=1:print_stacktrace=1"
+    },
+    "strict_warnings": {
+      "gcc_13": "passed",
+      "clang_18": "passed",
+      "flags": "-Wall -Wextra -Wpedantic -Werror"
+    },
+    "reduced_field_builds": {
+      "gf8_only": "passed field-options and high-direct production tests",
+      "gf16_only": "passed build and field-options test after fixing the diagnostic context snapshot guard"
+    },
+    "hot_path_allocations": 0,
+    "wire_format_changed": false,
+    "all_timed_workload_digests_matched": true
+  },
+  "code_size": {
+    "baseline_commit": "643407ff525b59e11ccecab74041c9d04d459f8e",
+    "baseline_benchmark_text_bytes": 950536,
+    "final_benchmark_text_bytes": 951800,
+    "benchmark_text_delta_bytes": 1264,
+    "benchmark_text_delta_percent": 0.132978,
+    "baseline_archive_text_bytes": 770844,
+    "final_archive_text_bytes": 771452,
+    "archive_text_delta_bytes": 608,
+    "archive_text_delta_percent": 0.078875
+  },
+  "raw_evidence": {
+    "screen_summary_sha256": "cfb12b132e88fe119122368e10292d2bc1f948cb62fbeac693dd4ef892cc7b68",
+    "screen_raw_sha256": "8d366b81afb1b0aea5f80882c0da8a6b01775bb48c6a7e316cf0dec1654de173",
+    "completed_holdout_failure_manifest_sha256": "899ecedc228f113fdc1b7664015545c5b72d3419f72f5c4b5e1d14e92ff90eaa",
+    "final_holdout_summary_sha256": "6562169ff2a762e599335de69b5a691c78b310f21794c74ed1b1ef165759f243",
+    "final_holdout_raw_sha256": "560158d647866426b2ed38c1f15c912d435e47a38f4bef4635448403375a47b6",
+    "runner_sha256": "f5a0711650994aaca8e0b091ef43739fdc303c06e98d276615e97b12d0cfd3f5",
+    "retention": "full per-process JSON remains in the ignored /tmp artifact directories; this compact checkpoint is the durable committed result"
+  },
+  "limitations": {
+    "ordinary_encode": "the per-shape extension is for reusable prevalidated bindings; ordinary one-shot T=4 encoding retains the established 2048-byte ceiling",
+    "selector_scope": "unsupported shapes, sparse parity outputs, arbitrary byte tails, and worker-pool contexts retain the mature path",
+    "hardware_scope": "thresholds require second-microarchitecture validation before being described as universally optimal",
+    "profile_scope": "the result applies only to legacy_high_v1 GF8 AVX2 and does not change parity bytes"
+  },
+  "reproduction": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t4_extended_abba.py",
+    "coordination_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "build_parallelism": 2,
+    "sanitizer_parallelism": 1,
+    "final_holdout_arguments": "--preset holdout --rounds 9 --iterations 9 --warmup 4 --cpu 13 --sibling 29"
+  }
+}

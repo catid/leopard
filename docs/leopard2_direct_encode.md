@@ -445,9 +445,21 @@ Dense reusable legacy-high bindings now amortize the fixed AVX2 preparation
 cost of the register-resident T=4 encoder. The selector requires GF8, AVX2, no
 context worker pool, `R` equal to 3 or 4, `K` in
 `{3,4,5,6,7,9,10,11}`, a homogeneous shard length divisible by 32 from 32
-through 2,048 bytes, and every transmitted parity output present. Any sparse
-output, heterogeneous byte count, unsupported shape, larger shard, or pooled
-context retains the ordinary prevalidated executor.
+through the measured per-shape ceiling below, and every transmitted parity
+output present. Any sparse output, heterogeneous byte count, unsupported
+shape, shard above its ceiling, or pooled context retains the ordinary
+prevalidated executor.
+
+| K | R=3 maximum bytes | R=4 maximum bytes |
+| ---: | ---: | ---: |
+| 3 | 16,384 | 2,048 |
+| 4 | 12,288 | 6,144 |
+| 5 | 6,144 | 4,096 |
+| 6 | 16,384 | 8,192 |
+| 7 | 16,384 | 4,096 |
+| 9 | 4,096 | 3,072 |
+| 10 | 8,192 | 4,096 |
+| 11 | 6,144 | 2,048 |
 
 The arithmetic kernel was already capable of keeping the four inverse
 accumulators and final forward transform in registers. The previous binding
@@ -504,6 +516,37 @@ every tiny non-binding invocation. At the excluded 2,112-byte boundary,
 same-source point ratios ranged from 0.986x to 1.012x and no cell had a
 credible regression greater than two percent.
 
+The larger per-shape ceilings were evaluated separately after the common
+2,048-byte promotion. A 102-cell screen retained every result, including
+thirteen cells that initially missed the five-percent lower-confidence gate.
+An independent nine-round holdout supported eight of those cells; unsupported
+ceilings were reduced instead of weakening the gate. The final-source
+nine-round holdout then accepted all four changed maxima and all four
+immediately unselected neighbors. To remove an observed ELF page-placement
+bias, candidate and control were hard links to the same immutable executable;
+a context-local setup-only diagnostic flag selected the old path before codec
+creation.
+
+Across the final 49 selected target cells above 2 KiB, same-source speedups
+ranged from 1.059x to 1.265x with a 1.101x median. The smallest lower
+95-percent confidence bound was 1.050x. Leopard2 beat exact Leopard main in
+all 49 cells by 1.355x to 1.897x with a 1.632x median; its smallest lower
+bound was 1.334x. The final-source maxima were:
+
+| K,R | bytes | control / candidate | Leopard main / candidate |
+| --- | ---: | ---: | ---: |
+| 9,3 | 4,096 | 1.094x `[1.079,1.110]` | 1.568x `[1.541,1.596]` |
+| 9,4 | 3,072 | 1.062x `[1.054,1.069]` | 1.675x `[1.659,1.690]` |
+| 10,4 | 4,096 | 1.080x `[1.074,1.086]` | 1.426x `[1.416,1.436]` |
+| 11,4 | 2,048 | 1.096x `[1.090,1.102]` | 1.465x `[1.457,1.472]` |
+
+The final selector passed the four focused Release tests, three focused Clang
+18 ASan/UBSan/LSan tests, strict GCC and Clang builds, and GF8-only and
+GF16-only field builds. The reduced-field gate found and fixed an unconditional
+reference to the GF8 diagnostic state in a GF16-only context. Relative to the
+common 2-KiB implementation, archive text grew by 608 bytes (0.079 percent)
+and benchmark executable text by 1,264 bytes (0.133 percent).
+
 The compact result is
 `experiments/leopard2/gf8_high_encode/results/`
 `t4_batch_checkpoint_20260731.json`. The reproducible runner is
@@ -511,6 +554,11 @@ The compact result is
 changed binary hashes, executable-section differences, dirty or mismatched
 source attestation, wrong dispatch, parity-digest differences, incorrect CPU
 topology, and any non-idle work observed on the reserved sibling.
+
+The per-shape extension result is
+`experiments/leopard2/gf8_high_encode/results/`
+`t4_extended_checkpoint_20260731.json`; its runner is
+`experiments/leopard2/gf8_high_encode/run_t4_extended_abba.py`.
 
 ## Promoted GF8/AVX2 T=8 one-block binding
 

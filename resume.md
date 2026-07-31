@@ -6,6 +6,32 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 T=4 extended-binding checkpoint
+
+The final production selector is commit
+`789d25da08a71f8479df78b2d1cdccbc8d9ef6c8`. Reusable dense legacy-high
+bindings now keep the prepared T=4 AVX2 tables through per-`K,R` ceilings up
+to 16 KiB. The exact table, merged 49-cell evidence, raw hashes, code-size
+delta, and reproduction arguments are in
+`experiments/leopard2/gf8_high_encode/results/`
+`t4_extended_checkpoint_20260731.json`.
+
+The final-source nine-round same-executable holdout is
+`/tmp/leopard2-t4-extended-789d25d-final-holdout-r9`: 8/8 cells accepted,
+360 processes, all digests equal, no sibling activity, no route-off
+regression, and no Leopard1 loss. The four target same-source gains are
+1.062x to 1.096x; exact-main gains are 1.426x to 1.675x. The final focused
+Release gate passed 4/4, ASan+UBSan+LSan passed 3/3 at 110,840 KiB RSS, strict
+GCC/Clang passed, and reduced-field builds passed. The reduced-field gate also
+found and fixed a GF16-only compile failure caused by an unconditional
+reference to the GF8 diagnostic selector.
+
+Before taking new work, attach this evidence to
+`leopard-79h.38.5.10.35.2`, close it, sync Beads, and commit/push the evidence
+files. Then resume the largest remaining exact-Leopard1 GF8 gap, currently
+`leopard-79h.38.5.10.43` (sub-4-KiB high encode), using the same-inode
+candidate/control method.
+
 ## 2026-07-30 OOM-safe source-plan negative result
 
 The default-off `LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN` candidate was screened
