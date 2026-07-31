@@ -78,7 +78,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpand|vpbroadcastb|vpbroadcastq|vpextrq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpaddq|vpand|vpbroadcastb|vpbroadcastq|vpextrq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
 # on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI
@@ -880,6 +880,11 @@ run_negative_controls()
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx2_xor \
         'Leopard2BackendAVX2Xor.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    # GCC can vectorize the in-range tail pointer-map construction as packed
+    # 64-bit additions.  VPADDQ is baseline AVX2, and the classified-object
+    # scan below still rejects EVEX encodings and AVX-512 operands.
+    expect_classified_archive_accepted good_avx2_pointer_add \
+        'Leopard2BackendAVX2.cpp.o' 'vpaddq %ymm0, %ymm0, %ymm0'
     # The GFNI member carries the affine transform alongside ordinary AVX2 VEX
     # code, so the fixture must prove both are admitted in the same object.
     expect_classified_archive_accepted good_gfni \

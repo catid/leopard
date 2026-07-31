@@ -123,7 +123,7 @@
 #error "LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING must be 0 or 1"
 #endif
 #ifndef LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
-#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 0
+#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 1
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING < 0 || \
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING > 1
@@ -168,11 +168,17 @@ bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
     return (shape_mask & (UINT16_C(1) << shape_bit)) != 0;
 }
 
-bool IsExpectedT8RaggedByteCount(size_t bytes)
+bool IsExpectedT8RaggedShapeByteCount(
+    unsigned k,
+    unsigned r,
+    size_t bytes)
 {
-    return LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
-        (bytes & 63U) != 0 &&
-        ((bytes >= 65 && bytes <= 191) ||
+    if (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING == 0 ||
+        r > k ||
+        (bytes & 63U) == 0)
+        return false;
+    const bool selected_byte_count =
+        (bytes >= 65 && bytes <= 191) ||
          (bytes >= 193 && bytes <= 224) ||
          (bytes >= 257 && bytes <= 352) ||
          bytes == 416 ||
@@ -183,7 +189,16 @@ bool IsExpectedT8RaggedByteCount(size_t bytes)
          bytes == 736 ||
          (bytes >= 769 && bytes <= 800) ||
          bytes == 864 ||
-         (bytes >= 897 && bytes <= 928));
+         (bytes >= 897 && bytes <= 928);
+    if (!selected_byte_count)
+        return false;
+    if (bytes == 191 && k == 5 && r == 5)
+        return false;
+    if (bytes == 319 &&
+        ((k == 6 && (r == 5 || r == 6)) ||
+         (k == 7 && r == 5)))
+        return false;
+    return true;
 }
 
 bool IsExpectedT8OneBlockByteCount(
@@ -193,7 +208,7 @@ bool IsExpectedT8OneBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
-        IsExpectedT8RaggedByteCount(bytes) ||
+        IsExpectedT8RaggedShapeByteCount(k, r, bytes) ||
         bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
@@ -234,7 +249,7 @@ bool IsExpectedT8TwoBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
-        IsExpectedT8RaggedByteCount(bytes) ||
+        IsExpectedT8RaggedShapeByteCount(k, r, bytes) ||
         bytes == 64 ||
         ((bytes == 128 || bytes == 192) &&
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 == 0) ||
@@ -729,7 +744,8 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
     static const size_t byte_counts[] = {
         1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
         64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024, 1088, 65
+        576, 640, 704, 768, 832, 896, 960, 1024, 1088,
+        65, 191, 319
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -870,7 +886,8 @@ uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
     static const size_t byte_counts[] = {
         1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
         64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024, 65
+        576, 640, 704, 768, 832, 896, 960, 1024,
+        65, 191, 319
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -1315,7 +1332,7 @@ void ExerciseTinyFullOutputRegion(
         17, 31, 32, 33, 63, 64, 65, 66, 70,
         95, 96, 97, 127, 128, 129,
         191, 192, 193, 255, 256, 257,
-        320, 384, 448, 511, 512, 513,
+        319, 320, 384, 448, 511, 512, 513,
         576, 640, 704, 768, 832, 896, 960, 1023, 1024, 1025, 1088
     };
     const leopard2_test::BinaryField field =
@@ -1519,6 +1536,7 @@ int main()
             ExerciseT8BatchBinding(context, 255) +
             ExerciseT8BatchBinding(context, 256) +
             ExerciseT8BatchBinding(context, 257) +
+            ExerciseT8BatchBinding(context, 319) +
             ExerciseT8BatchBinding(context, 320) +
             ExerciseT8BatchBinding(context, 384) +
             ExerciseT8BatchBinding(context, 448) +

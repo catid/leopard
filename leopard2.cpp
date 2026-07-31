@@ -242,13 +242,14 @@
 #endif
 
 /*
-    Default-off, text-layout-neutral experiment for extending the prepared
-    T=8 binding across non-64-byte-multiple shards from 65 through 1024.
-    Both values retain the selector in initialized data so candidate and
-    control builds can keep byte-identical executable instruction sections.
+    Qualified, text-layout-neutral selector for extending the prepared T=8
+    binding across non-64-byte-multiple shards from 65 through 1024.  Both
+    values retain the selector in initialized data so production and
+    diagnostic-control builds can keep byte-identical executable instruction
+    sections.
 */
 #ifndef LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
-#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 0
+#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 1
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING < 0 || \
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING > 1
@@ -658,22 +659,26 @@ static volatile uint32_t g_high_t8_tiny_binding_mode =
 static volatile uint32_t g_high_t8_ragged_binding_mode =
     2U - LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING;
 
-static bool IsHighT8RaggedByteCount(uint64_t shard_bytes)
+static bool IsHighT8RaggedShapeByteCount(
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t shard_bytes)
 {
     if (g_high_t8_ragged_binding_mode != 1U ||
+        recovery_count > original_count ||
         shard_bytes < 65 || shard_bytes > 1024 ||
         (shard_bytes & 63U) == 0)
         return false;
 
     /*
-        Conservative whole-shape intersection from the directional screen.
-        Each range is bounded by equal-cost 32-byte vector tiers and retained
-        only when every legal K=5..16,R=5..min(K,8) shape beat both the
-        selector-off path and padded exact Leopard main at its measured
-        endpoints.  Isolated multiples of 32 retain the no-tail-copy win where
-        neighboring ragged residues did not qualify.
+        Conservative intersection from the full frozen campaign and its
+        predeclared nine-round holdout.  Each byte range is bounded by
+        equal-cost 32-byte vector tiers.  Four shape/byte cells missed the
+        padded exact-main lower-confidence gate and stay on the mature path.
+        R>K shapes were outside the comparable Leopard1 campaign and are not
+        selected without independent evidence.
     */
-    return
+    const bool selected_byte_count =
         (shard_bytes >= 65 && shard_bytes <= 191) ||
         (shard_bytes >= 193 && shard_bytes <= 224) ||
         (shard_bytes >= 257 && shard_bytes <= 352) ||
@@ -686,6 +691,17 @@ static bool IsHighT8RaggedByteCount(uint64_t shard_bytes)
         (shard_bytes >= 769 && shard_bytes <= 800) ||
         shard_bytes == 864 ||
         (shard_bytes >= 897 && shard_bytes <= 928);
+    if (!selected_byte_count)
+        return false;
+    if (shard_bytes == 191 &&
+        original_count == 5 && recovery_count == 5)
+        return false;
+    if (shard_bytes == 319 &&
+        ((original_count == 6 &&
+          (recovery_count == 5 || recovery_count == 6)) ||
+         (original_count == 7 && recovery_count == 5)))
+        return false;
+    return true;
 }
 
 static bool IsHighT8OneBlockBeyond512ShapeByteCount(
@@ -745,7 +761,8 @@ static bool IsHighT8OneBlockByteCount(
     if (shard_bytes >= 1 && shard_bytes < 64 &&
         g_high_t8_tiny_binding_mode == 1U)
         return true;
-    if (IsHighT8RaggedByteCount(shard_bytes))
+    if (IsHighT8RaggedShapeByteCount(
+            original_count, recovery_count, shard_bytes))
         return true;
     if (shard_bytes == 64)
         return true;
@@ -831,7 +848,8 @@ static bool IsHighT8TwoBlockByteCount(
     if (shard_bytes >= 1 && shard_bytes < 64 &&
         g_high_t8_tiny_binding_mode == 1U)
         return true;
-    if (IsHighT8RaggedByteCount(shard_bytes))
+    if (IsHighT8RaggedShapeByteCount(
+            original_count, recovery_count, shard_bytes))
         return true;
     if (shard_bytes == 64)
         return true;

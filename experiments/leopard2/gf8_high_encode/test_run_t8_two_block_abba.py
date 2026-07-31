@@ -143,6 +143,27 @@ def main() -> int:
     require(len(cells) == 2058, "ragged matrix size changed")
     cell = dict(cells[0])
     require(cell["role"] == "target", "first ragged cell is not a target")
+    cells_by_id = {item["id"]: item for item in cells}
+    excluded = {
+        "ragged-target-k5-r5-b191",
+        "ragged-target-k6-r5-b319",
+        "ragged-target-k6-r6-b319",
+        "ragged-target-k7-r5-b319",
+    }
+    require(sum(item["role"] == "target" for item in cells) == 1214,
+            "ragged final target count changed")
+    require(sum(item["role"] == "neighbor" for item in cells) == 844,
+            "ragged final neighbor count changed")
+    require(all(
+            cells_by_id[cell_id]["role"] == "neighbor" and
+            cells_by_id[cell_id]["candidate_selected"] is False and
+            cells_by_id[cell_id]["control_selected"] is False
+            for cell_id in excluded),
+        "ragged final selector lost a holdout exclusion")
+    require(
+        cells_by_id["ragged-target-k6-r5-b191"]["role"] == "target" and
+        cells_by_id["ragged-target-k5-r5-b319"]["role"] == "target",
+        "ragged final selector widened a holdout exclusion")
     manifest_sha256 = "a" * 64
     with tempfile.TemporaryDirectory(
             prefix="leopard2-t8-ragged-runner-test-") as directory:

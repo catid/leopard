@@ -59,6 +59,9 @@ option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
 option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     "Enable the promoted two-message-block AVX2 T=8 binding fast path"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
+    "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
+    ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -318,7 +321,8 @@ if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
 endif()
 target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
-    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+    LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -775,7 +779,8 @@ if(LEO2_BUILD_TESTS)
     endif()
     target_compile_definitions(leopard_test_hooks PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
-        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+        LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -1276,6 +1281,9 @@ if(LEO2_BUILD_TESTS)
                 leopard2_high_direct_production_test PRIVATE
                 LEO2_EXPECT_HIGH_T8_TWO_BLOCK_BINDING=0)
         endif()
+        target_compile_definitions(
+            leopard2_high_direct_production_test PRIVATE
+            LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
         target_link_libraries(leopard2_high_direct_production_test leopard)
         add_test(NAME leopard2_high_direct_production
             COMMAND leopard2_high_direct_production_test)

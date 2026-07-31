@@ -36,11 +36,11 @@ ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
 TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v4"
 TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v4"
-RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v2"
-RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v2"
+RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v3"
+RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v3"
 RAGGED_MANIFEST_SCHEMA = \
-    "leopard2-gf8-t8-ragged-extension-manifest/v1"
-RAGGED_CELL_SCHEMA = "leopard2-gf8-t8-ragged-extension-cell/v1"
+    "leopard2-gf8-t8-ragged-extension-manifest/v2"
+RAGGED_CELL_SCHEMA = "leopard2-gf8-t8-ragged-extension-cell/v2"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -372,10 +372,11 @@ def tiny_extension_cells() -> list[dict[str, Any]]:
     return cells
 
 
-def ragged_selected(shard_bytes: int) -> bool:
-    if shard_bytes < 65 or shard_bytes > 1024 or shard_bytes % 64 == 0:
+def ragged_selected(k: int, r: int, shard_bytes: int) -> bool:
+    if r > k or shard_bytes < 65 or shard_bytes > 1024 or \
+            shard_bytes % 64 == 0:
         return False
-    return (
+    selected_byte_count = (
         65 <= shard_bytes <= 191 or
         193 <= shard_bytes <= 224 or
         257 <= shard_bytes <= 352 or
@@ -389,6 +390,15 @@ def ragged_selected(shard_bytes: int) -> bool:
         shard_bytes == 864 or
         897 <= shard_bytes <= 928
     )
+    if not selected_byte_count:
+        return False
+    if shard_bytes == 191 and k == 5 and r == 5:
+        return False
+    if shard_bytes == 319 and (
+            (k == 6 and r in (5, 6)) or
+            (k == 7 and r == 5)):
+        return False
+    return True
 
 
 def ragged_extension_cells() -> list[dict[str, Any]]:
@@ -396,16 +406,21 @@ def ragged_extension_cells() -> list[dict[str, Any]]:
     index = 0
     for k in range(5, 17):
         for r in range(5, min(k, 8) + 1):
-            for role, byte_counts in (
+            for discovery_role, byte_counts in (
                 ("target", RAGGED_TARGET_BYTE_COUNTS),
                 ("neighbor", RAGGED_NEIGHBOR_BYTE_COUNTS),
             ):
                 for shard_bytes in byte_counts:
-                    selected = ragged_selected(shard_bytes)
-                    require(selected is (role == "target"),
-                            "ragged target/neighbor table is inconsistent")
+                    selected = ragged_selected(k, r, shard_bytes)
+                    if discovery_role == "neighbor":
+                        require(not selected,
+                                "ragged neighbor table is inconsistent")
+                    role = "target" if selected else "neighbor"
                     cells.append({
-                        "id": f"ragged-{role}-k{k}-r{r}-b{shard_bytes}",
+                        "id": (
+                            f"ragged-{discovery_role}-k{k}-r{r}"
+                            f"-b{shard_bytes}"
+                        ),
                         "K": k,
                         "R": r,
                         "bytes": shard_bytes,
@@ -422,8 +437,11 @@ def ragged_extension_cells() -> list[dict[str, Any]]:
     require(len(cells) == expected_targets + expected_neighbors,
             "ragged T=8 matrix is incomplete")
     require(sum(cell["role"] == "target" for cell in cells) ==
-            expected_targets,
-            "ragged T=8 target matrix is incomplete")
+            expected_targets - 4,
+            "ragged T=8 final target matrix is incomplete")
+    require(sum(cell["role"] == "neighbor" for cell in cells) ==
+            expected_neighbors + 4,
+            "ragged T=8 final neighbor matrix is incomplete")
     return cells
 
 
