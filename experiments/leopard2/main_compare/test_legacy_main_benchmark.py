@@ -111,7 +111,8 @@ def check_case(executable: Path, k: int, r: int, loss: int, seed: int) -> None:
         raise RuntimeError("wrong source commit")
     parameters = one.get("parameters", {})
     if (parameters.get("K"), parameters.get("R"),
-            parameters.get("loss_count")) != (k, r, loss):
+            parameters.get("loss_count"),
+            parameters.get("logical_shard_bytes")) != (k, r, loss, 64):
         raise RuntimeError("parameter echo mismatch")
     missing = parameters.get("missing_original_indices")
     if (not isinstance(missing, list) or len(missing) != loss or
@@ -145,6 +146,57 @@ def check_case(executable: Path, k: int, r: int, loss: int, seed: int) -> None:
         raise RuntimeError("decode setup semantics are missing")
     positive_summary(metrics.get("encode_execution"))
     positive_summary(metrics.get("decode_including_setup"))
+
+
+def check_padded_case(
+        executable: Path, k: int, r: int, logical_bytes: int,
+        loss: int, seed: int) -> None:
+    arguments = [
+        "--k", str(k), "--r", str(r), "--bytes", "64",
+        "--logical-bytes", str(logical_bytes),
+        "--loss", str(loss), "--batch", "2", "--reuse", "1",
+        "--iterations", "2", "--warmup", "1", "--threads", "1",
+        "--seed", str(seed), "--json", "-",
+    ]
+    first = json.loads(run(executable, arguments).stdout)
+    second = json.loads(run(executable, arguments).stdout)
+    if first.get("schema") != "leopard-main-benchmark-v2":
+        raise RuntimeError("wrong padded-comparison schema")
+    parameters = first.get("parameters", {})
+    if (
+        parameters.get("shard_bytes"),
+        parameters.get("logical_shard_bytes"),
+    ) != (64, logical_bytes):
+        raise RuntimeError("padded byte-count echo mismatch")
+    resolved = first.get("resolved", {})
+    if (
+        resolved.get("padded_application_bytes") is not True or
+        resolved.get("padding_policy") != "zero suffix per shard"
+    ):
+        raise RuntimeError("padded comparison semantics are absent")
+    if first.get("correctness", {}).get("round_trip") is not True:
+        raise RuntimeError("padded round trip failed")
+    if (
+        first.get("correctness", {}).get(
+            "logical_prefix_fingerprinted") is not True
+    ):
+        raise RuntimeError("logical-prefix correctness evidence is absent")
+
+    digests = first.get("workload_digests", {})
+    if digests != second.get("workload_digests"):
+        raise RuntimeError("padded workload digests are nondeterministic")
+    originals = original_shards(k, 2, logical_bytes, seed)
+    if digests.get("original_data") != fnv1a64(
+            shard for stripe in originals for shard in stripe):
+        raise RuntimeError(
+            "padded original digest disagrees with independent generator")
+    missing = parameters.get("missing_original_indices")
+    if digests.get("recovered_originals") != fnv1a64(
+            originals[stripe][index]
+            for stripe in range(2) for index in missing):
+        raise RuntimeError(
+            "padded recovered digest disagrees with logical originals")
+    positive_summary(first.get("metrics", {}).get("encode_execution"))
 
 
 def check_compile_commands(path: Path) -> None:
@@ -186,9 +238,20 @@ def main() -> int:
     check_case(executable, 8, 4, 4, 7)
     check_case(executable, 129, 1, 1, 11)
     check_case(executable, 240, 16, 3, 19)
+    check_padded_case(executable, 8, 4, 1, 1, 23)
+    check_padded_case(executable, 8, 4, 33, 4, 29)
+    check_padded_case(executable, 16, 8, 63, 1, 31)
     run(executable, ["--k", "8", "--r", "9"], success=False)
     run(executable, ["--k", "8", "--r", "4", "--bytes", "65"],
         success=False)
+    run(executable, [
+        "--k", "8", "--r", "4", "--bytes", "64",
+        "--logical-bytes", "0",
+    ], success=False)
+    run(executable, [
+        "--k", "8", "--r", "4", "--bytes", "64",
+        "--logical-bytes", "65",
+    ], success=False)
     run(executable, ["--k", "8", "--r", "4", "--loss", "5"],
         success=False)
     run(executable, ["--k", str((1 << 32) - 1), "--r", "1"],

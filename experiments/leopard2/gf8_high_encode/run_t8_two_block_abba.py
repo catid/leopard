@@ -33,6 +33,8 @@ SUMMARY_SCHEMA = "leopard2-gf8-t8-two-block-summary/v1"
 ONE_KIB_SCHEMA = "leopard2-gf8-t8-one-kib-extension-abba/v1"
 ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
+TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v1"
+TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -77,6 +79,8 @@ ONE_KIB_ONE_BLOCK_PRIOR_MASK = 0x4FCC
 ONE_KIB_ONE_BLOCK_EXTENSION_MASK = 0x0030
 ONE_KIB_TWO_BLOCK_PRIOR_MASK = EXTENDED_PRODUCTION_MASKS[1024]
 ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000080
+TINY_BYTE_COUNTS = (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63)
+TINY_NEIGHBOR_BYTE_COUNTS = (64, 65)
 
 
 class EvidenceError(RuntimeError):
@@ -272,6 +276,43 @@ def one_kib_extension_cells() -> list[dict[str, Any]]:
     return cells
 
 
+def tiny_extension_cells() -> list[dict[str, Any]]:
+    cells: list[dict[str, Any]] = []
+    index = 0
+    for k in range(5, 17):
+        for r in range(5, min(k, 8) + 1):
+            for shard_bytes in TINY_BYTE_COUNTS:
+                cells.append({
+                    "id": f"tiny-k{k}-r{r}-b{shard_bytes}",
+                    "K": k,
+                    "R": r,
+                    "bytes": shard_bytes,
+                    "role": "target",
+                    "seed": 0x182E000 + index,
+                    "candidate_selected": True,
+                    "control_selected": False,
+                    "main_physical_shard_bytes": 64,
+                })
+                index += 1
+            for shard_bytes in TINY_NEIGHBOR_BYTE_COUNTS:
+                selected = shard_bytes == 64
+                cells.append({
+                    "id": f"tiny-neighbor-k{k}-r{r}-b{shard_bytes}",
+                    "K": k,
+                    "R": r,
+                    "bytes": shard_bytes,
+                    "role": "neighbor",
+                    "seed": 0x182E000 + index,
+                    "candidate_selected": selected,
+                    "control_selected": selected,
+                })
+                index += 1
+    require(len(cells) == 588, "tiny T=8 matrix is incomplete")
+    require(sum(cell["role"] == "target" for cell in cells) == 504,
+            "tiny T=8 target matrix is incomplete")
+    return cells
+
+
 def target_cells(
     target_bytes: int = 64,
     final_selector: bool = False,
@@ -357,17 +398,27 @@ def benchmark_command(
     cpu: int,
     iterations: int,
     warmup: int,
+    campaign: str = "two-block",
 ) -> list[str]:
+    shard_bytes = (
+        int(cell["main_physical_shard_bytes"])
+        if implementation == "main" and campaign == "tiny-extension"
+        else int(cell["bytes"])
+    )
     common = [
         "/usr/bin/prlimit", "--as=201326592",
         "/usr/bin/taskset", "-c", str(cpu), str(executable),
         "--k", str(cell["K"]), "--r", str(cell["R"]),
-        "--bytes", str(cell["bytes"]), "--loss", "1",
+        "--bytes", str(shard_bytes), "--loss", "1",
         "--batch", "64", "--reuse", "64",
         "--iterations", str(iterations), "--warmup", str(warmup),
         "--threads", "1", "--seed", str(cell["seed"]), "--json", "-",
     ]
     if implementation == "main":
+        if campaign == "tiny-extension":
+            common[-2:-2] = [
+                "--logical-bytes", str(cell["bytes"]),
+            ]
         return common
     return common[:-2] + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
@@ -402,12 +453,20 @@ def validate_result(
     final_selector: bool = False,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
+    expected_shard_bytes = (
+        int(cell["main_physical_shard_bytes"])
+        if implementation == "main" and campaign == "tiny-extension"
+        else int(cell["bytes"])
+    )
     expected_parameters = {
-        "K": cell["K"], "R": cell["R"], "shard_bytes": cell["bytes"],
+        "K": cell["K"], "R": cell["R"],
+        "shard_bytes": expected_shard_bytes,
         "loss_count": 1, "batch": 64, "reuse": 64,
         "iterations": iterations, "warmup": warmup,
         "thread_count": 1, "seed": cell["seed"],
     }
+    if implementation == "main" and campaign == "tiny-extension":
+        expected_parameters["logical_shard_bytes"] = int(cell["bytes"])
     parameters = result.get("parameters")
     require(isinstance(parameters, dict) and
             all(parameters.get(name) == value
@@ -428,7 +487,12 @@ def validate_result(
                     "recovered_originals")),
             "benchmark digests are incomplete")
     if implementation == "main":
-        require(result.get("schema") == "leopard-main-benchmark-v1" and
+        expected_schema = (
+            "leopard-main-benchmark-v2"
+            if campaign == "tiny-extension"
+            else "leopard-main-benchmark-v1"
+        )
+        require(result.get("schema") == expected_schema and
                 isinstance(correctness, dict) and
                 correctness.get("round_trip") is True,
                 "exact-main benchmark identity or round trip failed")
@@ -436,6 +500,12 @@ def validate_result(
         require(isinstance(build, dict) and
                 build.get("main_source_commit") == MAIN_COMMIT,
                 "exact-main source identity changed")
+        if campaign == "tiny-extension":
+            require(
+                resolved.get("padded_application_bytes") is True and
+                resolved.get("padding_policy") == "zero suffix per shard" and
+                correctness.get("logical_prefix_fingerprinted") is True,
+                "exact-main padded comparison semantics changed")
     else:
         require(result.get("schema") == "leopard2-benchmark-v5" and
                 resolved.get("backend") == "avx2" and
@@ -448,11 +518,30 @@ def validate_result(
                     "one-block-extended",
                     "one-block-beyond512",
                     "one-kib-extension",
+                    "tiny-extension",
                 ),
                 f"unsupported campaign identity: {campaign}")
         require(isinstance(build, dict),
                 "Leopard2 build identity is absent")
-        if campaign == "one-kib-extension":
+        if campaign == "tiny-extension":
+            expected_marker = implementation == "candidate"
+            expected_selected = cell.get(
+                f"{implementation}_selected") is True
+            one_block_shape = int(cell["K"]) <= 8
+            marker_valid = (
+                build.get("high_t8_tiny_binding_enabled") is expected_marker and
+                build.get("high_t8_one_block_extended_enabled") is True and
+                build.get("high_t8_one_block_beyond_512_enabled") is True and
+                build.get("high_t8_one_kilobyte_extension_enabled") is True and
+                build.get("high_t8_two_block_128_192_enabled") is True and
+                build.get("high_t8_two_block_320_enabled") is True and
+                build.get("high_t8_two_block_extended_enabled") is True and
+                build.get("high_t8_one_block_selected") is
+                    (expected_selected and one_block_shape) and
+                build.get("high_t8_two_block_selected") is
+                    (expected_selected and not one_block_shape)
+            )
+        elif campaign == "one-kib-extension":
             expected_extension = implementation == "candidate"
             expected_selected = cell.get(
                 f"{implementation}_selected") is True
@@ -576,7 +665,7 @@ def run_one(
     require(sha256(executable) == identity["sha256"],
             f"{implementation} binary changed before execution")
     command = benchmark_command(
-        implementation, executable, cell, cpu, iterations, warmup)
+        implementation, executable, cell, cpu, iterations, warmup, campaign)
     start = time.monotonic_ns()
     failure_prefix = (
         failure_output /
@@ -729,6 +818,13 @@ def parse_arguments() -> argparse.Namespace:
             "qualify only the four new 1024-byte T=8 selector shapes while "
             "treating every other legal K=5..16/R=5..8 shape as a neighbor"
         ))
+    parser.add_argument(
+        "--tiny-extension", action="store_true",
+        help=(
+            "qualify the 1..63-byte T=8 selector across every legal "
+            "K=5..16/R=5..8 shape; exact main performs an explicitly "
+            "labeled zero-padded 64-byte call with matching logical digests"
+        ))
     return parser.parse_args()
 
 
@@ -736,11 +832,23 @@ def main() -> int:
     options = parse_arguments()
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient benchmark repetitions")
-    require(not (options.one_kib_extension and options.final_selector),
-            "--one-kib-extension and --final-selector are distinct campaigns")
+    require(
+        sum((
+            bool(options.one_kib_extension),
+            bool(options.tiny_extension),
+            bool(options.final_selector),
+        )) <= 1,
+        "--one-kib-extension, --tiny-extension, and --final-selector "
+        "are distinct campaigns")
     require(not options.output.exists(), "output path already exists")
     options.output.mkdir(parents=True)
-    if options.one_kib_extension:
+    if options.tiny_extension:
+        target_bytes = 0
+        campaign = "tiny-extension"
+        schema = TINY_SCHEMA
+        summary_schema = TINY_SUMMARY_SCHEMA
+        cells = tiny_extension_cells()
+    elif options.one_kib_extension:
         target_bytes = 1024
         campaign = "one-kib-extension"
         schema = ONE_KIB_SCHEMA
@@ -767,6 +875,20 @@ def main() -> int:
         "target_rounds": options.target_rounds,
         "neighbor_rounds": len(NEIGHBOR_ORDER),
         "target_bytes": target_bytes,
+        "target_byte_counts": (
+            list(TINY_BYTE_COUNTS)
+            if campaign == "tiny-extension" else [target_bytes]
+        ),
+        "main_physical_shard_bytes": (
+            64 if campaign == "tiny-extension" else target_bytes
+        ),
+        "main_comparison_semantics": (
+            "Leopard main processes a zero-padded 64-byte physical shard; "
+            "input, parity, and recovery digests cover the matching logical "
+            "prefix only"
+            if campaign == "tiny-extension"
+            else "equal physical and logical shard bytes"
+        ),
         "campaign": campaign,
         "final_selector": options.final_selector,
         "batch": 64,
@@ -894,6 +1016,14 @@ def main() -> int:
             "source_tree": options.source_tree,
             "main_commit": MAIN_COMMIT,
             "target_bytes": target_bytes,
+            "target_byte_counts": (
+                list(TINY_BYTE_COUNTS)
+                if campaign == "tiny-extension" else [target_bytes]
+            ),
+            "main_physical_shard_bytes": (
+                64 if campaign == "tiny-extension" else target_bytes
+            ),
+            "main_comparison_semantics": raw["main_comparison_semantics"],
             "campaign": campaign,
             "target_rounds": options.target_rounds,
             "neighbor_rounds": len(NEIGHBOR_ORDER),

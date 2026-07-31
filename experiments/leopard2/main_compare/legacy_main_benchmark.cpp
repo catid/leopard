@@ -49,6 +49,8 @@ struct Options
     unsigned k;
     unsigned r;
     uint64_t bytes;
+    uint64_t logical_bytes;
+    bool logical_bytes_set;
     unsigned losses;
     size_t batch;
     size_t reuse;
@@ -59,7 +61,8 @@ struct Options
     std::string output;
 
     Options()
-        : k(240), r(16), bytes(65536), losses(1), batch(1), reuse(8),
+        : k(240), r(16), bytes(65536), logical_bytes(0),
+          logical_bytes_set(false), losses(1), batch(1), reuse(8),
           iterations(9), warmup(2), threads(1), seed(1), output("-")
     {}
 };
@@ -268,6 +271,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --k N          Original shard count (default 240)\n"
         << "  --r N          Recovery shard count (default 16)\n"
         << "  --bytes N      Bytes per shard; B/kB/MB/GiB suffixes accepted\n"
+        << "  --logical-bytes N\n"
+        << "                 Logical prefix bytes generated and fingerprinted;\n"
+        << "                 the remaining physical --bytes are zero padding\n"
         << "  --loss N       Missing original shards (default 1)\n"
         << "  --batch N      Independent stripes per timed call (default 1)\n"
         << "  --reuse N      Calls per timing sample (default 8)\n"
@@ -293,6 +299,11 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--k") options.k = ParseUnsignedInt(NeedValue(argc, argv, i), "--k");
         else if (argument == "--r") options.r = ParseUnsignedInt(NeedValue(argc, argv, i), "--r");
         else if (argument == "--bytes") options.bytes = ParseBytes(NeedValue(argc, argv, i));
+        else if (argument == "--logical-bytes")
+        {
+            options.logical_bytes = ParseBytes(NeedValue(argc, argv, i));
+            options.logical_bytes_set = true;
+        }
         else if (argument == "--loss" || argument == "--losses") options.losses = ParseUnsignedInt(NeedValue(argc, argv, i), "--loss");
         else if (argument == "--batch") options.batch = ParseSize(NeedValue(argc, argv, i), "--batch");
         else if (argument == "--reuse") options.reuse = ParseSize(NeedValue(argc, argv, i), "--reuse");
@@ -308,6 +319,12 @@ static Options ParseOptions(int argc, char** argv)
     if (options.bytes == 0 || (options.bytes & 63u) != 0 ||
         options.bytes > std::numeric_limits<size_t>::max())
         Fail("exact Leopard main requires positive shard bytes divisible by 64");
+    if (!options.logical_bytes_set)
+        options.logical_bytes = options.bytes;
+    if (options.logical_bytes == 0 ||
+        options.logical_bytes > options.bytes ||
+        options.logical_bytes > std::numeric_limits<size_t>::max())
+        Fail("--logical-bytes must be positive and no larger than --bytes");
     if (options.losses > options.k || options.losses > options.r)
         Fail("--loss cannot exceed K or R");
     if (options.batch == 0 || options.reuse == 0 ||
@@ -341,9 +358,30 @@ static void FillOriginals(Stripe& stripe, const Options& options, size_t stripe_
 {
     XorShift64 random(options.seed ^
         (UINT64_C(0x9e3779b97f4a7c15) * (stripe_index + 1)));
-    const size_t total = CheckedSize(options.k, options.bytes, "original data");
-    for (size_t i = 0; i < total; ++i)
-        stripe.original_storage.bytes()[i] = static_cast<uint8_t>(random.Next() >> 56);
+    if (options.logical_bytes == options.bytes)
+    {
+        const size_t total = CheckedSize(
+            options.k, options.bytes, "original data");
+        for (size_t i = 0; i < total; ++i)
+            stripe.original_storage.bytes()[i] =
+                static_cast<uint8_t>(random.Next() >> 56);
+        return;
+    }
+
+    /*
+        Consume the same random stream as an exact logical-byte Leopard2
+        workload.  Padding is already zero from AlignedBuffer::Reset and does
+        not consume random values, so the next shard begins with the byte that
+        immediately follows the prior shard's logical prefix.
+    */
+    for (unsigned shard = 0; shard < options.k; ++shard)
+    {
+        uint8_t* output = stripe.original_storage.bytes() +
+            static_cast<size_t>(shard) * static_cast<size_t>(options.bytes);
+        for (size_t i = 0;
+             i < static_cast<size_t>(options.logical_bytes); ++i)
+            output[i] = static_cast<uint8_t>(random.Next() >> 56);
+    }
 }
 
 static void RequireLegacy(LeopardResult result, const char* operation)
@@ -556,13 +594,13 @@ static std::string Run(const Options& options)
         Stripe& stripe = *stripes[i];
         for (unsigned original = 0; original < options.k; ++original)
             original_digest.Add(stripe.original[original],
-                static_cast<size_t>(options.bytes));
+                static_cast<size_t>(options.logical_bytes));
         RequireLegacy(leo_encode(options.bytes, options.k, options.r,
             encode_count, &stripe.original[0], &stripe.encode_work[0]),
             "correctness encode");
         for (unsigned parity = 0; parity < options.r; ++parity)
             parity_digest.Add(stripe.encode_work[parity],
-                static_cast<size_t>(options.bytes));
+                static_cast<size_t>(options.logical_bytes));
         RequireLegacy(leo_decode(options.bytes, options.k, options.r,
             decode_count, &stripe.received_original[0],
             &stripe.received_recovery[0], &stripe.decode_work[0]),
@@ -576,7 +614,8 @@ static std::string Run(const Options& options)
                 static_cast<size_t>(index) * static_cast<size_t>(options.bytes);
             if (memcmp(expected, actual, static_cast<size_t>(options.bytes)) != 0)
                 Fail("exact Leopard main restored a shard incorrectly");
-            recovered_digest.Add(actual, static_cast<size_t>(options.bytes));
+            recovered_digest.Add(
+                actual, static_cast<size_t>(options.logical_bytes));
         }
     }
 
@@ -629,10 +668,13 @@ static std::string Run(const Options& options)
     const uint64_t decode_output = CheckedProduct(
         CheckedProduct(options.losses, options.bytes, "decode output"), batch,
         "decode output");
+    const bool padded_application =
+        options.logical_bytes != options.bytes;
     std::ostringstream json;
     json << std::fixed << std::setprecision(6)
         << "{\n"
-        << "  \"schema\": \"leopard-main-benchmark-v1\",\n"
+        << "  \"schema\": \"leopard-main-benchmark-v"
+        << (padded_application ? 2 : 1) << "\",\n"
         << "  \"build\": {\n"
         << "    \"main_source_commit\": \"" << LEOPARD_MAIN_SOURCE_COMMIT << "\",\n"
         << "    \"cplusplus\": " << __cplusplus << "\n"
@@ -641,6 +683,7 @@ static std::string Run(const Options& options)
         << "    \"K\": " << options.k << ",\n"
         << "    \"R\": " << options.r << ",\n"
         << "    \"shard_bytes\": " << options.bytes << ",\n"
+        << "    \"logical_shard_bytes\": " << options.logical_bytes << ",\n"
         << "    \"loss_count\": " << options.losses << ",\n"
         << "    \"missing_original_indices\": [";
     for (size_t i = 0; i < losses.size(); ++i)
@@ -661,9 +704,13 @@ static std::string Run(const Options& options)
         << "    \"field\": \"" << (geometry.parent <= 256 ? "gf8" : "gf16") << "\",\n"
         << "    \"thread_count\": " << resolved_threads << ",\n"
         << "    \"parent_count\": " << geometry.parent << ",\n"
-        << "    \"padded_side\": " << geometry.padded_r << "\n"
+        << "    \"padded_side\": " << geometry.padded_r << ",\n"
+        << "    \"padded_application_bytes\": "
+        << (padded_application ? "true" : "false") << ",\n"
+        << "    \"padding_policy\": \"zero suffix per shard\"\n"
         << "  },\n"
-        << "  \"correctness\": {\"round_trip\": true},\n"
+        << "  \"correctness\": {\"round_trip\": true, "
+        << "\"logical_prefix_fingerprinted\": true},\n"
         << "  \"workload_digests\": {\n"
         << "    \"algorithm\": \"fnv1a64\",\n"
         << "    \"original_data\": \"" << original_digest.Hex() << "\",\n"
