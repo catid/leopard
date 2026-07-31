@@ -55,6 +55,7 @@ TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
 MAX_ATTEMPTS = 3
 MAX_JSON_BYTES = 32 << 20
+TARGET_ENDPOINT_TOLERANCE_NS = 10_000
 CHILD_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -212,6 +213,25 @@ def load_json(path: Path) -> dict[str, Any]:
         raise EvidenceError(f"invalid JSON artifact {path}: {error}") from error
     require(isinstance(value, dict), f"JSON artifact is not an object: {path}")
     return value
+
+
+def retained_file_identity(
+    path: Path,
+    maximum_bytes: int,
+    require_nonempty: bool,
+) -> dict[str, Any]:
+    resolved = path.resolve(strict=True)
+    status = resolved.stat()
+    require(
+        resolved.is_file() and status.st_size <= maximum_bytes and
+        (status.st_size > 0 or not require_nonempty),
+        f"invalid retained file: {resolved}")
+    return {
+        "path": str(resolved),
+        "size": status.st_size,
+        "mode": status.st_mode & 0o777,
+        "sha256": T8.sha256(resolved),
+    }
 
 
 def freeze_executable(origin: Path, directory: Path, name: str) -> dict[str, Any]:
@@ -416,7 +436,8 @@ def benchmark_command(
 
 def isolation_accepted(gated: Mapping[str, Any]) -> bool:
     return (
-        gated["target_runtime"]["accepted"] and
+        abs(int(gated["target_runtime"]["signed_difference_ns"])) <=
+            TARGET_ENDPOINT_TOLERANCE_NS and
         gated["wait4_crosscheck"]["accepted"] and
         gated["target_interrupts"]["accepted"] and
         gated["sibling_runtime"]["accepted"] and
@@ -462,8 +483,10 @@ def run_one(
             "implementation": implementation,
             "attempt": attempt,
             "command": command,
-            "stdout": T8.regular_file_identity(stdout_path),
-            "stderr": T8.regular_file_identity(stderr_path),
+            "stdout": retained_file_identity(
+                stdout_path, 8 << 20, True),
+            "stderr": retained_file_identity(
+                stderr_path, 1 << 20, False),
             "gated": gated,
             "accepted": False,
         }
@@ -475,7 +498,15 @@ def run_one(
             record["result"] = result
             record["normalized"] = normalized
             record["accepted"] = True
+            envelope_path = raw_directory / f"{stem}.envelope.json"
+            write_atomic_exclusive(envelope_path, record)
+            record["envelope"] = retained_file_identity(
+                envelope_path, MAX_JSON_BYTES, True)
             return record, rejected
+        envelope_path = raw_directory / f"{stem}.envelope.json"
+        write_atomic_exclusive(envelope_path, record)
+        record["envelope"] = retained_file_identity(
+            envelope_path, MAX_JSON_BYTES, True)
         rejected.append(record)
     raise EvidenceError(
         f"{item['id']} {implementation} failed isolation "
@@ -711,6 +742,17 @@ def run(options: argparse.Namespace) -> int:
         "main_support": T8.regular_file_identity(
             DIRECTORY.parent / "main_compare" / "run_abba.py"),
         "identities": identities,
+        "isolation_policy": {
+            "target_scheduler_minus_child_runtime_absolute_max_ns":
+                TARGET_ENDPOINT_TOLERANCE_NS,
+            "wait4_crosscheck_max_ns":
+                GATE.RUSAGE_CROSSCHECK_TOLERANCE_NS,
+            "target_rejected_interrupt_fields":
+                ["irq", "softirq", "steal", "guest", "guest_nice"],
+            "reserved_sibling_scheduler_delta_ns": 0,
+            "maximum_attempts": MAX_ATTEMPTS,
+            "retry_trigger": "objective isolation failure only",
+        },
         "cells": cells,
     }
     manifest_sha256 = digest_object(manifest)
@@ -886,6 +928,10 @@ def self_test() -> int:
             "confidence calculation changed")
     require(ceil64(1) == 64 and ceil64(64) == 64 and ceil64(65) == 128,
             "padded main geometry changed")
+    require(
+        abs(TARGET_ENDPOINT_TOLERANCE_NS) == 10_000 and
+        abs(10_001) > TARGET_ENDPOINT_TOLERANCE_NS,
+        "target endpoint tolerance changed")
     print("equal-rounded runner self-test passed")
     return 0
 
