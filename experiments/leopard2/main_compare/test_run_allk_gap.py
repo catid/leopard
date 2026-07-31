@@ -471,7 +471,10 @@ class AllKIdentityTests(unittest.TestCase):
             "algorithm": "fnv1a64",
             "original_data": "0123456789abcdef",
             "transmitted_parity": "123456789abcdef0",
-            "recovered_originals": "0123456789abcdef",
+            # Recovery fingerprints only the missing-original subset.  Keep
+            # this distinct from the all-original digest so partial-loss test
+            # fixtures exercise the real benchmark contract.
+            "recovered_originals": "fedcba9876543210",
         }
         records = self.records()
         for record in records:
@@ -1158,12 +1161,12 @@ class AllKIdentityTests(unittest.TestCase):
             "missing_original_indices"] = [
                 float(value) for value in runner.expected_losses(cell)]
         mutations.append((coercible_losses, "missing-original indices"))
-        coherent_bad_recovery = self.correctness_records(cell)
-        for record in coherent_bad_recovery:
-            record["result"]["workload_digests"]["recovered_originals"] = \
-                "fedcba9876543210"
+        one_sided_bad_recovery = self.correctness_records(cell)
+        one_sided_bad_recovery[2]["result"]["workload_digests"][
+            "recovered_originals"] = "1111111111111111"
         mutations.append(
-            (coherent_bad_recovery, "does not match its input"))
+            (one_sided_bad_recovery,
+             "Leopard1 and Leopard2 workload digests differ"))
         wrong_option_type = self.correctness_records(cell)
         wrong_option_type[1]["result"]["parameters"]["skip_legacy"] = 0
         mutations.append((wrong_option_type, "option skip_legacy"))
@@ -1174,6 +1177,19 @@ class AllKIdentityTests(unittest.TestCase):
                     lambda records=records: runner.validate_correctness(
                         cell, records),
                     message)
+
+        full_loss = runner.Cell("full", "gf8-all-k", 3, 3, 64, 3,
+                                "max-GF8-R", "max-loss", 8, 1, 1, 0)
+        inconsistent_full_loss = self.correctness_records(full_loss)
+        expect_rejected(
+            self,
+            lambda: runner.validate_correctness(
+                full_loss, inconsistent_full_loss),
+            "full-loss recovered-original digest")
+        for record in inconsistent_full_loss:
+            digests = record["result"]["workload_digests"]
+            digests["recovered_originals"] = digests["original_data"]
+        runner.validate_correctness(full_loss, inconsistent_full_loss)
 
     def test_manifest_rejects_stale_or_resigned_contract(self) -> None:
         proof_validator = mock.patch.object(

@@ -3326,10 +3326,19 @@ def validate_correctness(cell: Cell,
                         for character in value),
                     f"all-K invocation {index} workload digest {name} "
                     "is not lowercase FNV-1a hex")
-        require(fingerprint["recovered_originals"] ==
-                fingerprint["original_data"],
-                f"all-K invocation {index} recovered-original digest "
-                "does not match its input")
+        # original_data covers every systematic shard, whereas
+        # recovered_originals covers only the sorted missing-original set.
+        # They are therefore expected to differ for a partial-loss workload.
+        # The independently built implementations must still agree on the
+        # complete fingerprint below, and each benchmark has already proved
+        # its own byte-for-byte round trip above.  When every original is
+        # missing, both traversals cover the same shards in the same order and
+        # equality is an additional useful consistency check.
+        if cell.losses == cell.k:
+            require(fingerprint["recovered_originals"] ==
+                    fingerprint["original_data"],
+                    f"all-K invocation {index} full-loss recovered-original "
+                    "digest does not match its input")
         fingerprints.append(fingerprint)
     require(all(canonical_equal(fingerprint, fingerprints[0])
                 for fingerprint in fingerprints),
