@@ -6,8 +6,8 @@ candidate with equal-rounded multi-loss repair enabled, a current-source
 control with the same code and initialized-data selector disabled, and exact
 Leopard main. It freezes each binary into a lane-owned directory, verifies
 candidate/control executable sections are identical, executes every child on
-one logical CPU, and rejects any invocation whose scheduler accounting shows
-foreign target-CPU work or activity on the reserved SMT sibling.
+one logical CPU, and rejects any invocation whose target or reserved-sibling
+scheduler accounting exceeds the predeclared contamination bounds.
 
 The coordinator itself must be pinned away from the measured CPU pair. No
 foreign affinity is changed, so a killed coordinator cannot strand or
@@ -32,9 +32,9 @@ from typing import Any, Mapping, Sequence
 
 
 SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v5"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v5"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v5"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v6"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v6"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v6"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -63,6 +63,11 @@ MAX_JSON_BYTES = 32 << 20
 # child runtime and remains far below the 2% neighboring-cell regression gate.
 TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS = 20_000
 TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM = 50
+# The otherwise-clean sibling-runtime distribution is bimodal: ordinary
+# periodic work reaches 175 ppm, while contention outliers start above
+# 350 ppm.  A 200 ppm bound limits overlap to 0.02% on long invocations.
+SIBLING_ABSOLUTE_TOLERANCE_NS = 20_000
+SIBLING_RELATIVE_TOLERANCE_PPM = 200
 CHILD_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -473,6 +478,15 @@ def target_endpoint_tolerance_ns(child_runtime_ns: int) -> int:
     return max(TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS, relative)
 
 
+def sibling_runtime_tolerance_ns(child_runtime_ns: int) -> int:
+    require(type(child_runtime_ns) is int and child_runtime_ns >= 0,
+            "child runtime is invalid")
+    relative = (
+        child_runtime_ns * SIBLING_RELATIVE_TOLERANCE_PPM + 999_999
+    ) // 1_000_000
+    return max(SIBLING_ABSOLUTE_TOLERANCE_NS, relative)
+
+
 def isolation_accepted(gated: Mapping[str, Any]) -> bool:
     target = gated["target_runtime"]
     return (
@@ -480,7 +494,9 @@ def isolation_accepted(gated: Mapping[str, Any]) -> bool:
             target_endpoint_tolerance_ns(int(target["child_cpu_time_ns"])) and
         gated["wait4_crosscheck"]["accepted"] and
         gated["target_interrupts"]["accepted"] and
-        gated["sibling_runtime"]["accepted"] and
+        int(gated["sibling_runtime"]["scheduler_delta_ns"]) <=
+            sibling_runtime_tolerance_ns(
+                int(target["child_cpu_time_ns"])) and
         gated["sibling_interrupts"]["accepted"]
     )
 
@@ -655,9 +671,18 @@ def validate_cell_record(
         require(
             isinstance(round_value, dict) and
             isinstance(round_value.get("invocations"), list) and
-            all(invocation.get("accepted") is True
+            all(invocation.get("accepted") is True and
+                invocation["gated"]["return_code"] == 0 and
+                isolation_accepted(invocation["gated"])
                 for invocation in round_value["invocations"]),
             "cell record contains an unaccepted invocation")
+    require(
+        isinstance(value.get("rejected_attempts"), list) and
+        all(record.get("accepted") is False and
+            (record["gated"]["return_code"] != 0 or
+             not isolation_accepted(record["gated"]))
+            for record in value["rejected_attempts"]),
+        "cell record contains an accepted rejected-attempt")
     require(
         value["analysis"] == analyze_cell(expected, value["rounds"]),
         "cell analysis is not derived from retained rounds")
@@ -819,7 +844,12 @@ def run(options: argparse.Namespace) -> int:
                 GATE.RUSAGE_CROSSCHECK_TOLERANCE_NS,
             "target_rejected_interrupt_fields":
                 ["irq", "softirq", "steal", "guest", "guest_nice"],
-            "reserved_sibling_scheduler_delta_ns": 0,
+            "reserved_sibling_scheduler_runtime_effective_max":
+                "max(absolute_floor_ns, child_runtime_ns * relative_ppm / 1e6)",
+            "reserved_sibling_scheduler_runtime_absolute_floor_ns":
+                SIBLING_ABSOLUTE_TOLERANCE_NS,
+            "reserved_sibling_scheduler_runtime_relative_ppm":
+                SIBLING_RELATIVE_TOLERANCE_PPM,
             "maximum_attempts": MAX_ATTEMPTS,
             "retry_trigger": "objective isolation failure only",
         },
@@ -1008,6 +1038,12 @@ def self_test() -> int:
         target_endpoint_tolerance_ns(7_581_132) == 20_000 and
         target_endpoint_tolerance_ns(1_400_000_000) == 70_000,
         "target endpoint tolerance changed")
+    require(
+        SIBLING_ABSOLUTE_TOLERANCE_NS == 20_000 and
+        SIBLING_RELATIVE_TOLERANCE_PPM == 200 and
+        sibling_runtime_tolerance_ns(7_581_132) == 20_000 and
+        sibling_runtime_tolerance_ns(1_400_000_000) == 280_000,
+        "sibling runtime tolerance changed")
     require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
     interval = {"ratio": 2.0, "lower": 1.5, "upper": 2.5}
     target_analysis = {
