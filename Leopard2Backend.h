@@ -316,6 +316,15 @@ typedef void (*FF8HighEncodeTwoBlocksT8)(
     const uint8_t* forward_skew,
     uint64_t byte_count);
 
+/*
+    Arbitrary-tail companion for exactly two T=8 message blocks.  This is a
+    distinct callback so adding the bounded 1..63-byte experiment cannot alter
+    the mature 64-byte-multiple entry point's call shape or eligibility.
+    Inputs and outputs have the same disjointness contract as the regular
+    callback, but byte_count must be in [1, 63].
+*/
+typedef FF8HighEncodeTwoBlocksT8 FF8HighEncodeTwoBlocksT8Tiny;
+
 // Complete dense legacy-high GF8 encode for the two- and four-coordinate
 // redundancy transforms.  The implementation consumes all original shards
 // directly, accumulates each shifted inverse transform into work[0..side),
@@ -462,6 +471,7 @@ struct Ops
     FF8HighEncodeOneBlock ff8_high_encode_one_block;
     uint32_t ff8_high_encode_one_block_sides;
     FF8HighEncodeTwoBlocksT8 ff8_high_encode_two_blocks_t8;
+    FF8HighEncodeTwoBlocksT8Tiny ff8_high_encode_two_blocks_t8_tiny;
     FF8HighEncodeSmall ff8_high_encode_small;
     XorMemoryDense xor_memory_dense;
     FF8MultiplyAddOutputs ff8_multiply_add_outputs;

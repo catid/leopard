@@ -236,6 +236,9 @@ bool HighT8OneBlockBeyond512Enabled();
 /* Marker for the independently qualified T=8 1024-byte shape extension. */
 bool HighT8OneKilobyteExtensionEnabled();
 
+/* Default-off marker for the sub-64-byte T=8 binding experiment. */
+bool HighT8TinyBindingEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

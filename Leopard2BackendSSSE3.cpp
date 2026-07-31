@@ -2043,6 +2043,7 @@ static const Ops SSSE3Ops = {
     , NULL
     , NULL
     , NULL
+    , NULL
     // ff8_linear_combination2
     , NULL
     , NULL

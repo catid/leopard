@@ -115,6 +115,13 @@
     LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION > 1
 #error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION must be 0 or 1"
 #endif
+#ifndef LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING
+#define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING must be 0 or 1"
+#endif
 
 namespace {
 
@@ -159,7 +166,9 @@ bool IsExpectedT8OneBlockByteCount(
     unsigned r,
     size_t bytes)
 {
-    return bytes == 64 ||
+    return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
+            bytes >= 1 && bytes < 64) ||
+        bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
         IsExpectedT8OneBlockBeyond512ShapeByteCount(k, r, bytes);
@@ -197,7 +206,9 @@ bool IsExpectedT8TwoBlockByteCount(
     unsigned r,
     size_t bytes)
 {
-    return bytes == 64 ||
+    return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
+            bytes >= 1 && bytes < 64) ||
+        bytes == 64 ||
         ((bytes == 128 || bytes == 192) &&
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 == 0) ||
         (bytes == 256 &&
@@ -635,7 +646,8 @@ uint64_t ExerciseT8BatchBinding(
         Execution must read current bytes from captured addresses rather than
         caching a value-dependent transform during setup.
     */
-    original[3][17] ^= 0x6du;
+    const size_t mutation_index = std::min<size_t>(17, bytes - 1);
+    original[3][mutation_index] ^= 0x6du;
     RequireResult(leo2_encode_batch_binding_execute(binding),
         "T8 binding changed-source execute");
     for (size_t batch = 0; batch < batch_count; ++batch)
@@ -646,7 +658,7 @@ uint64_t ExerciseT8BatchBinding(
                 "T8 binding changed-source parity differs from oracle");
             ++checks;
         }
-    original[3][17] ^= 0x6du;
+    original[3][mutation_index] ^= 0x6du;
     leo2_encode_batch_binding_destroy(binding);
 
     /*
@@ -688,8 +700,9 @@ uint64_t ExerciseT8BatchBinding(
 uint64_t ExerciseT8PartialBindings(leo2_context* context)
 {
     static const size_t byte_counts[] = {
+        1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
         64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024, 1088
+        576, 640, 704, 768, 832, 896, 960, 1024, 1088, 65
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -765,7 +778,9 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
 
                 if (k == 5 && r == 5)
                 {
-                    original[1][13] ^= 0x6du;
+                    const size_t mutation_index =
+                        std::min<size_t>(13, bytes - 1);
+                    original[1][mutation_index] ^= 0x6du;
                     RequireResult(leo2_encode_batch_binding_execute(binding),
                         "partial T8 changed-source binding execute");
                     for (unsigned parity = 0; parity < r; ++parity)
@@ -775,7 +790,7 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
                             "partial T8 changed-source parity differs from oracle");
                         ++checks;
                     }
-                    original[1][13] ^= 0x6du;
+                    original[1][mutation_index] ^= 0x6du;
                     leo2_encode_batch_binding_destroy(binding);
                     binding = NULL;
                     for (unsigned parity = 0; parity < r; ++parity)
@@ -826,8 +841,9 @@ uint64_t ExerciseT8PartialBindings(leo2_context* context)
 uint64_t ExerciseT8TwoBlockBindings(leo2_context* context)
 {
     static const size_t byte_counts[] = {
+        1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
         64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024
+        576, 640, 704, 768, 832, 896, 960, 1024, 65
     };
     static const uint8_t sentinel = 0xa5;
     const leopard2_test::BinaryField field =
@@ -1387,6 +1403,10 @@ int main()
             leopard2_internal::HighT8OneKilobyteExtensionEnabled() ==
                 expected_one_kib_extension,
             "T=8 one-kilobyte provenance marker differs from build policy");
+        Require(
+            leopard2_internal::HighT8TinyBindingEnabled() ==
+                (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0),
+            "T=8 tiny-binding provenance marker differs from build policy");
         const uint64_t t4_diagnostic_checks =
             ExerciseT4DiagnosticControl();
 
@@ -1439,7 +1459,20 @@ int main()
         const uint64_t t4_binding_checks =
             ExerciseT4BatchBindings(context);
         const uint64_t t8_binding_checks =
+            ExerciseT8BatchBinding(context, 1) +
+            ExerciseT8BatchBinding(context, 2) +
+            ExerciseT8BatchBinding(context, 3) +
+            ExerciseT8BatchBinding(context, 7) +
+            ExerciseT8BatchBinding(context, 8) +
+            ExerciseT8BatchBinding(context, 15) +
+            ExerciseT8BatchBinding(context, 16) +
+            ExerciseT8BatchBinding(context, 17) +
+            ExerciseT8BatchBinding(context, 31) +
+            ExerciseT8BatchBinding(context, 32) +
+            ExerciseT8BatchBinding(context, 33) +
+            ExerciseT8BatchBinding(context, 63) +
             ExerciseT8BatchBinding(context, 64) +
+            ExerciseT8BatchBinding(context, 65) +
             ExerciseT8BatchBinding(context, 128) +
             ExerciseT8BatchBinding(context, 192) +
             ExerciseT8BatchBinding(context, 256) +
@@ -1460,7 +1493,12 @@ int main()
         const uint64_t t8_two_block_binding_checks =
             ExerciseT8TwoBlockBindings(context);
         const uint64_t t8_partial_unaligned_checks =
+            ExerciseT8PartialUnaligned(context, 1) +
+            ExerciseT8PartialUnaligned(context, 17) +
+            ExerciseT8PartialUnaligned(context, 33) +
+            ExerciseT8PartialUnaligned(context, 63) +
             ExerciseT8PartialUnaligned(context, 64) +
+            ExerciseT8PartialUnaligned(context, 65) +
             ExerciseT8PartialUnaligned(context, 128) +
             ExerciseT8PartialUnaligned(context, 192) +
             ExerciseT8PartialUnaligned(context, 256) +
@@ -1478,7 +1516,12 @@ int main()
             ExerciseT8PartialUnaligned(context, 1024) +
             ExerciseT8PartialUnaligned(context, 1088);
         const uint64_t t8_two_block_unaligned_checks =
+            ExerciseT8TwoBlockUnaligned(context, 1) +
+            ExerciseT8TwoBlockUnaligned(context, 17) +
+            ExerciseT8TwoBlockUnaligned(context, 33) +
+            ExerciseT8TwoBlockUnaligned(context, 63) +
             ExerciseT8TwoBlockUnaligned(context, 64) +
+            ExerciseT8TwoBlockUnaligned(context, 65) +
             ExerciseT8TwoBlockUnaligned(context, 128) +
             ExerciseT8TwoBlockUnaligned(context, 192) +
             ExerciseT8TwoBlockUnaligned(context, 256) +
@@ -1496,7 +1539,12 @@ int main()
             ExerciseT8TwoBlockUnaligned(context, 1024);
         leo2_context_destroy(context);
         const uint64_t t8_partial_thread_pool_checks =
+            ExerciseT8PartialThreadPool(1) +
+            ExerciseT8PartialThreadPool(17) +
+            ExerciseT8PartialThreadPool(33) +
+            ExerciseT8PartialThreadPool(63) +
             ExerciseT8PartialThreadPool(64) +
+            ExerciseT8PartialThreadPool(65) +
             ExerciseT8PartialThreadPool(128) +
             ExerciseT8PartialThreadPool(192) +
             ExerciseT8PartialThreadPool(256) +
@@ -1514,6 +1562,12 @@ int main()
             ExerciseT8PartialThreadPool(1024) +
             ExerciseT8PartialThreadPool(1088);
         const uint64_t t8_two_block_thread_pool_checks =
+            ExerciseT8TwoBlockThreadPool(1) +
+            ExerciseT8TwoBlockThreadPool(17) +
+            ExerciseT8TwoBlockThreadPool(33) +
+            ExerciseT8TwoBlockThreadPool(63) +
+            ExerciseT8TwoBlockThreadPool(64) +
+            ExerciseT8TwoBlockThreadPool(65) +
             ExerciseT8TwoBlockThreadPool(128) +
             ExerciseT8TwoBlockThreadPool(192) +
             ExerciseT8TwoBlockThreadPool(256) +

@@ -6185,61 +6185,105 @@ static void AVX2FF8HighEncodeT8Vector(
         offset += 32;
     }
 
-    while (offset < byte_count)
+    const size_t tail_bytes = static_cast<size_t>(byte_count - offset);
+    if (tail_bytes != 0)
     {
-        uint8_t values[8];
-        for (unsigned lane = 0; lane < 7; ++lane)
-            values[lane] = input[lane][offset];
-        values[7] = input[7][offset & lane7_offset_mask];
+        /*
+            When at least one complete vector exists, evaluate the final
+            in-range 32-byte window.  Its overlap with the preceding vector is
+            harmless because every byte position is independent, and this
+            avoids all tail copies for byte counts above 32.  A genuinely
+            short shard still uses one zero-padded staging vector.
+        */
+        alignas(32) uint8_t tail_input[8][32] = {};
+        alignas(32) uint8_t tail_output[8][32];
+        const uint8_t* tail_source[8];
+        uint8_t* tail_destination[8];
+        const bool staged_tail = offset == 0;
+        if (staged_tail)
+        {
+            for (unsigned lane = 0; lane < 7; ++lane)
+            {
+                std::memcpy(
+                    tail_input[lane], input[lane], tail_bytes);
+                tail_source[lane] = tail_input[lane];
+                tail_destination[lane] = tail_output[lane];
+            }
+            if (!shortened)
+                std::memcpy(
+                    tail_input[7], input[7], tail_bytes);
+            tail_source[7] = tail_input[7];
+            tail_destination[7] = tail_output[7];
+        }
+        else
+        {
+            const uint64_t final_offset = byte_count - 32;
+            for (unsigned lane = 0; lane < 7; ++lane)
+            {
+                tail_source[lane] = input[lane] + final_offset;
+                tail_destination[lane] = output[lane] + final_offset;
+            }
+            tail_source[7] = input[7] +
+                (shortened ? 0 : final_offset);
+            tail_destination[7] = output[7] + final_offset;
+        }
 
-        AVX2FF8T8VectorScalarIFFT2(
-            values[0], values[1], inverse_skew[1]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[2], values[3], inverse_skew[3]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[0], values[2], inverse_skew[2]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[1], values[3], inverse_skew[2]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[4], values[5], inverse_skew[5]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[6], values[7], inverse_skew[7]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[4], values[6], inverse_skew[6]);
-        AVX2FF8T8VectorScalarIFFT2(
-            values[5], values[7], inverse_skew[6]);
-        for (unsigned lane = 0; lane < 4; ++lane)
-            AVX2FF8T8VectorScalarIFFT2(
-                values[lane], values[lane + 4], inverse_skew[4]);
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[0]));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[1]));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[2]));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[3]));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[4]));
+        __m256i value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[5]));
+        __m256i value6 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[6]));
+        __m256i value7 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(tail_source[7]));
 
-        AVX2FF8T8VectorScalarFFT2(
-            values[0], values[4], forward_skew[4]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[1], values[5], forward_skew[4]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[2], values[6], forward_skew[4]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[3], values[7], forward_skew[4]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[0], values[2], forward_skew[2]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[1], values[3], forward_skew[2]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[4], values[6], forward_skew[6]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[5], values[7], forward_skew[6]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[0], values[1], forward_skew[1]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[2], values[3], forward_skew[3]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[4], values[5], forward_skew[5]);
-        AVX2FF8T8VectorScalarFFT2(
-            values[6], values[7], forward_skew[7]);
+        AVX2FF8T8VectorIFFTRadix4(
+            value0, value1, value2, value3,
+            inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+        AVX2FF8T8VectorIFFTRadix4(
+            value4, value5, value6, value7,
+            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+        AVX2FF8T8VectorIFFTDistance4(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, inverse_skew[4]);
 
-        for (unsigned lane = 0; lane < 8; ++lane)
-            output[lane][offset] = values[lane];
-        ++offset;
+        AVX2FF8T8VectorFFTRadix4Distance2(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7,
+            forward_skew[2], forward_skew[6], forward_skew[4]);
+        AVX2FF8T8VectorFFT2(value0, value1, forward_skew[1]);
+        AVX2FF8T8VectorFFT2(value2, value3, forward_skew[3]);
+        AVX2FF8T8VectorFFT2(value4, value5, forward_skew[5]);
+        AVX2FF8T8VectorFFT2(value6, value7, forward_skew[7]);
+
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[0]), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[1]), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[2]), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[3]), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[4]), value4);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[5]), value5);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[6]), value6);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(tail_destination[7]), value7);
+        if (staged_tail)
+            for (unsigned lane = 0; lane < 8; ++lane)
+                std::memcpy(
+                    output[lane], tail_output[lane], tail_bytes);
     }
 }
 
@@ -6592,22 +6636,25 @@ static LEO_FORCE_INLINE void AVX2FF8T8ForwardValues(
     AVX2FF8T8VectorFFT2(value6, value7, forward_skew[7]);
 }
 
-static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
+static LEO_FORCE_INLINE void AVX2FF8HighEncodeTwoBlocksT8Vectors(
     const void* const* data,
     void* const* work,
     const uint8_t* first_inverse_skew,
     const uint8_t* second_inverse_skew,
     const uint8_t* forward_skew,
+    uint64_t first_offset,
     uint64_t byte_count)
 {
     LEO_DEBUG_ASSERT(
-        byte_count >= 64 && byte_count <= 1024 &&
-        (byte_count & 63U) == 0);
-    if (byte_count < 64 || byte_count > 1024 ||
-        (byte_count & 63U) != 0)
+        byte_count >= 32 && byte_count <= 1024 &&
+        (byte_count & 31U) == 0);
+    if (byte_count < 32 || byte_count > 1024 ||
+        (byte_count & 31U) != 0)
         return;
 
-    for (uint64_t offset = 0; offset < byte_count; offset += 32)
+    const uint64_t end_offset = first_offset + byte_count;
+    for (uint64_t offset = first_offset;
+         offset < end_offset; offset += 32)
     {
         __m256i value0 = _mm256_loadu_si256(
             reinterpret_cast<const __m256i*>(
@@ -6741,6 +6788,95 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
                 static_cast<uint8_t*>(work[7]) + offset), value7);
     }
 }
+
+/*
+    Keep one copy of the exact-vector arithmetic for the tiny entry point.
+    The mature callback still inlines its loop exactly as before; the bounded
+    tiny wrapper pays at most two calls to avoid triplicating a large nibble-
+    table transform in its instruction footprint.
+*/
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8TinyVector32(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t offset)
+{
+    AVX2FF8HighEncodeTwoBlocksT8Vectors(
+        data, work, first_inverse_skew, second_inverse_skew,
+        forward_skew, offset, 32);
+}
+
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(
+        byte_count >= 64 && byte_count <= 1024 &&
+        (byte_count & 63U) == 0);
+    if (byte_count < 64 || byte_count > 1024 ||
+        (byte_count & 63U) != 0)
+        return;
+    AVX2FF8HighEncodeTwoBlocksT8Vectors(
+        data, work, first_inverse_skew, second_inverse_skew,
+        forward_skew, 0, byte_count);
+}
+
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8Tiny(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* first_inverse_skew,
+    const uint8_t* second_inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(byte_count >= 1 && byte_count < 64);
+    if (byte_count == 0 || byte_count >= 64)
+        return;
+
+    if (byte_count >= 32)
+    {
+        AVX2FF8HighEncodeTwoBlocksT8TinyVector32(
+            data, work, first_inverse_skew, second_inverse_skew,
+            forward_skew, 0);
+        if (byte_count > 32)
+            AVX2FF8HighEncodeTwoBlocksT8TinyVector32(
+                data, work, first_inverse_skew, second_inverse_skew,
+                forward_skew, byte_count - 32);
+        return;
+    }
+
+    alignas(32) uint8_t staged[16][32] = {};
+    const void* staged_data[16];
+    void* staged_work[8];
+    for (unsigned lane = 0; lane < 16; ++lane)
+    {
+        std::memcpy(
+            staged[lane],
+            static_cast<const uint8_t*>(data[lane]), byte_count);
+        staged_data[lane] = staged[lane];
+        if (lane < 8)
+            staged_work[lane] = staged[lane];
+    }
+
+    /*
+        The vector helper consumes every first-block input before overwriting
+        staged rows 0..7 with inverse coefficients.  Rows 8..15 remain intact
+        for the second inverse transform.  The fused coefficient XOR and one
+        forward transform then leave exact parity rows in staged[0..7].
+    */
+    AVX2FF8HighEncodeTwoBlocksT8TinyVector32(
+        staged_data, staged_work,
+        first_inverse_skew, second_inverse_skew, forward_skew, 0);
+    for (unsigned lane = 0; lane < 8; ++lane)
+        std::memcpy(
+            static_cast<uint8_t*>(work[lane]), staged[lane], byte_count);
+}
 #endif
 
 #undef LEO2_AVX2_T8_ENTRY
@@ -6841,6 +6977,14 @@ static const Ops AVX2Ops = {
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
     !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8HighEncodeTwoBlocksT8
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && \
+    LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && \
+    !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8HighEncodeTwoBlocksT8Tiny
 #else
     , NULL
 #endif

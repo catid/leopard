@@ -228,6 +228,20 @@
 #endif
 
 /*
+    Default-off, text-layout-neutral experiment for reusing the existing T=8
+    prevalidated binding on sub-vector byte counts.  Both values keep the
+    marker in initialized data; candidate and control therefore execute
+    byte-identical instruction sections and differ only in setup-time routing.
+*/
+#ifndef LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING
+#define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -625,6 +639,8 @@ static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
 static volatile uint32_t g_high_t8_1024_extension_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION;
 #endif
+static volatile uint32_t g_high_t8_tiny_binding_mode =
+    2U - LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING;
 
 static bool IsHighT8OneBlockBeyond512ShapeByteCount(
     uint32_t original_count,
@@ -680,6 +696,9 @@ static bool IsHighT8OneBlockByteCount(
     uint32_t recovery_count,
     uint64_t shard_bytes)
 {
+    if (shard_bytes >= 1 && shard_bytes < 64 &&
+        g_high_t8_tiny_binding_mode == 1U)
+        return true;
     if (shard_bytes == 64)
         return true;
     if (shard_bytes >= 128 && shard_bytes <= 512 &&
@@ -761,6 +780,9 @@ static bool IsHighT8TwoBlockByteCount(
     uint32_t recovery_count,
     uint64_t shard_bytes)
 {
+    if (shard_bytes >= 1 && shard_bytes < 64 &&
+        g_high_t8_tiny_binding_mode == 1U)
+        return true;
     if (shard_bytes == 64)
         return true;
     if ((shard_bytes == 128 || shard_bytes == 192) &&
@@ -9932,7 +9954,8 @@ bool GetCodecEncodePathInfo(
                 requested_recovery_count, requested_recovery_count);
         info.high_t8_two_block_binding_selected =
             transform_ops.kind == LEO2_BACKEND_AVX2 &&
-            transform_ops.ff8_high_encode_two_blocks_t8 != NULL;
+            transform_ops.ff8_high_encode_two_blocks_t8 != NULL &&
+            transform_ops.ff8_high_encode_two_blocks_t8_tiny != NULL;
     }
 #endif
 #endif
@@ -9997,6 +10020,15 @@ bool HighT8OneKilobyteExtensionEnabled()
 {
 #if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION && defined(LEO_HAS_FF8)
     return g_high_t8_1024_extension_mode == 1U;
+#else
+    return false;
+#endif
+}
+
+bool HighT8TinyBindingEnabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_high_t8_tiny_binding_mode == 1U;
 #else
     return false;
 #endif
@@ -10132,8 +10164,12 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
             ? recovery[i]
             : discarded_recovery[i - recovery_count];
     }
-    leopard::ff8::ReedSolomonEncodeTwoBlocksT8(
-        transform_ops, padded_original, work, shard_bytes);
+    if (shard_bytes < 64)
+        leopard::ff8::ReedSolomonEncodeTwoBlocksT8Tiny(
+            transform_ops, padded_original, work, shard_bytes);
+    else
+        leopard::ff8::ReedSolomonEncodeTwoBlocksT8(
+            transform_ops, padded_original, work, shard_bytes);
 }
 
 #undef LEO2_T8_TWO_BLOCK_NOINLINE
@@ -11054,6 +11090,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
                     codec->recovery_count, codec->recovery_count);
             if (transform_ops.kind != LEO2_BACKEND_AVX2 ||
                 !transform_ops.ff8_high_encode_two_blocks_t8 ||
+                !transform_ops.ff8_high_encode_two_blocks_t8_tiny ||
                 (selected_ops && selected_ops != &transform_ops))
             {
                 all_dense_qualified = false;

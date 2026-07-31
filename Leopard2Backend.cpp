@@ -1299,12 +1299,17 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
 
 static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
 {
-    if (!ops.ff8_high_encode_two_blocks_t8)
+    if (!ops.ff8_high_encode_two_blocks_t8 &&
+        !ops.ff8_high_encode_two_blocks_t8_tiny)
         return true;
+    if (!ops.ff8_high_encode_two_blocks_t8 ||
+        !ops.ff8_high_encode_two_blocks_t8_tiny)
+        return false;
 
     static const unsigned kInputCount = 16;
     static const unsigned kOutputCount = 8;
     static const uint64_t kByteCounts[] = {
+        1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
         64, 128, 192, 256, 320, 384, 448, 512,
         576, 640, 704, 768, 832, 896, 960, 1024
     };
@@ -1370,10 +1375,16 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
             ops.xor_memory(
                 expected_pointers[lane], second_pointers[lane], byte_count);
 
-        ops.ff8_high_encode_two_blocks_t8(
-            input_pointers, actual_pointers,
-            first_inverse_skew, second_inverse_skew,
-            forward_skew, byte_count);
+        if (byte_count < 64)
+            ops.ff8_high_encode_two_blocks_t8_tiny(
+                input_pointers, actual_pointers,
+                first_inverse_skew, second_inverse_skew,
+                forward_skew, byte_count);
+        else
+            ops.ff8_high_encode_two_blocks_t8(
+                input_pointers, actual_pointers,
+                first_inverse_skew, second_inverse_skew,
+                forward_skew, byte_count);
         if (std::memcmp(input, input_before, sizeof(input)) != 0 ||
             std::memcmp(actual, expected, sizeof(actual)) != 0)
             return false;
@@ -2640,13 +2651,18 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
             ~kFF8HighEncodeSupportedSides) != 0)
         return false;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
-    if ((ops.ff8_high_encode_two_blocks_t8 != NULL) !=
-        (ops.kind == LEO2_BACKEND_AVX2 &&
+    const bool expected_two_block_t8 =
+        ops.kind == LEO2_BACKEND_AVX2 &&
             ops.ff8_high_encode_one_block != NULL &&
-            (ops.ff8_high_encode_one_block_sides & 8U) != 0))
+            (ops.ff8_high_encode_one_block_sides & 8U) != 0;
+    if ((ops.ff8_high_encode_two_blocks_t8 != NULL) !=
+            expected_two_block_t8 ||
+        (ops.ff8_high_encode_two_blocks_t8_tiny != NULL) !=
+            expected_two_block_t8)
         return false;
 #else
-    if (ops.ff8_high_encode_two_blocks_t8)
+    if (ops.ff8_high_encode_two_blocks_t8 ||
+        ops.ff8_high_encode_two_blocks_t8_tiny)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
@@ -2747,6 +2763,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_high_encode_one_block ||
         ops.ff8_high_encode_one_block_sides != 0 ||
         ops.ff8_high_encode_two_blocks_t8 ||
+        ops.ff8_high_encode_two_blocks_t8_tiny ||
         ops.ff8_high_encode_small ||
         ops.ff8_multiply_add_outputs ||
         ops.ff8_multiply_add_2_sources_2_outputs ||

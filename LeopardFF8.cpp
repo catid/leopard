@@ -2987,6 +2987,29 @@ void ReedSolomonEncodeTwoBlocksT8(
         data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
         FFTSkewStorage, byte_count);
 }
+
+void ReedSolomonEncodeTwoBlocksT8Tiny(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_high_encode_two_blocks_t8_tiny != NULL);
+    LEO_DEBUG_ASSERT(byte_count >= 1 && byte_count < 64);
+    if (!ops.ff8_high_encode_two_blocks_t8_tiny ||
+        byte_count == 0 || byte_count >= 64)
+        return;
+
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    ops.ff8_high_encode_two_blocks_t8_tiny(
+        data, work, FFTSkewStorage + 8, FFTSkewStorage + 16,
+        FFTSkewStorage, byte_count);
+}
 #endif
 
 
