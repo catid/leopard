@@ -8882,8 +8882,12 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->auto_requested = requested == LEO2_BACKEND_AUTO;
     context->auto_avx512_encode_host = context->auto_requested &&
         leopard::backend::IsCalibratedAutoAVX512EncodeHost();
+#ifdef LEO_HAS_FF8
     context->high_t4_batch_binding_enabled =
         g_high_t4_batch_binding_mode == 1U;
+#else
+    context->high_t4_batch_binding_enabled = false;
+#endif
     context->thread_count = threads;
     /*
         The retained cache-policy campaigns used an explicitly requested AVX2
