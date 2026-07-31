@@ -24,6 +24,7 @@ import math
 import os
 import shutil
 import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -35,6 +36,9 @@ SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
 MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v7"
 CELL_SCHEMA = "leopard2-equal-rounded-cell/v7"
 SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v7"
+ONE_SHOT_MANIFEST_SCHEMA = "leopard2-equal-rounded-one-shot-manifest/v1"
+ONE_SHOT_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cell/v1"
+ONE_SHOT_SUMMARY_SCHEMA = "leopard2-equal-rounded-one-shot-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -159,7 +163,7 @@ def cell(
     }
 
 
-def matrix() -> list[dict[str, Any]]:
+def reusable_matrix() -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     for k in (17, 31, 32, 33, 64, 66, 96, 127, 128):
         for losses in (2, 4, 8):
@@ -191,6 +195,99 @@ def matrix() -> list[dict[str, Any]]:
     require(len({item["id"] for item in result}) == len(result),
             "matrix contains duplicate identifiers")
     return result
+
+
+def one_shot_cell(
+    identifier: str,
+    k: int,
+    r: int,
+    shard_bytes: int,
+    losses: int,
+    role: str,
+    candidate_direct: bool,
+    control_direct: bool,
+) -> dict[str, Any]:
+    result = cell(
+        identifier, k, r, shard_bytes, losses, role,
+        candidate_direct, control_direct)
+    result["measurement_mode"] = "one-shot"
+    return result
+
+
+def one_shot_matrix() -> list[dict[str, Any]]:
+    """Bound the promoted one-shot region and its immediate fallbacks."""
+    result: list[dict[str, Any]] = []
+    boundary_bytes = (
+        1, 31, 32, 33, 63, 64, 65,
+        127, 128, 129, 255, 256, 257,
+        511, 512, 513, 514,
+    )
+    for k in (17, 128):
+        for shard_bytes in boundary_bytes:
+            result.append(one_shot_cell(
+                f"oneshot-k{k}-r{k}-b{shard_bytes}-l8",
+                k, k, shard_bytes, 8, "target", True, False))
+        for shard_bytes in (1, 33, 65, 257, 514):
+            result.append(one_shot_cell(
+                f"oneshot-k{k}-r{k}-b{shard_bytes}-l1",
+                k, k, shard_bytes, 1, "target", True, False))
+
+    for k in (32, 66, 96, 127):
+        for losses in (1, 8):
+            result.append(one_shot_cell(
+                f"oneshot-edge-k{k}-r{k}-b514-l{losses}",
+                k, k, 514, losses, "target", True, False))
+
+    # Exact Leopard1 rejects R > K, so keep the authoritative three-way
+    # campaign to geometries both public APIs can represent.  R > K remains
+    # covered by same-source correctness and directional screens.
+    for k, r in ((32, 17), (128, 65)):
+        for losses in (1, 8):
+            for shard_bytes in (33, 514):
+                result.append(one_shot_cell(
+                    f"oneshot-asym-k{k}-r{r}-b{shard_bytes}-l{losses}",
+                    k, r, shard_bytes, losses, "target", True, False))
+
+    for k in (17, 32, 128):
+        result.append(one_shot_cell(
+            f"neighbor-cutoff-k{k}-r{k}-b515-l8",
+            k, k, 515, 8, "neighbor", False, False))
+    result.extend((
+        one_shot_cell("neighbor-k65-r65-b33-l8",
+                      65, 65, 33, 8, "neighbor", False, False),
+        one_shot_cell("neighbor-k65-r65-b514-l8",
+                      65, 65, 514, 8, "neighbor", False, False),
+        one_shot_cell("neighbor-k16-r17-b33-l8",
+                      16, 17, 33, 8, "neighbor", False, False),
+        one_shot_cell("neighbor-k17-r17-b33-l9",
+                      17, 17, 33, 9, "neighbor", False, False),
+        one_shot_cell("neighbor-k128-r128-b514-l9",
+                      128, 128, 514, 9, "neighbor", False, False),
+    ))
+    require(len({item["id"] for item in result}) == len(result),
+            "one-shot matrix contains duplicate identifiers")
+    return result
+
+
+def matrix(mode: str = "reusable") -> list[dict[str, Any]]:
+    require(mode in ("reusable", "one-shot"),
+            f"unsupported measurement mode: {mode}")
+    return one_shot_matrix() if mode == "one-shot" else reusable_matrix()
+
+
+def manifest_schema(mode: str) -> str:
+    return ONE_SHOT_MANIFEST_SCHEMA if mode == "one-shot" \
+        else MANIFEST_SCHEMA
+
+
+def cell_schema(item: Mapping[str, Any]) -> str:
+    return ONE_SHOT_CELL_SCHEMA \
+        if item.get("measurement_mode") == "one-shot" else CELL_SCHEMA
+
+
+def summary_schema(mode: str) -> str:
+    return ONE_SHOT_SUMMARY_SCHEMA if mode == "one-shot" \
+        else SUMMARY_SCHEMA
 
 
 def write_atomic_exclusive(path: Path, value: object) -> None:
@@ -321,6 +418,9 @@ def expected_parameters(
     }
     if implementation == "main" and physical != item["bytes"]:
         expected["logical_shard_bytes"] = item["bytes"]
+    if (implementation != "main" and
+            item.get("measurement_mode") == "one-shot"):
+        expected["measure_one_shot_decode"] = True
     return expected
 
 
@@ -375,6 +475,20 @@ def validate_result(
                 resolved.get("padded_application_bytes") is True and
                 correctness.get("logical_prefix_fingerprinted") is True,
                 "exact-main logical-prefix semantics changed")
+    elif item.get("measurement_mode") == "one-shot":
+        expected_enabled = implementation == "candidate"
+        build = result.get("build")
+        require(
+            result.get("schema") == "leopard2-benchmark-v8" and
+            resolved.get("backend") == "avx2" and
+            correctness.get("leopard2_round_trip") is True and
+            parameters.get("skip_legacy") is True and
+            parameters.get("retain_samples") is True and
+            parameters.get("measure_one_shot_decode") is True and
+            isinstance(build, dict) and
+            build.get("one_shot_equal_rounded_direct_enabled")
+                is expected_enabled,
+            f"{implementation} one-shot build identity changed")
     else:
         expected_enabled = implementation == "candidate"
         expected_direct = bool(item[
@@ -411,6 +525,11 @@ def validate_result(
         setup = 0.0
         execution = metric(
             result, "decode_including_setup",
+            "median_us_per_batch_call")
+    elif item.get("measurement_mode") == "one-shot":
+        setup = 0.0
+        execution = metric(
+            result, "one_shot_decode_including_setup",
             "median_us_per_batch_call")
     else:
         setup = metric(result, "decode_plan_setup", "median_us")
@@ -456,6 +575,15 @@ def benchmark_command(
     if implementation == "main":
         if physical != item["bytes"]:
             command.extend(("--logical-bytes", str(item["bytes"])))
+    elif item.get("measurement_mode") == "one-shot":
+        command.extend((
+            "--profile", "high",
+            "--field", "gf8",
+            "--backend", "avx2",
+            "--skip-legacy",
+            "--retain-samples",
+            "--measure-one-shot-decode",
+        ))
     else:
         command.extend((
             "--profile", "high",
@@ -468,6 +596,89 @@ def benchmark_command(
         ))
     command.extend(("--json", "-"))
     return command
+
+
+def attest_one_shot_source(
+    executable: Path,
+    identity: Mapping[str, Any],
+    source_commit: str,
+    source_tree: str,
+) -> dict[str, Any]:
+    """Bind a schema-v8 binary to its clean schema-v5 source identity."""
+    require(T8.sha256(executable) == identity["sha256"],
+            "one-shot executable changed before source attestation")
+    command = [
+        "/usr/bin/prlimit", "--as=268435456",
+        str(executable),
+        "--k", "32", "--r", "32",
+        "--bytes", "64", "--loss", "8",
+        "--batch", "1", "--reuse", "1",
+        "--iterations", "1", "--warmup", "0",
+        "--threads", "1", "--seed", "150",
+        "--profile", "high", "--field", "gf8",
+        "--backend", "avx2", "--skip-legacy",
+        "--attest-source", "--json", "-",
+    ]
+    completed = subprocess.run(
+        command, env=CHILD_ENVIRONMENT,
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        timeout=30.0, check=False)
+    require(
+        completed.returncode == 0 and
+        0 < len(completed.stdout) <= (8 << 20) and
+        len(completed.stderr) <= (1 << 20),
+        "one-shot source attestation process failed")
+    try:
+        result = json.loads(completed.stdout.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(
+            f"invalid one-shot source attestation: {error}") from error
+    require(isinstance(result, dict),
+            "one-shot source attestation is not an object")
+    build = result.get("build")
+    parameters = result.get("parameters")
+    resolved = result.get("resolved")
+    correctness = result.get("correctness")
+    digests = result.get("workload_digests")
+    require(
+        result.get("schema") == "leopard2-benchmark-v5" and
+        isinstance(build, dict) and
+        build.get("source_commit") == source_commit and
+        build.get("source_tree") == source_tree and
+        build.get("source_tracked_dirty") is False and
+        isinstance(parameters, dict) and
+        parameters.get("attest_source") is True and
+        isinstance(resolved, dict) and
+        resolved.get("profile") == "legacy_high_v1" and
+        resolved.get("field") == "gf8" and
+        resolved.get("backend") == "avx2" and
+        isinstance(correctness, dict) and
+        correctness.get("leopard2_round_trip") is True and
+        isinstance(digests, dict) and
+        digests.get("algorithm") == "fnv1a64" and
+        all(isinstance(digests.get(name), str) and
+            len(digests[name]) == 16 for name in
+            ("original_data", "transmitted_parity", "recovered_originals")),
+        "one-shot source attestation identity changed")
+    require(T8.sha256(executable) == identity["sha256"],
+            "one-shot executable changed after source attestation")
+    return {
+        "command": command,
+        "executable_sha256": identity["sha256"],
+        "source_commit": build["source_commit"],
+        "source_tree": build["source_tree"],
+        "source_tracked_dirty": build["source_tracked_dirty"],
+        "resolved": {
+            name: resolved[name] for name in
+            ("profile", "field", "backend")
+        },
+        "workload_digests": {
+            name: digests[name] for name in
+            ("original_data", "transmitted_parity", "recovered_originals")
+        },
+        "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
+        "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
+    }
 
 
 def target_endpoint_tolerance_ns(child_runtime_ns: int) -> int:
@@ -642,7 +853,8 @@ def validate_cell_record(
     manifest_sha256: str,
     target_rounds: int,
 ) -> dict[str, Any]:
-    require(isinstance(value, dict) and value.get("schema") == CELL_SCHEMA,
+    require(isinstance(value, dict) and
+            value.get("schema") == cell_schema(expected),
             "cell record schema changed")
     require(
         value.get("manifest_sha256") == manifest_sha256 and
@@ -760,7 +972,7 @@ def run(options: argparse.Namespace) -> int:
     require(PAIR.parse_cpu_list(sibling_text) ==
             {options.cpu, options.sibling},
             "requested CPUs are not one SMT pair")
-    cells = matrix()
+    cells = matrix(options.mode)
     if options.cell_id:
         by_id = {item["id"]: item for item in cells}
         unknown = sorted(set(options.cell_id) - set(by_id))
@@ -815,8 +1027,29 @@ def run(options: argparse.Namespace) -> int:
             T8.sha256(Path(identity["path"])) == identity["sha256"] and
             (Path(identity["path"]).stat().st_mode & 0o777) == 0o555,
             "frozen executable changed before campaign")
+    source_attestations: dict[str, Any] | None = None
+    if options.mode == "one-shot":
+        if options.resume:
+            prior_manifest = load_json(options.output / "manifest.json")
+            prior_attestations = prior_manifest.get("source_attestations")
+            require(isinstance(prior_attestations, dict),
+                    "resume source attestations are absent")
+            source_attestations = prior_attestations
+        else:
+            source_attestations = {
+                name: attest_one_shot_source(
+                    Path(executable_identities[name]["path"]),
+                    executable_identities[name],
+                    options.source_commit, options.source_tree)
+                for name in ("candidate", "control")
+            }
+            require(len({
+                canonical_bytes(value["workload_digests"])
+                for value in source_attestations.values()
+            }) == 1, "one-shot source-attestation workloads differ")
     manifest = {
-        "schema": MANIFEST_SCHEMA,
+        "schema": manifest_schema(options.mode),
+        "measurement_mode": options.mode,
         "source_commit": options.source_commit,
         "source_tree": options.source_tree,
         "main_commit": MAIN_COMMIT,
@@ -856,6 +1089,8 @@ def run(options: argparse.Namespace) -> int:
         },
         "cells": cells,
     }
+    if source_attestations is not None:
+        manifest["source_attestations"] = source_attestations
     manifest_sha256 = digest_object(manifest)
     manifest["digest"] = manifest_sha256
     manifest_path = options.output / "manifest.json"
@@ -932,7 +1167,7 @@ def run(options: argparse.Namespace) -> int:
                     })
                 analysis = analyze_cell(item, rounds)
                 value = {
-                    "schema": CELL_SCHEMA,
+                    "schema": cell_schema(item),
                     "manifest_sha256": manifest_sha256,
                     "pair_lease": pair_lease,
                     "cell": item,
@@ -959,8 +1194,17 @@ def run(options: argparse.Namespace) -> int:
     for identity in executable_identities.values():
         require(T8.sha256(Path(identity["path"])) == identity["sha256"],
                 "frozen executable changed after campaign")
+    all_digests_matched = all(
+        len({
+            tuple(sorted(invocation["normalized"]["digests"].items()))
+            for invocation in round_value["invocations"]
+        }) == 1
+        for item in cells
+        for round_value in load_json(
+            cells_directory / f"{item['id']}.json")["rounds"]
+    )
     summary = {
-        "schema": SUMMARY_SCHEMA,
+        "schema": summary_schema(options.mode),
         "manifest_sha256": manifest_sha256,
         "cell_count": len(cells),
         "accepted_process_count": sum(
@@ -970,27 +1214,22 @@ def run(options: argparse.Namespace) -> int:
                 cells_directory / f"{item['id']}.json")["rounds"]
         ),
         "rejected_isolation_attempt_count": rejected_attempt_count,
-        "all_digests_matched": all(
-            len({
-                tuple(sorted(invocation["normalized"]["digests"].items()))
-                for invocation in round_value["invocations"]
-            }) == 1
-            for item in cells
-            for round_value in load_json(
-                cells_directory / f"{item['id']}.json")["rounds"]
-        ),
+        "all_digests_matched": all_digests_matched,
         "analysis": aggregate(analyses),
     }
     summary["digest"] = digest_object(summary)
     write_atomic_exclusive(options.output / "summary.json", summary)
     print(json.dumps(summary, indent=2, sort_keys=True))
-    return 0 if summary["analysis"]["accepted"] else 2
+    return 0 if summary["analysis"]["accepted"] and \
+        all_digests_matched else 2
 
 
 def verify(options: argparse.Namespace) -> int:
     root = options.output.resolve(strict=True)
     manifest = load_json(root / "manifest.json")
-    require(manifest.get("schema") == MANIFEST_SCHEMA,
+    mode = manifest.get("measurement_mode", "reusable")
+    require(mode in ("reusable", "one-shot") and
+            manifest.get("schema") == manifest_schema(mode),
             "manifest schema changed")
     expected_digest = manifest.pop("digest", None)
     require(expected_digest == digest_object(manifest),
@@ -1004,15 +1243,62 @@ def verify(options: argparse.Namespace) -> int:
             item, expected_digest, int(manifest["target_rounds"]))
         analyses.append(value["analysis"])
     summary = load_json(root / "summary.json")
+    require(summary.get("schema") == summary_schema(mode),
+            "summary schema changed")
     summary_digest = summary.pop("digest", None)
     require(summary_digest == digest_object(summary),
             "summary digest changed")
     require(summary["analysis"] == aggregate(analyses),
             "summary analysis changed")
+    require(summary.get("all_digests_matched") is True,
+            "cross-implementation workload digests differ")
     identities = manifest["identities"]["executables"]
     for identity in identities.values():
         require(T8.sha256(Path(identity["path"])) == identity["sha256"],
                 "frozen executable changed")
+    if mode == "one-shot":
+        require(
+            T8.regular_file_identity(Path(__file__)) == manifest["runner"] and
+            T8.regular_file_identity(
+                DIRECTORY / "run_small_direct_abba.py") ==
+                    manifest["gate_runner"] and
+            T8.regular_file_identity(
+                DIRECTORY.parent / "main_compare" / "run_abba.py") ==
+                    manifest["main_support"],
+            "one-shot evidence support identity changed")
+        executable_sections = manifest["identities"].get(
+            "executable_sections")
+        require(isinstance(executable_sections, dict),
+                "one-shot executable-section evidence is absent")
+        recomputed_sections = {
+            name: T8.executable_sections_identity(
+                Path(identities[name]["path"]))
+            for name in ("candidate", "control")
+        }
+        require(
+            recomputed_sections == executable_sections and
+            executable_sections["candidate"]["sections"] ==
+                executable_sections["control"]["sections"],
+            "one-shot executable sections changed")
+        attestations = manifest.get("source_attestations")
+        require(isinstance(attestations, dict) and
+                set(attestations) == {"candidate", "control"},
+                "one-shot source attestations changed")
+        for name, attestation in attestations.items():
+            require(
+                isinstance(attestation, dict) and
+                attestation.get("executable_sha256") ==
+                    identities[name]["sha256"] and
+                attestation.get("source_commit") ==
+                    manifest["source_commit"] and
+                attestation.get("source_tree") ==
+                    manifest["source_tree"] and
+                attestation.get("source_tracked_dirty") is False,
+                f"{name} one-shot source attestation changed")
+        require(len({
+            canonical_bytes(attestation.get("workload_digests"))
+            for attestation in attestations.values()
+        }) == 1, "one-shot source-attestation workloads differ")
     print("equal-rounded evidence verified")
     return 0
 
@@ -1027,6 +1313,17 @@ def self_test() -> int:
     require(digest_object(cells) ==
             "96246fe43f13caf70bf615943782bcd4d53f6295b62308e04c09b43e7a7f8ff3",
             "matrix digest changed")
+    one_shot_cells = matrix("one-shot")
+    require(
+        len(one_shot_cells) == 68 and
+        sum(item["role"] == "target" for item in one_shot_cells) == 60 and
+        sum(item["role"] == "neighbor" for item in one_shot_cells) == 8 and
+        all(item.get("measurement_mode") == "one-shot"
+            for item in one_shot_cells),
+        "one-shot matrix shape changed")
+    require(digest_object(one_shot_cells) ==
+            "f261d82446d2920149c648e51e86beb60a3c25ae8ff4d419d92c0940d7b940ab",
+            "one-shot matrix digest changed")
     sample = confidence((math.log(2.0), math.log(2.0), math.log(2.0)))
     require(all(abs(sample[name] - 2.0) < 1e-12
                 for name in ("ratio", "lower", "upper")),
@@ -1099,6 +1396,8 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--reuse", type=int, default=64)
     run_parser.add_argument("--cell-id", action="append", default=[])
     run_parser.add_argument("--resume", action="store_true")
+    run_parser.add_argument(
+        "--mode", choices=("reusable", "one-shot"), default="reusable")
     run_parser.set_defaults(function=run)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--output", required=True, type=Path)
