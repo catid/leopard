@@ -6816,15 +6816,25 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8(
     const uint8_t* forward_skew,
     uint64_t byte_count)
 {
-    LEO_DEBUG_ASSERT(
-        byte_count >= 64 && byte_count <= 1024 &&
-        (byte_count & 63U) == 0);
-    if (byte_count < 64 || byte_count > 1024 ||
-        (byte_count & 63U) != 0)
+    LEO_DEBUG_ASSERT(byte_count >= 64 && byte_count <= 1024);
+    if (byte_count < 64 || byte_count > 1024)
         return;
+
+    const uint64_t complete_bytes = byte_count & ~UINT64_C(31);
     AVX2FF8HighEncodeTwoBlocksT8Vectors(
         data, work, first_inverse_skew, second_inverse_skew,
-        forward_skew, 0, byte_count);
+        forward_skew, 0, complete_bytes);
+    if (complete_bytes != byte_count)
+    {
+        /*
+            Recompute the final in-range vector.  It may overlap the preceding
+            vector, but every byte lane is independent and therefore produces
+            the same output.  This avoids any out-of-range load or tail copy.
+        */
+        AVX2FF8HighEncodeTwoBlocksT8TinyVector32(
+            data, work, first_inverse_skew, second_inverse_skew,
+            forward_skew, byte_count - 32);
+    }
 }
 
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8Tiny(

@@ -242,6 +242,20 @@
 #endif
 
 /*
+    Default-off, text-layout-neutral experiment for extending the prepared
+    T=8 binding across non-64-byte-multiple shards from 65 through 1024.
+    Both values retain the selector in initialized data so candidate and
+    control builds can keep byte-identical executable instruction sections.
+*/
+#ifndef LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
+#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING must be 0 or 1"
+#endif
+
+/*
     Compile-time control for the measured equal-rounded GF8/AVX2 multi-loss
     direct-repair promotion.  A value of zero retains the former one-loss
     control for reproducible same-source comparisons.
@@ -641,6 +655,15 @@ static volatile uint32_t g_high_t8_1024_extension_mode =
 #endif
 static volatile uint32_t g_high_t8_tiny_binding_mode =
     2U - LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING;
+static volatile uint32_t g_high_t8_ragged_binding_mode =
+    2U - LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING;
+
+static bool IsHighT8RaggedByteCount(uint64_t shard_bytes)
+{
+    return g_high_t8_ragged_binding_mode == 1U &&
+        shard_bytes >= 65 && shard_bytes <= 1024 &&
+        (shard_bytes & 63U) != 0;
+}
 
 static bool IsHighT8OneBlockBeyond512ShapeByteCount(
     uint32_t original_count,
@@ -698,6 +721,8 @@ static bool IsHighT8OneBlockByteCount(
 {
     if (shard_bytes >= 1 && shard_bytes < 64 &&
         g_high_t8_tiny_binding_mode == 1U)
+        return true;
+    if (IsHighT8RaggedByteCount(shard_bytes))
         return true;
     if (shard_bytes == 64)
         return true;
@@ -782,6 +807,8 @@ static bool IsHighT8TwoBlockByteCount(
 {
     if (shard_bytes >= 1 && shard_bytes < 64 &&
         g_high_t8_tiny_binding_mode == 1U)
+        return true;
+    if (IsHighT8RaggedByteCount(shard_bytes))
         return true;
     if (shard_bytes == 64)
         return true;
@@ -10029,6 +10056,15 @@ bool HighT8TinyBindingEnabled()
 {
 #ifdef LEO_HAS_FF8
     return g_high_t8_tiny_binding_mode == 1U;
+#else
+    return false;
+#endif
+}
+
+bool HighT8RaggedBindingEnabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_high_t8_ragged_binding_mode == 1U;
 #else
     return false;
 #endif

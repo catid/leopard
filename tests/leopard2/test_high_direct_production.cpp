@@ -122,6 +122,13 @@
     LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING > 1
 #error "LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING must be 0 or 1"
 #endif
+#ifndef LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
+#define LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING 0
+#endif
+#if LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING < 0 || \
+    LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING > 1
+#error "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING must be 0 or 1"
+#endif
 
 namespace {
 
@@ -168,6 +175,8 @@ bool IsExpectedT8OneBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
+        (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
+         bytes >= 65 && bytes <= 1024 && (bytes & 63U) != 0) ||
         bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
@@ -208,6 +217,8 @@ bool IsExpectedT8TwoBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
+        (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
+         bytes >= 65 && bytes <= 1024 && (bytes & 63U) != 0) ||
         bytes == 64 ||
         ((bytes == 128 || bytes == 192) &&
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 == 0) ||
@@ -1285,8 +1296,10 @@ void ExerciseTinyFullOutputRegion(
 {
     const size_t byte_counts[] = {
         1, 2, 3, 4, 7, 8, 15, 16,
-        17, 31, 32, 33, 63, 64, 65, 70,
-        128, 192, 256, 320, 384, 448, 512, 513,
+        17, 31, 32, 33, 63, 64, 65, 66, 70,
+        95, 96, 97, 127, 128, 129,
+        191, 192, 193, 255, 256, 257,
+        320, 384, 448, 511, 512, 513,
         576, 640, 704, 768, 832, 896, 960, 1024, 1025, 1088
     };
     const leopard2_test::BinaryField field =
@@ -1407,6 +1420,10 @@ int main()
             leopard2_internal::HighT8TinyBindingEnabled() ==
                 (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0),
             "T=8 tiny-binding provenance marker differs from build policy");
+        Require(
+            leopard2_internal::HighT8RaggedBindingEnabled() ==
+                (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0),
+            "T=8 ragged-binding provenance marker differs from build policy");
         const uint64_t t4_diagnostic_checks =
             ExerciseT4DiagnosticControl();
 

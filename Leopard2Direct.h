@@ -239,6 +239,9 @@ bool HighT8OneKilobyteExtensionEnabled();
 /* Marker for the qualified sub-64-byte T=8 binding. */
 bool HighT8TinyBindingEnabled();
 
+/* Marker for the default-off 65..1024-byte ragged T=8 experiment. */
+bool HighT8RaggedBindingEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

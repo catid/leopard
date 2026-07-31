@@ -938,19 +938,22 @@ void test_t8_one_block_mixed_binding(Context& avx2)
         expected_exact_calls, 2);
 
     /*
-        One unqualified item must disable the binding-level shortcut for the
-        complete heterogeneous batch.  The mature per-item path still emits
-        identical parity for both items.
+        The default path treats 513 as an unqualified boundary.  The ragged
+        experiment qualifies it, in which case both heterogeneous items use
+        the same immutable callback with byte-specific bodies.
     */
     static const size_t boundary[] = { 64, 513 };
     path = leopard2_internal::CodecEncodePathInfo();
+    const bool ragged_enabled =
+        leopard2_internal::HighT8RaggedBindingEnabled();
     require(leopard2_internal::GetCodecEncodePathInfo(
             codec.get(), 513, 5, &path) &&
-            !path.high_t8_partial_binding_selected,
-        "mixed T8 boundary unexpectedly selected the shortcut");
+            path.high_t8_partial_binding_selected == ragged_enabled,
+        "mixed T8 ragged selector differs from experiment policy");
     run_t8_mixed_binding(
         codec.get(), 5, 5, boundary,
-        sizeof(boundary) / sizeof(boundary[0]), 0, 2);
+        sizeof(boundary) / sizeof(boundary[0]),
+        ragged_enabled ? 2 : 0, 2);
 }
 
 void test_t8_two_block_mixed_binding(Context& avx2)
@@ -972,13 +975,21 @@ void test_t8_two_block_mixed_binding(Context& avx2)
         expected_qualified_calls, 4);
 
     /*
-        As with the one-block route, a single unqualified item must disable
-        the binding-level callback for the whole heterogeneous batch.
+        As with the one-block route, the experiment controls whether the
+        ragged item qualifies this heterogeneous binding.
     */
     static const size_t boundary[] = { 64, 513 };
+    path = leopard2_internal::CodecEncodePathInfo();
+    const bool ragged_enabled =
+        leopard2_internal::HighT8RaggedBindingEnabled();
+    require(leopard2_internal::GetCodecEncodePathInfo(
+            codec.get(), 513, 5, &path) &&
+            path.high_t8_two_block_binding_selected == ragged_enabled,
+        "mixed two-block T8 ragged selector differs from experiment policy");
     run_t8_mixed_binding(
         codec.get(), 13, 5, boundary,
-        sizeof(boundary) / sizeof(boundary[0]), 0, 4);
+        sizeof(boundary) / sizeof(boundary[0]),
+        ragged_enabled ? 2 : 0, 4);
 }
 
 Shards encode_unaligned(

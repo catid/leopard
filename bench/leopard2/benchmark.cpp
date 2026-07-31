@@ -1510,6 +1510,9 @@ static int Run(const Options& options)
          << "    \"high_t8_tiny_binding_enabled\": "
          << (leopard2_internal::HighT8TinyBindingEnabled() ?
                 "true" : "false") << ",\n"
+         << "    \"high_t8_ragged_binding_enabled\": "
+         << (leopard2_internal::HighT8RaggedBindingEnabled() ?
+                "true" : "false") << ",\n"
          << "    \"high_t8_one_block_selected\": "
          << (high_t8_one_block_selected ? "true" : "false") << ",\n"
          << "    \"high_t8_two_block_128_192_enabled\": "

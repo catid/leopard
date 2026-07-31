@@ -1310,8 +1310,10 @@ static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
     static const unsigned kOutputCount = 8;
     static const uint64_t kByteCounts[] = {
         1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63,
-        64, 128, 192, 256, 320, 384, 448, 512,
-        576, 640, 704, 768, 832, 896, 960, 1024
+        64, 65, 66, 95, 96, 97, 127, 128, 129,
+        191, 192, 193, 255, 256, 257, 320, 384, 448,
+        511, 512, 513, 576, 640, 704, 768, 832, 896,
+        960, 1023, 1024
     };
     uint8_t input[kInputCount][1028];
     uint8_t input_before[kInputCount][1028];
