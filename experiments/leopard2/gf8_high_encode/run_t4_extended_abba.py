@@ -30,6 +30,9 @@ def load_base() -> Any:
 BASE = load_base()
 BASE.SCHEMA = "leopard2-gf8-t4-extended-abba/v1"
 BASE.SUMMARY_SCHEMA = "leopard2-gf8-t4-extended-summary/v1"
+BASE_BENCHMARK_COMMAND = BASE.benchmark_command
+BASE_REQUIRE = BASE.require
+BASE_VALIDATE_RESULT = BASE.validate_result
 
 
 MAXIMUM_BYTES = {
@@ -56,6 +59,63 @@ EXTENDED_GRID = (3072, 4096, 6144, 8192, 12288, 16384)
 def production_selected(k: int, r: int, shard_bytes: int) -> bool:
     maximum = MAXIMUM_BYTES.get((k, r), 0)
     return 32 <= shard_bytes <= maximum and shard_bytes % 32 == 0
+
+
+def shared_candidate_control() -> bool:
+    try:
+        candidate_index = sys.argv.index("--candidate") + 1
+        control_index = sys.argv.index("--control") + 1
+        return Path(sys.argv[candidate_index]).samefile(
+            Path(sys.argv[control_index]))
+    except (OSError, ValueError, IndexError):
+        return False
+
+
+def require(condition: bool, message: str) -> None:
+    if not condition and \
+            message == "candidate, control, and main binaries are not distinct" \
+            and shared_candidate_control():
+        return
+    BASE_REQUIRE(condition, message)
+
+
+def benchmark_command(
+    implementation: str,
+    executable: Path,
+    cell: Mapping[str, Any],
+    cpu: int,
+    iterations: int,
+    warmup: int,
+) -> list[str]:
+    command = BASE_BENCHMARK_COMMAND(
+        implementation, executable, cell, cpu, iterations, warmup)
+    if implementation == "control":
+        command[-2:-2] = ["--disable-high-t4-binding"]
+    return command
+
+
+def validate_result(
+    implementation: str,
+    result: object,
+    cell: Mapping[str, Any],
+    source_commit: str,
+    source_tree: str,
+    iterations: int,
+    warmup: int,
+) -> dict[str, Any]:
+    normalized = BASE_VALIDATE_RESULT(
+        implementation, result, cell, source_commit, source_tree,
+        iterations, warmup)
+    if implementation != "main":
+        if not isinstance(result, dict):
+            raise BASE.EvidenceError("benchmark output is not an object")
+        build = result.get("build")
+        BASE_REQUIRE(
+            isinstance(build, dict) and
+            build.get("high_t4_batch_diagnostic_disabled") is
+                (implementation == "control"),
+            "same-executable T=4 diagnostic mode changed")
+    return normalized
 
 
 def make_cell(
@@ -176,6 +236,9 @@ def key_main_cell(cell: Mapping[str, Any]) -> bool:
 
 
 BASE.production_selected = production_selected
+BASE.require = require
+BASE.benchmark_command = benchmark_command
+BASE.validate_result = validate_result
 BASE.checkpoint_cells = checkpoint_cells
 BASE.smoke_cells = smoke_cells
 BASE.holdout_cells = holdout_cells

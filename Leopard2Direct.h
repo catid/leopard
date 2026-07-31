@@ -195,6 +195,16 @@ uint64_t HighT4BatchMaximumBytes(
     uint32_t recovery_count);
 
 /*
+    Setup-only benchmark control for same-executable attribution.  Call this
+    immediately after context creation and before constructing any codec.
+    This is deliberately internal: It does not alter the public API, codec
+    identity, wire profile, or production default.
+*/
+bool SetContextHighT4BatchBindingEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled);
+
+/*
     Pattern-dependent structural accounting for an immutable decode plan.
     Empty high-output entries select the mature full transform and are not
     counted as compiled pruned schedules.

@@ -87,9 +87,10 @@
 #endif
 
 /*
-    Text-layout-neutral same-source control for the dense T=4 batch callback.
-    The macro changes only a nonzero initialized data word; production keeps
-    the callback enabled while diagnostic controls preserve identical text.
+    Text-layout-neutral default for the dense T=4 batch callback.  Each context
+    snapshots this initialized data word and each codec then snapshots its
+    context.  Production keeps the callback enabled; same-executable benchmark
+    attribution can override a fresh context before codec construction.
 */
 #ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING
 #define LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING 0
@@ -267,6 +268,7 @@ struct leo2_context
     const leopard::backend::Ops* baseline_ops;
     bool auto_requested;
     bool auto_avx512_encode_host;
+    bool high_t4_batch_binding_enabled;
     uint32_t thread_count;
     size_t gf16_effective_l3_bytes;
     size_t gf16_live_set_target_bytes;
@@ -351,6 +353,7 @@ struct leo2_codec
     leo2_field field;
     leo2_shard_layout shard_layout;
     uint32_t flags;
+    bool high_t4_batch_binding_enabled;
     // Zero disables the optional AVX2 two-source one-loss executor.  A
     // nonzero value is derived once from the immutable profile/count/backend
     // identity so byte execution does not rescan the measured-shape table.
@@ -8879,6 +8882,8 @@ LEO2_EXPORT leo2_result leo2_context_create(
     context->auto_requested = requested == LEO2_BACKEND_AUTO;
     context->auto_avx512_encode_host = context->auto_requested &&
         leopard::backend::IsCalibratedAutoAVX512EncodeHost();
+    context->high_t4_batch_binding_enabled =
+        g_high_t4_batch_binding_mode == 1U;
     context->thread_count = threads;
     /*
         The retained cache-policy campaigns used an explicitly requested AVX2
@@ -9182,6 +9187,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->field = field;
     codec->shard_layout = shard_layout;
     codec->flags = options ? options->flags : 0;
+    codec->high_t4_batch_binding_enabled =
+        context->high_t4_batch_binding_enabled;
     codec->direct_one_loss_pair_minimum_bytes = 0;
     codec->direct_generator_numerator_log = 0;
     codec->direct_generator_numerator_valid = false;
@@ -9759,6 +9766,16 @@ uint64_t HighT4BatchMaximumBytes(
     }
 }
 
+bool SetContextHighT4BatchBindingEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled)
+{
+    if (!context)
+        return false;
+    context->high_t4_batch_binding_enabled = enabled;
+    return true;
+}
+
 bool GetCodecEncodePathInfo(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -9796,7 +9813,7 @@ bool GetCodecEncodePathInfo(
     info.high_t8_partial_binding_selected = false;
     info.high_t8_two_block_binding_selected = false;
 #ifdef LEO_HAS_FF8
-    if (g_high_t4_batch_binding_mode == 1U &&
+    if (codec->high_t4_batch_binding_enabled &&
         !codec->context->pool &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
@@ -10868,7 +10885,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         the complete batch.  Contexts with a worker pool retain the ordinary
         executor so independent stripes continue to scale across workers.
     */
-    if (g_high_t4_batch_binding_mode == 1U &&
+    if (codec->high_t4_batch_binding_enabled &&
         !codec->context->pool &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&

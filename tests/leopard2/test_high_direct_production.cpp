@@ -494,6 +494,44 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
     return checks;
 }
 
+uint64_t ExerciseT4DiagnosticControl()
+{
+    const bool accepted_null =
+        leopard2_internal::
+            SetContextHighT4BatchBindingEnabledForDiagnostics(NULL, false);
+    Require(!accepted_null,
+        "T4 diagnostic control accepted a null context");
+
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    RequireResult(leo2_context_create(&options, &context),
+        "T4 diagnostic context");
+    const bool disabled =
+        leopard2_internal::
+            SetContextHighT4BatchBindingEnabledForDiagnostics(
+                context, false);
+    Require(disabled,
+        "T4 diagnostic control rejected a valid context");
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, 4, 4,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        "T4 diagnostic codec");
+    leopard2_internal::CodecEncodePathInfo path = {};
+    Require(leopard2_internal::GetCodecEncodePathInfo(
+            codec, 6144, 4, &path),
+        "T4 diagnostic path introspection");
+    Require(!path.high_t4_batch_binding_selected,
+        "T4 diagnostic context retained the batch shortcut");
+
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
+    return 2;
+}
+
 uint64_t ExerciseT8BatchBinding(
     leo2_context* context,
     size_t bytes)
@@ -1318,6 +1356,8 @@ int main()
         Require(context != NULL &&
             leo2_context_backend(context) == LEO2_BACKEND_AVX2,
             "explicit AVX2 context selected another backend");
+        const uint64_t t4_diagnostic_checks =
+            ExerciseT4DiagnosticControl();
 
         leo2_codec* codec = NULL;
         RequireResult(leo2_codec_create(context, k, r,
@@ -1489,6 +1529,7 @@ int main()
             "t8_two_block_binding=%s "
             "K=2 R=16 bytes=4096 Q=1 parity=0,15 "
             "tiny_codecs=%llu tiny_encodes=%llu direct=%llu transform=%llu "
+            "t4_diagnostic_checks=%llu "
             "t4_binding_checks=%llu t8_binding_checks=%llu "
             "t8_partial_binding_checks=%llu "
             "t8_two_block_binding_checks=%llu "
@@ -1502,6 +1543,7 @@ int main()
             static_cast<unsigned long long>(tiny_encode_checks),
             static_cast<unsigned long long>(tiny_direct_checks),
             static_cast<unsigned long long>(tiny_transform_checks),
+            static_cast<unsigned long long>(t4_diagnostic_checks),
             static_cast<unsigned long long>(t4_binding_checks),
             static_cast<unsigned long long>(t8_binding_checks),
             static_cast<unsigned long long>(t8_partial_binding_checks),

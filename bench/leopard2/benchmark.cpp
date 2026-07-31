@@ -119,6 +119,9 @@ struct Options
     bool report_decode_path;
     bool report_direct_executor;
     bool attest_source;
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    bool disable_high_t4_binding;
+#endif
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     bool force_translated_low;
     bool force_native_high;
@@ -156,6 +159,9 @@ struct Options
         , report_decode_path(false)
         , report_direct_executor(false)
         , attest_source(false)
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        , disable_high_t4_binding(false)
+#endif
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         , force_translated_low(false)
         , force_native_high(false)
@@ -428,6 +434,10 @@ static void Usage(std::ostream& output, const char* program)
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         << "  --attest-source       Embed committed source identity using schema v5\n"
 #endif
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        << "  --disable-high-t4-binding\n"
+        << "                         Attribution-only: retain the prior T=4 path\n"
+#endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         << "  --high-evaluator-mode NAME\n"
         << "                         Attribution-only: no-copy or copy-fallback\n"
@@ -486,6 +496,10 @@ static Options ParseOptions(int argc, char** argv)
         }
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
         else if (argument == "--attest-source") options.attest_source = true;
+#endif
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        else if (argument == "--disable-high-t4-binding")
+            options.disable_high_t4_binding = true;
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         else if (argument == "--high-evaluator-mode")
@@ -1098,6 +1112,17 @@ static int Run(const Options& options)
     context_options.thread_count = options.threads;
     leo2_context* context = NULL;
     RequireLeo2(leo2_context_create(&context_options, &context), "context create");
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    if (options.disable_high_t4_binding)
+    {
+        const bool disabled =
+            leopard2_internal::
+                SetContextHighT4BatchBindingEnabledForDiagnostics(
+                    context, false);
+        if (!disabled)
+            Fail("cannot disable the T=4 binding for attribution");
+    }
+#endif
 
     leo2_codec* codec = NULL;
     leo2_codec_options codec_options;
@@ -1468,6 +1493,9 @@ static int Run(const Options& options)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     json << ",\n"
          << "    \"prevalidated_batch_experiment\": true,\n"
+         << "    \"high_t4_batch_diagnostic_disabled\": "
+         << (options.disable_high_t4_binding ? "true" : "false")
+         << ",\n"
          << "    \"high_t4_batch_selected\": "
          << (high_t4_batch_selected ? "true" : "false") << ",\n"
          << "    \"high_t8_one_block_extended_enabled\": "
