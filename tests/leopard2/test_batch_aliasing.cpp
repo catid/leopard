@@ -785,7 +785,7 @@ void TestT4BindingAllocation()
         { 3, 3, 16384 },
         { 4, 4, 6144 },
         { 7, 3, 16384 },
-        { 11, 4, 4096 }
+        { 11, 4, 2048 }
     };
     static const size_t item_count = 3;
 

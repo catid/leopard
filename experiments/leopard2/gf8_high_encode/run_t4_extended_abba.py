@@ -46,12 +46,12 @@ MAXIMUM_BYTES = {
     (6, 4): 8 * 1024,
     (7, 3): 16 * 1024,
     (7, 4): 4 * 1024,
-    (9, 3): 8 * 1024,
-    (9, 4): 6 * 1024,
+    (9, 3): 4 * 1024,
+    (9, 4): 4 * 1024,
     (10, 3): 8 * 1024,
-    (10, 4): 6 * 1024,
+    (10, 4): 4 * 1024,
     (11, 3): 6 * 1024,
-    (11, 4): 4 * 1024,
+    (11, 4): 2 * 1024,
 }
 EXTENDED_GRID = (3072, 4096, 6144, 8192, 12288, 16384)
 
@@ -214,47 +214,20 @@ def smoke_cells() -> list[dict[str, Any]]:
 
 
 def holdout_cells() -> list[dict[str, Any]]:
-    cells = [
-        make_cell(
-            "holdout-k4-r3-b12288-q64",
-            4, 3, 12288, 64, "target"),
-        make_cell(
-            "holdout-k6-r3-b8192-q64",
-            6, 3, 8192, 64, "target"),
-        make_cell(
-            "holdout-k6-r4-b4096-q64",
-            6, 4, 4096, 64, "target"),
-        make_cell(
-            "holdout-k6-r4-b6144-q64",
-            6, 4, 6144, 64, "target"),
-        make_cell(
-            "holdout-k7-r4-b4096-q64",
-            7, 4, 4096, 64, "target"),
-        make_cell(
-            "holdout-k9-r3-b6144-q64",
-            9, 3, 6144, 64, "target"),
-        make_cell(
-            "holdout-k9-r4-b6144-q64",
-            9, 4, 6144, 64, "target"),
-        make_cell(
-            "holdout-k10-r3-b6144-q64",
-            10, 3, 6144, 64, "target"),
-        make_cell(
-            "holdout-k10-r4-b3072-q64",
-            10, 4, 3072, 64, "target"),
-        make_cell(
-            "holdout-k10-r4-b6144-q64",
-            10, 4, 6144, 64, "target"),
-        make_cell(
-            "holdout-k11-r3-b6144-q64",
-            11, 3, 6144, 64, "target"),
-        make_cell(
-            "holdout-k11-r4-b3072-q64",
-            11, 4, 3072, 64, "target"),
-        make_cell(
-            "holdout-k11-r4-b4096-q64",
-            11, 4, 4096, 64, "target"),
-    ]
+    # A first independent nine-round holdout rejected the former 6/8-KiB
+    # ceilings for these four shapes.  Recheck the resulting production
+    # maxima and their immediately unselected neighbors from a fresh source
+    # identity rather than retaining favorable non-monotonic cells.
+    shapes = ((9, 3), (9, 4), (10, 4), (11, 4))
+    cells = []
+    for k, r in shapes:
+        maximum = MAXIMUM_BYTES[(k, r)]
+        cells.append(make_cell(
+            f"holdout-k{k}-r{r}-b{maximum}-q64",
+            k, r, maximum, 64, "target"))
+        cells.append(make_cell(
+            f"holdout-neighbor-k{k}-r{r}-b{maximum + 32}-q64",
+            k, r, maximum + 32, 64, "boundary_neighbor"))
     return finalize_cells(cells, 0x7435E000)
 
 
