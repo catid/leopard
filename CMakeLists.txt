@@ -2040,6 +2040,14 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/main_compare/test_run_allk_gap.py)
             add_test(
+                NAME leopard2_t8_ragged_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_t8_two_block_abba.py)
+            add_test(
+                NAME leopard2_t8_ragged_runner_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/test_run_t8_two_block_abba.py)
+            add_test(
                 NAME leopard2_affinity_supervisor_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/tools/leopard2_affinity_supervisor.py

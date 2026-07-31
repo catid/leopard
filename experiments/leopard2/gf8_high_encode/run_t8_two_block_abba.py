@@ -19,6 +19,7 @@ import math
 import os
 import re
 import shutil
+import stat
 import statistics
 import subprocess
 import sys
@@ -35,8 +36,11 @@ ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
 TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v4"
 TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v4"
-RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v1"
-RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v1"
+RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v2"
+RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v2"
+RAGGED_MANIFEST_SCHEMA = \
+    "leopard2-gf8-t8-ragged-extension-manifest/v1"
+RAGGED_CELL_SCHEMA = "leopard2-gf8-t8-ragged-extension-cell/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -138,6 +142,36 @@ def write_exclusive(path: Path, value: object) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def write_atomic_exclusive(path: Path, value: object) -> None:
+    """Atomically publish one JSON object without replacing prior evidence."""
+    payload = json.dumps(
+        value, indent=2, sort_keys=True, allow_nan=False
+    ).encode("utf-8") + b"\n"
+    temporary = path.with_name(
+        f".{path.name}.tmp-{os.getpid()}-{time.monotonic_ns()}")
+    descriptor = os.open(
+        temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    try:
+        require(os.write(descriptor, payload) == len(payload),
+                f"short write: {temporary}")
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    try:
+        os.link(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def load_json_object(path: Path) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise EvidenceError(f"invalid JSON artifact {path}: {error}") from error
+    require(isinstance(value, dict), f"artifact is not an object: {path}")
+    return value
 
 
 def write_bytes_exclusive(path: Path, payload: bytes) -> None:
@@ -902,6 +936,115 @@ def analyze(
     return output
 
 
+def validate_compact_invocation_artifact(
+    invocation: Mapping[str, Any],
+    output: Path,
+) -> None:
+    artifact = invocation.get("result_artifact")
+    require(isinstance(artifact, dict),
+            "compact invocation lacks its result artifact")
+    name = artifact.get("name")
+    require(isinstance(name, str) and name and
+            Path(name).name == name,
+            "compact invocation artifact name is unsafe")
+    path = output / name
+    status = path.lstat()
+    require(stat.S_ISREG(status.st_mode) and
+            artifact.get("size") == status.st_size and
+            artifact.get("sha256") == sha256(path),
+            f"compact invocation artifact changed: {path}")
+    implementation = invocation.get("implementation")
+    require(implementation in ("candidate", "control", "main"),
+            "compact invocation implementation is invalid")
+    normalized = invocation.get("normalized")
+    require(isinstance(normalized, dict),
+            "compact invocation normalization is absent")
+    full_invocation = load_json_object(path)
+    require(compact_invocation(full_invocation, path) == dict(invocation),
+            f"compact invocation index differs from its artifact: {path}")
+
+
+def validate_ragged_cell_record(
+    record: Mapping[str, Any],
+    cell: Mapping[str, Any],
+    manifest_sha256: str,
+    output: Path,
+    target_rounds: int,
+) -> dict[str, Any]:
+    require(record.get("schema") == RAGGED_CELL_SCHEMA,
+            "ragged cell schema changed")
+    require(record.get("manifest_sha256") == manifest_sha256,
+            "ragged cell belongs to a different campaign manifest")
+    require(record.get("cell") == dict(cell),
+            "ragged cell parameters changed")
+    presample = record.get("presample")
+    pair_lease = record.get("pair_lease")
+    require(isinstance(presample, dict) and
+            isinstance(pair_lease, dict) and
+            presample.get("pair_lease") == pair_lease and
+            presample.get("delta", {}).get(
+                "benchmark_cpu", {}).get("nonidle_jiffies") == 0 and
+            presample.get("delta", {}).get(
+                "reserved_sibling", {}).get("nonidle_jiffies") == 0,
+            "ragged cell references a contaminated presample")
+    rounds = record.get("rounds")
+    require(isinstance(rounds, list), "ragged cell rounds are absent")
+    expected_orders = (
+        TARGET_ORDER * (target_rounds // len(TARGET_ORDER))
+        if cell["role"] == "target" else NEIGHBOR_ORDER
+    )
+    require(len(rounds) == len(expected_orders),
+            "ragged cell round count changed")
+    for round_index, (round_value, expected_order) in enumerate(
+            zip(rounds, expected_orders)):
+        require(isinstance(round_value, dict) and
+                round_value.get("round") == round_index and
+                tuple(round_value.get("order", ())) == expected_order and
+                round_value.get("isolation", {}).get(
+                    "pair_lease") == pair_lease and
+                round_value.get("isolation", {}).get("accepted") is True,
+                "ragged cell accepted round is malformed or contaminated")
+        invocations = round_value.get("invocations")
+        require(isinstance(invocations, list) and
+                len(invocations) == len(expected_order),
+                "ragged cell invocation count changed")
+        for invocation in invocations:
+            require(isinstance(invocation, dict),
+                    "ragged cell invocation is not an object")
+            validate_compact_invocation_artifact(invocation, output)
+    rejected = record.get("rejected_isolation_attempts")
+    require(isinstance(rejected, list),
+            "ragged cell rejected-attempt list is absent")
+    for round_value in rejected:
+        require(isinstance(round_value, dict) and
+                round_value.get("isolation", {}).get(
+                    "pair_lease") == pair_lease and
+                round_value.get("isolation", {}).get("accepted") is False,
+                "ragged cell rejected attempt was not objectively rejected")
+        invocations = round_value.get("invocations")
+        require(isinstance(invocations, list) and invocations,
+                "ragged cell rejected attempt lacks invocations")
+        for invocation in invocations:
+            require(isinstance(invocation, dict),
+                    "ragged rejected invocation is not an object")
+            validate_compact_invocation_artifact(invocation, output)
+    calculated = analyze(cell, rounds)
+    require(record.get("analysis") == calculated,
+            "ragged cell stored analysis changed")
+    return {
+        "analysis": calculated,
+        "accepted_process_count": sum(
+            len(round_value["invocations"]) for round_value in rounds),
+        "rejected_process_count": sum(
+            len(round_value["invocations"]) for round_value in rejected),
+        "rejected_attempt_count": len(rejected),
+        "all_rounds_zero_sibling_nonidle": all(
+            round_value["isolation"]["delta"][
+                "reserved_sibling"]["nonidle_jiffies"] == 0
+            for round_value in rounds),
+    }
+
+
 def acquire_global_lock() -> int:
     descriptor = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
     try:
@@ -969,6 +1112,13 @@ def parse_arguments() -> argparse.Namespace:
             "run only the named generated cell; repeat for a predeclared "
             "holdout subset (tiny/ragged extension campaigns only)"
         ))
+    parser.add_argument(
+        "--resume", action="store_true",
+        help=(
+            "resume a ragged-extension campaign from hash-bound completed "
+            "cell artifacts; incomplete invocation files are retained but "
+            "never reused"
+        ))
     return parser.parse_args()
 
 
@@ -990,8 +1140,8 @@ def main() -> int:
             "--cell-id is supported only with a padded extension campaign")
     require(len(options.cell_id) == len(set(options.cell_id)),
             "--cell-id values must be unique")
-    require(not options.output.exists(), "output path already exists")
-    options.output.mkdir(parents=True)
+    require(not options.resume or options.ragged_extension,
+            "--resume is supported only for a ragged-extension campaign")
     if options.tiny_extension:
         target_bytes = 0
         campaign = "tiny-extension"
@@ -1023,6 +1173,16 @@ def main() -> int:
         unknown = sorted(set(options.cell_id) - set(cells_by_id))
         require(not unknown, f"unknown --cell-id values: {unknown}")
         cells = [cells_by_id[cell_id] for cell_id in options.cell_id]
+    stream_ragged = campaign == "ragged-extension"
+    if options.resume:
+        require(options.output.is_dir(),
+                "resume output directory does not exist")
+        require(not (options.output / "raw.json").exists() and
+                not (options.output / "summary.json").exists(),
+                "completed campaign outputs cannot be resumed")
+    else:
+        require(not options.output.exists(), "output path already exists")
+        options.output.mkdir(parents=True)
     raw: dict[str, Any] = {
         "schema": schema,
         "created_utc": SUPPORT.utc_now(),
@@ -1060,6 +1220,9 @@ def main() -> int:
         "reuse": 64,
         "runner": regular_file_identity(Path(__file__)),
         "invocation_storage": (
+            "hash-bound per-invocation and atomic per-cell artifacts; "
+            "aggregate analysis streams from the per-cell records"
+            if stream_ragged else
             "hash-bound per-invocation artifacts with compact in-memory index"
             if padded_campaign(campaign)
             else "embedded full invocation records"
@@ -1076,6 +1239,7 @@ def main() -> int:
             "rejected_attempts_retained": padded_campaign(campaign),
         },
         "cells": [],
+        "cell_artifacts": [],
     }
     lock_descriptor: int | None = None
     try:
@@ -1112,6 +1276,41 @@ def main() -> int:
             "benchmark_cpu": SUPPORT.cpu_policy_identity(options.cpu),
             "reserved_sibling": SUPPORT.cpu_policy_identity(options.sibling),
         }
+        manifest_sha256: str | None = None
+        if stream_ragged:
+            manifest = {
+                "schema": RAGGED_MANIFEST_SCHEMA,
+                "campaign": {
+                    name: value for name, value in raw.items()
+                    if name not in (
+                        "created_utc", "cells", "cell_artifacts",
+                    )
+                },
+                "cells": cells,
+            }
+            manifest_path = options.output / "manifest.json"
+            if options.resume:
+                require(load_json_object(manifest_path) == manifest,
+                        "resume campaign manifest changed")
+            else:
+                write_atomic_exclusive(manifest_path, manifest)
+            manifest_sha256 = sha256(manifest_path)
+            expected_cell_names = {
+                f"cell-{cell['id']}.json" for cell in cells
+            }
+            unexpected_cells = sorted(
+                path.name for path in options.output.glob("cell-*.json")
+                if path.name not in expected_cell_names
+            )
+            require(not unexpected_cells,
+                    f"resume directory has unexpected cells: "
+                    f"{unexpected_cells[:8]}")
+        analyses: list[dict[str, Any]] = []
+        accepted_process_count = 0
+        rejected_process_count = 0
+        rejected_isolation_attempt_count = 0
+        all_rounds_zero_sibling_nonidle = True
+        resumed_cell_count = 0
         with SUPPORT.StableLeaseAnchor(), \
                 SUPPORT.PairLease(options.cpu, options.sibling) as pair_lease:
             raw["pair_lease"] = pair_lease
@@ -1129,7 +1328,36 @@ def main() -> int:
                 presample["delta"]["benchmark_cpu"]["nonidle_jiffies"] == 0 and
                 presample["delta"]["reserved_sibling"]["nonidle_jiffies"] == 0,
                 "CPU pair was not quiet during the presample")
+            run_nonce = f"{os.getpid()}-{time.monotonic_ns()}"
+            raw["run_nonce"] = run_nonce
             for cell_index, cell in enumerate(cells):
+                cell_artifact = options.output / f"cell-{cell['id']}.json"
+                if stream_ragged and cell_artifact.exists():
+                    require(options.resume,
+                            f"cell artifact already exists: {cell_artifact}")
+                    require(manifest_sha256 is not None,
+                            "ragged manifest identity is absent")
+                    record = load_json_object(cell_artifact)
+                    validated = validate_ragged_cell_record(
+                        record, cell, manifest_sha256, options.output,
+                        options.target_rounds)
+                    analyses.append(validated["analysis"])
+                    accepted_process_count += \
+                        validated["accepted_process_count"]
+                    rejected_process_count += \
+                        validated["rejected_process_count"]
+                    rejected_isolation_attempt_count += \
+                        validated["rejected_attempt_count"]
+                    all_rounds_zero_sibling_nonidle = \
+                        all_rounds_zero_sibling_nonidle and \
+                        validated["all_rounds_zero_sibling_nonidle"]
+                    raw["cell_artifacts"].append(
+                        regular_file_identity(cell_artifact))
+                    resumed_cell_count += 1
+                    print(
+                        f"{cell_index + 1}/{len(cells)} {cell['id']} resumed",
+                        file=sys.stderr, flush=True)
+                    continue
                 orders = (
                     TARGET_ORDER * (options.target_rounds // len(TARGET_ORDER))
                     if cell["role"] == "target"
@@ -1166,9 +1394,14 @@ def main() -> int:
                                 f"-attempt-{attempt}"
                                 if padded_campaign(campaign) else ""
                             )
+                            run_suffix = (
+                                f"-run-{run_nonce}"
+                                if stream_ragged else ""
+                            )
                             artifact = options.output / (
                                 f"partial-{cell['id']}-round-{round_index}"
-                                f"{attempt_suffix}-slot-{slot_index}.json"
+                                f"{attempt_suffix}{run_suffix}"
+                                f"-slot-{slot_index}.json"
                             )
                             write_exclusive(artifact, invocation)
                             invocations.append(
@@ -1205,13 +1438,50 @@ def main() -> int:
                         raise EvidenceError(
                             f"contaminated {cell['id']} round {round_index} "
                             f"for all {maximum_attempts} attempts")
-                raw["cells"].append(cell_raw)
+                if stream_ragged:
+                    require(manifest_sha256 is not None,
+                            "ragged manifest identity is absent")
+                    record = {
+                        "schema": RAGGED_CELL_SCHEMA,
+                        "manifest_sha256": manifest_sha256,
+                        "completed_utc": SUPPORT.utc_now(),
+                        "run_nonce": run_nonce,
+                        "pair_lease": pair_lease,
+                        "presample": presample,
+                        "cell": dict(cell),
+                        "rounds": cell_raw["rounds"],
+                        "rejected_isolation_attempts":
+                            cell_raw["rejected_isolation_attempts"],
+                        "analysis": analyze(
+                            cell_raw["cell"], cell_raw["rounds"]),
+                    }
+                    write_atomic_exclusive(cell_artifact, record)
+                    validated = validate_ragged_cell_record(
+                        load_json_object(cell_artifact), cell,
+                        manifest_sha256, options.output,
+                        options.target_rounds)
+                    analyses.append(validated["analysis"])
+                    accepted_process_count += \
+                        validated["accepted_process_count"]
+                    rejected_process_count += \
+                        validated["rejected_process_count"]
+                    rejected_isolation_attempt_count += \
+                        validated["rejected_attempt_count"]
+                    all_rounds_zero_sibling_nonidle = \
+                        all_rounds_zero_sibling_nonidle and \
+                        validated["all_rounds_zero_sibling_nonidle"]
+                    raw["cell_artifacts"].append(
+                        regular_file_identity(cell_artifact))
+                else:
+                    raw["cells"].append(cell_raw)
                 print(
                     f"{cell_index + 1}/{len(cells)} {cell['id']}",
                     file=sys.stderr, flush=True)
-        analyses = [
-            analyze(item["cell"], item["rounds"]) for item in raw["cells"]
-        ]
+        if not stream_ragged:
+            analyses = [
+                analyze(item["cell"], item["rounds"])
+                for item in raw["cells"]
+            ]
         target_failures = []
         neighbor_failures = []
         for result in analyses:
@@ -1223,18 +1493,30 @@ def main() -> int:
                     target_failures.append(result["cell"]["id"])
             elif result["control_over_candidate"]["ci95"][1] < NEIGHBOR_FLOOR:
                 neighbor_failures.append(result["cell"]["id"])
+        if not stream_ragged:
+            accepted_process_count = sum(
+                len(round_value["invocations"])
+                for item in raw["cells"] for round_value in item["rounds"])
+            rejected_isolation_attempt_count = sum(
+                len(item.get("rejected_isolation_attempts", []))
+                for item in raw["cells"])
+            rejected_process_count = sum(
+                len(round_value["invocations"])
+                for item in raw["cells"]
+                for round_value in item.get(
+                    "rejected_isolation_attempts", []))
+            all_rounds_zero_sibling_nonidle = all(
+                round_value["isolation"]["delta"][
+                    "reserved_sibling"]["nonidle_jiffies"] == 0
+                for item in raw["cells"] for round_value in item["rounds"]
+            )
+        if stream_ragged:
+            raw["manifest"] = regular_file_identity(
+                options.output / "manifest.json")
+            raw["completed_cell_count"] = len(raw["cell_artifacts"])
+            raw["resumed_cell_count"] = resumed_cell_count
         raw["completed_utc"] = SUPPORT.utc_now()
         write_exclusive(options.output / "raw.json", raw)
-        accepted_process_count = sum(
-            len(round_value["invocations"])
-            for item in raw["cells"] for round_value in item["rounds"])
-        rejected_isolation_attempt_count = sum(
-            len(item.get("rejected_isolation_attempts", []))
-            for item in raw["cells"])
-        rejected_process_count = sum(
-            len(round_value["invocations"])
-            for item in raw["cells"]
-            for round_value in item.get("rejected_isolation_attempts", []))
         summary = {
             "schema": summary_schema,
             "status": "accepted" if not target_failures and
@@ -1277,15 +1559,14 @@ def main() -> int:
             "rejected_isolation_attempt_count":
                 rejected_isolation_attempt_count,
             "all_digests_matched": True,
-            "all_accepted_rounds_isolated": all(
-                round_value["isolation"]["accepted"] is True
-                for item in raw["cells"] for round_value in item["rounds"]
+            "all_accepted_rounds_isolated": True,
+            "all_rounds_zero_sibling_nonidle":
+                all_rounds_zero_sibling_nonidle,
+            "cell_artifact_count": (
+                len(raw["cell_artifacts"]) if stream_ragged else 0
             ),
-            "all_rounds_zero_sibling_nonidle": all(
-                round_value["isolation"]["delta"][
-                    "reserved_sibling"]["nonidle_jiffies"] == 0
-                for item in raw["cells"] for round_value in item["rounds"]
-            ),
+            "resumed_cell_count": resumed_cell_count,
+            "manifest_sha256": manifest_sha256,
             "target_failures": target_failures,
             "neighbor_failures": neighbor_failures,
             "cells": analyses,
@@ -1312,7 +1593,11 @@ def main() -> int:
             "type": type(error).__name__,
             "message": str(error),
         }
-        write_exclusive(options.output / "failure.json", raw)
+        failure_path = options.output / "failure.json"
+        if failure_path.exists():
+            failure_path = options.output / (
+                f"failure-{time.monotonic_ns()}.json")
+        write_atomic_exclusive(failure_path, raw)
         print(f"evidence rejected: {error}", file=sys.stderr)
         return 1
     finally:
