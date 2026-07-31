@@ -762,6 +762,50 @@ Clang 18 ASan+UBSan+LSan. The compact current-source checkpoint is
 `t8_one_kib_checkpoint_20260731.json`; the checked-in runner is
 `experiments/leopard2/gf8_high_encode/run_t8_two_block_abba.py`.
 
+## Promoted T=8 ragged 65--928-byte selector
+
+The same prepared legacy-high GF8/AVX2 binding now covers the following
+non-power-of-two byte tiers for dense `K=5..16`,
+`R=5..min(K,8)` profiles:
+
+    65..191, 193..224, 257..352, 416, 449..480,
+    513..544, 577..608, 641..672, 736, 769..800,
+    864, 897..928.
+
+This changes only the deterministic selector. It reuses the already-audited
+one- and two-block callbacks and does not change arithmetic, wire bytes, or
+scratch. Five measured shape/byte combinations remain on the mature transform
+path:
+
+    (K,R,bytes) = (5,5,191), (6,5,319), (6,6,319),
+                  (7,5,319), (7,6,319).
+
+The streamed discovery and predeclared holdout covered 2,058 cells and 32,004
+accepted benchmark processes. Applying the five exclusions yields 1,213
+qualified target cells and 845 route neighbors. Across that population the
+same-source selector-off/control speedup has a `2.0296x` geometric mean and
+`1.0504x` minimum lower 95-percent confidence bound. The application-equivalent
+padded exact-main speedup has a `1.2851x` geometric mean and `1.000026x`
+minimum lower bound. Neighbor control/candidate results retain the required
+two-percent safety floor.
+
+A separate final-source confirmation at commit
+`a808eac051469330583b7241d2591e30d7b6a354` exercised 14 targets and five
+exclusions in 816 fresh processes. All digests and isolation gates passed. Its
+same-source geometric mean is `1.7715x`, and its padded exact-main geometric
+mean is `1.0598x`; their minimum lower bounds are `1.0834x` and `1.00091x`.
+The fifth exclusion, `(7,6,319)`, was added because its earlier exact-main
+lower bound was `0.99897x`, even though it was substantially faster than the
+selector-off Leopard2 path.
+
+Fresh selector-on and selector-off GNU 13 Release gates and selector-on
+Clang 18 ASan+UBSan+LSan gates passed. Binary hashes were verified before and
+after the campaign, and the reserved SMT sibling remained idle. Full
+provenance, confidence summaries, canonical population digests, rejected
+preliminary runs, and raw-result hashes are in
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_ragged_checkpoint_20260731.json`.
+
 ## Promoted T=8 arbitrary-tail selector
 
 The reusable legacy-high GF8/AVX2 binding now covers every legal

@@ -1,5 +1,35 @@
 # Leopard2 versus exact Leopard main
 
+## GF8 T=8 ragged 65--928-byte update: 2026-07-31
+
+Dense legacy-high GF8/AVX2 T=8 profiles now reuse the prepared binding over
+measured ragged byte tiers from 65 through 928 bytes. The deterministic
+selector covers 1,213 qualified `(K,R,bytes)` target cells and leaves five
+measured exclusions plus 840 other route neighbors on the prior path.
+
+| population | comparison | geometric-mean speedup | minimum 95% lower bound |
+| --- | --- | ---: | ---: |
+| 1,213-cell discovery/holdout selector | selector-off control / Leopard2 | 2.0296x | 1.0504x |
+| 1,213-cell discovery/holdout selector | padded exact Leopard main / Leopard2 | 1.2851x | 1.000026x |
+| 14-cell final-source confirmation | selector-off control / Leopard2 | 1.7715x | 1.0834x |
+| 14-cell final-source confirmation | padded exact Leopard main / Leopard2 | 1.0598x | 1.00091x |
+
+The discovery and predeclared holdout contain 2,058 cells and 32,004 accepted
+processes. The separate final-source campaign contains 14 targets, five
+neighbors, and 816 accepted processes. Every logical input, parity, and
+recovery digest matched; all accepted rounds passed the isolation gate; and
+the frozen binary hashes were unchanged after timing.
+
+Exact Leopard main requires a physical shard length divisible by 64, so the
+main comparison processes a zero-padded
+`ceil(logical_shard_bytes/64)*64`-byte shard and verifies the common logical
+prefix. The same-source comparison processes the exact logical byte count in
+both paths. Five cells remain excluded:
+`(K,R,bytes)=(5,5,191),(6,5,319),(6,6,319),(7,5,319),(7,6,319)`.
+The compact checkpoint is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_ragged_checkpoint_20260731.json`.
+
 ## GF8 T=8 arbitrary-tail update: 2026-07-31
 
 Every dense legacy-high GF8/AVX2 T=8 profile with `K=5..16` and

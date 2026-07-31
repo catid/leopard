@@ -6,6 +6,37 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 T=8 ragged 65--928-byte checkpoint
+
+The final selector is commit
+`a808eac051469330583b7241d2591e30d7b6a354`, tree
+`36db13839c8a6d70441cff7a8737f924d55b7125`. Dense legacy-high GF8/AVX2
+T=8 profiles now use the prepared binding over qualified ragged tiers from
+65 through 928 bytes. Five cells remain explicitly excluded:
+`(5,5,191)`, `(6,5,319)`, `(6,6,319)`, `(7,5,319)`, and `(7,6,319)`.
+
+The discovery plus predeclared holdout covered 2,058 cells and 32,004 accepted
+processes, yielding 1,213 qualified targets and 845 neighbors. The selector's
+same-source geometric mean is 2.0296x with a 1.0504x minimum lower confidence
+bound; application-equivalent padded exact-main geometric mean is 1.2851x with
+a 1.000026x minimum lower bound.
+
+The final-source confirmation at
+`/tmp/leopard2-t8-ragged-a808eac/final-selector-v4-pinned-r1` covered 14
+targets and five neighbors in 816 accepted processes. All digests, frozen
+binary rehashes, and isolation checks passed, with zero sibling work. Its
+same-source/exact-main geometric means are 1.7715x/1.0598x and minimum lower
+bounds are 1.0834x/1.00091x. GNU Release selector-on passed 3/3,
+selector-off passed 2/2, and Clang 18 ASan+UBSan+LSan passed 2/2.
+
+Compact evidence is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_ragged_checkpoint_20260731.json`. Attach the result to
+`leopard-79h.38.5.10.43.16` and close that child after the evidence commit.
+Keep parent `.43` open for the remaining sub-4-KiB and final all-K work. The
+next highest-confidence AVX2/GF8 avenue is equal-rounded multi-loss direct
+repair under `leopard-79h.38.5.10.30`.
+
 ## 2026-07-31 GF8/AVX2 T=8 arbitrary-tail checkpoint
 
 The production selector is commit

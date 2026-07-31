@@ -1,0 +1,399 @@
+{
+  "schema": "leopard2-gf8-t8-ragged-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-07-31",
+  "bead": "leopard-79h.38.5.10.43.16",
+  "scope": {
+    "operation": "legacy-high full-output encode",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "padded_side": 8,
+    "public_counts": {
+      "K": "5..16",
+      "R": "5..min(K,8)",
+      "R_greater_than_K_selected": false
+    },
+    "batch": 64,
+    "reuse": 64,
+    "selected_logical_byte_ranges": [
+      "65..191",
+      "193..224",
+      "257..352",
+      "416",
+      "449..480",
+      "513..544",
+      "577..608",
+      "641..672",
+      "736",
+      "769..800",
+      "864",
+      "897..928"
+    ],
+    "discovery_byte_counts": [
+      65,
+      66,
+      95,
+      96,
+      97,
+      127,
+      129,
+      191,
+      193,
+      224,
+      257,
+      319,
+      321,
+      352,
+      416,
+      449,
+      480,
+      513,
+      544,
+      577,
+      608,
+      641,
+      672,
+      736,
+      769,
+      800,
+      864,
+      897,
+      928
+    ],
+    "shape_byte_exclusions": [
+      {
+        "K": 5,
+        "R": 5,
+        "logical_shard_bytes": 191
+      },
+      {
+        "K": 6,
+        "R": 5,
+        "logical_shard_bytes": 319
+      },
+      {
+        "K": 6,
+        "R": 6,
+        "logical_shard_bytes": 319
+      },
+      {
+        "K": 7,
+        "R": 5,
+        "logical_shard_bytes": 319
+      },
+      {
+        "K": 7,
+        "R": 6,
+        "logical_shard_bytes": 319
+      }
+    ],
+    "comparison_semantics": {
+      "same_source": "candidate and selector-off control process the exact logical shard byte count",
+      "exact_main": "Leopard main physically processes ceil(logical_shard_bytes/64)*64 zero-padded bytes",
+      "digest_scope": "original, transmitted-parity, and recovered-original digests cover the matching logical prefix",
+      "interpretation": "the exact-main ratio is application-equivalent rather than equal-physical-byte work"
+    }
+  },
+  "promotion_policy": {
+    "target_control_over_candidate_ci95_lower_floor": 1.05,
+    "target_main_over_candidate_ci95_lower_floor": 1.0,
+    "neighbor_control_over_candidate_ci95_upper_floor": 0.98,
+    "selective_timing_reruns": false,
+    "online_autotuning": false
+  },
+  "source": {
+    "discovery_commit": "08b306a66527cfa9edf0e7a1035f3e79e54a9663",
+    "discovery_tree": "86b4f2858a58bff023ad69f0f9fb18d65a6a045c",
+    "first_selector_commit": "911caed0d76906dd9701da5403b2698d4ba1c038",
+    "first_selector_tree": "9046372be57d425ebd53d0530768b13b437f22e8",
+    "final_selector_commit": "a808eac051469330583b7241d2591e30d7b6a354",
+    "final_selector_tree": "36db13839c8a6d70441cff7a8737f924d55b7125",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner_path": "experiments/leopard2/gf8_high_encode/run_t8_two_block_abba.py",
+    "runner_sha256": "a3e44a6d4d02f7978c5eb685ac790d8521b64bfdd2b98db4c3af3c88995ba309",
+    "runner_test_path": "experiments/leopard2/gf8_high_encode/test_run_t8_two_block_abba.py",
+    "runner_test_sha256": "db3341772d21bfb4fab1e1a7771ef78c74c1f2773104b81d3f60be2888239519"
+  },
+  "binary_provenance": {
+    "discovery": {
+      "candidate_sha256": "e3b4ac71512faa1f0aa93144a4898e6bda4f32391e2d1449c02bb3f159fc0624",
+      "control_sha256": "7e9bf66d55f21eaa818b1e91f2f1d4d50083c7b32e581d9ceb24235c39a5c7f1",
+      "main_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+      "candidate_control_executable_sections_sha256": "1cd170bdcc8d1bee1aba6884fc4e76c9e9147fd2cf65768d6fff60f4683a4f43"
+    },
+    "first_selector_confirmation": {
+      "candidate_sha256": "74f07c5880bca989c8d048124019eb4a8546221d145cb4a737bb05b0f5a2737c",
+      "control_sha256": "08d9eeebee0aebff5fdaca1d5efbaefe730bd76a977eb48b64c7e9632d906f1b",
+      "main_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+      "candidate_control_executable_sections_sha256": "d75d3df987fa287635ed3c79ff8b82c9f261514bd2d910cd6ec69a129b22309a"
+    },
+    "final_selector_confirmation": {
+      "candidate_sha256": "9a21604e07e6fa4ef53d5e05a7a0cabca56f4cb7b469af63220d67e372db3ad3",
+      "control_sha256": "dd61b5b5b8964ab1d25cdba2ae9d0d42edaffd462f222c3c2786fbe7f37c8578",
+      "main_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+      "candidate_control_executable_sections_sha256": "1e8f1da86a1eeef9ca2f259eba43280e1721495d42c68caab30381a99c908805",
+      "candidate_bytes": 1068384,
+      "control_bytes": 1068384,
+      "main_bytes": 1164976,
+      "file_mode": "0555",
+      "hashes_unchanged_after_campaign": true
+    }
+  },
+  "campaigns": {
+    "full_v2": {
+      "local_artifact": "/tmp/leopard2-t8-ragged-08b306a/full-v2",
+      "schema": "leopard2-gf8-t8-ragged-extension-summary/v2",
+      "source_status": "rejected_pending_predeclared_holdout",
+      "cells": 2058,
+      "targets": 1218,
+      "neighbors": 840,
+      "accepted_processes": 32004,
+      "rejected_isolation_attempts": 0,
+      "all_digests_matched": true,
+      "all_accepted_rounds_isolated": true,
+      "manifest_sha256": "cc4dd887bb60153d8e662c192aab03089c6a1d839092639fa9ec8ad0a6db4593",
+      "raw_sha256": "aa5ca023f06ab6a548520005c7b9a453b0e174e59742f29ee91b93d03e7668ed",
+      "summary_sha256": "70800a6091c9af0ee64a28b081a2a78d6e5dabd89a53cce83338b7e67c84d59b",
+      "initially_qualified_targets": 1199,
+      "predeclared_holdout_targets": 19
+    },
+    "holdout_v2": {
+      "local_artifact": "/tmp/leopard2-t8-ragged-08b306a/holdout-v2",
+      "schema": "leopard2-gf8-t8-ragged-extension-summary/v2",
+      "source_status": "rejected_with_four_exclusions",
+      "cells": 19,
+      "target_rounds": 9,
+      "accepted_processes": 1026,
+      "rejected_isolation_attempts": 0,
+      "all_digests_matched": true,
+      "all_accepted_rounds_isolated": true,
+      "manifest_sha256": "f119ea8f4b875f5aac380119cb1fbbece8b2f492080d5aa1c14a5f99ec3f8f83",
+      "raw_sha256": "5f7a5b907521e95f94acddd0aaea5a96a67c0407e5ee02b87fc6e82703b140c9",
+      "summary_sha256": "6510c1ed1dbbf279b31203d331f92bb52a31870f17bfa5f17ab71f249e7f2ee0",
+      "rescued_targets": 15,
+      "excluded_targets": 4
+    },
+    "first_selector_current_source_v3": {
+      "local_artifact": "/tmp/leopard2-t8-ragged-911caed/final-selector-v3-pinned-r4",
+      "schema": "leopard2-gf8-t8-ragged-extension-summary/v3",
+      "status": "rejected",
+      "cells": 19,
+      "targets": 15,
+      "neighbors": 4,
+      "accepted_processes": 858,
+      "rejected_isolation_attempts": 0,
+      "all_digests_matched": true,
+      "all_accepted_rounds_isolated": true,
+      "manifest_sha256": "1aeca70024cec16b849ed49d0c9934a3fc47f920b8cc3f9c36876ac03aebfd11",
+      "raw_sha256": "147828f3eaf35ad0c6425fc00789624ac40eced3b778e6b551ba6561a7cfe90c",
+      "summary_sha256": "9f31400080cbbd490e624fefff9b4607a223e8a1a13ac2f71ec59354d8e1a303",
+      "decisive_failure": {
+        "K": 7,
+        "R": 6,
+        "logical_shard_bytes": 319,
+        "control_over_candidate": 1.8050967659177986,
+        "control_over_candidate_ci95": [
+          1.7911890724609412,
+          1.819112445706341
+        ],
+        "main_over_candidate": 1.0191278030510662,
+        "main_over_candidate_ci95": [
+          0.9989727989496502,
+          1.0396894490457904
+        ],
+        "decision": "exclude because the exact-main lower bound missed 1.0"
+      }
+    },
+    "final_selector_current_source_v4": {
+      "local_artifact": "/tmp/leopard2-t8-ragged-a808eac/final-selector-v4-pinned-r1",
+      "schema": "leopard2-gf8-t8-ragged-extension-summary/v4",
+      "status": "accepted",
+      "cells": 19,
+      "targets": 14,
+      "neighbors": 5,
+      "target_rounds": 9,
+      "neighbor_rounds": 3,
+      "accepted_processes": 816,
+      "rejected_isolation_attempts": 0,
+      "all_digests_matched": true,
+      "all_accepted_rounds_isolated": true,
+      "all_rounds_zero_sibling_nonidle": true,
+      "target_failures": [],
+      "neighbor_failures": [],
+      "manifest_sha256": "17cc48c96caada46a3e26997fdf9fda33670880df8c6c905b11dd5d232e08d81",
+      "raw_sha256": "fba9f96a6dc740bf44ddccb67f399beb2d5a03463533c543e0a7f72b58bee51a",
+      "summary_sha256": "d03d78f1fecc9638f482ac2daacd840fa6b04a4372998e5e1504b389a3fc15c9"
+    }
+  },
+  "decision": {
+    "initial_target_cells": 1218,
+    "initial_neighbor_cells": 840,
+    "final_qualified_target_cells": 1213,
+    "final_neighbor_cells": 845,
+    "final_exclusion_count": 5,
+    "kernel_or_wire_change": false,
+    "production_change": "extend only the deterministic AVX2 binding selector over qualified ragged byte tiers",
+    "fallback": "all excluded and out-of-domain cells retain the mature transform path"
+  },
+  "aggregate_metrics": {
+    "quantile_method": "linear interpolation at (n-1)*q",
+    "historical_final_selector": {
+      "target_control_over_candidate": {
+        "min": 1.0789903929010336,
+        "p05": 1.3497849666190322,
+        "median": 1.786266326409999,
+        "p95": 4.25629159539338,
+        "max": 4.719038953454275,
+        "geomean": 2.029632282250931
+      },
+      "target_control_over_candidate_ci95_lower": {
+        "min": 1.0504306063981153,
+        "p05": 1.3167389607640412,
+        "median": 1.7388142369305777,
+        "p95": 4.099887292477213,
+        "max": 4.552175112336851,
+        "geomean": 1.9764736052554195
+      },
+      "target_padded_main_over_candidate": {
+        "min": 1.0127021974362072,
+        "p05": 1.0740596286391553,
+        "median": 1.2539818672449063,
+        "p95": 1.8826479568668044,
+        "max": 2.054863047030024,
+        "geomean": 1.2851368793687317
+      },
+      "target_padded_main_over_candidate_ci95_lower": {
+        "min": 1.0000258053360647,
+        "p05": 1.0454666234956937,
+        "median": 1.2153623870621881,
+        "p95": 1.728081009174056,
+        "max": 1.9478801585580878,
+        "geomean": 1.2416762419095821
+      },
+      "neighbor_control_over_candidate": {
+        "min": 0.9771482752854839,
+        "p05": 0.9866395688419753,
+        "median": 0.9981565706368732,
+        "p95": 1.0085094107130084,
+        "max": 1.0277726591959169,
+        "geomean": 0.9978992270495989
+      },
+      "neighbor_control_over_candidate_ci95_upper": {
+        "min": 0.9836352217917146,
+        "p05": 1.0015856161172572,
+        "median": 1.019412629644671,
+        "p95": 1.052278094553391,
+        "max": 1.1152111123557669,
+        "geomean": 1.0221676662208072
+      }
+    },
+    "final_current_source_focus": {
+      "target_control_over_candidate": {
+        "min": 1.0922066143422984,
+        "median": 1.9207144433759058,
+        "max": 2.4284042450419197,
+        "geomean": 1.7714598921197862
+      },
+      "target_control_over_candidate_ci95_lower": {
+        "min": 1.0833868175486747,
+        "median": 1.9091258464562468,
+        "max": 2.399690134222089,
+        "geomean": 1.7547278017599728
+      },
+      "target_padded_main_over_candidate": {
+        "min": 1.0142587174161684,
+        "median": 1.064203072030206,
+        "max": 1.1009288587682713,
+        "geomean": 1.0597564461760154
+      },
+      "target_padded_main_over_candidate_ci95_lower": {
+        "min": 1.0009076719797256,
+        "median": 1.0441285513094918,
+        "max": 1.0845042400247036,
+        "geomean": 1.0428733142269562
+      },
+      "neighbor_control_over_candidate": {
+        "min": 0.9968497033068586,
+        "median": 1.000179573300385,
+        "max": 1.0039737199687975,
+        "geomean": 1.0006017456884089
+      },
+      "neighbor_control_over_candidate_ci95_upper": {
+        "min": 0.9995551752829971,
+        "median": 1.0178970524282458,
+        "max": 1.0362291256571337,
+        "geomean": 1.0191605434421103
+      }
+    },
+    "canonical_digests": {
+      "qualified_ids_sha256": "95f4d985f776baee783229cdfc5b66494310fb8f6657e8a565402a9d9910922d",
+      "neighbor_ids_sha256": "3ae585c91668ab3546636a62f48cb2c42c7ab53756effbec1b37bd1f242e2bba",
+      "qualified_metrics_sha256": "77837da84c9bfb13648026f610a3a808ad9f56a9ff8945f64d3d4b356d57c8a1",
+      "neighbor_metrics_sha256": "9c144565e53b33f2da9f2e2a5f7223b9bc229c144d4141e488bbbbeec3e546ff"
+    }
+  },
+  "correctness_and_quality": {
+    "production_oracle": {
+      "configuration": "GNU 13 Release, ragged selector enabled",
+      "tests_passed": 3,
+      "tests_run": 3,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend"
+      ],
+      "memory_max_bytes": 268435456
+    },
+    "feature_off": {
+      "configuration": "GNU 13 Release, ragged selector disabled",
+      "tests_passed": 2,
+      "tests_run": 2,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_auto_encode_backend"
+      ],
+      "memory_max_bytes": 268435456
+    },
+    "sanitizers": {
+      "compiler": "Clang 18.1.3",
+      "sanitizers": [
+        "AddressSanitizer",
+        "UndefinedBehaviorSanitizer",
+        "LeakSanitizer"
+      ],
+      "tests_passed": 2,
+      "tests_run": 2,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops"
+      ],
+      "memory_max_bytes": 536870912
+    },
+    "runner_self_test": {
+      "normal_python": "passed",
+      "optimized_python": "passed"
+    },
+    "git_diff_check": "passed"
+  },
+  "rejected_preliminary_runs": [
+    {
+      "name": "full-v1",
+      "reason": "the 256 MiB controller was OOM-killed while duplicating the completed aggregate, before durable isolation records were checkpointed",
+      "timing_conclusion": false,
+      "remedy": "schema-v2 streamed aggregation and resumable per-cell evidence"
+    },
+    {
+      "name": "first-selector-presample-r1-r2",
+      "reason": "the singleton-pinned Python supervisor woke on the benchmark CPU while reading the ending counter",
+      "timing_conclusion": false,
+      "remedy": "explicitly permit one benchmark-CPU supervisor jiffy while retaining a zero-jiffy sibling requirement"
+    },
+    {
+      "name": "first-selector-wrong-benchmark-target",
+      "reason": "the ordinary benchmark binary lacked the required prevalidated-batch build markers and the runner failed closed before candidate timing",
+      "timing_conclusion": false,
+      "remedy": "rebuild and freeze bench_leopard2_prevalidated_batch from the exact detached source"
+    }
+  ]
+}
