@@ -9738,6 +9738,27 @@ bool GetCodecDecodeMetadataInfo(
     return true;
 }
 
+uint64_t HighT4BatchMaximumBytes(
+    uint32_t original_count,
+    uint32_t recovery_count)
+{
+    if (recovery_count != 3 && recovery_count != 4)
+        return 0;
+    const bool punctured_r3 = recovery_count == 3;
+    switch (original_count)
+    {
+    case 3: return punctured_r3 ? 16U * 1024U : 2U * 1024U;
+    case 4: return punctured_r3 ? 12U * 1024U : 6U * 1024U;
+    case 5: return punctured_r3 ? 12U * 1024U : 4U * 1024U;
+    case 6: return punctured_r3 ? 16U * 1024U : 8U * 1024U;
+    case 7: return punctured_r3 ? 16U * 1024U : 4U * 1024U;
+    case 9: return punctured_r3 ? 8U * 1024U : 6U * 1024U;
+    case 10: return punctured_r3 ? 8U * 1024U : 6U * 1024U;
+    case 11: return punctured_r3 ? 6U * 1024U : 4U * 1024U;
+    default: return 0;
+    }
+}
+
 bool GetCodecEncodePathInfo(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -9783,7 +9804,9 @@ bool GetCodecEncodePathInfo(
         codec->recovery_count >= 3 && codec->recovery_count <= 4 &&
         ((codec->original_count >= 3 && codec->original_count <= 7) ||
          (codec->original_count >= 9 && codec->original_count <= 11)) &&
-        shard_bytes >= 32 && shard_bytes <= 2U * 1024U &&
+        shard_bytes >= 32 &&
+        shard_bytes <= HighT4BatchMaximumBytes(
+            codec->original_count, codec->recovery_count) &&
         (shard_bytes & 31U) == 0 &&
         requested_recovery_count == codec->recovery_count)
     {
@@ -10855,8 +10878,11 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
          (codec->original_count >= 9 && codec->original_count <= 11)))
     {
         const uint64_t shard_bytes = binding->items[0].shard_bytes;
+        const uint64_t maximum_bytes =
+            leopard2_internal::HighT4BatchMaximumBytes(
+                codec->original_count, codec->recovery_count);
         bool all_dense_qualified =
-            shard_bytes >= 32 && shard_bytes <= 2U * 1024U &&
+            shard_bytes >= 32 && shard_bytes <= maximum_bytes &&
             (shard_bytes & 31U) == 0;
         for (size_t item_index = 0;
              all_dense_qualified && item_index < binding->items.size();

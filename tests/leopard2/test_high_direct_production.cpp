@@ -341,12 +341,17 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
     {
         unsigned k;
         unsigned r;
+        size_t maximum_bytes;
     };
     static const Shape shapes[] = {
-        { 3, 3 }, { 4, 4 }, { 7, 3 }, { 11, 4 }
-    };
-    static const size_t byte_counts[] = {
-        32, 64, 96, 2016, 2048, 2049, 2080
+        { 3, 3, 16384 }, { 3, 4, 2048 },
+        { 4, 3, 12288 }, { 4, 4, 6144 },
+        { 5, 3, 12288 }, { 5, 4, 4096 },
+        { 6, 3, 16384 }, { 6, 4, 8192 },
+        { 7, 3, 16384 }, { 7, 4, 4096 },
+        { 9, 3, 8192 }, { 9, 4, 6144 },
+        { 10, 3, 8192 }, { 10, 4, 6144 },
+        { 11, 3, 6144 }, { 11, 4, 4096 }
     };
     static const size_t item_count = 2;
     static const uint8_t sentinel = 0xa5;
@@ -359,6 +364,10 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
     {
         const unsigned k = shapes[shape_i].k;
         const unsigned r = shapes[shape_i].r;
+        const size_t maximum_bytes = shapes[shape_i].maximum_bytes;
+        Require(leopard2_internal::HighT4BatchMaximumBytes(k, r) ==
+                maximum_bytes,
+            "T4 binding maximum-byte policy differs from test matrix");
         leo2_codec* codec = NULL;
         RequireResult(leo2_codec_create(context, k, r,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
@@ -369,9 +378,24 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
         const leopard2_test::Matrix generator =
             leopard2_test::direct_systematic_generator(field, layout);
 
-        for (size_t byte_i = 0;
-             byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
-             ++byte_i)
+        std::vector<size_t> byte_counts;
+        byte_counts.push_back(32);
+        byte_counts.push_back(64);
+        byte_counts.push_back(96);
+        byte_counts.push_back(2016);
+        byte_counts.push_back(2048);
+        byte_counts.push_back(2049);
+        byte_counts.push_back(2080);
+        byte_counts.push_back(3072);
+        byte_counts.push_back(maximum_bytes - 32);
+        byte_counts.push_back(maximum_bytes);
+        byte_counts.push_back(maximum_bytes + 32);
+        std::sort(byte_counts.begin(), byte_counts.end());
+        byte_counts.erase(
+            std::unique(byte_counts.begin(), byte_counts.end()),
+            byte_counts.end());
+
+        for (size_t byte_i = 0; byte_i < byte_counts.size(); ++byte_i)
         {
             const size_t bytes = byte_counts[byte_i];
             leopard2_internal::CodecEncodePathInfo path = {};
@@ -379,7 +403,7 @@ uint64_t ExerciseT4BatchBindings(leo2_context* context)
                     codec, bytes, r, &path),
                 "T4 binding path introspection");
             const bool expected_selected =
-                bytes >= 32 && bytes <= 2048 &&
+                bytes >= 32 && bytes <= maximum_bytes &&
                 (bytes & 31U) == 0;
             Require(path.high_t4_batch_binding_selected ==
                     expected_selected,

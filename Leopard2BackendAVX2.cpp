@@ -2748,11 +2748,11 @@ static void AVX2FF8HighEncodeT4Batch(
     LEO_DEBUG_ASSERT(item_count != 0);
     LEO_DEBUG_ASSERT(recovery_count == 3 || recovery_count == 4);
     LEO_DEBUG_ASSERT(
-        byte_count >= 32 && byte_count <= 2U * 1024U &&
+        byte_count >= 32 && byte_count <= 16U * 1024U &&
         (byte_count & 31U) == 0);
     if (!data || !recovery || item_count == 0 ||
         (recovery_count != 3 && recovery_count != 4) ||
-        byte_count < 32 || byte_count > 2U * 1024U ||
+        byte_count < 32 || byte_count > 16U * 1024U ||
         (byte_count & 31U) != 0)
         return;
 

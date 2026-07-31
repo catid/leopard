@@ -775,14 +775,17 @@ void TestT8TwoBlockBindingAllocation()
 
 void TestT4BindingAllocation()
 {
-    static const size_t byte_counts[] = {
-        32, 64, 96, 2016, 2048
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+        size_t maximum_bytes;
     };
-    static const unsigned shapes[][2] = {
-        { 3, 3 },
-        { 4, 4 },
-        { 7, 3 },
-        { 11, 4 }
+    static const Shape shapes[] = {
+        { 3, 3, 16384 },
+        { 4, 4, 6144 },
+        { 7, 3, 16384 },
+        { 11, 4, 4096 }
     };
     static const size_t item_count = 3;
 
@@ -803,13 +806,20 @@ void TestT4BindingAllocation()
          shape_index < sizeof(shapes) / sizeof(shapes[0]);
          ++shape_index)
     {
-        const unsigned k = shapes[shape_index][0];
-        const unsigned r = shapes[shape_index][1];
+        const unsigned k = shapes[shape_index].k;
+        const unsigned r = shapes[shape_index].r;
+        const size_t maximum_bytes = shapes[shape_index].maximum_bytes;
+        Require(leopard2_internal::HighT4BatchMaximumBytes(k, r) ==
+                maximum_bytes,
+            "T4 allocation maximum-byte policy mismatch");
         leo2_codec* codec = NULL;
         RequireResult(leo2_codec_create(context, k, r,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
             LEO2_SUCCESS, "T4 allocation codec create");
 
+        const size_t byte_counts[] = {
+            32, 64, 96, 2016, 2048, maximum_bytes
+        };
         for (size_t byte_index = 0;
              byte_index < sizeof(byte_counts) / sizeof(byte_counts[0]);
              ++byte_index)

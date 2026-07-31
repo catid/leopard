@@ -186,6 +186,15 @@ bool GetCodecEncodePathInfo(
     CodecEncodePathInfo* info_out);
 
 /*
+    Deterministic upper byte boundary for the dense legacy-high GF8 AVX2
+    T=4 binding shortcut.  Zero means that the public shape is not supported.
+    This is an internal policy query, not part of the wire profile or C ABI.
+*/
+uint64_t HighT4BatchMaximumBytes(
+    uint32_t original_count,
+    uint32_t recovery_count);
+
+/*
     Pattern-dependent structural accounting for an immutable decode plan.
     Empty high-output entries select the mature full transform and are not
     counted as compiled pruned schedules.
