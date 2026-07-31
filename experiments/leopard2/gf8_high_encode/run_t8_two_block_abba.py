@@ -35,6 +35,7 @@ ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
+T95_DF8 = 2.306004135204166
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
@@ -627,10 +628,13 @@ def run_one(
 
 
 def confidence_interval(round_log_ratios: Sequence[float]) -> dict[str, Any]:
-    require(len(round_log_ratios) == 3,
-            "three independent round contrasts are required")
+    round_count = len(round_log_ratios)
+    require(round_count in (3, 9),
+            "three or nine independent round contrasts are required")
+    critical_value = T95_DF2 if round_count == 3 else T95_DF8
     center = statistics.mean(round_log_ratios)
-    half = T95_DF2 * statistics.stdev(round_log_ratios) / math.sqrt(3)
+    half = critical_value * statistics.stdev(
+        round_log_ratios) / math.sqrt(round_count)
     return {
         "speedup": math.exp(center),
         "ci95": [math.exp(center - half), math.exp(center + half)],
@@ -701,6 +705,12 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--iterations", type=int, default=9)
     parser.add_argument("--warmup", type=int, default=2)
     parser.add_argument(
+        "--target-rounds", type=int, choices=(3, 9), default=3,
+        help=(
+            "independent balanced target contrasts; neighbors retain three "
+            "rounds"
+        ))
+    parser.add_argument(
         "--target-bytes", type=int,
         choices=(
             64, 128, 192, 256, 320, 384, 448, 512,
@@ -754,6 +764,8 @@ def main() -> int:
         "reserved_sibling": options.sibling,
         "iterations": options.iterations,
         "warmup": options.warmup,
+        "target_rounds": options.target_rounds,
+        "neighbor_rounds": len(NEIGHBOR_ORDER),
         "target_bytes": target_bytes,
         "campaign": campaign,
         "final_selector": options.final_selector,
@@ -814,8 +826,11 @@ def main() -> int:
                 presample["delta"]["reserved_sibling"]["nonidle_jiffies"] == 0,
                 "CPU pair was not quiet during the presample")
             for cell_index, cell in enumerate(cells):
-                orders = TARGET_ORDER if cell["role"] == "target" \
+                orders = (
+                    TARGET_ORDER * (options.target_rounds // len(TARGET_ORDER))
+                    if cell["role"] == "target"
                     else NEIGHBOR_ORDER
+                )
                 cell_raw = {"cell": dict(cell), "rounds": []}
                 for round_index, order in enumerate(orders):
                     before_cpu = SUPPORT.cpu_stat_snapshot(options.cpu)
@@ -880,6 +895,8 @@ def main() -> int:
             "main_commit": MAIN_COMMIT,
             "target_bytes": target_bytes,
             "campaign": campaign,
+            "target_rounds": options.target_rounds,
+            "neighbor_rounds": len(NEIGHBOR_ORDER),
             "cell_count": len(analyses),
             "target_count": sum(
                 result["cell"]["role"] == "target"
