@@ -35,6 +35,8 @@ ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
 TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v4"
 TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v4"
+RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v1"
+RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -81,7 +83,16 @@ ONE_KIB_TWO_BLOCK_PRIOR_MASK = EXTENDED_PRODUCTION_MASKS[1024]
 ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000080
 TINY_BYTE_COUNTS = (1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63)
 TINY_NEIGHBOR_BYTE_COUNTS = (64, 65)
-TINY_MAX_ISOLATION_ATTEMPTS = 3
+RAGGED_TARGET_BYTE_COUNTS = (
+    65, 66, 95, 96, 97, 127, 129, 191, 193, 224,
+    257, 319, 321, 352, 416, 449, 480, 513, 544,
+    577, 608, 641, 672, 736, 769, 800, 864, 897, 928,
+)
+RAGGED_NEIGHBOR_BYTE_COUNTS = (
+    225, 255, 353, 385, 417, 481, 511, 545, 609, 673,
+    705, 737, 801, 833, 865, 929, 961, 992, 993, 1023,
+)
+PADDED_MAX_ISOLATION_ATTEMPTS = 3
 
 
 class EvidenceError(RuntimeError):
@@ -327,6 +338,65 @@ def tiny_extension_cells() -> list[dict[str, Any]]:
     return cells
 
 
+def ragged_selected(shard_bytes: int) -> bool:
+    if shard_bytes < 65 or shard_bytes > 1024 or shard_bytes % 64 == 0:
+        return False
+    return (
+        65 <= shard_bytes <= 191 or
+        193 <= shard_bytes <= 224 or
+        257 <= shard_bytes <= 352 or
+        shard_bytes == 416 or
+        449 <= shard_bytes <= 480 or
+        513 <= shard_bytes <= 544 or
+        577 <= shard_bytes <= 608 or
+        641 <= shard_bytes <= 672 or
+        shard_bytes == 736 or
+        769 <= shard_bytes <= 800 or
+        shard_bytes == 864 or
+        897 <= shard_bytes <= 928
+    )
+
+
+def ragged_extension_cells() -> list[dict[str, Any]]:
+    cells: list[dict[str, Any]] = []
+    index = 0
+    for k in range(5, 17):
+        for r in range(5, min(k, 8) + 1):
+            for role, byte_counts in (
+                ("target", RAGGED_TARGET_BYTE_COUNTS),
+                ("neighbor", RAGGED_NEIGHBOR_BYTE_COUNTS),
+            ):
+                for shard_bytes in byte_counts:
+                    selected = ragged_selected(shard_bytes)
+                    require(selected is (role == "target"),
+                            "ragged target/neighbor table is inconsistent")
+                    cells.append({
+                        "id": f"ragged-{role}-k{k}-r{r}-b{shard_bytes}",
+                        "K": k,
+                        "R": r,
+                        "bytes": shard_bytes,
+                        "role": role,
+                        "seed": 0x192E000 + index,
+                        "candidate_selected": selected,
+                        "control_selected": False,
+                        "main_physical_shard_bytes":
+                            ((shard_bytes + 63) // 64) * 64,
+                    })
+                    index += 1
+    expected_targets = 42 * len(RAGGED_TARGET_BYTE_COUNTS)
+    expected_neighbors = 42 * len(RAGGED_NEIGHBOR_BYTE_COUNTS)
+    require(len(cells) == expected_targets + expected_neighbors,
+            "ragged T=8 matrix is incomplete")
+    require(sum(cell["role"] == "target" for cell in cells) ==
+            expected_targets,
+            "ragged T=8 target matrix is incomplete")
+    return cells
+
+
+def padded_campaign(campaign: str) -> bool:
+    return campaign in ("tiny-extension", "ragged-extension")
+
+
 def target_cells(
     target_bytes: int = 64,
     final_selector: bool = False,
@@ -416,7 +486,7 @@ def benchmark_command(
 ) -> list[str]:
     shard_bytes = (
         int(cell["main_physical_shard_bytes"])
-        if implementation == "main" and campaign == "tiny-extension"
+        if implementation == "main" and padded_campaign(campaign)
         else int(cell["bytes"])
     )
     common = [
@@ -429,7 +499,7 @@ def benchmark_command(
         "--threads", "1", "--seed", str(cell["seed"]), "--json", "-",
     ]
     if implementation == "main":
-        if campaign == "tiny-extension":
+        if padded_campaign(campaign):
             common[-2:-2] = [
                 "--logical-bytes", str(cell["bytes"]),
             ]
@@ -469,7 +539,7 @@ def validate_result(
     require(isinstance(result, dict), "benchmark output is not an object")
     expected_shard_bytes = (
         int(cell["main_physical_shard_bytes"])
-        if implementation == "main" and campaign == "tiny-extension"
+        if implementation == "main" and padded_campaign(campaign)
         else int(cell["bytes"])
     )
     expected_parameters = {
@@ -479,7 +549,7 @@ def validate_result(
         "iterations": iterations, "warmup": warmup,
         "thread_count": 1, "seed": cell["seed"],
     }
-    if implementation == "main" and campaign == "tiny-extension":
+    if implementation == "main" and padded_campaign(campaign):
         expected_parameters["logical_shard_bytes"] = int(cell["bytes"])
     parameters = result.get("parameters")
     require(isinstance(parameters, dict) and
@@ -503,7 +573,7 @@ def validate_result(
     if implementation == "main":
         expected_schema = (
             "leopard-main-benchmark-v2"
-            if campaign == "tiny-extension"
+            if padded_campaign(campaign)
             else "leopard-main-benchmark-v1"
         )
         require(result.get("schema") == expected_schema and
@@ -514,7 +584,7 @@ def validate_result(
         require(isinstance(build, dict) and
                 build.get("main_source_commit") == MAIN_COMMIT,
                 "exact-main source identity changed")
-        if campaign == "tiny-extension":
+        if padded_campaign(campaign):
             require(
                 resolved.get("padded_application_bytes") is True and
                 resolved.get("padding_policy") == "zero suffix per shard" and
@@ -533,6 +603,7 @@ def validate_result(
                     "one-block-beyond512",
                     "one-kib-extension",
                     "tiny-extension",
+                    "ragged-extension",
                 ),
                 f"unsupported campaign identity: {campaign}")
         require(isinstance(build, dict),
@@ -544,6 +615,26 @@ def validate_result(
             one_block_shape = int(cell["K"]) <= 8
             marker_valid = (
                 build.get("high_t8_tiny_binding_enabled") is expected_marker and
+                build.get("high_t8_one_block_extended_enabled") is True and
+                build.get("high_t8_one_block_beyond_512_enabled") is True and
+                build.get("high_t8_one_kilobyte_extension_enabled") is True and
+                build.get("high_t8_two_block_128_192_enabled") is True and
+                build.get("high_t8_two_block_320_enabled") is True and
+                build.get("high_t8_two_block_extended_enabled") is True and
+                build.get("high_t8_one_block_selected") is
+                    (expected_selected and one_block_shape) and
+                build.get("high_t8_two_block_selected") is
+                    (expected_selected and not one_block_shape)
+            )
+        elif campaign == "ragged-extension":
+            expected_marker = implementation == "candidate"
+            expected_selected = cell.get(
+                f"{implementation}_selected") is True
+            one_block_shape = int(cell["K"]) <= 8
+            marker_valid = (
+                build.get("high_t8_ragged_binding_enabled") is
+                    expected_marker and
+                build.get("high_t8_tiny_binding_enabled") is True and
                 build.get("high_t8_one_block_extended_enabled") is True and
                 build.get("high_t8_one_block_beyond_512_enabled") is True and
                 build.get("high_t8_one_kilobyte_extension_enabled") is True and
@@ -866,10 +957,17 @@ def parse_arguments() -> argparse.Namespace:
             "labeled zero-padded 64-byte call with matching logical digests"
         ))
     parser.add_argument(
+        "--ragged-extension", action="store_true",
+        help=(
+            "qualify the narrowed 65..928-byte ragged T=8 selector across "
+            "every legal K=5..16/R=5..8 shape; exact main processes the "
+            "smallest legal zero-padded multiple of 64"
+        ))
+    parser.add_argument(
         "--cell-id", action="append", default=[],
         help=(
             "run only the named generated cell; repeat for a predeclared "
-            "holdout subset (tiny-extension campaigns only)"
+            "holdout subset (tiny/ragged extension campaigns only)"
         ))
     return parser.parse_args()
 
@@ -882,12 +980,14 @@ def main() -> int:
         sum((
             bool(options.one_kib_extension),
             bool(options.tiny_extension),
+            bool(options.ragged_extension),
             bool(options.final_selector),
         )) <= 1,
-        "--one-kib-extension, --tiny-extension, and --final-selector "
-        "are distinct campaigns")
-    require(not options.cell_id or options.tiny_extension,
-            "--cell-id is supported only with --tiny-extension")
+        "--one-kib-extension, --tiny-extension, --ragged-extension, and "
+        "--final-selector are distinct campaigns")
+    require(not options.cell_id or
+            options.tiny_extension or options.ragged_extension,
+            "--cell-id is supported only with a padded extension campaign")
     require(len(options.cell_id) == len(set(options.cell_id)),
             "--cell-id values must be unique")
     require(not options.output.exists(), "output path already exists")
@@ -898,6 +998,12 @@ def main() -> int:
         schema = TINY_SCHEMA
         summary_schema = TINY_SUMMARY_SCHEMA
         cells = tiny_extension_cells()
+    elif options.ragged_extension:
+        target_bytes = 0
+        campaign = "ragged-extension"
+        schema = RAGGED_SCHEMA
+        summary_schema = RAGGED_SUMMARY_SCHEMA
+        cells = ragged_extension_cells()
     elif options.one_kib_extension:
         target_bytes = 1024
         campaign = "one-kib-extension"
@@ -931,17 +1037,20 @@ def main() -> int:
         "neighbor_rounds": len(NEIGHBOR_ORDER),
         "target_bytes": target_bytes,
         "target_byte_counts": (
-            list(TINY_BYTE_COUNTS)
-            if campaign == "tiny-extension" else [target_bytes]
+            list(TINY_BYTE_COUNTS) if campaign == "tiny-extension" else
+            list(RAGGED_TARGET_BYTE_COUNTS)
+            if campaign == "ragged-extension" else [target_bytes]
         ),
         "main_physical_shard_bytes": (
-            64 if campaign == "tiny-extension" else target_bytes
+            64 if campaign == "tiny-extension" else
+            "ceil(logical_shard_bytes/64)*64"
+            if campaign == "ragged-extension" else target_bytes
         ),
         "main_comparison_semantics": (
-            "Leopard main processes a zero-padded 64-byte physical shard; "
+            "Leopard main processes a zero-padded legal physical shard; "
             "input, parity, and recovery digests cover the matching logical "
             "prefix only"
-            if campaign == "tiny-extension"
+            if padded_campaign(campaign)
             else "equal physical and logical shard bytes"
         ),
         "campaign": campaign,
@@ -952,19 +1061,19 @@ def main() -> int:
         "runner": regular_file_identity(Path(__file__)),
         "invocation_storage": (
             "hash-bound per-invocation artifacts with compact in-memory index"
-            if campaign == "tiny-extension"
+            if padded_campaign(campaign)
             else "embedded full invocation records"
         ),
         "isolation_retry_policy": {
             "maximum_attempts_per_round": (
-                TINY_MAX_ISOLATION_ATTEMPTS
-                if campaign == "tiny-extension" else 1
+                PADDED_MAX_ISOLATION_ATTEMPTS
+                if padded_campaign(campaign) else 1
             ),
             "retry_trigger": (
                 "objective CPU-pair isolation rejection only; timing values "
                 "are never consulted"
             ),
-            "rejected_attempts_retained": campaign == "tiny-extension",
+            "rejected_attempts_retained": padded_campaign(campaign),
         },
         "cells": [],
     }
@@ -1030,12 +1139,12 @@ def main() -> int:
                     "cell": dict(cell),
                     "rounds": [],
                 }
-                if campaign == "tiny-extension":
+                if padded_campaign(campaign):
                     cell_raw["rejected_isolation_attempts"] = []
                 for round_index, order in enumerate(orders):
                     maximum_attempts = (
-                        TINY_MAX_ISOLATION_ATTEMPTS
-                        if campaign == "tiny-extension" else 1
+                        PADDED_MAX_ISOLATION_ATTEMPTS
+                        if padded_campaign(campaign) else 1
                     )
                     accepted = False
                     for attempt in range(maximum_attempts):
@@ -1055,7 +1164,7 @@ def main() -> int:
                                 failure_output=options.output)
                             attempt_suffix = (
                                 f"-attempt-{attempt}"
-                                if campaign == "tiny-extension" else ""
+                                if padded_campaign(campaign) else ""
                             )
                             artifact = options.output / (
                                 f"partial-{cell['id']}-round-{round_index}"
@@ -1064,7 +1173,7 @@ def main() -> int:
                             write_exclusive(artifact, invocation)
                             invocations.append(
                                 compact_invocation(invocation, artifact)
-                                if campaign == "tiny-extension"
+                                if padded_campaign(campaign)
                                 else invocation
                             )
                         isolation = SUPPORT.isolation_record(
@@ -1079,13 +1188,13 @@ def main() -> int:
                             "invocations": invocations,
                             "isolation": isolation,
                         }
-                        if campaign == "tiny-extension":
+                        if padded_campaign(campaign):
                             round_record["attempt"] = attempt
                         if isolation["accepted"]:
                             cell_raw["rounds"].append(round_record)
                             accepted = True
                             break
-                        if campaign == "tiny-extension":
+                        if padded_campaign(campaign):
                             cell_raw[
                                 "rejected_isolation_attempts"
                             ].append(round_record)
@@ -1135,11 +1244,14 @@ def main() -> int:
             "main_commit": MAIN_COMMIT,
             "target_bytes": target_bytes,
             "target_byte_counts": (
-                list(TINY_BYTE_COUNTS)
-                if campaign == "tiny-extension" else [target_bytes]
+                list(TINY_BYTE_COUNTS) if campaign == "tiny-extension" else
+                list(RAGGED_TARGET_BYTE_COUNTS)
+                if campaign == "ragged-extension" else [target_bytes]
             ),
             "main_physical_shard_bytes": (
-                64 if campaign == "tiny-extension" else target_bytes
+                64 if campaign == "tiny-extension" else
+                "ceil(logical_shard_bytes/64)*64"
+                if campaign == "ragged-extension" else target_bytes
             ),
             "main_comparison_semantics": raw["main_comparison_semantics"],
             "runner": raw["runner"],
