@@ -660,9 +660,32 @@ static volatile uint32_t g_high_t8_ragged_binding_mode =
 
 static bool IsHighT8RaggedByteCount(uint64_t shard_bytes)
 {
-    return g_high_t8_ragged_binding_mode == 1U &&
-        shard_bytes >= 65 && shard_bytes <= 1024 &&
-        (shard_bytes & 63U) != 0;
+    if (g_high_t8_ragged_binding_mode != 1U ||
+        shard_bytes < 65 || shard_bytes > 1024 ||
+        (shard_bytes & 63U) == 0)
+        return false;
+
+    /*
+        Conservative whole-shape intersection from the directional screen.
+        Each range is bounded by equal-cost 32-byte vector tiers and retained
+        only when every legal K=5..16,R=5..min(K,8) shape beat both the
+        selector-off path and padded exact Leopard main at its measured
+        endpoints.  Isolated multiples of 32 retain the no-tail-copy win where
+        neighboring ragged residues did not qualify.
+    */
+    return
+        (shard_bytes >= 65 && shard_bytes <= 191) ||
+        (shard_bytes >= 193 && shard_bytes <= 224) ||
+        (shard_bytes >= 257 && shard_bytes <= 352) ||
+        shard_bytes == 416 ||
+        (shard_bytes >= 449 && shard_bytes <= 480) ||
+        (shard_bytes >= 513 && shard_bytes <= 544) ||
+        (shard_bytes >= 577 && shard_bytes <= 608) ||
+        (shard_bytes >= 641 && shard_bytes <= 672) ||
+        shard_bytes == 736 ||
+        (shard_bytes >= 769 && shard_bytes <= 800) ||
+        shard_bytes == 864 ||
+        (shard_bytes >= 897 && shard_bytes <= 928);
 }
 
 static bool IsHighT8OneBlockBeyond512ShapeByteCount(

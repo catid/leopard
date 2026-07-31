@@ -168,6 +168,24 @@ bool IsExpectedT8OneBlockBeyond512ShapeByteCount(
     return (shape_mask & (UINT16_C(1) << shape_bit)) != 0;
 }
 
+bool IsExpectedT8RaggedByteCount(size_t bytes)
+{
+    return LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
+        (bytes & 63U) != 0 &&
+        ((bytes >= 65 && bytes <= 191) ||
+         (bytes >= 193 && bytes <= 224) ||
+         (bytes >= 257 && bytes <= 352) ||
+         bytes == 416 ||
+         (bytes >= 449 && bytes <= 480) ||
+         (bytes >= 513 && bytes <= 544) ||
+         (bytes >= 577 && bytes <= 608) ||
+         (bytes >= 641 && bytes <= 672) ||
+         bytes == 736 ||
+         (bytes >= 769 && bytes <= 800) ||
+         bytes == 864 ||
+         (bytes >= 897 && bytes <= 928));
+}
+
 bool IsExpectedT8OneBlockByteCount(
     unsigned k,
     unsigned r,
@@ -175,8 +193,7 @@ bool IsExpectedT8OneBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
-        (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
-         bytes >= 65 && bytes <= 1024 && (bytes & 63U) != 0) ||
+        IsExpectedT8RaggedByteCount(bytes) ||
         bytes == 64 ||
         (LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED == 0 &&
          bytes >= 128 && bytes <= 512 && (bytes & 63U) == 0) ||
@@ -217,8 +234,7 @@ bool IsExpectedT8TwoBlockByteCount(
 {
     return (LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING != 0 &&
             bytes >= 1 && bytes < 64) ||
-        (LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING != 0 &&
-         bytes >= 65 && bytes <= 1024 && (bytes & 63U) != 0) ||
+        IsExpectedT8RaggedByteCount(bytes) ||
         bytes == 64 ||
         ((bytes == 128 || bytes == 192) &&
          LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_TWO_BLOCK_128_192 == 0) ||
