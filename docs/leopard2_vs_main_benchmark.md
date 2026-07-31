@@ -283,6 +283,29 @@ first-use gains. GF8 is regime-dependent: one-loss high rate improves 12.3%,
 full-loss high rate regresses about 1.4%, XOR regresses about 44% in time, and
 balanced full-loss Leopard2 takes about 1.61x as long as main.
 
+## Current equal-rounded GF8 multi-loss result
+
+The table above predates the source-major AVX2 direct-repair promotion.  On
+final candidate source `00191af`, a frozen 47-target/five-neighbor campaign
+plus one nine-round holdout compared reusable-plan execution with exact
+Leopard1 `6e5725e`.  The combined exact-main-over-Leopard2 execution geomean is
+5.0310x, with a 1.1041x weakest lower confidence bound.  The 64-KiB subset has
+a 7.5633x geomean and 2.8748x weakest lower bound; the 1-KiB subset has a
+6.4154x geomean and 2.8550x weakest lower bound.  All logical original,
+parity, and recovered-output digests match.
+
+This result applies to the measured equal-rounded legacy-high GF8/AVX2 region:
+`17 <= K <= 128`, `ceil_pow2(K) == ceil_pow2(R)`, `K != 65`, and two through
+eight missing originals.  It does not claim that a new plan is always faster.
+At one through 65 bytes, execution wins all 14 cells but first use has a
+0.6228x geomean versus Leopard1 because plan construction dominates; the
+observed reuse crossover is two through fifteen calls.  That remaining gap is
+`leopard-79h.38.5.10.44`.
+
+The compact authoritative evidence, binary identities, isolation bounds,
+confidence intervals, and reproduction commands are in
+`experiments/leopard2/direct_repair/results/equal_rounded_avx2_authoritative_20260731.json`.
+
 ## What Leopard2 adds
 
 The benchmark covers only the bit-identical legacy-high profile, but Leopard2

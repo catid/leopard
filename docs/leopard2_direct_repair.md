@@ -356,3 +356,51 @@ full per-cell medians, confidence intervals, source and binary hashes,
 raw-bundle manifests, exclusions, directional summary, and selector definition
 are in
 `experiments/leopard2/direct_repair/results/one_loss_equal_rounded_exact_main.json`.
+
+## Equal-rounded multi-loss promotion
+
+The AVX2 source-major executor is also selected for two through eight missing
+originals when `17 <= K <= 128`, `ceil_pow2(K) == ceil_pow2(R)`, and the
+separately calibrated `K=65` family does not apply.  The final candidate is
+commit `00191aff90d8b20b547fa28b4693e3d7b6b4ebcf`, tree
+`2db2b9eafaebd24578002788bd2f12bbc2e5bc6e`.  Candidate and initialized-data
+control binaries have identical executable sections; only the immutable
+selector datum differs.
+
+The authoritative CPU-13 campaign compared that candidate with both its
+same-source transform control and exact Leopard1 `main` commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`.  It covered 47 target cells and
+five selector neighbors in 906 accepted processes.  One three-round
+33-byte cell was inconclusive against Leopard1, so a predeclared nine-round
+holdout added 54 accepted processes and established a 1.1302x point speedup
+with a 1.1041x lower confidence bound.  All original, parity, and recovery
+digests matched.
+
+After replacing that cell with its holdout, the same-source transform over
+candidate execution geomean is 3.9574x and its weakest lower confidence bound
+is 1.3724x.  Exact Leopard1 over candidate execution has a 5.0310x geomean
+and a 1.1041x weakest lower bound.  At 64 KiB, the exact-main geomean is
+7.5633x and the weakest lower bound is 2.8748x.  At 1 KiB they are 6.4154x
+and 2.8550x.  The five unselected neighbors have no credible regression over
+two percent.
+
+For logical byte counts 1 through 65, exact Leopard1 is invoked on its required
+64-byte-rounded storage while logical digests remain equal.  Candidate
+execution wins all 14 tail cells, with a 2.0651x exact-main geomean and a
+1.1041x weakest lower bound.  A brand-new plan does not yet win those tiny
+cells: its first-use geomean is 0.6228x relative to Leopard1 because about four
+microseconds of coefficient/scatter setup dominates.  The conservative
+observed reuse crossover is two through fifteen executions.  This limitation
+is explicit in `leopard-79h.38.5.10.44`; it does not negate the reusable-plan
+execution promotion.
+
+The benchmark retains target CPU and SMT-sibling scheduler accounting,
+interrupt deltas, and a `wait4` cross-check for every process.  The effective
+bounds are `max(20 us, 50 ppm)` for unexplained target runtime and
+`max(50 us, 200 ppm)` for sibling runtime.  These cap possible contamination
+at 0.66 percent of the shortest retained invocation and 0.02 percent of long
+invocations, below the two-percent neighbor gate, while rejecting the
+retained scheduler outliers.  Both raw bundles independently verify.
+Machine-readable identities, hashes, confidence intervals, correctness gates,
+and reproduction commands are in
+`experiments/leopard2/direct_repair/results/equal_rounded_avx2_authoritative_20260731.json`.

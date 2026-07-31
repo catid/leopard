@@ -65,7 +65,7 @@ TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS = 20_000
 TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM = 50
 # The otherwise-clean sibling-runtime distribution is bimodal: ordinary
 # periodic work reaches 175 ppm, while contention outliers start above
-# 350 ppm.  A 50 us floor is at most 0.66% of the shortest retained runtime;
+# 280 ppm.  A 50 us floor is at most 0.66% of the shortest retained runtime;
 # the 200 ppm bound limits overlap to 0.02% on long invocations.
 SIBLING_ABSOLUTE_TOLERANCE_NS = 50_000
 SIBLING_RELATIVE_TOLERANCE_PPM = 200

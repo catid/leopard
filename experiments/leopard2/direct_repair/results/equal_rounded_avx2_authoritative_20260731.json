@@ -1,0 +1,248 @@
+{
+  "schema": "leopard2-equal-rounded-avx2-authoritative/v1",
+  "date_utc": "2026-07-31",
+  "bead": "leopard-79h.38.5.10.30",
+  "status": "promotion gate passed for reusable-plan execution; tiny one-shot setup follow-up remains",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "condition": "17 <= K <= 128, ceil_pow2(K) equals ceil_pow2(R), K is not 65, and 2 <= missing_originals <= 8",
+    "measured_equal_count_K": [
+      17,
+      31,
+      32,
+      33,
+      64,
+      66,
+      96,
+      127,
+      128
+    ],
+    "measured_loss_counts_at_64_kib": [
+      2,
+      4,
+      8
+    ],
+    "measured_arbitrary_tail_bytes": [
+      1,
+      31,
+      32,
+      33,
+      63,
+      64,
+      65
+    ],
+    "measured_1_kib_K": [
+      17,
+      66,
+      128
+    ],
+    "exact_leopard1_tail_geometry": "Leopard2 uses the logical byte count; the legacy-main adapter processes ceil64(bytes) and compares logical original, parity, and recovery digests",
+    "plan_reuse_count": 64,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "hot_path_allocation_changed": false
+  },
+  "source_identity": {
+    "timed_candidate_commit": "00191aff90d8b20b547fa28b4693e3d7b6b4ebcf",
+    "timed_candidate_tree": "2db2b9eafaebd24578002788bd2f12bbc2e5bc6e",
+    "exact_leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "evidence_runner_commit": "02c29b1b50d443ef5b525d263a5a76bd0543044b",
+    "evidence_runner_sha256": "742431d38bb21823e3bd83b52c0f7a819f51809ed3559f42f9efd482409694bc",
+    "current_release_test_tree": "ec509d4defb28e6c76a0809f20730debd27604b2",
+    "directional_predecessor": {
+      "path": "experiments/leopard2/direct_repair/results/equal_rounded_avx2_candidate_20260730.json",
+      "sha256": "e65832ca987afa19a9b747b3bd17a46780580ed3be5fcb8857ce86e9f5df4513"
+    }
+  },
+  "binary_identity": {
+    "candidate_sha256": "81bfa22c697ef1175dc7717ae58ffa12af9b16e9c28a4460b53ce49d6925f880",
+    "initialized_data_control_sha256": "5ce8973f6e12e386147e8b45692b58c59356afcca7d75f691e6c36199add8b8a",
+    "exact_leopard1_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+    "candidate_control_executable_sections_sha256": "3cf48e494fc6adb6aa35f600efd61b61c731e212c117130baa46174695ae1625",
+    "candidate_control_executable_sections_identical": true,
+    "frozen_mode": "0555",
+    "rehash_before_and_after_campaign": true,
+    "candidate_selector": "enabled, direct, source_major",
+    "control_selector": "disabled, materialized, none"
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic",
+    "compiler": "GCC 13.3.0",
+    "cmake": "3.28.3",
+    "timed_cpu": 13,
+    "smt_sibling": 29,
+    "coordinator_cpu": 0
+  },
+  "isolation_policy": {
+    "campaign_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "coordinator_excluded_from_measured_pair": true,
+    "one_child_process_at_a_time": true,
+    "target_runtime_effective_max": "max(20000 ns, 50 ppm of child scheduler runtime)",
+    "sibling_runtime_effective_max": "max(50000 ns, 200 ppm of child scheduler runtime)",
+    "wait4_crosscheck_max_ns": 5000,
+    "rejected_interrupt_fields": [
+      "irq",
+      "softirq",
+      "steal",
+      "guest",
+      "guest_nice"
+    ],
+    "maximum_isolation_only_attempts": 5,
+    "memory_max_bytes": 268435456,
+    "memory_swap_max_bytes": 0,
+    "policy_derivation": {
+      "target_sample_count": 707,
+      "otherwise_clean_target_sample_count": 645,
+      "target_policy_accepted": 630,
+      "target_rejected_outlier_ppm_range": [
+        115.9,
+        456.1
+      ],
+      "sibling_sample_count": 1605,
+      "sibling_policy_accepted": 1593,
+      "sibling_zero_samples_in_pre_floor_set": 1381,
+      "ordinary_long_sibling_cluster_max_ppm": 175,
+      "contention_outlier_min_ppm": 285,
+      "maximum_bound_fraction_of_shortest_retained_runtime": 0.0066
+    }
+  },
+  "artifacts": {
+    "full_matrix": {
+      "path": "/tmp/leopard2-equal-final-00191af/full-r3-v7",
+      "manifest_sha256": "8c31536a4776c99279b95a54f512aeb91eec9ccf2bbe2e2a269a4dc3659b152d",
+      "summary_sha256": "3e1f1f03a8553c8a4a5048e0bfdf1f78ca384728bfc14af5381e349a5a2a9a55",
+      "manifest_digest": "143cbf528c0d77ec02568a05c066938b970f2cfeef840d24a6ad7c03b7850a7e",
+      "summary_digest": "8f9651d3dca37ae07c6894e2b36e6421e20f89d2bc36acb341ca824b63594eb9",
+      "target_rounds": 3,
+      "accepted_processes": 906,
+      "rejected_isolation_attempts": 108,
+      "initial_inconclusive_cells": [
+        "tail-k128-r128-b33-l8"
+      ]
+    },
+    "predeclared_holdout": {
+      "path": "/tmp/leopard2-equal-final-00191af/holdout-k128-b33-r9-v7",
+      "manifest_sha256": "eb015a9510175111488703fec31ebee07bac698453ed14baac4b646f61afdc80",
+      "summary_sha256": "f820a24284563abae8dfe30eaeacc43d8bd731602b3faa4815a426252b6d8293",
+      "manifest_digest": "c1ed1851acee995b8dfbcc763a1c06f32cd4a14b3eb672c5780c45824dbaad1a",
+      "summary_digest": "79f7ad26acbde7030f909b92ef8b6c3b053d115d9379bef579106909e46e5b8d",
+      "target_rounds": 9,
+      "accepted_processes": 54,
+      "rejected_isolation_attempts": 1
+    },
+    "combined_analytic_processes": 942,
+    "retained_processes_including_superseded_three_round_cell": 960,
+    "retained_raw_bytes": 32576265,
+    "both_bundles_independently_verified": true
+  },
+  "combined_result": {
+    "accepted": true,
+    "target_cells": 47,
+    "neighbor_cells": 5,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "all_original_parity_and_recovery_digests_matched": true,
+    "same_source_transform_over_candidate_geomean": 3.9573956642535175,
+    "same_source_minimum_lower_confidence_bound": 1.3723559612867047,
+    "exact_leopard1_over_candidate_execution_geomean": 5.030982681585244,
+    "exact_leopard1_minimum_lower_confidence_bound": 1.1040762861191966,
+    "exact_leopard1_over_candidate_first_use_geomean": 3.3222767691904687,
+    "exact_leopard1_first_use_minimum_lower_confidence_bound": 0.521599776193595,
+    "minimum_neighbor_control_over_candidate_point_ratio": 0.9870013779945745,
+    "minimum_neighbor_upper_confidence_bound": 1.0029787408016368
+  },
+  "rate_slices": {
+    "64_kib": {
+      "target_cells": 27,
+      "same_source_geomean": 5.050311309365077,
+      "same_source_minimum_lower_confidence_bound": 2.0472976104027167,
+      "exact_leopard1_execution_geomean": 7.563252165828917,
+      "exact_leopard1_execution_minimum_lower_confidence_bound": 2.874849294098664,
+      "exact_leopard1_first_use_geomean": 7.492423691865869,
+      "exact_leopard1_first_use_minimum_lower_confidence_bound": 2.829731231481192
+    },
+    "1_kib": {
+      "target_cells": 6,
+      "same_source_geomean": 4.567525817124812,
+      "same_source_minimum_lower_confidence_bound": 2.133278044152227,
+      "exact_leopard1_execution_geomean": 6.415419882357367,
+      "exact_leopard1_execution_minimum_lower_confidence_bound": 2.855041723125742,
+      "exact_leopard1_first_use_geomean": 4.252580948584112,
+      "exact_leopard1_first_use_minimum_lower_confidence_bound": 1.8883221988828778
+    },
+    "1_to_65_byte_tails": {
+      "target_cells": 14,
+      "same_source_geomean": 2.325247710967041,
+      "same_source_minimum_lower_confidence_bound": 1.3723559612867047,
+      "exact_leopard1_execution_geomean": 2.065108576194934,
+      "exact_leopard1_execution_minimum_lower_confidence_bound": 1.1040762861191966,
+      "exact_leopard1_first_use_geomean": 0.6227881368661771,
+      "exact_leopard1_first_use_minimum_lower_confidence_bound": 0.521599776193595
+    }
+  },
+  "holdout_result": {
+    "cell": "tail-k128-r128-b33-l8",
+    "same_source_transform_over_candidate": {
+      "ratio": 1.4025299446826758,
+      "lower": 1.3723559612867047
+    },
+    "exact_leopard1_over_candidate_execution": {
+      "ratio": 1.1301570516929527,
+      "lower": 1.1040762861191966
+    },
+    "exact_leopard1_over_candidate_first_use": {
+      "ratio": 0.5276224842782405,
+      "lower": 0.521599776193595
+    }
+  },
+  "first_use_tradeoff": {
+    "sub_66_byte_cells_slower_than_exact_leopard1_on_new_plan": 14,
+    "sub_66_byte_cells_faster_than_exact_leopard1_in_execution": 14,
+    "observed_conservative_reuse_threshold_range": [
+      2,
+      15
+    ],
+    "cause": "approximately four microseconds of direct-plan preparation dominates tiny shard execution; the direct candidate is still materially cheaper to prepare than the transform control",
+    "followup_bead": "leopard-79h.38.5.10.44",
+    "disposition": "retain the reusable-plan execution promotion and optimize the explicitly reported one-shot gap separately"
+  },
+  "correctness_and_build_gates": {
+    "current_release_tests": {
+      "commit": "02c29b1b50d443ef5b525d263a5a76bd0543044b",
+      "command": "ctest --test-dir build/root-release-current -j1 -R ^leopard2_(backend_ops|direct_repair)$ --output-on-failure",
+      "passed": 2,
+      "failed": 0,
+      "backend_ops_binary_sha256": "eae48935ac79d12872d72c28c128ca376ddcf7a4eacde3d023dff67bc518a18c",
+      "direct_repair_binary_sha256": "d0dffa4549e096a6b609969f0cf5646b6eca2d020bdece94cc9918fc35f0f060"
+    },
+    "runner_tests": {
+      "command": "ctest --test-dir build/root-release-current -j1 -R ^leopard2_equal_rounded_abba_(self_test|optimized_self_test)$ --output-on-failure",
+      "passed": 2,
+      "failed": 0
+    },
+    "clang18_asan_ubsan_exact_candidate": {
+      "passed": true,
+      "source": "experiments/leopard2/direct_repair/results/equal_rounded_avx2_candidate_20260730.json"
+    },
+    "direct_oracle_and_legacy_compatibility_exact_candidate": {
+      "passed": true,
+      "high_compatibility_bytes": 3736998,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "arbitrary_tail_cases": 486
+    }
+  },
+  "decision": {
+    "promote_equal_rounded_multi_loss_reusable_execution": true,
+    "close_bead": true,
+    "known_limitation": "tiny new-plan one-shot decode remains slower than Leopard1 and is tracked by leopard-79h.38.5.10.44",
+    "next_avx2_step": "run the final all-K GF8 map and use the measured regions in the deterministic production crossover table"
+  }
+}

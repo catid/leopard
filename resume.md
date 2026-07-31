@@ -6,6 +6,35 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 equal-rounded multi-loss checkpoint
+
+The reusable-plan direct-repair selector is source commit
+`00191aff90d8b20b547fa28b4693e3d7b6b4ebcf`, tree
+`2db2b9eafaebd24578002788bd2f12bbc2e5bc6e`.  For legacy-high GF8/AVX2 it
+selects source-major direct repair when `17 <= K <= 128`,
+`ceil_pow2(K) == ceil_pow2(R)`, `K != 65`, and two through eight originals
+are missing.  Candidate and initialized-data control executable sections are
+byte-identical.
+
+The final 47-target/five-neighbor CPU-13 campaign retained 906 accepted
+processes; a predeclared nine-round holdout retained another 54 and resolved
+the only inconclusive exact-main cell.  The combined same-source and exact
+Leopard1 execution geomeans are 3.9574x and 5.0310x.  Their weakest lower
+confidence bounds are 1.3724x and 1.1041x.  All logical original, parity, and
+recovery digests match, and all neighbors pass.
+
+At one through 65 bytes, reusable execution wins all 14 cells but first use
+does not: exact-main-over-Leopard2 first-use geomean is 0.6228x because plan
+setup dominates.  The measured reuse crossover is two through fifteen calls.
+Follow-up `leopard-79h.38.5.10.44` owns that explicit one-shot gap.  Compact
+evidence is
+`experiments/leopard2/direct_repair/results/`
+`equal_rounded_avx2_authoritative_20260731.json`.
+
+Close `leopard-79h.38.5.10.30` after the evidence commit.  The next CPU/GF8
+step is the final all-K map and deterministic crossover table; do not mark the
+overall AVX2 goal complete.
+
 ## 2026-07-31 GF8/AVX2 T=8 ragged 65--928-byte checkpoint
 
 The final selector is commit
