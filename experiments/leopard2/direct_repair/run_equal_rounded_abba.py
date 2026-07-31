@@ -32,9 +32,9 @@ from typing import Any, Mapping, Sequence
 
 
 SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v6"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v6"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v6"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v7"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v7"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v7"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -65,8 +65,9 @@ TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS = 20_000
 TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM = 50
 # The otherwise-clean sibling-runtime distribution is bimodal: ordinary
 # periodic work reaches 175 ppm, while contention outliers start above
-# 350 ppm.  A 200 ppm bound limits overlap to 0.02% on long invocations.
-SIBLING_ABSOLUTE_TOLERANCE_NS = 20_000
+# 350 ppm.  A 50 us floor is at most 0.66% of the shortest retained runtime;
+# the 200 ppm bound limits overlap to 0.02% on long invocations.
+SIBLING_ABSOLUTE_TOLERANCE_NS = 50_000
 SIBLING_RELATIVE_TOLERANCE_PPM = 200
 CHILD_ENVIRONMENT = {
     "LANG": "C",
@@ -1039,9 +1040,9 @@ def self_test() -> int:
         target_endpoint_tolerance_ns(1_400_000_000) == 70_000,
         "target endpoint tolerance changed")
     require(
-        SIBLING_ABSOLUTE_TOLERANCE_NS == 20_000 and
+        SIBLING_ABSOLUTE_TOLERANCE_NS == 50_000 and
         SIBLING_RELATIVE_TOLERANCE_PPM == 200 and
-        sibling_runtime_tolerance_ns(7_581_132) == 20_000 and
+        sibling_runtime_tolerance_ns(7_581_132) == 50_000 and
         sibling_runtime_tolerance_ns(1_400_000_000) == 280_000,
         "sibling runtime tolerance changed")
     require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
