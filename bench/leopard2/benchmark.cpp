@@ -1447,6 +1447,8 @@ static int Run(const Options& options)
     if (!leopard2_internal::GetCodecEncodePathInfo(
             codec, options.bytes, options.r, &encode_path_info))
         Fail("prevalidated benchmark encode-path introspection failed");
+    const bool high_t4_batch_selected =
+        encode_path_info.high_t4_batch_binding_selected;
     const bool high_t8_one_block_selected =
         encode_path_info.high_t8_vector_selected ||
         encode_path_info.high_t8_partial_binding_selected;
@@ -1466,6 +1468,8 @@ static int Run(const Options& options)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     json << ",\n"
          << "    \"prevalidated_batch_experiment\": true,\n"
+         << "    \"high_t4_batch_selected\": "
+         << (high_t4_batch_selected ? "true" : "false") << ",\n"
          << "    \"high_t8_one_block_extended_enabled\": "
          << (leopard2_internal::HighT8OneBlockExtendedEnabled() ?
                 "true" : "false") << ",\n"

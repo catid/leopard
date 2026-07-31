@@ -159,7 +159,8 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const * const data,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans);
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    bool allow_sub_2k_register_t4 = true);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -189,6 +190,20 @@ void ReedSolomonEncodeK5R5T8(
     const backend::Ops& ops,
     const void* const* data,
     void* const* work,
+    uint64_t byte_count);
+
+/*
+    Execute a prevalidated item-major dense T=4 batch.  This wrapper supplies
+    Leopard's immutable legacy coordinate skews while the pure-AVX2 backend
+    amortizes table preparation over all stripes.
+*/
+void ReedSolomonEncodeT4Batch(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    uint32_t original_count,
+    uint32_t recovery_count,
     uint64_t byte_count);
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING

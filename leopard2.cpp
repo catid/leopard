@@ -87,6 +87,19 @@
 #endif
 
 /*
+    Text-layout-neutral same-source control for the dense T=4 batch callback.
+    The macro changes only a nonzero initialized data word; production keeps
+    the callback enabled while diagnostic controls preserve identical text.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING must be 0 or 1"
+#endif
+
+/*
     Promoted path that maps shortened/punctured T=8 profiles onto the measured
     full K=8,R=8 kernel after reusable batch validation.  CMake defines this
     selector explicitly in both production and diagnostic-control builds.
@@ -395,6 +408,9 @@ struct leo2_encode_batch_binding
     std::vector<leo2_encode_batch_item> items;
     std::vector<const void*> original_pointers;
     std::vector<void*> recovery_pointers;
+#ifdef LEO_HAS_FF8
+    const leopard::backend::Ops* high_t4_batch_ops;
+#endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     const leopard::backend::Ops* high_t8_partial_ops;
 #endif
@@ -575,6 +591,8 @@ namespace {
 static const size_t kScratchAlignment = 64;
 
 #ifdef LEO_HAS_FF8
+static volatile uint32_t g_high_t4_batch_binding_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING;
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
 static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
@@ -5197,8 +5215,12 @@ static void ExecuteTransformEncodePass(
     const void* const* padded_original,
     void** parity,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    bool allow_sub_2k_register_t4)
 {
+#ifndef LEO_HAS_FF8
+    (void)allow_sub_2k_register_t4;
+#endif
 #ifndef LEO_HAS_FF16
     // Source-policy sizing is a GF16-only input.  Keep the shared execution
     // signature warning-clean when the supported GF8-only build removes every
@@ -5226,7 +5248,8 @@ static void ExecuteTransformEncodePass(
                 ops, buffer_bytes, codec->original_count,
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
-                padded_original, work, sparse_plans);
+                padded_original, work, sparse_plans,
+                allow_sub_2k_register_t4);
 #else
             return;
 #endif
@@ -9747,10 +9770,30 @@ bool GetCodecEncodePathInfo(
         !UseSingleSideEncodeLayout(codec) &&
         AutoDirectEncodePreferred(
             codec, shard_bytes, requested_recovery_count);
+    info.high_t4_batch_binding_selected = false;
     info.high_t8_vector_selected = false;
     info.high_t8_partial_binding_selected = false;
     info.high_t8_two_block_binding_selected = false;
 #ifdef LEO_HAS_FF8
+    if (g_high_t4_batch_binding_mode == 1U &&
+        !codec->context->pool &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->padded_side == 4 &&
+        codec->recovery_count >= 3 && codec->recovery_count <= 4 &&
+        ((codec->original_count >= 3 && codec->original_count <= 7) ||
+         (codec->original_count >= 9 && codec->original_count <= 11)) &&
+        shard_bytes >= 32 && shard_bytes <= 2U * 1024U &&
+        (shard_bytes & 31U) == 0 &&
+        requested_recovery_count == codec->recovery_count)
+    {
+        const leopard::backend::Ops& transform_ops =
+            SelectTransformEncodeOps(codec, shard_bytes,
+                requested_recovery_count, requested_recovery_count);
+        info.high_t4_batch_binding_selected =
+            transform_ops.kind == LEO2_BACKEND_AVX2 &&
+            transform_ops.ff8_high_encode_t4_batch != NULL;
+    }
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->original_count == 8 && codec->recovery_count == 8 &&
@@ -10189,7 +10232,7 @@ static leo2_result EncodeInternal(
                 codec, transform_ops, geometry.aligned_prefix_bytes,
                 geometry.aligned_prefix_bytes,
                 requested_recovery_count, requested_recovery_prefix,
-                original, parity, work, &sparse_plans);
+                original, parity, work, &sparse_plans, true);
         }
         else
         {
@@ -10235,7 +10278,7 @@ static leo2_result EncodeInternal(
                     codec, transform_ops, pass_bytes,
                     geometry.aligned_prefix_bytes,
                     requested_recovery_count, requested_recovery_prefix,
-                    pass_original, parity, work, &sparse_plans);
+                    pass_original, parity, work, &sparse_plans, true);
                 first_tile += pass_tiles;
             }
             LEO_DEBUG_ASSERT(first_tile == total_tiles);
@@ -10263,7 +10306,7 @@ static leo2_result EncodeInternal(
             codec, transform_ops, kScratchAlignment, kScratchAlignment,
             requested_recovery_count,
             requested_recovery_prefix,
-            padded_original, parity, work, &sparse_plans);
+            padded_original, parity, work, &sparse_plans, false);
 
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
         {
@@ -10657,6 +10700,9 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
     if (!binding)
         return LEO2_OUT_OF_MEMORY;
     binding->codec = codec;
+#ifdef LEO_HAS_FF8
+    binding->high_t4_batch_ops = NULL;
+#endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     binding->high_t8_partial_ops = NULL;
 #endif
@@ -10792,6 +10838,50 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         return result;
     }
 
+#ifdef LEO_HAS_FF8
+    /*
+        Small homogeneous T=4 bindings can bypass the general per-stripe
+        scratch geometry and amortize the AVX2 multiplication-table setup over
+        the complete batch.  Contexts with a worker pool retain the ordinary
+        executor so independent stripes continue to scale across workers.
+    */
+    if (g_high_t4_batch_binding_mode == 1U &&
+        !codec->context->pool &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->padded_side == 4 &&
+        codec->recovery_count >= 3 && codec->recovery_count <= 4 &&
+        ((codec->original_count >= 3 && codec->original_count <= 7) ||
+         (codec->original_count >= 9 && codec->original_count <= 11)))
+    {
+        const uint64_t shard_bytes = binding->items[0].shard_bytes;
+        bool all_dense_qualified =
+            shard_bytes >= 32 && shard_bytes <= 2U * 1024U &&
+            (shard_bytes & 31U) == 0;
+        for (size_t item_index = 0;
+             all_dense_qualified && item_index < binding->items.size();
+             ++item_index)
+        {
+            const leo2_encode_batch_item& item =
+                binding->items[item_index];
+            all_dense_qualified = item.shard_bytes == shard_bytes;
+            for (uint32_t parity = 0;
+                 all_dense_qualified &&
+                 parity < codec->recovery_count; ++parity)
+                all_dense_qualified = item.recovery[parity] != NULL;
+        }
+        if (all_dense_qualified)
+        {
+            const leopard::backend::Ops& transform_ops =
+                SelectTransformEncodeOps(codec, shard_bytes,
+                    codec->recovery_count, codec->recovery_count);
+            if (transform_ops.kind == LEO2_BACKEND_AVX2 &&
+                transform_ops.ff8_high_encode_t4_batch)
+                binding->high_t4_batch_ops = &transform_ops;
+        }
+    }
+#endif
+
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
     if (codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
@@ -10897,6 +10987,20 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
 {
     if (!binding || !binding->codec || binding->items.empty())
         return LEO2_INVALID_ARGUMENT;
+#ifdef LEO_HAS_FF8
+    if (binding->high_t4_batch_ops)
+    {
+        leopard::ff8::ReedSolomonEncodeT4Batch(
+            *binding->high_t4_batch_ops,
+            binding->original_pointers.data(),
+            binding->recovery_pointers.data(),
+            static_cast<uint32_t>(binding->items.size()),
+            binding->codec->original_count,
+            binding->codec->recovery_count,
+            binding->items[0].shard_bytes);
+        return LEO2_SUCCESS;
+    }
+#endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     if (binding->high_t8_two_block_ops)
     {

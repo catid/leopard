@@ -335,6 +335,141 @@ void EncodeAllAndCheck(
     }
 }
 
+uint64_t ExerciseT4BatchBindings(leo2_context* context)
+{
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+    };
+    static const Shape shapes[] = {
+        { 3, 3 }, { 4, 4 }, { 7, 3 }, { 11, 4 }
+    };
+    static const size_t byte_counts[] = {
+        32, 64, 96, 2016, 2048, 2049, 2080
+    };
+    static const size_t item_count = 2;
+    static const uint8_t sentinel = 0xa5;
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    uint64_t checks = 0;
+
+    for (size_t shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]); ++shape_i)
+    {
+        const unsigned k = shapes[shape_i].k;
+        const unsigned r = shapes[shape_i].r;
+        leo2_codec* codec = NULL;
+        RequireResult(leo2_codec_create(context, k, r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+            "T4 binding codec");
+        const leopard2_test::ProfileLayout layout =
+            leopard2_test::make_profile_layout(
+                leopard2_test::kLegacyHigh, k, r);
+        const leopard2_test::Matrix generator =
+            leopard2_test::direct_systematic_generator(field, layout);
+
+        for (size_t byte_i = 0;
+             byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++byte_i)
+        {
+            const size_t bytes = byte_counts[byte_i];
+            leopard2_internal::CodecEncodePathInfo path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                    codec, bytes, r, &path),
+                "T4 binding path introspection");
+            const bool expected_selected =
+                bytes >= 32 && bytes <= 2048 &&
+                (bytes & 31U) == 0;
+            Require(path.high_t4_batch_binding_selected ==
+                    expected_selected,
+                "T4 binding selector differs from its byte predicate");
+
+            std::vector<Shards> original(
+                item_count, MakeOriginal(k, bytes));
+            original[1][0][0] ^= 0x6du;
+            std::vector<Shards> recovery(
+                item_count, Shards(r, Bytes(bytes, sentinel)));
+            std::vector<std::vector<const void*> > input(
+                item_count, std::vector<const void*>(k, NULL));
+            std::vector<std::vector<void*> > output(
+                item_count, std::vector<void*>(r, NULL));
+            std::vector<std::unique_ptr<AlignedBuffer> > scratch;
+            std::vector<leo2_encode_batch_item> items(item_count);
+            size_t scratch_bytes = 0;
+            RequireResult(leo2_encode_scratch_size(
+                codec, bytes, &scratch_bytes),
+                "T4 binding scratch query");
+            for (size_t item = 0; item < item_count; ++item)
+            {
+                for (unsigned source = 0; source < k; ++source)
+                    input[item][source] = &original[item][source][0];
+                for (unsigned parity = 0; parity < r; ++parity)
+                    output[item][parity] = &recovery[item][parity][0];
+                scratch.push_back(std::unique_ptr<AlignedBuffer>(
+                    new AlignedBuffer(scratch_bytes)));
+                items[item].shard_bytes = bytes;
+                items[item].original = &input[item][0];
+                items[item].recovery = &output[item][0];
+                items[item].scratch = scratch[item]->data();
+                items[item].scratch_bytes = scratch[item]->size();
+            }
+
+            leo2_encode_batch_binding* binding = NULL;
+            RequireResult(leo2_encode_batch_binding_create(
+                codec, &items[0], items.size(), &binding),
+                "T4 binding create");
+            RequireResult(leo2_encode_batch_binding_execute(binding),
+                "T4 binding execute");
+            for (size_t item = 0; item < item_count; ++item)
+                for (unsigned parity = 0; parity < r; ++parity)
+                {
+                    Require(recovery[item][parity] == OracleParity(
+                        field, generator, original[item], parity),
+                        "T4 binding parity differs from oracle");
+                    ++checks;
+                }
+
+            if (bytes == 64 && k == 4 && r == 4)
+            {
+                original[1][3][17] ^= 0x93u;
+                RequireResult(leo2_encode_batch_binding_execute(binding),
+                    "T4 changed-source binding execute");
+                for (unsigned parity = 0; parity < r; ++parity)
+                {
+                    Require(recovery[1][parity] == OracleParity(
+                        field, generator, original[1], parity),
+                        "T4 changed-source parity differs from oracle");
+                    ++checks;
+                }
+                leo2_encode_batch_binding_destroy(binding);
+                binding = NULL;
+
+                std::fill(recovery[0][1].begin(),
+                    recovery[0][1].end(), sentinel);
+                output[0][1] = NULL;
+                path = leopard2_internal::CodecEncodePathInfo();
+                Require(leopard2_internal::GetCodecEncodePathInfo(
+                        codec, bytes, r - 1, &path),
+                    "sparse T4 path introspection");
+                Require(!path.high_t4_batch_binding_selected,
+                    "sparse T4 request selected dense batch shortcut");
+                RequireResult(leo2_encode_batch_binding_create(
+                    codec, &items[0], items.size(), &binding),
+                    "sparse T4 binding create");
+                RequireResult(leo2_encode_batch_binding_execute(binding),
+                    "sparse T4 binding execute");
+                Require(recovery[0][1] == Bytes(bytes, sentinel),
+                    "sparse T4 binding modified a null output");
+                ++checks;
+            }
+            leo2_encode_batch_binding_destroy(binding);
+        }
+        leo2_codec_destroy(codec);
+    }
+    return checks;
+}
+
 uint64_t ExerciseT8BatchBinding(
     leo2_context* context,
     size_t bytes)
@@ -1206,6 +1341,8 @@ int main()
         ExerciseTinyFullOutputRegion(
             context, tiny_codec_checks, tiny_encode_checks,
             tiny_direct_checks, tiny_transform_checks);
+        const uint64_t t4_binding_checks =
+            ExerciseT4BatchBindings(context);
         const uint64_t t8_binding_checks =
             ExerciseT8BatchBinding(context, 64) +
             ExerciseT8BatchBinding(context, 128) +
@@ -1328,7 +1465,8 @@ int main()
             "t8_two_block_binding=%s "
             "K=2 R=16 bytes=4096 Q=1 parity=0,15 "
             "tiny_codecs=%llu tiny_encodes=%llu direct=%llu transform=%llu "
-            "t8_binding_checks=%llu t8_partial_binding_checks=%llu "
+            "t4_binding_checks=%llu t8_binding_checks=%llu "
+            "t8_partial_binding_checks=%llu "
             "t8_two_block_binding_checks=%llu "
             "t8_partial_unaligned_checks=%llu "
             "t8_two_block_unaligned_checks=%llu "
@@ -1340,6 +1478,7 @@ int main()
             static_cast<unsigned long long>(tiny_encode_checks),
             static_cast<unsigned long long>(tiny_direct_checks),
             static_cast<unsigned long long>(tiny_transform_checks),
+            static_cast<unsigned long long>(t4_binding_checks),
             static_cast<unsigned long long>(t8_binding_checks),
             static_cast<unsigned long long>(t8_partial_binding_checks),
             static_cast<unsigned long long>(

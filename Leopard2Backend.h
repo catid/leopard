@@ -340,6 +340,26 @@ typedef void (*FF8HighEncodeSmall)(
     const uint8_t* forward_skew,
     uint64_t byte_count);
 
+// Dense item-major batch of complete T=4 legacy-high encodes.  Reusable
+// public validation has already established that every source/destination
+// range is valid and that items are mutually disjoint.  The pure-AVX2
+// implementation prepares the code-dependent multiplication tables once,
+// then applies the register-resident transform to each stripe.
+//
+// data contains item_count * original_count pointers and recovery contains
+// item_count * recovery_count pointers.  Both arrays are item-major; the
+// current specialization supports the complete or one-coordinate-punctured
+// T=4 parity side.
+typedef void (*FF8HighEncodeT4Batch)(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count);
+
 // GF8 AVX2 boundary operation.  Applies four independent nonzero fixed
 // multipliers to the selected input rows and immediately executes the first
 // two inverse LCH layers.  weight_log values are ordinary GF8 logarithms: both
@@ -462,6 +482,9 @@ struct Ops
     // from AVX-512 and GFNI members because their table/code-generation
     // contracts differ from the qualified AVX2 nibble-table implementation.
     FF8LinearCombination4Tiny ff8_linear_combination4_tiny;
+    // Optional pure-AVX2 dense T=4 batch callback.  Other backends retain the
+    // ordinary prevalidated per-item executor.
+    FF8HighEncodeT4Batch ff8_high_encode_t4_batch;
 };
 
 struct X86Features

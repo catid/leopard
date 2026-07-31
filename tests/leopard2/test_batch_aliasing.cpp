@@ -773,6 +773,140 @@ void TestT8TwoBlockBindingAllocation()
     leo2_context_destroy(context);
 }
 
+void TestT4BindingAllocation()
+{
+    static const size_t byte_counts[] = {
+        32, 64, 96, 2016, 2048
+    };
+    static const unsigned shapes[][2] = {
+        { 3, 3 },
+        { 4, 4 },
+        { 7, 3 },
+        { 11, 4 }
+    };
+    static const size_t item_count = 3;
+
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result =
+        leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    RequireResult(context_result, LEO2_SUCCESS,
+        "T4 allocation context create");
+
+    for (size_t shape_index = 0;
+         shape_index < sizeof(shapes) / sizeof(shapes[0]);
+         ++shape_index)
+    {
+        const unsigned k = shapes[shape_index][0];
+        const unsigned r = shapes[shape_index][1];
+        leo2_codec* codec = NULL;
+        RequireResult(leo2_codec_create(context, k, r,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+            LEO2_SUCCESS, "T4 allocation codec create");
+
+        for (size_t byte_index = 0;
+             byte_index < sizeof(byte_counts) / sizeof(byte_counts[0]);
+             ++byte_index)
+        {
+            const size_t bytes = byte_counts[byte_index];
+            leopard2_internal::CodecEncodePathInfo path = {};
+            Require(leopard2_internal::GetCodecEncodePathInfo(
+                    codec, bytes, r, &path),
+                "T4 allocation path introspection");
+            Require(path.high_t4_batch_binding_selected,
+                "T4 allocation selector did not choose batch binding");
+
+            size_t scratch_bytes = 0;
+            RequireResult(leo2_encode_scratch_size(
+                codec, bytes, &scratch_bytes), LEO2_SUCCESS,
+                "T4 allocation scratch query");
+
+            std::vector<Shards> sources(
+                item_count, Shards(k, Bytes(bytes, 0)));
+            std::vector<Shards> expected(
+                item_count, Shards(r, Bytes(bytes, 0)));
+            std::vector<Shards> actual(
+                item_count, Shards(r, Bytes(bytes, 0xa5)));
+            std::vector<std::vector<const void*> > original_pointers(
+                item_count, std::vector<const void*>(k, NULL));
+            std::vector<std::vector<void*> > expected_pointers(
+                item_count, std::vector<void*>(r, NULL));
+            std::vector<std::vector<void*> > actual_pointers(
+                item_count, std::vector<void*>(r, NULL));
+            std::vector<std::unique_ptr<AlignedBuffer> > expected_scratches(
+                item_count);
+            std::vector<std::unique_ptr<AlignedBuffer> > actual_scratches(
+                item_count);
+            std::vector<leo2_encode_batch_item> items(item_count);
+
+            for (size_t item = 0; item < item_count; ++item)
+            {
+                Fixture::Fill(sources[item],
+                    0x74000000u + static_cast<uint32_t>(
+                        shape_index * 0x10000u +
+                        byte_index * 0x100u + item));
+                for (unsigned original = 0; original < k; ++original)
+                    original_pointers[item][original] =
+                        &sources[item][original][0];
+                for (unsigned parity = 0; parity < r; ++parity)
+                {
+                    expected_pointers[item][parity] =
+                        &expected[item][parity][0];
+                    actual_pointers[item][parity] =
+                        &actual[item][parity][0];
+                }
+                expected_scratches[item].reset(
+                    new AlignedBuffer(scratch_bytes));
+                actual_scratches[item].reset(
+                    new AlignedBuffer(scratch_bytes));
+                RequireResult(leo2_encode(codec, bytes,
+                    &original_pointers[item][0],
+                    &expected_pointers[item][0],
+                    expected_scratches[item]->data(),
+                    expected_scratches[item]->size()),
+                    LEO2_SUCCESS, "T4 allocation parity oracle");
+
+                memset(&items[item], 0, sizeof(items[item]));
+                items[item].shard_bytes = bytes;
+                items[item].original = &original_pointers[item][0];
+                items[item].recovery = &actual_pointers[item][0];
+                items[item].scratch = actual_scratches[item]->data();
+                items[item].scratch_bytes =
+                    actual_scratches[item]->size();
+            }
+
+            leo2_encode_batch_binding* binding = NULL;
+            RequireResult(leo2_encode_batch_binding_create(
+                codec, &items[0], items.size(), &binding),
+                LEO2_SUCCESS, "T4 allocation binding create");
+            RequireResult(leo2_encode_batch_binding_execute(binding),
+                LEO2_SUCCESS, "T4 allocation warm execute");
+            Require(actual == expected,
+                "T4 allocation warm parity mismatch");
+
+            BeginAllocationAudit();
+            const leo2_result audited_result =
+                leo2_encode_batch_binding_execute(binding);
+            const uint64_t audited_allocations = EndAllocationAudit();
+            RequireResult(audited_result, LEO2_SUCCESS,
+                "T4 allocation audited execute");
+            Require(audited_allocations == 0,
+                "T4 binding execution allocated memory");
+            Require(actual == expected,
+                "T4 allocation audited parity mismatch");
+            leo2_encode_batch_binding_destroy(binding);
+        }
+        leo2_codec_destroy(codec);
+    }
+    leo2_context_destroy(context);
+}
+
 void TestT8OneBlockBindingAllocation()
 {
     static const size_t byte_counts[] = {
@@ -2169,6 +2303,7 @@ int main()
         }
         Run(1);
         Run(4);
+        TestT4BindingAllocation();
         TestT8OneBlockBindingAllocation();
         TestT8TwoBlockBindingAllocation();
         std::cout << "leopard2 batch aliasing passed: contexts=2 "
@@ -2178,6 +2313,7 @@ int main()
                   << " scalable_batch_sizes=9,64,1024"
                   << " allocation_audit=clean concurrent_scalable_calls=64"
                   << " encode_binding=deep-copy,live-bytes,allocation-free"
+                  << " t4_binding=allocation-free"
                   << " t8_one_block_binding=allocation-free"
                   << " t8_two_block_binding=allocation-free"
                   << std::endl;

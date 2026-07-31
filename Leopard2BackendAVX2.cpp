@@ -2518,31 +2518,24 @@ static LEO2_AVX2_FORCE_INLINE void AVX2FF8T4Forward(
     x3 = _mm256_xor_si256(x3, x2);
 }
 
-template<uint32_t OriginalCount>
-static void AVX2FF8HighEncodeT4Blocks(
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8HighEncodeT4BlocksPrepared(
     const void* const* data,
     void* const* work,
-    const uint8_t* inverse_skew,
-    const uint8_t* forward_skew,
-    uint64_t byte_count)
+    uint64_t byte_count,
+    const AVX2FF8T4Tables& inverse0,
+    const AVX2FF8T4Tables& inverse1,
+    const AVX2FF8T4Tables& inverse2,
+    const AVX2FF8T4Tables& forward)
 {
     static_assert(
         (OriginalCount >= 3 && OriginalCount <= 7) ||
         (OriginalCount >= 9 && OriginalCount <= 11),
         "T=4 fused encoder instantiated outside its measured K set");
+    static_assert(
+        RecoveryCount == 3 || RecoveryCount == 4,
+        "T=4 batch encoder instantiated outside its parity prefix");
     LEO_DEBUG_ASSERT((byte_count & 31U) == 0);
-    const AVX2FF8T4Tables inverse0 = AVX2FF8PrepareT4Tables(
-        inverse_skew[1], inverse_skew[3], inverse_skew[2]);
-    const AVX2FF8T4Tables forward = AVX2FF8PrepareT4Tables(
-        forward_skew[1], forward_skew[3], forward_skew[2]);
-    AVX2FF8T4Tables inverse1;
-    if (OriginalCount > 4)
-        inverse1 = AVX2FF8PrepareT4Tables(
-            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
-    AVX2FF8T4Tables inverse2;
-    if (OriginalCount > 8)
-        inverse2 = AVX2FF8PrepareT4Tables(
-            inverse_skew[9], inverse_skew[11], inverse_skew[10]);
 
     const uint8_t* input[OriginalCount];
     for (uint32_t i = 0; i < OriginalCount; ++i)
@@ -2550,7 +2543,8 @@ static void AVX2FF8HighEncodeT4Blocks(
     uint8_t* output0 = static_cast<uint8_t*>(work[0]);
     uint8_t* output1 = static_cast<uint8_t*>(work[1]);
     uint8_t* output2 = static_cast<uint8_t*>(work[2]);
-    uint8_t* output3 = static_cast<uint8_t*>(work[3]);
+    uint8_t* output3 = RecoveryCount == 4
+        ? static_cast<uint8_t*>(work[3]) : NULL;
 
     // Keep the transformed accumulator live across all source blocks and the
     // final forward transform.  This removes both the temporary ragged block
@@ -2624,10 +2618,154 @@ static void AVX2FF8HighEncodeT4Blocks(
             reinterpret_cast<__m256i*>(output1 + offset), x1);
         _mm256_storeu_si256(
             reinterpret_cast<__m256i*>(output2 + offset), x2);
-        _mm256_storeu_si256(
-            reinterpret_cast<__m256i*>(output3 + offset), x3);
+        if (RecoveryCount == 4)
+        {
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output3 + offset), x3);
+        }
     }
 }
+
+template<uint32_t OriginalCount>
+static void AVX2FF8HighEncodeT4Blocks(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    const AVX2FF8T4Tables inverse0 = AVX2FF8PrepareT4Tables(
+        inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+    const AVX2FF8T4Tables forward = AVX2FF8PrepareT4Tables(
+        forward_skew[1], forward_skew[3], forward_skew[2]);
+    AVX2FF8T4Tables inverse1 = {};
+    if (OriginalCount > 4)
+        inverse1 = AVX2FF8PrepareT4Tables(
+            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+    AVX2FF8T4Tables inverse2 = {};
+    if (OriginalCount > 8)
+        inverse2 = AVX2FF8PrepareT4Tables(
+            inverse_skew[9], inverse_skew[11], inverse_skew[10]);
+    AVX2FF8HighEncodeT4BlocksPrepared<OriginalCount, 4>(
+        data, work, byte_count, inverse0, inverse1, inverse2, forward);
+}
+
+#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+static void AVX2FF8HighEncodeT4BatchBlocks(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    const AVX2FF8T4Tables inverse0 = AVX2FF8PrepareT4Tables(
+        inverse_skew[1], inverse_skew[3], inverse_skew[2]);
+    const AVX2FF8T4Tables forward = AVX2FF8PrepareT4Tables(
+        forward_skew[1], forward_skew[3], forward_skew[2]);
+    AVX2FF8T4Tables inverse1 = {};
+    if (OriginalCount > 4)
+        inverse1 = AVX2FF8PrepareT4Tables(
+            inverse_skew[5], inverse_skew[7], inverse_skew[6]);
+    AVX2FF8T4Tables inverse2 = {};
+    if (OriginalCount > 8)
+        inverse2 = AVX2FF8PrepareT4Tables(
+            inverse_skew[9], inverse_skew[11], inverse_skew[10]);
+
+    for (uint32_t item = 0; item < item_count; ++item)
+    {
+        AVX2FF8HighEncodeT4BlocksPrepared<
+            OriginalCount, RecoveryCount>(
+            data + static_cast<size_t>(item) * OriginalCount,
+            recovery + static_cast<size_t>(item) * RecoveryCount,
+            byte_count, inverse0, inverse1, inverse2, forward);
+    }
+}
+
+template<uint32_t RecoveryCount>
+static void AVX2FF8HighEncodeT4BatchDispatch(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    uint32_t original_count,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    switch (original_count)
+    {
+    case 3: AVX2FF8HighEncodeT4BatchBlocks<3, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 4: AVX2FF8HighEncodeT4BatchBlocks<4, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 5: AVX2FF8HighEncodeT4BatchBlocks<5, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 6: AVX2FF8HighEncodeT4BatchBlocks<6, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 7: AVX2FF8HighEncodeT4BatchBlocks<7, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 9: AVX2FF8HighEncodeT4BatchBlocks<9, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 10: AVX2FF8HighEncodeT4BatchBlocks<10, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    case 11: AVX2FF8HighEncodeT4BatchBlocks<11, RecoveryCount>(
+        data, recovery, item_count,
+        inverse_skew, forward_skew, byte_count);
+        return;
+    default:
+        LEO_DEBUG_BREAK;
+        return;
+    }
+}
+
+static void AVX2FF8HighEncodeT4Batch(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(data != NULL);
+    LEO_DEBUG_ASSERT(recovery != NULL);
+    LEO_DEBUG_ASSERT(item_count != 0);
+    LEO_DEBUG_ASSERT(recovery_count == 3 || recovery_count == 4);
+    LEO_DEBUG_ASSERT(
+        byte_count >= 32 && byte_count <= 2U * 1024U &&
+        (byte_count & 31U) == 0);
+    if (!data || !recovery || item_count == 0 ||
+        (recovery_count != 3 && recovery_count != 4) ||
+        byte_count < 32 || byte_count > 2U * 1024U ||
+        (byte_count & 31U) != 0)
+        return;
+
+    if (recovery_count == 3)
+        AVX2FF8HighEncodeT4BatchDispatch<3>(
+            data, recovery, item_count, original_count,
+            inverse_skew, forward_skew, byte_count);
+    else
+        AVX2FF8HighEncodeT4BatchDispatch<4>(
+            data, recovery, item_count, original_count,
+            inverse_skew, forward_skew, byte_count);
+}
+#endif
 
 static void AVX2FF8HighEncodeSmall(
     const void* const* data,
@@ -6747,6 +6885,12 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT && \
     !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8LinearCombination4Tiny
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8HighEncodeT4Batch
 #else
     , NULL
 #endif

@@ -2604,7 +2604,8 @@ void ReedSolomonEncode(
     unsigned m,
     const void* const* data,
     void** work,
-    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans)
+    const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    bool allow_sub_2k_register_t4)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
@@ -2614,16 +2615,23 @@ void ReedSolomonEncode(
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     // Exact-main AVX2 crossover measurements qualify every valid T=2 shape
-    // from 2 KiB.  For T=4, the former sub-threshold K=3/4/7/8 cells use the
-    // mature inverse accumulation followed by a single fused final forward
-    // pass.  Above their old thresholds K=3..7 and K=9..11 retain the
-    // register-resident whole-transform kernels, while K=8 and K>=12 retain
-    // the mature direct-input callback.  Keep the boundaries explicit:
-    // buffer_bytes is the current execution pass, so a padded 64-byte tail
+    // from 2 KiB.  For T=4, complete sub-2-KiB AVX2 vectors can use the
+    // existing register-resident K=3..7/K=9..11 kernels without staging the
+    // four-row accumulator.  Larger calls retain the established T=4
+    // thresholds and K=8/K>=12 direct-input callback.  Keep the boundaries
+    // explicit: buffer_bytes is the current execution pass, so a padded tail
     // cannot inherit its aligned prefix's decision.
+    const bool sub_2k_register_t4 =
+        allow_sub_2k_register_t4 &&
+        ops.kind == LEO2_BACKEND_AVX2 &&
+        m == 4 && buffer_bytes >= 32U && buffer_bytes < 2U * 1024U &&
+        (buffer_bytes & 31U) == 0 &&
+        ((original_count >= 3 && original_count <= 7) ||
+         (original_count >= 9 && original_count <= 11));
     const bool small_transform_shape =
         m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
-        m == 4 && original_count >= 3 && buffer_bytes >= 2U * 1024U;
+        m == 4 && original_count >= 3 &&
+            (buffer_bytes >= 2U * 1024U || sub_2k_register_t4);
     if ((ops.kind == LEO2_BACKEND_AVX2 ||
          ops.kind == LEO2_BACKEND_GFNI) &&
         ops.ff8_high_encode_small && small_transform_shape &&
@@ -2632,15 +2640,16 @@ void ReedSolomonEncode(
     {
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighSmallTransformCalls.fetch_add(1, std::memory_order_relaxed);
-        const bool fused_t4 = m == 4 &&
-            (((original_count == 5 || original_count == 6 ||
+        const bool fused_t4 = sub_2k_register_t4 ||
+            (m == 4 &&
+             (((original_count == 5 || original_count == 6 ||
                 original_count >= 9) && buffer_bytes >= 2U * 1024U) ||
              ((original_count == 3 || original_count == 7) &&
                 buffer_bytes >= 4U * 1024U) ||
              (original_count == 4 && buffer_bytes >= 8U * 1024U)) &&
             ((original_count >= 3 && original_count <= 7) ||
              (original_count >= 9 && original_count <= 11)) &&
-            (buffer_bytes & 31U) == 0;
+            (buffer_bytes & 31U) == 0);
         TestHighInputCopyShards.fetch_add(
             fused_t4 || original_count <= m ||
                     (m == 4 && original_count % m == 3)
@@ -2932,6 +2941,26 @@ void ReedSolomonEncodeK5R5T8(
     ops.ff8_high_encode_one_block(
         data, work, 8U | backend::kFF8HighEncodeK5R5Partial,
         FFTSkewStorage + 8, FFTSkewStorage, byte_count);
+}
+
+void ReedSolomonEncodeT4Batch(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* recovery,
+    uint32_t item_count,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_high_encode_t4_batch != NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighSmallTransformCalls.fetch_add(
+        item_count, std::memory_order_relaxed);
+#endif
+    ops.ff8_high_encode_t4_batch(
+        data, recovery, item_count, original_count, recovery_count,
+        FFTSkewStorage + 4, FFTSkewStorage, byte_count);
 }
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING

@@ -173,6 +173,7 @@ struct CodecEncodePathInfo
 {
     size_t direct_generator_rows;
     bool auto_direct_selected;
+    bool high_t4_batch_binding_selected;
     bool high_t8_vector_selected;
     bool high_t8_partial_binding_selected;
     bool high_t8_two_block_binding_selected;

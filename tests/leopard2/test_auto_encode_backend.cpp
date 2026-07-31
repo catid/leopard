@@ -1427,8 +1427,13 @@ void test_small_high_encode(
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
         (void)encode(codec.get(), original, test_case.r, false);
+        const bool sub_2k_t4 =
+            test_case.r >= 3 && test_case.r <= 4 &&
+            ((test_case.k >= 3 && test_case.k <= 7) ||
+             (test_case.k >= 9 && test_case.k <= 11)) &&
+            (test_case.bytes / 64U) * 64U >= 32U;
         require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                    small_transform_calls == 0,
+                    small_transform_calls == (sub_2k_t4 ? 1U : 0U),
             "T=2/T=4 coarse-kernel policy escaped its shape bounds");
     }
 }

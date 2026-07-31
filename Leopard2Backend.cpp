@@ -1540,6 +1540,124 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
     return true;
 }
 
+static bool TestFF8HighEncodeT4Batch(const Ops& ops)
+{
+    if (!ops.ff8_high_encode_t4_batch)
+        return true;
+    if (!ops.ff8_high_encode_small)
+        return false;
+
+    static const unsigned kItems = 2;
+    static const unsigned kMaximumOriginals = 11;
+    static const unsigned kMaximumRecoveries = 4;
+    static const unsigned kMaximumWork = 8;
+    static const uint64_t kBytes = 64;
+    static const unsigned kCounts[] = { 3, 4, 5, 6, 7, 9, 10, 11 };
+    uint8_t input[kItems][kMaximumOriginals][68];
+    uint8_t input_before[kItems][kMaximumOriginals][68];
+    uint8_t actual[kItems][kMaximumRecoveries][68];
+    uint8_t expected[kItems][kMaximumWork][68];
+    const void* input_pointers[kItems * kMaximumOriginals];
+    void* actual_pointers[kItems * kMaximumRecoveries];
+    uint8_t inverse_skew[16];
+    uint8_t forward_skew[4];
+
+    for (unsigned i = 0; i < sizeof(inverse_skew); ++i)
+        inverse_skew[i] = i % 5U == 1U
+            ? static_cast<uint8_t>(255)
+            : static_cast<uint8_t>((i * 37U + 11U) % 255U);
+    for (unsigned i = 0; i < sizeof(forward_skew); ++i)
+        forward_skew[i] = i == 3
+            ? static_cast<uint8_t>(255)
+            : static_cast<uint8_t>((i * 53U + 19U) % 255U);
+
+    for (unsigned count_i = 0;
+         count_i < sizeof(kCounts) / sizeof(kCounts[0]); ++count_i)
+    {
+        const unsigned original_count = kCounts[count_i];
+        for (unsigned recovery_count = 3;
+             recovery_count <= 4; ++recovery_count)
+        {
+            for (unsigned item = 0; item < kItems; ++item)
+            {
+                for (unsigned lane = 0;
+                     lane < kMaximumOriginals; ++lane)
+                {
+                    for (size_t byte = 0;
+                         byte < sizeof(input[item][lane]); ++byte)
+                    {
+                        input[item][lane][byte] =
+                            input_before[item][lane][byte] =
+                                static_cast<uint8_t>(
+                                    item * 61U + lane * 41U + byte * 29U +
+                                    count_i * 17U + recovery_count * 7U);
+                    }
+                    if (lane < original_count)
+                    {
+                        input_pointers[
+                            item * original_count + lane] =
+                                input[item][lane] + 1;
+                    }
+                }
+                void* expected_pointers[kMaximumWork];
+                for (unsigned lane = 0; lane < kMaximumWork; ++lane)
+                {
+                    std::memset(expected[item][lane],
+                        static_cast<int>(
+                            0x35U + item * 11U + lane * 13U),
+                        sizeof(expected[item][lane]));
+                    expected_pointers[lane] =
+                        expected[item][lane] + 1;
+                }
+                for (unsigned lane = 0;
+                     lane < kMaximumRecoveries; ++lane)
+                {
+                    std::memset(actual[item][lane],
+                        static_cast<int>(
+                            0xa5U + item * 7U + lane * 19U),
+                        sizeof(actual[item][lane]));
+                    if (lane < recovery_count)
+                    {
+                        actual_pointers[
+                            item * recovery_count + lane] =
+                                actual[item][lane] + 1;
+                    }
+                }
+                ops.ff8_high_encode_small(
+                    input_pointers + item * original_count,
+                    original_count, expected_pointers, 4,
+                    inverse_skew, forward_skew, kBytes);
+            }
+
+            ops.ff8_high_encode_t4_batch(
+                input_pointers, actual_pointers, kItems,
+                original_count, recovery_count,
+                inverse_skew, forward_skew, kBytes);
+            if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                return false;
+            for (unsigned item = 0; item < kItems; ++item)
+            {
+                for (unsigned lane = 0;
+                     lane < recovery_count; ++lane)
+                {
+                    if (std::memcmp(
+                            actual[item][lane] + 1,
+                            expected[item][lane] + 1,
+                            static_cast<size_t>(kBytes)) != 0 ||
+                        actual[item][lane][0] !=
+                            static_cast<uint8_t>(
+                                0xa5U + item * 7U + lane * 19U) ||
+                        actual[item][lane][kBytes + 1] !=
+                            static_cast<uint8_t>(
+                                0xa5U + item * 7U + lane * 19U))
+                        return false;
+                }
+            }
+        }
+    }
+    return true;
+}
+
 #endif // LEO_HAS_FF8
 
 #ifdef LEO_HAS_FF16
@@ -2503,8 +2621,13 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.xor_memory_sources_fused_final != NULL))
         return false;
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.ff8_high_encode_t4_batch != NULL))
+        return false;
 #else
     if (ops.xor_memory_sources_fused_final)
+        return false;
+    if (ops.ff8_high_encode_t4_batch)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
@@ -2549,7 +2672,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8ButterflyRanges(ops) ||
         !TestFF8HighEncodeOneBlock(ops) ||
         !TestFF8HighEncodeTwoBlocksT8(ops) ||
-        !TestFF8HighEncodeSmall(ops))
+        !TestFF8HighEncodeSmall(ops) ||
+        !TestFF8HighEncodeT4Batch(ops))
         return false;
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     const bool four_tiny_backend = ops.kind == LEO2_BACKEND_AVX2;
