@@ -9749,7 +9749,7 @@ uint64_t HighT4BatchMaximumBytes(
     {
     case 3: return punctured_r3 ? 16U * 1024U : 2U * 1024U;
     case 4: return punctured_r3 ? 12U * 1024U : 6U * 1024U;
-    case 5: return punctured_r3 ? 8U * 1024U : 4U * 1024U;
+    case 5: return punctured_r3 ? 6U * 1024U : 4U * 1024U;
     case 6: return punctured_r3 ? 16U * 1024U : 8U * 1024U;
     case 7: return punctured_r3 ? 16U * 1024U : 4U * 1024U;
     case 9: return punctured_r3 ? 8U * 1024U : 6U * 1024U;

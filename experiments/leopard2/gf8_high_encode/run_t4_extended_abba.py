@@ -37,7 +37,7 @@ MAXIMUM_BYTES = {
     (3, 4): 2 * 1024,
     (4, 3): 12 * 1024,
     (4, 4): 6 * 1024,
-    (5, 3): 8 * 1024,
+    (5, 3): 6 * 1024,
     (5, 4): 4 * 1024,
     (6, 3): 16 * 1024,
     (6, 4): 8 * 1024,
@@ -136,8 +136,8 @@ def smoke_cells() -> list[dict[str, Any]]:
             "smoke-k4-r4-b6144-q1",
             4, 4, 6144, 1, "boundary_neighbor"),
         make_cell(
-            "smoke-k5-r3-b8192-q64",
-            5, 3, 8192, 64, "target"),
+            "smoke-k5-r3-b6144-q64",
+            5, 3, 6144, 64, "target"),
         make_cell(
             "smoke-k11-r4-b4096-q8",
             11, 4, 4096, 8, "boundary_neighbor"),
