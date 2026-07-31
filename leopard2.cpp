@@ -228,13 +228,13 @@
 #endif
 
 /*
-    Default-off, text-layout-neutral experiment for reusing the existing T=8
-    prevalidated binding on sub-vector byte counts.  Both values keep the
-    marker in initialized data; candidate and control therefore execute
-    byte-identical instruction sections and differ only in setup-time routing.
+    Qualified, text-layout-neutral selector for reusing the T=8 prevalidated
+    binding on sub-vector byte counts.  The default is enabled.  Defining zero
+    retains a diagnostic control whose executable instruction sections are
+    byte-identical and which differs only in setup-time routing.
 */
 #ifndef LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING
-#define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING 0
+#define LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING 1
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING < 0 || \
     LEO2_EXPERIMENT_HIGH_T8_TINY_BINDING > 1

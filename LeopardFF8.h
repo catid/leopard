@@ -214,11 +214,11 @@ void ReedSolomonEncodeTwoBlocksT8(
     uint64_t byte_count);
 
 /*
-    Default-off tiny-binding experiment.  The pure-AVX2 callback fuses two
-    shifted T=8 inverse transforms, their coefficient XOR, and one final
-    transform while staging only a bounded partial vector.  Linearity preserves
-    the legacy codeword while avoiding the regular encoder's per-item geometry
-    for byte counts below 64.
+    Qualified tiny-binding path.  The pure-AVX2 callback fuses two shifted T=8
+    inverse transforms, their coefficient XOR, and one final transform while
+    staging only a bounded partial vector.  Linearity preserves the legacy
+    codeword while avoiding the regular encoder's per-item geometry for byte
+    counts below 64.
 */
 void ReedSolomonEncodeTwoBlocksT8Tiny(
     const backend::Ops& ops,
