@@ -169,11 +169,18 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_BUILD_FUZZERS": frozenset(("BOOL",)),
     "LEO2_BUILD_TESTS": frozenset(("BOOL",)),
     "LEO2_ENABLE_CUDA": frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
         frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
+        frozenset(("BOOL",)),
     "LEO2_FLAG_FALIGN_FUNCTIONS_64": frozenset(("INTERNAL",)),
     "LEO2_FLAG_MAVX2": frozenset(("INTERNAL",)),
     "LEO2_FLAG_MGFNI": frozenset(("INTERNAL",)),
@@ -212,8 +219,10 @@ PRODUCTION_BUILD_CLOSURE_SCHEMA = \
     "leopard2-production-build-closure/v2"
 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
-BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3 = \
     "leopard2-benchmark-build-configuration/v3"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v4"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
     "leopard2-reproducible-build-proof/v2"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA = \
@@ -4546,6 +4555,19 @@ def _validate_compile_flags(
 
     expected_definitions: set[str] = {"-DNDEBUG"}
     if source_root is not None:
+        current_configuration = (
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA)
+        if current_configuration:
+            expected_definitions.update((
+                "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+                "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+            ))
+            if name in {
+                    "leopard2.cpp", "Leopard2Backend.cpp",
+                    "Leopard2BackendAVX2.cpp"}:
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         available_names = {path.name for path in library_sources}
         enhanced_backend = name.startswith((
             "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
@@ -4555,6 +4577,12 @@ def _validate_compile_flags(
                 "-DLEO2_DISABLE_AVX2_CODEGEN=1",
                 "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
             ))
+            if current_configuration:
+                expected_definitions.update((
+                    "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+                    "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+                    "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+                ))
             for backend_name, definition in (
                 ("Leopard2BackendSSSE3.cpp",
                  "-DLEO2_HAVE_SSSE3_BACKEND=1"),
@@ -4578,6 +4606,9 @@ def _validate_compile_flags(
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_HAVE_GFNI_BACKEND=1",
             ))
+        elif name.startswith("Leopard2BackendAVX2"):
+            expected_definitions.add(
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
         elif (
                 benchmark_source is True or
                 (benchmark_source is None and source == (
@@ -4781,9 +4812,15 @@ def _validate_candidate_required_cache(
         "LEO2_BUILD_BENCHMARKS": "ON",
         "LEO2_BUILD_FUZZERS": "OFF",
         "LEO2_ENABLE_CUDA": "OFF",
+        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+        "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+        "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+        "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
         "LEOPARD_ENABLE_GF8": "ON",
         "LEOPARD_ENABLE_GF16": "ON",
     }
@@ -4827,24 +4864,53 @@ def _reproducible_replay_contract(
             "reproducible-build closure configuration digest is malformed")
     closure_schema = candidate.get("schema")
     if closure_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA:
-        require(
-            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
-                BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
-            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-            "current reproducible-build closure configuration contract "
-            "differs")
-        return {
-            "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
-            "configuration_schema": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
-            "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
-            "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
-            "invocation_schema": REPLAY_INVOCATION_SCHEMA,
-        }
+        configuration_schema = cache.get(
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA")
+        if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+            require(
+                cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") ==
+                    "ON" and
+                cache.get(
+                    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") ==
+                    "ON" and
+                cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON",
+                "current reproducible-build closure configuration contract "
+                "differs")
+            return {
+                "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+                "configuration_schema":
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+                "invocation_schema": REPLAY_INVOCATION_SCHEMA,
+            }
+        if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3:
+            require(
+                cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") ==
+                    "OFF" and
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT" not in
+                    cache and
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE" not in cache,
+                "v3 reproducible-build closure configuration contract "
+                "differs")
+            return {
+                "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+                "configuration_schema":
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
+                "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+                "invocation_schema": REPLAY_INVOCATION_SCHEMA,
+            }
+        raise BuildProvenanceError(
+            "current reproducible-build closure configuration schema is "
+            "unsupported")
     if closure_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA_V1:
         require(
             cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2 and
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache,
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache and
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT" not in cache and
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE" not in cache,
             "historical reproducible-build closure configuration contract "
             "differs")
         return {
@@ -5280,10 +5346,22 @@ def candidate_build_provenance(
             "LEO2_BENCHMARK_GIT_EXECUTABLE": benchmark_git_value,
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
                 cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR":
+                cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"),
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE":
+                cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"),
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
                 cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"),
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
                 cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING"),
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING"),
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING"),
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
+                cache.get("LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT"),
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": small_direct_mode,
             "LEOPARD_ENABLE_GF16": cache.get("LEOPARD_ENABLE_GF16"),
             "LEO2_FLAG_FALIGN_FUNCTIONS_64":
@@ -5627,8 +5705,6 @@ def _reproducible_configure_argv(
         "LEO2_ENABLE_CUDA": "OFF",
         "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN":
             cache.get("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN"),
-        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
-            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"),
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE":
             cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE":
@@ -5646,6 +5722,28 @@ def _reproducible_configure_argv(
             cache.get("LEO2_LOCATOR_GIT_EXECUTABLE"),
         "CMAKE_RANLIB": cache.get("CMAKE_RANLIB"),
     }
+    configuration_schema = cache.get(
+        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA")
+    if configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
+        cmake_values["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = \
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
+    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+        cmake_values.update({
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR":
+                cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR"),
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE":
+                cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"),
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING"),
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING"),
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING":
+                cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING"),
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
+                cache.get("LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT"),
+        })
     require(all(value is not None for value in cmake_values.values()),
             "candidate build lacks a CMake value needed for clean rebuild")
     for name, value in cmake_values.items():

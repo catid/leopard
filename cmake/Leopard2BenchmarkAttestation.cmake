@@ -54,6 +54,8 @@ function(leopard2_enable_benchmark_source_attestation target)
             LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
             LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
             LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
+            LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
+            LEO2_EXPERIMENT_CAUCHY_LOG_REUSE
             LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE)
         set(variable_value "${${variable}}")
         if(variable STREQUAL "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE")
@@ -93,7 +95,7 @@ function(leopard2_enable_benchmark_source_attestation target)
         LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
         "${build_configuration_sha256}")
     set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA
-        "leopard2-benchmark-build-configuration/v3"
+        "leopard2-benchmark-build-configuration/v4"
         CACHE INTERNAL
         "Leopard2 benchmark effective-configuration schema"
         FORCE)

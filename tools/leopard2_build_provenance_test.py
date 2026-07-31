@@ -2286,9 +2286,17 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BENCHMARK_GIT_EXECUTABLE": str(tool_path("git")),
             "LEO2_BUILD_ALLK_DIAGNOSTIC": "OFF",
             "LEO2_BUILD_TESTS": "ON",
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             "LEOPARD_ENABLE_GF16": "ON",
             "LEO2_FLAG_FALIGN_FUNCTIONS_64": "1",
@@ -2319,8 +2327,48 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "-DLEO2_LOCATOR_GIT_EXECUTABLE:FILEPATH=" +
                 str(tool_path("git")), configure)
             self.assertIn(
-                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=OFF",
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=ON",
                 configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT:BOOL=ON",
+                configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL=ON",
+                configure)
+            current_only = {
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+                "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING",
+                "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
+                "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+            }
+            v3_cache = dict(cache)
+            v3_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3
+            v3_cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+            for selector in current_only:
+                v3_cache.pop(selector)
+            v3_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v3-build", v3_cache)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=OFF",
+                v3_configure)
+            self.assertFalse(any(
+                any(argument.startswith(f"-D{selector}:")
+                    for selector in current_only)
+                for argument in v3_configure))
+
+            v2_cache = dict(v3_cache)
+            v2_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2
+            v2_cache.pop("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
+            v2_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v2-build", v2_cache)
+            self.assertFalse(any(
+                argument.startswith(
+                    "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:")
+                for argument in v2_configure))
             configure_environment = dict(provenance.GIT_ENVIRONMENT)
             configure_environment.update({
                 "CC": str(c_compiler), "CXX": str(cxx_compiler)})
@@ -3269,7 +3317,9 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                         provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
                     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                         "a" * 64,
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                 },
                 "c_compiler": identity,
                 "compiler": identity,
@@ -3341,7 +3391,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
 
 
 class ExactCommandValidationTests(unittest.TestCase):
-    def test_general_one_loss_cache_is_exactly_off(self) -> None:
+    def test_current_production_selector_cache_is_exact(self) -> None:
         cache = {
             "CMAKE_BUILD_TYPE": "Release",
             "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
@@ -3353,33 +3403,49 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_BUILD_BENCHMARKS": "ON",
             "LEO2_BUILD_FUZZERS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEOPARD_ENABLE_GF8": "ON",
             "LEOPARD_ENABLE_GF16": "ON",
         }
         validated = provenance._validate_candidate_required_cache(cache)
-        self.assertEqual(
-            validated["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
-        for value in ("ON", "TRUE", "", None, False):
-            with self.subTest(value=value):
-                changed = dict(cache)
-                if value is None:
-                    del changed[
-                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"]
-                else:
-                    changed[
-                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = value
-                with self.assertRaisesRegex(
+        selectors = {
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+        }
+        for selector, expected in selectors.items():
+            self.assertEqual(validated[selector], expected)
+            for value in (
+                    "OFF" if expected == "ON" else "ON",
+                    "TRUE", "", None, False):
+                with self.subTest(selector=selector, value=value):
+                    changed = dict(cache)
+                    if value is None:
+                        del changed[selector]
+                    else:
+                        changed[selector] = value
+                    with self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            selector.removeprefix("LEO2_")):
+                        provenance._validate_candidate_required_cache(changed)
+            with self.subTest(selector_type=selector), \
+                    self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "GENERAL_ONE_LOSS_DIRECT"):
-                    provenance._validate_candidate_required_cache(changed)
-        with self.assertRaisesRegex(
-                provenance.BuildProvenanceError,
-                "expected one of \\['BOOL'\\]"):
-            provenance.parse_cmake_cache(
-                b"LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:STRING=OFF\n")
+                        "expected one of \\['BOOL'\\]"):
+                provenance.parse_cmake_cache(
+                    f"{selector}:STRING={expected}\n".encode("ascii"))
 
     def test_replay_contract_cannot_downgrade_current_closures(self) -> None:
         digest = "a" * 64
@@ -3388,6 +3454,17 @@ class ExactCommandValidationTests(unittest.TestCase):
             "validated_cache": {
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            },
+        }
+        v3 = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
             },
@@ -3406,6 +3483,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "invocation_schema"],
             provenance.REPLAY_INVOCATION_SCHEMA)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v3, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 historical,
@@ -3432,21 +3515,43 @@ class ExactCommandValidationTests(unittest.TestCase):
                     provenance._require_reproducible_replay_artifact_contract(
                         candidate, proof, recipe)
 
-        missing_selector = copy.deepcopy(current)
-        del missing_selector["validated_cache"][
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"]
-        with self.assertRaisesRegex(
-                provenance.BuildProvenanceError,
-                "current reproducible-build closure configuration"):
-            provenance._reproducible_replay_contract(missing_selector)
-        historical_with_selector = copy.deepcopy(historical)
-        historical_with_selector["validated_cache"][
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
-        with self.assertRaisesRegex(
-                provenance.BuildProvenanceError,
-                "historical reproducible-build closure configuration"):
-            provenance._reproducible_replay_contract(
-                historical_with_selector)
+        for selector in (
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"):
+            with self.subTest(current_missing=selector):
+                missing_selector = copy.deepcopy(current)
+                del missing_selector["validated_cache"][selector]
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "current reproducible-build closure configuration"):
+                    provenance._reproducible_replay_contract(
+                        missing_selector)
+
+        for selector in (
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"):
+            with self.subTest(v3_extra=selector):
+                v3_with_selector = copy.deepcopy(v3)
+                v3_with_selector["validated_cache"][selector] = "ON"
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "v3 reproducible-build closure configuration"):
+                    provenance._reproducible_replay_contract(
+                        v3_with_selector)
+
+        for selector in (
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"):
+            with self.subTest(historical_extra=selector):
+                historical_with_selector = copy.deepcopy(historical)
+                historical_with_selector["validated_cache"][selector] = "OFF"
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "historical reproducible-build closure configuration"):
+                    provenance._reproducible_replay_contract(
+                        historical_with_selector)
 
     def test_benchmark_compile_digest_is_bound_to_retained_cache(self) -> None:
         source = (
@@ -3463,6 +3568,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "-Wall", "-Wextra", "-fopenmp", "-fopenmp",
                 "-O3", "-DNDEBUG", "-O3", "-std=gnu++11",
                 f"-I{SOURCE_ROOT}",
+                "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+                "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
                 '-DLEO2_BENCHMARK_BUILD_TYPE=\"Release\"',
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER=" +
@@ -3476,6 +3583,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                     tokens, source, source_root=SOURCE_ROOT,
                     build_root=build,
                     cache={
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
                         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                             digest,
                     },
@@ -3483,6 +3592,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                     lexical_build_output=True),
                 "portable-core")
             changed_cache = {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "b" * 64,
             }
             with self.assertRaisesRegex(
@@ -3661,6 +3772,11 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
+            "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
             f"-I{SOURCE_ROOT}",
             "-Wall", "-Wextra", "-fopenmp",
             "-O3", "-DNDEBUG", "-O3", "-std=gnu++11", "-fopenmp",
@@ -3671,7 +3787,9 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ff8_tokens, ff8_source, source_root=SOURCE_ROOT,
                 cache={
                     "LEO2_BACKEND_VARIANT": "auto",
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                        provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
                 },
                 library_sources=backend_sources),
@@ -3687,7 +3805,9 @@ class ExactCommandValidationTests(unittest.TestCase):
                 source_root=SOURCE_ROOT,
                 cache={
                     "LEO2_BACKEND_VARIANT": "auto",
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+                    "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                        provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
                 },
                 library_sources=backend_sources)

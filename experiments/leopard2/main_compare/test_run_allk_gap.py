@@ -189,14 +189,29 @@ class ProductionBuildFixture:
         enhanced_backend = source_name.startswith(
             ("Leopard2BackendSSSE3", "Leopard2BackendAVX2",
              "Leopard2BackendGFNI"))
-        definitions = ["-DNDEBUG"]
+        definitions = [
+            "-DNDEBUG",
+            "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+            "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        ]
+        if source_name in {
+                "leopard2.cpp", "Leopard2Backend.cpp",
+                "Leopard2BackendAVX2.cpp"}:
+            definitions.append(
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         if relative in self.library_source_names and not enhanced_backend:
             definitions.extend((
                 "-DLEO2_DISABLE_AVX2_CODEGEN=1",
                 "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_HAVE_SSSE3_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+                "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
             ))
+        elif source_name.startswith("Leopard2BackendAVX2"):
+            definitions.append(
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
         elif relative == "bench/leopard2/benchmark.cpp":
             generated_header = (
                 self.build /
@@ -253,7 +268,13 @@ class ProductionBuildFixture:
                 "0" * 64,
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL": "OFF",
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR:BOOL": "OFF",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL": "ON",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING:BOOL": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING:BOOL": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING:BOOL": "ON",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT:BOOL": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING": "0",
             "LEOPARD_ENABLE_GF8:BOOL": "ON",
             "LEOPARD_ENABLE_GF16:BOOL": "ON",
@@ -304,10 +325,14 @@ class AllKIdentityTests(unittest.TestCase):
     def run_contract(
             schema: str = runner.RUN_CONTRACT_SCHEMA) -> dict:
         expected = runner.ALL_K_EVIDENCE_CONTRACTS[schema]
-        historical = schema == runner.RUN_CONTRACT_SCHEMA_V4
-        cache_keys = (
-            runner.ALL_K_BUILD_CACHE_KEYS_V2 if historical else
-            runner.ALL_K_BUILD_CACHE_KEYS)
+        cache_keys = {
+            runner.RUN_CONTRACT_SCHEMA_V4:
+                runner.ALL_K_BUILD_CACHE_KEYS_V2,
+            runner.RUN_CONTRACT_SCHEMA_V5:
+                runner.ALL_K_BUILD_CACHE_KEYS_V3,
+            runner.RUN_CONTRACT_SCHEMA:
+                runner.ALL_K_BUILD_CACHE_KEYS,
+        }[schema]
         cache = {key: "fixture" for key in cache_keys}
         cache.update({
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
@@ -318,8 +343,18 @@ class AllKIdentityTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
         })
-        if not historical:
+        if schema == runner.RUN_CONTRACT_SCHEMA_V5:
             cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
+        elif schema == runner.RUN_CONTRACT_SCHEMA:
+            cache.update({
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+                "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+                "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            })
         return {
             "schema": schema,
             "main_commit": "a" * 40,
@@ -1209,28 +1244,34 @@ class AllKIdentityTests(unittest.TestCase):
         validated_proof = proof_validator.start()
         self.addCleanup(proof_validator.stop)
         current = self.run_contract()
-        historical = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
+        v5 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V5)
+        v4 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
         self.assertIs(
             runner.validate_run_contract_evidence(current), current)
         self.assertIs(
-            runner.validate_run_contract_evidence(historical), historical)
+            runner.validate_run_contract_evidence(v5), v5)
+        self.assertIs(
+            runner.validate_run_contract_evidence(v4), v4)
 
         # Each body remains coherent under its own generation.  Relabeling only
         # the outer contract cannot upgrade or downgrade its nested closure.
-        relabeled = copy.deepcopy(historical)
-        relabeled["schema"] = runner.RUN_CONTRACT_SCHEMA
-        expect_rejected(
-            self,
-            lambda: runner.validate_run_contract_evidence(relabeled),
-            "schema tuple")
-        downgraded = copy.deepcopy(current)
-        downgraded["schema"] = runner.RUN_CONTRACT_SCHEMA_V4
-        expect_rejected(
-            self,
-            lambda: runner.validate_run_contract_evidence(downgraded),
-            "schema tuple")
+        for body, schema in (
+                (v4, runner.RUN_CONTRACT_SCHEMA_V5),
+                (v4, runner.RUN_CONTRACT_SCHEMA),
+                (v5, runner.RUN_CONTRACT_SCHEMA_V4),
+                (v5, runner.RUN_CONTRACT_SCHEMA),
+                (current, runner.RUN_CONTRACT_SCHEMA_V4),
+                (current, runner.RUN_CONTRACT_SCHEMA_V5)):
+            with self.subTest(body=body["schema"], label=schema):
+                relabeled = copy.deepcopy(body)
+                relabeled["schema"] = schema
+                expect_rejected(
+                    self,
+                    lambda relabeled=relabeled:
+                        runner.validate_run_contract_evidence(relabeled),
+                    "schema tuple")
 
-        extended = copy.deepcopy(historical)
+        extended = copy.deepcopy(v4)
         extended["current_build_initial"]["validated_cache"][
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
         expect_rejected(
@@ -1238,10 +1279,34 @@ class AllKIdentityTests(unittest.TestCase):
             lambda: runner.validate_run_contract_evidence(extended),
             "schema tuple")
 
+        for selector in (
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"):
+            with self.subTest(v5_extra=selector):
+                extended_v5 = copy.deepcopy(v5)
+                extended_v5["current_build_initial"]["validated_cache"][
+                    selector] = "ON"
+                expect_rejected(
+                    self,
+                    lambda extended_v5=extended_v5:
+                        runner.validate_run_contract_evidence(extended_v5),
+                    "schema tuple")
+
         for label, variable, value in (
             ("direct-source", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("high-direct", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
             ("small-direct", "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "3"),
+            ("general-one-loss",
+             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", "OFF"),
+            ("one-shot-equal-rounded",
+             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT", "OFF"),
+            ("Cauchy-log-reuse",
+             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE", "OFF"),
+            ("T8-partial", "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING", "OFF"),
+            ("T8-two-block",
+             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING", "OFF"),
+            ("T8-ragged", "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING", "OFF"),
+            ("T8-disable", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR", "ON"),
         ):
             with self.subTest(selector=label):
                 changed = copy.deepcopy(current)
@@ -1300,26 +1365,26 @@ class AllKIdentityTests(unittest.TestCase):
         preflight = self.attestation_record()
         attestation_identity = runner.source_attestation_identity(
             preflight, self.current_source, self.current_snapshot)
-        historical_digest = runner.canonical_digest(historical)
-        historical_manifest = {
-            "schema": runner.MANIFEST_SCHEMA_V4,
-            "run_contract": historical,
-            "run_contract_sha256": historical_digest,
+        v5_digest = runner.canonical_digest(v5)
+        v5_manifest = {
+            "schema": runner.MANIFEST_SCHEMA_V5,
+            "run_contract": v5,
+            "run_contract_sha256": v5_digest,
             "cells": [runner.dataclasses.asdict(cell)],
             "current_source_attestation_preflights": [preflight],
             "completion": None,
         }
         runner.validate_manifest(
-            historical_manifest, historical, historical_digest, [cell],
+            v5_manifest, v5, v5_digest, [cell],
             self.current_source, self.current_snapshot,
             attestation_identity)
 
-        relabeled_manifest = copy.deepcopy(historical_manifest)
+        relabeled_manifest = copy.deepcopy(v5_manifest)
         relabeled_manifest["schema"] = runner.MANIFEST_SCHEMA
         expect_rejected(
             self,
             lambda: runner.validate_manifest(
-                relabeled_manifest, historical, historical_digest, [cell],
+                relabeled_manifest, v5, v5_digest, [cell],
                 self.current_source, self.current_snapshot,
                 attestation_identity),
             "schema tuple")
@@ -3579,7 +3644,13 @@ class ProductionBuildClosureTests(unittest.TestCase):
             runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA)
         self.assertEqual(
             result["validated_cache"][
-                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "ON")
+        self.assertEqual(
+            result["validated_cache"][
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT"], "ON")
+        self.assertEqual(
+            result["validated_cache"][
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"], "ON")
         self.assertEqual(result["archive_members"], [
             path.name for path in self.fixture.archive_objects])
         self.assertTrue(

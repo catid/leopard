@@ -49,6 +49,7 @@ if str(TOOLS_DIRECTORY) not in sys.path:
 from leopard2_build_provenance import (
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
     CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
     LEGACY_REPLAY_RECIPE_SCHEMA,
@@ -100,9 +101,11 @@ CHILD_REAP_TIMEOUT_SECONDS = 5.0
 MAX_SUPERVISOR_CONTROL_BYTES = 64 * 1024
 BOUNDED_SUPERVISOR_MODE = "--internal-bounded-process-supervisor"
 RUN_CONTRACT_SCHEMA_V4 = "leopard2-all-k-gap-contract/v4"
-RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v5"
+RUN_CONTRACT_SCHEMA_V5 = "leopard2-all-k-gap-contract/v5"
+RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v6"
 MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
-MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v5"
+MANIFEST_SCHEMA_V5 = "leopard2-all-k-gap-manifest/v5"
+MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v6"
 ALL_K_EVIDENCE_CONTRACTS = {
     RUN_CONTRACT_SCHEMA_V4: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
@@ -118,9 +121,17 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
     },
+    RUN_CONTRACT_SCHEMA_V5: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
 }
 MANIFEST_TO_CONTRACT_SCHEMA = {
     MANIFEST_SCHEMA_V4: RUN_CONTRACT_SCHEMA_V4,
+    MANIFEST_SCHEMA_V5: RUN_CONTRACT_SCHEMA_V5,
     MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
 }
 RUN_CONTRACT_KEYS = frozenset((
@@ -151,9 +162,18 @@ ALL_K_BUILD_CACHE_KEYS_V2 = frozenset((
     "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER", "CMAKE_LINKER",
     "CMAKE_MAKE_PROGRAM", "CMAKE_RANLIB",
 ))
-ALL_K_BUILD_CACHE_KEYS = frozenset((
+ALL_K_BUILD_CACHE_KEYS_V3 = frozenset((
     *ALL_K_BUILD_CACHE_KEYS_V2,
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+))
+ALL_K_BUILD_CACHE_KEYS = frozenset((
+    *ALL_K_BUILD_CACHE_KEYS_V3,
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
 ))
 
 
@@ -1468,10 +1488,11 @@ def validate_run_contract_evidence(
     invocations = (
         immutable.get("invocations")
         if isinstance(immutable, Mapping) else None)
-    expected_cache_keys = (
-        ALL_K_BUILD_CACHE_KEYS
-        if contract_schema == RUN_CONTRACT_SCHEMA else
-        ALL_K_BUILD_CACHE_KEYS_V2)
+    expected_cache_keys = {
+        RUN_CONTRACT_SCHEMA_V4: ALL_K_BUILD_CACHE_KEYS_V2,
+        RUN_CONTRACT_SCHEMA_V5: ALL_K_BUILD_CACHE_KEYS_V3,
+        RUN_CONTRACT_SCHEMA: ALL_K_BUILD_CACHE_KEYS,
+    }[contract_schema]
     require(
         build.get("schema") == expected["closure"] and
         isinstance(cache, Mapping) and
@@ -1495,13 +1516,28 @@ def validate_run_contract_evidence(
         "all-K run contract selector tuple differs")
     if contract_schema == RUN_CONTRACT_SCHEMA:
         require(
-            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-            "current all-K run contract does not bind the generalized "
-            "one-loss selector OFF")
+            cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR") == "OFF" and
+            cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING") == "ON" and
+            cache.get(
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") == "ON",
+            "current all-K run contract does not bind the production "
+            "selector tuple")
+    elif contract_schema == RUN_CONTRACT_SCHEMA_V5:
+        require(
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF" and
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT" not in cache and
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE" not in cache,
+            "v5 all-K run contract selector tuple differs")
     else:
         require(
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache,
-            "historical all-K run contract contains an unversioned selector")
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT" not in cache and
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT" not in cache and
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE" not in cache,
+            "v4 all-K run contract contains an unversioned selector")
     try:
         validate_reproducible_build_proof(
             proof, build, label="all-K run contract")
