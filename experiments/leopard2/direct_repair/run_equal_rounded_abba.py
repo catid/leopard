@@ -32,9 +32,9 @@ from typing import Any, Mapping, Sequence
 
 
 SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v2"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v2"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v2"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v3"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v3"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v3"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -56,7 +56,11 @@ TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
 MAX_ATTEMPTS = 5
 MAX_JSON_BYTES = 32 << 20
-TARGET_ENDPOINT_TOLERANCE_NS = 10_000
+# CPU-wide and per-task schedstat clocks have a repeatable fixed endpoint
+# disagreement on this host.  Retained two-pair evidence puts its 95th
+# percentile below 15 us; 20 us is at most 0.264% of the shortest observed
+# child runtime and remains far below the 2% neighboring-cell regression gate.
+TARGET_ENDPOINT_TOLERANCE_NS = 20_000
 CHILD_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -970,8 +974,8 @@ def self_test() -> int:
     require(ceil64(1) == 64 and ceil64(64) == 64 and ceil64(65) == 128,
             "padded main geometry changed")
     require(
-        abs(TARGET_ENDPOINT_TOLERANCE_NS) == 10_000 and
-        abs(10_001) > TARGET_ENDPOINT_TOLERANCE_NS,
+        abs(TARGET_ENDPOINT_TOLERANCE_NS) == 20_000 and
+        abs(20_001) > TARGET_ENDPOINT_TOLERANCE_NS,
         "target endpoint tolerance changed")
     require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
     with tempfile.TemporaryDirectory(
