@@ -32,9 +32,9 @@ from typing import Any, Mapping, Sequence
 
 
 SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v3"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v3"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v3"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v4"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v4"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v4"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -56,11 +56,13 @@ TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
 MAX_ATTEMPTS = 5
 MAX_JSON_BYTES = 32 << 20
-# CPU-wide and per-task schedstat clocks have a repeatable fixed endpoint
-# disagreement on this host.  Retained two-pair evidence puts its 95th
-# percentile below 15 us; 20 us is at most 0.264% of the shortest observed
+# CPU-wide and per-task schedstat clocks have both fixed and runtime-scaled
+# endpoint disagreement on this host.  Across 645 otherwise-clean retained
+# invocations, max(20 us, 50 ppm) accepts 630 while rejecting all 15 observed
+# 116--456 ppm outliers.  The floor is at most 0.264% of the shortest observed
 # child runtime and remains far below the 2% neighboring-cell regression gate.
-TARGET_ENDPOINT_TOLERANCE_NS = 20_000
+TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS = 20_000
+TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM = 50
 CHILD_ENVIRONMENT = {
     "LANG": "C",
     "LC_ALL": "C",
@@ -462,10 +464,20 @@ def benchmark_command(
     return command
 
 
+def target_endpoint_tolerance_ns(child_runtime_ns: int) -> int:
+    require(type(child_runtime_ns) is int and child_runtime_ns >= 0,
+            "child runtime is invalid")
+    relative = (
+        child_runtime_ns * TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM + 999_999
+    ) // 1_000_000
+    return max(TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS, relative)
+
+
 def isolation_accepted(gated: Mapping[str, Any]) -> bool:
+    target = gated["target_runtime"]
     return (
-        abs(int(gated["target_runtime"]["signed_difference_ns"])) <=
-            TARGET_ENDPOINT_TOLERANCE_NS and
+        abs(int(target["signed_difference_ns"])) <=
+            target_endpoint_tolerance_ns(int(target["child_cpu_time_ns"])) and
         gated["wait4_crosscheck"]["accepted"] and
         gated["target_interrupts"]["accepted"] and
         gated["sibling_runtime"]["accepted"] and
@@ -784,8 +796,12 @@ def run(options: argparse.Namespace) -> int:
             DIRECTORY.parent / "main_compare" / "run_abba.py"),
         "identities": identities,
         "isolation_policy": {
-            "target_scheduler_minus_child_runtime_absolute_max_ns":
-                TARGET_ENDPOINT_TOLERANCE_NS,
+            "target_scheduler_minus_child_runtime_effective_max":
+                "max(absolute_floor_ns, child_runtime_ns * relative_ppm / 1e6)",
+            "target_scheduler_minus_child_runtime_absolute_floor_ns":
+                TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS,
+            "target_scheduler_minus_child_runtime_relative_ppm":
+                TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM,
             "wait4_crosscheck_max_ns":
                 GATE.RUSAGE_CROSSCHECK_TOLERANCE_NS,
             "target_rejected_interrupt_fields":
@@ -974,8 +990,10 @@ def self_test() -> int:
     require(ceil64(1) == 64 and ceil64(64) == 64 and ceil64(65) == 128,
             "padded main geometry changed")
     require(
-        abs(TARGET_ENDPOINT_TOLERANCE_NS) == 20_000 and
-        abs(20_001) > TARGET_ENDPOINT_TOLERANCE_NS,
+        TARGET_ENDPOINT_ABSOLUTE_TOLERANCE_NS == 20_000 and
+        TARGET_ENDPOINT_RELATIVE_TOLERANCE_PPM == 50 and
+        target_endpoint_tolerance_ns(7_581_132) == 20_000 and
+        target_endpoint_tolerance_ns(1_400_000_000) == 70_000,
         "target endpoint tolerance changed")
     require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
     with tempfile.TemporaryDirectory(
