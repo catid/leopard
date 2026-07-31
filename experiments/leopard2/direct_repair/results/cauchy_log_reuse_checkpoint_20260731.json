@@ -1,0 +1,211 @@
+{
+  "schema": "leopard2-cauchy-log-reuse-checkpoint/v1",
+  "date_utc": "2026-07-31",
+  "bead": "leopard-79h.38.5.10.44",
+  "status": "promoted; the previously failing one-shot cell now credibly beats exact Leopard1",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "operation": "direct-repair Cauchy inverse setup used by reusable plans and the bounded one-shot path",
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "codec_or_plan_layout_changed": false,
+    "scratch_bytes_changed": false,
+    "execution_coefficients_changed": false
+  },
+  "source_identity": {
+    "candidate_commit": "568877cb36264d95aa980be58b6265d56fee704c",
+    "candidate_tree": "ccedce4d9f6331f973560c2ac16571b3dd42b7eb",
+    "exact_leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner_sha256": "65e9d12b4a55c5a9b90e258e364207da653bfed43f80c50f2fbab70b1fb8fbb7",
+    "matrix_sha256": "7472bb3c334953ed589a912cd800039511dc86307fc09d8da902bcbebf7d12bf"
+  },
+  "binary_identity": {
+    "candidate_sha256": "ce97e3cbc32386f99be47581d3b5a9aa453621b296a753f1e9a72336f74944b1",
+    "initialized_data_control_sha256": "793bdb5d348fab42d6c638c4a849892587b23f282157974766a0298e6bd64ff1",
+    "exact_leopard1_sha256": "ad32a6c2441058dab75cfcccca709b2c1c88211c1fee2be9ceec3f5c1436b97c",
+    "candidate_control_executable_sections_sha256": "ff176fa277515b3831d0eb8645123663ce8fb6d95fbf2bd38d51c9f2ee4fa704",
+    "candidate_control_executable_sections_identical": true,
+    "candidate_marker": {
+      "one_shot_equal_rounded_direct_enabled": true,
+      "cauchy_log_reuse_enabled": true
+    },
+    "control_marker": {
+      "one_shot_equal_rounded_direct_enabled": true,
+      "cauchy_log_reuse_enabled": false
+    },
+    "frozen_mode": "0555",
+    "rehash_before_and_after_each_campaign": true
+  },
+  "algorithmic_change": {
+    "old_difference_log_calls": "5*L*L - 2*L",
+    "new_difference_log_calls": "2*L*L - L",
+    "saved_difference_log_calls": "3*L*L - L",
+    "loss_8_old_calls": 304,
+    "loss_8_new_calls": 120,
+    "loss_8_reduction_fraction": 0.6052631578947368,
+    "derivation": "Each message/parity cross difference formerly appeared in the row product, column product, and final denominator. Each within-parity and within-message derivative pair formerly appeared once from each endpoint. The new setup stores every cross log once and accumulates both products, then visits each unordered derivative pair once.",
+    "reference_path_retained_for_same_text_ab": true
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "allowed_logical_cpus": 30,
+    "numa_nodes": 1,
+    "compiler": "GCC 13.3.0",
+    "timed_cpu": 13,
+    "smt_sibling": 29
+  },
+  "isolation": {
+    "campaign_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "coordinator_excluded_from_measured_pair": true,
+    "one_child_process_at_a_time": true,
+    "child_address_space_limit_bytes": 268435456,
+    "campaign_memory_max_bytes": 402653184,
+    "memory_swap_max_bytes": 0,
+    "accepted_processes": 2490,
+    "rejected_isolation_attempts": 225,
+    "all_original_parity_and_recovery_digests_matched": true
+  },
+  "artifacts": {
+    "broad_reuse_1": {
+      "path": "/tmp/leopard2-cauchy-authoritative-568877c-r3",
+      "manifest_file_sha256": "52539744b824f41ee6ca9847e097f1351bbad6c96b954a7b2e706f5a75f10c71",
+      "summary_file_sha256": "08406c286bf2c725a0e1d7b42b6af258e7514cb1d0da92c47211fa4cc3175da0",
+      "manifest_digest": "a360ffecff445ef0a7f0cece6a3679be6d2decc551cf7f9b6dfedd7acd5d7bb0",
+      "summary_digest": "937612e49890621b39da6be0c2dd36fcc1d8e2e1a3b1b9ac052b230068b5911f",
+      "cells": 68,
+      "targets": 60,
+      "neighbors": 8,
+      "accepted_processes": 1176,
+      "rejected_isolation_attempts": 66,
+      "verified": true
+    },
+    "predeclared_former_failure_holdout": {
+      "path": "/tmp/leopard2-cauchy-holdout-568877c-r9",
+      "manifest_file_sha256": "545ddaab9fc78b05665cec871016108d6e824af95ab3e3e4452f3bd8d31456f3",
+      "summary_file_sha256": "be2d0116752919617b3e91b7f9f5102bc54ad372ff1dfd86e7f0381059a1c097",
+      "manifest_digest": "e6f516efe8f525064ef925a25211b068970564b8c2227e7153b59799a58b5c8f",
+      "summary_digest": "be08edad3cf1fad2a597762c38c9212e3feb94f465418fb92143ae4971c6972b",
+      "target_rounds": 9,
+      "accepted_processes": 54,
+      "rejected_isolation_attempts": 20,
+      "verified": true
+    },
+    "required_reuse_sweeps": [
+      {
+        "reuse": 2,
+        "path": "/tmp/leopard2-cauchy-reuse2-568877c",
+        "manifest_file_sha256": "7e9ac0b3a1609110381a4089ec44fb4cee8145f41521afa381553913265b0676",
+        "summary_file_sha256": "34430b81eaf03159104e4f32d572547614ac6f56bb19b795cf8fedaa17289880",
+        "summary_digest": "ec6ef88f7934fc2e043a837714dce5b8743da1b088d308a69562973ce6309947"
+      },
+      {
+        "reuse": 4,
+        "path": "/tmp/leopard2-cauchy-reuse4-568877c",
+        "manifest_file_sha256": "0ec3a962eca0f4268eb9d6fd49adda4e349b3045a4687a18dd64c842ae43e171",
+        "summary_file_sha256": "b1d6fbcff97abaef4b737bf335a3b53f384b20c8134b7162a9a976a70911d5b5",
+        "summary_digest": "2db129dacddbcf391c8195f2f6bd7f9340fae1002661ea190e9212010b16c867"
+      },
+      {
+        "reuse": 8,
+        "path": "/tmp/leopard2-cauchy-reuse8-568877c",
+        "manifest_file_sha256": "6d2c0b264f392670b41ac84eeb007aa9f58c0db643fdd1e400fa6959e0f8bf02",
+        "summary_file_sha256": "40ab979ed5f6bc11b6da715eece1102d51a5238c8ecd78642bfeb9e2fd5f3a8f",
+        "summary_digest": "d6964cf304fe549712370ce95cdb5a6238070bac63d881c1e76dc1194c1137f0"
+      },
+      {
+        "reuse": 16,
+        "path": "/tmp/leopard2-cauchy-reuse16-568877c",
+        "manifest_file_sha256": "491670d4d95ee70b4c3654f162ee4244f8e0ffe6ae26d28b04c48d41cedff927",
+        "summary_file_sha256": "9ffa742c8654a8f6583509149db4e15ed4b926442ad42b75b8d93e85c162c924",
+        "summary_digest": "0fa347ca8207bb0b7c3d13aeaff4b7ddbe1663ee3c953faa470fa58a3e3e9afe"
+      },
+      {
+        "reuse": 64,
+        "path": "/tmp/leopard2-cauchy-reuse64-568877c",
+        "manifest_file_sha256": "7903f8a95d101d9ecc7c6371c4f47a9a71c2799b4ad0cbf6165471a4ac95029b",
+        "summary_file_sha256": "4af09438c07f41148fe4ce22727711928c124de570554f41a7cb064f787fa36a",
+        "summary_digest": "255fb87b4b168c79900d12cb4cf2eb0790fd8e11193aed0cb7396f1e4f57749c"
+      }
+    ],
+    "all_bundles_verified": true
+  },
+  "results": {
+    "broad_same_source_control_over_candidate_geomean": 1.0510009224990131,
+    "broad_minimum_same_source_point_ratio": 0.9953306233669558,
+    "broad_cells_with_point_regression_over_2_percent": 0,
+    "broad_exact_leopard1_over_candidate_geomean": 2.486686178635832,
+    "broad_minimum_exact_leopard1_lower_confidence_bound": 1.0005600271202686,
+    "broad_exact_leopard1_failures": 0,
+    "required_k17_k128_loss8_boundary_cells": 84,
+    "required_reuse_counts": [
+      1,
+      2,
+      4,
+      8,
+      16,
+      64
+    ],
+    "required_boundary_same_source_geomean_by_reuse": {
+      "1": 1.1036906667243536,
+      "2": 1.1051362705139791,
+      "4": 1.103535019528032,
+      "8": 1.1096992277829916,
+      "16": 1.1095481265710343,
+      "64": 1.1061034335054367
+    },
+    "required_boundary_minimum_exact_leopard1_lower_confidence_bound": 1.3128733411836864,
+    "former_failure_holdout": {
+      "K": 32,
+      "R": 17,
+      "losses": 8,
+      "bytes": 33,
+      "control_over_candidate_ratio": 1.1054984410648563,
+      "control_over_candidate_lower": 1.09313700955945,
+      "exact_leopard1_over_candidate_ratio": 1.0277356235180144,
+      "exact_leopard1_over_candidate_lower": 1.0185637024261696
+    },
+    "raw_broad_summary_accepted": false,
+    "raw_broad_summary_explanation": "The inherited runner labels every broad one-shot cell a >=5 percent Cauchy target. Large-K and one-loss cells are intentionally neighboring controls: they are neutral or modest wins, have no point regression above 0.5 percent, and all still beat exact Leopard1. The independently predeclared former-failure target clears both promotion floors in nine rounds. No threshold was weakened and no losing cell was hidden."
+  },
+  "correctness_and_build_gates": {
+    "release_default": "4/4 high-direct, random, direct-repair, and benchmark-JSON tests passed",
+    "release_control": "direct-repair test passed",
+    "direct_repair_oracle": {
+      "profiles": 50,
+      "plans": 2120,
+      "executions": 1113915,
+      "recovered_symbols": 1989902,
+      "random_cases": 344,
+      "invalid_cases": 16
+    },
+    "random_public_api": {
+      "randomized_patterns": 48,
+      "recovered_shards": 5658,
+      "repeated_executions": 96,
+      "guard_checks": 221116,
+      "includes_concurrent_equal_rounded_one_shot_decode": true
+    },
+    "runner_self_test_normal_and_python_optimized": true,
+    "benchmark_json_normal_and_python_optimized": true,
+    "gcc13_strict_gf8_only": true,
+    "clang18_strict_gf16_only": true,
+    "clang18_asan_ubsan": {
+      "passed": "4/4",
+      "peak_rss_kib": 118060
+    },
+    "clang18_tsan": {
+      "production_high_direct_passed": true,
+      "broader_context_backends_accepted": false,
+      "broader_context_backends_reason": "exceeded the deliberately imposed 384 MiB cgroup after the production test passed; no result was accepted and no unsafe retry was made"
+    }
+  },
+  "decision": {
+    "promote_cauchy_log_reuse": true,
+    "close_bead": true,
+    "reason": "The change removes 60.5 percent of the repeated difference-log calls at L=8, improves the required boundary family by about 10 percent, closes the sole exact-Leopard1 one-shot failure with a 1.0186 lower confidence bound, preserves all digests and storage contracts, and shows no measured regression above 0.5 percent in the broad control matrix.",
+    "next_avx2_step": "run the final exact-Leopard1 all-K GF8 map and build the deterministic crossover table"
+  }
+}

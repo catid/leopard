@@ -6,6 +6,39 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 Cauchy-setup checkpoint
+
+Commit `568877cb36264d95aa980be58b6265d56fee704c`, tree
+`ccedce4d9f6331f973560c2ac16571b3dd42b7eb`, reuses every direct-repair
+Cauchy cross-difference log across its row product, column product, and final
+denominator and visits each within-set derivative pair once.  At eight losses
+this reduces the relevant difference-log calls from 304 to 120 without
+changing coefficients, plan layout, scratch, the ABI, or the wire format.
+
+The frozen identical-text candidate/control campaign retained 2,490 accepted
+processes plus 225 fail-closed isolation retries.  Across the broad 60-target
+one-shot matrix the Cauchy refactor's same-source geometric mean is 1.0510x,
+its worst point ratio is 0.9953x, and every target beats exact Leopard1 with a
+minimum lower confidence bound of 1.00056.  The required K=17/K=128, L=8,
+1--65-byte cells at reuse 1,2,4,8,16,64 improve by 1.1035x--1.1097x
+geometrically and have a minimum exact-main lower bound of 1.31287.
+
+The pre-existing sole failure `(K,R,L,bytes)=(32,17,8,33)` passed a separate
+nine-round holdout: control/candidate 1.10550x with lower bound 1.09314, and
+exact-main/candidate 1.02774x with lower bound 1.01856.  Release ON/OFF,
+strict GCC/Clang reduced-field, ASan+UBSan, runner, benchmark-JSON, random,
+direct-oracle, arbitrary-tail, guard, and concurrent one-shot gates pass.
+The broader TSan context test exceeded its deliberately imposed 384 MiB
+cgroup after the production high-direct TSan test passed; no result from the
+terminated test was accepted or retried.
+
+Compact evidence is
+`experiments/leopard2/direct_repair/results/`
+`cauchy_log_reuse_checkpoint_20260731.json`.  Close
+`leopard-79h.38.5.10.44` after the evidence commit.  The next active CPU/GF8
+step is `leopard-79h.38.5.10.27`, the final exact-Leopard1 all-K map and
+deterministic crossover table.
+
 ## 2026-07-31 GF8/AVX2 equal-rounded multi-loss checkpoint
 
 The reusable-plan direct-repair selector is source commit
