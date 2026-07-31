@@ -1,0 +1,148 @@
+{
+  "schema": "leopard2-gf8-t8-one-kib-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-07-31",
+  "scope": {
+    "operation": "encode",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "shard_bytes": 1024,
+    "batch": 64,
+    "reuse": 64,
+    "selection": [
+      {"K": 6, "R": 5},
+      {"K": 6, "R": 6},
+      {"K": 10, "R": 8},
+      {"K": 16, "R": 5}
+    ],
+    "unchanged_neighbors": "Every other legal K=5..16, R=5..min(K,8) shape at 1024 bytes"
+  },
+  "source": {
+    "commit": "cf86e4d2c7d9b2b906a491d5b3312f31c662e57f",
+    "tree": "572676891889dbf6fe4e7a439e2d67cbf218eb2b",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_t8_two_block_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "af80c5a85b28e9d34b755edf0dc7e7a4286bf988c6a062d651e9edc1a1f83e0a",
+    "control_sha256": "8742f1e130bdecc53794ceef3f406eac5a4b642a523da5e6b2634ec724be1052",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_text_sha256": "b881917502cf2e5b743548fb6175781d3923c3c7bf7edde2d783152ffbf80701",
+    "candidate_control_executable_sections_sha256": "8fa0e2e6ec5f67d6e81e856f5874903a680a0f4b539667d4a76bfe65e6f33842",
+    "candidate_control_instruction_sections_identical": true
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "target_rounds": 9,
+    "neighbor_rounds": 3,
+    "target_count": 4,
+    "neighbor_count": 38,
+    "cell_count": 42,
+    "process_count": 672,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "target_failures": [],
+    "neighbor_failures": [],
+    "raw_sha256": "ced6bde1d6a16853df3508fd518f21e338112bd33a2d09504cb790cc25eb5c5c",
+    "summary_sha256": "1c16ad13c1981045b5911a2ccd78b317b8123028c6944c7a02e53f8b3ae8e151",
+    "targets": [
+      {
+        "K": 6,
+        "R": 5,
+        "control_over_candidate": 1.0615384802040195,
+        "control_over_candidate_ci95": [1.0551811812033567, 1.0679340809213014],
+        "exact_main_over_candidate": 1.1395744814060664,
+        "exact_main_over_candidate_ci95": [1.1300013144235548, 1.1492287505297039]
+      },
+      {
+        "K": 6,
+        "R": 6,
+        "control_over_candidate": 1.0630759083718115,
+        "control_over_candidate_ci95": [1.0572537173999732, 1.068930161569731],
+        "exact_main_over_candidate": 1.1404167048405771,
+        "exact_main_over_candidate_ci95": [1.1301734312045832, 1.1507528179044717]
+      },
+      {
+        "K": 10,
+        "R": 8,
+        "control_over_candidate": 1.0764803428980585,
+        "control_over_candidate_ci95": [1.0686991340483758, 1.0843182068054964],
+        "exact_main_over_candidate": 1.1581617754947677,
+        "exact_main_over_candidate_ci95": [1.1503178393524063, 1.1660591988839584]
+      },
+      {
+        "K": 16,
+        "R": 5,
+        "control_over_candidate": 1.0932423185477544,
+        "control_over_candidate_ci95": [1.0827571267518672, 1.1038290467309628],
+        "exact_main_over_candidate": 1.3028207621483308,
+        "exact_main_over_candidate_ci95": [1.2933935772872005, 1.312316659129242]
+      }
+    ]
+  },
+  "rejected_candidates": [
+    {
+      "K": 11,
+      "R": 5,
+      "reason": "The nine-round lower 95-percent confidence bound was 1.0475, below the required 1.05 same-source floor.",
+      "control_over_candidate": 1.060080263316968,
+      "control_over_candidate_ci95": [1.0475141818421405, 1.0727970887209652],
+      "exact_main_over_candidate": 1.1343700973689814,
+      "summary_sha256": "6612dd49ad27b4bb82388cccec200ac4252894fe29611907ca38425d98bc6eba",
+      "raw_sha256": "e45ae7723ac7dc50ef10e4673af57b5df8743dada4cc2fdae87df6c08a9aa1c0"
+    },
+    {
+      "K": 11,
+      "R": 6,
+      "reason": "The final-source nine-round lower 95-percent confidence bound was 1.0477, below the required 1.05 same-source floor.",
+      "control_over_candidate": 1.0552384767680476,
+      "control_over_candidate_ci95": [1.047710247610556, 1.0628207993491523],
+      "exact_main_over_candidate": 1.1296389171827528,
+      "summary_sha256": "74f7d129f10694e7b6de2bd8c6d748ca215858851e47fedca1c6ef64c35df4f7",
+      "raw_sha256": "f32cf955cb1e40168a29c16686cec381423f5eab5d33623254c18551f2538885"
+    }
+  ],
+  "validation": {
+    "gnu13_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_backend_ops",
+        "leopard2_auto_encode_backend",
+        "leopard2_batch_aliasing"
+      ],
+      "result": "4/4 passed"
+    },
+    "feature_off_release": {
+      "test": "leopard2_high_direct_production",
+      "result": "1/1 passed"
+    },
+    "gf8_only_release": {
+      "test": "leopard2_high_direct_production",
+      "result": "1/1 passed"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "test": "leopard2_high_direct_production",
+      "result": "1/1 passed"
+    },
+    "independent_oracle": "The production test compares selected parity with the direct systematic generator and covers full/partial outputs, arbitrary tails, unaligned guards, repeated bindings, and thread-pool execution."
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "neighbor_regression_lower_bound": 0.98,
+    "exact_main_lower_ci_floor": 1.0,
+    "online_benchmarking": false,
+    "wire_change": false
+  },
+  "memory_policy": {
+    "release_build_memory_max_mib": 512,
+    "release_test_memory_max_mib": 256,
+    "sanitizer_build_memory_max_mib": 512,
+    "sanitizer_test_memory_max_mib": 256,
+    "build_parallelism": 2,
+    "sanitizer_build_parallelism": 1,
+    "subworkers": 0
+  }
+}

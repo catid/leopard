@@ -720,3 +720,44 @@ round results, neighbor screen, validation commands, and rejected variants are
 in
 `experiments/leopard2/gf8_high_encode/results/`
 `t8_k5r5_spillfree_checkpoint_20260731.json`.
+
+## Promoted T=8 one-kibibyte selector extension
+
+The reusable prevalidated legacy-high GF8/AVX2 binding now also selects the
+existing T=8 direct-input transform at exactly 1024 bytes for four additional
+profiles:
+
+    (K,R) = (6,5), (6,6), (10,8), (16,5).
+
+This is a dispatch extension, not a new arithmetic kernel or wire profile.
+Candidate and diagnostic-control executables had byte-identical instruction
+sections; a read-only initialized-data marker disabled only these four routes
+in the control. All other legal `K=5..16`, `R=5..min(K,8)` shapes were
+neighbor controls, including profiles already selected by earlier production
+tables.
+
+The final current-source CPU-4 campaign used nine counterbalanced target
+rounds, three neighbor rounds, 672 fresh processes, batch/reuse 64, and a
+reserved idle SMT sibling. Every original, parity, and recovered-output digest
+matched. All four targets cleared the five-percent lower-confidence
+same-source gate, all four beat exact Leopard main, and none of the 38
+neighbors failed the two-percent regression gate:
+
+| K,R | control / candidate, 95% CI | exact main / candidate, 95% CI |
+| --- | ---: | ---: |
+| 6,5 | 1.0615x `[1.0552,1.0679]` | 1.1396x `[1.1300,1.1492]` |
+| 6,6 | 1.0631x `[1.0573,1.0689]` | 1.1404x `[1.1302,1.1508]` |
+| 10,8 | 1.0765x `[1.0687,1.0843]` | 1.1582x `[1.1503,1.1661]` |
+| 16,5 | 1.0932x `[1.0828,1.1038]` | 1.3028x `[1.2934,1.3123]` |
+
+Two attractive point estimates were deliberately excluded. `K=11,R=5`
+measured 1.0601x but had lower bound 1.0475x, and `K=11,R=6` measured
+1.0552x with lower bound 1.0477x. Their rejected summary and raw hashes remain
+in the compact result rather than being hidden.
+
+The final selector passed four focused GNU 13 Release tests, the feature-off
+production test, the GF8-only production test, and the production test under
+Clang 18 ASan+UBSan+LSan. The compact current-source checkpoint is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_one_kib_checkpoint_20260731.json`; the checked-in runner is
+`experiments/leopard2/gf8_high_encode/run_t8_two_block_abba.py`.

@@ -6,6 +6,32 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-07-31 GF8/AVX2 T=8 one-kibibyte checkpoint
+
+The final selector source is commit
+`cf86e4d2c7d9b2b906a491d5b3312f31c662e57f`, tree
+`572676891889dbf6fe4e7a439e2d67cbf218eb2b`. At exactly 1024 bytes the
+reusable legacy-high GF8/AVX2 binding now extends the existing direct-input
+T=8 route to `(K,R)=(6,5),(6,6),(10,8),(16,5)`.
+
+The final frozen CPU-4 campaign is
+`/tmp/leopard2-t8-1k-final-cf86e4d/evidence-final-r9-cpu4`: 42 K/R cells,
+672 processes, four targets, 38 neighbors, all workload/parity/recovery
+digests equal, zero sibling activity, no target failure, and no neighbor
+failure. Same-source gains are 1.0615x--1.0932x and exact-main gains are
+1.1396x--1.3028x. The rejected `K=11,R=5` and `K=11,R=6` candidates missed
+the five-percent lower-confidence floor and remain on the prior path.
+
+Final focused gates passed: GNU 13 Release 4/4, explicit feature-off 1/1,
+GF8-only 1/1, and Clang 18 ASan+UBSan+LSan 1/1. The compact evidence is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_one_kib_checkpoint_20260731.json`.
+
+Attach this result to `leopard-79h.38.5.10.43`, commit and push the evidence
+milestone, then continue the same bead's still-open 1--256-byte exact-Leopard1
+gap or the final all-K map under `leopard-79h.38.5.10.27`. Do not close the
+parent bead: the full sub-4-KiB acceptance matrix is not yet complete.
+
 ## 2026-07-31 GF8/AVX2 T=4 extended-binding checkpoint
 
 The final production selector is commit

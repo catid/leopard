@@ -1,5 +1,29 @@
 # Leopard2 versus exact Leopard main
 
+## GF8 T=8 one-kibibyte update: 2026-07-31
+
+Four additional dense legacy-high GF8/AVX2 encode profiles now use the
+wire-identical direct-input T=8 binding at exactly 1024 bytes. The final
+current-source comparison used batch/reuse 64, nine target rounds, an exact
+Leopard main binary from commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`, matching workload/parity/recovery
+digests, and a reserved idle SMT sibling.
+
+| K,R | exact main / Leopard2, 95% CI |
+| --- | ---: |
+| 6,5 | 1.1396x `[1.1300,1.1492]` |
+| 6,6 | 1.1404x `[1.1302,1.1508]` |
+| 10,8 | 1.1582x `[1.1503,1.1661]` |
+| 16,5 | 1.3028x `[1.2934,1.3123]` |
+
+All four same-source improvements also have lower confidence bounds above
+1.05, and no one of the 38 unmodified K/R neighbors had a credible regression
+over two percent. `K=11,R=5` and `K=11,R=6` remain on the prior path because
+their nine-round lower same-source bounds were 1.0475x and 1.0477x. The
+machine-readable checkpoint is
+`experiments/leopard2/gf8_high_encode/results/`
+`t8_one_kib_checkpoint_20260731.json`.
+
 ## Optimization update: 2026-07-21
 
 The production stack after the paper-faithfulness audit has materially moved
