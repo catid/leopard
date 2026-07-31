@@ -32,9 +32,9 @@ from typing import Any, Mapping, Sequence
 
 
 SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
-MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v4"
-CELL_SCHEMA = "leopard2-equal-rounded-cell/v4"
-SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v4"
+MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v5"
+CELL_SCHEMA = "leopard2-equal-rounded-cell/v5"
+SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v5"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -667,6 +667,7 @@ def validate_cell_record(
 def aggregate(
     analyses: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
+    require(bool(analyses), "campaign has no analyses")
     targets = [item for item in analyses if item["cell"]["role"] == "target"]
     neighbors = [
         item for item in analyses if item["cell"]["role"] == "neighbor"
@@ -680,30 +681,42 @@ def aggregate(
         item["cell"]["id"] for item in neighbors
         if item["control_over_candidate"]["upper"] < NEIGHBOR_FLOOR
     ]
+    target_control = [
+        item["control_over_candidate"]["ratio"] for item in targets]
+    target_main = [
+        item["main_over_candidate"]["ratio"] for item in targets]
+    target_main_first_use = [
+        item["main_over_candidate_first_use"]["ratio"] for item in targets]
+    target_control_lower = [
+        item["control_over_candidate"]["lower"] for item in targets]
+    target_main_lower = [
+        item["main_over_candidate"]["lower"] for item in targets]
+    target_main_first_use_lower = [
+        item["main_over_candidate_first_use"]["lower"] for item in targets]
+    neighbor_upper = [
+        item["control_over_candidate"]["upper"] for item in neighbors]
+
+    def geomean(values: Sequence[float]) -> float | None:
+        return math.exp(statistics.mean(map(math.log, values))) \
+            if values else None
+
     return {
         "target_count": len(targets),
         "neighbor_count": len(neighbors),
         "target_failures": target_failures,
         "neighbor_failures": neighbor_failures,
         "accepted": not target_failures and not neighbor_failures,
-        "target_control_geomean": math.exp(statistics.mean(
-            math.log(item["control_over_candidate"]["ratio"])
-            for item in targets)),
-        "target_main_geomean": math.exp(statistics.mean(
-            math.log(item["main_over_candidate"]["ratio"])
-            for item in targets)),
-        "target_main_first_use_geomean": math.exp(statistics.mean(
-            math.log(item["main_over_candidate_first_use"]["ratio"])
-            for item in targets)),
-        "minimum_target_control_lower": min(
-            item["control_over_candidate"]["lower"] for item in targets),
-        "minimum_target_main_lower": min(
-            item["main_over_candidate"]["lower"] for item in targets),
-        "minimum_target_main_first_use_lower": min(
-            item["main_over_candidate_first_use"]["lower"]
-            for item in targets),
-        "minimum_neighbor_upper": min(
-            item["control_over_candidate"]["upper"] for item in neighbors),
+        "target_control_geomean": geomean(target_control),
+        "target_main_geomean": geomean(target_main),
+        "target_main_first_use_geomean": geomean(target_main_first_use),
+        "minimum_target_control_lower":
+            min(target_control_lower) if targets else None,
+        "minimum_target_main_lower":
+            min(target_main_lower) if targets else None,
+        "minimum_target_main_first_use_lower":
+            min(target_main_first_use_lower) if targets else None,
+        "minimum_neighbor_upper":
+            min(neighbor_upper) if neighbors else None,
     }
 
 
@@ -996,6 +1009,27 @@ def self_test() -> int:
         target_endpoint_tolerance_ns(1_400_000_000) == 70_000,
         "target endpoint tolerance changed")
     require(MAX_ATTEMPTS == 5, "isolation retry policy changed")
+    interval = {"ratio": 2.0, "lower": 1.5, "upper": 2.5}
+    target_analysis = {
+        "cell": {"id": "target", "role": "target"},
+        "control_over_candidate": interval,
+        "main_over_candidate": interval,
+        "main_over_candidate_first_use": interval,
+    }
+    neighbor_analysis = {
+        "cell": {"id": "neighbor", "role": "neighbor"},
+        "control_over_candidate": interval,
+    }
+    target_only = aggregate((target_analysis,))
+    neighbor_only = aggregate((neighbor_analysis,))
+    require(
+        target_only["target_count"] == 1 and
+        target_only["neighbor_count"] == 0 and
+        target_only["minimum_neighbor_upper"] is None and
+        neighbor_only["target_count"] == 0 and
+        neighbor_only["neighbor_count"] == 1 and
+        neighbor_only["target_control_geomean"] is None,
+        "single-role campaign aggregation changed")
     with tempfile.TemporaryDirectory(
             prefix="leopard2-equal-rounded-self-test-") as temporary:
         raw_root = Path(temporary) / "raw"
