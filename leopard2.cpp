@@ -431,16 +431,14 @@ struct leo2_codec
     // logarithms, for the bounded allocation-free direct encoder.
     std::vector<uint8_t> direct_generator_logs8;
     std::vector<uint16_t> direct_generator_logs16;
-#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
     /*
-        Exact row-major GF8 generator coefficients for the default-off
-        equal-rounded multi-loss experiment.  Unlike the canonical K=65
+        Exact row-major GF8 generator coefficients for measured equal-rounded
+        multi-loss repair. Unlike the canonical K=65
         context cache, this table is tied to the immutable codec's exact K/R
         identity.  Moving row construction to codec setup lets every erasure
         plan reuse both the rows and the Cauchy inverse path.
     */
     std::vector<uint8_t> direct_repair_generator_rows8;
-#endif
     // In the P=T,N=2P legacy-high region, coordinate xor P turns the parent
     // into the Algorithm 4 low-profile view without changing public bytes.
     // Keep that translated view immutable and code-dependent in the codec.
@@ -642,6 +640,15 @@ static void ExecuteHighT8TwoBlockBinding(
 namespace {
 
 static const size_t kScratchAlignment = 64;
+
+/*
+    Keep the equal-rounded direct-repair control in initialized data. Both
+    values are nonzero and every candidate routine remains compiled, so an
+    ON/OFF A/B changes setup-time routing without perturbing executable
+    instruction layout.
+*/
+static volatile uint32_t g_equal_rounded_multi_loss_mode =
+    2U - LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS;
 
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_high_t4_batch_binding_mode =
@@ -2204,7 +2211,8 @@ static bool IsEqualRoundedMultiLossDirectRepairCodec(
         the established one-loss selector, and K=65 retains its separately
         measured byte boundary and shared canonical row cache.
     */
-    return IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
+    return g_equal_rounded_multi_loss_mode == 1U &&
+        IsMeasuredEqualRoundedDirectRepairCodec(codec) &&
         !IsExpandedDirectRepairCodec(codec) &&
         codec->context->backend == LEO2_BACKEND_AVX2;
 }
@@ -2368,12 +2376,8 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
         return kDirectMaxRepairLosses;
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
-#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
         return IsEqualRoundedMultiLossDirectRepairCodec(codec)
             ? kDirectMaxRepairLosses : 1;
-#else
-        return 1;
-#endif
     if (IsGeneralDirectOneLossCodec(codec))
         return 1;
     return 4;
@@ -7086,13 +7090,9 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
         const bool measured_small = false;
 #endif
         const bool experimental_equal_rounded =
-#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
             shard_bytes >=
                 LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES &&
             IsEqualRoundedMultiLossDirectRepairCodec(codec);
-#else
-            false;
-#endif
         if (expanded_k65 || measured_small ||
             experimental_equal_rounded)
             return leopard2_internal::kDirectRepairExecutorSourceMajor;
@@ -9458,7 +9458,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                                             direct_repair_generator_rows8);
                                 });
                         }
-#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
                         else if (
                             IsEqualRoundedMultiLossDirectRepairCodec(codec))
                         {
@@ -9472,7 +9471,6 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                                 codec, weights,
                                 codec->direct_repair_generator_rows8);
                         }
-#endif
                         codec->direct_barycentric8.swap(weights);
                     }
                 }
@@ -10107,6 +10105,15 @@ bool HighT8RaggedBindingEnabled()
 {
 #ifdef LEO_HAS_FF8
     return g_high_t8_ragged_binding_mode == 1U;
+#else
+    return false;
+#endif
+}
+
+bool EqualRoundedMultiLossEnabled()
+{
+#ifdef LEO_HAS_FF8
+    return g_equal_rounded_multi_loss_mode == 1U;
 #else
     return false;
 #endif
@@ -11420,13 +11427,11 @@ static leo2_result DecodePlanCreateInternal(
                         cached_generator_rows = &codec->context->
                             direct_repair_generator_rows8;
                     }
-#if LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
                     else if (!codec->direct_repair_generator_rows8.empty())
                     {
                         cached_generator_rows =
                             &codec->direct_repair_generator_rows8;
                     }
-#endif
                     plan->direct_repair =
                         PrepareDirectRepairTerms<DirectField8>(
                             plan, codec->direct_barycentric8,

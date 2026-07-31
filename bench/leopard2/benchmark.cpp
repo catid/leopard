@@ -541,10 +541,8 @@ static Options ParseOptions(int argc, char** argv)
         (options.force_tiled_decode || options.force_materialized_decode))
         Fail("--force-generic cannot select a specialized workspace kernel");
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
-    if (options.attest_source && options.report_direct_executor)
-        Fail("--attest-source and --report-direct-executor use distinct "
-             "JSON schemas");
-    if (options.attest_source && options.report_decode_path)
+    if (options.attest_source && options.report_decode_path &&
+        !options.report_direct_executor)
         Fail("--attest-source and --report-decode-path use distinct JSON schemas");
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
@@ -1270,6 +1268,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        (options.report_direct_executor && options.attest_source) ? 7 :
         options.report_direct_executor ? 6 :
         options.attest_source ? 5 :
         (options.report_decode_path ? 3 : (extended_schema ? 2 : 1));
@@ -1539,6 +1538,13 @@ static int Run(const Options& options)
              << (LEO2_BENCHMARK_SOURCE_TRACKED_DIRTY ? "true" : "false");
     }
 #endif
+    if (options.report_direct_executor)
+    {
+        json << ",\n"
+             << "    \"equal_rounded_multi_loss_enabled\": "
+             << (leopard2_internal::EqualRoundedMultiLossEnabled() ?
+                    "true" : "false");
+    }
     json << "\n"
          << "  },\n"
          << "  \"parameters\": {\n"

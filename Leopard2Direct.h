@@ -242,6 +242,9 @@ bool HighT8TinyBindingEnabled();
 /* Marker for the qualified 65..1024-byte ragged T=8 selector. */
 bool HighT8RaggedBindingEnabled();
 
+/* Text-layout-neutral marker for equal-rounded GF8/AVX2 multi-loss repair. */
+bool EqualRoundedMultiLossEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

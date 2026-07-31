@@ -2136,6 +2136,23 @@ if(LEO2_BUILD_TESTS)
                 RUN_SERIAL TRUE
                 TIMEOUT 300)
             add_test(
+                NAME leopard2_equal_rounded_abba_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/run_equal_rounded_abba.py
+                    self-test)
+            add_test(
+                NAME leopard2_equal_rounded_abba_optimized_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE} -O
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/run_equal_rounded_abba.py
+                    self-test)
+            set_tests_properties(
+                leopard2_equal_rounded_abba_self_test
+                leopard2_equal_rounded_abba_optimized_self_test PROPERTIES
+                ENVIRONMENT
+                    "PYTHONDONTWRITEBYTECODE=1;PYTHONWARNINGS=error::ResourceWarning"
+                RUN_SERIAL TRUE
+                TIMEOUT 300)
+            add_test(
                 NAME leopard2_small_direct_exhaustive_self_test
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/direct_repair/test_run_small_direct_exhaustive.py)
