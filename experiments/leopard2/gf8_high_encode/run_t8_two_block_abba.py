@@ -36,11 +36,11 @@ ONE_KIB_SUMMARY_SCHEMA = \
     "leopard2-gf8-t8-one-kib-extension-summary/v1"
 TINY_SCHEMA = "leopard2-gf8-t8-tiny-extension-abba/v4"
 TINY_SUMMARY_SCHEMA = "leopard2-gf8-t8-tiny-extension-summary/v4"
-RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v3"
-RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v3"
+RAGGED_SCHEMA = "leopard2-gf8-t8-ragged-extension-abba/v4"
+RAGGED_SUMMARY_SCHEMA = "leopard2-gf8-t8-ragged-extension-summary/v4"
 RAGGED_MANIFEST_SCHEMA = \
-    "leopard2-gf8-t8-ragged-extension-manifest/v2"
-RAGGED_CELL_SCHEMA = "leopard2-gf8-t8-ragged-extension-cell/v2"
+    "leopard2-gf8-t8-ragged-extension-manifest/v3"
+RAGGED_CELL_SCHEMA = "leopard2-gf8-t8-ragged-extension-cell/v3"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 T95_DF2 = 4.302652729911275
 T95_DF8 = 2.306004135204166
@@ -397,7 +397,7 @@ def ragged_selected(k: int, r: int, shard_bytes: int) -> bool:
         return False
     if shard_bytes == 319 and (
             (k == 6 and r in (5, 6)) or
-            (k == 7 and r == 5)):
+            (k == 7 and r in (5, 6))):
         return False
     return True
 
@@ -438,10 +438,10 @@ def ragged_extension_cells() -> list[dict[str, Any]]:
     require(len(cells) == expected_targets + expected_neighbors,
             "ragged T=8 matrix is incomplete")
     require(sum(cell["role"] == "target" for cell in cells) ==
-            expected_targets - 4,
+            expected_targets - 5,
             "ragged T=8 final target matrix is incomplete")
     require(sum(cell["role"] == "neighbor" for cell in cells) ==
-            expected_neighbors + 4,
+            expected_neighbors + 5,
             "ragged T=8 final neighbor matrix is incomplete")
     return cells
 

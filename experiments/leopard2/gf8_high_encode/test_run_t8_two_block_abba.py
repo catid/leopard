@@ -149,10 +149,11 @@ def main() -> int:
         "ragged-target-k6-r5-b319",
         "ragged-target-k6-r6-b319",
         "ragged-target-k7-r5-b319",
+        "ragged-target-k7-r6-b319",
     }
-    require(sum(item["role"] == "target" for item in cells) == 1214,
+    require(sum(item["role"] == "target" for item in cells) == 1213,
             "ragged final target count changed")
-    require(sum(item["role"] == "neighbor" for item in cells) == 844,
+    require(sum(item["role"] == "neighbor" for item in cells) == 845,
             "ragged final neighbor count changed")
     require(all(
             cells_by_id[cell_id]["role"] == "neighbor" and
@@ -162,7 +163,8 @@ def main() -> int:
         "ragged final selector lost a holdout exclusion")
     require(
         cells_by_id["ragged-target-k6-r5-b191"]["role"] == "target" and
-        cells_by_id["ragged-target-k5-r5-b319"]["role"] == "target",
+        cells_by_id["ragged-target-k5-r5-b319"]["role"] == "target" and
+        cells_by_id["ragged-target-k7-r7-b319"]["role"] == "target",
         "ragged final selector widened a holdout exclusion")
     manifest_sha256 = "a" * 64
     with tempfile.TemporaryDirectory(

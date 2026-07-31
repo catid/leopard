@@ -196,7 +196,7 @@ bool IsExpectedT8RaggedShapeByteCount(
         return false;
     if (bytes == 319 &&
         ((k == 6 && (r == 5 || r == 6)) ||
-         (k == 7 && r == 5)))
+         (k == 7 && (r == 5 || r == 6))))
         return false;
     return true;
 }

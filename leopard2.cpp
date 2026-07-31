@@ -673,7 +673,7 @@ static bool IsHighT8RaggedShapeByteCount(
     /*
         Conservative intersection from the full frozen campaign and its
         predeclared nine-round holdout.  Each byte range is bounded by
-        equal-cost 32-byte vector tiers.  Four shape/byte cells missed the
+        equal-cost 32-byte vector tiers.  Five shape/byte cells missed the
         padded exact-main lower-confidence gate and stay on the mature path.
         R>K shapes were outside the comparable Leopard1 campaign and are not
         selected without independent evidence.
@@ -699,7 +699,8 @@ static bool IsHighT8RaggedShapeByteCount(
     if (shard_bytes == 319 &&
         ((original_count == 6 &&
           (recovery_count == 5 || recovery_count == 6)) ||
-         (original_count == 7 && recovery_count == 5)))
+         (original_count == 7 &&
+          (recovery_count == 5 || recovery_count == 6))))
         return false;
     return true;
 }
