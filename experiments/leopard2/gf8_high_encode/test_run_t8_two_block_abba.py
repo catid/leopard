@@ -188,6 +188,20 @@ def main() -> int:
                 validated["all_rounds_zero_sibling_nonidle"] is True,
                 "valid streamed cell accounting changed")
 
+        runner_wakeup = copy.deepcopy(record)
+        runner_wakeup["presample"]["delta"]["benchmark_cpu"][
+            "nonidle_jiffies"] = 1
+        RUNNER.validate_ragged_cell_record(
+            runner_wakeup, cell, manifest_sha256, root, 3)
+
+        contaminated_presample = copy.deepcopy(record)
+        contaminated_presample["presample"]["delta"]["benchmark_cpu"][
+            "nonidle_jiffies"] = 2
+        expect_failure(
+            lambda: RUNNER.validate_ragged_cell_record(
+                contaminated_presample, cell, manifest_sha256, root, 3),
+            "cell with excess benchmark-CPU presample work was accepted")
+
         wrong_manifest = copy.deepcopy(record)
         wrong_manifest["manifest_sha256"] = "b" * 64
         expect_failure(

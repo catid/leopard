@@ -97,6 +97,7 @@ RAGGED_NEIGHBOR_BYTE_COUNTS = (
     705, 737, 801, 833, 865, 929, 961, 992, 993, 1023,
 )
 PADDED_MAX_ISOLATION_ATTEMPTS = 3
+PRESAMPLE_MAX_RUNNER_NONIDLE_JIFFIES = 1
 
 
 class EvidenceError(RuntimeError):
@@ -1001,7 +1002,8 @@ def validate_ragged_cell_record(
             isinstance(pair_lease, dict) and
             presample.get("pair_lease") == pair_lease and
             presample.get("delta", {}).get(
-                "benchmark_cpu", {}).get("nonidle_jiffies") == 0 and
+                "benchmark_cpu", {}).get("nonidle_jiffies", 2) <=
+                    PRESAMPLE_MAX_RUNNER_NONIDLE_JIFFIES and
             presample.get("delta", {}).get(
                 "reserved_sibling", {}).get("nonidle_jiffies") == 0,
             "ragged cell references a contaminated presample")
@@ -1256,6 +1258,15 @@ def main() -> int:
             ),
             "rejected_attempts_retained": padded_campaign(campaign),
         },
+        "presample_policy": {
+            "benchmark_cpu_max_nonidle_jiffies":
+                PRESAMPLE_MAX_RUNNER_NONIDLE_JIFFIES,
+            "reserved_sibling_max_nonidle_jiffies": 0,
+            "rationale": (
+                "the singleton-pinned Python supervisor must wake and read "
+                "the ending counters on the benchmark CPU"
+            ),
+        },
         "cells": [],
         "cell_artifacts": [],
     }
@@ -1343,7 +1354,8 @@ def main() -> int:
                 before_sibling, SUPPORT.cpu_stat_snapshot(options.sibling))
             raw["presample"] = presample
             require(
-                presample["delta"]["benchmark_cpu"]["nonidle_jiffies"] == 0 and
+                presample["delta"]["benchmark_cpu"]["nonidle_jiffies"] <=
+                    PRESAMPLE_MAX_RUNNER_NONIDLE_JIFFIES and
                 presample["delta"]["reserved_sibling"]["nonidle_jiffies"] == 0,
                 "CPU pair was not quiet during the presample")
             run_nonce = f"{os.getpid()}-{time.monotonic_ns()}"
@@ -1557,6 +1569,7 @@ def main() -> int:
             "runner": raw["runner"],
             "invocation_storage": raw["invocation_storage"],
             "isolation_retry_policy": raw["isolation_retry_policy"],
+            "presample_policy": raw["presample_policy"],
             "campaign": campaign,
             "cell_filter": raw["cell_filter"],
             "target_rounds": options.target_rounds,
