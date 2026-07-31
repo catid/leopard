@@ -76,7 +76,7 @@ EXTENDED_PRODUCTION_MASKS = {
 ONE_KIB_ONE_BLOCK_PRIOR_MASK = 0x4FCC
 ONE_KIB_ONE_BLOCK_EXTENSION_MASK = 0x0030
 ONE_KIB_TWO_BLOCK_PRIOR_MASK = EXTENDED_PRODUCTION_MASKS[1024]
-ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000380
+ONE_KIB_TWO_BLOCK_EXTENSION_MASK = 0x10000280
 
 
 class EvidenceError(RuntimeError):
@@ -267,7 +267,7 @@ def one_kib_extension_cells() -> list[dict[str, Any]]:
             })
             index += 1
     require(len(cells) == 42, "one-kib shape matrix is incomplete")
-    require(sum(cell["role"] == "target" for cell in cells) == 6,
+    require(sum(cell["role"] == "target" for cell in cells) == 5,
             "one-kib target intersection changed")
     return cells
 
@@ -726,7 +726,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         "--one-kib-extension", action="store_true",
         help=(
-            "qualify only the six new 1024-byte T=8 selector shapes while "
+            "qualify only the five new 1024-byte T=8 selector shapes while "
             "treating every other legal K=5..16/R=5..8 shape as a neighbor"
         ))
     return parser.parse_args()

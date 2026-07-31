@@ -747,11 +747,11 @@ static bool IsHighT8TwoBlockExtendedShapeByteCount(
     uint32_t shape_mask = kShapeMasks[byte_index];
 #if LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION
     /*
-        Independent nine-round holdout winners not selected by the prior
-        1024-byte mask: K=10/R=8, K=11/R=5..6, and K=16/R=5.
+        Independently qualified shapes not selected by the prior 1024-byte
+        mask: K=10/R=8, K=11/R=6, and K=16/R=5.
     */
     if (shard_bytes == 1024 && g_high_t8_1024_extension_mode == 1U)
-        shape_mask |= UINT32_C(0x10000380);
+        shape_mask |= UINT32_C(0x10000280);
 #endif
     return (shape_mask & (UINT32_C(1) << shape_bit)) != 0;
 }

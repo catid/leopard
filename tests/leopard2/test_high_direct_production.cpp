@@ -188,7 +188,7 @@ bool IsExpectedT8TwoBlockExtendedShapeByteCount(
     if (LEO2_EXPERIMENT_HIGH_T8_1024_EXTENSION != 0 &&
         LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_1024_EXTENSION == 0 &&
         bytes == 1024)
-        shape_mask |= UINT32_C(0x10000380);
+        shape_mask |= UINT32_C(0x10000280);
     return (shape_mask & (UINT32_C(1) << shape_bit)) != 0;
 }
 
