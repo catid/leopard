@@ -216,17 +216,41 @@ def smoke_cells() -> list[dict[str, Any]]:
 def holdout_cells() -> list[dict[str, Any]]:
     cells = [
         make_cell(
-            "holdout-k3-r3-b16384-q1",
-            3, 3, 16384, 1, "boundary_neighbor"),
+            "holdout-k4-r3-b12288-q64",
+            4, 3, 12288, 64, "target"),
         make_cell(
-            "holdout-k4-r4-b6144-q1",
-            4, 4, 6144, 1, "boundary_neighbor"),
+            "holdout-k6-r3-b8192-q64",
+            6, 3, 8192, 64, "target"),
         make_cell(
-            "holdout-k6-r4-b8192-q8",
-            6, 4, 8192, 8, "boundary_neighbor"),
+            "holdout-k6-r4-b4096-q64",
+            6, 4, 4096, 64, "target"),
         make_cell(
-            "holdout-k7-r3-b16384-q64",
-            7, 3, 16384, 64, "target"),
+            "holdout-k6-r4-b6144-q64",
+            6, 4, 6144, 64, "target"),
+        make_cell(
+            "holdout-k7-r4-b4096-q64",
+            7, 4, 4096, 64, "target"),
+        make_cell(
+            "holdout-k9-r3-b6144-q64",
+            9, 3, 6144, 64, "target"),
+        make_cell(
+            "holdout-k9-r4-b6144-q64",
+            9, 4, 6144, 64, "target"),
+        make_cell(
+            "holdout-k10-r3-b6144-q64",
+            10, 3, 6144, 64, "target"),
+        make_cell(
+            "holdout-k10-r4-b3072-q64",
+            10, 4, 3072, 64, "target"),
+        make_cell(
+            "holdout-k10-r4-b6144-q64",
+            10, 4, 6144, 64, "target"),
+        make_cell(
+            "holdout-k11-r3-b6144-q64",
+            11, 3, 6144, 64, "target"),
+        make_cell(
+            "holdout-k11-r4-b3072-q64",
+            11, 4, 3072, 64, "target"),
         make_cell(
             "holdout-k11-r4-b4096-q64",
             11, 4, 4096, 64, "target"),
