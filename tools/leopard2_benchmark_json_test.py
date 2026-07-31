@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-import itertools
 import importlib.util
 import json
 import math
@@ -302,6 +301,7 @@ def run(
     report_decode_path: bool = False,
     attest_source: bool = False,
     report_direct_executor: bool = False,
+    measure_one_shot_decode: bool = False,
     *,
     k: int = 3,
     r: int = 2,
@@ -324,6 +324,8 @@ def run(
             command.append("--attest-source")
         if report_direct_executor:
             command.append("--report-direct-executor")
+        if measure_one_shot_decode:
+            command.append("--measure-one-shot-decode")
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -343,7 +345,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             document["schema"] in {
                 "leopard2-benchmark-v1", "leopard2-benchmark-v2",
                 "leopard2-benchmark-v3", "leopard2-benchmark-v5",
-                "leopard2-benchmark-v6",
+                "leopard2-benchmark-v6", "leopard2-benchmark-v7",
+                "leopard2-benchmark-v8",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -351,6 +354,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
         "leopard2-benchmark-v2", "leopard2-benchmark-v3",
         "leopard2-benchmark-v5", "leopard2-benchmark-v6",
+        "leopard2-benchmark-v7", "leopard2-benchmark-v8",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -360,16 +364,26 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(isinstance(document[section], dict),
                 f"benchmark {section} is not an object")
     expected_build = {"compiler", "compiler_version", "cplusplus"}
-    if document["schema"] == "leopard2-benchmark-v5":
+    if document["schema"] in {
+            "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         expected_build.update({
             "source_commit", "source_tree", "source_tracked_dirty"})
+    if document["schema"] in {
+            "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
+        expected_build.add("equal_rounded_multi_loss_enabled")
     require(set(document["build"]) == expected_build, "build keys changed")
     require(type(document["build"]["compiler"]) is str and
             type(document["build"]["compiler_version"]) is str and
             type(document["build"]["cplusplus"]) is int and
             document["build"]["cplusplus"] > 0,
             "benchmark build value types changed")
-    if document["schema"] == "leopard2-benchmark-v5":
+    if document["schema"] in {
+            "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
+        require(type(document["build"][
+                    "equal_rounded_multi_loss_enabled"]) is bool,
+                "equal-rounded build selector is not Boolean")
+    if document["schema"] in {
+            "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         for name in ("source_commit", "source_tree"):
             value = document["build"][name]
             require(value == "unknown" or
@@ -383,6 +397,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "padded_side"}
     if document["schema"] in {
         "leopard2-benchmark-v3", "leopard2-benchmark-v6",
+        "leopard2-benchmark-v7",
     }:
         expected_resolved.update({
             "selected_decode_path", "selected_decode_rule",
@@ -390,7 +405,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "decode_tail_bytes", "decode_rounded_bytes",
             "decode_multi_item_batch",
         })
-    if document["schema"] == "leopard2-benchmark-v6":
+    if document["schema"] in {
+            "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_resolved.add("selected_direct_executor")
     require(set(document["resolved"]) == expected_resolved,
             "resolved keys changed")
@@ -419,6 +435,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "resolved numeric codec identity is invalid")
     if document["schema"] in {
         "leopard2-benchmark-v3", "leopard2-benchmark-v6",
+        "leopard2-benchmark-v7",
     }:
         pair = (
             document["resolved"]["selected_decode_path"],
@@ -426,7 +443,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(all(type(item) is str for item in pair) and
                 pair in PRODUCTION_DECODE_PATH_RULE_PAIRS,
                 "resolved decode path/rule pair is not a production pair")
-    if document["schema"] == "leopard2-benchmark-v6":
+    if document["schema"] in {
+            "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         executor = document["resolved"]["selected_direct_executor"]
         require(type(executor) is str and
                 executor in {"none", "output_major", "source_major"} and
@@ -438,17 +456,27 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             (document["correctness"]["legacy_comparison"] is None or
              document["correctness"]["legacy_comparison"] == "matched"),
             "correctness results are invalid")
-    require(set(document["memory"]) == {
+    expected_memory = {
         "scratch_alignment", "encode_scratch_bytes_per_stripe",
         "decode_scratch_bytes_per_stripe", "encode_scratch_bytes_batch",
-        "decode_scratch_bytes_batch"}, "memory keys changed")
+        "decode_scratch_bytes_batch"}
+    if document["schema"] == "leopard2-benchmark-v8":
+        expected_memory.update({
+            "one_shot_decode_scratch_bytes_per_stripe",
+            "one_shot_decode_scratch_bytes_batch",
+        })
+    require(set(document["memory"]) == expected_memory,
+            "memory keys changed")
     require(all(type(value) is int and value >= 0
                 for value in document["memory"].values()) and
             document["memory"]["scratch_alignment"] > 0,
             "memory values are invalid")
-    require(set(document["metrics"]) == {
+    expected_metrics = {
         "codec_setup", "encode_execution", "decode_plan_setup",
-        "decode_execution", "decode_amortized_at_reuse", "rate_semantics"},
+        "decode_execution", "decode_amortized_at_reuse", "rate_semantics"}
+    if document["schema"] == "leopard2-benchmark-v8":
+        expected_metrics.add("one_shot_decode_including_setup")
+    require(set(document["metrics"]) == expected_metrics,
         "metrics keys changed")
     require(set(document["legacy"]) == {
         "available", "unavailable_reason", "codec_setup",
@@ -483,6 +511,18 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="offered_received_GB_per_s",
         output_rate_name="repaired_output_GB_per_s",
         input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
+    if document["schema"] == "leopard2-benchmark-v8":
+        require(parameters.get("measure_one_shot_decode") is True,
+                "one-shot decode benchmark opt-in was not recorded")
+        validate_timing_summary(
+            document["metrics"]["one_shot_decode_including_setup"],
+            "one_shot_decode_including_setup",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=True,
+            input_rate_name="offered_received_GB_per_s",
+            output_rate_name="repaired_output_GB_per_s",
+            input_bytes=decode_input_bytes,
+            output_bytes=decode_output_bytes)
 
     amortized = document["metrics"]["decode_amortized_at_reuse"]
     require(isinstance(amortized, dict) and set(amortized) == {
@@ -563,8 +603,9 @@ def validate_direct_executor_report(
     expected_executor: str,
     *,
     expect_direct_path: bool,
+    expected_schema: str = "leopard2-benchmark-v6",
 ) -> None:
-    require(document.get("schema") == "leopard2-benchmark-v6",
+    require(document.get("schema") == expected_schema,
             "direct-executor benchmark schema changed")
     validate_common(document, True)
     validate_workload_digests(document)
@@ -685,27 +726,43 @@ def main() -> int:
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
 
+    one_shot = run(
+        executable, True, measure_one_shot_decode=True,
+        k=17, r=17, losses=8)
+    require(one_shot["schema"] == "leopard2-benchmark-v8",
+            "one-shot decode benchmark schema changed")
+    validate_common(one_shot, True)
+    validate_workload_digests(one_shot)
+    require(set(one_shot["parameters"]) ==
+            (expected_external_parameters | {"measure_one_shot_decode"}),
+            "one-shot decode parameter structure changed")
+    require(one_shot["parameters"]["measure_one_shot_decode"] is True,
+            "one-shot decode opt-in was not recorded")
+    require(one_shot["memory"][
+                "one_shot_decode_scratch_bytes_per_stripe"] > 0 and
+            one_shot["memory"]["one_shot_decode_scratch_bytes_batch"] ==
+                one_shot["memory"][
+                    "one_shot_decode_scratch_bytes_per_stripe"],
+            "one-shot decode scratch accounting changed")
+
     path_diagnostic = (
         "--attest-source and --report-decode-path use distinct JSON schemas")
-    direct_diagnostic = (
-        "--attest-source and --report-direct-executor use distinct "
-        "JSON schemas")
     for arguments in (
             ("--attest-source", "--report-decode-path"),
             ("--report-decode-path", "--attest-source")):
         require_schema_modes_rejected(
             executable, arguments, path_diagnostic)
-    for arguments in (
-            ("--attest-source", "--report-direct-executor"),
-            ("--report-direct-executor", "--attest-source")):
-        require_schema_modes_rejected(
-            executable, arguments, direct_diagnostic)
-    for arguments in itertools.permutations((
-            "--attest-source",
-            "--report-decode-path",
-            "--report-direct-executor")):
-        require_schema_modes_rejected(
-            executable, arguments, direct_diagnostic)
+    one_shot_diagnostic = (
+        "--measure-one-shot-decode currently uses a standalone schema and "
+        "cannot be combined with path/source attestation")
+    for incompatible in (
+            "--attest-source", "--report-decode-path",
+            "--report-direct-executor"):
+        for arguments in (
+                ("--measure-one-shot-decode", incompatible),
+                (incompatible, "--measure-one-shot-decode")):
+            require_schema_modes_rejected(
+                executable, arguments, one_shot_diagnostic)
 
     standard_attested = run(executable, True, attest_source=True)
     require(standard_attested["schema"] == "leopard2-benchmark-v5",
@@ -745,6 +802,25 @@ def main() -> int:
         require(standard_attested["build"]["source_tracked_dirty"] is
                 (expected_dirty != "0"),
                 "standard benchmark dirty flag differs from CMake identity")
+
+    attested_direct = run(
+        executable, True, attest_source=True,
+        report_direct_executor=True, k=3, r=2, losses=2)
+    validate_direct_executor_report(
+        attested_direct, "output_major", expect_direct_path=True,
+        expected_schema="leopard2-benchmark-v7")
+    require(set(attested_direct["parameters"]) ==
+            (expected_external_parameters | {
+                "attest_source", "report_decode_path",
+                "report_direct_executor"}),
+            "source-attested direct-executor parameters changed")
+    require(all(attested_direct["build"][name] ==
+                standard_attested["build"][name]
+                for name in (
+                    "compiler", "compiler_version", "cplusplus",
+                    "source_commit", "source_tree",
+                    "source_tracked_dirty")),
+            "source-attested direct executor changed source identity")
 
     if len(sys.argv) == 3:
         attested_executable = Path(sys.argv[2]).resolve()

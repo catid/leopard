@@ -28,12 +28,8 @@
 
 #include "leopard.h"
 #include "leopard2.h"
-#include "Leopard2Dispatch.h"
-#if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION) || \
-    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
-    defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
 #include "Leopard2Direct.h"
-#endif
+#include "Leopard2Dispatch.h"
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
 #if !defined(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER)
 #error "source-attested benchmark requires its exact generated header path"
@@ -119,6 +115,7 @@ struct Options
     bool report_decode_path;
     bool report_direct_executor;
     bool attest_source;
+    bool measure_one_shot_decode;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     bool disable_high_t4_binding;
 #endif
@@ -159,6 +156,7 @@ struct Options
         , report_decode_path(false)
         , report_direct_executor(false)
         , attest_source(false)
+        , measure_one_shot_decode(false)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         , disable_high_t4_binding(false)
 #endif
@@ -250,6 +248,7 @@ struct Stripe
     AlignedBuffer restored_storage;
     AlignedBuffer encode_scratch;
     AlignedBuffer decode_scratch;
+    AlignedBuffer one_shot_decode_scratch;
     std::vector<const void*> original;
     std::vector<const void*> received_original;
     std::vector<void*> recovery_output;
@@ -426,6 +425,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
         << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+        << "  --measure-one-shot-decode\n"
+        << "                         Time the public one-shot decode wrapper using schema v8\n"
 #if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
     !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         << "  --report-direct-executor\n"
@@ -483,6 +484,8 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+        else if (argument == "--measure-one-shot-decode")
+            options.measure_one_shot_decode = true;
         else if (argument == "--report-direct-executor")
         {
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
@@ -523,6 +526,13 @@ static Options ParseOptions(int argc, char** argv)
         else Fail("unknown argument: " + argument);
     }
 
+    if (options.measure_one_shot_decode &&
+        (options.report_decode_path || options.report_direct_executor ||
+         options.attest_source))
+    {
+        Fail("--measure-one-shot-decode currently uses a standalone schema "
+             "and cannot be combined with path/source attestation");
+    }
     if (options.k == 0 || options.r == 0)
         Fail("--k and --r must be positive and fit in uint32");
     if (options.bytes == 0 || options.bytes > std::numeric_limits<size_t>::max())
@@ -1160,8 +1170,15 @@ static int Run(const Options& options)
 
     size_t encode_scratch_bytes = 0;
     size_t decode_scratch_bytes = 0;
+    size_t one_shot_decode_scratch_bytes = 0;
     RequireLeo2(leo2_encode_scratch_size(codec, options.bytes, &encode_scratch_bytes),
         "encode scratch query");
+    if (options.measure_one_shot_decode)
+    {
+        RequireLeo2(leo2_decode_scratch_size(
+            codec, options.bytes, &one_shot_decode_scratch_bytes),
+            "one-shot decode scratch query");
+    }
 
     const std::vector<uint32_t> losses = SelectLosses(options);
     std::vector<uint8_t> original_present(options.k, 1);
@@ -1203,6 +1220,8 @@ static int Run(const Options& options)
         InitializeStripe(*stripes.back(), options, losses, i,
             encode_scratch_bytes, decode_scratch_bytes);
         Stripe& stripe = *stripes.back();
+        stripe.one_shot_decode_scratch.Reset(
+            one_shot_decode_scratch_bytes);
         encode_items[i].shard_bytes = options.bytes;
         encode_items[i].original = &stripe.original[0];
         encode_items[i].recovery = &stripe.recovery_output[0];
@@ -1252,6 +1271,21 @@ static int Run(const Options& options)
                 decode_batch_preflight.size());
         RequireLeo2(result, "decode batch");
     };
+    const auto run_one_shot_decode = [&]() {
+        for (size_t i = 0; i < stripes.size(); ++i)
+        {
+            Stripe& stripe = *stripes[i];
+            RequireLeo2(leo2_decode(
+                codec, options.bytes,
+                &original_present[0], &recovery_present[0],
+                &stripe.received_original[0],
+                &stripe.received_recovery[0],
+                &stripe.restored[0],
+                stripe.one_shot_decode_scratch.data(),
+                stripe.one_shot_decode_scratch.size()),
+                "one-shot decode");
+        }
+    };
     const auto run_encode_batch_execution = [&]() {
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         RequireLeo2(leo2_encode_batch_binding_execute(
@@ -1263,11 +1297,12 @@ static int Run(const Options& options)
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
-        options.attest_source;
+        options.attest_source || options.measure_one_shot_decode;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.measure_one_shot_decode ? 8 :
         (options.report_direct_executor && options.attest_source) ? 7 :
         options.report_direct_executor ? 6 :
         options.attest_source ? 5 :
@@ -1296,6 +1331,13 @@ static int Run(const Options& options)
     run_decode_batch();
     for (size_t i = 0; i < stripes.size(); ++i)
         CheckRestored(*stripes[i], options, losses, "Leopard2");
+    if (options.measure_one_shot_decode)
+    {
+        run_one_shot_decode();
+        for (size_t i = 0; i < stripes.size(); ++i)
+            CheckRestored(*stripes[i], options, losses,
+                "Leopard2 one-shot");
+    }
     if (extended_schema)
     {
         for (size_t stripe_index = 0; stripe_index < stripes.size(); ++stripe_index)
@@ -1353,6 +1395,8 @@ static int Run(const Options& options)
     {
         run_encode_batch_execution();
         run_decode_batch();
+        if (options.measure_one_shot_decode)
+            run_one_shot_decode();
     }
 
     const Summary encode_execution = Measure(
@@ -1363,6 +1407,14 @@ static int Run(const Options& options)
         options.iterations, options.reuse, options.retain_samples, [&]() {
         run_decode_batch();
     });
+    Summary one_shot_decode = Summary();
+    if (options.measure_one_shot_decode)
+    {
+        one_shot_decode = Measure(
+            options.iterations, options.reuse, options.retain_samples, [&]() {
+            run_one_shot_decode();
+        });
+    }
 
     const std::string legacy_reason = options.skip_legacy
         ? "disabled by --skip-legacy"
@@ -1465,6 +1517,9 @@ static int Run(const Options& options)
             "batch decode scratch byte count"),
         static_cast<uint64_t>(decode_batch_preflight_bytes),
         "batch decode scratch byte count");
+    const uint64_t one_shot_decode_scratch_batch = CheckedU64Product(
+        static_cast<uint64_t>(one_shot_decode_scratch_bytes), batch,
+        "batch one-shot decode scratch byte count");
 
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     leopard2_internal::CodecEncodePathInfo encode_path_info = {};
@@ -1583,6 +1638,8 @@ static int Run(const Options& options)
             json << "    \"report_direct_executor\": true,\n";
         if (options.attest_source)
             json << "    \"attest_source\": true,\n";
+        if (options.measure_one_shot_decode)
+            json << "    \"measure_one_shot_decode\": true,\n";
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
@@ -1681,7 +1738,16 @@ static int Run(const Options& options)
          << "    \"encode_scratch_bytes_per_stripe\": " << encode_scratch_bytes << ",\n"
          << "    \"decode_scratch_bytes_per_stripe\": " << decode_scratch_bytes << ",\n"
          << "    \"encode_scratch_bytes_batch\": " << encode_scratch_batch << ",\n"
-         << "    \"decode_scratch_bytes_batch\": " << decode_scratch_batch << "\n"
+         << "    \"decode_scratch_bytes_batch\": " << decode_scratch_batch;
+    if (options.measure_one_shot_decode)
+    {
+        json << ",\n"
+             << "    \"one_shot_decode_scratch_bytes_per_stripe\": "
+             << one_shot_decode_scratch_bytes << ",\n"
+             << "    \"one_shot_decode_scratch_bytes_batch\": "
+             << one_shot_decode_scratch_batch;
+    }
+    json << "\n"
          << "  },\n"
          << "  \"metrics\": {\n"
          << "    \"codec_setup\": ";
@@ -1697,6 +1763,14 @@ static int Run(const Options& options)
     json << ",\n    \"decode_amortized_at_reuse\": ";
     WriteAmortizedDecodeSummary(json, plan_setup, decode_execution, options.reuse,
         decode_input_bytes, decode_output_bytes, 4);
+    if (options.measure_one_shot_decode)
+    {
+        json << ",\n    \"one_shot_decode_including_setup\": ";
+        WriteSummary(json, one_shot_decode,
+            decode_input_bytes, "offered_received_GB_per_s",
+            decode_output_bytes, "repaired_output_GB_per_s",
+            4, options.retain_samples);
+    }
     json << ",\n    \"rate_semantics\": "
          << "\"offered_received counts all non-null shard pointers supplied; "
          << "a plan may read a deterministic subset\"";

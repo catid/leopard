@@ -44,6 +44,13 @@ option(LEO2_PORTABLE_ISA_RELEASE_AUDIT
     "Require the strict x86-64 portable-ISA release audit" OFF)
 option(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN
     "Preformat AVX2 direct-repair source schedules in decode plans" OFF)
+option(LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
+    "Fuse tiny equal-rounded GF8 one-shot repair without a heap plan" ON)
+if(LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT)
+    add_definitions(-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1)
+else()
+    add_definitions(-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=0)
+endif()
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
     "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
     OFF)

@@ -275,6 +275,14 @@
 #error "LEO2_EXPERIMENT_EQUAL_ROUNDED_SOURCE_MAJOR_MIN_BYTES must be positive"
 #endif
 
+#ifndef LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
+#define LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT 1
+#endif
+#if LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT < 0 || \
+    LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT > 1
+#error "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT must be 0 or 1"
+#endif
+
 #ifndef LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
 #define LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE 1
 #endif
@@ -2974,7 +2982,9 @@ static bool InvertDirectRepairMatrix(
 
 template<class Field>
 static bool PrepareDirectRepairCauchyInverse(
-    const leo2_decode_plan* plan,
+    const leo2_codec* codec,
+    const uint32_t* missing_originals,
+    uint32_t losses,
     const std::vector<typename Field::Element>& barycentric_weights,
     const std::vector<typename Field::Element>& cached_generator_rows,
     const uint32_t* selected_parities,
@@ -2982,10 +2992,9 @@ static bool PrepareDirectRepairCauchyInverse(
         [kDirectMaxRepairLosses][kDirectMaxRepairLosses])
 {
     typedef typename Field::Element Element;
-    const leo2_codec* codec = plan->codec;
-    const uint32_t losses = plan->missing_original_count;
     if (!codec || losses == 0 || losses > kDirectMaxRepairLosses ||
-        !selected_parities || barycentric_weights.size() !=
+        !missing_originals || !selected_parities ||
+        barycentric_weights.size() !=
             codec->original_count)
         return false;
 
@@ -3009,7 +3018,7 @@ static bool PrepareDirectRepairCauchyInverse(
     {
         missing_coordinates[missing] = static_cast<Element>(
             CoordinateForOriginal(codec,
-                plan->missing_originals[missing]));
+                missing_originals[missing]));
     }
 
     const Element reference_coordinate = static_cast<Element>(
@@ -3090,7 +3099,7 @@ static bool PrepareDirectRepairCauchyInverse(
         }
         column_factor_logs[missing] = Field::SubtractLogs(0,
             Field::AddLogs(Field::Log(barycentric_weights[
-                plan->missing_originals[missing]]),
+                missing_originals[missing]]),
                 message_derivative_log));
     }
 
@@ -3286,7 +3295,8 @@ static bool PrepareDirectRepairTerms(
     {
         Element cauchy_inverse
             [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
-        if (PrepareDirectRepairCauchyInverse<Field>(plan,
+        if (PrepareDirectRepairCauchyInverse<Field>(codec,
+                plan->missing_originals.data(), losses,
                 barycentric_weights, *cached_generator_rows,
                 selected_parities, cauchy_inverse))
         {
@@ -6164,6 +6174,485 @@ static leo2_result ValidateDecodeBuffers(
             MakeRange(restored[i], shard_bytes, outputs[output_count++]);
     return ValidateDisjointRanges(ranges, input_count, outputs, output_count);
 }
+
+#if LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT && defined(LEO_HAS_FF8)
+static const uint64_t kOneShotEqualRoundedMaximumBytes = 514;
+static const size_t kOneShotEqualRoundedTileBytes = 256;
+
+/*
+    A reusable direct plan is intentionally output-major and heap-owned.  That
+    is the right representation once its K*L terms are reused, but at one to
+    65 bytes a cold plan costs more than all byte arithmetic.  The one-shot
+    wrapper already knows the byte count, so keep the same equations in bounded
+    stack storage and fuse coefficient preparation with source-major execution.
+
+    This path is deliberately narrower than direct-plan eligibility: pure AVX2,
+    equal-rounded legacy-high GF8, one through eight losses, and bounded
+    256-byte tiles.  It never changes reusable plans, scratch queries, the wire
+    profile, or other backends.
+*/
+static leo2_result TryOneShotEqualRoundedDirectRepair(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes,
+    DecodePresencePrefix* validated_prefix,
+    bool& handled)
+{
+    handled = false;
+    if (!codec || shard_bytes == 0 ||
+        shard_bytes > kOneShotEqualRoundedMaximumBytes ||
+        !IsEqualRoundedMultiLossDirectRepairCodec(codec) ||
+        !codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_multiply_add_outputs ||
+        codec->original_count > kDirectMaxParentDimension ||
+        codec->recovery_count > kDirectMaxParentDimension)
+        return LEO2_SUCCESS;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return LEO2_SUCCESS;
+#endif
+
+    handled = true;
+    if (!original_present || !recovery_present)
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange original_presence_range = { 0, 0 };
+    AddressRange recovery_presence_range = { 0, 0 };
+    uint32_t original_scan_start = 0;
+    uint32_t present_count = 0;
+    uint32_t missing_count = 0;
+    uint32_t single_missing_original =
+        std::numeric_limits<uint32_t>::max();
+    if (validated_prefix)
+    {
+        original_presence_range = validated_prefix->original_range;
+        recovery_presence_range = validated_prefix->recovery_range;
+        original_scan_start = validated_prefix->original_scan_start;
+        present_count = validated_prefix->present_count;
+        missing_count = validated_prefix->missing_original_count;
+        single_missing_original =
+            validated_prefix->single_missing_original;
+        if (original_scan_start > codec->original_count ||
+            present_count + missing_count != original_scan_start ||
+            missing_count != 1 ||
+            single_missing_original >= original_scan_start)
+            return LEO2_INTERNAL_ERROR;
+    }
+    else if (!MakeArrayRange(original_present, codec->original_count,
+                 sizeof(*original_present), original_presence_range) ||
+             !MakeArrayRange(recovery_present, codec->recovery_count,
+                 sizeof(*recovery_present), recovery_presence_range))
+    {
+        return LEO2_INVALID_ARGUMENT;
+    }
+
+    uint32_t missing_originals[kDirectMaxRepairLosses] = {};
+    uint32_t selected_parities[kDirectMaxRepairLosses] = {};
+    uint32_t selected_count = 0;
+    if (missing_count == 1)
+        missing_originals[0] = single_missing_original;
+    const size_t repeated_one = ~static_cast<size_t>(0) /
+        static_cast<size_t>(0xff);
+    uint32_t original_index = original_scan_start;
+    while (codec->original_count - original_index >= sizeof(size_t))
+    {
+        size_t packed_presence = 0;
+        memcpy(&packed_presence, original_present + original_index,
+            sizeof(packed_presence));
+        if (packed_presence == repeated_one)
+        {
+            present_count += static_cast<uint32_t>(sizeof(size_t));
+            original_index += static_cast<uint32_t>(sizeof(size_t));
+            continue;
+        }
+        if ((packed_presence & ~repeated_one) != 0)
+            return LEO2_INVALID_ARGUMENT;
+        const uint32_t end = original_index +
+            static_cast<uint32_t>(sizeof(size_t));
+        for (; original_index < end; ++original_index)
+        {
+            if (original_present[original_index])
+                ++present_count;
+            else
+            {
+                if (missing_count < kDirectMaxRepairLosses)
+                    missing_originals[missing_count] = original_index;
+                ++missing_count;
+                single_missing_original = original_index;
+                if (missing_count > kDirectMaxRepairLosses)
+                {
+                    handled = false;
+                    return LEO2_SUCCESS;
+                }
+            }
+        }
+    }
+    for (; original_index < codec->original_count; ++original_index)
+    {
+        if (original_present[original_index] > 1)
+            return LEO2_INVALID_ARGUMENT;
+        if (original_present[original_index])
+            ++present_count;
+        else
+        {
+            if (missing_count < kDirectMaxRepairLosses)
+                missing_originals[missing_count] = original_index;
+            ++missing_count;
+            single_missing_original = original_index;
+            if (missing_count > kDirectMaxRepairLosses)
+            {
+                handled = false;
+                return LEO2_SUCCESS;
+            }
+        }
+    }
+    if (missing_count == 0)
+    {
+        if (validated_prefix)
+        {
+            validated_prefix->original_scan_start = codec->original_count;
+            validated_prefix->present_count = present_count;
+            validated_prefix->missing_original_count = missing_count;
+            validated_prefix->single_missing_original =
+                single_missing_original;
+        }
+        handled = false;
+        return LEO2_SUCCESS;
+    }
+    uint32_t recovery_index = 0;
+    while (codec->recovery_count - recovery_index >= sizeof(size_t))
+    {
+        size_t packed_presence = 0;
+        memcpy(&packed_presence, recovery_present + recovery_index,
+            sizeof(packed_presence));
+        if ((packed_presence & ~repeated_one) != 0)
+            return LEO2_INVALID_ARGUMENT;
+        const uint32_t end = recovery_index +
+            static_cast<uint32_t>(sizeof(size_t));
+        if (packed_presence == repeated_one)
+        {
+            present_count += static_cast<uint32_t>(sizeof(size_t));
+            for (uint32_t index = recovery_index;
+                 index < end && selected_count < missing_count; ++index)
+                selected_parities[selected_count++] = index;
+        }
+        else
+        {
+            for (uint32_t index = recovery_index; index < end; ++index)
+            {
+                if (!recovery_present[index])
+                    continue;
+                ++present_count;
+                if (selected_count < missing_count)
+                    selected_parities[selected_count++] = index;
+            }
+        }
+        recovery_index = end;
+    }
+    for (; recovery_index < codec->recovery_count; ++recovery_index)
+    {
+        if (recovery_present[recovery_index] > 1)
+            return LEO2_INVALID_ARGUMENT;
+        if (!recovery_present[recovery_index])
+            continue;
+        ++present_count;
+        if (selected_count < missing_count)
+            selected_parities[selected_count++] = recovery_index;
+    }
+    if (present_count < codec->original_count)
+        return LEO2_NEED_MORE_DATA;
+    if (selected_count < missing_count)
+        return LEO2_INTERNAL_ERROR;
+
+    size_t row_count = 0;
+    if (!CheckedMultiply(static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), row_count) ||
+        codec->direct_repair_generator_rows8.size() < row_count)
+    {
+        handled = false;
+        return LEO2_SUCCESS;
+    }
+
+    ScratchLayout layout;
+    size_t rounded_bytes = 0;
+    leo2_result result = DirectDecodeLayout(
+        codec, shard_bytes, layout, rounded_bytes);
+    if (result != LEO2_SUCCESS)
+        return result;
+    AddressRange scratch_range;
+    result = CheckScratch(scratch, scratch_bytes, layout, scratch_range);
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!original || !recovery || !restored)
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange metadata_ranges[5];
+    if (!MakeArrayRange(original, codec->original_count,
+            sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, codec->recovery_count,
+            sizeof(*recovery), metadata_ranges[1]) ||
+        !MakeArrayRange(restored, codec->original_count,
+            sizeof(*restored), metadata_ranges[2]))
+        return LEO2_INVALID_ARGUMENT;
+    metadata_ranges[3] = original_presence_range;
+    metadata_ranges[4] = recovery_presence_range;
+    if (RangeOverlapsAny(scratch_range, metadata_ranges, 5))
+        return LEO2_OVERLAP;
+
+    size_t input_count = 0;
+    size_t output_count = 0;
+    AddressRange* const input_ranges =
+        reinterpret_cast<AddressRange*>(scratch);
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        if ((original[i] != NULL) != (original_present[i] != 0))
+            return LEO2_INVALID_ARGUMENT;
+        AddressRange range;
+        if (original[i])
+        {
+            if (!MakeRange(original[i], shard_bytes, range))
+                return LEO2_INVALID_ARGUMENT;
+            if (RangesOverlap(range, scratch_range))
+                return LEO2_OVERLAP;
+            if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+                return LEO2_INVALID_ARGUMENT;
+            input_ranges[input_count++] = range;
+        }
+        else
+        {
+            if (!restored[i] ||
+                !MakeRange(restored[i], shard_bytes, range))
+                return LEO2_INVALID_ARGUMENT;
+            if (RangesOverlap(range, scratch_range) ||
+                RangeOverlapsAny(range, metadata_ranges, 5))
+                return LEO2_OVERLAP;
+            input_ranges[codec->original_count + codec->recovery_count +
+                output_count++] = range;
+        }
+    }
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        if ((recovery[i] != NULL) != (recovery_present[i] != 0))
+            return LEO2_INVALID_ARGUMENT;
+        if (!recovery[i])
+            continue;
+        AddressRange range;
+        if (!MakeRange(recovery[i], shard_bytes, range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(range, scratch_range))
+            return LEO2_OVERLAP;
+        input_ranges[input_count++] = range;
+    }
+    if (output_count != missing_count)
+        return LEO2_INTERNAL_ERROR;
+
+    /* Compact outputs behind the actual input list before the established
+       sort/merge validator; their temporary high-water placement above kept
+       input appends from overwriting them. */
+    AddressRange* const staged_outputs = input_ranges +
+        codec->original_count + codec->recovery_count;
+    AddressRange* const output_ranges = input_ranges + input_count;
+    if (output_ranges != staged_outputs)
+        memmove(output_ranges, staged_outputs,
+            output_count * sizeof(*output_ranges));
+    result = ValidateDisjointRanges(
+        input_ranges, input_count, output_ranges, output_count);
+    if (result != LEO2_SUCCESS)
+        return result;
+
+    typedef DirectField8 Field;
+    typedef Field::Element Element;
+    const std::vector<Element>& rows =
+        codec->direct_repair_generator_rows8;
+    Element inverse
+        [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
+    const bool have_cauchy_inverse =
+        PrepareDirectRepairCauchyInverse<Field>(codec,
+            missing_originals, missing_count,
+            codec->direct_barycentric8, rows,
+            selected_parities, inverse);
+    if (!have_cauchy_inverse)
+    {
+        Element augmented
+            [kDirectMaxRepairLosses][kDirectMaxRepairLosses * 2] = {};
+        for (uint32_t equation = 0;
+             equation < missing_count; ++equation)
+        {
+            const Element* const row = rows.data() +
+                static_cast<size_t>(selected_parities[equation]) *
+                    codec->original_count;
+            for (uint32_t missing = 0;
+                 missing < missing_count; ++missing)
+                augmented[equation][missing] =
+                    row[missing_originals[missing]];
+            augmented[equation][missing_count + equation] = 1;
+        }
+        if (!InvertDirectRepairMatrix<Field>(augmented, missing_count))
+            return LEO2_INTERNAL_ERROR;
+        for (uint32_t output = 0;
+             output < missing_count; ++output)
+        {
+            for (uint32_t equation = 0;
+                 equation < missing_count; ++equation)
+            {
+                inverse[output][equation] =
+                    augmented[output][missing_count + equation];
+            }
+        }
+    }
+
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    alignas(kScratchAlignment)
+        uint8_t source_tile[kOneShotEqualRoundedTileBytes];
+    alignas(kScratchAlignment)
+        uint8_t residual_tiles[kDirectMaxRepairLosses]
+            [kOneShotEqualRoundedTileBytes];
+    alignas(kScratchAlignment)
+        uint8_t output_tiles[kDirectMaxRepairLosses]
+            [kOneShotEqualRoundedTileBytes];
+    void* residuals[kDirectMaxRepairLosses] = {};
+    void* outputs[kDirectMaxRepairLosses] = {};
+    uint16_t multiplier_logs[kDirectMaxRepairLosses] = {};
+    const size_t total_bytes = static_cast<size_t>(shard_bytes);
+    for (size_t offset = 0; offset < total_bytes;
+         offset += kOneShotEqualRoundedTileBytes)
+    {
+        const size_t logical_bytes = std::min(
+            kOneShotEqualRoundedTileBytes, total_bytes - offset);
+        const size_t execution_bytes =
+            (logical_bytes + 31U) & ~size_t(31U);
+        if (execution_bytes == 0 ||
+            execution_bytes > kOneShotEqualRoundedTileBytes)
+            return LEO2_INTERNAL_ERROR;
+        const bool exact_vector_bytes = logical_bytes == execution_bytes;
+        if (!exact_vector_bytes)
+            memset(source_tile + logical_bytes, 0,
+                execution_bytes - logical_bytes);
+
+        for (uint32_t output = 0;
+             output < missing_count; ++output)
+        {
+            residuals[output] = residual_tiles[output];
+            outputs[output] = exact_vector_bytes
+                ? static_cast<uint8_t*>(
+                      restored[missing_originals[output]]) + offset
+                : static_cast<void*>(output_tiles[output]);
+            memcpy(residual_tiles[output],
+                static_cast<const uint8_t*>(
+                    recovery[selected_parities[output]]) + offset,
+                logical_bytes);
+            if (!exact_vector_bytes)
+            {
+                memset(residual_tiles[output] + logical_bytes, 0,
+                    execution_bytes - logical_bytes);
+            }
+            if (missing_count != 1)
+                memset(outputs[output], 0, execution_bytes);
+        }
+
+        if (missing_count == 1)
+        {
+            const Element* const generator_row = rows.data() +
+                static_cast<size_t>(selected_parities[0]) *
+                    codec->original_count;
+            for (uint32_t source = 0;
+                 source < codec->original_count; ++source)
+            {
+                if (!original_present[source])
+                    continue;
+                const Element coefficient = generator_row[source];
+                if (coefficient == 0)
+                    continue;
+                const void* execution_source =
+                    static_cast<const uint8_t*>(original[source]) + offset;
+                if (!exact_vector_bytes)
+                {
+                    memcpy(source_tile, execution_source, logical_bytes);
+                    execution_source = source_tile;
+                }
+                const uint16_t multiplier_log = Field::Log(coefficient);
+                if (multiplier_log == 0)
+                    ops.xor_memory(
+                        residual_tiles[0], execution_source,
+                        execution_bytes);
+                else
+                    ops.ff8_multiply_add(
+                        residual_tiles[0], execution_source,
+                        multiplier_log, execution_bytes);
+            }
+            const Element coefficient = inverse[0][0];
+            if (coefficient == 0)
+                return LEO2_INTERNAL_ERROR;
+            const uint16_t multiplier_log = Field::Log(coefficient);
+            if (multiplier_log == 0)
+                memcpy(outputs[0], residual_tiles[0], execution_bytes);
+            else
+                ops.ff8_multiply(outputs[0], residual_tiles[0],
+                    multiplier_log, execution_bytes);
+            if (!exact_vector_bytes)
+            {
+                memcpy(static_cast<uint8_t*>(
+                           restored[missing_originals[0]]) + offset,
+                    output_tiles[0], logical_bytes);
+            }
+            continue;
+        }
+
+        for (uint32_t source = 0;
+             source < codec->original_count; ++source)
+        {
+            if (!original_present[source])
+                continue;
+            for (uint32_t equation = 0;
+                 equation < missing_count; ++equation)
+            {
+                const Element coefficient = rows[
+                    static_cast<size_t>(selected_parities[equation]) *
+                        codec->original_count + source];
+                multiplier_logs[equation] = coefficient == 0
+                    ? UINT16_MAX : Field::Log(coefficient);
+            }
+            const void* execution_source =
+                static_cast<const uint8_t*>(original[source]) + offset;
+            if (!exact_vector_bytes)
+            {
+                memcpy(source_tile, execution_source, logical_bytes);
+                execution_source = source_tile;
+            }
+            ops.ff8_multiply_add_outputs(residuals, execution_source,
+                multiplier_logs, missing_count, execution_bytes);
+        }
+        for (uint32_t equation = 0;
+             equation < missing_count; ++equation)
+        {
+            for (uint32_t output = 0;
+                 output < missing_count; ++output)
+            {
+                const Element coefficient = inverse[output][equation];
+                multiplier_logs[output] = coefficient == 0
+                    ? UINT16_MAX : Field::Log(coefficient);
+            }
+            ops.ff8_multiply_add_outputs(outputs,
+                residual_tiles[equation], multiplier_logs,
+                missing_count, execution_bytes);
+        }
+        for (uint32_t output = 0;
+             !exact_vector_bytes && output < missing_count; ++output)
+        {
+            memcpy(static_cast<uint8_t*>(
+                       restored[missing_originals[output]]) + offset,
+                output_tiles[output], logical_bytes);
+        }
+    }
+    return LEO2_SUCCESS;
+}
+#endif
 
 static void XorArbitraryBytes(
     const leopard::backend::Ops& ops,
@@ -12192,6 +12681,23 @@ LEO2_EXPORT leo2_result leo2_decode(
         if (prefix_valid)
             validated_prefix = &presence_prefix;
     }
+#endif
+
+#if LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT && defined(LEO_HAS_FF8)
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    DecodePresencePrefix* const one_shot_direct_prefix =
+        validated_prefix ? &presence_prefix : NULL;
+#else
+    DecodePresencePrefix* const one_shot_direct_prefix = NULL;
+#endif
+    bool one_shot_direct_handled = false;
+    const leo2_result one_shot_direct_result =
+        TryOneShotEqualRoundedDirectRepair(
+            codec, shard_bytes, original_present, recovery_present,
+            original, recovery, restored_original, scratch, scratch_bytes,
+            one_shot_direct_prefix, one_shot_direct_handled);
+    if (one_shot_direct_result != LEO2_SUCCESS || one_shot_direct_handled)
+        return one_shot_direct_result;
 #endif
 
     leo2_decode_plan* plan = NULL;

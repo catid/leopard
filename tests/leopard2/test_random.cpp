@@ -40,6 +40,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 #if defined(_MSC_VER)
@@ -482,6 +483,310 @@ void test_low_direct_parity(
         ++counts->low_cases;
         leo2_codec_destroy(codec);
     }
+}
+
+void test_equal_rounded_one_shot(
+    Random& random,
+    TestCounts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_success(context_result, "equal-rounded AVX2 context create");
+
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+    };
+    static const Shape shapes[] = {
+        { 17, 17 }, { 17, 32 }, { 32, 17 }, { 32, 32 },
+        { 66, 65 }, { 66, 128 }, { 128, 65 }, { 128, 128 }
+    };
+    static const size_t byte_counts[] = {
+        1, 31, 32, 33, 63, 64, 65,
+        127, 128, 129, 255, 256, 257,
+        511, 512, 513, 514, 515
+    };
+    static const unsigned losses_to_test[] = { 1, 2, 3, 4, 5, 6, 7, 8 };
+    for (unsigned shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]);
+         ++shape_i)
+    {
+        const unsigned k = shapes[shape_i].k;
+        const unsigned r = shapes[shape_i].r;
+        for (unsigned byte_i = 0;
+             byte_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++byte_i)
+        {
+            const size_t bytes = byte_counts[byte_i];
+            leo2_codec* codec = create_codec(context, k, r,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+            Shards original(k, bytes, 7u + shape_i + byte_i);
+            Shards recovery(r, bytes, 19u + shape_i + byte_i);
+            fill_random(original, random);
+            encode(codec, original, recovery);
+
+            for (unsigned loss_i = 0;
+                 loss_i < sizeof(losses_to_test) /
+                     sizeof(losses_to_test[0]); ++loss_i)
+            {
+                const unsigned losses = losses_to_test[loss_i];
+                std::vector<uint8_t> original_present(k, 1);
+                std::vector<uint8_t> recovery_present(r, 1);
+                std::vector<const void*> original_pointers =
+                    original.const_pointers();
+                std::vector<const void*> recovery_pointers =
+                    recovery.const_pointers();
+                if (((loss_i + byte_i) & 1u) != 0)
+                {
+                    recovery_present[0] = 0;
+                    recovery_pointers[0] = NULL;
+                }
+                Shards restored(k, bytes, 37u + loss_i + byte_i);
+                std::vector<void*> restored_pointers(k, NULL);
+                for (unsigned missing = 0; missing < losses; ++missing)
+                {
+                    /* Exercise both ends and the interior without duplicate
+                       coordinates for either K=17 or K=128. */
+                    const unsigned index = losses == 1 ? k / 2 :
+                        missing * (k - 1) / (losses - 1);
+                    original_present[index] = 0;
+                    original_pointers[index] = NULL;
+                    restored_pointers[index] = restored[index].data();
+                }
+
+                size_t scratch_bytes = 0;
+                require_success(leo2_decode_scratch_size(
+                    codec, bytes, &scratch_bytes),
+                    "equal-rounded one-shot scratch query");
+                AlignedBuffer scratch(scratch_bytes);
+                require_success(leo2_decode(codec, bytes,
+                    &original_present[0], &recovery_present[0],
+                    &original_pointers[0], &recovery_pointers[0],
+                    &restored_pointers[0], scratch.data(), scratch.bytes()),
+                    "equal-rounded one-shot decode");
+                for (unsigned missing = 0; missing < losses; ++missing)
+                {
+                    const unsigned index = losses == 1 ? k / 2 :
+                        missing * (k - 1) / (losses - 1);
+                    require(restored.equals(index, original, index),
+                        "equal-rounded one-shot recovery mismatch");
+                    ++counts->recovered_shards;
+                }
+                require(original.all_guards_intact() &&
+                        recovery.all_guards_intact() &&
+                        restored.all_guards_intact(),
+                    "equal-rounded one-shot guard was modified");
+                counts->guard_checks += k * 2 + r;
+            }
+            leo2_codec_destroy(codec);
+        }
+    }
+
+    {
+        static const unsigned k = 128;
+        static const unsigned losses = 8;
+        static const size_t bytes = 65;
+        leo2_codec* codec = create_codec(context, k, k,
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+        Shards original(k, bytes, 23);
+        Shards recovery(k, bytes, 41);
+        fill_random(original, random);
+        encode(codec, original, recovery);
+        std::vector<uint8_t> original_present(k, 1);
+        std::vector<uint8_t> recovery_present(k, 1);
+        std::vector<const void*> original_pointers =
+            original.const_pointers();
+        const std::vector<const void*> recovery_pointers =
+            recovery.const_pointers();
+        unsigned missing_indices[losses];
+        for (unsigned missing = 0; missing < losses; ++missing)
+        {
+            const unsigned index = missing * (k - 1) / (losses - 1);
+            missing_indices[missing] = index;
+            original_present[index] = 0;
+            original_pointers[index] = NULL;
+        }
+        size_t scratch_bytes = 0;
+        require_success(leo2_decode_scratch_size(
+            codec, bytes, &scratch_bytes),
+            "equal-rounded concurrent scratch query");
+
+        static const unsigned worker_count = 4;
+        std::vector<int> worker_passed(worker_count, 0);
+        std::vector<std::thread> workers;
+        workers.reserve(worker_count);
+        for (unsigned worker = 0; worker < worker_count; ++worker)
+        {
+            workers.push_back(std::thread([&, worker]() {
+                try
+                {
+                    Shards restored(k, bytes, 5u + worker * 7u);
+                    std::vector<void*> restored_pointers(k, NULL);
+                    for (unsigned missing = 0;
+                         missing < losses; ++missing)
+                    {
+                        const unsigned index = missing_indices[missing];
+                        restored_pointers[index] = restored[index].data();
+                    }
+                    AlignedBuffer scratch(scratch_bytes);
+                    for (unsigned repetition = 0;
+                         repetition < 32; ++repetition)
+                    {
+                        require_success(leo2_decode(codec, bytes,
+                            &original_present[0], &recovery_present[0],
+                            &original_pointers[0], &recovery_pointers[0],
+                            &restored_pointers[0], scratch.data(),
+                            scratch.bytes()),
+                            "equal-rounded concurrent one-shot decode");
+                    }
+                    for (unsigned missing = 0;
+                         missing < losses; ++missing)
+                    {
+                        const unsigned index = missing_indices[missing];
+                        require(restored.equals(index, original, index),
+                            "equal-rounded concurrent recovery mismatch");
+                    }
+                    require(restored.all_guards_intact(),
+                        "equal-rounded concurrent guard was modified");
+                    worker_passed[worker] = 1;
+                }
+                catch (...)
+                {
+                    worker_passed[worker] = 0;
+                }
+            }));
+        }
+        for (size_t worker = 0; worker < workers.size(); ++worker)
+            workers[worker].join();
+        require(std::find(worker_passed.begin(), worker_passed.end(), 0) ==
+                worker_passed.end(),
+            "equal-rounded concurrent execution failed");
+        counts->recovered_shards += worker_count * losses;
+        counts->guard_checks += worker_count * k;
+        leo2_codec_destroy(codec);
+    }
+    leo2_context_destroy(context);
+}
+
+void test_equal_rounded_one_shot_invalid(
+    Random& random,
+    TestCounts* counts)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result context_result = leo2_context_create(&options, &context);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_success(context_result,
+        "equal-rounded invalid AVX2 context create");
+
+    static const unsigned k = 17;
+    static const size_t bytes = 33;
+    static const unsigned first_missing = 1;
+    static const unsigned second_missing = 15;
+    leo2_codec* codec = create_codec(context, k, k,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    Shards original(k, bytes, 13);
+    Shards recovery(k, bytes, 29);
+    Shards restored(k, bytes, 43);
+    fill_random(original, random);
+    encode(codec, original, recovery);
+    size_t scratch_bytes = 0;
+    require_success(leo2_decode_scratch_size(codec, bytes, &scratch_bytes),
+        "equal-rounded invalid scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+
+    std::vector<uint8_t> original_present;
+    std::vector<uint8_t> recovery_present;
+    std::vector<const void*> original_pointers;
+    std::vector<const void*> recovery_pointers;
+    std::vector<void*> restored_pointers;
+    const auto prepare = [&]() {
+        original_present.assign(k, 1);
+        recovery_present.assign(k, 1);
+        original_pointers = original.const_pointers();
+        recovery_pointers = recovery.const_pointers();
+        restored_pointers.assign(k, NULL);
+        original_present[first_missing] = 0;
+        original_present[second_missing] = 0;
+        original_pointers[first_missing] = NULL;
+        original_pointers[second_missing] = NULL;
+        restored[first_missing].fill(0x5a);
+        restored[second_missing].fill(0x5a);
+        restored_pointers[first_missing] = restored[first_missing].data();
+        restored_pointers[second_missing] = restored[second_missing].data();
+    };
+    const auto expect = [&](leo2_result expected, const char* label) {
+        require_result(leo2_decode(codec, bytes,
+            &original_present[0], &recovery_present[0],
+            &original_pointers[0], &recovery_pointers[0],
+            &restored_pointers[0], scratch.data(), scratch.bytes()),
+            expected, label);
+        for (size_t i = 0; i < bytes; ++i)
+        {
+            require(restored[first_missing].data()[i] == 0x5a &&
+                    restored[second_missing].data()[i] == 0x5a,
+                std::string(label) + " modified an output before failure");
+        }
+        ++counts->invalid_checks;
+    };
+
+    prepare();
+    original_pointers[0] = NULL;
+    expect(LEO2_INVALID_ARGUMENT,
+        "equal-rounded original presence/pointer mismatch");
+
+    prepare();
+    recovery_pointers[0] = NULL;
+    expect(LEO2_INVALID_ARGUMENT,
+        "equal-rounded recovery presence/pointer mismatch");
+
+    prepare();
+    original_present[2] = 2;
+    expect(LEO2_INVALID_ARGUMENT,
+        "equal-rounded invalid original presence byte");
+
+    prepare();
+    restored_pointers[first_missing] =
+        const_cast<void*>(original_pointers[0]);
+    expect(LEO2_OVERLAP, "equal-rounded input/output overlap");
+
+    prepare();
+    restored_pointers[second_missing] = restored_pointers[first_missing];
+    expect(LEO2_OVERLAP, "equal-rounded output/output overlap");
+
+    prepare();
+    restored_pointers[first_missing] = &original_present[0];
+    expect(LEO2_OVERLAP, "equal-rounded output/presence overlap");
+
+    prepare();
+    restored_pointers[first_missing] = scratch.data();
+    expect(LEO2_OVERLAP, "equal-rounded output/scratch overlap");
+
+    prepare();
+    std::fill(recovery_present.begin(), recovery_present.end(), 0);
+    std::fill(recovery_pointers.begin(), recovery_pointers.end(),
+        static_cast<const void*>(NULL));
+    expect(LEO2_NEED_MORE_DATA, "equal-rounded insufficient recovery");
+
+    require(original.all_guards_intact() &&
+            recovery.all_guards_intact() &&
+            restored.all_guards_intact(),
+        "equal-rounded invalid-call guard was modified");
+    counts->guard_checks += k * 3;
+    leo2_codec_destroy(codec);
+    leo2_context_destroy(context);
 }
 
 void shuffle(std::vector<unsigned>& values, Random& random)
@@ -1038,6 +1343,8 @@ int main(int argc, char** argv)
         test_high_legacy_compatibility(context, random, &counts);
         const BinaryField gf8 = leopard2_test::make_legacy_gf8();
         test_low_direct_parity(context, gf8, random, &counts);
+        test_equal_rounded_one_shot(random, &counts);
+        test_equal_rounded_one_shot_invalid(random, &counts);
         test_no_loss_and_parity_only(context, &counts);
         test_batch_apis(context, random, &counts);
         for (unsigned i = 0; i < configuration.random_cases; ++i)
