@@ -346,7 +346,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v1", "leopard2-benchmark-v2",
                 "leopard2-benchmark-v3", "leopard2-benchmark-v5",
                 "leopard2-benchmark-v6", "leopard2-benchmark-v7",
-                "leopard2-benchmark-v8",
+                "leopard2-benchmark-v8", "leopard2-benchmark-v9",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -355,6 +355,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v2", "leopard2-benchmark-v3",
         "leopard2-benchmark-v5", "leopard2-benchmark-v6",
         "leopard2-benchmark-v7", "leopard2-benchmark-v8",
+        "leopard2-benchmark-v9",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -371,8 +372,14 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_build.add("equal_rounded_multi_loss_enabled")
-    if document["schema"] == "leopard2-benchmark-v8":
+    if document["schema"] in {
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
         expected_build.add("one_shot_equal_rounded_direct_enabled")
+    if document["schema"] == "leopard2-benchmark-v9":
+        expected_build.update({
+            "one_shot_equal_rounded_direct_enabled",
+            "cauchy_log_reuse_enabled",
+        })
     require(set(document["build"]) == expected_build, "build keys changed")
     require(type(document["build"]["compiler"]) is str and
             type(document["build"]["compiler_version"]) is str and
@@ -384,10 +391,15 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(type(document["build"][
                     "equal_rounded_multi_loss_enabled"]) is bool,
                 "equal-rounded build selector is not Boolean")
-    if document["schema"] == "leopard2-benchmark-v8":
+    if document["schema"] in {
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
         require(type(document["build"][
                     "one_shot_equal_rounded_direct_enabled"]) is bool,
                 "one-shot build selector is not Boolean")
+    if document["schema"] == "leopard2-benchmark-v9":
+        require(type(document["build"][
+                    "cauchy_log_reuse_enabled"]) is bool,
+                "Cauchy-log-reuse build selector is not Boolean")
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         for name in ("source_commit", "source_tree"):
@@ -466,7 +478,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "scratch_alignment", "encode_scratch_bytes_per_stripe",
         "decode_scratch_bytes_per_stripe", "encode_scratch_bytes_batch",
         "decode_scratch_bytes_batch"}
-    if document["schema"] == "leopard2-benchmark-v8":
+    if document["schema"] in {
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
         expected_memory.update({
             "one_shot_decode_scratch_bytes_per_stripe",
             "one_shot_decode_scratch_bytes_batch",
@@ -480,7 +493,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     expected_metrics = {
         "codec_setup", "encode_execution", "decode_plan_setup",
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"}
-    if document["schema"] == "leopard2-benchmark-v8":
+    if document["schema"] in {
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
         expected_metrics.add("one_shot_decode_including_setup")
     require(set(document["metrics"]) == expected_metrics,
         "metrics keys changed")
@@ -517,7 +531,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="offered_received_GB_per_s",
         output_rate_name="repaired_output_GB_per_s",
         input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
-    if document["schema"] == "leopard2-benchmark-v8":
+    if document["schema"] in {
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
         require(parameters.get("measure_one_shot_decode") is True,
                 "one-shot decode benchmark opt-in was not recorded")
         validate_timing_summary(
@@ -735,7 +750,7 @@ def main() -> int:
     one_shot = run(
         executable, True, measure_one_shot_decode=True,
         k=17, r=17, losses=8)
-    require(one_shot["schema"] == "leopard2-benchmark-v8",
+    require(one_shot["schema"] == "leopard2-benchmark-v9",
             "one-shot decode benchmark schema changed")
     validate_common(one_shot, True)
     validate_workload_digests(one_shot)

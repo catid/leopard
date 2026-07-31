@@ -288,6 +288,14 @@
 #error "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT must be 0 or 1"
 #endif
 
+#ifndef LEO2_EXPERIMENT_CAUCHY_LOG_REUSE
+#define LEO2_EXPERIMENT_CAUCHY_LOG_REUSE 1
+#endif
+#if LEO2_EXPERIMENT_CAUCHY_LOG_REUSE < 0 || \
+    LEO2_EXPERIMENT_CAUCHY_LOG_REUSE > 1
+#error "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE must be 0 or 1"
+#endif
+
 #ifndef LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE
 #define LEO2_EXPERIMENT_SOURCE_MAJOR_TAIL_TILE 1
 #endif
@@ -662,8 +670,12 @@ static const size_t kScratchAlignment = 64;
 */
 static volatile uint32_t g_equal_rounded_multi_loss_mode =
     2U - LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS;
+#ifdef LEO_HAS_FF8
 static volatile uint32_t g_one_shot_equal_rounded_direct_mode =
     2U - LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT;
+#endif
+static volatile uint32_t g_cauchy_log_reuse_mode =
+    2U - LEO2_EXPERIMENT_CAUCHY_LOG_REUSE;
 
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_high_t4_batch_binding_mode =
@@ -3016,6 +3028,11 @@ static bool PrepareDirectRepairCauchyInverse(
     Element row_factor_logs[kDirectMaxRepairLosses] = {};
     Element column_factor_logs[kDirectMaxRepairLosses] = {};
     Element parity_at_missing_logs[kDirectMaxRepairLosses] = {};
+    Element cross_logs
+        [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
+    Element message_at_parity_logs[kDirectMaxRepairLosses] = {};
+    Element parity_derivative_logs[kDirectMaxRepairLosses] = {};
+    Element message_derivative_logs[kDirectMaxRepairLosses] = {};
     for (uint32_t equation = 0; equation < losses; ++equation)
     {
         parity_coordinates[equation] = static_cast<Element>(
@@ -3026,6 +3043,62 @@ static bool PrepareDirectRepairCauchyInverse(
         missing_coordinates[missing] = static_cast<Element>(
             CoordinateForOriginal(codec,
                 missing_originals[missing]));
+    }
+
+    const bool reuse_difference_logs = g_cauchy_log_reuse_mode == 1U;
+    /*
+        Every cross-difference appears three times in the closed-form Cauchy
+        inverse: a row product, a column product, and the final denominator.
+        Compute its log once and accumulate both products.  Likewise each
+        within-set derivative pair contributes symmetrically to two entries,
+        so visit each unordered pair once.  This preserves the exact field
+        formula while removing the repeated locator-style setup work from a
+        public one-shot decode.
+    */
+    if (reuse_difference_logs)
+    {
+        for (uint32_t missing = 0; missing < losses; ++missing)
+        {
+            for (uint32_t equation = 0; equation < losses; ++equation)
+            {
+                const Element difference = static_cast<Element>(
+                    missing_coordinates[missing] ^
+                    parity_coordinates[equation]);
+                if (difference == 0)
+                    return false;
+                const Element difference_log = Field::Log(difference);
+                cross_logs[missing][equation] = difference_log;
+                message_at_parity_logs[equation] = Field::AddLogs(
+                    message_at_parity_logs[equation], difference_log);
+                parity_at_missing_logs[missing] = Field::AddLogs(
+                    parity_at_missing_logs[missing], difference_log);
+            }
+        }
+        for (uint32_t left = 0; left < losses; ++left)
+        {
+            for (uint32_t right = left + 1; right < losses; ++right)
+            {
+                Element difference = static_cast<Element>(
+                    parity_coordinates[left] ^ parity_coordinates[right]);
+                if (difference == 0)
+                    return false;
+                Element difference_log = Field::Log(difference);
+                parity_derivative_logs[left] = Field::AddLogs(
+                    parity_derivative_logs[left], difference_log);
+                parity_derivative_logs[right] = Field::AddLogs(
+                    parity_derivative_logs[right], difference_log);
+
+                difference = static_cast<Element>(
+                    missing_coordinates[left] ^ missing_coordinates[right]);
+                if (difference == 0)
+                    return false;
+                difference_log = Field::Log(difference);
+                message_derivative_logs[left] = Field::AddLogs(
+                    message_derivative_logs[left], difference_log);
+                message_derivative_logs[right] = Field::AddLogs(
+                    message_derivative_logs[right], difference_log);
+            }
+        }
     }
 
     const Element reference_coordinate = static_cast<Element>(
@@ -3047,29 +3120,34 @@ static bool PrepareDirectRepairCauchyInverse(
         row_scale_log =
             Field::SubtractLogs(row_scale_log, reference_weight_log);
 
-        Element message_vanishing_log = 0;
-        for (uint32_t missing = 0; missing < losses; ++missing)
+        Element message_vanishing_log =
+            message_at_parity_logs[equation];
+        Element parity_derivative_log =
+            parity_derivative_logs[equation];
+        if (!reuse_difference_logs)
         {
-            const Element difference = static_cast<Element>(
-                parity_coordinates[equation] ^
-                missing_coordinates[missing]);
-            if (difference == 0)
-                return false;
-            message_vanishing_log = Field::AddLogs(
-                message_vanishing_log, Field::Log(difference));
-        }
-        Element parity_derivative_log = 0;
-        for (uint32_t other = 0; other < losses; ++other)
-        {
-            if (other == equation)
-                continue;
-            const Element difference = static_cast<Element>(
-                parity_coordinates[equation] ^
-                parity_coordinates[other]);
-            if (difference == 0)
-                return false;
-            parity_derivative_log = Field::AddLogs(
-                parity_derivative_log, Field::Log(difference));
+            for (uint32_t missing = 0; missing < losses; ++missing)
+            {
+                const Element difference = static_cast<Element>(
+                    parity_coordinates[equation] ^
+                    missing_coordinates[missing]);
+                if (difference == 0)
+                    return false;
+                message_vanishing_log = Field::AddLogs(
+                    message_vanishing_log, Field::Log(difference));
+            }
+            for (uint32_t other = 0; other < losses; ++other)
+            {
+                if (other == equation)
+                    continue;
+                const Element difference = static_cast<Element>(
+                    parity_coordinates[equation] ^
+                    parity_coordinates[other]);
+                if (difference == 0)
+                    return false;
+                parity_derivative_log = Field::AddLogs(
+                    parity_derivative_log, Field::Log(difference));
+            }
         }
         row_factor_logs[equation] = Field::SubtractLogs(
             Field::SubtractLogs(message_vanishing_log, row_scale_log),
@@ -3078,31 +3156,34 @@ static bool PrepareDirectRepairCauchyInverse(
 
     for (uint32_t missing = 0; missing < losses; ++missing)
     {
-        Element parity_vanishing_log = 0;
-        for (uint32_t equation = 0; equation < losses; ++equation)
+        Element message_derivative_log =
+            message_derivative_logs[missing];
+        if (!reuse_difference_logs)
         {
-            const Element difference = static_cast<Element>(
-                missing_coordinates[missing] ^
-                parity_coordinates[equation]);
-            if (difference == 0)
-                return false;
-            parity_vanishing_log = Field::AddLogs(
-                parity_vanishing_log, Field::Log(difference));
-        }
-        parity_at_missing_logs[missing] = parity_vanishing_log;
-
-        Element message_derivative_log = 0;
-        for (uint32_t other = 0; other < losses; ++other)
-        {
-            if (other == missing)
-                continue;
-            const Element difference = static_cast<Element>(
-                missing_coordinates[missing] ^
-                missing_coordinates[other]);
-            if (difference == 0)
-                return false;
-            message_derivative_log = Field::AddLogs(
-                message_derivative_log, Field::Log(difference));
+            Element parity_vanishing_log = 0;
+            for (uint32_t equation = 0; equation < losses; ++equation)
+            {
+                const Element difference = static_cast<Element>(
+                    missing_coordinates[missing] ^
+                    parity_coordinates[equation]);
+                if (difference == 0)
+                    return false;
+                parity_vanishing_log = Field::AddLogs(
+                    parity_vanishing_log, Field::Log(difference));
+            }
+            parity_at_missing_logs[missing] = parity_vanishing_log;
+            for (uint32_t other = 0; other < losses; ++other)
+            {
+                if (other == missing)
+                    continue;
+                const Element difference = static_cast<Element>(
+                    missing_coordinates[missing] ^
+                    missing_coordinates[other]);
+                if (difference == 0)
+                    return false;
+                message_derivative_log = Field::AddLogs(
+                    message_derivative_log, Field::Log(difference));
+            }
         }
         column_factor_logs[missing] = Field::SubtractLogs(0,
             Field::AddLogs(Field::Log(barycentric_weights[
@@ -3114,16 +3195,23 @@ static bool PrepareDirectRepairCauchyInverse(
     {
         for (uint32_t equation = 0; equation < losses; ++equation)
         {
-            const Element difference = static_cast<Element>(
-                missing_coordinates[missing] ^
-                parity_coordinates[equation]);
             Element inverse_log = Field::AddLogs(
                 row_factor_logs[equation],
                 column_factor_logs[missing]);
             inverse_log = Field::AddLogs(
                 inverse_log, parity_at_missing_logs[missing]);
-            inverse_log =
-                Field::SubtractLogs(inverse_log, Field::Log(difference));
+            Element difference_log = cross_logs[missing][equation];
+            if (!reuse_difference_logs)
+            {
+                const Element difference = static_cast<Element>(
+                    missing_coordinates[missing] ^
+                    parity_coordinates[equation]);
+                if (difference == 0)
+                    return false;
+                difference_log = Field::Log(difference);
+            }
+            inverse_log = Field::SubtractLogs(
+                inverse_log, difference_log);
             inverse[missing][equation] = Field::FromLog(inverse_log);
         }
     }
@@ -10623,6 +10711,11 @@ bool OneShotEqualRoundedDirectEnabled()
 #else
     return false;
 #endif
+}
+
+bool CauchyLogReuseEnabled()
+{
+    return g_cauchy_log_reuse_mode == 1U;
 }
 
 bool HighT8TwoBlock320Enabled()

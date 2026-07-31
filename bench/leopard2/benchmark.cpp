@@ -1302,7 +1302,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
-        options.measure_one_shot_decode ? 8 :
+        options.measure_one_shot_decode ? 9 :
         (options.report_direct_executor && options.attest_source) ? 7 :
         options.report_direct_executor ? 6 :
         options.attest_source ? 5 :
@@ -1605,6 +1605,9 @@ static int Run(const Options& options)
         json << ",\n"
              << "    \"one_shot_equal_rounded_direct_enabled\": "
              << (leopard2_internal::OneShotEqualRoundedDirectEnabled() ?
+                    "true" : "false") << ",\n"
+             << "    \"cauchy_log_reuse_enabled\": "
+             << (leopard2_internal::CauchyLogReuseEnabled() ?
                     "true" : "false");
     }
     json << "\n"

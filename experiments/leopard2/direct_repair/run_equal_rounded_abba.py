@@ -39,6 +39,12 @@ SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v7"
 ONE_SHOT_MANIFEST_SCHEMA = "leopard2-equal-rounded-one-shot-manifest/v1"
 ONE_SHOT_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cell/v1"
 ONE_SHOT_SUMMARY_SCHEMA = "leopard2-equal-rounded-one-shot-summary/v1"
+CAUCHY_MANIFEST_SCHEMA = \
+    "leopard2-equal-rounded-one-shot-cauchy-manifest/v1"
+CAUCHY_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cauchy-cell/v1"
+CAUCHY_SUMMARY_SCHEMA = \
+    "leopard2-equal-rounded-one-shot-cauchy-summary/v1"
+ONE_SHOT_MODES = ("one-shot", "one-shot-cauchy")
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 TARGET_ORDER = (
@@ -269,25 +275,45 @@ def one_shot_matrix() -> list[dict[str, Any]]:
     return result
 
 
+def cauchy_one_shot_matrix() -> list[dict[str, Any]]:
+    """Reuse the frozen one-shot geometry while changing only setup math."""
+    result = one_shot_matrix()
+    for item in result:
+        item["measurement_mode"] = "one-shot-cauchy"
+        item["control_direct"] = item["candidate_direct"]
+    return result
+
+
 def matrix(mode: str = "reusable") -> list[dict[str, Any]]:
-    require(mode in ("reusable", "one-shot"),
+    require(mode in ("reusable", *ONE_SHOT_MODES),
             f"unsupported measurement mode: {mode}")
+    if mode == "one-shot-cauchy":
+        return cauchy_one_shot_matrix()
     return one_shot_matrix() if mode == "one-shot" else reusable_matrix()
 
 
 def manifest_schema(mode: str) -> str:
-    return ONE_SHOT_MANIFEST_SCHEMA if mode == "one-shot" \
-        else MANIFEST_SCHEMA
+    return {
+        "reusable": MANIFEST_SCHEMA,
+        "one-shot": ONE_SHOT_MANIFEST_SCHEMA,
+        "one-shot-cauchy": CAUCHY_MANIFEST_SCHEMA,
+    }[mode]
 
 
 def cell_schema(item: Mapping[str, Any]) -> str:
-    return ONE_SHOT_CELL_SCHEMA \
-        if item.get("measurement_mode") == "one-shot" else CELL_SCHEMA
+    return {
+        None: CELL_SCHEMA,
+        "one-shot": ONE_SHOT_CELL_SCHEMA,
+        "one-shot-cauchy": CAUCHY_CELL_SCHEMA,
+    }[item.get("measurement_mode")]
 
 
 def summary_schema(mode: str) -> str:
-    return ONE_SHOT_SUMMARY_SCHEMA if mode == "one-shot" \
-        else SUMMARY_SCHEMA
+    return {
+        "reusable": SUMMARY_SCHEMA,
+        "one-shot": ONE_SHOT_SUMMARY_SCHEMA,
+        "one-shot-cauchy": CAUCHY_SUMMARY_SCHEMA,
+    }[mode]
 
 
 def write_atomic_exclusive(path: Path, value: object) -> None:
@@ -419,7 +445,7 @@ def expected_parameters(
     if implementation == "main" and physical != item["bytes"]:
         expected["logical_shard_bytes"] = item["bytes"]
     if (implementation != "main" and
-            item.get("measurement_mode") == "one-shot"):
+            item.get("measurement_mode") in ONE_SHOT_MODES):
         expected["measure_one_shot_decode"] = True
     return expected
 
@@ -475,11 +501,26 @@ def validate_result(
                 resolved.get("padded_application_bytes") is True and
                 correctness.get("logical_prefix_fingerprinted") is True,
                 "exact-main logical-prefix semantics changed")
+    elif item.get("measurement_mode") == "one-shot-cauchy":
+        expected_cauchy = implementation == "candidate"
+        build = result.get("build")
+        require(
+            result.get("schema") == "leopard2-benchmark-v9" and
+            resolved.get("backend") == "avx2" and
+            correctness.get("leopard2_round_trip") is True and
+            parameters.get("skip_legacy") is True and
+            parameters.get("retain_samples") is True and
+            parameters.get("measure_one_shot_decode") is True and
+            isinstance(build, dict) and
+            build.get("one_shot_equal_rounded_direct_enabled") is True and
+            build.get("cauchy_log_reuse_enabled") is expected_cauchy,
+            f"{implementation} Cauchy one-shot build identity changed")
     elif item.get("measurement_mode") == "one-shot":
         expected_enabled = implementation == "candidate"
         build = result.get("build")
         require(
-            result.get("schema") == "leopard2-benchmark-v8" and
+            result.get("schema") in {
+                "leopard2-benchmark-v8", "leopard2-benchmark-v9"} and
             resolved.get("backend") == "avx2" and
             correctness.get("leopard2_round_trip") is True and
             parameters.get("skip_legacy") is True and
@@ -489,6 +530,9 @@ def validate_result(
             build.get("one_shot_equal_rounded_direct_enabled")
                 is expected_enabled,
             f"{implementation} one-shot build identity changed")
+        if result.get("schema") == "leopard2-benchmark-v9":
+            require(build.get("cauchy_log_reuse_enabled") is True,
+                    f"{implementation} Cauchy selector is not production")
     else:
         expected_enabled = implementation == "candidate"
         expected_direct = bool(item[
@@ -526,7 +570,7 @@ def validate_result(
         execution = metric(
             result, "decode_including_setup",
             "median_us_per_batch_call")
-    elif item.get("measurement_mode") == "one-shot":
+    elif item.get("measurement_mode") in ONE_SHOT_MODES:
         setup = 0.0
         execution = metric(
             result, "one_shot_decode_including_setup",
@@ -575,7 +619,7 @@ def benchmark_command(
     if implementation == "main":
         if physical != item["bytes"]:
             command.extend(("--logical-bytes", str(item["bytes"])))
-    elif item.get("measurement_mode") == "one-shot":
+    elif item.get("measurement_mode") in ONE_SHOT_MODES:
         command.extend((
             "--profile", "high",
             "--field", "gf8",
@@ -1028,7 +1072,7 @@ def run(options: argparse.Namespace) -> int:
             (Path(identity["path"]).stat().st_mode & 0o777) == 0o555,
             "frozen executable changed before campaign")
     source_attestations: dict[str, Any] | None = None
-    if options.mode == "one-shot":
+    if options.mode in ONE_SHOT_MODES:
         if options.resume:
             prior_manifest = load_json(options.output / "manifest.json")
             prior_attestations = prior_manifest.get("source_attestations")
@@ -1228,7 +1272,7 @@ def verify(options: argparse.Namespace) -> int:
     root = options.output.resolve(strict=True)
     manifest = load_json(root / "manifest.json")
     mode = manifest.get("measurement_mode", "reusable")
-    require(mode in ("reusable", "one-shot") and
+    require(mode in ("reusable", *ONE_SHOT_MODES) and
             manifest.get("schema") == manifest_schema(mode),
             "manifest schema changed")
     expected_digest = manifest.pop("digest", None)
@@ -1256,7 +1300,7 @@ def verify(options: argparse.Namespace) -> int:
     for identity in identities.values():
         require(T8.sha256(Path(identity["path"])) == identity["sha256"],
                 "frozen executable changed")
-    if mode == "one-shot":
+    if mode in ONE_SHOT_MODES:
         require(
             T8.regular_file_identity(Path(__file__)) == manifest["runner"] and
             T8.regular_file_identity(
@@ -1324,6 +1368,17 @@ def self_test() -> int:
     require(digest_object(one_shot_cells) ==
             "f261d82446d2920149c648e51e86beb60a3c25ae8ff4d419d92c0940d7b940ab",
             "one-shot matrix digest changed")
+    cauchy_cells = matrix("one-shot-cauchy")
+    require(
+        len(cauchy_cells) == 68 and
+        sum(item["role"] == "target" for item in cauchy_cells) == 60 and
+        sum(item["role"] == "neighbor" for item in cauchy_cells) == 8 and
+        all(item.get("measurement_mode") == "one-shot-cauchy"
+            for item in cauchy_cells),
+        "Cauchy one-shot matrix shape changed")
+    require(digest_object(cauchy_cells) ==
+            "7472bb3c334953ed589a912cd800039511dc86307fc09d8da902bcbebf7d12bf",
+            "Cauchy one-shot matrix digest changed")
     sample = confidence((math.log(2.0), math.log(2.0), math.log(2.0)))
     require(all(abs(sample[name] - 2.0) < 1e-12
                 for name in ("ratio", "lower", "upper")),
@@ -1397,7 +1452,8 @@ def parser() -> argparse.ArgumentParser:
     run_parser.add_argument("--cell-id", action="append", default=[])
     run_parser.add_argument("--resume", action="store_true")
     run_parser.add_argument(
-        "--mode", choices=("reusable", "one-shot"), default="reusable")
+        "--mode", choices=("reusable", *ONE_SHOT_MODES),
+        default="reusable")
     run_parser.set_defaults(function=run)
     verify_parser = commands.add_parser("verify")
     verify_parser.add_argument("--output", required=True, type=Path)

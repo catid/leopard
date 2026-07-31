@@ -248,6 +248,9 @@ bool EqualRoundedMultiLossEnabled();
 /* Equivalent marker for the bounded public one-shot repair path. */
 bool OneShotEqualRoundedDirectEnabled();
 
+/* Text-layout-neutral marker for Cauchy setup log reuse. */
+bool CauchyLogReuseEnabled();
+
 bool HighT8TwoBlock128192Enabled();
 
 /* Equivalent text-layout-neutral marker for the 320-byte extension. */

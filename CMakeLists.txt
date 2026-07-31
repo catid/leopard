@@ -51,6 +51,13 @@ if(LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT)
 else()
     add_definitions(-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=0)
 endif()
+option(LEO2_EXPERIMENT_CAUCHY_LOG_REUSE
+    "Reuse Cauchy cross-difference logs during direct-repair setup" ON)
+if(LEO2_EXPERIMENT_CAUCHY_LOG_REUSE)
+    add_definitions(-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1)
+else()
+    add_definitions(-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=0)
+endif()
 option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE
     "Enable default-off candidate legacy-high GF8/AVX2 direct diagnostics"
     OFF)
