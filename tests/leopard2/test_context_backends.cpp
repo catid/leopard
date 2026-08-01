@@ -1793,7 +1793,8 @@ void execute_r1_xor_dispatch_case(
     leo2_field field = LEO2_FIELD_GF8,
     bool expect_fused = false,
     bool expect_dense = false,
-    bool expect_group4 = false)
+    bool expect_group4_encode = false,
+    bool expect_group4_decode = false)
 {
     const CodecCase test_case = {
         original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -1814,7 +1815,7 @@ void execute_r1_xor_dispatch_case(
         entry.context, test_case, originals, &codec);
     require_r1_xor_trace(
         trace, original_count, expect_coarse, expect_fused, expect_dense,
-        identity + " encode", expect_group4);
+        identity + " encode", expect_group4_encode);
 
     std::vector<uint8_t> original_present(original_count, 1);
     std::vector<uint8_t> recovery_present(1, 1);
@@ -1853,7 +1854,7 @@ void execute_r1_xor_dispatch_case(
     require(restored == originals[0], identity + " restored data mismatch");
     require_r1_xor_trace(
         trace, original_count, expect_coarse, expect_fused, expect_dense,
-        identity + " decode", expect_group4);
+        identity + " decode", expect_group4_decode);
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
@@ -1957,7 +1958,13 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 22, 1024U * 1024U + 1U, true, false },
         { 23, 1024U * 1024U, true, true },
         { 23, 1024U * 1024U + 1U, true, false },
-        /* Pure-AVX2 four-source grouping: exact K and byte boundaries. */
+        /* Pure-AVX2 four-source grouping: operation-specific K boundaries
+           and the shared exact byte boundary. */
+        { 24, 4096, true, false },
+        { 25, 4095, true, false },
+        { 25, 4096, true, false },
+        { 25, 4097, true, false },
+        { 26, 4096, true, false },
         { 40, 4095, true, false },
         { 40, 4096, true, false },
         { 40, 4097, true, false },
@@ -2019,13 +2026,19 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         leo2_context_backend(avx2->context) == LEO2_BACKEND_AVX2;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
     {
-        const bool expect_group4 = pure_avx2 && cases[i].bytes == 4096 &&
+        const bool expect_group4_encode =
+            pure_avx2 && cases[i].bytes == 4096 &&
+            cases[i].original_count >= 25 &&
+            cases[i].original_count <= 252;
+        const bool expect_group4_decode =
+            pure_avx2 && cases[i].bytes == 4096 &&
             cases[i].original_count >= 41 &&
             cases[i].original_count <= 252;
         execute_r1_xor_dispatch_case(*avx2, trace,
             cases[i].original_count, cases[i].bytes,
             cases[i].expect_coarse, LEO2_FIELD_GF8,
-            cases[i].expect_fused, cases[i].expect_dense, expect_group4);
+            cases[i].expect_fused, cases[i].expect_dense,
+            expect_group4_encode, expect_group4_decode);
     }
 
     /* The measured policy is deliberately limited to GF8.  GF16 retains its

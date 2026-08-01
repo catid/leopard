@@ -1,0 +1,191 @@
+{
+  "schema": "leopard2-r1-group4-operation-split-checkpoint/v1",
+  "status": "directional_production_candidate_pending_authoritative_all_k_confirmation",
+  "source": {
+    "base_commit": "e98104ba6d359ab0fa894f10e3b310ff4851b571",
+    "base_tree": "c7688ba3da1060ea62a1bd138eafed5daa77bb1b",
+    "dirty_patch_sha256": "7e32480a36d5fb07a33c70485aa6c2a12d634a5af5de3041488013d10f21324e",
+    "candidate_benchmark_sha256": "aee512a0c06f23be79f409097063483bcc19f93fbb1042659aea10ba49406aac",
+    "stock_benchmark_sha256": "d1e746374f3d052fdcfb01e8ce9090e1e685be7f9a50b682a5e984d404268f49",
+    "native_leopard1_benchmark_sha256": "d6439bebe9d2de25f9ad7eef8b029f75e1e0a5cc272c18fc7fe89da1b95ba699",
+    "native_leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "selector": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "R": 1,
+    "shard_bytes": 4096,
+    "encode_K": "25..252",
+    "decode_K": "41..252",
+    "lower_encode_control_K": 24,
+    "lower_decode_control_K": 40,
+    "upper_control_K": 253,
+    "wire_format_changed": false,
+    "public_abi_changed": false,
+    "scratch_changed": false
+  },
+  "same_source_evidence": {
+    "prior_screen": {
+      "path": "/tmp/leopard-r1-group4-stock-abba-k24-85-v1/result.json",
+      "sha256": "69dbadd2e6d3c8e34878e4115bc311dc9e6d0e47cc24978370e4ad480ba41f77",
+      "design": "five stock/group4/group4/stock rounds",
+      "ratio_orientation": "stock_time_over_group4_time",
+      "encode_boundaries": [
+        {
+          "K": 24,
+          "ratio": 1.045314359,
+          "lower95": 1.020014776,
+          "decision": "retain_mature_route"
+        },
+        {
+          "K": 25,
+          "ratio": 1.138399092,
+          "lower95": 1.109137810,
+          "decision": "select_group4_encode"
+        },
+        {
+          "K": 26,
+          "ratio": 1.094751271,
+          "lower95": 1.049547691,
+          "decision": "select_as_part_of_positive_contiguous_encode_region"
+        },
+        {
+          "K": 27,
+          "ratio": 1.107444202,
+          "lower95": 1.083566427,
+          "decision": "select_group4_encode"
+        },
+        {
+          "K": 40,
+          "ratio": 1.156044233,
+          "lower95": 1.110338110,
+          "decision": "select_group4_encode_but_not_decode"
+        },
+        {
+          "K": 41,
+          "ratio": 1.211581418,
+          "lower95": 1.183192172,
+          "decision": "select_group4_encode_and_decode"
+        }
+      ],
+      "K40_decode": {
+        "first_use_ratio": 0.969138546,
+        "first_use_lower95": 0.964593147,
+        "reuse_128_ratio": 0.967735580,
+        "reuse_128_lower95": 0.963000017,
+        "decision": "retain_mature_decode_route"
+      }
+    },
+    "K26_focused_holdout": {
+      "artifact_root": "/tmp/leopard-r1-op-split-final-v1",
+      "design": "nine stock/candidate/candidate/stock rounds, 15 samples, 32 warmups, reuse 128, CPU 15",
+      "ratio_orientation": "stock_time_over_candidate_time",
+      "encode_ratio": 1.060816812,
+      "encode_lower95": 1.037930082,
+      "encode_upper95": 1.084208201,
+      "interpretation": "positive and nonregressing, but the per-cell lower bound does not independently clear 1.05; retain the explicit final all-K gate"
+    }
+  },
+  "native_leopard1_directional_evidence": {
+    "authoritative": false,
+    "non_authoritative_reasons": [
+      "The current v9 exact-main evidence contract rejects the promoted production default LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON.",
+      "This bounded manual run pins the benchmark process but does not exclude the interactive coordinator from both SMT siblings."
+    ],
+    "artifact_root": "/tmp/leopard-r1-op-split-final-v1",
+    "raw_json_count_including_same_source_holdout": 176,
+    "ordered_raw_sha256_listing_digest": "23d34be3f6ca444d04a48ca295049488ee36a66cd4eb197b5a3b50a42c8b2c44",
+    "design": "five Leopard2/Leopard1/Leopard1/Leopard2 rounds, 15 samples, 32 warmups, reuse 128, CPU 15",
+    "ratio_orientation": "Leopard1_time_over_Leopard2_time",
+    "rows": [
+      {
+        "K": 24,
+        "encode": 1.0884,
+        "decode_reuse_128": 1.0482,
+        "decode_plan_plus_execution": 0.9763,
+        "public_one_shot_decode": 1.0580
+      },
+      {
+        "K": 25,
+        "encode": 1.0928,
+        "decode_reuse_128": 0.9992,
+        "decode_plan_plus_execution": 0.9479,
+        "public_one_shot_decode": 0.9948
+      },
+      {
+        "K": 26,
+        "encode": 1.0852,
+        "decode_reuse_128": 1.0234,
+        "decode_plan_plus_execution": 0.9577,
+        "public_one_shot_decode": 1.0048
+      },
+      {
+        "K": 40,
+        "encode": 1.0896,
+        "decode_reuse_128": 0.9545,
+        "decode_plan_plus_execution": 0.9117,
+        "public_one_shot_decode": 0.9715
+      },
+      {
+        "K": 41,
+        "encode": 1.0864,
+        "decode_reuse_128": 1.0588,
+        "decode_plan_plus_execution": 1.0114,
+        "public_one_shot_decode": 1.0672
+      },
+      {
+        "K": 252,
+        "encode": 1.0389,
+        "decode_reuse_128": 1.0647,
+        "decode_plan_plus_execution": 1.0400,
+        "public_one_shot_decode": 1.0550
+      },
+      {
+        "K": 253,
+        "encode": 1.0094,
+        "decode_reuse_128": 1.0338,
+        "decode_plan_plus_execution": 1.0115,
+        "public_one_shot_decode": 1.0298
+      }
+    ]
+  },
+  "correctness": {
+    "gnu_release": {
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_r1_xor"
+      ],
+      "passed": 2,
+      "failed": 0,
+      "build_peak_rss_kib": 254688,
+      "test_peak_rss_kib": 212836,
+      "memory_policy": "build MemoryMax=512M; tests MemoryMax=256M; MemorySwapMax=0; serial"
+    },
+    "clang18_asan_ubsan": {
+      "tests": [
+        "leopard2_context_backends",
+        "leopard2_r1_xor"
+      ],
+      "passed": 2,
+      "failed": 0,
+      "build_peak_rss_kib": 302608,
+      "test_peak_rss_kib": 494736,
+      "memory_policy": "MemoryMax=768M; MemorySwapMax=0; serial",
+      "asan_options": "detect_leaks=1:halt_on_error=1:abort_on_error=1:quarantine_size_mb=64:thread_local_quarantine_size_kb=256",
+      "ubsan_options": "halt_on_error=1:abort_on_error=1:print_stacktrace=1"
+    },
+    "all_directional_workload_digests_matched": true,
+    "git_diff_check_passed": true
+  },
+  "decision": {
+    "promote_operation_specific_selector": true,
+    "reason": "Dense encoding benefits at smaller K than sparse one-loss decoding; sharing one threshold discarded an encode win or selected a decode regression.",
+    "keep_parent_bead_open": true,
+    "remaining_gates": [
+      "Commit and rebuild from the clean source identity.",
+      "Version the exact-main runner for the production one-loss option.",
+      "Run the coordinator-excluded final all-K GF8 campaign and adjust any boundary that fails the production gate."
+    ]
+  }
+}

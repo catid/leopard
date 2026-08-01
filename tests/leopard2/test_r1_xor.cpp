@@ -1442,7 +1442,8 @@ void test_public_r1(leo2_backend backend)
     if (backend == LEO2_BACKEND_AVX2)
     {
         static const uint32_t group4_counts[] = {
-            40, 41, 42, 84, 85, 86, 212, 213, 214, 251, 252, 253
+            24, 25, 26, 40, 41, 42, 84, 85, 86,
+            212, 213, 214, 251, 252, 253
         };
         static const size_t group4_sizes[] = { 4095, 4096, 4097 };
         for (size_t count_i = 0;
@@ -1697,7 +1698,8 @@ int main()
             "tails=0..257 max_bytes=16777233 fields=gf8,gf16 "
             "exact_arity_k=3,5,6 "
             "final_remainder_k=7,12..15,20..23 "
-            "group4_k=41..252@4096B "
+            "group4_encode_k=25..252@4096B "
+            "group4_decode_k=41..252@4096B "
             "null_boundaries=0,7,8,15,16,last "
             "batch=2,8,64 batch_k=3,5,6,7,9,129 "
             "batch_bytes=4096,4097 "
