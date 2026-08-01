@@ -1958,6 +1958,15 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 23, 1024U * 1024U, true, true },
         { 23, 1024U * 1024U + 1U, true, false },
         /* Pure-AVX2 four-source grouping: exact K and byte boundaries. */
+        { 40, 4095, true, false },
+        { 40, 4096, true, false },
+        { 40, 4097, true, false },
+        { 41, 4095, true, false },
+        { 41, 4096, true, false },
+        { 41, 4097, true, false },
+        { 42, 4095, true, false },
+        { 42, 4096, true, false },
+        { 42, 4097, true, false },
         { 84, 4095, true, false },
         { 84, 4096, true, false },
         { 84, 4097, true, false },
@@ -1976,6 +1985,15 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 214, 4095, true, false },
         { 214, 4096, true, false },
         { 214, 4097, true, false },
+        { 251, 4095, true, false },
+        { 251, 4096, true, false },
+        { 251, 4097, true, false },
+        { 252, 4095, true, false },
+        { 252, 4096, true, false },
+        { 252, 4097, true, false },
+        { 253, 4095, true, false },
+        { 253, 4096, true, false },
+        { 253, 4097, true, false },
         /* Each measured staircase boundary retains the coarse reduction just
            below its K or byte threshold and selects the pairwise reduction at
            the exact threshold. */
@@ -2002,8 +2020,8 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
     {
         const bool expect_group4 = pure_avx2 && cases[i].bytes == 4096 &&
-            cases[i].original_count >= 86 &&
-            cases[i].original_count <= 212;
+            cases[i].original_count >= 41 &&
+            cases[i].original_count <= 252;
         execute_r1_xor_dispatch_case(*avx2, trace,
             cases[i].original_count, cases[i].bytes,
             cases[i].expect_coarse, LEO2_FIELD_GF8,

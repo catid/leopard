@@ -6105,13 +6105,14 @@ static LEO_FORCE_INLINE bool UseGroup4R1Xor(
     const leopard::backend::Ops& ops,
     size_t shard_bytes)
 {
-    /* A complete pinned all-K screen found a contiguous conservative region
-       where four live sources per destination traversal beat the mature
-       eight-source reduction in both encode and one-loss decode.  Keep the
-       policy exact until adjacent byte sizes have equally broad evidence. */
+    /* Pinned all-K screens and focused ABBA confirmation found a contiguous
+       region where four live sources per destination traversal beat the
+       mature eight-source reduction in both encode and one-loss decode.  K=40
+       regressed in decode and K=253 was neutral/slightly slower, so keep both
+       count boundaries and the byte-size boundary exact. */
     return shard_bytes == 4096 && codec->field == LEO2_FIELD_GF8 &&
         codec->context->backend == LEO2_BACKEND_AVX2 &&
-        codec->original_count >= 86 && codec->original_count <= 212 &&
+        codec->original_count >= 41 && codec->original_count <= 252 &&
         ops.xor_memory_sources_group4 != NULL;
 }
 

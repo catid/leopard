@@ -1,0 +1,116 @@
+{
+  "schema": "leopard2-r1-group4-expanded-checkpoint/v1",
+  "status": "directional_promotion_candidate",
+  "source": {
+    "base_commit": "8a47ecb1cd0bc3456011518afecf14796d6746c0",
+    "change": "Expand the exact-4096-byte GF8 AVX2 R=1 group-four selector from K=86..212 to K=41..252",
+    "candidate_benchmark_sha256": "bd226b48a0517097699ce8f9459f779ac7dd06ce4dd8898ceee0c4517399c929",
+    "candidate_archive_sha256": "7de4d88747613d7646e62110c535c460dcef43bd9b915608f622a48f3263d05a",
+    "stock_benchmark_sha256": "d1e746374f3d052fdcfb01e8ce9090e1e685be7f9a50b682a5e984d404268f49",
+    "native_leopard1_benchmark_sha256": "d6439bebe9d2de25f9ad7eef8b029f75e1e0a5cc272c18fc7fe89da1b95ba699",
+    "leopard1_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "selector": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "R": 1,
+    "shard_bytes": 4096,
+    "minimum_K": 41,
+    "maximum_K": 252,
+    "lower_rejection_control_K": 40,
+    "upper_rejection_control_K": 253
+  },
+  "stock_vs_group4": {
+    "ratio_orientation": "stock_Leopard2_time_over_group4_Leopard2_time",
+    "design": "five independent stock/group4/group4/stock rounds, 11 or 15 retained medians per process, warmup 32, plan reuse 128",
+    "K41_through_K85": {
+      "raw_artifact": "/tmp/leopard-r1-group4-stock-abba-k24-85-v1/result.json",
+      "raw_artifact_sha256": "69dbadd2e6d3c8e34878e4115bc311dc9e6d0e47cc24978370e4ad480ba41f77",
+      "minimum_geometric_ratio": {
+        "encode": 1.1063426476654217,
+        "decode_first_use": 1.03189068624767,
+        "decode_reuse_128": 1.0323470503025953
+      },
+      "minimum_95_percent_lower_bound": {
+        "encode": 1.0672707968179547,
+        "decode_first_use": 1.00643793140204,
+        "decode_reuse_128": 1.000551807063019
+      },
+      "all_K_values_improved_both_encode_and_decode": true
+    },
+    "K213_through_K252": {
+      "raw_artifacts": [
+        {
+          "path": "/tmp/leopard-r1-group4-stock-abba-k213-243-v1/result.json",
+          "sha256": "e5e294d03eb9d6f5fcbf04332fd0e5f473029c15ded7ea655a76b7e374de9a4a"
+        },
+        {
+          "path": "/tmp/leopard-r1-group4-stock-abba-k244-255-v1/result.json",
+          "sha256": "09fc78b7befd5f0e8eab44e984c2842734d216ca582fa7144ab049c68b8d3830"
+        }
+      ],
+      "minimum_geometric_ratio": {
+        "encode": 1.027776289367784,
+        "decode_first_use": 1.0100167929004575,
+        "decode_reuse_128": 1.0107209741923073
+      },
+      "uncertain_but_nonregressing_point_cell": "K=235; confidence intervals include one, while all three point estimates favor group-four",
+      "upper_boundary_result": "K=252 favored group-four; K=253 was neutral/slightly slower and remains on the mature reducer"
+    }
+  },
+  "leopard1_comparison": {
+    "authoritative": false,
+    "non_authoritative_reason": "The current v9 exact-main evidence contract rejects the promoted production default LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON. The frozen-binary campaign is suitable for selector direction but not final publication evidence.",
+    "raw_artifact": "/tmp/leopard-r1-group4-final-native-directional-v1/result.json",
+    "raw_artifact_sha256": "b5d6a077c908fe5a4beda0cf976391019305bfb6cf9043056153bf2a000eecb5",
+    "design": "five independent Leopard1/Leopard2/Leopard2/Leopard1 rounds on CPU 15, iterations 15, warmup 32, plan reuse 128",
+    "ratio_orientation": "Leopard1_time_over_Leopard2_time",
+    "selected_cells": [
+      {"K": 41, "encode": 1.083009, "decode_first_use": 0.997446, "decode_reuse_128": 1.041508},
+      {"K": 42, "encode": 1.091692, "decode_first_use": 1.021233, "decode_reuse_128": 1.065123},
+      {"K": 58, "encode": 1.104810, "decode_first_use": 1.016136, "decode_reuse_128": 1.055213},
+      {"K": 59, "encode": 1.109272, "decode_first_use": 1.030255, "decode_reuse_128": 1.070098},
+      {"K": 64, "encode": 1.123447, "decode_first_use": 1.049155, "decode_reuse_128": 1.086621},
+      {"K": 65, "encode": 1.112799, "decode_first_use": 1.023415, "decode_reuse_128": 1.061105},
+      {"K": 84, "encode": 1.127525, "decode_first_use": 1.047916, "decode_reuse_128": 1.080643},
+      {"K": 85, "encode": 1.111009, "decode_first_use": 1.044311, "decode_reuse_128": 1.077886},
+      {"K": 86, "encode": 1.117183, "decode_first_use": 1.040163, "decode_reuse_128": 1.072827},
+      {"K": 128, "encode": 1.137786, "decode_first_use": 1.071587, "decode_reuse_128": 1.098540},
+      {"K": 212, "encode": 1.144494, "decode_first_use": 1.097973, "decode_reuse_128": 1.124268},
+      {"K": 213, "encode": 1.101561, "decode_first_use": 1.055527, "decode_reuse_128": 1.083630},
+      {"K": 235, "encode": 1.105419, "decode_first_use": 1.040884, "decode_reuse_128": 1.064341},
+      {"K": 241, "encode": 1.073436, "decode_first_use": 1.037505, "decode_reuse_128": 1.062565},
+      {"K": 252, "encode": 1.076349, "decode_first_use": 1.042783, "decode_reuse_128": 1.065717}
+    ],
+    "selected_sample_minimum": {
+      "encode_ratio": 1.0734362105322819,
+      "encode_95_percent_lower_bound": 1.0516468343977938,
+      "decode_first_use_ratio": 0.9974464154301599,
+      "decode_first_use_95_percent_lower_bound": 0.9846886153284838,
+      "decode_reuse_128_ratio": 1.041507579495498,
+      "decode_reuse_128_95_percent_lower_bound": 1.027719806075352
+    },
+    "remaining_boundary_gap": "K=41 first-use decode is statistically tied/slightly slower; K=40 remains a separate setup/execution optimization target"
+  },
+  "byte_boundary": {
+    "raw_artifact": "/tmp/leopard-r1-group4-k85-native-directional-v2/result.json",
+    "raw_artifact_sha256": "98001bdf500539cdf5695edd8485ffd91232eb7fe5efdb4a87f8287274bead20",
+    "result": "At K=85 the exact 4096-byte selector beat Leopard1 by 1.103674x encode, 1.021942x first-use decode and 1.054006x reused decode. Legal Leopard1 neighbors 4032 and 4160 bytes retained the mature path."
+  },
+  "correctness": {
+    "build": "GNU 13 Release, runtime-dispatch AUTO archive",
+    "tests": [
+      "leopard2_context_backends",
+      "leopard2_r1_xor"
+    ],
+    "result": "2/2 passed",
+    "peak_rss_kib": 213192,
+    "memory_scope": "MemoryMax=256M, MemorySwapMax=0"
+  },
+  "next_gates": [
+    "Commit the selector, rebuild from the clean commit and repeat focused correctness plus Clang ASan/UBSan.",
+    "Version the exact-main evidence contract for the promoted one-loss default, then repeat the final Leopard1 campaign without the directional qualifier.",
+    "Optimize the remaining K=40 and K=41 first-use decode setup gap, then resume the all-K sweep."
+  ]
+}
