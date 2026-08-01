@@ -1168,14 +1168,10 @@ request = {{
 }}
 real_start = runner.start_campaign_guardian
 def controlled_start(descriptor, campaign_scope):
-    with pathlib.Path({checkpoint!r}).open(
-            "w", encoding="utf-8") as stream:
-        json.dump({{
-            "campaign_scope": str(campaign_scope),
-            "mode": {launch_mode!r},
-        }}, stream)
-        stream.flush()
-        os.fsync(stream.fileno())
+    runner.atomic_json(pathlib.Path({checkpoint!r}), {{
+        "campaign_scope": str(campaign_scope),
+        "mode": {launch_mode!r},
+    }})
     if {launch_mode!r} == "before-control":
         time.sleep(30)
     real_start(descriptor, campaign_scope)
@@ -1335,14 +1331,10 @@ def controlled_start(descriptor, campaign_scope):
     children = runner.adopted_child_pids()
     if len(children) != 1:
         raise RuntimeError("guardian PID inventory changed")
-    with pathlib.Path({checkpoint!r}).open(
-            "w", encoding="utf-8") as stream:
-        json.dump({{
-            "campaign_scope": str(campaign_scope),
-            "guardian_pid": children[0],
-        }}, stream)
-        stream.flush()
-        os.fsync(stream.fileno())
+    runner.atomic_json(pathlib.Path({checkpoint!r}), {{
+        "campaign_scope": str(campaign_scope),
+        "guardian_pid": children[0],
+    }})
     # The harness installs a stopped external PID before killing this
     # coordinator, so launch authorization must not be sent first.
     time.sleep(30)

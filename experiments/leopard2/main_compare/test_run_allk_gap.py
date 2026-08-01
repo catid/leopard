@@ -3807,13 +3807,18 @@ class ProductionBuildClosureTests(unittest.TestCase):
         entry = next(item for item in self.fixture.entries
                      if item["file"].endswith("Leopard2Plan.cpp"))
         wrong = str((self.fixture.source / "leopard2.cpp").resolve())
+        general_one_loss = \
+            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1"
         entry["file"] = wrong
         entry["arguments"][entry["arguments"].index("-c") + 1] = wrong
+        entry["arguments"].insert(
+            entry["arguments"].index("-o"), general_one_loss)
         self.fixture._write_commands()
         expect_rejected(self, self.provenance, "source closure differs")
         entry["file"] = str(
             (self.fixture.source / "Leopard2Plan.cpp").resolve())
         entry["arguments"][entry["arguments"].index("-c") + 1] = entry["file"]
+        entry["arguments"].remove(general_one_loss)
         self.fixture._write_commands()
         extra = self.fixture.build / "unexpected.o"
         extra.write_bytes(b"unexpected\n")
