@@ -164,6 +164,7 @@ def validate_document(
     document: dict[str, Any],
     lane: str,
     byte_count: int,
+    variant: str,
     expected_source_commit: str,
     expected_source_tree: str,
     expected_main_commit: str,
@@ -212,13 +213,22 @@ def validate_document(
         require(document["correctness"].get("leopard2_round_trip") is True,
                 f"{lane} round trip failed")
         build = document["build"]
-        require(build.get("prevalidated_batch_experiment") is True and
-                build.get("source_commit") == expected_source_commit and
+        if variant == "prevalidated":
+            require(build.get("prevalidated_batch_experiment") is True,
+                    f"{lane} prevalidated marker differs")
+            setup_metric(document, "encode_binding_setup")
+            setup_metric(document, "decode_binding_setup")
+        else:
+            require("prevalidated_batch_experiment" not in build and
+                    "encode_binding_setup" not in document["metrics"] and
+                    "decode_binding_setup" not in document["metrics"],
+                    f"{lane} ordinary benchmark selected a binding")
+            setup_metric(document, "codec_setup")
+            setup_metric(document, "decode_plan_setup")
+        require(build.get("source_commit") == expected_source_commit and
                 build.get("source_tree") == expected_source_tree and
                 build.get("source_tracked_dirty") is False,
                 f"{lane} build/source identity differs")
-        setup_metric(document, "encode_binding_setup")
-        setup_metric(document, "decode_binding_setup")
     metric(document, lane, "encode")
     metric(document, lane, "decode")
 
@@ -249,6 +259,9 @@ def main() -> int:
     parser.add_argument("--expected-source-commit", required=True)
     parser.add_argument("--expected-source-tree", required=True)
     parser.add_argument("--expected-main-commit", required=True)
+    parser.add_argument(
+        "--variant", choices=("prevalidated", "ordinary"),
+        default="prevalidated")
     parser.add_argument("--bootstrap-repetitions", type=int, default=100000)
     args = parser.parse_args()
     require(args.bootstrap_repetitions >= 1000,
@@ -279,7 +292,7 @@ def main() -> int:
                 f"duplicate sequence for {byte_count}: {sequence}")
         sequences[byte_count].add(sequence)
         document = load_json(path)
-        validate_document(document, lane, byte_count,
+        validate_document(document, lane, byte_count, args.variant,
                           args.expected_source_commit,
                           args.expected_source_tree,
                           args.expected_main_commit)
@@ -338,25 +351,41 @@ def main() -> int:
             for round_values in records[byte_count]["candidate"].values()
             for document in round_values
         ]
-        encode_setup = statistics.median([
-            setup_metric(document, "encode_binding_setup")
-            for document in candidate_documents
-        ])
-        decode_setup = statistics.median([
-            setup_metric(document, "decode_binding_setup")
-            for document in candidate_documents
-        ])
-        for operation, setup in (("encode", encode_setup),
-                                 ("decode", decode_setup)):
-            medians = operations[operation]["process_median_us"]
-            saved = medians["main"] - medians["candidate"]
-            operations[operation]["binding_setup_median_us"] = round(setup, 9)
-            operations[operation]["main_break_even_calls"] = (
-                math.ceil(setup / saved) if saved > 0 else None)
-        summaries.append({"shard_bytes": byte_count, **operations})
+        summary = {"shard_bytes": byte_count, **operations}
+        if args.variant == "prevalidated":
+            encode_setup = statistics.median([
+                setup_metric(document, "encode_binding_setup")
+                for document in candidate_documents
+            ])
+            decode_setup = statistics.median([
+                setup_metric(document, "decode_binding_setup")
+                for document in candidate_documents
+            ])
+            for operation, setup in (("encode", encode_setup),
+                                     ("decode", decode_setup)):
+                medians = operations[operation]["process_median_us"]
+                saved = medians["main"] - medians["candidate"]
+                operations[operation]["binding_setup_median_us"] = round(
+                    setup, 9)
+                operations[operation]["main_break_even_calls"] = (
+                    math.ceil(setup / saved) if saved > 0 else None)
+        else:
+            summary["setup_median_us"] = {
+                "codec": round(statistics.median([
+                    setup_metric(document, "codec_setup")
+                    for document in candidate_documents
+                ]), 9),
+                "decode_plan": round(statistics.median([
+                    setup_metric(document, "decode_plan_setup")
+                    for document in candidate_documents
+                ]), 9),
+            }
+        summaries.append(summary)
 
     result = {
-        "schema": "leopard2-k1-binding-holdout-v1",
+        "schema": ("leopard2-k1-binding-holdout-v1"
+                   if args.variant == "prevalidated"
+                   else "leopard2-k1-ordinary-holdout-v1"),
         "source": {
             "commit": args.expected_source_commit,
             "tree": args.expected_source_tree,
