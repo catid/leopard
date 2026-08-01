@@ -65,6 +65,7 @@ static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighInputCopyShards(0);
 static std::atomic<uint64_t> TestHighForwardFusedCalls(0);
 static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
+static std::atomic<uint64_t> TestHighK5R5PartialCalls(0);
 static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
@@ -2937,6 +2938,7 @@ void ReedSolomonEncodeK5R5T8(
     TestHighIFFTButterfly4OutCalls.fetch_add(2, std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighK5R5PartialCalls.fetch_add(1, std::memory_order_relaxed);
 #endif
     ops.ff8_high_encode_one_block(
         data, work, 8U | backend::kFF8HighEncodeK5R5Partial,
@@ -3842,6 +3844,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighInputCopyShards.store(0, std::memory_order_relaxed);
     TestHighForwardFusedCalls.store(0, std::memory_order_relaxed);
     TestHighWholeTransformCalls.store(0, std::memory_order_relaxed);
+    TestHighK5R5PartialCalls.store(0, std::memory_order_relaxed);
     TestHighSmallTransformCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
@@ -3859,6 +3862,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighForwardFusedCalls.load(std::memory_order_relaxed);
     result.whole_transform_calls =
         TestHighWholeTransformCalls.load(std::memory_order_relaxed);
+    result.k5r5_partial_calls =
+        TestHighK5R5PartialCalls.load(std::memory_order_relaxed);
     result.small_transform_calls =
         TestHighSmallTransformCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =

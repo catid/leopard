@@ -385,6 +385,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t input_copy_shards;
     uint64_t forward_fused_calls;
     uint64_t whole_transform_calls;
+    uint64_t k5r5_partial_calls;
     uint64_t small_transform_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;

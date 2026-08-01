@@ -150,6 +150,16 @@
 #error "LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED must be 0 or 1"
 #endif
 
+/* Same-text attribution control for the packed ordinary K=5/R=5/64-byte
+   terminal.  The macro changes only a nonzero initialized data word. */
+#ifndef LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL
+#define LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL must be 0 or 1"
+#endif
+
 /*
     Promoted path that maps shortened/punctured T=8 profiles onto the measured
     full K=8,R=8 kernel after reusable batch validation.  CMake defines this
@@ -795,6 +805,8 @@ static volatile uint32_t g_k1_prevalidated_binding_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K1_PREVALIDATED_BINDING;
 static volatile uint32_t g_k1_ordinary_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED;
+static volatile uint32_t g_k5r5_b64_terminal_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_K5R5_B64_TERMINAL;
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
 static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
@@ -11470,6 +11482,150 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
 #undef LEO2_T8_TWO_BLOCK_NOINLINE
 #endif
 
+#ifdef LEO_HAS_FF8
+static LEO_FORCE_INLINE bool IsGF8AVX2K5R5T8B64TerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes != 64 || codec->original_count != 5 ||
+        g_k5r5_b64_terminal_mode != 1U ||
+        codec->recovery_count != 5 || codec->padded_side != 8 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 || !codec->context ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_high_encode_one_block ||
+        (codec->context->ops->ff8_high_encode_one_block_sides & 8U) == 0)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+#if defined(_MSC_VER)
+#define LEO2_K5R5_B64_TERMINAL_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_K5R5_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_k5r5_b64_terminal"), \
+        aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K5R5_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K5R5_B64_TERMINAL_NOINLINE
+#endif
+
+/*
+    The ordinary API's common packed layout has five consecutive 64-byte
+    inputs and five consecutive 64-byte outputs.  Proving those two slabs and
+    every pointer in their public arrays is equivalent to the general
+    per-shard range sweep, while avoiding scratch staging, sorting predicates,
+    and transform geometry that the concrete T=8 kernel does not consume.
+
+    A layout mismatch is not an error: arbitrary pointer order, input aliases,
+    sparse output masks, and every unusual but valid arrangement retain the
+    complete validator and mature executor.  Once this helper recognizes the
+    packed layout, all checks precede the first output write so failure remains
+    atomic.
+*/
+template<size_t ProtectedCount>
+static LEO2_K5R5_B64_TERMINAL_NOINLINE bool
+TryEncodeGF8K5R5T8B64PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2K5R5T8B64TerminalEligible(codec, 64));
+    LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+
+    /* Production geometry is fixed at this exact shape: ten range records,
+       5 + 2T pointers, and 2T 64-byte work rows.  Hook builds reserve an
+       additional diagnostic sparse schedule, so derive their established
+       upper bound through the oracle layout instead. */
+    ScratchLayout layout = { 0, 0, 0,
+        ((10U * sizeof(AddressRange) + 21U * sizeof(void*) +
+            kScratchAlignment - 1U) & ~(kScratchAlignment - 1U)) +
+            16U * 64U };
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 64, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, 5, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 5, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[2 + i] = protected_ranges[i];
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], 5U * 64U, input_range) ||
+        !MakeRange(recovery[0], 5U * 64U, output_range))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < 5; ++i)
+    {
+        if (reinterpret_cast<uintptr_t>(original[i]) !=
+                input_range.begin + i * 64U ||
+            reinterpret_cast<uintptr_t>(recovery[i]) !=
+                output_range.begin + i * 64U)
+            return false;
+    }
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    leopard::ff8::ReedSolomonEncodeK5R5T8(
+        *codec->context->ops, original, recovery, 64);
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_K5R5_B64_TERMINAL_NOINLINE
+#endif
+
 #if defined(_MSC_VER)
 #define LEO2_K2_ENCODE_NOINLINE __declspec(noinline)
 #elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
@@ -12355,6 +12511,16 @@ LEO2_EXPORT leo2_result leo2_encode(
     if (IsK1R1EncodeTerminalEligible(codec, shard_bytes))
         return EncodeGF8K1R1PublicTerminal(
             codec, shard_bytes, original, recovery, scratch, scratch_bytes);
+#ifdef LEO_HAS_FF8
+    if (IsGF8AVX2K5R5T8B64TerminalEligible(codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8K5R5T8B64PackedTerminal<0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result))
+            return terminal_result;
+    }
+#endif
     return EncodeInternal(codec, shard_bytes, original, recovery,
         scratch, scratch_bytes, NULL, 0, false);
 }
@@ -12447,6 +12613,18 @@ LEO2_EXPORT LEO2_ENCODE_BATCH_ALIGNED leo2_result leo2_encode_batch(
                 return EncodeGF8K1R1Batch1024Terminal(codec, items);
             return EncodeGF8K1R1BatchTerminal(codec, items);
         }
+#ifdef LEO_HAS_FF8
+        if (IsGF8AVX2K5R5T8B64TerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8K5R5T8B64PackedTerminal<1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+#endif
     }
     return EncodeBatchCompatibilityInternal(codec, items, item_count);
 }
