@@ -1,0 +1,166 @@
+{
+  "schema": "leopard2-gf8-ordinary-k5r5-b64-terminal-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-08-01",
+  "scope": {
+    "operation": "encode",
+    "api_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch"
+    ],
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "K": 5,
+    "R": 5,
+    "shard_bytes": 64,
+    "batch": 1,
+    "fallback_policy": "Every different count, byte size, batch size, backend, sparse output layout, or non-packed valid layout retains the existing general path."
+  },
+  "source": {
+    "implementation_commit": "3b935ff7ce5e484a850a3235612e8614a2fe8ecd",
+    "implementation_tree": "8845a1ab679050526e04ed9614a390c1830beb35",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_k5r5_b64_terminal_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "816c04abe48ddb53d1c38409623dec4ea9b55e264761275e584c6273ef133ba8",
+    "control_sha256": "52bb5750db7286996b37595f0f205aeed5f3bd60ea1b1e241c021ac1d0eccc0a",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_executable_sections_sha256": "732c7775469b5302f0ebd652add76bf487b29f9d60a9e6b39de64c205dae403b",
+    "candidate_control_instruction_sections_identical": true,
+    "candidate_selector_word": 1,
+    "control_selector_word": 2,
+    "selector_symbol": "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "iterations_per_process": 15,
+    "warmup_per_process": 64,
+    "target_rounds": 3,
+    "neighbor_rounds": 3,
+    "cell_count": 12,
+    "process_count": 150,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "credible_neighbor_regressions": [],
+    "raw_sha256": "de69f55dcb13dcce715b397b36b589fd7e26b4ad2c7bc19c2963057d6bdbf668",
+    "summary_sha256": "2fe108a41454edb0444de66991d993ba2818c1e43afe7ebaf8180331b5f9aade",
+    "target": {
+      "control_over_candidate": 5.033178677259785,
+      "control_over_candidate_ci95": [
+        4.821473446337616,
+        5.254179635991853
+      ],
+      "exact_main_over_candidate": 2.385157325373034,
+      "exact_main_over_candidate_ci95": [
+        2.3353688435312,
+        2.436007263922651
+      ]
+    },
+    "neighbors": [
+      {
+        "id": "byte-neighbor-k5-r5-b63-q1",
+        "control_over_candidate": 1.0221254392995116,
+        "ci95": [0.9421808960382413, 1.108853318992381]
+      },
+      {
+        "id": "byte-neighbor-k5-r5-b65-q1",
+        "control_over_candidate": 1.0031723492603442,
+        "ci95": [0.9863226881789918, 1.020309858408013]
+      },
+      {
+        "id": "byte-neighbor-k5-r5-b128-q1",
+        "control_over_candidate": 1.0011031694982018,
+        "ci95": [0.9948593697568602, 1.0073861557179495]
+      },
+      {
+        "id": "shape-neighbor-k4-r4-b64-q1",
+        "control_over_candidate": 1.0019649363569492,
+        "ci95": [0.9923039293858089, 1.0117200022680297]
+      },
+      {
+        "id": "shape-neighbor-k5-r4-b64-q1",
+        "control_over_candidate": 0.995659467899814,
+        "ci95": [0.9866017091147901, 1.0048003838428374]
+      },
+      {
+        "id": "shape-neighbor-k6-r5-b64-q1",
+        "control_over_candidate": 1.00091373592802,
+        "ci95": [0.9858379476978312, 1.0162200685304277]
+      },
+      {
+        "id": "shape-neighbor-k5-r6-b64-q1",
+        "control_over_candidate": 0.9993152893139698,
+        "ci95": [0.9930774690175389, 1.0055922912485553]
+      },
+      {
+        "id": "terminal-neighbor-k1-r1-b64-q1",
+        "control_over_candidate": 0.9971794336494719,
+        "ci95": [0.9611528955040783, 1.0345563411864707]
+      },
+      {
+        "id": "terminal-neighbor-k2-r1-b64-q1",
+        "control_over_candidate": 1.000941974836164,
+        "ci95": [0.989423955266621, 1.0125940772466353]
+      },
+      {
+        "id": "batch-neighbor-k5-r5-b64-q2",
+        "control_over_candidate": 1.002843853876224,
+        "ci95": [1.0002259100148143, 1.0054686498197416]
+      },
+      {
+        "id": "batch-neighbor-k5-r5-b64-q8",
+        "control_over_candidate": 1.0042311312192884,
+        "ci95": [0.9852255943132529, 1.0236032952563807]
+      }
+    ]
+  },
+  "validation": {
+    "gnu13_release": {
+      "tests": [
+        "leopard2_k5r5_b64_terminal",
+        "leopard2_high_direct_production",
+        "leopard2_auto_encode_backend",
+        "leopard2_public_api_contract",
+        "leopard2_batch_aliasing"
+      ],
+      "result": "5/5 passed"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": [
+        "leopard2_k5r5_b64_terminal",
+        "leopard2_high_direct_production",
+        "leopard2_public_api_contract"
+      ],
+      "result": "3/3 passed"
+    },
+    "strict_compilers": {
+      "gcc13": "-Wall -Wextra -Wpedantic -Werror library build passed",
+      "clang18": "-Wall -Wextra -Wpedantic -Werror library build passed"
+    },
+    "contract_coverage": [
+      "independent direct systematic generator parity oracle",
+      "ordinary encode and one-item batch routing",
+      "packed unaligned source and destination slabs",
+      "sparse and null output fallback",
+      "valid detached and non-packed input fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output and descriptor/scratch overlap rejection",
+      "forced-transform and scalar-backend fallback"
+    ]
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.0,
+    "credible_neighbor_regression_floor": 0.9803921568627451,
+    "online_benchmarking": false,
+    "wire_change": false
+  },
+  "final_disposition": {
+    "promoted": true,
+    "reason": "The fixed-count validator and existing spill-free K5/R5 circuit eliminate generic setup while preserving the full public contract. The target clears both promotion floors by a wide margin and no inactive neighboring cell has a credible regression."
+  }
+}
