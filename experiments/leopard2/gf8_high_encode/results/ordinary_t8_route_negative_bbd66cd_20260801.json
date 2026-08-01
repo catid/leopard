@@ -1,0 +1,130 @@
+{
+  "schema": "leopard2-gf8-ordinary-t8-route-negative-result-v1",
+  "source": {
+    "base_commit": "bbd66cd3304332a4a43d1be6f20f9825209db416",
+    "base_tree": "9755bfb93149ca577940496ada69f2b335dad67d",
+    "candidate_patch_sha256": "2b18edd9c7382dcfde40a1956b6a7e89f860e551acd660ae33fcf428d5303461",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "hypothesis": "After ordinary one-shot validation, route dense GF8 legacy-high T=8 calls through the already-qualified AVX2 one-block and two-block binding kernels instead of constructing general transform pointer geometry.",
+  "configuration": {
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "batch": 1,
+    "loss_count": 1,
+    "reuse": 8192,
+    "iterations": 9,
+    "warmup": 32,
+    "timed_cpu": 4,
+    "reserved_smt_sibling": 20
+  },
+  "frozen_binaries": {
+    "artifact": "/tmp/leopard2-ordinary-t8-discovery-20260801-v1",
+    "control_sha256": "15ae344e3a368f9269fa20715164379516208b6618820d7955c714f3f183236b",
+    "candidate_sha256": "6760a4feea0022e164a81c0b3904d7e1a343415a86ec61b5a0e0989c715cbb17",
+    "main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+  },
+  "discovery_cells": [
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 64,
+      "candidate_us": 0.059455,
+      "control_us": 0.096933,
+      "main_us": 0.048692,
+      "control_over_candidate": 1.630359095,
+      "main_over_candidate": 0.818972332
+    },
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 512,
+      "candidate_us": 0.196615,
+      "control_us": 0.204603,
+      "main_us": 0.150425,
+      "control_over_candidate": 1.040627623,
+      "main_over_candidate": 0.765073875
+    },
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 1024,
+      "candidate_us": 0.335652,
+      "control_us": 0.330000,
+      "main_us": 0.283993,
+      "control_over_candidate": 0.983161131,
+      "main_over_candidate": 0.846093573
+    },
+    {
+      "K": 9,
+      "R": 5,
+      "shard_bytes": 256,
+      "candidate_us": 0.168146,
+      "control_us": 0.180666,
+      "main_us": 0.135094,
+      "control_over_candidate": 1.074459101,
+      "main_over_candidate": 0.803432731
+    },
+    {
+      "K": 9,
+      "R": 5,
+      "shard_bytes": 1024,
+      "candidate_us": 0.489025,
+      "control_us": 0.458556,
+      "main_us": 0.444037,
+      "control_over_candidate": 0.937694392,
+      "main_over_candidate": 0.908004703
+    },
+    {
+      "K": 12,
+      "R": 8,
+      "shard_bytes": 512,
+      "candidate_us": 0.306964,
+      "control_us": 0.283964,
+      "main_us": 0.240114,
+      "control_over_candidate": 0.925072647,
+      "main_over_candidate": 0.782222020
+    },
+    {
+      "K": 12,
+      "R": 8,
+      "shard_bytes": 1024,
+      "candidate_us": 0.516118,
+      "control_us": 0.494283,
+      "main_us": 0.459123,
+      "control_over_candidate": 0.957693783,
+      "main_over_candidate": 0.889569827
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "shard_bytes": 256,
+      "candidate_us": 0.180891,
+      "control_us": 0.206666,
+      "main_us": 0.155370,
+      "control_over_candidate": 1.142489123,
+      "main_over_candidate": 0.858915037
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "shard_bytes": 1024,
+      "candidate_us": 0.547777,
+      "control_us": 0.534507,
+      "main_us": 0.519717,
+      "control_over_candidate": 0.975774813,
+      "main_over_candidate": 0.948774775
+    }
+  ],
+  "validation": {
+    "parity_digest_matched_control_and_main_in_all_cells": true,
+    "generated_code": "The selector was isolated in .text.leo2_ordinary_high_t8; EncodeInternal retained its prior 0x1b8-byte stack frame.",
+    "authoritative_confidence_interval_campaign_run": false,
+    "reason_expensive_gates_skipped": "The discovery screen met the predeclared kill criterion: no sampled cell beat exact main and four sampled cells regressed same-source Leopard2."
+  },
+  "final_disposition": {
+    "promoted": false,
+    "reason": "Routing alone cannot meet the project objective. Exact main remained 5.1 to 23.5 percent faster in every sampled cell, while ordinary validation and setup erased the already-qualified binding-kernel advantage. The next candidate must reduce that contract-preserving ordinary setup cost rather than merely substitute the byte kernel."
+  }
+}
