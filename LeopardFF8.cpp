@@ -68,6 +68,7 @@ static std::atomic<uint64_t> TestHighWholeTransformCalls(0);
 static std::atomic<uint64_t> TestHighK5R5PartialCalls(0);
 static std::atomic<uint64_t> TestHighTwoBlockCalls(0);
 static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
+static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighK9R5TailCalls(0);
@@ -2609,7 +2610,7 @@ void ReedSolomonEncode(
     const void* const* data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
-    bool allow_sub_2k_register_t4)
+    bool allow_sub_2k_register_kernels)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
@@ -2619,21 +2620,32 @@ void ReedSolomonEncode(
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     // Exact-main AVX2 crossover measurements qualify every valid T=2 shape
-    // from 2 KiB.  For T=4, complete sub-2-KiB AVX2 vectors can use the
+    // from 2 KiB.  The generated K=2/3 circuit is also selected for complete
+    // 32-byte vectors below that boundary; its fixed packed terminal handles
+    // the common public layout, while this predicate accelerates validated
+    // irregular layouts without changing their validation contract.  For
+    // T=4, complete sub-2-KiB AVX2 vectors can use the
     // existing register-resident K=3..7/K=9..11 kernels without staging the
     // four-row accumulator.  Larger calls retain the established T=4
     // thresholds and K=8/K>=12 direct-input callback.  Keep the boundaries
     // explicit: buffer_bytes is the current execution pass, so a padded tail
     // cannot inherit its aligned prefix's decision.
     const bool sub_2k_register_t4 =
-        allow_sub_2k_register_t4 &&
+        allow_sub_2k_register_kernels &&
         ops.kind == LEO2_BACKEND_AVX2 &&
         m == 4 && buffer_bytes >= 32U && buffer_bytes < 2U * 1024U &&
         (buffer_bytes & 31U) == 0 &&
         ((original_count >= 3 && original_count <= 7) ||
          (original_count >= 9 && original_count <= 11));
+    const bool sub_2k_register_t2 =
+        allow_sub_2k_register_kernels &&
+        ops.kind == LEO2_BACKEND_AVX2 && m == 2 &&
+        original_count >= 2 && original_count <= 3 &&
+        buffer_bytes >= 32U && buffer_bytes < 2U * 1024U &&
+        (buffer_bytes & 31U) == 0;
     const bool small_transform_shape =
-        m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
+        m == 2 ? original_count >= 2 &&
+            (buffer_bytes >= 2U * 1024U || sub_2k_register_t2) :
         m == 4 && original_count >= 3 &&
             (buffer_bytes >= 2U * 1024U || sub_2k_register_t4);
     if ((ops.kind == LEO2_BACKEND_AVX2 ||
@@ -3881,6 +3893,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighK5R5PartialCalls.store(0, std::memory_order_relaxed);
     TestHighTwoBlockCalls.store(0, std::memory_order_relaxed);
     TestHighSmallTransformCalls.store(0, std::memory_order_relaxed);
+    TestHighT2PackedCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighK9R5TailCalls.store(0, std::memory_order_relaxed);
@@ -3905,6 +3918,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighTwoBlockCalls.load(std::memory_order_relaxed);
     result.small_transform_calls =
         TestHighSmallTransformCalls.load(std::memory_order_relaxed);
+    result.t2_packed_calls =
+        TestHighT2PackedCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =
         TestHighTailColumnCalls.load(std::memory_order_relaxed);
     result.half_tail_column_calls =
@@ -3914,6 +3929,11 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
     result.k9r6r8_tail_calls =
         TestHighK9R6R8TailCalls.load(std::memory_order_relaxed);
     return result;
+}
+
+void TestOnlyRecordT2PackedCall()
+{
+    TestHighT2PackedCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 

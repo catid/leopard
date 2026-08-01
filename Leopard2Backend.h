@@ -611,6 +611,24 @@ void AVX2FF8EncodeOutputGroupTiny(
 
 #if defined(LEO2_HAVE_AVX2_BACKEND)
 const Ops* InitializeAVX2(const InitializeArgs& args);
+#if !defined(NO_LEO_HAS_FF8)
+/*
+    Complete the fixed K=2/3,R=2 legacy-high GF8 transform for a prevalidated
+    packed stripe.  Complete 32-byte vectors use AVX2 and any final byte tail
+    uses the same fixed maps through the scalar table.  This concrete entry is
+    called only after runtime dispatch has selected the pure AVX2 backend.
+*/
+void AVX2FF8HighEncodeT2Packed(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count);
+void AVX2FF8HighEncodeT2PackedTail(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count);
+#endif
 // Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen
 // variants.  The erased pointer types keep the private table layouts local to
 // their implementation translation unit.

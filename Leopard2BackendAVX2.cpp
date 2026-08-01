@@ -7644,6 +7644,108 @@ const void* GetAVX2FF16Tables()
 }
 #endif
 
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+void AVX2FF8HighEncodeT2Packed(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(data != NULL && recovery != NULL);
+    LEO_DEBUG_ASSERT(original_count == 2 || original_count == 3);
+    LEO_DEBUG_ASSERT(byte_count >= 32 && (byte_count & 31U) == 0);
+
+    /*
+        In the legacy Cantor representation, log(2)=85 and log(4)=17.
+        Expanding the fixed T=2 inverse/forward circuit gives
+
+          p0 = 3*a + 2*b,     p1 = 2*a + 3*b                  (K=2)
+          p0 ^= 5*c,          p1 ^= 4*c                       (K=3)
+
+        or equivalently the existing common-term form with multipliers 2 and
+        4.  The direct algebra tests independently verify these rows against
+        the systematic generator matrix and the padded transform.
+    */
+    static const uint16_t kZeroSkew = 255;
+    const AVX2FF8LinearTable first =
+        AVX2FF8PrepareLinearTable(85, kZeroSkew);
+    const uint8_t* input[3] = {
+        static_cast<const uint8_t*>(data[0]),
+        static_cast<const uint8_t*>(data[1]),
+        original_count == 3
+            ? static_cast<const uint8_t*>(data[2])
+            : NULL
+    };
+    uint8_t* output0 = static_cast<uint8_t*>(recovery[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(recovery[1]);
+
+    if (original_count == 2)
+    {
+        for (uint64_t offset = 0; offset < byte_count; offset += 32U)
+        {
+            AVX2FF8HighEncodeT2Vector<2>(
+                input, output0, output1, offset, first, first);
+        }
+        return;
+    }
+    const AVX2FF8LinearTable second =
+        AVX2FF8PrepareLinearTable(17, kZeroSkew);
+    for (uint64_t offset = 0; offset < byte_count; offset += 32U)
+    {
+        AVX2FF8HighEncodeT2Vector<3>(
+            input, output0, output1, offset, first, second);
+    }
+}
+
+void AVX2FF8HighEncodeT2PackedTail(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count)
+{
+    LEO_DEBUG_ASSERT(data != NULL && recovery != NULL);
+    LEO_DEBUG_ASSERT(original_count == 2 || original_count == 3);
+    LEO_DEBUG_ASSERT(byte_count != 0 && (byte_count & 31U) != 0);
+
+    const uint8_t* input[3] = {
+        static_cast<const uint8_t*>(data[0]),
+        static_cast<const uint8_t*>(data[1]),
+        original_count == 3
+            ? static_cast<const uint8_t*>(data[2])
+            : NULL
+    };
+    uint8_t* output0 = static_cast<uint8_t*>(recovery[0]);
+    uint8_t* output1 = static_cast<uint8_t*>(recovery[1]);
+    const uint64_t aligned_bytes = byte_count & ~UINT64_C(31);
+    if (aligned_bytes != 0)
+    {
+        AVX2FF8HighEncodeT2Packed(
+            data, recovery, original_count, aligned_bytes);
+    }
+
+    /* The table representation is the scalar oracle for the same two fixed
+       maps used above.  Evaluating only the final ragged bytes avoids padded
+       loads while retaining the one-pass circuit. */
+    for (uint64_t offset = aligned_bytes; offset < byte_count; ++offset)
+    {
+        const uint8_t a = input[0][offset];
+        const uint8_t b = input[1][offset];
+        uint8_t common = FF8Product(85,
+            static_cast<uint8_t>(a ^ b));
+        uint8_t parity0 = a;
+        if (original_count == 3)
+        {
+            const uint8_t c = input[2][offset];
+            common = static_cast<uint8_t>(common ^ FF8Product(17, c));
+            parity0 = static_cast<uint8_t>(parity0 ^ c);
+        }
+        output0[offset] = static_cast<uint8_t>(parity0 ^ common);
+        output1[offset] = static_cast<uint8_t>(b ^ common);
+    }
+}
+#endif
+
 #ifdef LEO2_ENABLE_TEST_HOOKS
 void LEO2_AVX_TABLE_STATE(TestBackendState* state)
 {

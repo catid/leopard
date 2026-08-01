@@ -160,7 +160,7 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
-    bool allow_sub_2k_register_t4 = true);
+    bool allow_sub_2k_register_kernels = true);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,
@@ -401,6 +401,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t k5r5_partial_calls;
     uint64_t two_block_calls;
     uint64_t small_transform_calls;
+    uint64_t t2_packed_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;
     uint64_t k9r5_tail_calls;
@@ -443,6 +444,7 @@ void TestOnlyResetLowEncodeCounts();
 TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts();
 void TestOnlyResetHighEncodeCounts();
 TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
+void TestOnlyRecordT2PackedCall();
 void TestOnlyResetSparseEncodeCounts();
 TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();
