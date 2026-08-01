@@ -11684,9 +11684,13 @@ static LEO_FORCE_INLINE void ExecuteGF8AVX2T2PackedTerminal(
 
 #if defined(_MSC_VER)
 #define LEO2_T2_PACKED_TERMINAL_NOINLINE __declspec(noinline)
-#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
 #define LEO2_T2_PACKED_TERMINAL_NOINLINE \
-    __attribute__((noinline, section(".text.leo2_t2_packed_terminal"), \
+    __attribute__((noipa, section(".leo2_t2_packed_terminal"), \
+        aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_T2_PACKED_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".leo2_t2_packed_terminal"), \
         aligned(64)))
 #elif defined(__GNUC__) || defined(__clang__)
 #define LEO2_T2_PACKED_TERMINAL_NOINLINE \
@@ -11702,7 +11706,7 @@ static LEO_FORCE_INLINE void ExecuteGF8AVX2T2PackedTerminal(
     aliased, ragged, or otherwise irregular layouts retain the general path.
 */
 template<uint32_t OriginalCount, size_t ProtectedCount>
-static LEO2_T2_PACKED_TERMINAL_NOINLINE bool
+static LEO_FORCE_INLINE bool
 TryEncodeGF8AVX2T2PackedTerminal(
     const leo2_codec* codec,
     const AddressRange* protected_ranges,
