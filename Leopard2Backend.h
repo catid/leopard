@@ -59,6 +59,15 @@ typedef void (*XorMemory)(
     const void* source,
     uint64_t byte_count);
 
+// Copy a read-only source into a disjoint destination.  A zero byte count
+// performs no access.  This optional primitive lets a runtime-selected ISA
+// backend avoid falling back through the process C library for measured
+// copy-only codec terminals while retaining the ordinary memcpy fallback.
+typedef void (*CopyMemory)(
+    void* destination,
+    const void* source,
+    uint64_t byte_count);
+
 // One-pass accumulation of two read-only inputs:
 //
 //     destination[i] ^= source0[i] ^ source1[i]
@@ -495,6 +504,9 @@ struct Ops
     // Optional pure-AVX2 dense T=4 batch callback.  Other backends retain the
     // ordinary prevalidated per-item executor.
     FF8HighEncodeT4Batch ff8_high_encode_t4_batch;
+    // Optional runtime-selected copy primitive.  Callers must already have
+    // proved disjoint source/destination ranges.
+    CopyMemory copy_memory;
 };
 
 struct X86Features
@@ -523,6 +535,9 @@ bool IsCalibratedAutoAVX512EncodeProcessor(
 bool IsCalibratedAutoAVX512EncodeHost();
 bool IsCalibratedAutoGFNIProcessor(const X86ProcessorIdentity& identity);
 bool IsCalibratedAutoGFNIHost();
+bool IsCalibratedK1AVX2CopyProcessor(
+    const X86ProcessorIdentity& identity);
+bool IsCalibratedK1AVX2CopyHost();
 
 // Pure feature classifier used by both the runtime probe and synthetic tests.
 X86Features ClassifyX86Features(

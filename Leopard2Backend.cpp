@@ -2440,6 +2440,34 @@ static bool TestXor(const Ops& ops)
     return true;
 }
 
+static bool TestCopyMemory(const Ops& ops)
+{
+    if (!ops.copy_memory)
+        return true;
+    ops.copy_memory(NULL, NULL, 0);
+    static const uint64_t byte_counts[] = {
+        1, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
+        127, 128, 129, 255, 256, 257, 1023, 1024, 1025, 4096, 4097
+    };
+    uint8_t source[4100];
+    uint8_t output[4100];
+    uint8_t expected[4100];
+    for (size_t i = 0; i < sizeof(source); ++i)
+        source[i] = static_cast<uint8_t>(i * 101U + 29U);
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        const uint64_t bytes = byte_counts[count_i];
+        std::memset(output, 0xa5, sizeof(output));
+        std::memset(expected, 0xa5, sizeof(expected));
+        std::memcpy(expected + 1, source + 1, static_cast<size_t>(bytes));
+        ops.copy_memory(output + 1, source + 1, bytes);
+        if (std::memcmp(output, expected, sizeof(output)) != 0)
+            return false;
+    }
+    return true;
+}
+
 #ifdef LEO_HAS_FF8
 static bool TestWeightedIFFTAliasingContract()
 {
@@ -2628,7 +2656,11 @@ static bool TestFF8Butterfly8Out(const Ops& ops, FF8MultiplyLog reference)
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
-        !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops))
+        !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops) ||
+        !TestCopyMemory(ops))
+        return false;
+    if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
+        (ops.copy_memory != NULL))
         return false;
 #ifdef LEO_HAS_FF8
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=

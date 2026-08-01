@@ -363,9 +363,22 @@ rejection or immutable-input sharing.
 When every buffer and per-item scratch address remains stable across many
 encodes, `leo2_encode_batch_binding_create` deep-copies and validates that
 metadata once. `leo2_encode_batch_binding_execute` then performs only the
-captured byte-heavy work without allocation or repeated alias sorting. Source
-bytes may change, but the codec/context and every captured buffer must outlive
-the binding; one binding is not concurrently executable because it owns no
-separate parity or scratch storage. The full algorithms, alias treatment,
-tests, lifetime rules, and diagnostic crossover evidence are in
-`docs/leopard2_batch_preflight.md`.
+captured byte-heavy work without allocation or repeated alias sorting. API
+version 7 adds the matching `leo2_decode_batch_binding_*` family. It snapshots
+the original, recovery, restored-original, and scratch addresses and moves the
+same validation out of repeated decode execution. A no-loss decode binding
+preserves the ordinary true-no-op contract.
+
+Source or received bytes may change, but the codec/context/plan and every
+captured buffer must outlive its binding. Compact GF16 padded-odd bindings
+recheck the required zero systematic pad bytes on every non-no-op execution.
+For a non-no-op binding, the output handle is setup metadata and must be
+disjoint from the codec/plan/context and every captured descriptor, pointer
+array, shard, and scratch span; overlap is rejected before anything is cleared.
+No-loss creation protects only the setup objects and top-level descriptor
+array. Its deliberately uninspected nested item fields do not name input or
+protected spans for that call, so the caller may use otherwise-writable storage
+there as the output-handle destination. One binding is not concurrently
+executable because it captures writable output and scratch storage. The full
+algorithms, alias treatment, tests, lifetime rules, and diagnostic crossover
+evidence are in `docs/leopard2_batch_preflight.md`.

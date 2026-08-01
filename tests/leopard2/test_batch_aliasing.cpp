@@ -670,6 +670,134 @@ void TestEncodeBinding(Fixture& fixture)
         "failed encode binding creation retained output handle");
     Require(conflict.outputs == conflict_before,
         "encode binding setup modified a rejected output");
+
+    ScalableEncodeBatch handle_alias(fixture, 1);
+    void* const saved_item_scratch = handle_alias.items[0].scratch;
+    leo2_encode_batch_binding** item_handle =
+        reinterpret_cast<leo2_encode_batch_binding**>(
+            &handle_alias.items[0].scratch);
+    RequireResult(leo2_encode_batch_binding_create(fixture.codec,
+        &handle_alias.items[0], 1, item_handle), LEO2_OVERLAP,
+        "encode binding output/item alias rejection");
+    Require(handle_alias.items[0].scratch == saved_item_scratch,
+        "encode binding output/item alias modified the descriptor");
+
+    void* const saved_pointer = handle_alias.recovery_pointers[0][0];
+    leo2_encode_batch_binding** pointer_handle =
+        reinterpret_cast<leo2_encode_batch_binding**>(
+            &handle_alias.recovery_pointers[0][0]);
+    RequireResult(leo2_encode_batch_binding_create(fixture.codec,
+        &handle_alias.items[0], 1, pointer_handle), LEO2_OVERLAP,
+        "encode binding output/pointer-array alias rejection");
+    Require(handle_alias.recovery_pointers[0][0] == saved_pointer,
+        "encode binding output/pointer-array alias modified metadata");
+
+    Bytes source_prefix(fixture.source_a[0].begin(),
+        fixture.source_a[0].begin() + sizeof(void*));
+    leo2_encode_batch_binding** source_handle =
+        reinterpret_cast<leo2_encode_batch_binding**>(
+            &fixture.source_a[0][0]);
+    RequireResult(leo2_encode_batch_binding_create(fixture.codec,
+        &handle_alias.items[0], 1, source_handle), LEO2_OVERLAP,
+        "encode binding output/source alias rejection");
+    Require(std::equal(source_prefix.begin(), source_prefix.end(),
+            fixture.source_a[0].begin()),
+        "encode binding output/source alias modified input bytes");
+}
+
+void TestDecodeBinding(Fixture& fixture)
+{
+    ScalableEncodeBatch encoded(fixture, 8);
+    RequireResult(encoded.Execute(), LEO2_SUCCESS,
+        "decode binding prerequisite encode");
+    encoded.Check();
+
+    ScalableDecodeBatch batch(fixture, encoded);
+    leo2_decode_batch_binding* binding = NULL;
+    RequireResult(leo2_decode_batch_binding_create(
+        fixture.plan, &batch.items[0], batch.items.size(), &binding),
+        LEO2_SUCCESS, "decode binding create");
+    Require(binding != NULL &&
+            leo2_decode_batch_binding_item_count(binding) ==
+                batch.items.size(),
+        "decode binding item-count mismatch");
+
+    const leo2_decode_batch_item saved_descriptor = batch.items[0];
+    const std::vector<const void*> saved_recovery_pointers =
+        batch.recovery_pointers[2];
+    const std::vector<void*> saved_restored_pointers =
+        batch.restored_pointers[2];
+    batch.items[0].recovery = NULL;
+    batch.items[0].restored_original = NULL;
+    batch.recovery_pointers[2][0] = NULL;
+    batch.restored_pointers[2][0] = &batch.restored[3][0];
+    RequireResult(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "decode binding captured-metadata execute");
+    batch.items[0] = saved_descriptor;
+    batch.recovery_pointers[2] = saved_recovery_pointers;
+    batch.restored_pointers[2] = saved_restored_pointers;
+    batch.Check();
+
+    RequireResult(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "decode binding warm execute");
+    BeginAllocationAudit();
+    const leo2_result audited_result =
+        leo2_decode_batch_binding_execute(binding);
+    const uint64_t audited_allocations = EndAllocationAudit();
+    RequireResult(audited_result, LEO2_SUCCESS,
+        "decode binding audited execute");
+    Require(audited_allocations == 0,
+        "decode binding execution allocated memory");
+    batch.Check();
+    leo2_decode_batch_binding_destroy(binding);
+
+    ScalableDecodeBatch conflict(fixture, encoded);
+    conflict.restored_pointers[1][0] =
+        conflict.restored_pointers[0][0];
+    const std::vector<Bytes> conflict_before = conflict.restored;
+    leo2_decode_batch_binding* rejected =
+        reinterpret_cast<leo2_decode_batch_binding*>(
+            static_cast<uintptr_t>(1));
+    RequireResult(leo2_decode_batch_binding_create(
+        fixture.plan, &conflict.items[0], conflict.items.size(), &rejected),
+        LEO2_OVERLAP, "decode binding conflict rejection");
+    Require(rejected == NULL,
+        "failed decode binding creation retained output handle");
+    Require(conflict.restored == conflict_before,
+        "decode binding setup modified a rejected output");
+
+    ScalableDecodeBatch handle_alias(fixture, encoded);
+    void* const saved_item_scratch = handle_alias.items[0].scratch;
+    leo2_decode_batch_binding** item_handle =
+        reinterpret_cast<leo2_decode_batch_binding**>(
+            &handle_alias.items[0].scratch);
+    RequireResult(leo2_decode_batch_binding_create(fixture.plan,
+        &handle_alias.items[0], 1, item_handle), LEO2_OVERLAP,
+        "decode binding output/item alias rejection");
+    Require(handle_alias.items[0].scratch == saved_item_scratch,
+        "decode binding output/item alias modified the descriptor");
+
+    void* const saved_pointer = handle_alias.restored_pointers[0][0];
+    leo2_decode_batch_binding** pointer_handle =
+        reinterpret_cast<leo2_decode_batch_binding**>(
+            &handle_alias.restored_pointers[0][0]);
+    RequireResult(leo2_decode_batch_binding_create(fixture.plan,
+        &handle_alias.items[0], 1, pointer_handle), LEO2_OVERLAP,
+        "decode binding output/pointer-array alias rejection");
+    Require(handle_alias.restored_pointers[0][0] == saved_pointer,
+        "decode binding output/pointer-array alias modified metadata");
+
+    Bytes recovery_prefix(encoded.outputs[0][0].begin(),
+        encoded.outputs[0][0].begin() + sizeof(void*));
+    leo2_decode_batch_binding** recovery_handle =
+        reinterpret_cast<leo2_decode_batch_binding**>(
+            &encoded.outputs[0][0][0]);
+    RequireResult(leo2_decode_batch_binding_create(fixture.plan,
+        &handle_alias.items[0], 1, recovery_handle), LEO2_OVERLAP,
+        "decode binding output/recovery alias rejection");
+    Require(std::equal(recovery_prefix.begin(), recovery_prefix.end(),
+            encoded.outputs[0][0].begin()),
+        "decode binding output/recovery alias modified input bytes");
 }
 
 void TestT8TwoBlockBindingAllocation()
@@ -1165,6 +1293,37 @@ void TestNoLossBatchIsTrueNoOp(Fixture& fixture)
     }
     const leo2_result result = leo2_decode_plan_execute_batch(
         no_loss, items, 2);
+    void* const saved_item_scratch = items[0].scratch;
+    leo2_decode_batch_binding** aliased_binding_out =
+        reinterpret_cast<leo2_decode_batch_binding**>(&items[0].scratch);
+    RequireResult(leo2_decode_batch_binding_create(
+        no_loss, items, 2, aliased_binding_out), LEO2_OVERLAP,
+        "no-loss decode binding output/item alias rejection");
+    Require(items[0].scratch == saved_item_scratch,
+        "no-loss decode binding output alias modified an item");
+
+    leo2_decode_batch_binding* binding = NULL;
+    RequireResult(leo2_decode_batch_binding_create(
+        no_loss, items, 2, &binding), LEO2_SUCCESS,
+        "no-loss decode binding create");
+    Require(binding != NULL &&
+            leo2_decode_batch_binding_item_count(binding) == 2,
+        "no-loss decode binding item-count mismatch");
+    RequireResult(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "no-loss decode binding inspected item state");
+    leo2_decode_batch_binding_destroy(binding);
+
+    leo2_decode_batch_binding* nested_output = NULL;
+    items[0].scratch = &nested_output;
+    items[0].scratch_bytes = sizeof(nested_output);
+    RequireResult(leo2_decode_batch_binding_create(
+        no_loss, items, 2, &nested_output), LEO2_SUCCESS,
+        "no-loss decode binding rejected uninspected nested output storage");
+    Require(nested_output != NULL,
+        "no-loss nested output storage did not receive the binding");
+    RequireResult(leo2_decode_batch_binding_execute(nested_output),
+        LEO2_SUCCESS, "no-loss nested-output binding inspected item state");
+    leo2_decode_batch_binding_destroy(nested_output);
     leo2_decode_plan_destroy(no_loss);
     RequireResult(result, LEO2_SUCCESS,
         "no-loss batch inspected per-item execution state");
@@ -2295,6 +2454,7 @@ void Run(uint32_t thread_count)
     TestScalableLargeBatch(fixture);
     TestConcurrentScalableCalls(fixture);
     TestEncodeBinding(fixture);
+    TestDecodeBinding(fixture);
 }
 
 } // namespace

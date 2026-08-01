@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import copy
 import importlib.util
 import json
 import math
@@ -677,6 +678,71 @@ def require_common_rejected(document: dict[str, Any], label: str) -> None:
     raise RuntimeError(f"benchmark validator accepted {label}")
 
 
+def validate_prevalidated_batch_variant(
+    document: dict[str, Any],
+    retain_samples: bool,
+) -> None:
+    build_fields = {
+        "prevalidated_batch_experiment",
+        "high_t4_batch_diagnostic_disabled",
+        "high_t4_batch_selected",
+        "high_t8_one_block_extended_enabled",
+        "high_t8_one_block_beyond_512_enabled",
+        "high_t8_one_kilobyte_extension_enabled",
+        "high_t8_tiny_binding_enabled",
+        "high_t8_ragged_binding_enabled",
+        "high_t8_one_block_selected",
+        "high_t8_two_block_128_192_enabled",
+        "high_t8_two_block_320_enabled",
+        "high_t8_two_block_extended_enabled",
+        "high_t8_two_block_selected",
+    }
+    metric_fields = {"encode_binding_setup", "decode_binding_setup"}
+    require(isinstance(document.get("build"), dict) and
+            build_fields <= set(document["build"]),
+            "prevalidated benchmark build markers are incomplete")
+    require(isinstance(document.get("metrics"), dict) and
+            metric_fields <= set(document["metrics"]),
+            "prevalidated benchmark setup metrics are incomplete")
+
+    normalized = copy.deepcopy(document)
+    for name in build_fields:
+        del normalized["build"][name]
+    for name in metric_fields:
+        del normalized["metrics"][name]
+    validate_common(normalized, retain_samples)
+
+    build = document["build"]
+    require(build["prevalidated_batch_experiment"] is True and
+            all(type(build[name]) is bool for name in build_fields),
+            "prevalidated benchmark build markers are not Boolean")
+    require(build["high_t4_batch_selected"] is False and
+            build["high_t8_one_block_selected"] is False and
+            build["high_t8_two_block_selected"] is False,
+            "K=1/R=1 unexpectedly selected a T=4/T=8 encode binding")
+
+    iterations = document["parameters"]["iterations"]
+    for name in sorted(metric_fields):
+        validate_timing_summary(
+            document["metrics"][name], name,
+            retain_samples=retain_samples, iterations=iterations,
+            execution=False)
+        finite_metric(
+            document["metrics"][name]["median_us"],
+            f"{name} median", positive=True)
+
+
+def require_prevalidated_rejected(
+    document: dict[str, Any], label: str,
+) -> None:
+    try:
+        validate_prevalidated_batch_variant(document, True)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return
+    raise RuntimeError(
+        f"prevalidated benchmark validator accepted {label}")
+
+
 def validate_isal_comparison_contract(document: dict[str, Any]) -> None:
     # Exercise the exact parser used by future ISA-L collection, rather than
     # letting this executable-shape regression and the retained-artifact
@@ -746,6 +812,31 @@ def main() -> int:
     require(external["correctness"]["legacy_comparison"] is None,
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
+
+    prevalidated_executable = executable.with_name(
+        "bench_leopard2_prevalidated_batch" + executable.suffix)
+    require(prevalidated_executable.is_file(),
+            "prevalidated benchmark target is absent")
+    prevalidated = run(
+        prevalidated_executable, True, k=1, r=1, losses=1)
+    require(prevalidated["schema"] == "leopard2-benchmark-v2",
+            "prevalidated benchmark external schema changed")
+    validate_prevalidated_batch_variant(prevalidated, True)
+    validate_workload_digests(prevalidated)
+    require(prevalidated["resolved"]["profile"] == "legacy_high_v1" and
+            prevalidated["resolved"]["field"] == "gf8" and
+            prevalidated["correctness"]["leopard2_round_trip"] is True,
+            "prevalidated K=1/R=1 binding round trip changed")
+
+    missing_binding_metric = copy.deepcopy(prevalidated)
+    del missing_binding_metric["metrics"]["decode_binding_setup"]
+    require_prevalidated_rejected(
+        missing_binding_metric, "missing decode binding setup")
+    malformed_binding_marker = copy.deepcopy(prevalidated)
+    malformed_binding_marker["build"][
+        "prevalidated_batch_experiment"] = 1
+    require_prevalidated_rejected(
+        malformed_binding_marker, "numeric experiment marker")
 
     one_shot = run(
         executable, True, measure_one_shot_decode=True,

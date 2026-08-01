@@ -49,6 +49,24 @@ typedef leo2_result (*leo2_codec_create_integer_selector_fn)(
 static leo2_codec_create_integer_selector_fn const
     leo2_codec_create_integer_selector_signature = leo2_codec_create;
 
+typedef leo2_result (*leo2_decode_binding_create_fn)(
+    const leo2_decode_plan *, const leo2_decode_batch_item *, size_t,
+    leo2_decode_batch_binding **);
+typedef void (*leo2_decode_binding_destroy_fn)(leo2_decode_batch_binding *);
+typedef size_t (*leo2_decode_binding_item_count_fn)(
+    const leo2_decode_batch_binding *);
+typedef leo2_result (*leo2_decode_binding_execute_fn)(
+    const leo2_decode_batch_binding *);
+static leo2_decode_binding_create_fn const
+    leo2_decode_binding_create_signature = leo2_decode_batch_binding_create;
+static leo2_decode_binding_destroy_fn const
+    leo2_decode_binding_destroy_signature = leo2_decode_batch_binding_destroy;
+static leo2_decode_binding_item_count_fn const
+    leo2_decode_binding_item_count_signature =
+        leo2_decode_batch_binding_item_count;
+static leo2_decode_binding_execute_fn const
+    leo2_decode_binding_execute_signature = leo2_decode_batch_binding_execute;
+
 static int require_result(leo2_result actual, leo2_result expected,
     const char *operation)
 {
@@ -87,8 +105,12 @@ int main(void)
     memset(&context_options, 0, sizeof(context_options));
     context_options.struct_size = sizeof(context_options);
     context_options.thread_count = 1;
-    if (LEO2_API_VERSION < 6u ||
+    if (LEO2_API_VERSION < 7u ||
         leo2_codec_create_integer_selector_signature == NULL ||
+        leo2_decode_binding_create_signature == NULL ||
+        leo2_decode_binding_destroy_signature == NULL ||
+        leo2_decode_binding_item_count_signature == NULL ||
+        leo2_decode_binding_execute_signature == NULL ||
         !require_result(leo2_context_create(&context_options, &context), LEO2_SUCCESS,
             "C ABI context create")) {
         return 1;

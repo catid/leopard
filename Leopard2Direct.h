@@ -73,6 +73,10 @@ LEO2_EXPORT leo2_result leo2_test_codec_set_encode_mode(
     leo2_codec* codec,
     int mode);
 
+/* Whether immutable binding setup captured the K=1/R=1 copy terminal. */
+LEO2_EXPORT int leo2_test_encode_batch_binding_uses_k1_copy(
+    const leo2_encode_batch_binding* binding);
+
 LEO2_EXPORT leo2_result leo2_test_codec_set_decode_mode(
     leo2_codec* codec,
     int mode);

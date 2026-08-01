@@ -2364,6 +2364,70 @@ void test_auto_dispatch_threshold(leo2_context* context, Counts* counts)
     delete gf16;
 }
 
+void test_k1_binding_respects_encode_mode(Counts* counts)
+{
+    leo2_context_options options = {};
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* context = NULL;
+    const leo2_result created = leo2_context_create(&options, &context);
+    if (created == LEO2_UNSUPPORTED)
+        return;
+    require_result(created, "K1 binding AVX2 context create");
+
+    CodecOwner* owner = make_codec(context, 1, 1,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    static const uint64_t bytes = 1024;
+    const Shards original = random_shards(
+        1, static_cast<size_t>(bytes), UINT64_C(0x4b3142494e44494e));
+    const void* original_pointer[1] = { &original[0][0] };
+    Bytes recovery(static_cast<size_t>(bytes), 0);
+    void* recovery_pointer[1] = { &recovery[0] };
+
+    require_result(leo2_test_codec_set_encode_mode(
+        owner->codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM),
+        "force K1 binding transform mode");
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        owner->codec, bytes, &scratch_bytes),
+        "forced K1 binding scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    leo2_encode_batch_item item = {
+        bytes, original_pointer, recovery_pointer,
+        scratch.data(), scratch_bytes
+    };
+    leo2_encode_batch_binding* binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        owner->codec, &item, 1, &binding),
+        "forced K1 transform binding create");
+    require(leo2_test_encode_batch_binding_uses_k1_copy(binding) == 0,
+        "forced K1 transform binding captured the copy terminal");
+    require_result(leo2_encode_batch_binding_execute(binding),
+        "forced K1 transform binding execute");
+    require(recovery == original[0],
+        "forced K1 transform binding parity mismatch");
+    leo2_encode_batch_binding_destroy(binding);
+    ++counts->dispatch_checks;
+
+    require_result(leo2_test_codec_set_encode_mode(
+        owner->codec, LEO2_TEST_ENCODE_AUTO),
+        "restore K1 binding AUTO mode");
+    item.scratch = NULL;
+    item.scratch_bytes = 0;
+    binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        owner->codec, &item, 1, &binding),
+        "AUTO K1 copy binding create");
+    require(leo2_test_encode_batch_binding_uses_k1_copy(binding) == 1,
+        "AUTO K1 binding did not capture the copy terminal");
+    leo2_encode_batch_binding_destroy(binding);
+    ++counts->dispatch_checks;
+
+    delete owner;
+    leo2_context_destroy(context);
+}
+
 void test_tail_allocation_and_contracts(
     leo2_context* context,
     const BinaryField& gf8,
@@ -3239,6 +3303,7 @@ int main()
         test_high_gf8_byte_tiling(gf8, &counts);
         test_gf8_high_coarse_direct_oracle(gf8, &counts);
         test_auto_dispatch_threshold(context, &counts);
+        test_k1_binding_respects_encode_mode(&counts);
         test_tail_allocation_and_contracts(context, gf8, gf16, &counts);
         test_unaligned_guarded_buffers(context, gf8, gf16, &counts);
         test_auto_encode_batch(context, &counts);

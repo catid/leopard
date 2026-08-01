@@ -1328,6 +1328,27 @@ void test_layout_creation_and_core_enforcement(leo2_context* context)
 
     wire[0][1] = 0;
     parity = encode(padded.codec, wire);
+    recoveries = mutable_pointers(parity);
+
+    leo2_encode_batch_item encode_item = {};
+    encode_item.shard_bytes = 2;
+    encode_item.original = &originals[0];
+    encode_item.recovery = &recoveries[0];
+    encode_item.scratch = scratch.data;
+    encode_item.scratch_bytes = scratch.bytes;
+    leo2_encode_batch_binding* encode_binding = NULL;
+    require_result(leo2_encode_batch_binding_create(padded.codec,
+        &encode_item, 1, &encode_binding),
+        "padded encode binding create");
+    wire[0][1] = 1;
+    require(leo2_encode_batch_binding_execute(encode_binding) ==
+            LEO2_INVALID_ARGUMENT,
+        "padded encode binding ignored a changed nonzero systematic pad");
+    wire[0][1] = 0;
+    require_result(leo2_encode_batch_binding_execute(encode_binding),
+        "padded encode binding restored-pad execute");
+    leo2_encode_batch_binding_destroy(encode_binding);
+
     std::vector<uint8_t> original_present(5, 1);
     std::vector<uint8_t> recovery_present(3, 1);
     original_present[0] = 0;
@@ -1337,13 +1358,33 @@ void test_layout_creation_and_core_enforcement(leo2_context* context)
     require_result(leo2_decode_plan_scratch_size(loss_plan, 2, &scratch_bytes),
         "pad-enforcement loss scratch query");
     AlignedBuffer decode_scratch(scratch_bytes);
-    wire[1][1] = 1;
     originals = const_pointers(wire);
     originals[0] = NULL;
     std::vector<const void*> parity_inputs = const_pointers(parity);
     Shards restored(5, Bytes(2, 0));
     std::vector<void*> restored_outputs(5, NULL);
     restored_outputs[0] = &restored[0][0];
+    leo2_decode_batch_item decode_item = {};
+    decode_item.shard_bytes = 2;
+    decode_item.original = &originals[0];
+    decode_item.recovery = &parity_inputs[0];
+    decode_item.restored_original = &restored_outputs[0];
+    decode_item.scratch = decode_scratch.data;
+    decode_item.scratch_bytes = decode_scratch.bytes;
+    leo2_decode_batch_binding* decode_binding = NULL;
+    require_result(leo2_decode_batch_binding_create(loss_plan,
+        &decode_item, 1, &decode_binding),
+        "padded decode binding create");
+    wire[1][1] = 1;
+    require(leo2_decode_batch_binding_execute(decode_binding) ==
+            LEO2_INVALID_ARGUMENT,
+        "padded decode binding ignored a changed nonzero systematic pad");
+    wire[1][1] = 0;
+    require_result(leo2_decode_batch_binding_execute(decode_binding),
+        "padded decode binding restored-pad execute");
+    leo2_decode_batch_binding_destroy(decode_binding);
+
+    wire[1][1] = 1;
     require(leo2_decode_plan_execute(loss_plan, 2, &originals[0],
         &parity_inputs[0], &restored_outputs[0], decode_scratch.data,
         decode_scratch.bytes) == LEO2_INVALID_ARGUMENT,

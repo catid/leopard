@@ -644,6 +644,25 @@ bool IsCalibratedAutoGFNIHost()
     return IsCalibratedAutoGFNIProcessor(DetectX86Processor());
 }
 
+bool IsCalibratedK1AVX2CopyProcessor(
+    const X86ProcessorIdentity& identity)
+{
+    /*
+        The exact-4-KiB copy callback competes with the platform C library,
+        whose choice varies across processors and releases.  The retained
+        end-to-end qualification is currently limited to Zen 5 Granite Ridge;
+        every other processor keeps libc until an independent campaign adds
+        another explicit identity.
+    */
+    return identity.authentic_amd && identity.family == 0x1aU &&
+        identity.model == 0x44U;
+}
+
+bool IsCalibratedK1AVX2CopyHost()
+{
+    return IsCalibratedK1AVX2CopyProcessor(DetectX86Processor());
+}
+
 uint64_t DetectConservativeL3Bytes()
 {
 #if defined(__linux__)

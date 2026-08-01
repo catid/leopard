@@ -50,12 +50,13 @@
 extern "C" {
 #endif
 
-#define LEO2_API_VERSION 6u
+#define LEO2_API_VERSION 7u
 
 typedef struct leo2_context leo2_context;
 typedef struct leo2_codec leo2_codec;
 typedef struct leo2_decode_plan leo2_decode_plan;
 typedef struct leo2_encode_batch_binding leo2_encode_batch_binding;
+typedef struct leo2_decode_batch_binding leo2_decode_batch_binding;
 
 typedef enum leo2_result {
     LEO2_SUCCESS = 0,
@@ -413,6 +414,11 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
     behavior.  Creation is setup work: it may allocate and returns
     LEO2_OUT_OF_MEMORY on failure.  item_count must be positive and no greater
     than UINT32_MAX.  The codec and its context must outlive the binding.
+    binding_out follows the setup-output rule above: its complete pointer span
+    must be disjoint from every descriptor, pointer array, captured shard, and
+    captured scratch span, and an overlap is rejected before the handle or the
+    aliased object is modified.  For GF16 padded-odd layouts, execution
+    rechecks the required zero systematic pad byte after source data changes.
 */
 LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
     const leo2_codec* codec,
@@ -474,6 +480,40 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch_with_preflight_scratch(
     size_t item_count,
     void* preflight_scratch,
     size_t preflight_scratch_bytes);
+
+/*
+    A decode binding is the recovery-side counterpart of an encode binding.
+    Creation deep-copies each non-no-op descriptor and every original,
+    recovery, and restored-original pointer-array entry, then validates the
+    complete batch alias contract.  A no-loss plan retains its true no-op
+    semantics: creation validates only the top-level item-array span and
+    execute inspects no item fields or buffers.
+
+    The plan, codec, context, captured shard buffers, and captured per-item
+    scratch spans must outlive the binding and retain their addresses and
+    sizes.  Received bytes may change between executions.  Execution allocates
+    nothing and repeats no pointer/alias validation.  One binding must not
+    execute concurrently with itself because it captures writable restored
+    buffers and scratch; destroying it during execution is invalid.  The
+    For a non-no-op plan, binding_out obeys the same complete disjoint
+    setup-output rule as an encode binding.  No-loss creation protects the
+    plan, codec, context, and top-level item array only; because it deliberately
+    does not inspect item fields, their nested pointer-array, shard, and scratch
+    spans are neither inputs nor protected ranges for that call.  A non-no-op
+    GF16 padded-odd binding rechecks every surviving systematic pad byte on
+    execution; a no-loss binding remains a true no-op.
+*/
+LEO2_EXPORT leo2_result leo2_decode_batch_binding_create(
+    const leo2_decode_plan* plan,
+    const leo2_decode_batch_item* items,
+    size_t item_count,
+    leo2_decode_batch_binding** binding_out);
+LEO2_EXPORT void leo2_decode_batch_binding_destroy(
+    leo2_decode_batch_binding* binding);
+LEO2_EXPORT size_t leo2_decode_batch_binding_item_count(
+    const leo2_decode_batch_binding* binding);
+LEO2_EXPORT leo2_result leo2_decode_batch_binding_execute(
+    const leo2_decode_batch_binding* binding);
 
 /* One-shot convenience wrapper.  It allocates and destroys plan setup state. */
 LEO2_EXPORT leo2_result leo2_decode_scratch_size(

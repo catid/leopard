@@ -6893,6 +6893,72 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeTwoBlocksT8Tiny(
 
 #endif // promoted T=8 callback in the regular AVX2 backend
 
+#if !defined(LEO2_AVX512_VARIANT)
+/*
+    The K=1/R=1 terminal has already proved that these ranges are disjoint.
+    Keep eight cache lines in flight so the measured 4 KiB copy does not
+    pay the libc dispatch/size-selection path.  Arbitrary tails remain correct
+    for backend self-tests and future measured users, although production K1
+    currently selects this callback only for 4096 bytes.
+*/
+static void AVX2CopyMemory(
+    void* destination,
+    const void* source,
+    uint64_t byte_count)
+{
+    uint8_t* output = static_cast<uint8_t*>(destination);
+    const uint8_t* input = static_cast<const uint8_t*>(source);
+    while (byte_count >= 256)
+    {
+        const __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input));
+        const __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 32));
+        const __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 64));
+        const __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 96));
+        const __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 128));
+        const __m256i value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 160));
+        const __m256i value6 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 192));
+        const __m256i value7 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input + 224));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 32), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 64), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 96), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 128), value4);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 160), value5);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 192), value6);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output + 224), value7);
+        input += 256;
+        output += 256;
+        byte_count -= 256;
+    }
+    while (byte_count >= 32)
+    {
+        const __m256i value = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), value);
+        input += 32;
+        output += 32;
+        byte_count -= 32;
+    }
+    if (byte_count != 0)
+        std::memcpy(output, input, static_cast<size_t>(byte_count));
+}
+#endif
+
 static const Ops AVX2Ops = {
     LEO2_AVX_BACKEND_KIND,
     LEO2_AVX_BACKEND_NAME,
@@ -7045,6 +7111,11 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
     !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8HighEncodeT4Batch
+#else
+    , NULL
+#endif
+#if !defined(LEO2_AVX512_VARIANT)
+    , AVX2CopyMemory
 #else
     , NULL
 #endif

@@ -142,6 +142,8 @@ void test_processor_classifier()
         "AMD extended family/model classification");
     require(leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(zen5),
         "calibrated AMD processor classification");
+    require(leopard::backend::IsCalibratedK1AVX2CopyProcessor(zen5),
+        "calibrated K1 AVX2 copy processor classification");
 
     const leopard::backend::X86ProcessorIdentity wrong_vendor =
         leopard::backend::ClassifyX86Processor(
@@ -152,6 +154,9 @@ void test_processor_classifier()
     require(!leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(
                 wrong_vendor),
         "non-AMD processor entered the calibrated selector");
+    require(!leopard::backend::IsCalibratedK1AVX2CopyProcessor(
+                wrong_vendor),
+        "non-AMD processor entered the calibrated K1 copy selector");
 
     const uint32_t family_6_model_9e =
         (6U << 8) | (0xeU << 4) | (9U << 16);
@@ -162,6 +167,8 @@ void test_processor_classifier()
         "family-six extended model classification");
     require(!leopard::backend::IsCalibratedAutoAVX512EncodeProcessor(family6),
         "uncalibrated family/model entered the calibrated selector");
+    require(!leopard::backend::IsCalibratedK1AVX2CopyProcessor(family6),
+        "uncalibrated family/model entered the calibrated K1 copy selector");
 }
 
 #ifdef LEO_HAS_FF8

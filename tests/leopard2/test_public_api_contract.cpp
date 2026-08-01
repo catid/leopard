@@ -410,11 +410,27 @@ void test_introspection_and_null_contracts(
         "null encode binding item-count sentinel");
     require_result(leo2_encode_batch_binding_execute(NULL),
         LEO2_INVALID_ARGUMENT, "null encode binding execute");
+    leo2_decode_batch_binding* invalid_decode_binding =
+        reinterpret_cast<leo2_decode_batch_binding*>(
+            static_cast<uintptr_t>(1));
+    require_result(leo2_decode_batch_binding_create(
+        NULL, NULL, 0, &invalid_decode_binding), LEO2_INVALID_ARGUMENT,
+        "null plan decode binding create");
+    require(invalid_decode_binding == NULL,
+        "failed decode binding creation did not clear output");
+    require_result(leo2_decode_batch_binding_create(
+        NULL, NULL, 0, NULL), LEO2_INVALID_ARGUMENT,
+        "null decode binding output");
+    require(leo2_decode_batch_binding_item_count(NULL) == 0,
+        "null decode binding item-count sentinel");
+    require_result(leo2_decode_batch_binding_execute(NULL),
+        LEO2_INVALID_ARGUMENT, "null decode binding execute");
     leo2_context_destroy(NULL);
     leo2_codec_destroy(NULL);
     leo2_decode_plan_destroy(NULL);
     leo2_encode_batch_binding_destroy(NULL);
-    counts->introspection_checks += 15;
+    leo2_decode_batch_binding_destroy(NULL);
+    counts->introspection_checks += 20;
 
     CodecOwner high;
     require_result(leo2_codec_create(context, 9, 7, LEO2_PROFILE_AUTO,
@@ -594,6 +610,10 @@ void test_introspection_and_null_contracts(
         reinterpret_cast<leo2_encode_batch_binding**>(
             invalid_size_address)), LEO2_INVALID_ARGUMENT,
         "unrepresentable encode-binding output span");
+    require_result(leo2_decode_batch_binding_create(valid_plan.plan, NULL, 1,
+        reinterpret_cast<leo2_decode_batch_binding**>(
+            invalid_size_address)), LEO2_INVALID_ARGUMENT,
+        "unrepresentable decode-binding output span");
     require_result(leo2_decode_plan_scratch_size(
         valid_plan.plan, 17, invalid_size_output), LEO2_INVALID_ARGUMENT,
         "unrepresentable plan scratch output span");

@@ -8,13 +8,20 @@ without changing the existing batch ABI:
 - `leo2_decode_plan_batch_preflight_scratch_size` and
   `leo2_decode_plan_execute_batch_with_preflight_scratch`.
 
-Version 6 also adds an encode-only reusable binding for workloads whose shard,
-parity, and scratch addresses remain stable:
+Version 6 also adds a reusable encode binding for workloads whose shard, parity,
+and scratch addresses remain stable:
 
 - `leo2_encode_batch_binding_create`;
 - `leo2_encode_batch_binding_execute`;
 - `leo2_encode_batch_binding_item_count`;
 - `leo2_encode_batch_binding_destroy`.
+
+API version 7 adds the symmetric reusable decode binding:
+
+- `leo2_decode_batch_binding_create`;
+- `leo2_decode_batch_binding_execute`;
+- `leo2_decode_batch_binding_item_count`;
+- `leo2_decode_batch_binding_destroy`.
 
 The original `leo2_encode_batch` and `leo2_decode_plan_execute_batch` remain
 correct, allocation-free compatibility entry points. They deliberately retain
@@ -86,25 +93,54 @@ batch counts therefore measure the best safe public batch API rather than
 accidentally timing the deliberately quadratic compatibility fallback at 64 or
 1,024 items.
 
-## Reusable encode binding
+## Reusable encode and decode bindings
 
 The scalable scratch API still validates and sorts `O(B * (K+R))` address
 ranges on every call. That is the correct safe default when application
 descriptors or buffers may change, but it can dominate 64-byte GF8 stripes.
-The binding API moves that work into explicit setup. Creation deep-copies the
-batch descriptors and all original/recovery pointer-array entries, validates
-the full alias contract once, and captures each per-item scratch address.
-Execution invokes only the already-validated codec items and allocates no
-memory.
+The binding API moves that work into explicit setup. Encode creation deep-copies
+the batch descriptors and all original/recovery pointer-array entries, validates
+the full alias contract once, and captures each per-item scratch address. Decode
+creation performs the same work for original, recovery, restored-original, and
+scratch addresses. Execution invokes only the already-validated codec or plan
+items and allocates no memory. A no-loss decode binding is a true no-op: after
+the top-level descriptor span is accepted at creation, execution does not
+inspect any descriptor or buffer state.
 
 The caller may release or modify its descriptor and pointer arrays after
 creation. The codec, context, captured shard buffers, and captured scratch
 buffers must outlive the binding and remain at the same addresses and sizes.
-The source bytes at captured addresses may change between calls. Because a
-binding captures writable parity and scratch ranges, the same binding is not a
-concurrent-execution object; callers use separate disjoint bindings for
-concurrent batches. Context-worker startup remains lazy and should be paid
-before a latency-sensitive execution if the context uses a thread pool.
+The source or received bytes at captured addresses may change between calls.
+For the compact GF16 padded-odd layout, execution rechecks the zero systematic
+pad byte so changing payload bytes cannot silently invalidate the wire layout.
+Because a binding captures writable parity/restored-output and scratch ranges,
+the same binding is not a concurrent-execution object; callers use separate
+disjoint bindings for concurrent batches. Context-worker startup remains lazy
+and should be paid before a latency-sensitive execution if the context uses a
+thread pool.
+
+For a non-no-op binding, the output handle follows Leopard2's complete
+setup-output rule. Its pointer span must be disjoint from the codec, plan,
+context, item descriptors, nested pointer arrays, captured shards, and scratch.
+Creation detects such an overlap before clearing the handle, so an invalid call
+cannot corrupt an input while trying to report failure. A no-loss decode
+binding still inspects no per-item fields: it protects only the setup objects
+and top-level item span. Consequently, nested item fields do not designate
+protected ranges for no-loss creation and may contain the writable output
+handle itself.
+
+### Pre-resolved K=1,R=1 copy terminal
+
+For one legacy-high GF8 stripe on an AVX2 or GFNI context, binding creation now
+resolves the copy operation, source, destination, backend, and byte count once.
+Repeated execution through 64 KiB is therefore pure byte work; it does not
+revisit descriptor, address-range, alias, plan, or dispatch state. Larger
+payloads and all other shapes retain the general prevalidated executor.
+
+Current-source frozen-binary evidence is collected only after the API and
+backend changes are committed. This keeps the documented executable hashes
+and source identity reproducible instead of carrying forward measurements from
+an intermediate dirty tree.
 
 A frozen-binary, one-core diagnostic on 2026-07-30 compared the exact
 `main`-branch Leopard codec with the reusable Leopard2 binding. Each batch item

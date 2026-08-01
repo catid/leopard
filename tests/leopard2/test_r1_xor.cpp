@@ -32,7 +32,13 @@ void require_result(leo2_result actual, leo2_result expected,
     const char* message)
 {
     if (actual != expected)
-        throw std::runtime_error(message);
+    {
+        char detail[256];
+        std::snprintf(detail, sizeof(detail), "%s: got %s (%d), expected %s (%d)",
+            message, leo2_result_string(actual), static_cast<int>(actual),
+            leo2_result_string(expected), static_cast<int>(expected));
+        throw std::runtime_error(detail);
+    }
 }
 
 uint8_t pattern(uint64_t index, uint32_t salt)
@@ -585,6 +591,65 @@ void execute_public_r1_multi_item_batch(
         }
     }
 
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(restored_storage[item_i].begin(),
+            restored_storage[item_i].end(), 0x5a);
+    std::unique_ptr<AlignedScratch> binding_optional_scratch;
+    if (batch_count == 1)
+    {
+        binding_optional_scratch.reset(new AlignedScratch(64));
+        items[0].scratch = binding_optional_scratch->data();
+        items[0].scratch_bytes = 64;
+    }
+    leo2_decode_batch_binding* binding = NULL;
+    require_result(leo2_decode_batch_binding_create(
+        fixture.plan, &items[0], items.size(), &binding),
+        LEO2_SUCCESS, "R=1 decode binding create");
+    require(binding != NULL &&
+            leo2_decode_batch_binding_item_count(binding) == items.size(),
+        "R=1 decode binding item-count mismatch");
+    const void* const* const saved_binding_recovery = items[0].recovery;
+    void* const* const saved_binding_restored = items[0].restored_original;
+    items[0].recovery = NULL;
+    items[0].restored_original = NULL;
+    require_result(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "R=1 decode binding captured-metadata execute");
+    items[0].recovery = saved_binding_recovery;
+    items[0].restored_original = saved_binding_restored;
+    check_outputs();
+
+    uint8_t* const live_recovery =
+        const_cast<uint8_t*>(static_cast<const uint8_t*>(fixture.recovery[0]));
+    const uint8_t saved_recovery_byte = live_recovery[0];
+    Bytes changed_expected(
+        static_cast<const uint8_t*>(fixture.original[fixture.missing]),
+        static_cast<const uint8_t*>(fixture.original[fixture.missing]) +
+            fixture.bytes);
+    changed_expected[0] ^= 0x5bu;
+    live_recovery[0] ^= 0x5bu;
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(restored_storage[item_i].begin(),
+            restored_storage[item_i].end(), 0x5a);
+    require_result(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "R=1 decode binding changed-input execute");
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        require(std::memcmp(restored[item_i][fixture.missing],
+                    &changed_expected[0], fixture.bytes) == 0,
+            "R=1 decode binding ignored changed received bytes");
+    live_recovery[0] = saved_recovery_byte;
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(restored_storage[item_i].begin(),
+            restored_storage[item_i].end(), 0x5a);
+    require_result(leo2_decode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "R=1 decode binding restored-input execute");
+    check_outputs();
+    leo2_decode_batch_binding_destroy(binding);
+    if (batch_count == 1)
+    {
+        items[0].scratch = NULL;
+        items[0].scratch_bytes = 0;
+    }
+
     if (!adversarial)
         return;
 
@@ -701,6 +766,13 @@ void execute_public_k1_encode_batch(
         "K=1 scalable encode batch execute");
     check_outputs();
 
+    std::unique_ptr<AlignedScratch> binding_optional_scratch;
+    if (batch_count == 1)
+    {
+        binding_optional_scratch.reset(new AlignedScratch(64));
+        items[0].scratch = binding_optional_scratch->data();
+        items[0].scratch_bytes = 64;
+    }
     leo2_encode_batch_binding* binding = NULL;
     require_result(leo2_encode_batch_binding_create(
         fixture.codec, &items[0], items.size(), &binding),
@@ -714,7 +786,33 @@ void execute_public_k1_encode_batch(
     require_result(leo2_encode_batch_binding_execute(binding),
         LEO2_SUCCESS, "K=1 encode binding execute");
     check_outputs();
+
+    uint8_t* const live_source =
+        const_cast<uint8_t*>(static_cast<const uint8_t*>(fixture.original[0]));
+    const uint8_t saved_source_byte = live_source[0];
+    live_source[0] ^= 0xa7u;
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(output_storage[item_i].begin(),
+            output_storage[item_i].end(), 0x5a);
+    require_result(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "K=1 encode binding changed-source execute");
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        require(std::memcmp(outputs[item_i][0], live_source,
+                    fixture.bytes) == 0,
+            "K=1 encode binding ignored changed source bytes");
+    live_source[0] = saved_source_byte;
+    for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        std::fill(output_storage[item_i].begin(),
+            output_storage[item_i].end(), 0x5a);
+    require_result(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "K=1 encode binding restored-source execute");
+    check_outputs();
     leo2_encode_batch_binding_destroy(binding);
+    if (batch_count == 1)
+    {
+        items[0].scratch = NULL;
+        items[0].scratch_bytes = 0;
+    }
 
     if (batch_count >= 9 && fixture.bytes == 4097)
     {
@@ -746,6 +844,9 @@ void execute_public_k1_encode_batch(
             "K=1 scalable encode ran work before preflight failure");
         items.back().original = saved_original;
     }
+
+    if (batch_count < 2)
+        return;
 
     for (size_t item_i = 0; item_i < batch_count; ++item_i)
         std::fill(output_storage[item_i].begin(),
@@ -1193,7 +1294,7 @@ void test_public_r1(leo2_backend backend)
        of eight live sources. */
     static const uint32_t counts[] = { 1, 2, 3, 4, 5, 6, 8, 9, 10, 31 };
     static const size_t sizes[] = {
-        1, 2, 3, 17, 31, 32, 33, 64, 65, 1025,
+        1, 2, 3, 17, 31, 32, 33, 64, 65, 1024, 1025,
         4095, 4096, 4097, 65537, 1048579
     };
     for (size_t count_i = 0;
@@ -1206,6 +1307,23 @@ void test_public_r1(leo2_backend backend)
                 LEO2_SHARD_LAYOUT_NATIVE_V1);
             execute_and_check_decode(fixture);
         }
+
+    /* One-item reusable bindings are the public execution terminal for the
+       K=1,R=1 copy code.  Cover each measured selection boundary, including
+       both sides of the 64-KiB cutoff, with unaligned guarded buffers and an
+       optional caller scratch span. */
+    static const size_t k1_binding_sizes[] = {
+        1, 64, 1024, 4096, 4097, 65536, 65537
+    };
+    for (size_t size_i = 0;
+         size_i < sizeof(k1_binding_sizes) / sizeof(k1_binding_sizes[0]);
+         ++size_i)
+    {
+        R1Fixture fixture(backend, 1, k1_binding_sizes[size_i], false,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1);
+        execute_public_r1_multi_item_batch(fixture, 1, false);
+        execute_public_k1_encode_batch(fixture, 1);
+    }
 
     /* K=2 enters the dense two-input reducer and K=7 the exact-arity
        fused-final reducer at 2 KiB on the GF8 AVX2 tier.  Recover every

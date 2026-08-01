@@ -1246,10 +1246,30 @@ static int Run(const Options& options)
     AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
     AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
     leo2_encode_batch_binding* encode_batch_binding = NULL;
+    leo2_decode_batch_binding* decode_batch_binding = NULL;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    const Summary encode_binding_setup = Measure(
+        options.iterations, 1, options.retain_samples, [&]() {
+        leo2_encode_batch_binding* temporary = NULL;
+        RequireLeo2(leo2_encode_batch_binding_create(
+            codec, &encode_items[0], encode_items.size(), &temporary),
+            "timed encode batch binding create");
+        leo2_encode_batch_binding_destroy(temporary);
+    });
+    const Summary decode_binding_setup = Measure(
+        options.iterations, 1, options.retain_samples, [&]() {
+        leo2_decode_batch_binding* temporary = NULL;
+        RequireLeo2(leo2_decode_batch_binding_create(
+            plan, &decode_items[0], decode_items.size(), &temporary),
+            "timed decode batch binding create");
+        leo2_decode_batch_binding_destroy(temporary);
+    });
     RequireLeo2(leo2_encode_batch_binding_create(
         codec, &encode_items[0], encode_items.size(),
         &encode_batch_binding), "encode batch binding create");
+    RequireLeo2(leo2_decode_batch_binding_create(
+        plan, &decode_items[0], decode_items.size(),
+        &decode_batch_binding), "decode batch binding create");
 #endif
     const auto run_encode_batch = [&]() {
         const leo2_result result = encode_batch_preflight_bytes == 0
@@ -1262,6 +1282,10 @@ static int Run(const Options& options)
         RequireLeo2(result, "encode batch");
     };
     const auto run_decode_batch = [&]() {
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        const leo2_result result =
+            leo2_decode_batch_binding_execute(decode_batch_binding);
+#else
         const leo2_result result = decode_batch_preflight_bytes == 0
             ? leo2_decode_plan_execute_batch(
                 plan, &decode_items[0], decode_items.size())
@@ -1269,6 +1293,7 @@ static int Run(const Options& options)
                 plan, &decode_items[0], decode_items.size(),
                 decode_batch_preflight.data(),
                 decode_batch_preflight.size());
+#endif
         RequireLeo2(result, "decode batch");
     };
     const auto run_one_shot_decode = [&]() {
@@ -1762,11 +1787,19 @@ static int Run(const Options& options)
          << "  \"metrics\": {\n"
          << "    \"codec_setup\": ";
     WriteSetupSummary(json, codec_setup, 4, options.retain_samples);
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    json << ",\n    \"encode_binding_setup\": ";
+    WriteSetupSummary(json, encode_binding_setup, 4, options.retain_samples);
+#endif
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
         encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
     json << ",\n    \"decode_plan_setup\": ";
     WriteSetupSummary(json, plan_setup, 4, options.retain_samples);
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    json << ",\n    \"decode_binding_setup\": ";
+    WriteSetupSummary(json, decode_binding_setup, 4, options.retain_samples);
+#endif
     json << ",\n    \"decode_execution\": ";
     WriteSummary(json, decode_execution, decode_input_bytes, "offered_received_GB_per_s",
         decode_output_bytes, "repaired_output_GB_per_s", 4, options.retain_samples);
@@ -1820,6 +1853,7 @@ static int Run(const Options& options)
             Fail("failed writing JSON output: " + options.output);
     }
 
+    leo2_decode_batch_binding_destroy(decode_batch_binding);
     leo2_encode_batch_binding_destroy(encode_batch_binding);
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
