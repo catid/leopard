@@ -1,0 +1,142 @@
+{
+  "change": {
+    "copy_policy": "libc except for the independently qualified exact-4096-byte AVX2 callback",
+    "ordinary_terminal_max_shard_bytes": 65536,
+    "summary": "Reuse the fixed-shape GF8 K=1/R=1 validators through 64 KiB and avoid resolving backend copy state when libc is selected."
+  },
+  "clean_exact_main_holdout": {
+    "artifact": "/tmp/leopard2-k1-ordinary-extended-final-20260801-v29",
+    "candidate_control_text_sha256": "67615a57e32463f2cce2d5a17562c1e2cbbac6b9708e5391b8ffafcc215e8df6",
+    "correctness_all": true,
+    "frozen_sha256": {
+      "candidate": "15ae344e3a368f9269fa20715164379516208b6618820d7955c714f3f183236b",
+      "control": "ed450feda05be14ade01d995518d0bc8eb1fde41213c6be0f647c312aae850bd",
+      "main": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    },
+    "main_over_candidate": {
+      "1024": {
+        "decode": {
+          "bootstrap_95_high": 1.034924151,
+          "bootstrap_95_low": 0.967575967,
+          "geometric_mean_ratio": 1.000040665
+        },
+        "encode": {
+          "bootstrap_95_high": 0.972394417,
+          "bootstrap_95_low": 0.91651647,
+          "geometric_mean_ratio": 0.94262624
+        }
+      },
+      "4096": {
+        "decode": {
+          "bootstrap_95_high": 1.062405581,
+          "bootstrap_95_low": 1.037715273,
+          "geometric_mean_ratio": 1.050291567
+        },
+        "encode": {
+          "bootstrap_95_high": 1.115860667,
+          "bootstrap_95_low": 1.064186208,
+          "geometric_mean_ratio": 1.087677356
+        }
+      },
+      "64": {
+        "decode": {
+          "bootstrap_95_high": 1.081571212,
+          "bootstrap_95_low": 1.06018239,
+          "geometric_mean_ratio": 1.069508158
+        },
+        "encode": {
+          "bootstrap_95_high": 1.095821552,
+          "bootstrap_95_low": 1.073895004,
+          "geometric_mean_ratio": 1.084716896
+        }
+      },
+      "65536": {
+        "decode": {
+          "bootstrap_95_high": 0.999414869,
+          "bootstrap_95_low": 0.997704131,
+          "geometric_mean_ratio": 0.998495558
+        },
+        "encode": {
+          "bootstrap_95_high": 1.000597632,
+          "bootstrap_95_low": 0.998404787,
+          "geometric_mean_ratio": 0.999503222
+        }
+      }
+    },
+    "processes": 216,
+    "reserved_smt_sibling": 20,
+    "rounds": 9,
+    "samples_per_process": 11,
+    "sibling_non_idle_delta": 0,
+    "summary_sha256": "4b74539ba0ce5ac816fb21b6e146f885375e953317fb1bbc5fb1d9ee41a92aac",
+    "timed_cpu": 4
+  },
+  "disposition": {
+    "ordinary_k1_gap_closed": false,
+    "promoted": true,
+    "reason": "The fixed-shape terminal is materially faster than the old generic route immediately above 4 KiB, remains a small credible win at 64 KiB, and changes neither validation nor wire semantics. Ordinary 1-KiB encode and intermediate-size comparisons against Leopard1 remain follow-up work; reusable prevalidated bindings already beat Leopard1 in their qualified cells.",
+    "remaining_work": [
+      "Close ordinary K=1/R=1 Leopard1 encode gaps outside the existing fixed terminals without weakening the public validation contract.",
+      "Refresh the final all-K pure-AVX2 exact-main map after the remaining K=1 work."
+    ]
+  },
+  "inactive_route_audit": {
+    "assembly_result": "At 1024 bytes, encode branches directly on the <=4096 comparison and decode dispatches to ExecuteK1R1DecodeBatch1024Item; neither path loads g_k1_ordinary_extended_mode. Selector loads occur only after a >4096 comparison.",
+    "initial_holdout_anomaly": "The independently linked candidate/control holdout reported a 1024-byte decode difference even though the selector is unreachable. It is not attributed to the change.",
+    "resolution": "Remove both GNU build IDs and rerun longer counterbalanced timings. The resulting files differ by exactly the one initialized selector byte. Both inactive 1024-byte confidence intervals include 1."
+  },
+  "schema": "leopard2-k1-ordinary-extension-result-v1",
+  "selector_only_long_sanity": {
+    "artifact": "/tmp/leopard2-k1-ordinary-extended-buildid-free-long-20260801-v33",
+    "binary_difference_bytes": 1,
+    "candidate_sha256": "652bc4ad9d60a254701f4421c46062c5fa3818406663167c68b7f721c3a88ec5",
+    "control_over_candidate": {
+      "1024": {
+        "decode": {
+          "bootstrap_95_high": 1.050617433,
+          "bootstrap_95_low": 0.964938009,
+          "geometric_mean_ratio": 1.008638995
+        },
+        "encode": {
+          "bootstrap_95_high": 1.032017053,
+          "bootstrap_95_low": 0.957432919,
+          "geometric_mean_ratio": 0.991059487
+        }
+      },
+      "65536": {
+        "decode": {
+          "bootstrap_95_high": 1.002033792,
+          "bootstrap_95_low": 1.00092285,
+          "geometric_mean_ratio": 1.00149772
+        },
+        "encode": {
+          "bootstrap_95_high": 1.002956476,
+          "bootstrap_95_low": 1.002217074,
+          "geometric_mean_ratio": 1.002589782
+        }
+      }
+    },
+    "control_sha256": "1f176c4327dc79b7efaabedf79207c4bae0829190be7b5b7edb5a74ae98e2a2d",
+    "correctness_all": true,
+    "processes": 72,
+    "reserved_smt_sibling": 20,
+    "rounds": 9,
+    "samples_per_process": 11,
+    "sibling_non_idle_delta": 0,
+    "summary_sha256": "9a557f34242e023c7f47c5a02d264c2b9e82fd7c1f3a473fd655e31817aad638",
+    "text_sha256": "67615a57e32463f2cce2d5a17562c1e2cbbac6b9708e5391b8ffafcc215e8df6",
+    "timed_cpu": 4
+  },
+  "source": {
+    "commit": "a86f6ad014f66b5a1299134ae1a07e90d959afea",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "tracked_dirty": false,
+    "tree": "58536feac1feb2f8792d04106638b114813b6221"
+  },
+  "validation": {
+    "asan_ubsan_lsan_focused": "7/7 passed; post-helper-refactor r1/api/batch 3/3 passed",
+    "clang_strict": "passed",
+    "gcc_strict": "passed",
+    "release_focused": "7/7 passed: backend_ops, r1_xor, api, public_api_contract, batch_aliasing, codec_options_abi, boundaries"
+  }
+}
