@@ -1,0 +1,130 @@
+{
+  "schema": "leopard2-dense-4k-transform-attribution/v1",
+  "authoritative_promotion_evidence": false,
+  "purpose": "Reject the apparent 4 KiB dense-transform regression as a cold-ramp and same-tree-baseline artifact before changing production arithmetic.",
+  "source": {
+    "candidate_commit": "272b84d95d8b68ebaf82766c45fbdda3e45b5366",
+    "candidate_tree": "d4af00806802b519eb99863dbd69db72c59c3296",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_binary_sha256": "e68ff22c23c2f09bd848c71c4efa594492db9aea131c5403e57d3fb03b2a4553",
+    "binding_binary_sha256": "262bc777fb715852c753001f72c4dedc353269e8be7ccd80e3101bbb31089911",
+    "raw_core_binary_sha256": "ba0c08456aec4d81e02502a35f7b569736008bb58a9e549b82749182c4713182",
+    "exact_main_binary_sha256": "be4be156bf873d02ab6b11c95fcc805070c947501f6567a37181450ea7008d9e",
+    "exact_main_evex_prefix_count": 0
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "numa_nodes": 1
+  },
+  "parameters": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "shard_bytes": 4096,
+    "batch": 1,
+    "reuse": 256,
+    "iterations_per_process": 15,
+    "warmup_calls_per_process": 64,
+    "process_medians_per_implementation": 6,
+    "seed": 872641
+  },
+  "cells": [
+    {
+      "K": 76,
+      "R": 76,
+      "leopard2_ordinary_us": 35.549662,
+      "leopard2_binding_us": 35.431622,
+      "exact_main_us": 37.677158,
+      "same_tree_legacy_us": 35.119628,
+      "exact_main_over_leopard2_ordinary": 1.059846,
+      "exact_main_over_leopard2_binding": 1.063377,
+      "same_tree_legacy_over_leopard2_ordinary": 0.987903,
+      "same_tree_legacy_over_leopard2_binding": 0.994264,
+      "round_exact_main_over_ordinary": [
+        1.055119,
+        1.064211,
+        1.060227
+      ]
+    },
+    {
+      "K": 48,
+      "R": 48,
+      "leopard2_ordinary_us": 16.152553,
+      "exact_main_us": 17.073850,
+      "exact_main_over_leopard2_ordinary": 1.057037,
+      "round_exact_main_over_ordinary": [
+        1.051396,
+        1.061520,
+        1.058221
+      ]
+    },
+    {
+      "K": 35,
+      "R": 35,
+      "leopard2_ordinary_us": 14.959383,
+      "exact_main_us": 15.529115,
+      "exact_main_over_leopard2_ordinary": 1.038085,
+      "round_exact_main_over_ordinary": [
+        1.035682,
+        1.038805,
+        1.039773
+      ]
+    },
+    {
+      "K": 19,
+      "R": 10,
+      "leopard2_ordinary_us": 4.462388,
+      "exact_main_us": 4.877092,
+      "exact_main_over_leopard2_ordinary": 1.092933,
+      "round_exact_main_over_ordinary": [
+        1.098790,
+        1.091691,
+        1.088344
+      ]
+    }
+  ],
+  "raw_core_attribution": {
+    "note": "The raw benchmark uses a contiguous prebuilt work vector and is a localization aid, not an exactly subtractable timing component because its allocations and executable differ from the public benchmark.",
+    "K76_R76_prefix_core_us": 35.190725,
+    "K76_R76_binding_over_raw_core": 1.006845,
+    "K76_R76_ordinary_over_raw_core": 1.010200
+  },
+  "correctness": {
+    "all_round_trips_passed": true,
+    "all_original_digests_matched": true,
+    "all_parity_digests_matched": true,
+    "all_recovery_digests_matched": true
+  },
+  "cold_ramp_observation": {
+    "initial_low_warmup_K76_R76_ordinary_first_sample_us": 39.651375,
+    "initial_low_warmup_K76_R76_ordinary_last_sample_us": 35.409625,
+    "explanation": "The earlier approximately 39.9 us observation sampled the frequency/cache warm-up transition. Increasing warm-up and counterbalancing fresh processes removes the apparent approximately 11 percent gap."
+  },
+  "retained_raw_artifacts": [
+    {
+      "path": "/tmp/leopard-dense4k-attribution-272b84d-v1",
+      "run_summary_sha256": "968afff14d22521405a627b0fbbc4739e59fb773cf7180ae6b860c64171f02a9"
+    },
+    {
+      "path": "/tmp/leopard-dense4k-rawcore-272b84d-v1",
+      "run_summary_sha256": "53c63702051e1ba5e4633dc2c8321ba71ebe6471250d8ebe993e3cd5fd372533"
+    },
+    {
+      "path": "/tmp/leopard-dense4k-k76-stable-abba-272b84d-v1",
+      "run_summary_sha256": "264e4434a948ea21a08a5abc14f6bb164604cc79eba5d605923b7fe0666377a7"
+    },
+    {
+      "path": "/tmp/leopard-dense4k-shapes-main-abba-272b84d-v1",
+      "run_summary_sha256": "2ff15de6d23fd7e36c6f0d184df180c5a2d87f0afca8f4b3948be78f6bd60eb3"
+    }
+  ],
+  "disposition": {
+    "production_change": "none",
+    "reason": "Every suspected cell already beats the independently built exact Leopard main pure-AVX2 codec. The remaining fixed overhead appears only against Leopard1 arithmetic recompiled with Leopard2's newer transform kernels and is at most about 1.2 percent in this matrix. A contiguous-accumulator/final-scatter rewrite is not justified by this target evidence.",
+    "next_step": "Run the final current-source pure-AVX2 all-K crossover map and optimize only cells that still lose to exact Leopard main."
+  }
+}
