@@ -5742,15 +5742,17 @@ static LEO2_R1_FUSED_POLICY_NOINLINE bool UseFusedFinalR1Xor(
 {
     /* The exact-arity callback executes K=3,5,6 in one traversal and folds
        final 3..6-source remainders into larger coarse reductions.  Retained
-       Zen 5 AVX2 screens promoted the exact K groups below.  K=7 crosses back
-       to the mature coarse loop above 4 MiB; K=20/21 missed the 5% threshold;
+       Zen 5 AVX2 screens promoted the exact K groups below.  K=7 starts at
+       2 KiB and crosses back to the mature coarse loop above 4 MiB;
+       K=20/21 missed the 5% threshold;
        K=8 Group7, K=31, explicit prefetch, and byte-loop unrolling all
        regressed and remain excluded. */
     /* This layout-isolated policy is reached only after the inline eligibility
        gate has proved the field, backend, callback, lower byte bound, and K
        set.  Keep those preconditions explicit while avoiding duplicate loads
        and branches at both encode and decode call sites. */
-    LEO_DEBUG_ASSERT(shard_bytes >= 4096);
+    LEO_DEBUG_ASSERT(shard_bytes >=
+        (original_count == 7 ? 2048U : 4096U));
     LEO_DEBUG_ASSERT(original_count == 7 ||
         (original_count >= 12 && original_count <= 15) ||
         (original_count >= 22 && original_count <= 23) ||
@@ -5779,13 +5781,14 @@ static LEO_FORCE_INLINE bool IsFusedFinalR1XorEligible(
     (void)shard_bytes;
     return false;
 #else
-    if (shard_bytes < 4096 || codec->field != LEO2_FIELD_GF8 ||
+    const uint32_t k = codec->original_count;
+    const size_t minimum_bytes = k == 7 ? 2048U : 4096U;
+    if (shard_bytes < minimum_bytes || codec->field != LEO2_FIELD_GF8 ||
         (codec->context->backend != LEO2_BACKEND_AVX2 &&
          codec->context->backend != LEO2_BACKEND_GFNI) ||
         !ops.xor_memory_sources_fused_final)
         return false;
 
-    const uint32_t k = codec->original_count;
     return k == 3 || k == 5 || k == 6 || k == 7 ||
         (k >= 12 && k <= 15) || (k >= 22 && k <= 23);
 #endif
@@ -5796,7 +5799,8 @@ static LEO_FORCE_INLINE bool UseDenseR1Xor(
     size_t shard_bytes)
 {
     const bool eligible =
-        (codec->original_count == 2 && shard_bytes >= 4096) ||
+        (codec->original_count == 2 && shard_bytes >=
+            (codec->field == LEO2_FIELD_GF8 ? 2048U : 4096U)) ||
         (codec->original_count == 4 && shard_bytes >= 2048);
 #if defined(__GNUC__) || defined(__clang__)
     if (__builtin_expect(!eligible, 1))

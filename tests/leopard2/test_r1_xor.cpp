@@ -1054,6 +1054,32 @@ void test_public_r1(leo2_backend backend)
             execute_and_check_decode(fixture);
         }
 
+    /* K=2 enters the dense two-input reducer and K=7 the exact-arity
+       fused-final reducer at 2 KiB on the GF8 AVX2 tier.  Recover every
+       original on both sides of that boundary, including vector and page
+       tails, so a null-source or unaligned-buffer error cannot hide behind
+       the missing-zero route checks. */
+    static const uint32_t tiny_threshold_counts[] = { 2, 7 };
+    static const size_t tiny_threshold_sizes[] = {
+        2047, 2048, 2049, 2079, 3072, 4095
+    };
+    for (size_t count_i = 0;
+         count_i < sizeof(tiny_threshold_counts) /
+             sizeof(tiny_threshold_counts[0]); ++count_i)
+    {
+        const uint32_t k = tiny_threshold_counts[count_i];
+        for (uint32_t missing = 0; missing < k; ++missing)
+            for (size_t size_i = 0;
+                 size_i < sizeof(tiny_threshold_sizes) /
+                     sizeof(tiny_threshold_sizes[0]); ++size_i)
+            {
+                R1Fixture fixture(backend, k,
+                    tiny_threshold_sizes[size_i], false, LEO2_FIELD_GF8,
+                    LEO2_SHARD_LAYOUT_NATIVE_V1, missing);
+                execute_and_check_decode(fixture);
+            }
+    }
+
     /* K=3,5,6 cross to the exact-arity AVX2 reduction at 4 KiB.  Recover
        every original around that boundary, through an arbitrary vector tail,
        and beyond one MiB so null compaction and the unbounded large-shard

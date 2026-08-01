@@ -122,6 +122,7 @@ struct TraceState
     std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> xor_sources_calls;
     std::atomic<uint64_t> xor_fused_final_sources_calls;
+    std::atomic<uint64_t> xor_dense_calls;
     std::atomic<uint64_t> ff8_ifft_four_calls;
     std::atomic<uint64_t> ff8_ifft_four_out_calls;
     std::atomic<uint64_t> ff8_weighted_ifft_four_calls;
@@ -224,6 +225,17 @@ void trace_xor_fused_final_sources(
         1, std::memory_order_relaxed);
     trace_delegate()->xor_memory_sources_fused_final(
         destination, initial_source, sources, source_count, bytes);
+}
+
+void trace_xor_dense(
+    void* destination,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t bytes)
+{
+    g_trace.xor_dense_calls.fetch_add(1, std::memory_order_relaxed);
+    trace_delegate()->xor_memory_dense(
+        destination, sources, source_count, bytes);
 }
 
 void trace_xor4(
@@ -554,6 +566,8 @@ public:
         if (entry.table->xor_memory_sources_fused_final)
             tracing_.xor_memory_sources_fused_final =
                 trace_xor_fused_final_sources;
+        if (entry.table->xor_memory_dense)
+            tracing_.xor_memory_dense = trace_xor_dense;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
         tracing_.ff16_fft_butterfly2 = trace_ff16_fft;
         tracing_.ff16_fft_butterfly2_out = trace_ff16_fft_out;
@@ -584,6 +598,7 @@ public:
         g_trace.xor_sources_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_fused_final_sources_calls.store(
             0, std::memory_order_relaxed);
+        g_trace.xor_dense_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_out_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_weighted_ifft_four_calls.store(
@@ -649,6 +664,10 @@ public:
     {
         return g_trace.xor_fused_final_sources_calls.load(
             std::memory_order_relaxed);
+    }
+    uint64_t xor_dense_calls() const
+    {
+        return g_trace.xor_dense_calls.load(std::memory_order_relaxed);
     }
     uint64_t ff8_ifft_four_calls() const
     {
@@ -1695,13 +1714,25 @@ void require_r1_xor_trace(
     uint32_t original_count,
     bool expect_coarse,
     bool expect_fused,
+    bool expect_dense,
     const std::string& operation)
 {
     const uint64_t expected_pairs = (original_count - 1U) / 2U;
     const uint64_t expected_single = (original_count - 1U) % 2U;
-    if (expect_coarse)
+    if (expect_dense)
     {
-        require(trace.xor_sources_calls() == 1 &&
+        require(trace.xor_dense_calls() == 1 &&
+                trace.xor_sources_calls() == 0 &&
+                trace.xor_two_to_one_calls() == 0 &&
+                trace.xor_calls() == 0,
+            operation + " did not select exactly one dense reduction");
+        require(trace.xor_fused_final_sources_calls() == 0,
+            operation + " unexpectedly selected the fused reduction");
+    }
+    else if (expect_coarse)
+    {
+        require(trace.xor_dense_calls() == 0 &&
+                trace.xor_sources_calls() == 1 &&
                 trace.xor_two_to_one_calls() == 0 &&
                 trace.xor_calls() == 0,
             operation + " did not select exactly one coarse reduction");
@@ -1711,7 +1742,8 @@ void require_r1_xor_trace(
     }
     else
     {
-        require(trace.xor_sources_calls() == 0 &&
+        require(trace.xor_dense_calls() == 0 &&
+                trace.xor_sources_calls() == 0 &&
                 trace.xor_two_to_one_calls() == expected_pairs &&
                 trace.xor_calls() == expected_single,
             operation + " did not retain the exact paired/single reduction");
@@ -1727,7 +1759,8 @@ void execute_r1_xor_dispatch_case(
     size_t bytes,
     bool expect_coarse,
     leo2_field field = LEO2_FIELD_GF8,
-    bool expect_fused = false)
+    bool expect_fused = false,
+    bool expect_dense = false)
 {
     const CodecCase test_case = {
         original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -1747,7 +1780,7 @@ void execute_r1_xor_dispatch_case(
     const Shards recovery = encode_case(
         entry.context, test_case, originals, &codec);
     require_r1_xor_trace(
-        trace, original_count, expect_coarse, expect_fused,
+        trace, original_count, expect_coarse, expect_fused, expect_dense,
         identity + " encode");
 
     std::vector<uint8_t> original_present(original_count, 1);
@@ -1786,7 +1819,7 @@ void execute_r1_xor_dispatch_case(
         LEO2_SUCCESS, identity + " decode");
     require(restored == originals[0], identity + " restored data mismatch");
     require_r1_xor_trace(
-        trace, original_count, expect_coarse, expect_fused,
+        trace, original_count, expect_coarse, expect_fused, expect_dense,
         identity + " decode");
 
     leo2_decode_plan_destroy(plan);
@@ -1813,8 +1846,26 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         size_t bytes;
         bool expect_coarse;
         bool expect_fused;
+        bool expect_dense;
+
+        DispatchCase(uint32_t count, size_t byte_count,
+            bool coarse, bool fused, bool dense = false)
+            : original_count(count)
+            , bytes(byte_count)
+            , expect_coarse(coarse)
+            , expect_fused(fused)
+            , expect_dense(dense)
+        {
+        }
     };
     static const DispatchCase cases[] = {
+        /* Dense two- and four-input policy boundaries. */
+        { 2, 2047, false, false, false },
+        { 2, 2048, false, false, true },
+        { 2, 2049, false, false, true },
+        { 4, 2047, false, false, false },
+        { 4, 2048, false, false, true },
+        { 4, 2049, false, false, true },
         /* Exact final-remainder policy boundaries. */
         { 3, 4095, false, false },
         { 3, 4096, true, true },
@@ -1829,8 +1880,10 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 6, 4097, true, true },
         { 6, 1024U * 1024U + 17U, true, true },
         { 7, 1024, true, false },
-        { 7, 2048, true, false },
-        { 7, 4095, true, false },
+        { 7, 2047, true, false },
+        { 7, 2048, true, true },
+        { 7, 2049, true, true },
+        { 7, 4095, true, true },
         { 7, 4096, true, true },
         { 7, 4U * 1024U * 1024U, true, true },
         { 7, 4U * 1024U * 1024U + 1U, true, false },
@@ -1896,7 +1949,7 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         execute_r1_xor_dispatch_case(*avx2, trace,
             cases[i].original_count, cases[i].bytes,
             cases[i].expect_coarse, LEO2_FIELD_GF8,
-            cases[i].expect_fused);
+            cases[i].expect_fused, cases[i].expect_dense);
 
     /* The measured policy is deliberately limited to GF8.  GF16 retains its
        established coarse policy at every otherwise-promoted boundary. */
@@ -1918,6 +1971,13 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         execute_r1_xor_dispatch_case(*avx2, trace,
             gf16_cases[i].original_count, gf16_cases[i].bytes,
             gf16_cases[i].expect_coarse, LEO2_FIELD_GF16);
+
+    /* Lowering the K=2 threshold is GF8-only; retain the established GF16
+       boundary until that field has independent end-to-end evidence. */
+    execute_r1_xor_dispatch_case(
+        *avx2, trace, 2, 2048, false, LEO2_FIELD_GF16);
+    execute_r1_xor_dispatch_case(
+        *avx2, trace, 2, 4096, false, LEO2_FIELD_GF16, false, true);
 }
 
 void test_avx2_gf8_large_r1_xor_dispatch(

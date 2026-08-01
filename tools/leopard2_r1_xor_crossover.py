@@ -286,6 +286,27 @@ def full_grid(backends):
     return result
 
 
+def tiny_threshold_grid(backends):
+    """R=1 selector boundaries and unaffected binary-layout controls.
+
+    K=2 exercises the dense two-input reducer and K=7 the exact-arity
+    fused-final reducer.  Adjacent K values and both sides of the byte
+    thresholds make a compiler-layout or overly broad selector change visible
+    instead of attributing every small-code movement to the target kernel.
+    """
+    result = []
+    counts = (2, 3, 4, 6, 7, 8)
+    shard_sizes = (1024, 2047, 2048, 2049, 3072, 4095, 4096)
+    for backend in backends:
+        for k in counts:
+            for shard_bytes in shard_sizes:
+                target = k in (2, 7) and 2048 <= shard_bytes < 4096
+                result.append(cell(
+                    "target_r1" if target else "neighbor_r1",
+                    backend, k, 1, shard_bytes, 1))
+    return result
+
+
 def final_remainders_grid(backends):
     result = []
     target_counts = (7, 12, 13, 14, 15, 20, 21, 22, 23)
@@ -437,6 +458,8 @@ def make_manifest(args):
     backends = parse_backends(args.backends)
     if args.grid == "full":
         cells = full_grid(backends)
+    elif args.grid == "tiny-thresholds":
+        cells = tiny_threshold_grid(backends)
     elif args.grid == "final-remainders":
         cells = final_remainders_grid(backends)
     elif args.grid == "final-remainders-confirmation":
@@ -1158,6 +1181,21 @@ def command_self_test(_args):
                  item["shard_bytes"] == 1048577)["region"] ==
                     "neighbor_r1",
             "K={} upper-bound neighbor classification".format(k))
+    tiny = tiny_threshold_grid(["avx2"])
+    checks.require(len(tiny) == 42, "tiny-threshold grid size")
+    for k in (2, 7):
+        for shard_bytes in (2048, 2049, 3072, 4095):
+            checks.require(
+                next(item for item in tiny
+                     if item["k"] == k and
+                     item["shard_bytes"] == shard_bytes)["region"] ==
+                    "target_r1",
+                "tiny-threshold target classification")
+    for k in (3, 4, 6, 8):
+        checks.require(
+            all(item["region"] == "neighbor_r1"
+                for item in tiny if item["k"] == k),
+            "tiny-threshold control classification")
     fake = {
         "job_id": "0" * 24,
         "measurements": [],
@@ -1246,7 +1284,7 @@ def parser():
     run.add_argument("--backends", default=",".join(BACKENDS))
     run.add_argument(
         "--grid", choices=(
-            "compact", "full", "final-remainders",
+            "compact", "full", "tiny-thresholds", "final-remainders",
             "final-remainders-confirmation", "final-remainders-production",
             ),
         default="compact")
