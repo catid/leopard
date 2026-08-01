@@ -1,0 +1,179 @@
+{
+  "schema": "leopard2.gf8_avx2_k2_r1_terminal/v1",
+  "created_utc": "2026-08-01T07:05:34Z",
+  "decision": {
+    "status": "retained_pending_final_all_k_map",
+    "summary": "Retain the fixed-shape GF8 K=2 R=1 public encode and decode terminals. Clean-source same-family evidence shows large target wins, and exact-main diagnostics favor Leopard2. One unrelated K=6/2049 encode observation exceeded the aggregate two-percent noise gate but was non-credible and did not reproduce in longer focused confirmations.",
+    "wire_format_changed": false,
+    "backend_scope": "legacy-high GF8 K=2 R=1, shard_bytes >= 2048, effective AVX2 or GFNI context with the AVX2 dense XOR primitive",
+    "online_autotuning": false,
+    "final_gate": "Do not close the parent optimization bead or freeze the selector until the current-source pure-AVX2 all-K exact-Leopard1 map has completed."
+  },
+  "identity": {
+    "candidate_source_commit": "f72be1bf2bc37a4d44eeabcd91b56ef8e44f4c8a",
+    "candidate_source_tree": "aa54e6ee68419d7f25770fef09dd286519866fe9",
+    "same_family_control_source_commit": "4bcdacceb0a94b640a38e96aad33d0cdd8be8a58",
+    "same_family_control_source_tree": "88a555485cb3d78cd29606efc2b00ae47f03199a",
+    "exact_leopard_main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_leopard_main_source_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "candidate_executable_sha256": "b6413089248b961145e0752e30b3b10a31da7ad1d2e3a65975f146282385e584",
+    "same_family_control_executable_sha256": "43a147bbe511d4abf9a178db3466e4612f9325dffb8e33514575a11129775cb8",
+    "exact_leopard_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_cmake_cache_sha256": "d58c2de0de825e72b6f2155936323e8cbae987f268ba01ff28e1a0667a0e4b50",
+    "control_cmake_cache_sha256": "8be16ec0ea7c66392902e3f4a8b8d0a6adc55da87ee116550a12f974a9da6177",
+    "crossover_runner_sha256": "05af62bfcf288ac623dbfc97c60d754bd771e6e25fb6c8a8bacd00544ded9627",
+    "unexpected_evex_instruction_count": {
+      "candidate": 0,
+      "same_family_control": 0,
+      "exact_leopard_main": 0
+    }
+  },
+  "machine": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "architecture": "x86_64",
+    "sockets": 1,
+    "cores_per_socket": 16,
+    "threads_per_core": 2,
+    "numa_nodes": 1,
+    "compiler_gcc": "GCC 13.3.0",
+    "compiler_clang": "Clang 18.1.3",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "scaling_governor": "powersave",
+    "energy_performance_preference": "performance",
+    "resource_note": "Builds and tests were serialized and memory-capped after repeated controlling-session OOMs. Cache-sensitive timings intentionally used one pinned physical core and required zero non-idle jiffy growth on its reserved SMT sibling."
+  },
+  "same_family_clean_source_grid": {
+    "artifact_directory": "/tmp/leopard2-r1-k2-terminal-final-f72be1b/control-results",
+    "manifest_sha256": "3808ca78b1f7cb14d8979a39e39f4900df978b9b6d2db8f72744f2762b8f16ad",
+    "analysis_sha256": "88f33eebbf48e78b31ff235f5d7f56a14133a8d6f8d6e906d0949ab5185f6d9a",
+    "configuration_id": "1dd722c5ec7ad2ec9a416e2525e4bf4cf0a43dbe4ee0e44282a1f3166037ef86",
+    "cells": 42,
+    "rounds_per_cell": 7,
+    "ratio_orientation": "control_time_over_candidate_time",
+    "promotion_rule": "At least one credible five-percent target win for each requested backend and metric; no observed target or neighbor regression over two percent.",
+    "aggregate_gate": {
+      "passed": false,
+      "credible_target_win_for_every_requested_backend_and_metric": true,
+      "target_wins": {
+        "encode": 4,
+        "decode": 3
+      },
+      "reason": "One non-credible unrelated neighbor observation triggered the deliberately conservative observed-regression rule."
+    },
+    "target_results_percent": {
+      "columns": [
+        "shard_bytes",
+        "encode_median_improvement",
+        "encode_order_statistic_95",
+        "decode_median_improvement",
+        "decode_order_statistic_95"
+      ],
+      "rows": [
+        [2048, 26.2173, [25.1890, 28.2160], 32.3783, [29.5681, 34.5735]],
+        [2049, 26.6787, [24.7264, 27.2034], 29.9120, [23.9668, 36.6776]],
+        [3072, 17.9246, [17.2634, 18.6907], 25.3729, [25.2415, 25.5727]],
+        [4095, 12.2291, [10.7620, 14.8226], 20.8489, [-3.0740, 54.0531]]
+      ]
+    },
+    "observed_neighbor_regressions": [
+      {
+        "k": 6,
+        "r": 1,
+        "shard_bytes": 2049,
+        "metric": "encode",
+        "median_improvement_percent": -4.7342,
+        "order_statistic_95": [-5.0488, 3.5268],
+        "credible": false,
+        "candidate_route_changed": false
+      }
+    ]
+  },
+  "same_code_diagnostic_replication": {
+    "note": "The candidate executable predates the clean source commit but its production code is identical. It is retained only as diagnostic replication; the clean-source artifact above is the identity-bearing result.",
+    "artifact_directory": "/tmp/leopard2-r1-k2-terminal-tinygrid-v5/results",
+    "candidate_executable_sha256": "664b3f4bce53cbc84b0bc9f7414389192b76261799127844394b30f242f20cce",
+    "manifest_sha256": "bd816a4c96e899a8dc3d7f5359c5a5bd59c448bf11dfb2a1ef9314d29eb7cc39",
+    "analysis_sha256": "81e011083ef56422ab4da5e7a127a1c18001a82f50058056b64b32385c696e09",
+    "configuration_id": "9c25688c4fc8aaa09976a5f10144180adfec7f324a2e6edb9ea4f83235740278",
+    "aggregate_gate_passed": true,
+    "target_wins": {
+      "encode": 4,
+      "decode": 4
+    },
+    "target_median_improvement_percent": {
+      "columns": ["shard_bytes", "encode", "decode"],
+      "rows": [
+        [2048, 26.0856, 34.9691],
+        [2049, 26.3454, 25.3811],
+        [3072, 18.4453, 24.8793],
+        [4095, 11.7821, 15.6234]
+      ]
+    }
+  },
+  "focused_unchanged_neighbor_confirmation": {
+    "status": "diagnostic_terminal_summary_only",
+    "cell": {"k": 6, "r": 1, "shard_bytes": 2049},
+    "ratio_orientation": "control_time_over_candidate_time",
+    "runs": [
+      {"rounds": 21, "reuse": 9358, "encode_median_ratio": 1.000434, "decode_median_ratio": 1.006154},
+      {"rounds": 31, "reuse": 65536, "encode_median_ratio": 1.000278, "decode_median_ratio": 0.994697}
+    ],
+    "interpretation": "The production route is unchanged and neither longer run reproduces a material regression. The terminal-only summaries are supporting evidence, not a replacement for the final all-K campaign."
+  },
+  "exact_leopard_main_diagnostic": {
+    "status": "diagnostic_not_authoritative",
+    "reason": "The frozen binaries and SMT-sibling check were valid, but the manual controller predates the campaign-wide coordinator-exclusion requirement and did not retain raw calls. These results may guide retention but cannot close the final all-K bead.",
+    "method": "Pinned CPU 4, sibling CPU 20 non-idle delta zero, 11 outer rounds, 9 inner iterations, approximately 128 MiB target work per measurement.",
+    "ratio_orientation": "exact_leopard_main_time_over_leopard2_time; values above one favor Leopard2",
+    "columns": [
+      "shard_bytes",
+      "encode_median_ratio",
+      "encode_trimmed_round_range",
+      "reused_decode_median_ratio",
+      "reused_decode_trimmed_round_range",
+      "one_shot_decode_median_ratio",
+      "one_shot_decode_trimmed_round_range"
+    ],
+    "rows": [
+      [2048, 1.127052, [1.096369, 1.151751], 1.079372, [1.057807, 1.184617], 1.019494, [1.014398, 1.116195]],
+      [3072, 1.473667, [1.454221, 1.500506], 1.484421, [1.450710, 1.492568], 1.400488, [1.386049, 1.410519]],
+      [4096, 1.500207, [1.479172, 1.517559], 1.530312, [1.495884, 1.558049], 1.452511, [1.432068, 1.461860]],
+      [8192, 1.488906, [1.468863, 1.495476], 1.584801, [1.564146, 1.599386], 1.485930, [1.482518, 1.494249]]
+    ],
+    "coverage_note": "Leopard1 requires shard bytes divisible by 64, so odd-byte target cells are excluded from the exact-main comparison."
+  },
+  "correctness_and_quality_gates": {
+    "gcc13_release_targeted_ctest": {
+      "tests": ["leopard2_context_backends", "leopard2_r1_xor"],
+      "result": "2/2 passed"
+    },
+    "clang18_asan_ubsan_targeted_ctest": {
+      "tests": ["leopard2_context_backends", "leopard2_r1_xor"],
+      "result": "2/2 passed",
+      "asan_quarantine_mib": 16
+    },
+    "strict_compile": {
+      "gcc13_release": "passed without warnings",
+      "clang18_release": "passed without warnings"
+    },
+    "test_scope": [
+      "both missing-original choices",
+      "unaligned buffers, arbitrary tails, and guard bytes",
+      "one-shot zero-scratch contract",
+      "reusable-plan scratch contract",
+      "metadata, descriptor, pointer-array, input/output, and batch overlap rejection",
+      "below-threshold and GF16 exclusion",
+      "scalar, SSSE3, AVX2, AVX512, and GFNI public backend loops",
+      "shared immutable K=2 decode-plan concurrency"
+    ],
+    "wire_and_round_trip_digests_match": true,
+    "hot_path_allocations_added": false
+  },
+  "limitations": [
+    "The final authoritative pure-AVX2 all-K exact-Leopard1 map remains open.",
+    "The current crossover runner does not yet satisfy the newer global coordinator-exclusion policy; all timing in this record is classified diagnostic.",
+    "This specialization targets only K=2 R=1 and does not prove the broader GF8 objective by itself.",
+    "No TSan run was performed for this milestone; Release and ASan exercise concurrent execution of the stateless helper through a shared immutable plan."
+  ]
+}
