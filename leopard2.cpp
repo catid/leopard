@@ -3887,6 +3887,72 @@ static leo2_result ValidateK1R1EncodeBuffers(
     return LEO2_SUCCESS;
 }
 
+/*
+    K=2,R=1 is the smallest non-copy code and an important tiny-shard
+    crossover against the legacy API.  The general validator deliberately
+    handles arbitrary K/R, sparse outputs, and several sorting cases.  None of
+    that shape discovery is dynamic here, so preserve the same public overlap
+    contract with an unrolled validator instead of paying the general loops on
+    every stripe.
+*/
+static LEO_FORCE_INLINE leo2_result ValidateK2R1EncodeBuffers(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    const AddressRange& scratch_range,
+    const void* protected_metadata,
+    size_t protected_metadata_bytes)
+{
+    LEO_DEBUG_ASSERT(codec && codec->original_count == 2 &&
+        codec->recovery_count == 1);
+    if (!original || !recovery)
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange metadata_ranges[3];
+    size_t metadata_count = 2;
+    if (!MakeArrayRange(original, 2, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 1, sizeof(*recovery), metadata_ranges[1]))
+        return LEO2_INVALID_ARGUMENT;
+    if (protected_metadata)
+    {
+        if (protected_metadata_bytes == 0 ||
+            !MakeRange(protected_metadata,
+                static_cast<uint64_t>(protected_metadata_bytes),
+                metadata_ranges[metadata_count]))
+            return LEO2_INVALID_ARGUMENT;
+        ++metadata_count;
+    }
+    if (RangeOverlapsAny(scratch_range, metadata_ranges, metadata_count))
+        return LEO2_OVERLAP;
+
+    AddressRange output_range = { 0, 0 };
+    if (recovery[0])
+    {
+        if (!MakeRange(recovery[0], shard_bytes, output_range))
+            return LEO2_INVALID_ARGUMENT;
+        if (RangesOverlap(output_range, scratch_range) ||
+            RangeOverlapsAny(output_range, metadata_ranges, metadata_count))
+            return LEO2_OVERLAP;
+    }
+
+    AddressRange input0;
+    AddressRange input1;
+    if (!MakeRange(original[0], shard_bytes, input0) ||
+        !MakeRange(original[1], shard_bytes, input1))
+        return LEO2_INVALID_ARGUMENT;
+    if (RangesOverlap(input0, scratch_range) ||
+        RangesOverlap(input1, scratch_range) ||
+        (recovery[0] &&
+         (RangesOverlap(input0, output_range) ||
+          RangesOverlap(input1, output_range))))
+        return LEO2_OVERLAP;
+    if (!HasValidSystematicPad(codec, original[0], shard_bytes) ||
+        !HasValidSystematicPad(codec, original[1], shard_bytes))
+        return LEO2_INVALID_ARGUMENT;
+    return LEO2_SUCCESS;
+}
+
 static leo2_result ValidateEncodeBuffers(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -4795,6 +4861,37 @@ static bool IsLegacyHighK1R1Codec(const leo2_codec* codec)
 {
     return codec && codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->original_count == 1 && codec->recovery_count == 1;
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    /* Most calls are not K=2.  Reject that case before touching the rest of
+       the codec so this terminal does not tax mature neighboring paths. */
+    if (!codec || codec->original_count != 2 || shard_bytes < 2048 ||
+        codec->recovery_count != 1 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 || codec->padded_side != 1 ||
+        !codec->context || !codec->context->ops ||
+        !codec->context->ops->xor_memory_dense)
+        return false;
+    return codec->context->backend == LEO2_BACKEND_AVX2 ||
+        codec->context->backend == LEO2_BACKEND_GFNI;
+}
+
+static LEO_FORCE_INLINE size_t K2R1EncodeScratchBytes()
+{
+    const size_t range_bytes = 3U * sizeof(AddressRange);
+    return (range_bytes + kScratchAlignment - 1U) &
+        ~(kScratchAlignment - 1U);
+}
+
+static LEO_FORCE_INLINE size_t K2R1DecodeScratchBytes()
+{
+    const size_t range_bytes = 5U * sizeof(AddressRange);
+    return (range_bytes + kScratchAlignment - 1U) &
+        ~(kScratchAlignment - 1U);
 }
 
 static leo2_result DirectEncodeLayout(
@@ -6028,6 +6125,135 @@ DecodeK1R1TerminalValidated(
 }
 
 #undef LEO2_K1_TERMINAL_NOINLINE
+
+#if defined(_MSC_VER)
+#define LEO2_K2_DECODE_VALIDATED_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_K2_DECODE_VALIDATED_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_k2_decode"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K2_DECODE_VALIDATED_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K2_DECODE_VALIDATED_NOINLINE
+#endif
+
+template<bool RequireScratch, size_t ProtectedCount>
+static LEO_FORCE_INLINE leo2_result
+DecodeK2R1TerminalValidated(
+    const leo2_codec* codec,
+    uint32_t missing,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes));
+    size_t rounded_bytes = 0;
+    if (missing >= 2 || !RoundShardBytes(shard_bytes, rounded_bytes))
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange scratch_range = { 0, 0 };
+    leo2_result result;
+    if (RequireScratch)
+    {
+        const ScratchLayout layout = {
+            0, 0, 0, K2R1DecodeScratchBytes()
+        };
+        result = CheckScratch(
+            scratch, scratch_bytes, layout, scratch_range);
+    }
+    else
+    {
+        result = CheckOptionalScratch(
+            scratch, scratch_bytes, scratch_range);
+    }
+    if (result != LEO2_SUCCESS)
+        return result;
+    if (!original || !recovery || !restored)
+        return LEO2_INVALID_ARGUMENT;
+    if (ProtectedCount > 2 || (ProtectedCount != 0 && !protected_ranges))
+        return LEO2_INVALID_ARGUMENT;
+
+    AddressRange metadata_ranges[5];
+    if (!MakeArrayRange(original, 2, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 1, sizeof(*recovery), metadata_ranges[1]) ||
+        !MakeArrayRange(restored, 2, sizeof(*restored), metadata_ranges[2]))
+        return LEO2_INVALID_ARGUMENT;
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[3 + i] = protected_ranges[i];
+    const size_t metadata_count = 3 + ProtectedCount;
+    const bool have_scratch = RequireScratch || scratch_bytes != 0;
+    if (have_scratch &&
+        RangeOverlapsAny(scratch_range, metadata_ranges, metadata_count))
+        return LEO2_OVERLAP;
+
+    AddressRange output_range;
+    if (!restored[missing] ||
+        !MakeRange(restored[missing], shard_bytes, output_range))
+        return LEO2_INVALID_ARGUMENT;
+    if ((have_scratch && RangesOverlap(output_range, scratch_range)) ||
+        RangeOverlapsAny(output_range, metadata_ranges, metadata_count))
+        return LEO2_OVERLAP;
+
+    const uint32_t survivor = missing ^ 1U;
+    if (original[missing] || !original[survivor] || !recovery[0])
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange input_range;
+    AddressRange recovery_range;
+    if (!MakeRange(original[survivor], shard_bytes, input_range) ||
+        !MakeRange(recovery[0], shard_bytes, recovery_range))
+        return LEO2_INVALID_ARGUMENT;
+    if ((have_scratch && RangesOverlap(input_range, scratch_range)) ||
+        RangesOverlap(input_range, output_range) ||
+        (have_scratch && RangesOverlap(recovery_range, scratch_range)) ||
+        RangesOverlap(recovery_range, output_range))
+        return LEO2_OVERLAP;
+    if (!HasValidSystematicPad(codec, original[survivor], shard_bytes))
+        return LEO2_INVALID_ARGUMENT;
+
+    const void* sources[2] = { recovery[0], original[survivor] };
+    codec->context->ops->xor_memory_dense(
+        restored[missing], sources, 2, shard_bytes);
+    return LEO2_SUCCESS;
+}
+
+static LEO2_K2_DECODE_VALIDATED_NOINLINE leo2_result
+DecodeK2R1TerminalValidatedDynamic(
+    const leo2_codec* codec,
+    uint32_t missing,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    size_t protected_count,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    switch (protected_count)
+    {
+    case 0:
+        return DecodeK2R1TerminalValidated<true, 0>(
+            codec, missing, shard_bytes, NULL, original, recovery, restored,
+            scratch, scratch_bytes);
+    case 1:
+        return DecodeK2R1TerminalValidated<true, 1>(
+            codec, missing, shard_bytes, protected_ranges, original,
+            recovery, restored, scratch, scratch_bytes);
+    case 2:
+        return DecodeK2R1TerminalValidated<true, 2>(
+            codec, missing, shard_bytes, protected_ranges, original,
+            recovery, restored, scratch, scratch_bytes);
+    default:
+        return LEO2_INVALID_ARGUMENT;
+    }
+}
+
+#undef LEO2_K2_DECODE_VALIDATED_NOINLINE
 
 static leo2_result DecodeDirectXorValidated(
     const leo2_codec* codec,
@@ -10895,6 +11121,56 @@ static LEO2_T8_TWO_BLOCK_NOINLINE void ExecuteHighT8TwoBlockBinding(
 #undef LEO2_T8_TWO_BLOCK_NOINLINE
 #endif
 
+#if defined(_MSC_VER)
+#define LEO2_K2_ENCODE_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_K2_ENCODE_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_k2_encode"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K2_ENCODE_NOINLINE __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K2_ENCODE_NOINLINE
+#endif
+
+static LEO2_K2_ENCODE_NOINLINE leo2_result EncodeK2R1Terminal(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    const void* protected_metadata,
+    size_t protected_metadata_bytes,
+    bool prevalidated)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes));
+    if (!prevalidated)
+    {
+        size_t rounded_bytes = 0;
+        if (!RoundShardBytes(shard_bytes, rounded_bytes))
+            return LEO2_INVALID_ARGUMENT;
+        ScratchLayout layout = {
+            0, 0, 0, K2R1EncodeScratchBytes()
+        };
+        AddressRange scratch_range = { 0, 0 };
+        leo2_result result = CheckScratch(
+            scratch, scratch_bytes, layout, scratch_range);
+        if (result != LEO2_SUCCESS)
+            return result;
+        result = ValidateK2R1EncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch_range,
+            protected_metadata, protected_metadata_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
+    if (recovery[0])
+        codec->context->ops->xor_memory_dense(
+            recovery[0], original, 2, shard_bytes);
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_K2_ENCODE_NOINLINE
+
 static leo2_result EncodeInternal(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -11386,6 +11662,65 @@ static LEO_FORCE_INLINE leo2_result TryOneShotLegacyHighR1Terminal(
     return LEO2_SUCCESS;
 }
 
+/*
+    Keep the common K=2,R=1 one-shot repair in the small public wrapper and
+    outside the general plan-construction frame.  Non-repairable patterns
+    deliberately fall back to the ordinary path so error selection and
+    test-only forced decoders stay centralized.  A no-loss call retains the
+    public true-no-op contract.
+*/
+static LEO_FORCE_INLINE leo2_result DecodeK2R1OneShotTerminal(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes,
+    bool& handled_out)
+{
+    handled_out = false;
+    LEO_DEBUG_ASSERT(IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes));
+    if (!original_present || !recovery_present)
+        return LEO2_INVALID_ARGUMENT;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return LEO2_SUCCESS;
+#endif
+
+    AddressRange protected_ranges[2];
+    if (!MakeArrayRange(original_present, 2,
+            sizeof(*original_present), protected_ranges[0]) ||
+        !MakeArrayRange(recovery_present, 1,
+            sizeof(*recovery_present), protected_ranges[1]))
+        return LEO2_INVALID_ARGUMENT;
+
+    const uint8_t state0 = original_present[0];
+    const uint8_t state1 = original_present[1];
+    const uint8_t recovery_state = recovery_present[0];
+    if (state0 > 1 || state1 > 1 || recovery_state > 1)
+        return LEO2_INVALID_ARGUMENT;
+
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    if (state0 && state1)
+    {
+        handled_out = true;
+        return LEO2_SUCCESS;
+    }
+#endif
+    if (recovery_state == 1 && state0 != state1)
+    {
+        const uint32_t missing = state0 ? 1U : 0U;
+        handled_out = true;
+        return DecodeK2R1TerminalValidated<false, 2>(
+            codec, missing, shard_bytes, protected_ranges,
+            original, recovery, restored_original, scratch, scratch_bytes);
+    }
+    return LEO2_SUCCESS;
+}
+
 extern "C" {
 
 LEO2_EXPORT leo2_result leo2_encode(
@@ -11396,6 +11731,10 @@ LEO2_EXPORT leo2_result leo2_encode(
     void* scratch,
     size_t scratch_bytes)
 {
+    if (IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes))
+        return EncodeK2R1Terminal(
+            codec, shard_bytes, original, recovery, scratch, scratch_bytes,
+            NULL, 0, false);
     return EncodeInternal(codec, shard_bytes, original, recovery,
         scratch, scratch_bytes, NULL, 0, false);
 }
@@ -11460,6 +11799,12 @@ LEO2_EXPORT leo2_result leo2_encode_batch(
     const leo2_encode_batch_item* items,
     size_t item_count)
 {
+    if (item_count == 1 && items &&
+        IsGF8AVX2K2R1TerminalEligible(codec, items[0].shard_bytes))
+        return EncodeK2R1Terminal(
+            codec, items[0].shard_bytes, items[0].original,
+            items[0].recovery, items[0].scratch, items[0].scratch_bytes,
+            items, sizeof(*items), false);
     return EncodeBatchCompatibilityInternal(codec, items, item_count);
 }
 
@@ -12301,6 +12646,17 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
 
 } // extern "C"
 
+static LEO_FORCE_INLINE bool IsGF8AVX2K2R1PlanTerminalEligible(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes)
+{
+    if (!plan ||
+        !IsGF8AVX2K2R1TerminalEligible(plan->codec, shard_bytes))
+        return false;
+    return plan->direct_xor && plan->missing_original_count == 1 &&
+        plan->missing_originals.size() == 1;
+}
+
 static leo2_result DecodePlanExecuteInternal(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
@@ -12320,6 +12676,41 @@ static leo2_result DecodePlanExecuteInternal(
         return LEO2_SUCCESS;
     if (shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
+    if (IsGF8AVX2K2R1PlanTerminalEligible(plan, shard_bytes))
+    {
+        const uint32_t missing = plan->missing_originals[0];
+        if (prevalidated)
+        {
+            if (missing >= 2 || !original || !recovery ||
+                !restored_original || original[missing] ||
+                !original[missing ^ 1U] || !recovery[0] ||
+                !restored_original[missing])
+                return LEO2_INTERNAL_ERROR;
+            const void* sources[2] = {
+                recovery[0], original[missing ^ 1U]
+            };
+            plan->codec->context->ops->xor_memory_dense(
+                restored_original[missing], sources, 2, shard_bytes);
+            return LEO2_SUCCESS;
+        }
+        if (protected_metadata_count > 2 ||
+            (protected_metadata_count != 0 && !protected_metadata))
+            return LEO2_INVALID_ARGUMENT;
+        AddressRange protected_ranges[2];
+        for (size_t i = 0; i < protected_metadata_count; ++i)
+        {
+            if (!protected_metadata[i].data ||
+                protected_metadata[i].bytes == 0 ||
+                !MakeRange(protected_metadata[i].data,
+                    static_cast<uint64_t>(protected_metadata[i].bytes),
+                    protected_ranges[i]))
+                return LEO2_INVALID_ARGUMENT;
+        }
+        return DecodeK2R1TerminalValidatedDynamic(
+            plan->codec, missing, shard_bytes, protected_ranges,
+            protected_metadata_count, original, recovery, restored_original,
+            scratch, scratch_bytes);
+    }
     if (PlanHasCompactDirectXor(plan))
     {
         if (!prevalidated)
@@ -12630,6 +13021,11 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
     void* scratch,
     size_t scratch_bytes)
 {
+    if (IsGF8AVX2K2R1PlanTerminalEligible(plan, shard_bytes))
+        return DecodeK2R1TerminalValidated<true, 0>(
+            plan->codec, plan->missing_originals[0], shard_bytes,
+            NULL, original, recovery, restored_original, scratch,
+            scratch_bytes);
     return DecodePlanExecuteInternal(
         plan, shard_bytes, original, recovery, restored_original,
         scratch, scratch_bytes, false, NULL, 0, false);
@@ -12698,6 +13094,18 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute_batch(
     const leo2_decode_batch_item* items,
     size_t item_count)
 {
+    if (item_count == 1 && items &&
+        IsGF8AVX2K2R1PlanTerminalEligible(plan, items[0].shard_bytes))
+    {
+        AddressRange item_range;
+        if (!MakeRange(items, sizeof(*items), item_range))
+            return LEO2_INVALID_ARGUMENT;
+        return DecodeK2R1TerminalValidated<true, 1>(
+            plan->codec, plan->missing_originals[0], items[0].shard_bytes,
+            &item_range, items[0].original, items[0].recovery,
+            items[0].restored_original, items[0].scratch,
+            items[0].scratch_bytes);
+    }
     return DecodeBatchCompatibilityInternal(plan, items, item_count);
 }
 
@@ -12765,6 +13173,12 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     if (!IsRepresentableOutput(scratch_bytes_out))
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
+    if (IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes))
+    {
+        size_t rounded_bytes = 0;
+        return RoundShardBytes(shard_bytes, rounded_bytes)
+            ? LEO2_SUCCESS : LEO2_INVALID_ARGUMENT;
+    }
     if (IsLegacyHighK1R1Codec(codec))
     {
         ScratchLayout layout;
@@ -12785,7 +13199,15 @@ LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     return LEO2_SUCCESS;
 }
 
-LEO2_EXPORT leo2_result leo2_decode(
+#if defined(_MSC_VER)
+#define LEO2_ONE_SHOT_GENERAL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_ONE_SHOT_GENERAL_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_ONE_SHOT_GENERAL_NOINLINE
+#endif
+
+static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
     const leo2_codec* codec,
     uint64_t shard_bytes,
     const uint8_t* original_present,
@@ -12861,6 +13283,34 @@ LEO2_EXPORT leo2_result leo2_decode(
     leo2_decode_plan_destroy(plan);
     return result;
 }
+
+LEO2_EXPORT leo2_result leo2_decode(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    if (IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes))
+    {
+        bool handled = false;
+        const leo2_result terminal_result = DecodeK2R1OneShotTerminal(
+            codec, shard_bytes, original_present, recovery_present,
+            original, recovery, restored_original, scratch, scratch_bytes,
+            handled);
+        if (terminal_result != LEO2_SUCCESS || handled)
+            return terminal_result;
+    }
+    return DecodeOneShotGeneral(
+        codec, shard_bytes, original_present, recovery_present,
+        original, recovery, restored_original, scratch, scratch_bytes);
+}
+
+#undef LEO2_ONE_SHOT_GENERAL_NOINLINE
 
 } // extern "C"
 

@@ -982,6 +982,159 @@ void test_public_r1_overlap_rejection(leo2_backend backend)
         "K=1 R=1 one-shot output/recovery-presence overlap");
 }
 
+void test_k2_avx2_terminal_contract(leo2_backend backend)
+{
+    R1Fixture fixture(backend, 2, 2048, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    const leo2_backend effective = leo2_context_backend(fixture.context);
+    if (effective != LEO2_BACKEND_AVX2 && effective != LEO2_BACKEND_GFNI)
+        return;
+
+    size_t one_shot_scratch_bytes = 1;
+    require_result(leo2_decode_scratch_size(
+        fixture.codec, fixture.bytes, &one_shot_scratch_bytes),
+        LEO2_SUCCESS, "K=2 terminal one-shot scratch query");
+    require(one_shot_scratch_bytes == 0,
+        "K=2 terminal one-shot unexpectedly requires data scratch");
+    size_t reusable_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        fixture.plan, fixture.bytes, &reusable_scratch_bytes),
+        LEO2_SUCCESS, "K=2 terminal reusable scratch query");
+    require(reusable_scratch_bytes != 0,
+        "K=2 terminal unexpectedly changed reusable-plan scratch contract");
+
+    const uint8_t recovery_present[1] = { 1 };
+    for (uint32_t missing = 0; missing < 2; ++missing)
+    {
+        std::vector<const void*> received = fixture.original;
+        received[missing] = NULL;
+        uint8_t original_present[2] = { 1, 1 };
+        original_present[missing] = 0;
+        Bytes restored_storage(fixture.bytes + 9U, 0xa6);
+        void* restored[2] = { NULL, NULL };
+        restored[missing] = &restored_storage[3];
+        require_result(leo2_decode(fixture.codec, fixture.bytes,
+            original_present, recovery_present, &received[0],
+            fixture.recovery, restored, NULL, 0), LEO2_SUCCESS,
+            "K=2 zero-scratch one-shot decode");
+        require(std::memcmp(restored[missing], fixture.original[missing],
+                    fixture.bytes) == 0,
+            "K=2 zero-scratch one-shot restored the wrong original");
+        for (size_t i = 0; i < 3; ++i)
+            require(restored_storage[i] == 0xa6,
+                "K=2 zero-scratch one-shot changed a prefix guard");
+        for (size_t i = 3 + fixture.bytes;
+             i < restored_storage.size(); ++i)
+            require(restored_storage[i] == 0xa6,
+                "K=2 zero-scratch one-shot changed a suffix guard");
+    }
+
+    /* A no-loss decode remains a true no-op and must not inspect shard or
+       output arrays.  Presence metadata itself is still validated. */
+    const uint8_t all_originals_present[2] = { 1, 1 };
+    const uint8_t parity_absent[1] = { 0 };
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        all_originals_present, parity_absent, NULL, NULL, NULL, NULL, 0),
+        LEO2_SUCCESS, "K=2 terminal no-loss no-op");
+    uint8_t invalid_original_presence[2] = { 2, 1 };
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        invalid_original_presence, parity_absent, NULL, NULL, NULL, NULL, 0),
+        LEO2_INVALID_ARGUMENT, "K=2 invalid original presence");
+    const uint8_t invalid_recovery_presence[1] = { 2 };
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        all_originals_present, invalid_recovery_presence,
+        NULL, NULL, NULL, NULL, 0), LEO2_INVALID_ARGUMENT,
+        "K=2 invalid recovery presence");
+
+    std::vector<const void*> received = fixture.original;
+    received[0] = NULL;
+    uint8_t original_present[2] = { 0, 1 };
+    Bytes ordinary_output(fixture.bytes, 0x4d);
+    void* restored[2] = { &ordinary_output[0], NULL };
+    require_result(leo2_decode_plan_execute(fixture.plan, fixture.bytes,
+        &received[0], fixture.recovery, restored, NULL, 0),
+        LEO2_SCRATCH_TOO_SMALL,
+        "K=2 terminal reusable plan accepted absent scratch");
+    AlignedScratch optional_scratch(65);
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        original_present, recovery_present, &received[0], fixture.recovery,
+        restored, optional_scratch.data(), 64), LEO2_SUCCESS,
+        "K=2 optional aligned scratch");
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        original_present, recovery_present, &received[0], fixture.recovery,
+        restored, static_cast<uint8_t*>(optional_scratch.data()) + 1, 64),
+        LEO2_BAD_ALIGNMENT, "K=2 optional misaligned scratch");
+    restored[0] = optional_scratch.data();
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        original_present, recovery_present, &received[0], fixture.recovery,
+        restored, optional_scratch.data(), 64), LEO2_OVERLAP,
+        "K=2 output/optional-scratch overlap");
+    restored[0] = &ordinary_output[0];
+    uint8_t* presence_in_scratch =
+        static_cast<uint8_t*>(optional_scratch.data());
+    presence_in_scratch[0] = 0;
+    presence_in_scratch[1] = 1;
+    require_result(leo2_decode(fixture.codec, fixture.bytes,
+        presence_in_scratch, recovery_present, &received[0], fixture.recovery,
+        restored, optional_scratch.data(), 64), LEO2_OVERLAP,
+        "K=2 presence/optional-scratch overlap");
+
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &encode_scratch_bytes),
+        LEO2_SUCCESS, "K=2 terminal encode scratch query");
+    AlignedScratch encode_scratch(encode_scratch_bytes);
+    void* overlapping_parity[1] = {
+        const_cast<void*>(fixture.original[1])
+    };
+    require_result(leo2_encode(fixture.codec, fixture.bytes,
+        &fixture.original[0], overlapping_parity, encode_scratch.data(),
+        encode_scratch_bytes), LEO2_OVERLAP,
+        "K=2 terminal encode input/output overlap");
+
+    leo2_encode_batch_item encode_item = {};
+    void* batch_parity[1] = { &encode_item };
+    encode_item.shard_bytes = fixture.bytes;
+    encode_item.original = &fixture.original[0];
+    encode_item.recovery = batch_parity;
+    encode_item.scratch = encode_scratch.data();
+    encode_item.scratch_bytes = encode_scratch_bytes;
+    require_result(leo2_encode_batch(
+        fixture.codec, &encode_item, 1), LEO2_OVERLAP,
+        "K=2 terminal batch output/descriptor overlap");
+
+    AlignedScratch reusable_scratch(reusable_scratch_bytes);
+    leo2_decode_batch_item decode_item = {};
+    void* batch_restored[2] = { &decode_item, NULL };
+    decode_item.shard_bytes = fixture.bytes;
+    decode_item.original = &received[0];
+    decode_item.recovery = fixture.recovery;
+    decode_item.restored_original = batch_restored;
+    decode_item.scratch = reusable_scratch.data();
+    decode_item.scratch_bytes = reusable_scratch_bytes;
+    require_result(leo2_decode_plan_execute_batch(
+        fixture.plan, &decode_item, 1), LEO2_OVERLAP,
+        "K=2 terminal batch output/descriptor overlap");
+
+    R1Fixture below_threshold(backend, 2, 2047, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    size_t below_scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(below_threshold.codec,
+        below_threshold.bytes, &below_scratch_bytes), LEO2_SUCCESS,
+        "K=2 below-threshold one-shot scratch query");
+    require(below_scratch_bytes != 0,
+        "K=2 terminal escaped below its measured byte threshold");
+
+    R1Fixture gf16_fixture(backend, 2, 2048, false, LEO2_FIELD_GF16,
+        LEO2_SHARD_LAYOUT_NATIVE_V1);
+    size_t gf16_scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(gf16_fixture.codec,
+        gf16_fixture.bytes, &gf16_scratch_bytes), LEO2_SUCCESS,
+        "K=2 GF16 one-shot scratch query");
+    require(gf16_scratch_bytes != 0,
+        "GF8 K=2 terminal changed the GF16 scratch contract");
+}
+
 void test_public_r1(leo2_backend backend)
 {
     /* K=1 is a copy-only code.  Its specialized validators do not stage any
@@ -1241,10 +1394,11 @@ void test_public_r1(leo2_backend backend)
     execute_and_check_decode(final_missing);
 
     test_public_r1_overlap_rejection(backend);
+    test_k2_avx2_terminal_contract(backend);
     test_public_r1_multi_item_batch(backend);
 
     // Shared immutable mature and newly compact/fused plans must be race-free.
-    static const uint32_t concurrent_counts[] = { 5, 9 };
+    static const uint32_t concurrent_counts[] = { 2, 5, 9 };
     for (size_t count_i = 0;
          count_i < sizeof(concurrent_counts) /
              sizeof(concurrent_counts[0]); ++count_i)
