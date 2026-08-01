@@ -222,10 +222,17 @@ bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled);
 
 /*
     Process-local benchmark control for the exact K=9/R=5/256-byte packed
-    terminal.  Invoke before context creation.  This remains outside the
-    public API and changes no codec or wire identity.
+    terminal.  Change it only while no encode call is executing.  This remains
+    outside the public API and changes no codec or wire identity.
 */
 bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled);
+
+/*
+    Process-local benchmark control for the exact K=9/R=6..8/256-byte packed
+    terminals.  Change it only while no encode call is executing.  This
+    remains outside the public API and changes no codec or wire identity.
+*/
+bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled);
 
 /*
     Pattern-dependent structural accounting for an immutable decode plan.

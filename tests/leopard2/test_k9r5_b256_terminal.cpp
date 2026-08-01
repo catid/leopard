@@ -46,7 +46,8 @@
 namespace {
 
 static const unsigned kOriginalCount = 9;
-static const unsigned kRecoveryCount = 5;
+static const unsigned kMinimumRecoveryCount = 5;
+static const unsigned kMaximumRecoveryCount = 8;
 static const size_t kShardBytes = 256;
 
 void Require(bool condition, const char* message)
@@ -122,26 +123,28 @@ void SetPackedPointers(
     uint8_t* input_base,
     uint8_t* output_base,
     const void** original,
-    void** recovery)
+    void** recovery,
+    unsigned recovery_count)
 {
     for (unsigned i = 0; i < kOriginalCount; ++i)
         original[i] = input_base + i * kShardBytes;
-    for (unsigned i = 0; i < kRecoveryCount; ++i)
+    for (unsigned i = 0; i < recovery_count; ++i)
         recovery[i] = output_base + i * kShardBytes;
 }
 
-void ResetOutput(uint8_t* output)
+void ResetOutput(uint8_t* output, unsigned recovery_count)
 {
-    std::memset(output, 0xa5, kRecoveryCount * kShardBytes);
+    std::memset(output, 0xa5, recovery_count * kShardBytes);
 }
 
 void CheckParity(
     const leopard2_test::BinaryField& field,
     const leopard2_test::Matrix& generator,
     const void* const* original,
-    void* const* recovery)
+    void* const* recovery,
+    unsigned recovery_count)
 {
-    for (unsigned parity = 0; parity < kRecoveryCount; ++parity)
+    for (unsigned parity = 0; parity < recovery_count; ++parity)
     {
         if (!recovery[parity])
             continue;
@@ -159,34 +162,61 @@ void CheckParity(
                     field.multiply(row[source], value));
             }
             Require(output[offset] == expected,
-                "K9/R5/256 parity differs from the independent oracle");
+                "K9/256 parity differs from the independent oracle");
         }
     }
 }
 
-void RequireTerminalCalls(uint64_t expected, const char* message)
+void RequireTerminalCalls(
+    unsigned recovery_count,
+    uint64_t expected,
+    const char* message)
 {
     const leopard::ff8::TestOnlyHighEncodeCounts counts =
         leopard::ff8::TestOnlyGetHighEncodeCounts();
-    Require(counts.k9r5_tail_calls == expected, message);
+    if (recovery_count == 5)
+    {
+        Require(counts.k9r5_tail_calls == expected, message);
+        Require(counts.k9r6r8_tail_calls == 0,
+            "R=5 encode entered the R=6..8 terminal counter");
+    }
+    else
+    {
+        Require(counts.k9r6r8_tail_calls == expected, message);
+        Require(counts.k9r5_tail_calls == 0,
+            "R=6..8 encode entered the R=5 terminal counter");
+    }
 }
 
-void ExerciseAVX2Terminal(leo2_context* context)
+bool SetTerminalEnabledForDiagnostics(
+    unsigned recovery_count,
+    bool enabled)
+{
+    return recovery_count == 5
+        ? leopard2_internal::
+            SetK9R5B256TerminalEnabledForDiagnostics(enabled)
+        : leopard2_internal::
+            SetK9R6R8B256TerminalEnabledForDiagnostics(enabled);
+}
+
+void ExerciseAVX2Terminal(
+    leo2_context* context,
+    unsigned recovery_count)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
-        kOriginalCount, kRecoveryCount,
+        kOriginalCount, recovery_count,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-        NULL, &codec), LEO2_SUCCESS, "create K9/R5 terminal codec");
+        NULL, &codec), LEO2_SUCCESS, "create K9 terminal codec");
 
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
         codec, kShardBytes, &scratch_bytes), LEO2_SUCCESS,
-        "query K9/R5 terminal scratch");
-    Require(scratch_bytes != 0, "K9/R5 scratch query returned zero");
+        "query K9 terminal scratch");
+    Require(scratch_bytes != 0, "K9 scratch query returned zero");
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
     AlignedBuffer input(kOriginalCount * kShardBytes + 8);
-    AlignedBuffer output(kRecoveryCount * kShardBytes + 8);
+    AlignedBuffer output(recovery_count * kShardBytes + 8);
     FillInput(input.bytes());
 
     const leopard2_test::BinaryField field =
@@ -194,142 +224,146 @@ void ExerciseAVX2Terminal(leo2_context* context)
     const leopard2_test::ProfileLayout layout =
         leopard2_test::make_profile_layout(
             leopard2_test::kLegacyHigh,
-            kOriginalCount, kRecoveryCount);
+            kOriginalCount, recovery_count);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
 
     const void* original[kOriginalCount];
-    void* recovery[kRecoveryCount];
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
+    void* recovery[kMaximumRecoveryCount];
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
 
-    ResetOutput(output.bytes());
+    ResetOutput(output.bytes(), recovery_count);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute packed public K9/R5 terminal");
-    RequireTerminalCalls(1,
-        "packed public encode did not select the K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute packed public K9 terminal");
+    RequireTerminalCalls(recovery_count, 1,
+        "packed public encode did not select the K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
 
-    ResetOutput(output.bytes());
+    ResetOutput(output.bytes(), recovery_count);
     leo2_encode_batch_item item = {
         kShardBytes, original, recovery, scratch.data(), scratch_bytes
     };
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
-        "execute packed one-item K9/R5 batch terminal");
-    RequireTerminalCalls(1,
-        "one-item batch did not select the K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute packed one-item K9 batch terminal");
+    RequireTerminalCalls(recovery_count, 1,
+        "one-item batch did not select the K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
 
     SetPackedPointers(
-        input.bytes() + 1, output.bytes() + 3, original, recovery);
+        input.bytes() + 1, output.bytes() + 3, original, recovery,
+        recovery_count);
     FillInput(input.bytes() + 1);
-    ResetOutput(output.bytes() + 3);
+    ResetOutput(output.bytes() + 3, recovery_count);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute unaligned packed K9/R5 terminal");
-    RequireTerminalCalls(1,
-        "unaligned packed encode missed the K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute unaligned packed K9 terminal");
+    RequireTerminalCalls(recovery_count, 1,
+        "unaligned packed encode missed the K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
 
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
     FillInput(input.bytes());
-    ResetOutput(output.bytes());
+    ResetOutput(output.bytes(), recovery_count);
     RequireResult(leo2_test_codec_set_encode_mode(
         codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
-        "force mature K9/R5 transform");
+        "force mature K9 transform");
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute forced mature K9/R5 transform");
-    RequireTerminalCalls(0,
-        "forced transform unexpectedly entered the K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute forced mature K9 transform");
+    RequireTerminalCalls(recovery_count, 0,
+        "forced transform unexpectedly entered the K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
     RequireResult(leo2_test_codec_set_encode_mode(
         codec, LEO2_TEST_ENCODE_AUTO), LEO2_SUCCESS,
-        "restore K9/R5 AUTO encode mode");
+        "restore K9 AUTO encode mode");
 
-    Require(leopard2_internal::
-            SetK9R5B256TerminalEnabledForDiagnostics(false),
-        "disable the K9/R5 benchmark terminal");
-    ResetOutput(output.bytes());
+    Require(SetTerminalEnabledForDiagnostics(recovery_count, false),
+        "disable the K9 benchmark terminal");
+    ResetOutput(output.bytes(), recovery_count);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute same-binary K9/R5 control route");
-    RequireTerminalCalls(0,
-        "same-binary control unexpectedly entered the K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
-    Require(leopard2_internal::
-            SetK9R5B256TerminalEnabledForDiagnostics(true),
-        "restore the K9/R5 benchmark terminal");
+        "execute same-binary K9 control route");
+    RequireTerminalCalls(recovery_count, 0,
+        "same-binary control unexpectedly entered the K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
+    Require(SetTerminalEnabledForDiagnostics(recovery_count, true),
+        "restore the K9 benchmark terminal");
 
-    ResetOutput(output.bytes());
+    ResetOutput(output.bytes(), recovery_count);
     recovery[3] = NULL;
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute sparse K9/R5 fallback");
-    RequireTerminalCalls(0,
-        "sparse output entered the dense K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute sparse K9 fallback");
+    RequireTerminalCalls(recovery_count, 0,
+        "sparse output entered the dense K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
     for (size_t i = 0; i < kShardBytes; ++i)
         Require(output.bytes()[3 * kShardBytes + i] == 0xa5,
             "sparse fallback modified a null parity shard");
 
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
     std::vector<uint8_t> detached(kShardBytes);
     std::memcpy(&detached[0], original[8], kShardBytes);
     original[8] = &detached[0];
-    ResetOutput(output.bytes());
+    ResetOutput(output.bytes(), recovery_count);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
-        "execute non-packed K9/R5 fallback");
-    RequireTerminalCalls(0,
-        "non-packed source entered the packed K9/R5 terminal");
-    CheckParity(field, generator, original, recovery);
+        "execute non-packed K9 fallback");
+    RequireTerminalCalls(recovery_count, 0,
+        "non-packed source entered the packed K9 terminal");
+    CheckParity(field, generator, original, recovery, recovery_count);
 
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
-    ResetOutput(output.bytes());
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
+    ResetOutput(output.bytes(), recovery_count);
     const std::vector<uint8_t> output_before(
-        output.bytes(), output.bytes() + kRecoveryCount * kShardBytes);
+        output.bytes(), output.bytes() + recovery_count * kShardBytes);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes - 1), LEO2_SCRATCH_TOO_SMALL,
-        "reject undersized K9/R5 terminal scratch");
-    RequireTerminalCalls(0,
-        "undersized scratch reached the K9/R5 terminal");
+        "reject undersized K9 terminal scratch");
+    RequireTerminalCalls(recovery_count, 0,
+        "undersized scratch reached the K9 terminal");
     Require(std::memcmp(output.bytes(), &output_before[0],
             output_before.size()) == 0,
-        "undersized scratch modified K9/R5 output");
+        "undersized scratch modified K9 output");
 
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.bytes() + 1, scratch_bytes), LEO2_BAD_ALIGNMENT,
-        "reject misaligned K9/R5 terminal scratch");
-    RequireTerminalCalls(0,
-        "misaligned scratch reached the K9/R5 terminal");
+        "reject misaligned K9 terminal scratch");
+    RequireTerminalCalls(recovery_count, 0,
+        "misaligned scratch reached the K9 terminal");
 
-    for (unsigned i = 0; i < kRecoveryCount; ++i)
+    for (unsigned i = 0; i < recovery_count; ++i)
         recovery[i] = input.bytes() + i * kShardBytes;
     const std::vector<uint8_t> input_before(
         input.bytes(), input.bytes() + kOriginalCount * kShardBytes);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_OVERLAP,
-        "reject overlapping packed K9/R5 slabs");
-    RequireTerminalCalls(0,
-        "overlapping slabs reached the K9/R5 terminal");
+        "reject overlapping packed K9 slabs");
+    RequireTerminalCalls(recovery_count, 0,
+        "overlapping slabs reached the K9 terminal");
     Require(std::memcmp(input.bytes(), &input_before[0],
             input_before.size()) == 0,
-        "overlap rejection modified K9/R5 input");
+        "overlap rejection modified K9 input");
 
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
     alignas(64) uint8_t protected_storage[
-        kRecoveryCount * kShardBytes] = {};
+        kMaximumRecoveryCount * kShardBytes] = {};
     leo2_encode_batch_item* const protected_item =
         new (protected_storage) leo2_encode_batch_item;
     protected_item->shard_bytes = kShardBytes;
@@ -337,14 +371,14 @@ void ExerciseAVX2Terminal(leo2_context* context)
     protected_item->recovery = recovery;
     protected_item->scratch = scratch.data();
     protected_item->scratch_bytes = scratch_bytes;
-    for (unsigned i = 0; i < kRecoveryCount; ++i)
+    for (unsigned i = 0; i < recovery_count; ++i)
         recovery[i] = protected_storage + i * kShardBytes;
     const leo2_encode_batch_item protected_before = *protected_item;
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, protected_item, 1),
-        LEO2_OVERLAP, "reject K9/R5 output/batch-metadata overlap");
-    RequireTerminalCalls(0,
-        "metadata overlap reached the K9/R5 terminal");
+        LEO2_OVERLAP, "reject K9 output/batch-metadata overlap");
+    RequireTerminalCalls(recovery_count, 0,
+        "metadata overlap reached the K9 terminal");
     Require(std::memcmp(protected_item, &protected_before,
             sizeof(*protected_item)) == 0,
         "metadata rejection modified the batch descriptor");
@@ -352,7 +386,7 @@ void ExerciseAVX2Terminal(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
-void ExerciseScalarFallback()
+void ExerciseScalarFallback(unsigned recovery_count)
 {
     leo2_context_options options = {};
     options.struct_size = sizeof(options);
@@ -360,41 +394,42 @@ void ExerciseScalarFallback()
     options.thread_count = 1;
     leo2_context* context = NULL;
     RequireResult(leo2_context_create(&options, &context), LEO2_SUCCESS,
-        "create scalar K9/R5 fallback context");
+        "create scalar K9 fallback context");
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
-        kOriginalCount, kRecoveryCount,
+        kOriginalCount, recovery_count,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-        NULL, &codec), LEO2_SUCCESS, "create scalar K9/R5 codec");
+        NULL, &codec), LEO2_SUCCESS, "create scalar K9 codec");
 
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
         codec, kShardBytes, &scratch_bytes), LEO2_SUCCESS,
-        "query scalar K9/R5 scratch");
+        "query scalar K9 scratch");
     AlignedBuffer scratch(scratch_bytes);
     AlignedBuffer input(kOriginalCount * kShardBytes);
-    AlignedBuffer output(kRecoveryCount * kShardBytes);
+    AlignedBuffer output(recovery_count * kShardBytes);
     FillInput(input.bytes());
     const void* original[kOriginalCount];
-    void* recovery[kRecoveryCount];
-    SetPackedPointers(input.bytes(), output.bytes(), original, recovery);
+    void* recovery[kMaximumRecoveryCount];
+    SetPackedPointers(
+        input.bytes(), output.bytes(), original, recovery, recovery_count);
 
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch.size()), LEO2_SUCCESS,
-        "execute scalar K9/R5 fallback");
-    RequireTerminalCalls(0,
-        "scalar context entered the AVX2 K9/R5 terminal");
+        "execute scalar K9 fallback");
+    RequireTerminalCalls(recovery_count, 0,
+        "scalar context entered the AVX2 K9 terminal");
 
     const leopard2_test::BinaryField field =
         leopard2_test::make_legacy_gf8();
     const leopard2_test::ProfileLayout layout =
         leopard2_test::make_profile_layout(
             leopard2_test::kLegacyHigh,
-            kOriginalCount, kRecoveryCount);
+            kOriginalCount, recovery_count);
     const leopard2_test::Matrix generator =
         leopard2_test::direct_systematic_generator(field, layout);
-    CheckParity(field, generator, original, recovery);
+    CheckParity(field, generator, original, recovery, recovery_count);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);
 }
@@ -415,20 +450,24 @@ int main()
         if (context_result == LEO2_UNSUPPORTED)
         {
             std::printf(
-                "K9/R5/256 AVX2 terminal test skipped: AVX2 unavailable\n");
+                "K9/R=5..8/256 AVX2 terminal test skipped: AVX2 unavailable\n");
             return 0;
         }
         RequireResult(context_result, LEO2_SUCCESS,
-            "create AVX2 K9/R5 terminal context");
-        ExerciseAVX2Terminal(context);
+            "create AVX2 K9 terminal context");
+        for (unsigned recovery_count = kMinimumRecoveryCount;
+             recovery_count <= kMaximumRecoveryCount; ++recovery_count)
+            ExerciseAVX2Terminal(context, recovery_count);
         leo2_context_destroy(context);
-        ExerciseScalarFallback();
-        std::printf("K9/R5/256 packed AVX2 terminal checks passed\n");
+        for (unsigned recovery_count = kMinimumRecoveryCount;
+             recovery_count <= kMaximumRecoveryCount; ++recovery_count)
+            ExerciseScalarFallback(recovery_count);
+        std::printf("K9/R=5..8/256 packed AVX2 terminal checks passed\n");
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::fprintf(stderr, "K9/R5/256 terminal failure: %s\n",
+        std::fprintf(stderr, "K9/R=5..8/256 terminal failure: %s\n",
             error.what());
         return 1;
     }

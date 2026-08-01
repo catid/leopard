@@ -71,6 +71,7 @@ static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighK9R5TailCalls(0);
+static std::atomic<uint64_t> TestHighK9R6R8TailCalls(0);
 static std::atomic<uint64_t> TestHighOutputBlocks(0);
 static std::atomic<uint64_t> TestHighFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
@@ -2968,25 +2969,33 @@ void ReedSolomonEncodeT4Batch(
 }
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
-void ReedSolomonEncodeK9R5T8(
+void ReedSolomonEncodeK9T8(
     const backend::Ops& ops,
     const void* const* data,
     void* const* work,
+    uint32_t recovery_count,
     uint64_t byte_count)
 {
     LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
     LEO_DEBUG_ASSERT(ops.ff8_high_encode_one_block != NULL);
     LEO_DEBUG_ASSERT((ops.ff8_high_encode_one_block_sides & 8U) != 0);
+    LEO_DEBUG_ASSERT(recovery_count >= 5 && recovery_count <= 8);
     LEO_DEBUG_ASSERT(byte_count == 256);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     TestHighIFFTButterfly4OutCalls.fetch_add(2, std::memory_order_relaxed);
     TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
     TestHighTailColumnCalls.fetch_add(1, std::memory_order_relaxed);
-    TestHighK9R5TailCalls.fetch_add(1, std::memory_order_relaxed);
+    if (recovery_count == 5)
+        TestHighK9R5TailCalls.fetch_add(1, std::memory_order_relaxed);
+    else
+        TestHighK9R6R8TailCalls.fetch_add(1, std::memory_order_relaxed);
 #endif
     ops.ff8_high_encode_one_block(
-        data, work, 8U | backend::kFF8HighEncodeK9R5Tail,
+        data, work,
+        8U | backend::kFF8HighEncodeK9Tail |
+            (recovery_count <<
+                backend::kFF8HighEncodeK9OutputCountShift),
         FFTSkewStorage + 8, FFTSkewStorage, byte_count);
 }
 
@@ -3875,6 +3884,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighK9R5TailCalls.store(0, std::memory_order_relaxed);
+    TestHighK9R6R8TailCalls.store(0, std::memory_order_relaxed);
 }
 
 
@@ -3901,6 +3911,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighHalfTailColumnCalls.load(std::memory_order_relaxed);
     result.k9r5_tail_calls =
         TestHighK9R5TailCalls.load(std::memory_order_relaxed);
+    result.k9r6r8_tail_calls =
+        TestHighK9R6R8TailCalls.load(std::memory_order_relaxed);
     return result;
 }
 
