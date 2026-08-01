@@ -2461,6 +2461,63 @@ static bool TestXor(const Ops& ops)
             }
         }
 
+        if (ops.xor_memory_sources_group4)
+        {
+            /* Qualify every four-source boundary independently from the
+               mature eight-source reducer. */
+            ops.xor_memory_sources_group4(
+                NULL, NULL, NULL, UINT32_MAX, 0);
+            static const unsigned live_counts[] = {
+                0, 1, 2, 3, 4, 5, 7, 8, 9, 15, 16, 17, 23
+            };
+            static const unsigned hole_positions[] = {
+                24, 0, 1, 3, 4, 7, 8, 15, 16
+            };
+            for (size_t live_i = 0;
+                 live_i < sizeof(live_counts) / sizeof(live_counts[0]);
+                 ++live_i)
+            {
+                const unsigned live = live_counts[live_i];
+                for (size_t hole_i = 0;
+                     hole_i < sizeof(hole_positions) /
+                         sizeof(hole_positions[0]);
+                     ++hole_i)
+                {
+                    const unsigned hole = hole_positions[hole_i];
+                    if (hole != 24 && hole > live)
+                        continue;
+                    const unsigned source_count = live + (hole != 24);
+                    unsigned data_i = 0;
+                    for (unsigned source_i = 0;
+                         source_i < source_count; ++source_i)
+                    {
+                        if (source_i == hole)
+                            reduction_sources[source_i] = NULL;
+                        else
+                            reduction_sources[source_i] =
+                                reduction_data[data_i++] + 1;
+                    }
+                    std::memset(output, 0x4e, sizeof(output));
+                    std::memset(expected, 0x4e, sizeof(expected));
+                    for (uint64_t byte = 0; byte < bytes; ++byte)
+                    {
+                        uint8_t value = source[byte + 1];
+                        for (unsigned source_i = 0;
+                             source_i < source_count; ++source_i)
+                            if (reduction_sources[source_i])
+                                value ^= static_cast<const uint8_t*>(
+                                    reduction_sources[source_i])[byte];
+                        expected[byte + 1] = value;
+                    }
+                    ops.xor_memory_sources_group4(
+                        output + 1, source + 1, reduction_sources,
+                        source_count, bytes);
+                    if (std::memcmp(output, expected, sizeof(output)) != 0)
+                        return false;
+                }
+            }
+        }
+
         if (ops.xor_memory_dense)
         {
             const void* dense_sources[4] = {
@@ -2757,10 +2814,15 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         (ops.xor_memory_sources_fused_final != NULL))
         return false;
     if ((ops.kind == LEO2_BACKEND_AVX2) !=
+        (ops.xor_memory_sources_group4 != NULL))
+        return false;
+    if ((ops.kind == LEO2_BACKEND_AVX2) !=
         (ops.ff8_high_encode_t4_batch != NULL))
         return false;
 #else
     if (ops.xor_memory_sources_fused_final)
+        return false;
+    if (ops.xor_memory_sources_group4)
         return false;
     if (ops.ff8_high_encode_t4_batch)
         return false;

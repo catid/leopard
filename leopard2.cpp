@@ -6100,6 +6100,35 @@ static LEO_FORCE_INLINE bool IsFusedFinalR1XorEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool UseGroup4R1Xor(
+    const leo2_codec* codec,
+    const leopard::backend::Ops& ops,
+    size_t shard_bytes)
+{
+    /* A complete pinned all-K screen found a contiguous conservative region
+       where four live sources per destination traversal beat the mature
+       eight-source reduction in both encode and one-loss decode.  Keep the
+       policy exact until adjacent byte sizes have equally broad evidence. */
+    return shard_bytes == 4096 && codec->field == LEO2_FIELD_GF8 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->original_count >= 86 && codec->original_count <= 212 &&
+        ops.xor_memory_sources_group4 != NULL;
+}
+
+static LEO_FORCE_INLINE leopard::backend::XorMemorySources
+SelectCoarseR1XorReduction(
+    const leo2_codec* codec,
+    const leopard::backend::Ops& ops,
+    size_t shard_bytes)
+{
+    if (UseGroup4R1Xor(codec, ops, shard_bytes))
+        return ops.xor_memory_sources_group4;
+    if (IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
+        UseFusedFinalR1Xor(codec->original_count, shard_bytes))
+        return ops.xor_memory_sources_fused_final;
+    return ops.xor_memory_sources;
+}
+
 static LEO_FORCE_INLINE bool UseDenseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
@@ -6140,10 +6169,7 @@ static void ExecuteSingleSideEncode(
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
         const leopard::backend::XorMemorySources reduce =
-            IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
-                    UseFusedFinalR1Xor(
-                        codec->original_count, shard_bytes) ?
-                ops.xor_memory_sources_fused_final : ops.xor_memory_sources;
+            SelectCoarseR1XorReduction(codec, ops, shard_bytes);
         reduce(recovery[0], original[0], original + 1,
             codec->original_count - 1, shard_bytes);
         return;
@@ -6176,10 +6202,7 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
         const leopard::backend::XorMemorySources reduce =
-            IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
-                    UseFusedFinalR1Xor(
-                        codec->original_count, shard_bytes) ?
-                ops.xor_memory_sources_fused_final : ops.xor_memory_sources;
+            SelectCoarseR1XorReduction(codec, ops, shard_bytes);
         reduce(restored_original[missing], recovery[0],
             original, codec->original_count, shard_bytes);
         return;

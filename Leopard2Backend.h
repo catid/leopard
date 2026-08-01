@@ -512,6 +512,11 @@ struct Ops
     // Optional runtime-selected copy primitive.  Callers must already have
     // proved disjoint source/destination ranges.
     CopyMemory copy_memory;
+    // Optional pure-AVX2 four-source reduction.  This remains separate from
+    // xor_memory_sources so measured R=1 policies can select its lower live
+    // register count without perturbing the mature eight-source callback or
+    // changing another backend's code generation.
+    XorMemorySources xor_memory_sources_group4;
 };
 
 struct X86Features
@@ -572,6 +577,13 @@ const Ops* InitializeSSSE3(const InitializeArgs& args);
 // arities cannot perturb mature backend function layout or inlining.
 #if !defined(NO_LEO_HAS_FF8)
 void AVX2XorMemorySourcesFusedFinal(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count);
+
+void AVX2XorMemorySourcesGroup4(
     void* destination,
     const void* initial_source,
     const void* const* sources,

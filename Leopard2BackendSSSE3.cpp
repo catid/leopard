@@ -2055,6 +2055,8 @@ static const Ops SSSE3Ops = {
     , NULL
     // copy_memory
     , NULL
+    // xor_memory_sources_group4
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

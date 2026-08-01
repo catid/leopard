@@ -7413,6 +7413,12 @@ static const Ops AVX2Ops = {
 #else
     , NULL
 #endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    , AVX2XorMemorySourcesGroup4
+#else
+    , NULL
+#endif
 };
 
 #if defined(LEO2_GFNI_VARIANT)

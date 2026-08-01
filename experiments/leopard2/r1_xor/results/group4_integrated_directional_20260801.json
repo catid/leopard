@@ -1,0 +1,115 @@
+{
+  "schema": "leopard2-r1-group4-integrated-checkpoint/v1",
+  "date_utc": "2026-08-01",
+  "disposition": "retain_narrow_candidate_pending_clean_commit_exact_main_abba",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "recovery_count": 1,
+    "shard_bytes": 4096,
+    "selected_original_count_minimum": 86,
+    "selected_original_count_maximum": 212
+  },
+  "implementation": {
+    "base_commit": "6503bcf005222c110bcf37a272f855a1980d6828",
+    "base_tree": "738dbfc9d731dadd96b4b246eb9ca946820f5eab",
+    "candidate_diff_sha256": "872b73bd9cafdf0376f1eb15a080c8597440c08641b619b0777868ceb60b0ada",
+    "control_executable_sha256": "a663823f0ad008fbafad71f45204540fb3bc20035a5bec857e5f549ca156c3b6",
+    "candidate_executable_sha256": "68093d0d125b3250fa4ef130137dcb8fea63b61b66a34c761376d8656537db5d",
+    "group4_symbol_text_bytes": 887,
+    "avx2_xor_object_text_growth_bytes": 899,
+    "avx2_xor_object_evex_instruction_count": 0,
+    "wire_format_changed": false
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "gcc": "13.3.0",
+    "clang": "18.1.3"
+  },
+  "correctness": {
+    "release_context_backends": "pass",
+    "release_r1_xor": "pass",
+    "release_memory_cap_mib": 256,
+    "release_peak_rss_kib": {
+      "context_backends": 212788,
+      "r1_xor": 212332
+    },
+    "gf8_disabled_release_build": "pass",
+    "clang_asan_ubsan_context_backends": "pass",
+    "clang_asan_ubsan_r1_xor": "pass",
+    "sanitizer_memory_cap_mib": 768,
+    "sanitizer_peak_rss_kib": {
+      "context_backends": 688244,
+      "r1_xor_with_64_mib_quarantine": 500968
+    },
+    "sanitizer_note": "Initial 384-MiB context and 768-MiB default-quarantine R1 scopes were killed by their own MemoryMax before completing. The controlling session was unaffected. The successful R1 run retained ASan, UBSan, leak detection, redzones, and halt-on-error while bounding ASan quarantine at 64 MiB."
+  },
+  "directional_abba": {
+    "artifact": "/tmp/leopard-r1-group4-integrated-abba-6503bcf-v3/result.json",
+    "artifact_sha256": "feac497bd0c03cde3ccaca855439a7ba26e394363f12833dc8446d439a637387",
+    "affinity_report": "/tmp/leopard-r1-group4-integrated-abba-6503bcf-v3/affinity.json",
+    "affinity_report_sha256": "f18da683d7b903a88b1c780a16b5620709063348e035d8c268c93d1dc0467013",
+    "rounds": 5,
+    "process_order_per_round": "control,candidate,candidate,control",
+    "iterations_per_process": 15,
+    "warmup_calls_per_process": 32,
+    "reuse": 128,
+    "benchmark_cpu": 15,
+    "reserved_sibling": 31,
+    "sibling_nonidle_jiffies": 0,
+    "binary_identity_stable": true,
+    "promotion_evidence": false,
+    "non_authoritative_reason": "The legacy affinity supervisor deliberately rejected authoritative completion after mutating external task affinities because finite procfs scans cannot exclude an in-flight clone. Timings are retained only as directional selector evidence; clean-commit persistent-containment ABBA remains required.",
+    "target_control_over_candidate_geometric_mean_and_exhaustive_round_bootstrap95": {
+      "K86": {
+        "encode": [1.117212, 1.108899, 1.128896],
+        "decode_execution": [1.079303, 1.061015, 1.097907]
+      },
+      "K128": {
+        "encode": [1.140216, 1.131867, 1.148886],
+        "decode_execution": [1.135955, 1.129593, 1.142530]
+      },
+      "K160": {
+        "encode": [1.102459, 1.074701, 1.122751],
+        "decode_execution": [1.104556, 1.071304, 1.128689]
+      },
+      "K200": {
+        "encode": [1.155809, 1.121367, 1.182524],
+        "decode_execution": [1.097777, 1.068590, 1.126832]
+      },
+      "K212": {
+        "encode": [1.099767, 1.067728, 1.125843],
+        "decode_execution": [1.116855, 1.093556, 1.142848]
+      }
+    },
+    "controls": {
+      "cells": [
+        "K49/B4096",
+        "K84/B4096",
+        "K85/B4096",
+        "K128/B4095",
+        "K128/B4097",
+        "K213/B4096",
+        "K214/B4096",
+        "K240/B4096"
+      ],
+      "largest_geometric_mean_candidate_regression_fraction": 0.009,
+      "neighbor_regression_threshold_fraction": 0.02,
+      "threshold_pass": true
+    }
+  },
+  "rejected_wider_selector": {
+    "original_count_minimum": 85,
+    "original_count_maximum": 213,
+    "artifact": "/tmp/leopard-r1-group4-integrated-abba-6503bcf-v2/result.json",
+    "artifact_sha256": "98224a71eb2fe3f2b61ed85edc61b1fe45ec755deb8fd4540f012fca58c0c987",
+    "reason": "K=85 decode and K=213 encode/decode did not consistently clear the five-percent project threshold, so both boundary counts were returned to the mature eight-source callback."
+  },
+  "next_gate": "Commit the narrowed implementation, rebuild from the clean commit, then run persistent-containment exact-Leopard1 ABBA at K=85,86,128,160,200,212,213 and the 4095/4096/4097 byte boundary."
+}

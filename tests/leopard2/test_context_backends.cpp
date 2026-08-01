@@ -122,6 +122,7 @@ struct TraceState
     std::atomic<uint64_t> xor_two_to_one_calls;
     std::atomic<uint64_t> xor_sources_calls;
     std::atomic<uint64_t> xor_fused_final_sources_calls;
+    std::atomic<uint64_t> xor_group4_sources_calls;
     std::atomic<uint64_t> xor_dense_calls;
     std::atomic<uint64_t> ff8_ifft_four_calls;
     std::atomic<uint64_t> ff8_ifft_four_out_calls;
@@ -224,6 +225,20 @@ void trace_xor_fused_final_sources(
     g_trace.xor_fused_final_sources_calls.fetch_add(
         1, std::memory_order_relaxed);
     trace_delegate()->xor_memory_sources_fused_final(
+        destination, initial_source, sources, source_count, bytes);
+}
+
+void trace_xor_group4_sources(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t bytes)
+{
+    g_trace.xor_sources_calls.fetch_add(1, std::memory_order_relaxed);
+    g_trace.xor_group4_sources_calls.fetch_add(
+        1, std::memory_order_relaxed);
+    trace_delegate()->xor_memory_sources_group4(
         destination, initial_source, sources, source_count, bytes);
 }
 
@@ -566,6 +581,8 @@ public:
         if (entry.table->xor_memory_sources_fused_final)
             tracing_.xor_memory_sources_fused_final =
                 trace_xor_fused_final_sources;
+        if (entry.table->xor_memory_sources_group4)
+            tracing_.xor_memory_sources_group4 = trace_xor_group4_sources;
         if (entry.table->xor_memory_dense)
             tracing_.xor_memory_dense = trace_xor_dense;
         tracing_.ff16_ifft_butterfly2 = trace_ff16_ifft;
@@ -597,6 +614,8 @@ public:
         g_trace.xor_two_to_one_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_sources_calls.store(0, std::memory_order_relaxed);
         g_trace.xor_fused_final_sources_calls.store(
+            0, std::memory_order_relaxed);
+        g_trace.xor_group4_sources_calls.store(
             0, std::memory_order_relaxed);
         g_trace.xor_dense_calls.store(0, std::memory_order_relaxed);
         g_trace.ff8_ifft_four_calls.store(0, std::memory_order_relaxed);
@@ -663,6 +682,11 @@ public:
     uint64_t xor_fused_final_sources_calls() const
     {
         return g_trace.xor_fused_final_sources_calls.load(
+            std::memory_order_relaxed);
+    }
+    uint64_t xor_group4_sources_calls() const
+    {
+        return g_trace.xor_group4_sources_calls.load(
             std::memory_order_relaxed);
     }
     uint64_t xor_dense_calls() const
@@ -1715,7 +1739,8 @@ void require_r1_xor_trace(
     bool expect_coarse,
     bool expect_fused,
     bool expect_dense,
-    const std::string& operation)
+    const std::string& operation,
+    bool expect_group4 = false)
 {
     const uint64_t expected_pairs = (original_count - 1U) / 2U;
     const uint64_t expected_single = (original_count - 1U) % 2U;
@@ -1728,6 +1753,8 @@ void require_r1_xor_trace(
             operation + " did not select exactly one dense reduction");
         require(trace.xor_fused_final_sources_calls() == 0,
             operation + " unexpectedly selected the fused reduction");
+        require(trace.xor_group4_sources_calls() == 0,
+            operation + " unexpectedly selected the group-four reduction");
     }
     else if (expect_coarse)
     {
@@ -1739,6 +1766,9 @@ void require_r1_xor_trace(
         require(trace.xor_fused_final_sources_calls() ==
                 (expect_fused ? 1U : 0U),
             operation + " selected the wrong coarse reduction callback");
+        require(trace.xor_group4_sources_calls() ==
+                (expect_group4 ? 1U : 0U),
+            operation + " selected the wrong group-four reduction callback");
     }
     else
     {
@@ -1749,6 +1779,8 @@ void require_r1_xor_trace(
             operation + " did not retain the exact paired/single reduction");
         require(trace.xor_fused_final_sources_calls() == 0,
             operation + " unexpectedly selected the fused reduction");
+        require(trace.xor_group4_sources_calls() == 0,
+            operation + " unexpectedly selected the group-four reduction");
     }
 }
 
@@ -1760,7 +1792,8 @@ void execute_r1_xor_dispatch_case(
     bool expect_coarse,
     leo2_field field = LEO2_FIELD_GF8,
     bool expect_fused = false,
-    bool expect_dense = false)
+    bool expect_dense = false,
+    bool expect_group4 = false)
 {
     const CodecCase test_case = {
         original_count, 1, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -1781,7 +1814,7 @@ void execute_r1_xor_dispatch_case(
         entry.context, test_case, originals, &codec);
     require_r1_xor_trace(
         trace, original_count, expect_coarse, expect_fused, expect_dense,
-        identity + " encode");
+        identity + " encode", expect_group4);
 
     std::vector<uint8_t> original_present(original_count, 1);
     std::vector<uint8_t> recovery_present(1, 1);
@@ -1820,7 +1853,7 @@ void execute_r1_xor_dispatch_case(
     require(restored == originals[0], identity + " restored data mismatch");
     require_r1_xor_trace(
         trace, original_count, expect_coarse, expect_fused, expect_dense,
-        identity + " decode");
+        identity + " decode", expect_group4);
 
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
@@ -1924,6 +1957,25 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 22, 1024U * 1024U + 1U, true, false },
         { 23, 1024U * 1024U, true, true },
         { 23, 1024U * 1024U + 1U, true, false },
+        /* Pure-AVX2 four-source grouping: exact K and byte boundaries. */
+        { 84, 4095, true, false },
+        { 84, 4096, true, false },
+        { 84, 4097, true, false },
+        { 85, 4095, true, false },
+        { 85, 4096, true, false },
+        { 85, 4097, true, false },
+        { 86, 4095, true, false },
+        { 86, 4096, true, false },
+        { 86, 4097, true, false },
+        { 212, 4095, true, false },
+        { 212, 4096, true, false },
+        { 212, 4097, true, false },
+        { 213, 4095, true, false },
+        { 213, 4096, true, false },
+        { 213, 4097, true, false },
+        { 214, 4095, true, false },
+        { 214, 4096, true, false },
+        { 214, 4097, true, false },
         /* Each measured staircase boundary retains the coarse reduction just
            below its K or byte threshold and selects the pairwise reduction at
            the exact threshold. */
@@ -1945,11 +1997,18 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
         { 31, 2U * 1024U * 1024U + 17U, false, false },
         { 51, 1024U * 1024U + 17U, false, false }
     };
+    const bool pure_avx2 =
+        leo2_context_backend(avx2->context) == LEO2_BACKEND_AVX2;
     for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        const bool expect_group4 = pure_avx2 && cases[i].bytes == 4096 &&
+            cases[i].original_count >= 86 &&
+            cases[i].original_count <= 212;
         execute_r1_xor_dispatch_case(*avx2, trace,
             cases[i].original_count, cases[i].bytes,
             cases[i].expect_coarse, LEO2_FIELD_GF8,
-            cases[i].expect_fused, cases[i].expect_dense);
+            cases[i].expect_fused, cases[i].expect_dense, expect_group4);
+    }
 
     /* The measured policy is deliberately limited to GF8.  GF16 retains its
        established coarse policy at every otherwise-promoted boundary. */
@@ -2098,6 +2157,8 @@ void test_non_avx2_large_r1_xor_exclusion(
         if (backends[i] == LEO2_BACKEND_AVX512)
             require(entry->table->xor_memory_sources_fused_final == NULL,
                 "AVX-512 unexpectedly exposes the AVX2 fused R=1 callback");
+        require(entry->table->xor_memory_sources_group4 == NULL,
+            "non-AVX2 backend unexpectedly exposes group-four R=1 XOR");
         TraceOpsGuard trace(*entry);
         execute_r1_xor_dispatch_case(*entry, trace, 3, 4096, false);
         execute_r1_xor_dispatch_case(*entry, trace, 5, 4096,

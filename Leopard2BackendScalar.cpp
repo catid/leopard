@@ -1406,6 +1406,8 @@ static const Ops ScalarOps = {
     , NULL
     // copy_memory
     , NULL
+    // xor_memory_sources_group4
+    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

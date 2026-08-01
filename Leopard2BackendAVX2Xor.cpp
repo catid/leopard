@@ -131,6 +131,56 @@ void AVX2XorMemorySourcesFusedFinal(
         std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
 }
 
+void AVX2XorMemorySourcesGroup4(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint64_t byte_count)
+{
+    if (byte_count == 0)
+        return;
+
+    const void* waiting[4];
+    unsigned waiting_count = 0;
+    const void* accumulator = initial_source;
+    bool wrote_destination = false;
+    for (uint32_t i = 0; i < source_count; ++i)
+    {
+        if (!sources[i])
+            continue;
+        waiting[waiting_count++] = sources[i];
+        if (waiting_count == 4)
+        {
+            AVX2XorMemoryFusedFinalGroup<4>(
+                destination, accumulator, waiting, byte_count);
+            accumulator = destination;
+            wrote_destination = true;
+            waiting_count = 0;
+        }
+    }
+
+    switch (waiting_count)
+    {
+    case 3:
+        AVX2XorMemoryFusedFinalGroup<3>(
+            destination, accumulator, waiting, byte_count);
+        return;
+    case 2:
+        AVX2XorMemoryFusedFinalGroup<2>(
+            destination, accumulator, waiting, byte_count);
+        return;
+    case 1:
+        AVX2XorMemoryFusedFinalGroup<1>(
+            destination, accumulator, waiting, byte_count);
+        return;
+    default:
+        break;
+    }
+    if (!wrote_destination)
+        std::memcpy(destination, initial_source, static_cast<size_t>(byte_count));
+}
+
 #undef LEO2_AVX2_XOR_FORCE_INLINE
 
 #endif // !NO_LEO_HAS_FF8

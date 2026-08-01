@@ -139,7 +139,8 @@ void test_coarse_primitive_case(
     uint64_t byte_count,
     uint32_t source_count,
     bool sparse,
-    uint32_t salt)
+    uint32_t salt,
+    leopard::backend::XorMemorySources reduction = NULL)
 {
     const size_t guard = 96;
     const size_t size = static_cast<size_t>(byte_count) + guard * 2U + 64U;
@@ -197,7 +198,9 @@ void test_coarse_primitive_case(
         expected[output_offset + static_cast<size_t>(byte)] = value;
     }
 
-    ops.xor_memory_sources(
+    if (!reduction)
+        reduction = ops.xor_memory_sources;
+    reduction(
         &output[output_offset], &initial[initial_offset],
         sources.empty() ? NULL : &sources[0], source_count, byte_count);
     require(output == expected,
@@ -243,6 +246,32 @@ void test_primitive(const leopard::backend::Ops& ops)
     // case allocate a comparably large pointer list.
     test_coarse_primitive_case(
         ops, 257, 257, true, 0x243f6a88U + ops.kind);
+
+    if (ops.xor_memory_sources_group4)
+    {
+        static const uint64_t group4_byte_counts[] = {
+            0, 1, 31, 32, 33, 127, 128, 129,
+            4095, 4096, 4097, 65537
+        };
+        static const uint32_t group4_source_counts[] = {
+            0, 1, 2, 3, 4, 5, 7, 8, 9,
+            15, 16, 17, 31, 32, 33, 84, 85, 212, 213
+        };
+        for (size_t byte_i = 0;
+             byte_i < sizeof(group4_byte_counts) /
+                 sizeof(group4_byte_counts[0]); ++byte_i)
+            for (size_t source_i = 0;
+                 source_i < sizeof(group4_source_counts) /
+                     sizeof(group4_source_counts[0]); ++source_i)
+                for (unsigned sparse = 0; sparse < 2; ++sparse)
+                    test_coarse_primitive_case(ops,
+                        group4_byte_counts[byte_i],
+                        group4_source_counts[source_i], sparse != 0,
+                        static_cast<uint32_t>(
+                            byte_i * 1301U + source_i * 179U +
+                            sparse * 43U + ops.kind * 2017U),
+                        ops.xor_memory_sources_group4);
+    }
 }
 
 void test_primitive_concurrency(const leopard::backend::Ops& ops)
@@ -266,6 +295,13 @@ void test_primitive_concurrency(const leopard::backend::Ops& ops)
                         (thread * 17U + round * 11U) % 41U,
                         (thread + round) % 3U == 0,
                         thread * 313U + round * 101U + ops.kind * 19U);
+                    if (ops.xor_memory_sources_group4)
+                        test_coarse_primitive_case(ops, count,
+                            (thread * 23U + round * 13U) % 97U,
+                            (thread + round) % 4U == 0,
+                            thread * 419U + round * 137U +
+                                ops.kind * 29U,
+                            ops.xor_memory_sources_group4);
                 }
             }
             catch (...)
@@ -1400,6 +1436,30 @@ void test_public_r1(leo2_backend backend)
             execute_and_check_decode(fixture);
         }
 
+    /* The measured group-four policy is intentionally narrow.  Exercise both
+       K boundaries and their immediate neighbors on both sides of the exact
+       4-KiB byte selector. */
+    if (backend == LEO2_BACKEND_AVX2)
+    {
+        static const uint32_t group4_counts[] = {
+            84, 85, 86, 212, 213, 214
+        };
+        static const size_t group4_sizes[] = { 4095, 4096, 4097 };
+        for (size_t count_i = 0;
+             count_i < sizeof(group4_counts) / sizeof(group4_counts[0]);
+             ++count_i)
+            for (size_t size_i = 0;
+                 size_i < sizeof(group4_sizes) / sizeof(group4_sizes[0]);
+                 ++size_i)
+            {
+                R1Fixture fixture(backend, group4_counts[count_i],
+                    group4_sizes[size_i], false, LEO2_FIELD_GF8,
+                    LEO2_SHARD_LAYOUT_NATIVE_V1,
+                    group4_counts[count_i] / 2U);
+                execute_and_check_decode(fixture);
+            }
+    }
+
     /* K=7 is the smallest live remainder-six case and has no complete
        eight-source group, so the final group is the entire coarse reduction.
        Exercise the large shard sizes where one pass can matter most. */
@@ -1637,6 +1697,7 @@ int main()
             "tails=0..257 max_bytes=16777233 fields=gf8,gf16 "
             "exact_arity_k=3,5,6 "
             "final_remainder_k=7,12..15,20..23 "
+            "group4_k=86..212@4096B "
             "null_boundaries=0,7,8,15,16,last "
             "batch=2,8,64 batch_k=3,5,6,7,9,129 "
             "batch_bytes=4096,4097 "
