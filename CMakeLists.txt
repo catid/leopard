@@ -1319,6 +1319,25 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_k5r5_b64_terminal PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
+           NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
+            add_executable(leopard2_k16r8_b256_terminal_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_k16r8_b256_terminal.cpp)
+            target_include_directories(
+                leopard2_k16r8_b256_terminal_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_k16r8_b256_terminal_test PRIVATE
+                LEO2_ENABLE_TEST_HOOKS=1)
+            target_link_libraries(leopard2_k16r8_b256_terminal_test
+                leopard_test_hooks)
+            add_test(NAME leopard2_k16r8_b256_terminal
+                COMMAND leopard2_k16r8_b256_terminal_test)
+            set_tests_properties(leopard2_k16r8_b256_terminal PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
     endif()
 
     # Bounded experiment-only verifier for the AVX2 loss-5-through-8 direct
