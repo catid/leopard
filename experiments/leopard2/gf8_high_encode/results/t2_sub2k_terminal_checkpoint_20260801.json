@@ -1,0 +1,139 @@
+{
+  "schema": "leopard2-gf8-t2-sub2k-terminal-checkpoint/v1",
+  "authoritative_promotion_evidence": true,
+  "bead": "leopard-79h.38.5.10.47.1",
+  "purpose": "Qualify the validation-preserving GF8 AVX2 K=2/3, R=2 packed terminal through 2 KiB against the exact Leopard main codec while bounding neighboring Leopard2 code-layout effects.",
+  "source": {
+    "candidate_commit": "5bf19ac4af8a1837e67a4f9d9c9025e1a7ae78a7",
+    "candidate_tree": "8ae7e41649fd3b286ed36d040f0e23fbba49f760",
+    "candidate_tracked_dirty": false,
+    "candidate_binary_sha256": "04d04926cba979874b070ed13d10dbf061af2658b5d4e92a0aa7f0a2b5394687",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "neighbor_control_commit": "8cce7486dddf3c8adc6c9b5164e18915bca9d0e4",
+    "neighbor_control_tree": "8bbb32d74af94f7ae207c37108c035be3c090931",
+    "neighbor_control_binary_sha256": "b0d6b856497656ffe21224beab53ceb34a8483677d6bde7f3903c6c926a69b10"
+  },
+  "implementation": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "qualified_shapes": [
+      { "K": 2, "R": 2 },
+      { "K": 3, "R": 2 }
+    ],
+    "qualified_byte_rule": "positive multiples of 64 through 2048 bytes on the packed ordinary and batch layouts",
+    "fallback": "All ragged, aliased, sparse-output, unaligned, and out-of-range layouts retain the validated general path.",
+    "layout_control": "The public and batch terminal wrappers occupy a dedicated orphan ELF section; their shared validation template is force-inlined into those wrappers so unrelated mature transform text is not displaced."
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus_allowed": "0-31",
+    "physical_cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "timed_cpu": 15,
+    "reserved_smt_sibling": 31,
+    "kernel": "Linux 6.8.0-134-generic x86_64"
+  },
+  "methodology": {
+    "target_comparison": "exact Leopard main binary over candidate Leopard2 encode time",
+    "neighbor_comparison": "pre-change Leopard2 control over candidate Leopard2 encode time",
+    "rounds": 7,
+    "order_per_round": ["baseline", "candidate", "candidate", "baseline"],
+    "reuse_per_sample": 50000,
+    "iterations_per_process": 15,
+    "warmup_calls_per_process": 4,
+    "batch": 1,
+    "threads": 1,
+    "loss_count": 1,
+    "statistic": "One mean-log ABBA contrast per independent round; exponentiated mean and two-sided Student-t 95 percent confidence interval with df=6.",
+    "student_t_critical": 2.446911851,
+    "target_threshold": "confidence-interval lower bound at least 1.05",
+    "neighbor_regression_threshold": "credible regression only when confidence-interval upper bound is below 0.98",
+    "isolation": "Canonical build/timing lock held for each campaign; CPU 15 pinned; SMT sibling 31 idle. One core was intentional because these are cache-sensitive authoritative microbenchmarks.",
+    "immutability": "Frozen executables were hashed before and after each campaign; hashes were identical. Candidate source attestation was clean in every result."
+  },
+  "target_exact_main_results": [
+    { "K": 2, "R": 2, "shard_bytes": 64, "ratio": 1.084692, "ci95": [1.068566, 1.101061], "passed": true },
+    { "K": 2, "R": 2, "shard_bytes": 256, "ratio": 1.383032, "ci95": [1.340449, 1.426968], "passed": true },
+    { "K": 2, "R": 2, "shard_bytes": 1024, "ratio": 1.542157, "ci95": [1.510599, 1.574374], "passed": true },
+    { "K": 3, "R": 2, "shard_bytes": 64, "ratio": 1.713033, "ci95": [1.674316, 1.752646], "passed": true },
+    { "K": 3, "R": 2, "shard_bytes": 256, "ratio": 2.045498, "ci95": [2.013895, 2.077598], "passed": true },
+    { "K": 3, "R": 2, "shard_bytes": 1024, "ratio": 1.937320, "ci95": [1.911512, 1.963476], "passed": true }
+  ],
+  "neighbor_control_results": [
+    { "K": 1, "R": 2, "shard_bytes": 64, "ratio": 0.992839, "ci95": [0.974715, 1.011300], "credible_regression_over_2_percent": false },
+    { "K": 2, "R": 1, "shard_bytes": 2048, "ratio": 0.997798, "ci95": [0.987492, 1.008211], "credible_regression_over_2_percent": false },
+    { "K": 2, "R": 2, "shard_bytes": 2049, "ratio": 1.038830, "ci95": [1.018741, 1.059315], "credible_regression_over_2_percent": false },
+    { "K": 2, "R": 3, "shard_bytes": 64, "ratio": 0.984694, "ci95": [0.971661, 0.997901], "credible_regression_over_2_percent": false },
+    { "K": 2, "R": 3, "shard_bytes": 256, "ratio": 0.987382, "ci95": [0.975832, 0.999069], "credible_regression_over_2_percent": false },
+    { "K": 3, "R": 1, "shard_bytes": 256, "ratio": 1.001008, "ci95": [0.990807, 1.011314], "credible_regression_over_2_percent": false },
+    { "K": 3, "R": 2, "shard_bytes": 4096, "ratio": 0.998746, "ci95": [0.983708, 1.014015], "credible_regression_over_2_percent": false },
+    { "K": 3, "R": 3, "shard_bytes": 1024, "ratio": 0.991844, "ci95": [0.987638, 0.996068], "credible_regression_over_2_percent": false },
+    { "K": 4, "R": 2, "shard_bytes": 64, "ratio": 0.995318, "ci95": [0.988847, 1.001830], "credible_regression_over_2_percent": false },
+    { "K": 4, "R": 2, "shard_bytes": 1024, "ratio": 1.006039, "ci95": [0.996170, 1.016006], "credible_regression_over_2_percent": false }
+  ],
+  "correctness_and_build_gates": {
+    "release": {
+      "result": "5/5 passed",
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_t2_packed_terminal",
+        "leopard2_context_backends",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode"
+      ],
+      "elapsed_seconds": 72.56,
+      "peak_rss_kib": 211932,
+      "ctest_stdout_sha256": "f4ad80054f68332d52a43dd697bce0951ed2e2c632e9d6c791994e74170b3a02"
+    },
+    "clang_asan_ubsan": {
+      "required_focused_result": "2/2 passed",
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_t2_packed_terminal"
+      ],
+      "ctest_prefix_stdout_sha256": "f726eb0711adf5f26909ee0bb874a8c25a660321444db1697f758a188940a31f",
+      "broader_auto_backend_result": "Resource-inconclusive in the final rerun: no sanitizer diagnostic, but the test's live set reached enforced 384 MiB and 448 MiB cgroup ceilings. The same AUTO matrix passed the clean Release gate; this resource-only failure is not counted as a sanitizer failure."
+    },
+    "clang_release_t2_terminal": {
+      "result": "passed",
+      "binary_sha256": "94370d0b9df54b5e2dfa19b219f3712877de481ae30b980797d4abe0bc6d86e4"
+    },
+    "field_disabled_builds": {
+      "gf8_disabled_archive_sha256": "6369800f7f7cc247e6c2e920648450e06083ffd4218f25677ba40830ff4f8404",
+      "gf16_disabled_archive_sha256": "964f819446552edbc916c60773b50700e519bc32268408cfc1b11450b7f6078a",
+      "result": "both archives built successfully"
+    },
+    "benchmark_correctness": "All 448 JSON invocations reported round-trip success; all four implementations in each ABBA round had identical input, parity, and recovered-output digests."
+  },
+  "raw_artifacts": [
+    {
+      "path": "/tmp/leopard2-t2-auth-5bf19ac/target-main-abba-v3",
+      "json_file_count": 168,
+      "sorted_json_sha256_manifest_sha256": "8f854e4820d0c79540ee565aa2d00e20ca2cb1d94b7aa9009dc6e776443350e4"
+    },
+    {
+      "path": "/tmp/leopard2-t2-auth-5bf19ac/neighbor-control-abba-v1",
+      "json_file_count": 280,
+      "sorted_json_sha256_manifest_sha256": "5a22005742620bef4b479368d47f169a25aab631fcdbdf86c8c90650bbb2d43d"
+    }
+  ],
+  "rejected_variants": [
+    "A combined terminal-shape switch met the K=2/3 target but credibly regressed K=2,R=3 by about 3 percent.",
+    "Explicit EncodeInternal alignment and shape guards were slower.",
+    "A narrow K=2,R=3 direct policy improved its target but displaced unrelated text and caused larger losses.",
+    "A 4 KiB text anchor repaired immediate neighbors but produced six broad-screen losses, including three above 5 percent.",
+    "A nearby wrapper plus terminal thunks lost the K=2,64-byte gain."
+  ],
+  "known_neighbor": {
+    "bead": "leopard-79h.38.5.10.47.2",
+    "cell": { "K": 100, "R": 28, "shard_bytes": 64 },
+    "observation": "A broader diagnostic found a credible approximately 2.6 percent code-layout regression. About 1.2 percentage points are attributable to this placement and the remainder predates it; it is tracked separately and does not invalidate the bounded T=2 acceptance neighborhood."
+  },
+  "disposition": {
+    "promoted": true,
+    "reason": "All target confidence intervals clear the 5 percent promotion threshold, the declared neighboring gate has no credible regression over 2 percent, bit-for-bit workload digests match, and the focused correctness/sanitizer gates pass."
+  }
+}
