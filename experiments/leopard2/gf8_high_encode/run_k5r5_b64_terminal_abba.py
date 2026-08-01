@@ -31,8 +31,12 @@ SCHEMA = "leopard2-gf8-k5r5-b64-terminal-abba/v1"
 SUMMARY_SCHEMA = "leopard2-gf8-k5r5-b64-terminal-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
+ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
+CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
+CONTROL_BUILD_MARKER: str | None = None
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 T95_DF2 = 4.302652729911275
+T95_DF3 = 3.182446305284263
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
@@ -204,11 +208,13 @@ def benchmark_command(
     ]
     if implementation == "main":
         return common
-    return common[:-2] + [
+    command = common[:-2] + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--attest-source",
-        "--json", "-",
     ]
+    if implementation == "control":
+        command.extend(CONTROL_EXTRA_ARGUMENTS)
+    return command + ["--json", "-"]
 
 
 def positive_encode_metric(result: Mapping[str, Any]) -> float:
@@ -282,6 +288,10 @@ def validate_result(
                 build.get("source_tree") == source_tree and
                 build.get("source_tracked_dirty") is False,
                 "Leopard2 embedded source identity changed")
+        if CONTROL_BUILD_MARKER is not None:
+            require(build.get(CONTROL_BUILD_MARKER) is
+                    (implementation == "control"),
+                    "runtime attribution marker differs from the label")
     return {
         "encode_us": positive_encode_metric(result),
         "digests": dict(digests),
@@ -341,9 +351,11 @@ def run_one(
 
 
 def confidence_interval(values: Sequence[float]) -> dict[str, Any]:
-    require(len(values) == 3, "three independent round contrasts are required")
+    require(len(values) in (3, 4),
+            "three or four independent round contrasts are required")
     center = statistics.mean(values)
-    half_width = T95_DF2 * statistics.stdev(values) / math.sqrt(len(values))
+    critical = T95_DF2 if len(values) == 3 else T95_DF3
+    half_width = critical * statistics.stdev(values) / math.sqrt(len(values))
     return {
         "speedup": math.exp(center),
         "ci95": [
@@ -446,8 +458,16 @@ def main() -> int:
             "main": T8_SUPPORT.file_identity(options.main),
         }
         raw["identities"] = identities
-        require(len({item["sha256"] for item in identities.values()}) == 3,
-                "candidate, control, and main binaries are not distinct")
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            require(
+                identities["candidate"]["sha256"] ==
+                    identities["control"]["sha256"] and
+                identities["candidate"]["sha256"] !=
+                    identities["main"]["sha256"],
+                "runtime attribution requires one shared candidate/control binary")
+        else:
+            require(len({item["sha256"] for item in identities.values()}) == 3,
+                    "candidate, control, and main binaries are not distinct")
         executable_sections = {
             name: T8_SUPPORT.executable_sections_identity(
                 Path(str(identities[name]["path"])))
@@ -457,14 +477,23 @@ def main() -> int:
         require(executable_sections["candidate"]["sections"] ==
                 executable_sections["control"]["sections"],
                 "candidate and control executable instruction sections differ")
-        mode_words = {
-            name: mode_word_identity(Path(str(identities[name]["path"])))
-            for name in ("candidate", "control")
-        }
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            shared_mode = mode_word_identity(
+                Path(str(identities["candidate"]["path"])))
+            mode_words = {"shared_binary_default": shared_mode}
+        else:
+            mode_words = {
+                name: mode_word_identity(Path(str(identities[name]["path"])))
+                for name in ("candidate", "control")
+            }
         raw["mode_words"] = mode_words
-        require(mode_words["candidate"]["value"] == 1 and
-                mode_words["control"]["value"] == 2,
-                "candidate/control diagnostic selectors are not enabled/disabled")
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            require(mode_words["shared_binary_default"]["value"] == 1,
+                    "shared binary does not default to the candidate route")
+        else:
+            require(mode_words["candidate"]["value"] == 1 and
+                    mode_words["control"]["value"] == 2,
+                    "candidate/control selectors are not enabled/disabled")
         require(set(os.sched_getaffinity(0)) == {options.cpu},
                 "runner must be singleton-pinned to the benchmark CPU")
         sibling_text = Path(

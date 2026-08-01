@@ -252,6 +252,22 @@ void ExerciseAVX2Terminal(leo2_context* context)
         codec, LEO2_TEST_ENCODE_AUTO), LEO2_SUCCESS,
         "restore K16/R8 AUTO encode mode");
 
+    /* The benchmark control must retain the same binary and mature route. */
+    Require(leopard2_internal::
+            SetK16R8B256TerminalEnabledForDiagnostics(false),
+        "disable the K16/R8 benchmark terminal");
+    ResetOutput(output.bytes());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
+        scratch.data(), scratch_bytes), LEO2_SUCCESS,
+        "execute same-binary K16/R8 control route");
+    RequireTwoBlockCalls(0,
+        "same-binary control unexpectedly entered the two-block terminal");
+    CheckParity(field, generator, original, recovery);
+    Require(leopard2_internal::
+            SetK16R8B256TerminalEnabledForDiagnostics(true),
+        "restore the K16/R8 benchmark terminal");
+
     ResetOutput(output.bytes());
     recovery[3] = NULL;
     leopard::ff8::TestOnlyResetHighEncodeCounts();

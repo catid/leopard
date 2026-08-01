@@ -116,6 +116,7 @@ struct Options
     bool report_direct_executor;
     bool attest_source;
     bool measure_one_shot_decode;
+    bool disable_k16r8_b256_terminal;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     bool disable_high_t4_binding;
 #endif
@@ -157,6 +158,7 @@ struct Options
         , report_direct_executor(false)
         , attest_source(false)
         , measure_one_shot_decode(false)
+        , disable_k16r8_b256_terminal(false)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         , disable_high_t4_binding(false)
 #endif
@@ -427,6 +429,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
         << "  --measure-one-shot-decode\n"
         << "                         Time the public one-shot decode wrapper using schema v8\n"
+        << "  --disable-k16r8-b256-terminal\n"
+        << "                         Attribution-only: retain the prior ordinary encode path\n"
 #if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
     !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         << "  --report-direct-executor\n"
@@ -486,6 +490,8 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--report-decode-path") options.report_decode_path = true;
         else if (argument == "--measure-one-shot-decode")
             options.measure_one_shot_decode = true;
+        else if (argument == "--disable-k16r8-b256-terminal")
+            options.disable_k16r8_b256_terminal = true;
         else if (argument == "--report-direct-executor")
         {
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
@@ -1113,6 +1119,9 @@ static std::string LegacyUnavailableReason(
 
 static int Run(const Options& options)
 {
+    if (options.disable_k16r8_b256_terminal &&
+        !leopard2_internal::SetK16R8B256TerminalEnabledForDiagnostics(false))
+        Fail("cannot disable the K16/R8/256-byte terminal for attribution");
     leo2_context_options context_options;
     memset(&context_options, 0, sizeof(context_options));
     context_options.struct_size = sizeof(context_options);
@@ -1606,6 +1615,9 @@ static int Run(const Options& options)
          << "    \"high_t8_two_block_selected\": "
          << (high_t8_two_block_selected ? "true" : "false");
 #endif
+    json << ",\n"
+         << "    \"k16r8_b256_terminal_diagnostic_disabled\": "
+         << (options.disable_k16r8_b256_terminal ? "true" : "false");
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)
     {
