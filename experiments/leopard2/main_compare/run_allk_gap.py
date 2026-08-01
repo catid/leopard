@@ -3825,6 +3825,7 @@ def _run_with_snapshot_owner_held(
         inherited_descriptors=inherited_descriptors)
     current_reproducible_build = verify_reproducible_candidate_build(
         current_build_initial,
+        jobs=options.reproducible_build_jobs,
         inherited_descriptors=inherited_descriptors)
     (main_executable_initial, main_snapshot_descriptor,
      main_snapshot_initial) = snapshots.capture(
@@ -4058,6 +4059,10 @@ def main(arguments: Sequence[str] | None = None) -> int:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--workers", type=int,
                         default=min(128, os.cpu_count() or 1))
+    parser.add_argument(
+        "--reproducible-build-jobs", type=int, default=1,
+        help="parallel jobs for the one-time clean reproducibility rebuild; "
+             "kept separate from benchmark workers to bound peak memory")
     parser.add_argument("--timeout", type=float, default=120.0)
     parser.add_argument("--gf8-only", action="store_true",
                         help="run the 2,522-cell GF8 K=1..255 matrix only")
