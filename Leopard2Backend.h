@@ -299,6 +299,7 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 // implementation without weakening the callback contract for other backends.
 static const uint32_t kFF8HighEncodeShortenedInput = 0x80000000U;
 static const uint32_t kFF8HighEncodeK5R5Partial = 0x40000000U;
+static const uint32_t kFF8HighEncodeK9R5Tail = 0x20000000U;
 static const uint32_t kFF8HighEncodeSupportedSides =
     8U | 16U | 32U | 64U;
 

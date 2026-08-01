@@ -1794,21 +1794,27 @@ def validate_leopard_result(
         extra_parameters)
     build = document.get("build", {})
     base_build_keys = {"compiler", "compiler_version", "cplusplus"}
-    terminal_marker = "k16r8_b256_terminal_diagnostic_disabled"
-    if set(build) not in (base_build_keys, base_build_keys | {terminal_marker}):
+    terminal_markers = {
+        "k16r8_b256_terminal_diagnostic_disabled",
+        "k9r5_b256_terminal_diagnostic_disabled",
+    }
+    build_keys = set(build)
+    if (not base_build_keys.issubset(build_keys) or
+            not build_keys.issubset(base_build_keys | terminal_markers)):
         raise ComparisonError(
             "Leopard2 child build keys changed: "
             f"got {sorted(build)}, expected {sorted(base_build_keys)} with "
-            f"optional {terminal_marker}")
+            f"optional {sorted(terminal_markers)}")
     if (not isinstance(build.get("compiler"), str) or not build["compiler"] or
             not isinstance(build.get("compiler_version"), str) or
             not build["compiler_version"] or
             isinstance(build.get("cplusplus"), bool) or
             not isinstance(build.get("cplusplus"), int)):
         raise ComparisonError("Leopard2 child build identity is invalid")
-    if terminal_marker in build and build[terminal_marker] is not False:
-        raise ComparisonError(
-            "Leopard2 comparison used a disabled K16/R8 terminal")
+    for terminal_marker in terminal_markers:
+        if terminal_marker in build and build[terminal_marker] is not False:
+            raise ComparisonError(
+                "Leopard2 comparison used a disabled packed terminal")
     profile, field, parent = resolved_identity(cell)
     resolved = document.get("resolved", {})
     require_exact_keys(resolved, {
@@ -3618,13 +3624,14 @@ def self_test() -> None:
         "algorithm": "fnv1a64", "original_data": "1" * 16,
         "transmitted_parity": "2" * 16, "recovered_originals": "3" * 16}
     leopard_schema_mutations.append((changed, "historical"))
-    for invalid_terminal_marker in (True, 0):
-        changed = fake_leopard_result(
-            CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
-        changed["build"][
-            "k16r8_b256_terminal_diagnostic_disabled"] = (
-                invalid_terminal_marker)
-        leopard_schema_mutations.append((changed, "mixed"))
+    for terminal_marker in (
+            "k16r8_b256_terminal_diagnostic_disabled",
+            "k9r5_b256_terminal_diagnostic_disabled"):
+        for invalid_terminal_marker in (True, 0):
+            changed = fake_leopard_result(
+                CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
+            changed["build"][terminal_marker] = invalid_terminal_marker
+            leopard_schema_mutations.append((changed, "mixed"))
     for schema in (LEOPARD_SCHEMA_V1, LEOPARD_SCHEMA_V2):
         for selector in ("force_tiled_decode", "force_materialized_decode"):
             partial = fake_leopard_result(selector_cell, schema=schema)

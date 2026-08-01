@@ -207,6 +207,18 @@ void ReedSolomonEncodeT4Batch(
     uint64_t byte_count);
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+/*
+    Execute the fused AVX2 K=9/R=5 T=8 tile.  The first eight systematic
+    shards use the regular inverse/forward transform and the ninth shard is
+    accumulated through its exact legacy systematic-generator column.  Only
+    the five transmitted parity rows are written.
+*/
+void ReedSolomonEncodeK9R5T8(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work,
+    uint64_t byte_count);
+
 void ReedSolomonEncodeTwoBlocksT8(
     const backend::Ops& ops,
     const void* const* data,
@@ -390,6 +402,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t small_transform_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;
+    uint64_t k9r5_tail_calls;
 };
 struct TestOnlySparseEncodeCounts
 {

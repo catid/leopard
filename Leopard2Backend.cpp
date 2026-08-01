@@ -1292,6 +1292,49 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                 for (size_t i = 0; i < sizeof(actual[lane]); ++i)
                     if (actual[lane][i] != 0xc3)
                         return false;
+
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
+            /*
+                Qualify the exact K=9/R=5 terminal independently of its
+                fixed-column implementation.  The first eight sources use
+                the ordinary reference transform; source nine is then added
+                through the direct legacy systematic-generator column.  Only
+                the five transmitted parity rows may be written.
+            */
+            static const uint8_t kTailLogs[5] = {
+                121, 151, 78, 228, 229
+            };
+            static const uint64_t kK9R5Bytes = 32;
+            for (unsigned lane = 0; lane < side; ++lane)
+            {
+                std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+                std::memset(expected[lane], 0xc3, sizeof(expected[lane]));
+                actual_pointers[lane] = actual[lane] + 1;
+                expected_pointers[lane] = expected[lane] + 1;
+            }
+            ReferenceFF8HighEncodeOneBlock(
+                ops, input_pointers, expected_pointers, side,
+                partial_inverse_skew, partial_forward_skew, kK9R5Bytes);
+            for (unsigned lane = 0; lane < 5; ++lane)
+                ops.ff8_multiply_add(
+                    expected_pointers[lane], input_pointers[8],
+                    kTailLogs[lane], kK9R5Bytes);
+            ops.ff8_high_encode_one_block(
+                input_pointers, actual_pointers,
+                side | kFF8HighEncodeK9R5Tail,
+                partial_inverse_skew, partial_forward_skew, kK9R5Bytes);
+            if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                return false;
+            for (unsigned lane = 0; lane < 5; ++lane)
+                if (std::memcmp(
+                        actual[lane], expected[lane],
+                        sizeof(actual[lane])) != 0)
+                    return false;
+            for (unsigned lane = 5; lane < side; ++lane)
+                for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                    if (actual[lane][i] != 0xc3)
+                        return false;
+#endif
         }
     }
     return true;

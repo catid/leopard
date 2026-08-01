@@ -170,6 +170,16 @@
 #error "LEO2_DIAGNOSTIC_DISABLE_K16R8_B256_TERMINAL must be 0 or 1"
 #endif
 
+/* Same-text attribution control for the packed ordinary K=9/R=5/256-byte
+   terminal.  The macro changes only a nonzero initialized data word. */
+#ifndef LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL
+#define LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL must be 0 or 1"
+#endif
+
 /*
     Promoted path that maps shortened/punctured T=8 profiles onto the measured
     full K=8,R=8 kernel after reusable batch validation.  CMake defines this
@@ -820,6 +830,8 @@ static volatile uint32_t g_k5r5_b64_terminal_mode =
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 static volatile uint32_t g_k16r8_b256_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K16R8_B256_TERMINAL;
+static volatile uint32_t g_k9r5_b256_terminal_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL;
 #endif
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
@@ -11146,6 +11158,17 @@ bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    g_k9r5_b256_terminal_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool GetCodecEncodePathInfo(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -11786,6 +11809,143 @@ TryEncodeGF8K16R8T8B256PackedTerminal(
 }
 
 #undef LEO2_K16R8_B256_TERMINAL_NOINLINE
+
+static LEO_FORCE_INLINE bool IsGF8AVX2K9R5T8B256TerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes != 256 || codec->original_count != 9 ||
+        g_k9r5_b256_terminal_mode != 1U ||
+        codec->recovery_count != 5 || codec->padded_side != 8 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 || !codec->context ||
+        codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_high_encode_one_block ||
+        (codec->context->ops->ff8_high_encode_one_block_sides & 8U) == 0)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+#if defined(_MSC_VER)
+#define LEO2_K9R5_B256_TERMINAL_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_K9R5_B256_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_k9r5_b256_terminal"), \
+        aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_K9R5_B256_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_K9R5_B256_TERMINAL_NOINLINE
+#endif
+
+/*
+    The exact callback consumes the nine public inputs and writes only the five
+    transmitted parity rows.  It evaluates the complete first T=8 block and
+    accumulates the ninth systematic coordinate through its fixed legacy
+    generator column, avoiding a padded second inverse transform and all
+    punctured output stores.  This ordinary terminal proves the application's
+    nine- and five-shard packed slabs before entering that callback.
+
+    A layout mismatch remains a normal fallback.  Scratch, metadata, data,
+    and output overlap checks all finish before the first parity write.
+*/
+template<size_t ProtectedCount>
+static LEO2_K9R5_B256_TERMINAL_NOINLINE bool
+TryEncodeGF8K9R5T8B256PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2K9R5T8B256TerminalEligible(codec, 256));
+    LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+
+    /* 14 range records, 9 + 2T pointers, and 2T 256-byte work rows. */
+    ScratchLayout layout = { 0, 0, 0,
+        ((14U * sizeof(AddressRange) + 25U * sizeof(void*) +
+            kScratchAlignment - 1U) & ~(kScratchAlignment - 1U)) +
+            16U * 256U };
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 256, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, 9, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 5, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[2 + i] = protected_ranges[i];
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], 9U * 256U, input_range) ||
+        !MakeRange(recovery[0], 5U * 256U, output_range))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < 9; ++i)
+        if (reinterpret_cast<uintptr_t>(original[i]) !=
+                input_range.begin + i * 256U)
+            return false;
+    for (size_t i = 0; i < 5; ++i)
+        if (reinterpret_cast<uintptr_t>(recovery[i]) !=
+                output_range.begin + i * 256U)
+            return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    leopard::ff8::ReedSolomonEncodeK9R5T8(
+        *codec->context->ops, original, recovery, 256);
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_K9R5_B256_TERMINAL_NOINLINE
 #endif
 
 #if defined(_MSC_VER)
@@ -12684,6 +12844,14 @@ LEO2_EXPORT leo2_result leo2_encode(
     }
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+    if (IsGF8AVX2K9R5T8B256TerminalEligible(codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8K9R5T8B256PackedTerminal<0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result))
+            return terminal_result;
+    }
     if (IsGF8AVX2K16R8T8B256TerminalEligible(codec, shard_bytes))
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
@@ -12798,6 +12966,16 @@ LEO2_EXPORT LEO2_ENCODE_BATCH_ALIGNED leo2_result leo2_encode_batch(
         }
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
+        if (IsGF8AVX2K9R5T8B256TerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8K9R5T8B256PackedTerminal<1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
         if (IsGF8AVX2K16R8T8B256TerminalEligible(
                 codec, items[0].shard_bytes))
         {
