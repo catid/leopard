@@ -1,0 +1,100 @@
+{
+  "schema": "leopard2-gf8-dense-packed-validation-checkpoint-v1",
+  "date_utc": "2026-08-01",
+  "scope": "GF8 legacy-high AVX2 encode execution",
+  "candidate": {
+    "commit": "1f2b121475caff0c682b61078a56599eb94eb475",
+    "tree": "2ab42c74c3e7e370e4dddba599130691712505e5",
+    "benchmark_sha256": "54446805f06e537b29afdff28c14e061e3cb0370dc7e0b59947fc433a3bbf5a6",
+    "prevalidated_benchmark_sha256": "ace004cd4733f9b1563b58ebc0b42995a9f4946f9657a57de091743733e04b5b",
+    "source_attestation": "clean"
+  },
+  "comparators": {
+    "pre_t2_leopard2": {
+      "commit": "8cce748",
+      "benchmark_sha256": "b0d6b856497656ffe21224beab53ceb34a8483677d6bde7f3903c6c926a69b10"
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "implementation": [
+    "Recognize dense full GF8 input and parity slabs with two aggregate checked ranges and one pointer-layout scan.",
+    "Reuse the successful dense proof to avoid a second requested-output scan.",
+    "Zero the shortened suffix of a contiguous final message block with one bounded memset rather than one memset per shard.",
+    "Keep the generic encode core free of the sub-2-KiB T=2 terminal branch; route prevalidated batch and binding items at batch dispatch.",
+    "Retain general validation and mature transform fallbacks for sparse, unordered, aliased, ragged, and unsupported layouts."
+  ],
+  "authoritative_k100_r28_b64": {
+    "cpu": 15,
+    "rounds": 7,
+    "samples_per_process": 15,
+    "reuse": 10000,
+    "same_source_control_over_candidate_time_ratio": 1.313239277,
+    "same_source_ci95": [1.305153005, 1.321375649],
+    "candidate_time_change_percent": -23.8524,
+    "exact_main_over_candidate_time_ratio": 0.980621823,
+    "exact_main_ci95": [0.970844007, 0.990498115],
+    "candidate_time_slower_than_main_percent": 1.9761,
+    "raw_directory": "/tmp/leopard2-auth-1f2b121/k100-authoritative"
+  },
+  "retained_t2_exact_main": [
+    {"K": 2, "R": 2, "bytes": 64, "main_over_candidate": 1.110337, "ci95": [1.095956, 1.124906]},
+    {"K": 2, "R": 2, "bytes": 256, "main_over_candidate": 1.375379, "ci95": [1.252383, 1.510455]},
+    {"K": 2, "R": 2, "bytes": 1024, "main_over_candidate": 1.478774, "ci95": [1.457195, 1.500673]},
+    {"K": 3, "R": 2, "bytes": 64, "main_over_candidate": 1.742643, "ci95": [1.731769, 1.753586]},
+    {"K": 3, "R": 2, "bytes": 256, "main_over_candidate": 2.057918, "ci95": [2.040604, 2.075378]},
+    {"K": 3, "R": 2, "bytes": 1024, "main_over_candidate": 1.984177, "ci95": [1.943781, 2.025411]}
+  ],
+  "clean_neighbor_screen": {
+    "cells": 16,
+    "comparison": "8cce748 control over 1f2b121 candidate encode time",
+    "minimum_ratio": 1.021692,
+    "maximum_ratio": 1.356267,
+    "observed_regressions": 0,
+    "raw_directory": "/tmp/leopard2-auth-1f2b121/neighbor-control-screen"
+  },
+  "prevalidated_attribution": {
+    "interpretation": "A ratio above one means prevalidated Leopard2 execution is faster than exact Leopard main.",
+    "cells": [
+      {"K": 5, "R": 4, "bytes": 64, "main_over_prevalidated": 2.114771},
+      {"K": 8, "R": 8, "bytes": 64, "main_over_prevalidated": 1.733322},
+      {"K": 64, "R": 32, "bytes": 64, "main_over_prevalidated": 0.979369},
+      {"K": 100, "R": 28, "bytes": 64, "main_over_prevalidated": 1.013281},
+      {"K": 127, "R": 28, "bytes": 64, "main_over_prevalidated": 0.985130},
+      {"K": 192, "R": 64, "bytes": 64, "main_over_prevalidated": 1.117349},
+      {"K": 224, "R": 32, "bytes": 64, "main_over_prevalidated": 1.012941},
+      {"K": 240, "R": 16, "bytes": 64, "main_over_prevalidated": 1.041304}
+    ],
+    "raw_directory": "/tmp/leopard2-auth-1f2b121/prevalidated-main-screen"
+  },
+  "correctness": {
+    "release": [
+      "leopard2_t2_packed_terminal_test",
+      "leopard2_public_api_contract_test",
+      "leopard2_high_direct_production_test",
+      "leopard2_auto_encode_backend_test",
+      "leopard2_legacy_golden_test",
+      "leopard2_batch_aliasing_test"
+    ],
+    "asan_ubsan": [
+      "leopard2_t2_packed_terminal_test",
+      "leopard2_public_api_contract_test",
+      "leopard2_high_direct_production_test"
+    ],
+    "strict_compilers": ["GCC 13.3.0", "Clang 18"],
+    "field_disabled_builds": ["GF8-only", "GF16-only"],
+    "new_contract_cases": [
+      "dense partial-final-block success",
+      "dense input/output and scratch/output overlap",
+      "dense data-span overflow",
+      "dense batch-descriptor overlap",
+      "two-item scattered T=2 batch and binding",
+      "mixed full/sparse T=2 batch and binding",
+      "all-null recovery no-op"
+    ]
+  },
+  "resource_note": "Builds and tests were serialized after prior OOM incidents. RLIMIT_AS caused expected thread-stack reservation failures in two broad Release tests; isolated reruns with OMP_NUM_THREADS=1 passed at 214200 KiB and 23540 KiB peak RSS. The focused ASan high-direct peak was 339968 KiB.",
+  "disposition": "Promote. The original same-source regression is replaced by a 23.85 percent execution-time reduction, every measured neighbor improves, and all six T=2 exact-main promotions retain lower confidence bounds above five percent. The residual K100 exact-main deficit is 1.98 percent and is attributable to the stronger ordinary public validation contract because the prevalidated executor is faster than main."
+}
