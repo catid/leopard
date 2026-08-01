@@ -303,6 +303,7 @@ def run(
     attest_source: bool = False,
     report_direct_executor: bool = False,
     measure_one_shot_decode: bool = False,
+    disable_k16r8_b256_terminal: bool = False,
     *,
     k: int = 3,
     r: int = 2,
@@ -327,6 +328,8 @@ def run(
             command.append("--report-direct-executor")
         if measure_one_shot_decode:
             command.append("--measure-one-shot-decode")
+        if disable_k16r8_b256_terminal:
+            command.append("--disable-k16r8-b256-terminal")
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -365,7 +368,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "metrics", "legacy"):
         require(isinstance(document[section], dict),
                 f"benchmark {section} is not an object")
-    expected_build = {"compiler", "compiler_version", "cplusplus"}
+    expected_build = {
+        "compiler", "compiler_version", "cplusplus",
+        "k16r8_b256_terminal_diagnostic_disabled",
+    }
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         expected_build.update({
@@ -385,6 +391,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     require(type(document["build"]["compiler"]) is str and
             type(document["build"]["compiler_version"]) is str and
             type(document["build"]["cplusplus"]) is int and
+            type(document["build"][
+                "k16r8_b256_terminal_diagnostic_disabled"]) is bool and
             document["build"]["cplusplus"] > 0,
             "benchmark build value types changed")
     if document["schema"] in {
@@ -766,6 +774,9 @@ def main() -> int:
     require(default["schema"] == "leopard2-benchmark-v1",
             "default benchmark schema changed")
     validate_common(default, False)
+    require(default["build"][
+                "k16r8_b256_terminal_diagnostic_disabled"] is False,
+            "default benchmark disabled the K16/R8 terminal")
     require(set(default["parameters"]) == {
         "K", "R", "requested_profile", "requested_field",
         "requested_backend", "force_generic_decode",
@@ -797,6 +808,9 @@ def main() -> int:
     if external["schema"] == "leopard2-benchmark-v2":
         require(external["parameters"]["retain_samples"] is True,
                 "external-evidence raw-sample mode was not recorded")
+    require(external["build"][
+                "k16r8_b256_terminal_diagnostic_disabled"] is False,
+            "external-evidence benchmark disabled the K16/R8 terminal")
     unavailable_reason = (
         "disabled by --skip-legacy" if
         external["schema"] == "leopard2-benchmark-v2" else
@@ -812,6 +826,17 @@ def main() -> int:
     require(external["correctness"]["legacy_comparison"] is None,
             "external-evidence mode claimed a legacy comparison")
     validate_isal_comparison_contract(external)
+
+    disabled_k16_terminal = run(
+        executable, True, disable_k16r8_b256_terminal=True)
+    validate_common(disabled_k16_terminal, True)
+    validate_workload_digests(disabled_k16_terminal)
+    require(disabled_k16_terminal["build"][
+                "k16r8_b256_terminal_diagnostic_disabled"] is True,
+            "K16/R8 attribution option was not recorded")
+    require(disabled_k16_terminal["workload_digests"] ==
+                external["workload_digests"],
+            "inert K16/R8 attribution option changed the workload")
 
     prevalidated_executable = executable.with_name(
         "bench_leopard2_prevalidated_batch" + executable.suffix)
