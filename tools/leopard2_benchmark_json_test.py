@@ -305,6 +305,7 @@ def run(
     measure_one_shot_decode: bool = False,
     disable_k16r8_b256_terminal: bool = False,
     disable_k9r5_b256_terminal: bool = False,
+    disable_k9r6r8_b256_terminal: bool = False,
     *,
     k: int = 3,
     r: int = 2,
@@ -333,6 +334,8 @@ def run(
             command.append("--disable-k16r8-b256-terminal")
         if disable_k9r5_b256_terminal:
             command.append("--disable-k9r5-b256-terminal")
+        if disable_k9r6r8_b256_terminal:
+            command.append("--disable-k9r6r8-b256-terminal")
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -354,6 +357,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v3", "leopard2-benchmark-v5",
                 "leopard2-benchmark-v6", "leopard2-benchmark-v7",
                 "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+                "leopard2-benchmark-v10",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -362,7 +366,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v2", "leopard2-benchmark-v3",
         "leopard2-benchmark-v5", "leopard2-benchmark-v6",
         "leopard2-benchmark-v7", "leopard2-benchmark-v8",
-        "leopard2-benchmark-v9",
+        "leopard2-benchmark-v9", "leopard2-benchmark-v10",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -376,6 +380,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
     }
+    if document["schema"] == "leopard2-benchmark-v10":
+        expected_build.add("k9r6r8_b256_terminal_diagnostic_disabled")
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         expected_build.update({
@@ -401,6 +407,10 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "k9r5_b256_terminal_diagnostic_disabled"]) is bool and
             document["build"]["cplusplus"] > 0,
             "benchmark build value types changed")
+    if document["schema"] == "leopard2-benchmark-v10":
+        require(type(document["build"][
+                    "k9r6r8_b256_terminal_diagnostic_disabled"]) is bool,
+                "K9/R=6..8 terminal selector is not Boolean")
     if document["schema"] in {
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         require(type(document["build"][
@@ -860,6 +870,20 @@ def main() -> int:
     require(disabled_k9_terminal["workload_digests"] ==
                 external["workload_digests"],
             "inert K9/R5 attribution option changed the workload")
+
+    disabled_k9r6r8_terminal = run(
+        executable, True, disable_k9r6r8_b256_terminal=True)
+    require(disabled_k9r6r8_terminal["schema"] ==
+                "leopard2-benchmark-v10",
+            "K9/R=6..8 attribution did not version its build marker")
+    validate_common(disabled_k9r6r8_terminal, True)
+    validate_workload_digests(disabled_k9r6r8_terminal)
+    require(disabled_k9r6r8_terminal["build"][
+                "k9r6r8_b256_terminal_diagnostic_disabled"] is True,
+            "K9/R=6..8 attribution option was not recorded")
+    require(disabled_k9r6r8_terminal["workload_digests"] ==
+                external["workload_digests"],
+            "inert K9/R=6..8 attribution option changed the workload")
 
     prevalidated_executable = executable.with_name(
         "bench_leopard2_prevalidated_batch" + executable.suffix)

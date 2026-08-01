@@ -32,6 +32,9 @@ SUMMARY_SCHEMA = "leopard2-gf8-k5r5-b64-terminal-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
 ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
+ALLOW_MULTIPLE_TARGETS = False
+CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
+CONTROL_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_BUILD_MARKER: str | None = None
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
@@ -277,7 +280,9 @@ def validate_result(
                 build.get("main_source_commit") == MAIN_COMMIT,
                 "exact-main source identity changed")
     else:
-        require(result.get("schema") == "leopard2-benchmark-v5" and
+        expected_schema = CONTROL_SCHEMA if implementation == "control" \
+            else CANDIDATE_SCHEMA
+        require(result.get("schema") == expected_schema and
                 resolved.get("backend") == "avx2" and
                 isinstance(correctness, dict) and
                 correctness.get("leopard2_round_trip") is True,
@@ -289,9 +294,13 @@ def validate_result(
                 build.get("source_tracked_dirty") is False,
                 "Leopard2 embedded source identity changed")
         if CONTROL_BUILD_MARKER is not None:
-            require(build.get(CONTROL_BUILD_MARKER) is
-                    (implementation == "control"),
-                    "runtime attribution marker differs from the label")
+            if implementation == "control":
+                require(build.get(CONTROL_BUILD_MARKER) is True,
+                        "runtime attribution marker differs from the label")
+            else:
+                require(CONTROL_BUILD_MARKER not in build or
+                        build[CONTROL_BUILD_MARKER] is False,
+                        "candidate unexpectedly reports a disabled terminal")
     return {
         "encode_us": positive_encode_metric(result),
         "digests": dict(digests),
@@ -561,12 +570,19 @@ def main() -> int:
 
         analyses = [
             analyze(item["cell"], item["rounds"]) for item in raw["cells"]]
-        target = next(item for item in analyses
-                      if item["cell"]["role"] == "target")
-        target_control_failure = \
-            target["control_over_candidate"]["ci95"][0] < TARGET_CONTROL_FLOOR
-        target_main_failure = \
+        targets = [item for item in analyses
+                   if item["cell"]["role"] == "target"]
+        require(len(targets) >= 1, "campaign has no target cell")
+        if not ALLOW_MULTIPLE_TARGETS:
+            require(len(targets) == 1,
+                    "campaign unexpectedly has multiple target cells")
+        target_control_failure = any(
+            target["control_over_candidate"]["ci95"][0] <
+                TARGET_CONTROL_FLOOR
+            for target in targets)
+        target_main_failure = any(
             target["main_over_candidate"]["ci95"][0] < TARGET_MAIN_FLOOR
+            for target in targets)
         credible_neighbor_regressions = [
             item["cell"]["id"] for item in analyses
             if item["cell"]["role"] == "neighbor" and
@@ -605,14 +621,25 @@ def main() -> int:
             "raw_sha256": sha256(options.output / "raw.json"),
         }
         T8_SUPPORT.write_exclusive(options.output / "summary.json", summary)
-        print(json.dumps({
+        result_line = {
             "status": summary["status"],
             "cells": summary["cell_count"],
             "processes": summary["process_count"],
-            "target_control": target["control_over_candidate"],
-            "target_main": target["main_over_candidate"],
             "credible_neighbor_regressions": credible_neighbor_regressions,
-        }, sort_keys=True))
+        }
+        if len(targets) == 1:
+            result_line["target_control"] = \
+                targets[0]["control_over_candidate"]
+            result_line["target_main"] = targets[0]["main_over_candidate"]
+        else:
+            result_line["targets"] = {
+                target["cell"]["id"]: {
+                    "control": target["control_over_candidate"],
+                    "main": target["main_over_candidate"],
+                }
+                for target in targets
+            }
+        print(json.dumps(result_line, sort_keys=True))
         return 0 if summary["status"] == "accepted" else 2
     except Exception as error:
         raw["failed_utc"] = MAIN_SUPPORT.utc_now()

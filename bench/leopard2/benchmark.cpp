@@ -118,6 +118,7 @@ struct Options
     bool measure_one_shot_decode;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
+    bool disable_k9r6r8_b256_terminal;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     bool disable_high_t4_binding;
 #endif
@@ -161,6 +162,7 @@ struct Options
         , measure_one_shot_decode(false)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
+        , disable_k9r6r8_b256_terminal(false)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         , disable_high_t4_binding(false)
 #endif
@@ -435,6 +437,8 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
+        << "  --disable-k9r6r8-b256-terminal\n"
+        << "                         Attribution-only: retain the prior path using schema v10\n"
 #if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
     !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         << "  --report-direct-executor\n"
@@ -498,6 +502,8 @@ static Options ParseOptions(int argc, char** argv)
             options.disable_k16r8_b256_terminal = true;
         else if (argument == "--disable-k9r5-b256-terminal")
             options.disable_k9r5_b256_terminal = true;
+        else if (argument == "--disable-k9r6r8-b256-terminal")
+            options.disable_k9r6r8_b256_terminal = true;
         else if (argument == "--report-direct-executor")
         {
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
@@ -1131,6 +1137,9 @@ static int Run(const Options& options)
     if (options.disable_k9r5_b256_terminal &&
         !leopard2_internal::SetK9R5B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K9/R5/256-byte terminal for attribution");
+    if (options.disable_k9r6r8_b256_terminal &&
+        !leopard2_internal::SetK9R6R8B256TerminalEnabledForDiagnostics(false))
+        Fail("cannot disable the K9/R=6..8/256-byte terminal for attribution");
     leo2_context_options context_options;
     memset(&context_options, 0, sizeof(context_options));
     context_options.struct_size = sizeof(context_options);
@@ -1340,11 +1349,13 @@ static int Run(const Options& options)
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
-        options.attest_source || options.measure_one_shot_decode;
+        options.attest_source || options.measure_one_shot_decode ||
+        options.disable_k9r6r8_b256_terminal;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.disable_k9r6r8_b256_terminal ? 10 :
         options.measure_one_shot_decode ? 9 :
         (options.report_direct_executor && options.attest_source) ? 7 :
         options.report_direct_executor ? 6 :
@@ -1630,6 +1641,11 @@ static int Run(const Options& options)
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k9r5_b256_terminal ? "true" : "false");
+    if (options.disable_k9r6r8_b256_terminal)
+    {
+        json << ",\n"
+             << "    \"k9r6r8_b256_terminal_diagnostic_disabled\": true";
+    }
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)
     {

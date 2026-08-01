@@ -1797,6 +1797,7 @@ def validate_leopard_result(
     terminal_markers = {
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
+        "k9r6r8_b256_terminal_diagnostic_disabled",
     }
     build_keys = set(build)
     if (not base_build_keys.issubset(build_keys) or
@@ -3626,7 +3627,8 @@ def self_test() -> None:
     leopard_schema_mutations.append((changed, "historical"))
     for terminal_marker in (
             "k16r8_b256_terminal_diagnostic_disabled",
-            "k9r5_b256_terminal_diagnostic_disabled"):
+            "k9r5_b256_terminal_diagnostic_disabled",
+            "k9r6r8_b256_terminal_diagnostic_disabled"):
         for invalid_terminal_marker in (True, 0):
             changed = fake_leopard_result(
                 CHECKPOINT_CELLS[0], schema=LEOPARD_SCHEMA_V2)
