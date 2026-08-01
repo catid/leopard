@@ -1,0 +1,177 @@
+{
+  "schema": "leopard2-gf8-ordinary-k16r8-b256-terminal-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-08-01",
+  "scope": {
+    "operation": "encode",
+    "api_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch"
+    ],
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "K": 16,
+    "R": 8,
+    "shard_bytes": 256,
+    "batch": 1,
+    "fallback_policy": "Every different count, byte size, multi-item batch, backend, sparse output layout, or non-packed valid layout retains the existing general path."
+  },
+  "source": {
+    "implementation_commit": "1f61801fd9451a0ecd10bf38d4411ea35fbc80e3",
+    "implementation_tree": "26332c0282e2e2c5b1fc0443943a1c4d5ed27596",
+    "attribution_commit": "be474fc6d435adf2a6ded0db0daf0e0594e0a6d9",
+    "attribution_tree": "ca4dd201840bf1402df2270870aac171a0f0f62b",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_k16r8_b256_terminal_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "e96e7d7c05440e97692598128966db0cb22a5550f2ac897bce7d251c3b37cd8c",
+    "control_sha256": "e96e7d7c05440e97692598128966db0cb22a5550f2ac897bce7d251c3b37cd8c",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_executable_sections_sha256": "cf9bc2c8fc613216bdd8a9f7579e65c1b145fc0dcf0cf50ba33b0fe1c387cd58",
+    "candidate_control_binary_identical": true,
+    "candidate_control_instruction_sections_identical": true,
+    "default_selector_word": 1,
+    "control_argument": "--disable-k16r8-b256-terminal",
+    "selector_symbol": "_ZN12_GLOBAL__N_1L26g_k16r8_b256_terminal_modeE"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "iterations_per_process": 15,
+    "warmup_per_process": 64,
+    "target_rounds": 3,
+    "neighbor_rounds": 4,
+    "cell_count": 12,
+    "process_count": 194,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "credible_neighbor_regressions": [],
+    "raw_sha256": "0dd5a87826e498003bdc3e0b7e6dda7d6ad1f1018c7269ebbd140b12529ced58",
+    "summary_sha256": "1b055fef8072cd275444b3fc8a5824a48c5d5a16688520989f8bc04dcb806215",
+    "target": {
+      "control_over_candidate": 1.6053049851503813,
+      "control_over_candidate_ci95": [
+        1.5788714627722042,
+        1.6321810585036016
+      ],
+      "exact_main_over_candidate": 1.1972171732748054,
+      "exact_main_over_candidate_ci95": [
+        1.175627078562648,
+        1.219203764629631
+      ]
+    },
+    "neighbors": [
+      {
+        "id": "byte-neighbor-k16-r8-b255-q1",
+        "control_over_candidate": 0.9956984076172579,
+        "ci95": [0.9679495888132721, 1.0242427192381378]
+      },
+      {
+        "id": "byte-neighbor-k16-r8-b257-q1",
+        "control_over_candidate": 1.0052817205368547,
+        "ci95": [0.9759664995585642, 1.035477486268879]
+      },
+      {
+        "id": "byte-neighbor-k16-r8-b512-q1",
+        "control_over_candidate": 1.0041329352531003,
+        "ci95": [0.9821606357382159, 1.0265967856695426]
+      },
+      {
+        "id": "shape-neighbor-k15-r8-b256-q1",
+        "control_over_candidate": 1.0005482564500203,
+        "ci95": [0.988184625042263, 1.0130665749250658]
+      },
+      {
+        "id": "shape-neighbor-k16-r7-b256-q1",
+        "control_over_candidate": 0.9933706144574673,
+        "ci95": [0.9748783413382711, 1.0122136638229031]
+      },
+      {
+        "id": "shape-neighbor-k15-r7-b256-q1",
+        "control_over_candidate": 1.0088180031389162,
+        "ci95": [0.9956322417185309, 1.022178391592206]
+      },
+      {
+        "id": "existing-terminal-k5-r5-b64-q1",
+        "control_over_candidate": 1.0289663340780815,
+        "ci95": [0.9545844067818295, 1.1091441564979054]
+      },
+      {
+        "id": "terminal-neighbor-k1-r1-b256-q1",
+        "control_over_candidate": 0.998653793653657,
+        "ci95": [0.9913796000686198, 1.0059813612362114]
+      },
+      {
+        "id": "terminal-neighbor-k2-r1-b256-q1",
+        "control_over_candidate": 1.0055518647668333,
+        "ci95": [0.9897570490382309, 1.0215987385172938]
+      },
+      {
+        "id": "batch-neighbor-k16-r8-b256-q2",
+        "control_over_candidate": 1.0003416484845817,
+        "ci95": [0.9945183723998539, 1.0061990220232129]
+      },
+      {
+        "id": "batch-neighbor-k16-r8-b256-q8",
+        "control_over_candidate": 0.9991679901558844,
+        "ci95": [0.9913652777098871, 1.0070321152041624]
+      }
+    ],
+    "methodology_note": "Candidate and control use the same frozen executable and initialized runtime selector. This avoids the build-id and binary-layout confounding observed in rejected separate-binary neighbor campaigns. The four neighbor rounds are outer/inner balanced."
+  },
+  "validation": {
+    "gnu13_release": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_k5r5_b64_terminal",
+        "leopard2_k16r8_b256_terminal",
+        "leopard2_auto_encode_backend",
+        "leopard2_public_api_contract",
+        "leopard2_batch_aliasing"
+      ],
+      "result": "6/6 passed"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_k16r8_b256_terminal",
+        "leopard2_public_api_contract"
+      ],
+      "result": "3/3 passed"
+    },
+    "strict_compilers": {
+      "gcc13": "-Wall -Wextra -Wpedantic -Werror focused target compiled and passed",
+      "clang18": "-Wall -Wextra -Wpedantic -Werror focused target compiled and passed"
+    },
+    "feature_off": "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF library compiled and the focused K16 terminal test was absent",
+    "benchmark_contracts": [
+      "benchmark JSON regression passed with default and disabled selector routes",
+      "ISA-L comparison parser self-test passed and rejects disabled-terminal evidence"
+    ],
+    "contract_coverage": [
+      "independent direct systematic generator parity oracle",
+      "ordinary encode and one-item batch routing",
+      "packed unaligned source and destination slabs",
+      "sparse and null output fallback",
+      "valid detached and non-packed input fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output and descriptor/scratch overlap rejection",
+      "forced-transform and scalar-backend fallback",
+      "same-binary diagnostic control route"
+    ]
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.0,
+    "credible_neighbor_regression_floor": 0.9803921568627451,
+    "online_benchmarking": false,
+    "wire_change": false
+  },
+  "final_disposition": {
+    "promoted": true,
+    "reason": "The fixed-count aggregate validator and already-qualified two-block T=8 AVX2 kernel remove generic staging without weakening the public contract. Both target promotion floors pass with wide margins, and no inactive neighboring cell has a credible regression."
+  }
+}
