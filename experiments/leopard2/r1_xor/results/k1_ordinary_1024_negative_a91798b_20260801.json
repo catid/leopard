@@ -1,0 +1,136 @@
+{
+  "schema": "leopard2-k1-ordinary-1024-negative-result-v1",
+  "source": {
+    "base_commit": "a91798b78d38fa6ab96898d0681e357841ba21c2",
+    "base_tree": "ba361b7a90d01b655ca2fd4ac97a0376dc245914",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "configuration": {
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "K": 1,
+    "R": 1,
+    "shard_bytes": 1024,
+    "batch": 1,
+    "loss_count": 1,
+    "timed_cpu": 4,
+    "reserved_smt_sibling": 20
+  },
+  "frozen_control": {
+    "binary_sha256_without_build_id": "245c493cc35fe2be64358b0079953188c99f1e049bd07201b47b86b1714746e1",
+    "text_sha256": "67615a57e32463f2cce2d5a17562c1e2cbbac6b9708e5391b8ffafcc215e8df6"
+  },
+  "frozen_main": {
+    "binary_sha256_without_build_id": "ead435b66583eabfb1ac64109a1b988d074a52ccd9cebd612e92b838be3371f0",
+    "text_sha256": "a9f44941ddafbb160b1bf58940e0063bf990479ec6a1f1bd629202499647e820"
+  },
+  "candidates": {
+    "branchless_metadata_overlap": {
+      "artifact": "/tmp/leopard2-k1-flat-discovery-20260801-v1",
+      "candidate_sha256": "1ee351f64b2e81db5b5f3bc155d320bd9406080d64941f152e7eb13a7ff96f21",
+      "candidate_text_sha256": "ffa866c5f6d73b59be0ae79332a2475d5d23886d909d9e36c2f3aa8ca89c0af8",
+      "control_over_candidate": {
+        "encode": {
+          "geometric_mean_ratio": 0.893177491,
+          "bootstrap_95_low": 0.854010332,
+          "bootstrap_95_high": 0.936875783
+        },
+        "decode": {
+          "geometric_mean_ratio": 1.009298944,
+          "bootstrap_95_low": 0.986357443,
+          "bootstrap_95_high": 1.031150865
+        }
+      },
+      "rounds": 12,
+      "reuse": 500000,
+      "sibling_non_idle_delta": 1,
+      "disposition": "rejected: predictable non-overlap branches skip work; evaluating both bounds regressed encode by about 10.7 percent. This discovery screen is also non-authoritative because the SMT sibling accumulated one non-idle tick."
+    },
+    "trusted_item_range_and_k1_first": {
+      "artifact": "/tmp/leopard2-k1-flat-discovery-20260801-v2",
+      "candidate_sha256": "c0fd50c2d64ce17d1c3f3f44e7e5946252844e3ed504e836eb1ea7a43ed723ca",
+      "candidate_text_sha256": "c0cdce218d35399a1433f5e9362e32f5285787ebde2d30fa810e1bf3b70ed2c9",
+      "control_over_candidate": {
+        "encode": {
+          "geometric_mean_ratio": 1.007601100,
+          "bootstrap_95_low": 0.976612257,
+          "bootstrap_95_high": 1.039114085
+        },
+        "decode": {
+          "geometric_mean_ratio": 1.037919007,
+          "bootstrap_95_low": 1.013590422,
+          "bootstrap_95_high": 1.059444278
+        }
+      },
+      "rounds": 12,
+      "reuse": 500000,
+      "sibling_non_idle_delta": 0,
+      "disposition": "rejected: encode was neutral; the apparent decode movement is unrelated executable-layout noise because no decode path changed."
+    },
+    "direct_libc_call_at_both_fixed_helpers": {
+      "artifact": "/tmp/leopard2-k1-inline-libc-discovery-20260801-v3",
+      "candidate_sha256": "7929d724a03d71c9ff2ea1f2997f2567918ba5ad72de5d41fdc7ec282c7cd00a",
+      "candidate_text_sha256": "3a958b0535ee47aba041afc5d4d35d400fc7ee132b2a70a6a44874f15da5dccb",
+      "control_over_candidate": {
+        "encode": {
+          "geometric_mean_ratio": 0.998139785,
+          "bootstrap_95_low": 0.974562029,
+          "bootstrap_95_high": 1.023596452
+        },
+        "decode": {
+          "geometric_mean_ratio": 1.037112088,
+          "bootstrap_95_low": 1.008031030,
+          "bootstrap_95_high": 1.070162893
+        }
+      },
+      "main_over_candidate": {
+        "encode": {
+          "geometric_mean_ratio": 0.955870971,
+          "bootstrap_95_low": 0.927380110,
+          "bootstrap_95_high": 0.989115256
+        },
+        "decode": {
+          "geometric_mean_ratio": 1.030621963,
+          "bootstrap_95_low": 0.987297140,
+          "bootstrap_95_high": 1.074790755
+        }
+      },
+      "rounds": 9,
+      "reuse": 5000000,
+      "sibling_non_idle_delta": 0,
+      "disposition": "rejected: encode was neutral versus Leopard2 control and remained credibly slower than exact main; the decode result did not survive decode-only isolation."
+    },
+    "direct_libc_call_at_decode_only": {
+      "artifact": "/tmp/leopard2-k1-decode-direct-libc-discovery-20260801-v4",
+      "candidate_sha256": "e29fd6bdcd86ca61d74f8a4bb5f153cd4f03e0dd4b979bb09258f3f24c0ba826",
+      "candidate_text_sha256": "06cdc063a94dc88e756b782f36cc690bd0c1789de8b2b3a9fb6ccbe95f62d4c8",
+      "control_over_candidate": {
+        "encode": {
+          "geometric_mean_ratio": 0.986939480,
+          "bootstrap_95_low": 0.956747945,
+          "bootstrap_95_high": 1.020491907
+        },
+        "decode": {
+          "geometric_mean_ratio": 1.012597848,
+          "bootstrap_95_low": 0.973288736,
+          "bootstrap_95_high": 1.052625918
+        }
+      },
+      "rounds": 9,
+      "reuse": 5000000,
+      "sibling_non_idle_delta": 0,
+      "disposition": "rejected: the isolated decode change was neutral and missed the five-percent promotion threshold."
+    }
+  },
+  "validation": {
+    "release_branchless_candidate": "3/3 passed: r1_xor, public_api_contract, batch_aliasing; peak RSS 213124 KiB under a 256 MiB cap",
+    "asan_ubsan_branchless_candidate": "3/3 passed with 16 MiB ASan quarantine; r1_xor peak RSS 346732 KiB under a 512 MiB cap",
+    "all_benchmark_round_trips": true,
+    "production_source_restored_after_rejection": true
+  },
+  "final_disposition": {
+    "promoted": false,
+    "reason": "No candidate produced a credible five-percent ordinary 1024-byte improvement without weakening Leopard2's overlap, range, scratch, and failure-atomicity contract. The reusable prevalidated binding remains the intended throughput path and already beats exact Leopard1 main at this cell."
+  }
+}
