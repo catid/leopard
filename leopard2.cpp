@@ -138,6 +138,19 @@
 #endif
 
 /*
+    Same-text attribution control for the ordinary K=1/R=1 terminal above
+    4 KiB.  Both values are nonzero initialized data, so an A/B changes only
+    routing while retaining identical executable text.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED
+#define LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED must be 0 or 1"
+#endif
+
+/*
     Promoted path that maps shortened/punctured T=8 profiles onto the measured
     full K=8,R=8 kernel after reusable batch validation.  CMake defines this
     selector explicitly in both production and diagnostic-control builds.
@@ -766,6 +779,7 @@ static volatile uint32_t g_cauchy_log_reuse_mode =
 static const uint32_t g_k1_avx2_copy_mode = 2U;
 static const uint32_t g_k1_fixed_1024_mode = 2U;
 static const uint32_t g_k1_fixed_64_mode = 2U;
+static const uint32_t g_k1_ordinary_extended_mode = 2U;
 #endif
 
 #ifdef LEO_HAS_FF8
@@ -779,6 +793,8 @@ static volatile uint32_t g_k1_fixed_64_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K1_FIXED_64;
 static volatile uint32_t g_k1_prevalidated_binding_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K1_PREVALIDATED_BINDING;
+static volatile uint32_t g_k1_ordinary_extended_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_K1_ORDINARY_EXTENDED;
 static volatile uint32_t g_high_t8_one_block_extended_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_ONE_BLOCK_EXTENDED;
 static volatile uint32_t g_high_t8_one_block_beyond_512_mode =
@@ -4990,12 +5006,20 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
         codec->context->backend == LEO2_BACKEND_GFNI;
 }
 
+static LEO_FORCE_INLINE bool IsK1R1OrdinaryTerminalByteCount(
+    uint64_t shard_bytes)
+{
+    return shard_bytes <= 4096 ||
+        (shard_bytes <= 65536 &&
+         g_k1_ordinary_extended_mode == 1U);
+}
+
 static LEO_FORCE_INLINE bool IsK1R1EncodeTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
     if (!codec || codec->terminal_r1_shape != kTerminalR1K1Copy ||
-        shard_bytes > 4096)
+        !IsK1R1OrdinaryTerminalByteCount(shard_bytes))
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
@@ -6181,9 +6205,9 @@ static LEO_FORCE_INLINE void CopyGF8K1TerminalBytes(
         validation.  Giving the compiler a constant size avoids the dynamic
         memcpy entry cost on the copy-only code.  A qualified AVX2 callback
         wins at exactly 4 KiB on its calibrated processor class; its 1 KiB
-        result and larger constant-size rep-mov experiments were slower, so
-        every other payload and every uncalibrated host retains the mature
-        libc implementation.
+        result and larger payload experiments were slower, so every other
+        payload and every uncalibrated host retains the mature libc
+        implementation.
     */
     switch (bytes)
     {
@@ -6209,6 +6233,16 @@ CalibratedK1AVX2CopyOps(const leo2_codec* codec)
     return codec && codec->context &&
             codec->context->calibrated_k1_avx2_copy_host
         ? codec->context->ops : NULL;
+}
+
+static LEO_FORCE_INLINE const leopard::backend::Ops*
+CalibratedK1AVX2CopyOpsForBytes(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    /* Avoid touching the context/backend chain when policy always selects
+       libc in CopyGF8K1TerminalBytes(). */
+    return shard_bytes == 4096 ? CalibratedK1AVX2CopyOps(codec) : NULL;
 }
 
 static LEO_FORCE_INLINE leo2_result
@@ -6428,7 +6462,8 @@ DecodeGF8K1R1PlanTerminal(
     LEO_DEBUG_ASSERT(codec->field == LEO2_FIELD_GF8);
     LEO_DEBUG_ASSERT(codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1);
     static_cast<void>(codec);
-    return DecodeGF8K1R1TerminalCore<0>(CalibratedK1AVX2CopyOps(codec),
+    return DecodeGF8K1R1TerminalCore<0>(
+        CalibratedK1AVX2CopyOpsForBytes(codec, shard_bytes),
         shard_bytes, NULL, original, recovery, restored,
         scratch, scratch_bytes);
 }
@@ -11593,7 +11628,8 @@ EncodeGF8K1R1PublicTerminal(
     LEO_DEBUG_ASSERT(codec->field == LEO2_FIELD_GF8);
     LEO_DEBUG_ASSERT(codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1);
     static_cast<void>(codec);
-    return EncodeGF8K1R1TerminalCore<0>(CalibratedK1AVX2CopyOps(codec),
+    return EncodeGF8K1R1TerminalCore<0>(
+        CalibratedK1AVX2CopyOpsForBytes(codec, shard_bytes),
         shard_bytes, original, recovery, scratch, scratch_bytes, NULL, 0);
 }
 
@@ -11645,12 +11681,14 @@ EncodeGF8K1R1BatchTerminal(
             RangesOverlap(input_range, output_range))
             return LEO2_OVERLAP;
         if (item->recovery[0])
-            CopyGF8K1TerminalBytes(CalibratedK1AVX2CopyOps(codec),
+            CopyGF8K1TerminalBytes(
+                CalibratedK1AVX2CopyOpsForBytes(codec, item->shard_bytes),
                 item->recovery[0], item->original[0],
                 static_cast<size_t>(item->shard_bytes));
         return LEO2_SUCCESS;
     }
-    return EncodeGF8K1R1TerminalCore<1>(CalibratedK1AVX2CopyOps(codec),
+    return EncodeGF8K1R1TerminalCore<1>(
+        CalibratedK1AVX2CopyOpsForBytes(codec, item->shard_bytes),
         item->shard_bytes, item->original, item->recovery,
         item->scratch, item->scratch_bytes, item, sizeof(*item));
 }
@@ -11666,7 +11704,7 @@ EncodeGF8K1R1Batch64Terminal(
     LEO_DEBUG_ASSERT(codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1);
     if (item->scratch_bytes != 0 || g_k1_fixed_64_mode != 1U)
         return EncodeGF8K1R1TerminalCore<1>(
-            CalibratedK1AVX2CopyOps(codec),
+            CalibratedK1AVX2CopyOpsForBytes(codec, 64),
             64, item->original, item->recovery,
             item->scratch, item->scratch_bytes, item, sizeof(*item));
     if (!item->original || !item->recovery)
@@ -13478,7 +13516,7 @@ static LEO2_K1_BATCH_NOINLINE leo2_result ExecuteK1R1DecodeBatchItem(
     AddressRange item_range;
     if (!MakeRange(item, sizeof(*item), item_range))
         return LEO2_INVALID_ARGUMENT;
-    if (item->shard_bytes > 4096)
+    if (!IsK1R1OrdinaryTerminalByteCount(item->shard_bytes))
         return DecodeK1R1TerminalValidated(
             plan->codec, item->shard_bytes, &item_range, 1,
             item->original, item->recovery, item->restored_original,
@@ -13525,13 +13563,16 @@ static LEO2_K1_BATCH_NOINLINE leo2_result ExecuteK1R1DecodeBatchItem(
             return LEO2_INVALID_ARGUMENT;
         if (RangesOverlap(recovery_range, output_range))
             return LEO2_OVERLAP;
-        CopyGF8K1TerminalBytes(CalibratedK1AVX2CopyOps(plan->codec),
+        CopyGF8K1TerminalBytes(
+            CalibratedK1AVX2CopyOpsForBytes(
+                plan->codec, item->shard_bytes),
             item->restored_original[0],
             item->recovery[0], static_cast<size_t>(item->shard_bytes));
         return LEO2_SUCCESS;
     }
     return DecodeGF8K1R1TerminalCore<1>(
-        CalibratedK1AVX2CopyOps(plan->codec),
+        CalibratedK1AVX2CopyOpsForBytes(
+            plan->codec, item->shard_bytes),
         item->shard_bytes, &item_range,
         item->original, item->recovery, item->restored_original,
         item->scratch, item->scratch_bytes);
@@ -14005,7 +14046,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
             scratch_bytes);
     if (IsK1R1PlanTerminalEligible(plan))
     {
-        if (shard_bytes > 4096)
+        if (!IsK1R1OrdinaryTerminalByteCount(shard_bytes))
             return DecodeK1R1TerminalValidated(
                 plan->codec, shard_bytes, NULL, 0, original, recovery,
                 restored_original, scratch, scratch_bytes);
