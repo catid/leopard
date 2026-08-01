@@ -1,0 +1,174 @@
+{
+  "schema": "leopard2-gf8-ordinary-k9r5-b256-terminal-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-08-01",
+  "scope": {
+    "operation": "encode",
+    "api_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch"
+    ],
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "K": 9,
+    "R": 5,
+    "shard_bytes": 256,
+    "batch": 1,
+    "fallback_policy": "Every different count, byte size, multi-item batch, backend, sparse output layout, or non-packed valid layout retains the existing general path."
+  },
+  "source": {
+    "implementation_commit": "e7ca48231b42f4013d0e4079c7a79068cd8d8f02",
+    "implementation_tree": "9fd9d18a9932b7365511c2da7c1018193860e514",
+    "attribution_commit": "e7ca48231b42f4013d0e4079c7a79068cd8d8f02",
+    "attribution_tree": "9fd9d18a9932b7365511c2da7c1018193860e514",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_k9r5_b256_terminal_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "7c85df89090affc30f0eeb76e6d30e53c75d886ba30dd9a7438d0d775b55fe64",
+    "control_sha256": "7c85df89090affc30f0eeb76e6d30e53c75d886ba30dd9a7438d0d775b55fe64",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_executable_sections_sha256": "a9d990dce37bb27e46e503d394245f0d92793134e68cec32ea465c38686a2244",
+    "candidate_control_binary_identical": true,
+    "candidate_control_instruction_sections_identical": true,
+    "default_selector_word": 1,
+    "control_argument": "--disable-k9r5-b256-terminal",
+    "selector_symbol": "_ZN12_GLOBAL__N_1L25g_k9r5_b256_terminal_modeE"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 4,
+    "reserved_smt_sibling": 20,
+    "iterations_per_process": 15,
+    "warmup_per_process": 64,
+    "target_rounds": 3,
+    "neighbor_rounds": 4,
+    "cell_count": 12,
+    "process_count": 194,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "credible_neighbor_regressions": [],
+    "raw_sha256": "fd30f971d26bd702125d036f40c742f6448c666b5f6088dee60a499967a24d92",
+    "summary_sha256": "f6df4995b17225a241a7276f1e2862c352622a86a4dd884c10d023ac6f54f295",
+    "target": {
+      "control_over_candidate": 2.4170352525426244,
+      "control_over_candidate_ci95": [
+        2.335565569596032,
+        2.501346777878838
+      ],
+      "exact_main_over_candidate": 1.6616473236481473,
+      "exact_main_over_candidate_ci95": [
+        1.5938020170764675,
+        1.7323806838014435
+      ]
+    },
+    "neighbors": [
+      {
+        "id": "byte-neighbor-k9-r5-b255-q1",
+        "control_over_candidate": 1.0000458169808641,
+        "ci95": [0.9798839947012374, 1.0206224833439062]
+      },
+      {
+        "id": "byte-neighbor-k9-r5-b257-q1",
+        "control_over_candidate": 1.0001403578198196,
+        "ci95": [0.9970098181118954, 1.003280727199112]
+      },
+      {
+        "id": "byte-neighbor-k9-r5-b512-q1",
+        "control_over_candidate": 1.0017233247644783,
+        "ci95": [0.9926701193760945, 1.010859095877572]
+      },
+      {
+        "id": "shape-neighbor-k8-r5-b256-q1",
+        "control_over_candidate": 1.0073000131082959,
+        "ci95": [0.9935000799714012, 1.0212916303310018]
+      },
+      {
+        "id": "shape-neighbor-k9-r4-b256-q1",
+        "control_over_candidate": 1.0055208318433113,
+        "ci95": [0.9880342503597285, 1.0233168970637896]
+      },
+      {
+        "id": "shape-neighbor-k10-r5-b256-q1",
+        "control_over_candidate": 1.004552221824614,
+        "ci95": [0.9723694422905222, 1.0378001636864111]
+      },
+      {
+        "id": "shape-neighbor-k9-r6-b256-q1",
+        "control_over_candidate": 0.9967048769302493,
+        "ci95": [0.9936717652667619, 0.9997472469491462]
+      },
+      {
+        "id": "existing-terminal-k5-r5-b64-q1",
+        "control_over_candidate": 1.0297913859299488,
+        "ci95": [0.9425861975213853, 1.1250645313119652]
+      },
+      {
+        "id": "existing-terminal-k16-r8-b256-q1",
+        "control_over_candidate": 0.9976305195561583,
+        "ci95": [0.9878814096773336, 1.0074758405211501]
+      },
+      {
+        "id": "batch-neighbor-k9-r5-b256-q2",
+        "control_over_candidate": 1.0080029595283664,
+        "ci95": [0.9910289195479459, 1.025267725669824]
+      },
+      {
+        "id": "batch-neighbor-k9-r5-b256-q8",
+        "control_over_candidate": 1.0014103877358091,
+        "ci95": [0.9919062497591609, 1.011005591414182]
+      }
+    ],
+    "methodology_note": "Candidate and control use the same frozen executable and initialized runtime selector. This avoids build-id and binary-layout confounding. The four neighbor rounds are outer/inner balanced."
+  },
+  "validation": {
+    "gnu13_release": {
+      "tests": [
+        "leopard2_k9r5_b256_terminal",
+        "leopard2_k16r8_b256_terminal",
+        "leopard2_k5r5_b64_terminal",
+        "leopard2_batch_aliasing"
+      ],
+      "result": "4/4 passed"
+    },
+    "clang18_asan_ubsan_lsan": {
+      "tests": [
+        "leopard2_k9r5_b256_terminal"
+      ],
+      "result": "1/1 passed"
+    },
+    "strict_compilers": {
+      "gcc13": "-Wall -Wextra -Wpedantic -Werror focused target compiled and passed",
+      "clang18": "-Wall -Wextra -Wpedantic -Werror focused target compiled and passed"
+    },
+    "feature_off": "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF library compiled and the focused K9 terminal test was absent",
+    "benchmark_contracts": [
+      "benchmark JSON regression passed with default and disabled K9 selector routes",
+      "ISA-L comparison parser self-test passed and rejects disabled packed-terminal evidence"
+    ],
+    "contract_coverage": [
+      "backend startup KAT against the reference transform and direct generator column",
+      "independent direct systematic generator parity oracle",
+      "ordinary encode and one-item batch routing",
+      "packed unaligned source and destination slabs",
+      "sparse and null output fallback",
+      "valid detached and non-packed input fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output and descriptor/output overlap rejection",
+      "forced-transform and scalar-backend fallback",
+      "same-binary diagnostic control route"
+    ]
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.0,
+    "credible_neighbor_regression_floor": 0.9803921568627451,
+    "online_benchmarking": false,
+    "wire_change": false
+  },
+  "final_disposition": {
+    "promoted": true,
+    "reason": "The fixed legacy generator column removes the padded second T=8 inverse transform, seven zero-source loads, intermediate stores and reloads, and three punctured parity stores. Both target promotion floors pass with wide margins, and no inactive neighboring cell has a credible regression."
+  }
+}
