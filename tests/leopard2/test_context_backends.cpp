@@ -1757,6 +1757,17 @@ void execute_r1_xor_dispatch_case(
     require_result(leo2_decode_plan_create(codec, &original_present[0],
         &recovery_present[0], &plan), LEO2_SUCCESS,
         identity + " plan create");
+    const leo2_backend effective_backend =
+        leo2_context_backend(entry.context);
+    const bool expect_compact = original_count == 1 || original_count >= 8 ||
+        (field == LEO2_FIELD_GF8 &&
+         (effective_backend == LEO2_BACKEND_AVX2 ||
+          effective_backend == LEO2_BACKEND_GFNI) &&
+         (original_count == 3 || original_count == 5 ||
+          original_count == 6));
+    require(leo2_test_decode_plan_is_compact_direct_xor(plan) ==
+            (expect_compact ? 1 : 0),
+        identity + " selected the wrong compact-plan representation");
     size_t scratch_bytes = 0;
     require_result(leo2_decode_plan_scratch_size(plan, bytes,
         &scratch_bytes), LEO2_SUCCESS, identity + " scratch query");
@@ -1805,13 +1816,24 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
     };
     static const DispatchCase cases[] = {
         /* Exact final-remainder policy boundaries. */
+        { 3, 4095, false, false },
+        { 3, 4096, true, true },
+        { 3, 4097, true, true },
+        { 3, 1024U * 1024U + 17U, true, true },
+        { 5, 4095, false, false },
+        { 5, 4096, true, true },
+        { 5, 4097, true, true },
+        { 5, 1024U * 1024U + 17U, true, true },
+        { 6, 4095, false, false },
+        { 6, 4096, true, true },
+        { 6, 4097, true, true },
+        { 6, 1024U * 1024U + 17U, true, true },
         { 7, 1024, true, false },
         { 7, 2048, true, false },
         { 7, 4095, true, false },
         { 7, 4096, true, true },
         { 7, 4U * 1024U * 1024U, true, true },
         { 7, 4U * 1024U * 1024U + 1U, true, false },
-        { 6, 4096, false, false },
         { 8, 4096, true, false },
         { 9, 4096, true, false },
         { 10, 4096, true, false },
@@ -1879,6 +1901,9 @@ void execute_avx2_tier_gf8_large_r1_xor_dispatch(
     /* The measured policy is deliberately limited to GF8.  GF16 retains its
        established coarse policy at every otherwise-promoted boundary. */
     static const DispatchCase gf16_cases[] = {
+        { 3, 4096, false, false },
+        { 5, 4096, false, false },
+        { 6, 4096, false, false },
         { 12, 1024, true, false },
         { 12, 2048, true, false },
         { 12, 4096, true, false },
@@ -1927,7 +1952,7 @@ void test_avx2_r1_absent_parity_noop(
         return;
 
     TraceOpsGuard trace(*avx2);
-    static const uint32_t counts[] = { 7, 12 };
+    static const uint32_t counts[] = { 3, 5, 6, 7, 12 };
     for (size_t count_i = 0;
          count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
     {
@@ -2014,6 +2039,11 @@ void test_non_avx2_large_r1_xor_exclusion(
             require(entry->table->xor_memory_sources_fused_final == NULL,
                 "AVX-512 unexpectedly exposes the AVX2 fused R=1 callback");
         TraceOpsGuard trace(*entry);
+        execute_r1_xor_dispatch_case(*entry, trace, 3, 4096, false);
+        execute_r1_xor_dispatch_case(*entry, trace, 5, 4096,
+            backends[i] != LEO2_BACKEND_AVX512);
+        execute_r1_xor_dispatch_case(*entry, trace, 6, 4096,
+            backends[i] != LEO2_BACKEND_AVX512);
         execute_r1_xor_dispatch_case(*entry, trace, 12, 1024,
             backends[i] != LEO2_BACKEND_AVX512);
         execute_r1_xor_dispatch_case(*entry, trace, 12, 2048,

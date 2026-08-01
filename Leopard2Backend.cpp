@@ -2318,10 +2318,10 @@ static bool TestXor(const Ops& ops)
             ops.xor_memory_sources_fused_final(
                 NULL, NULL, NULL, UINT32_MAX, 0);
             static const unsigned live_counts[] = {
-                3, 4, 5, 6, 11, 12, 13, 14, 19, 20, 21, 22
+                2, 3, 4, 5, 6, 11, 12, 13, 14, 19, 20, 21, 22
             };
             static const unsigned hole_positions[] = {
-                24, 0, 7, 8, 15, 16
+                24, 0, 1, 7, 8, 15, 16
             };
             for (size_t live_i = 0;
                  live_i < sizeof(live_counts) / sizeof(live_counts[0]);

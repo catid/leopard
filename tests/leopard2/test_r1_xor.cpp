@@ -526,13 +526,13 @@ void execute_public_r1_multi_item_batch(
 
     /* Two or more items may use the allocation-free, caller-supplied interval
        preflight.  Legacy-high K=1,R=1 retains its measured nine-item cutoff.
-       Compact R=1 plans omit all presence vectors, so exercise representative
-       serial/pool cases through that independent entry point instead of
-       relying on the compatibility preflight above to cover the reconstructed
-       scalar metadata. */
+       Compact R=1 plans omit all presence vectors, so exercise every compact
+       policy boundary through that independent entry point instead of relying
+       on the compatibility preflight above to cover reconstructed metadata. */
     const size_t scalable_minimum = fixture.k == 1 ? 9 : 2;
     if (batch_count >= scalable_minimum &&
-        (fixture.k == 1 || fixture.k == 9) && fixture.bytes == 4097)
+        (fixture.k == 1 || fixture.k == 3 || fixture.k == 5 ||
+         fixture.k == 6 || fixture.k == 9) && fixture.bytes == 4097)
     {
         size_t preflight_bytes = 0;
         require_result(leo2_decode_plan_batch_preflight_scratch_size(
@@ -780,7 +780,7 @@ void execute_public_k1_encode_batch(
 
 void test_public_r1_multi_item_batch(leo2_backend backend)
 {
-    static const uint32_t counts[] = { 1, 7, 9, 129 };
+    static const uint32_t counts[] = { 1, 3, 5, 6, 7, 9, 129 };
     static const size_t sizes[] = { 4096, 4097 };
     static const size_t batches[] = { 2, 8, 64 };
     static const uint32_t thread_counts[] = { 1, 4 };
@@ -804,7 +804,7 @@ void test_public_r1_multi_item_batch(leo2_backend backend)
                 {
                     const bool adversarial =
                         thread_counts[thread_i] == 4 &&
-                        (k == 1 || k == 9) &&
+                        (k == 1 || k == 3 || k == 9) &&
                         sizes[size_i] == 4096 && batches[batch_i] == 8;
                     execute_public_r1_multi_item_batch(
                         fixture, batches[batch_i], adversarial);
@@ -1038,9 +1038,10 @@ void test_public_r1(leo2_backend backend)
     /* K=8 has seven live originals during one-loss repair and exercises the
        fused initial-plus-seven AVX2 reduction; K=9 exercises the full group
        of eight live sources. */
-    static const uint32_t counts[] = { 1, 2, 3, 4, 8, 9, 10, 31 };
+    static const uint32_t counts[] = { 1, 2, 3, 4, 5, 6, 8, 9, 10, 31 };
     static const size_t sizes[] = {
-        1, 2, 3, 17, 31, 32, 33, 64, 65, 1025, 65537, 1048579
+        1, 2, 3, 17, 31, 32, 33, 64, 65, 1025,
+        4095, 4096, 4097, 65537, 1048579
     };
     for (size_t count_i = 0;
          count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
@@ -1052,6 +1053,31 @@ void test_public_r1(leo2_backend backend)
                 LEO2_SHARD_LAYOUT_NATIVE_V1);
             execute_and_check_decode(fixture);
         }
+
+    /* K=3,5,6 cross to the exact-arity AVX2 reduction at 4 KiB.  Recover
+       every original around that boundary, through an arbitrary vector tail,
+       and beyond one MiB so null compaction and the unbounded large-shard
+       policy cannot be validated only at missing index zero. */
+    static const uint32_t small_fused_counts[] = { 3, 5, 6 };
+    static const size_t small_fused_sizes[] = {
+        4095, 4096, 4097, 4127, 65537, 1048593
+    };
+    for (size_t count_i = 0;
+         count_i < sizeof(small_fused_counts) /
+             sizeof(small_fused_counts[0]); ++count_i)
+    {
+        const uint32_t k = small_fused_counts[count_i];
+        for (uint32_t missing = 0; missing < k; ++missing)
+            for (size_t size_i = 0;
+                 size_i < sizeof(small_fused_sizes) /
+                     sizeof(small_fused_sizes[0]); ++size_i)
+            {
+                R1Fixture fixture(backend, k, small_fused_sizes[size_i],
+                    false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                    missing);
+                execute_and_check_decode(fixture);
+            }
+    }
 
     /* These K values leave final live-source remainders three through six
        after one or two complete eight-source groups.  R1Fixture offsets each
@@ -1191,29 +1217,35 @@ void test_public_r1(leo2_backend backend)
     test_public_r1_overlap_rejection(backend);
     test_public_r1_multi_item_batch(backend);
 
-    // Shared immutable codec/plan execution must remain race-free.
-    R1Fixture fixture(backend, 9, 4097, true, LEO2_FIELD_GF8,
-        LEO2_SHARD_LAYOUT_NATIVE_V1);
-    std::atomic<bool> failed(false);
-    std::vector<std::thread> threads;
-    for (unsigned thread = 0; thread < 16; ++thread)
+    // Shared immutable mature and newly compact/fused plans must be race-free.
+    static const uint32_t concurrent_counts[] = { 5, 9 };
+    for (size_t count_i = 0;
+         count_i < sizeof(concurrent_counts) /
+             sizeof(concurrent_counts[0]); ++count_i)
     {
-        threads.push_back(std::thread([&fixture, &failed]() {
-            try
-            {
-                for (unsigned round = 0; round < 32; ++round)
-                    execute_and_check_decode(fixture);
-            }
-            catch (...)
-            {
-                failed.store(true, std::memory_order_relaxed);
-            }
-        }));
+        R1Fixture fixture(backend, concurrent_counts[count_i], 4097, true,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1);
+        std::atomic<bool> failed(false);
+        std::vector<std::thread> threads;
+        for (unsigned thread = 0; thread < 16; ++thread)
+        {
+            threads.push_back(std::thread([&fixture, &failed]() {
+                try
+                {
+                    for (unsigned round = 0; round < 32; ++round)
+                        execute_and_check_decode(fixture);
+                }
+                catch (...)
+                {
+                    failed.store(true, std::memory_order_relaxed);
+                }
+            }));
+        }
+        for (size_t i = 0; i < threads.size(); ++i)
+            threads[i].join();
+        require(!failed.load(std::memory_order_relaxed),
+            "concurrent R=1 plan execution failed");
     }
-    for (size_t i = 0; i < threads.size(); ++i)
-        threads[i].join();
-    require(!failed.load(std::memory_order_relaxed),
-        "concurrent R=1 plan execution failed");
 }
 
 bool public_backend_available(leo2_backend requested)
@@ -1305,9 +1337,11 @@ int main()
             "effective runtime backend lacked public R=1 coverage");
         std::printf("Leopard2 R=1 fused XOR passed: backends=qualified "
             "tails=0..257 max_bytes=16777233 fields=gf8,gf16 "
+            "exact_arity_k=3,5,6 "
             "final_remainder_k=7,12..15,20..23 "
             "null_boundaries=0,7,8,15,16,last "
-            "batch=2,8,64 batch_k=7,9,129 batch_bytes=4096,4097 "
+            "batch=2,8,64 batch_k=3,5,6,7,9,129 "
+            "batch_bytes=4096,4097 "
             "batch_threads=1,4 concurrency=pass\n");
         return 0;
     }

@@ -576,14 +576,25 @@ static bool PlanHasCompactDirectXor(const leo2_decode_plan* plan)
 }
 
 /*
-    Compact R=1 plans avoid all pattern-owned vectors, but the mature vector
-    representation still produces slightly better large-shard execution for
-    K=2..7.  Keep that measured boundary while treating K=1 separately: its
-    copy-only validator has no presence vector to scan and compact setup avoids
-    three otherwise empty pattern allocations.  The one-shot API has its
-    independent allocation-free path for every K.
+    Compact R=1 plans avoid all pattern-owned vectors.  Retained AVX2 screens
+    promote K=3,5,6 as well as K>=8: compact setup is about twice as fast and
+    execution improves from one-byte shards through the fused large-shard
+    route.  K=2,4,7 retain the mature vector representation.  K=1 is handled
+    separately because its copy-only validator has no presence vector to scan.
+    The one-shot API has its independent allocation-free path for every K.
 */
 static const uint32_t kCompactDirectXorMinOriginalCount = 8;
+
+static bool UseCompactDirectXorPlan(const leo2_codec* codec)
+{
+    const uint32_t k = codec->original_count;
+    if (k == 1 || k >= kCompactDirectXorMinOriginalCount)
+        return true;
+    return codec->field == LEO2_FIELD_GF8 &&
+        (codec->context->backend == LEO2_BACKEND_AVX2 ||
+         codec->context->backend == LEO2_BACKEND_GFNI) &&
+        (k == 3 || k == 5 || k == 6);
+}
 
 static bool PlanOriginalPresent(
     const leo2_decode_plan* plan,
@@ -5669,6 +5680,17 @@ static bool UseCoarseR1Xor(
 {
     if (shard_bytes < 1024)
         return false;
+    /* K=3,5,6 need only one exact-arity AVX2 traversal.  At 4 KiB and above
+       it is faster than the paired loop's destination initialization plus
+       subsequent XOR pass, and it remains a one-pass reduction as shards
+       grow.  Keep this wire-neutral policy restricted to the measured GF8
+       AVX2 tier. */
+    if (shard_bytes >= 4096 && codec->field == LEO2_FIELD_GF8 &&
+        (codec->context->backend == LEO2_BACKEND_AVX2 ||
+         codec->context->backend == LEO2_BACKEND_GFNI) &&
+        (codec->original_count == 3 ||
+         codec->original_count == 5 || codec->original_count == 6))
+        return true;
     uint32_t minimum_originals = 0;
     switch (codec->context->backend)
     {
@@ -5718,8 +5740,8 @@ static LEO2_R1_FUSED_POLICY_NOINLINE bool UseFusedFinalR1Xor(
     uint32_t original_count,
     size_t shard_bytes)
 {
-    /* The remainder-specific callback folds the final 3..6 sources into the
-       coarse reduction instead of returning to the generic loop.  Retained
+    /* The exact-arity callback executes K=3,5,6 in one traversal and folds
+       final 3..6-source remainders into larger coarse reductions.  Retained
        Zen 5 AVX2 screens promoted the exact K groups below.  K=7 crosses back
        to the mature coarse loop above 4 MiB; K=20/21 missed the 5% threshold;
        K=8 Group7, K=31, explicit prefetch, and byte-loop unrolling all
@@ -5731,7 +5753,10 @@ static LEO2_R1_FUSED_POLICY_NOINLINE bool UseFusedFinalR1Xor(
     LEO_DEBUG_ASSERT(shard_bytes >= 4096);
     LEO_DEBUG_ASSERT(original_count == 7 ||
         (original_count >= 12 && original_count <= 15) ||
-        (original_count >= 22 && original_count <= 23));
+        (original_count >= 22 && original_count <= 23) ||
+        original_count == 3 || original_count == 5 || original_count == 6);
+    if (original_count == 3 || original_count == 5 || original_count == 6)
+        return true;
     if (original_count == 7)
         return shard_bytes <= 4U * 1024U * 1024U;
     return shard_bytes <= 1024U * 1024U;
@@ -5761,7 +5786,8 @@ static LEO_FORCE_INLINE bool IsFusedFinalR1XorEligible(
         return false;
 
     const uint32_t k = codec->original_count;
-    return k == 7 || (k >= 12 && k <= 15) || (k >= 22 && k <= 23);
+    return k == 3 || k == 5 || k == 6 || k == 7 ||
+        (k >= 12 && k <= 15) || (k >= 22 && k <= 23);
 #endif
 }
 
@@ -10276,6 +10302,12 @@ LEO2_EXPORT int leo2_test_decode_plan_uses_translated_low(
     return PlanUsesTranslatedLowDecode(plan) ? 1 : 0;
 }
 
+LEO2_EXPORT int leo2_test_decode_plan_is_compact_direct_xor(
+    const leo2_decode_plan* plan)
+{
+    return plan && PlanHasCompactDirectXor(plan) ? 1 : 0;
+}
+
 LEO2_EXPORT size_t leo2_test_decode_plan_direct_source_rows(
     const leo2_decode_plan* plan)
 {
@@ -11973,9 +12005,7 @@ static leo2_result DecodePlanCreateInternal(
         }
 #endif
 
-        if (plan->direct_xor &&
-            (codec->original_count == 1 ||
-             codec->original_count >= kCompactDirectXorMinOriginalCount))
+        if (plan->direct_xor && UseCompactDirectXorPlan(codec))
         {
             if (single_missing_original >= codec->original_count)
             {
