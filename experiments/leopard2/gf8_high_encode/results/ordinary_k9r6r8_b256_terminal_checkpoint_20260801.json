@@ -1,0 +1,184 @@
+{
+  "schema": "leopard2-gf8-ordinary-k9r6r8-b256-terminal-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-08-01",
+  "scope": {
+    "operation": "encode",
+    "api_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch"
+    ],
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "K": 9,
+    "R": [
+      6,
+      7,
+      8
+    ],
+    "shard_bytes": 256,
+    "batch": 1,
+    "fallback_policy": "Every different original count, recovery count, byte size, multi-item batch, backend, sparse output layout, or non-packed valid layout retains the existing general path. The independently promoted R=5 terminal retains its dedicated original kernel."
+  },
+  "source": {
+    "implementation_commit": "39718d9",
+    "implementation_tree": "2d47434ad50cf2a03ed54a46ac23dd3510c78624",
+    "attribution_commit": "ec396ef5333d745b22e869a5ea9c421595c65127",
+    "attribution_tree": "84d3355b1cd2c465c2af3553201357b8a68437ed",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_k9r6r8_b256_terminal_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "bfe6cc114d40495e74b592fc2323a87360e721b7c70d0a1b721abf599375adc6",
+    "control_sha256": "bfe6cc114d40495e74b592fc2323a87360e721b7c70d0a1b721abf599375adc6",
+    "exact_leopard_main_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_control_executable_sections_sha256": "e3b5b0fbc99196890c6a9a3493bec7cb5157b82bcbe468267789de099cdd2f71",
+    "candidate_control_binary_identical": true,
+    "candidate_control_instruction_sections_identical": true,
+    "embedded_source_tracked_dirty": false,
+    "default_selector_word": 1,
+    "control_argument": "--disable-k9r6r8-b256-terminal",
+    "selector_symbol": "_ZN12_GLOBAL__N_1L27g_k9r6r8_b256_terminal_modeE"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 12,
+    "reserved_smt_sibling": 28,
+    "iterations_per_process": 15,
+    "warmup_per_process": 64,
+    "target_rounds": 3,
+    "neighbor_rounds": 4,
+    "cell_count": 16,
+    "process_count": 262,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "credible_neighbor_regressions": [],
+    "raw_sha256": "68de648898cf5ee8574f866c0f12b901c3dd9713772cceb8aaf2a343c3657fed",
+    "summary_sha256": "021bf5c69e40350374397bbf4c4316b4d302f4682d0d773d23c8b49a1f6a1dc8",
+    "targets": [
+      {
+        "R": 6,
+        "control_over_candidate": 2.2606787564296367,
+        "control_over_candidate_ci95": [
+          2.224813715509647,
+          2.2971219586362213
+        ],
+        "exact_main_over_candidate": 1.5595085213435698,
+        "exact_main_over_candidate_ci95": [
+          1.5219576957788363,
+          1.5979858276537953
+        ]
+      },
+      {
+        "R": 7,
+        "control_over_candidate": 2.1290291329788604,
+        "control_over_candidate_ci95": [
+          2.0852173840981276,
+          2.173761394682202
+        ],
+        "exact_main_over_candidate": 1.4379862914946284,
+        "exact_main_over_candidate_ci95": [
+          1.4193227206140948,
+          1.4568952814563574
+        ]
+      },
+      {
+        "R": 8,
+        "control_over_candidate": 1.8744252497167515,
+        "control_over_candidate_ci95": [
+          1.8314979362250015,
+          1.9183587091654102
+        ],
+        "exact_main_over_candidate": 1.3525424596454874,
+        "exact_main_over_candidate_ci95": [
+          1.332442638866804,
+          1.3729454850676959
+        ]
+      }
+    ],
+    "methodology_note": "Candidate and control use the same frozen executable and initialized runtime selector. This isolates the terminal from build-ID, layout, or instruction-section differences. Every target also runs exact Leopard main, and the four neighbor rounds are outer/inner balanced."
+  },
+  "r5_preservation": {
+    "function_size_bytes": 1584,
+    "pre_generalization_function_sha256": "57ea66b51c01c1a4360ca11429787c9fd9ff3751f5bf46c0fdcfed2eb39986bb",
+    "generalized_source_function_sha256": "57ea66b51c01c1a4360ca11429787c9fd9ff3751f5bf46c0fdcfed2eb39986bb",
+    "function_bytes_identical": true,
+    "authoritative_runner": "experiments/leopard2/gf8_high_encode/run_k9r5_b256_terminal_abba.py",
+    "cell_count": 12,
+    "process_count": 194,
+    "credible_neighbor_regressions": [],
+    "raw_sha256": "054e2593c144e365de30545491929c0d6fee727aa683c5c1084788aee34e5db1",
+    "summary_sha256": "8d90fdb6654f139b569ca8537bdcc731943d8bfb8d91ac47eec335876da55b2c",
+    "control_over_candidate": 2.294279399919629,
+    "control_over_candidate_ci95": [
+      2.27140719920328,
+      2.317381914938844
+    ],
+    "exact_main_over_candidate": 1.6086213633899806,
+    "exact_main_over_candidate_ci95": [
+      1.5695691391588993,
+      1.6486452404010168
+    ]
+  },
+  "code_size": {
+    "pre_generalization_avx2_object_text_bytes": 161399,
+    "generalized_avx2_object_text_bytes": 167261,
+    "text_growth_bytes": 5862,
+    "text_growth_percent": 3.63,
+    "r6_kernel_bytes": 1665,
+    "r7_kernel_bytes": 1906,
+    "r8_kernel_bytes": 1963,
+    "forbidden_avx512_or_evex_instructions_in_new_kernels": 0
+  },
+  "validation": {
+    "gnu13_release": {
+      "tests": [
+        "leopard2_k9r5_b256_terminal",
+        "leopard2_context_backends",
+        "leopard2_auto_encode_backend",
+        "leopard2_direct_encode",
+        "leopard2_batch_aliasing",
+        "leopard2_benchmark_json_regression"
+      ],
+      "result": "6/6 passed; direct-encode oracle checked 48,796,669 parity symbols"
+    },
+    "legacy_compatibility": "R=5,6,7,8 parity and round trips matched exact old Leopard",
+    "clang18_asan_ubsan_lsan": "focused K9 R=5..8 terminal test passed",
+    "strict_compilers": {
+      "gcc13": "-Wall -Wextra -Wpedantic -Werror focused build and tests passed",
+      "clang18": "-Wall -Wextra -Wpedantic -Werror focused build and tests passed"
+    },
+    "portable_isa": "2/2 portable ISA audits passed",
+    "feature_off": "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=OFF production archive built successfully",
+    "benchmark_contracts": [
+      "benchmark JSON regression passed without changing historical v1-v9 schemas",
+      "schema v10 strictly binds the R=6..8 diagnostic control",
+      "ISA-L comparison parser self-test passed and rejected 22 malformed Leopard documents"
+    ],
+    "contract_coverage": [
+      "backend startup KAT against all eight independently checked generator-column logs",
+      "malformed private backend flags fail closed",
+      "independent direct systematic generator parity oracle",
+      "ordinary encode and one-item batch routing",
+      "packed unaligned source and destination slabs",
+      "sparse and null output fallback",
+      "valid detached and non-packed input fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output, scratch, and batch-metadata overlap rejection",
+      "forced-transform and scalar-backend fallback",
+      "same-binary diagnostic control route"
+    ]
+  },
+  "promotion_policy": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.0,
+    "credible_neighbor_regression_floor": 0.9803921568627451,
+    "online_benchmarking": false,
+    "wire_change": false
+  },
+  "final_disposition": {
+    "promoted": true,
+    "reason": "The exact fixed ninth-source generator column extends the already-qualified T=8 first-block terminal to the three additional transmitted parity counts without a padded second inverse transform or punctured stores. Every target clears both promotion floors with wide margins, R=5 remains byte-identical and independently requalified, and no inactive neighboring cell has a credible regression."
+  }
+}
