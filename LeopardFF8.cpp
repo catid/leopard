@@ -1454,7 +1454,8 @@ static void IFFT_DIT_Encoder(
     void** work,
     void** xor_result,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    bool contiguous_zero_suffix)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
@@ -1483,8 +1484,45 @@ static void IFFT_DIT_Encoder(
             ? (m_truncated + 3U) & ~3U
             : m_truncated;
         bool return_after_radix8 = false;
-        for (unsigned i = initialized_prefix; i < m; ++i)
-            memset(work[i], 0, bytes);
+        if (contiguous_zero_suffix && initialized_prefix < m)
+        {
+            const size_t row_bytes = static_cast<size_t>(bytes);
+            const size_t suffix_rows = m - initialized_prefix;
+            const bool aggregate_zero_safe =
+                row_bytes <= SIZE_MAX / suffix_rows;
+            LEO_DEBUG_ASSERT(aggregate_zero_safe);
+            if (!aggregate_zero_safe)
+            {
+                for (unsigned i = initialized_prefix; i < m; ++i)
+                    memset(work[i], 0, bytes);
+            }
+            else
+            {
+#if !defined(NDEBUG)
+                /* The aggregate form requires rows from one backing
+                   allocation, not merely numerically adjacent unrelated
+                   objects.  Integer stepping keeps this diagnostic free of
+                   cross-object pointer arithmetic. */
+                uintptr_t expected =
+                    reinterpret_cast<uintptr_t>(work[initialized_prefix]);
+                for (unsigned i = initialized_prefix + 1; i < m; ++i)
+                {
+                    LEO_DEBUG_ASSERT(expected <= UINTPTR_MAX - row_bytes);
+                    expected += row_bytes;
+                    LEO_DEBUG_ASSERT(
+                        reinterpret_cast<uintptr_t>(work[i]) == expected);
+                }
+                static_cast<void>(expected);
+#endif
+                memset(work[initialized_prefix], 0,
+                    suffix_rows * row_bytes);
+            }
+        }
+        else
+        {
+            for (unsigned i = initialized_prefix; i < m; ++i)
+                memset(work[i], 0, bytes);
+        }
 
         unsigned r = 0;
         /*
@@ -2610,7 +2648,8 @@ void ReedSolomonEncode(
     const void* const* data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
-    bool allow_sub_2k_register_kernels)
+    bool allow_sub_2k_register_kernels,
+    bool contiguous_temporary_work)
 {
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
@@ -2620,11 +2659,9 @@ void ReedSolomonEncode(
     const bool dense_schedule = !sparse_plans ||
         sparse_plans->block_count == 0;
     // Exact-main AVX2 crossover measurements qualify every valid T=2 shape
-    // from 2 KiB.  The generated K=2/3 circuit is also selected for complete
-    // 32-byte vectors below that boundary; its fixed packed terminal handles
-    // the common public layout, while this predicate accelerates validated
-    // irregular layouts without changing their validation contract.  For
-    // T=4, complete sub-2-KiB AVX2 vectors can use the
+    // from 2 KiB.  Below that boundary the generated packed terminal handles
+    // dense public and prevalidated layouts without perturbing this generic
+    // transform.  For T=4, complete sub-2-KiB AVX2 vectors can use the
     // existing register-resident K=3..7/K=9..11 kernels without staging the
     // four-row accumulator.  Larger calls retain the established T=4
     // thresholds and K=8/K>=12 direct-input callback.  Keep the boundaries
@@ -2637,15 +2674,8 @@ void ReedSolomonEncode(
         (buffer_bytes & 31U) == 0 &&
         ((original_count >= 3 && original_count <= 7) ||
          (original_count >= 9 && original_count <= 11));
-    const bool sub_2k_register_t2 =
-        allow_sub_2k_register_kernels &&
-        ops.kind == LEO2_BACKEND_AVX2 && m == 2 &&
-        original_count >= 2 && original_count <= 3 &&
-        buffer_bytes >= 32U && buffer_bytes < 2U * 1024U &&
-        (buffer_bytes & 31U) == 0;
     const bool small_transform_shape =
-        m == 2 ? original_count >= 2 &&
-            (buffer_bytes >= 2U * 1024U || sub_2k_register_t2) :
+        m == 2 ? original_count >= 2 && buffer_bytes >= 2U * 1024U :
         m == 4 && original_count >= 3 &&
             (buffer_bytes >= 2U * 1024U || sub_2k_register_t4);
     if ((ops.kind == LEO2_BACKEND_AVX2 ||
@@ -2803,7 +2833,8 @@ void ReedSolomonEncode(
         work,
         nullptr, // No xor output
         m,
-        skewLUT);
+        skewLUT,
+        false);
 
     const unsigned last_count = original_count % m;
     if (m >= original_count)
@@ -2825,7 +2856,8 @@ void ReedSolomonEncode(
             work + m, // temporary workspace
             work, // xor destination
             m,
-            skewLUT);
+            skewLUT,
+            false);
     }
 
     // Handle final partial set of m pieces:
@@ -2844,7 +2876,8 @@ void ReedSolomonEncode(
             work + m, // temporary workspace
             work, // xor destination
             m,
-            skewLUT);
+            skewLUT,
+            contiguous_temporary_work);
     }
 
 skip_body:
@@ -3086,7 +3119,8 @@ void ReedSolomonEncodeLow(
         work,
         nullptr,
         p,
-        FFTSkewStorage);
+        FFTSkewStorage,
+        false);
 
     // Evaluate the immutable coefficient block on each requested parity coset.
     // The out-of-place first layer writes work[p..2p) directly, avoiding the

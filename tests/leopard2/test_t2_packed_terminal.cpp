@@ -226,6 +226,90 @@ void ExercisePackedCell(
         "packed batch T=2 terminal selection mismatch");
     CheckParity(k, bytes, original, recovery);
 
+    if (expect_terminal)
+    {
+        AlignedBuffer second_output(kRecoveryCount * bytes + 16);
+        AlignedBuffer second_scratch(
+            scratch_bytes + leo2_scratch_alignment());
+        std::vector<uint8_t> detached_source(bytes);
+        std::memcpy(&detached_source[0], original[k - 1], bytes);
+        const void* second_original[3] = {
+            original[0], original[1], original[2]
+        };
+        second_original[k - 1] = &detached_source[0];
+        void* second_recovery[kRecoveryCount] = {
+            second_output.bytes() + 2,
+            second_output.bytes() + 2 + bytes + 5
+        };
+        ResetOutput(output.bytes() + 3, bytes);
+        std::memset(second_recovery[0], 0xa5, bytes);
+        std::memset(second_recovery[1], 0xa5, bytes);
+        leo2_encode_batch_item items[2] = {
+            { bytes, original, recovery, scratch.data(), scratch_bytes },
+            { bytes, second_original, second_recovery,
+                second_scratch.data(), scratch_bytes }
+        };
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch(codec, items, 2), LEO2_SUCCESS,
+            "execute packed T=2 two-item batch");
+        Require(PackedCalls() == 2,
+            "prevalidated two-item T=2 routing mismatch");
+        CheckParity(k, bytes, original, recovery);
+        CheckParity(k, bytes, original, second_recovery);
+
+        leo2_encode_batch_binding* two_item_binding = NULL;
+        RequireResult(leo2_encode_batch_binding_create(
+            codec, items, 2, &two_item_binding), LEO2_SUCCESS,
+            "create two-item T=2 encode binding");
+        ResetOutput(output.bytes() + 3, bytes);
+        std::memset(second_recovery[0], 0xa5, bytes);
+        std::memset(second_recovery[1], 0xa5, bytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch_binding_execute(two_item_binding),
+            LEO2_SUCCESS, "execute two-item T=2 encode binding");
+        Require(PackedCalls() == 2,
+            "prevalidated two-item binding T=2 routing mismatch");
+        CheckParity(k, bytes, original, recovery);
+        CheckParity(k, bytes, original, second_recovery);
+        leo2_encode_batch_binding_destroy(two_item_binding);
+
+        void* const second_parity_one = second_recovery[1];
+        second_recovery[1] = NULL;
+        ResetOutput(output.bytes() + 3, bytes);
+        std::memset(second_recovery[0], 0xa5, bytes);
+        std::memset(second_parity_one, 0xa5, bytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch(codec, items, 2), LEO2_SUCCESS,
+            "execute mixed full/sparse T=2 two-item batch");
+        Require(PackedCalls() == 1,
+            "mixed sparse T=2 batch routing mismatch");
+        CheckParity(k, bytes, original, recovery);
+        CheckParity(k, bytes, second_original, second_recovery);
+        for (size_t i = 0; i < bytes; ++i)
+            Require(static_cast<const uint8_t*>(second_parity_one)[i] == 0xa5,
+                "mixed sparse T=2 batch modified null parity");
+
+        leo2_encode_batch_binding* sparse_binding = NULL;
+        RequireResult(leo2_encode_batch_binding_create(
+            codec, items, 2, &sparse_binding), LEO2_SUCCESS,
+            "create mixed sparse T=2 encode binding");
+        ResetOutput(output.bytes() + 3, bytes);
+        std::memset(second_recovery[0], 0xa5, bytes);
+        std::memset(second_parity_one, 0xa5, bytes);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch_binding_execute(sparse_binding),
+            LEO2_SUCCESS, "execute mixed sparse T=2 encode binding");
+        Require(PackedCalls() == 1,
+            "mixed sparse binding T=2 routing mismatch");
+        CheckParity(k, bytes, original, recovery);
+        CheckParity(k, bytes, second_original, second_recovery);
+        for (size_t i = 0; i < bytes; ++i)
+            Require(static_cast<const uint8_t*>(second_parity_one)[i] == 0xa5,
+                "mixed sparse T=2 binding modified null parity");
+        leo2_encode_batch_binding_destroy(sparse_binding);
+        second_recovery[1] = second_parity_one;
+    }
+
     ResetOutput(output.bytes() + 3, bytes);
     leo2_encode_batch_binding* binding = NULL;
     RequireResult(leo2_encode_batch_binding_create(
@@ -284,6 +368,15 @@ void ExerciseFallbackAndErrors(leo2_context* context)
     for (size_t i = 0; i < bytes; ++i)
         Require(output.bytes()[bytes + i] == 0xa5,
             "sparse T=2 fallback modified null parity");
+
+    recovery[0] = NULL;
+    recovery[1] = NULL;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, bytes, original, recovery,
+        scratch.data(), scratch_bytes), LEO2_SUCCESS,
+        "execute all-null T=2 no-op");
+    Require(PackedCalls() == 0,
+        "all-null T=2 no-op entered the packed circuit");
 
     SetPackedPointers(
         input.bytes(), output.bytes(), k, bytes, original, recovery);

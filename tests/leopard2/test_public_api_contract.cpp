@@ -936,6 +936,107 @@ void test_alias_and_scratch_contracts(leo2_context* context, Counts* counts)
         "monotonic parity subset changed requested parity");
     counts->alias_checks += 7;
 
+    /* Exercise the aggregate packed-slab validator outside dedicated tiny
+       terminals.  K=17 leaves a partial final T=16 message block and remains
+       outside the bounded direct-encode dispatcher. */
+    static const size_t dense_k = 17;
+    static const size_t dense_r = 9;
+    CodecOwner dense_codec;
+    require_result(leo2_codec_create(context, dense_k, dense_r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL,
+        &dense_codec.codec), LEO2_SUCCESS,
+        "dense partial-block codec create");
+    Shards dense_source(dense_k, Bytes(bytes, 0));
+    fill_shards(dense_source, 0x6d2b79f5u);
+    std::vector<const void*> dense_source_pointers =
+        const_pointers(dense_source);
+    Shards dense_expected(dense_r, Bytes(bytes, 0));
+    std::vector<void*> dense_expected_pointers =
+        mutable_pointers(dense_expected);
+    size_t dense_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(dense_codec.codec, bytes,
+        &dense_scratch_bytes), LEO2_SUCCESS,
+        "dense partial-block scratch query");
+    AlignedBuffer dense_scratch(dense_scratch_bytes);
+    require_result(leo2_encode(dense_codec.codec, bytes,
+        &dense_source_pointers[0], &dense_expected_pointers[0],
+        dense_scratch.data(), dense_scratch.size()), LEO2_SUCCESS,
+        "dense partial-block reference encode");
+
+    Bytes dense_storage((dense_k + dense_r) * bytes, 0);
+    const void* dense_original[dense_k];
+    void* dense_recovery[dense_r];
+    for (size_t i = 0; i < dense_k; ++i)
+    {
+        memcpy(&dense_storage[i * bytes], &dense_source[i][0], bytes);
+        dense_original[i] = &dense_storage[i * bytes];
+    }
+    for (size_t i = 0; i < dense_r; ++i)
+        dense_recovery[i] = &dense_storage[(dense_k + i) * bytes];
+    require_result(leo2_encode(dense_codec.codec, bytes, dense_original,
+        dense_recovery, dense_scratch.data(), dense_scratch.size()),
+        LEO2_SUCCESS, "aggregate packed partial-block encode");
+    for (size_t i = 0; i < dense_r; ++i)
+        require(memcmp(dense_recovery[i], &dense_expected[i][0], bytes) == 0,
+            "aggregate packed partial-block encode changed parity");
+
+    const Bytes dense_before_rejections = dense_storage;
+    void* dense_input_overlap[dense_r];
+    for (size_t i = 0; i < dense_r; ++i)
+        dense_input_overlap[i] =
+            &dense_storage[(dense_k - 1 + i) * bytes];
+    require_result(leo2_encode(dense_codec.codec, bytes, dense_original,
+        dense_input_overlap, dense_scratch.data(), dense_scratch.size()),
+        LEO2_OVERLAP, "aggregate packed input/output overlap");
+    void* dense_scratch_overlap[dense_r];
+    for (size_t i = 0; i < dense_r; ++i)
+        dense_scratch_overlap[i] =
+            static_cast<uint8_t*>(dense_scratch.data()) + i * bytes;
+    require_result(leo2_encode(dense_codec.codec, bytes, dense_original,
+        dense_scratch_overlap, dense_scratch.data(), dense_scratch.size()),
+        LEO2_OVERLAP, "aggregate packed scratch/output overlap");
+    const void* dense_overflow_original[dense_k];
+    memcpy(dense_overflow_original, dense_original,
+        sizeof(dense_overflow_original));
+    dense_overflow_original[0] =
+        reinterpret_cast<const void*>(near_address_end);
+    require_result(leo2_encode(dense_codec.codec, bytes,
+        dense_overflow_original, dense_recovery,
+        dense_scratch.data(), dense_scratch.size()),
+        LEO2_INVALID_ARGUMENT, "aggregate packed overflowing input span");
+    void* dense_overflow_recovery[dense_r];
+    memcpy(dense_overflow_recovery, dense_recovery,
+        sizeof(dense_overflow_recovery));
+    dense_overflow_recovery[0] =
+        reinterpret_cast<void*>(near_address_end);
+    require_result(leo2_encode(dense_codec.codec, bytes, dense_original,
+        dense_overflow_recovery, dense_scratch.data(), dense_scratch.size()),
+        LEO2_INVALID_ARGUMENT, "aggregate packed overflowing output span");
+    require(dense_storage == dense_before_rejections,
+        "rejected aggregate packed overlap changed shard storage");
+
+    alignas(64) uint8_t dense_protected_storage[
+        sizeof(leo2_encode_batch_item) + dense_r * 17] = {};
+    leo2_encode_batch_item* const dense_protected_item =
+        new (dense_protected_storage) leo2_encode_batch_item;
+    void* dense_protected_recovery[dense_r];
+    for (size_t i = 0; i < dense_r; ++i)
+        dense_protected_recovery[i] = dense_protected_storage + i * bytes;
+    dense_protected_item->shard_bytes = bytes;
+    dense_protected_item->original = dense_original;
+    dense_protected_item->recovery = dense_protected_recovery;
+    dense_protected_item->scratch = dense_scratch.data();
+    dense_protected_item->scratch_bytes = dense_scratch.size();
+    const leo2_encode_batch_item dense_protected_before =
+        *dense_protected_item;
+    require_result(leo2_encode_batch(
+        dense_codec.codec, dense_protected_item, 1),
+        LEO2_OVERLAP, "aggregate packed output/batch-metadata overlap");
+    require(memcmp(dense_protected_item, &dense_protected_before,
+            sizeof(*dense_protected_item)) == 0,
+        "aggregate metadata-overlap rejection changed batch descriptor");
+    counts->alias_checks += 6;
+
     const Shards exact_encoded = encoded;
     AlignedBuffer general_metadata_scratch(source_scratch_bytes);
     const void** general_scratch_original =

@@ -160,7 +160,8 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
-    bool allow_sub_2k_register_kernels = true);
+    bool allow_sub_2k_register_kernels = true,
+    bool contiguous_temporary_work = false);
 void ReedSolomonEncode(
     uint64_t buffer_bytes,
     unsigned original_count,

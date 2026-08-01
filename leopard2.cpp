@@ -773,6 +773,14 @@ static leo2_result EncodeInternal(
     size_t protected_metadata_bytes,
     bool prevalidated);
 
+#ifdef LEO_HAS_FF8
+static bool TryExecuteGF8AVX2T2Prevalidated(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery);
+#endif
+
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
 static void ExecuteHighT8PartialBinding(
     const leopard::backend::Ops& transform_ops,
@@ -4107,6 +4115,88 @@ static LEO_FORCE_INLINE leo2_result ValidateK2R1EncodeBuffers(
     return LEO2_SUCCESS;
 }
 
+/*
+    Applications normally expose systematic and recovery shards as two dense
+    slabs, with their pointer arrays enumerating each slab in wire order.  A
+    successful aggregate proof is equivalent to validating K+R individual
+    ranges and then sweeping them for overlap, but it avoids constructing the
+    same begin/end pairs more than once on every tiny-shard encode call.
+
+    This is deliberately only a recognition fast path.  Sparse outputs,
+    aliased inputs, arbitrary pointer order, and every other valid layout fall
+    through to the general validator below.  The aggregate ranges also make
+    the proof atomic: all metadata, scratch, and data overlap checks finish
+    before EncodeInternal can write an output byte.
+*/
+static bool TryValidateDensePackedGF8EncodeBuffers(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    const AddressRange& scratch_range,
+    const AddressRange* metadata_ranges,
+    size_t metadata_count,
+    leo2_result& result_out)
+{
+#ifdef LEO_HAS_FF8
+    if (!codec || !original || !recovery ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !original[0] || !recovery[0])
+        return false;
+
+    LEO_DEBUG_ASSERT(
+        shard_bytes <= std::numeric_limits<size_t>::max());
+    const size_t bytes = static_cast<size_t>(shard_bytes);
+    size_t input_bytes = 0;
+    size_t output_bytes = 0;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!CheckedMultiply(codec->original_count, bytes, input_bytes) ||
+        !CheckedMultiply(codec->recovery_count, bytes, output_bytes) ||
+        !MakeRange(original[0], input_bytes, input_range) ||
+        !MakeRange(recovery[0], output_bytes, output_range))
+        return false;
+
+    uintptr_t expected = input_range.begin;
+    uintptr_t pointer_mismatch = 0;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        pointer_mismatch |=
+            reinterpret_cast<uintptr_t>(original[i]) ^ expected;
+        expected += bytes;
+    }
+    expected = output_range.begin;
+    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    {
+        pointer_mismatch |=
+            reinterpret_cast<uintptr_t>(recovery[i]) ^ expected;
+        expected += bytes;
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    result_out =
+        RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(output_range, metadata_ranges, metadata_count)
+            ? LEO2_OVERLAP
+            : LEO2_SUCCESS;
+    return true;
+#else
+    (void)codec;
+    (void)shard_bytes;
+    (void)original;
+    (void)recovery;
+    (void)scratch_range;
+    (void)metadata_ranges;
+    (void)metadata_count;
+    (void)result_out;
+    return false;
+#endif
+}
+
 static leo2_result ValidateEncodeBuffers(
     const leo2_codec* codec,
     uint64_t shard_bytes,
@@ -4115,8 +4205,11 @@ static leo2_result ValidateEncodeBuffers(
     void* scratch,
     size_t scratch_bytes,
     const void* protected_metadata,
-    size_t protected_metadata_bytes)
+    size_t protected_metadata_bytes,
+    bool* dense_packed_full_out = NULL)
 {
+    if (dense_packed_full_out)
+        *dense_packed_full_out = false;
     if (!original || !recovery)
         return LEO2_INVALID_ARGUMENT;
 
@@ -4143,6 +4236,16 @@ static leo2_result ValidateEncodeBuffers(
     if (RangeOverlapsAny(
             scratch_range, metadata_ranges, metadata_count))
         return LEO2_OVERLAP;
+
+    leo2_result packed_result = LEO2_INTERNAL_ERROR;
+    if (TryValidateDensePackedGF8EncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch_range,
+            metadata_ranges, metadata_count, packed_result))
+    {
+        if (dense_packed_full_out && packed_result == LEO2_SUCCESS)
+            *dense_packed_full_out = true;
+        return packed_result;
+    }
 
     size_t output_count = 0;
     AddressRange single_output = { 0, 0 };
@@ -5805,10 +5908,12 @@ static void ExecuteTransformEncodePass(
     void** parity,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
-    bool allow_sub_2k_register_kernels)
+    bool allow_sub_2k_register_kernels,
+    bool contiguous_temporary_work)
 {
 #ifndef LEO_HAS_FF8
     (void)allow_sub_2k_register_kernels;
+    (void)contiguous_temporary_work;
 #endif
 #ifndef LEO_HAS_FF16
     // Source-policy sizing is a GF16-only input.  Keep the shared execution
@@ -5838,7 +5943,8 @@ static void ExecuteTransformEncodePass(
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
                 padded_original, work, sparse_plans,
-                allow_sub_2k_register_kernels);
+                allow_sub_2k_register_kernels,
+                contiguous_temporary_work);
 #else
             return;
 #endif
@@ -9728,6 +9834,11 @@ static leo2_result RunEncodeBatchItem(void* context, size_t index)
 {
     const EncodeBatchTaskContext* batch = static_cast<const EncodeBatchTaskContext*>(context);
     const leo2_encode_batch_item& item = batch->items[index];
+#ifdef LEO_HAS_FF8
+    if (TryExecuteGF8AVX2T2Prevalidated(
+            batch->codec, item.shard_bytes, item.original, item.recovery))
+        return LEO2_SUCCESS;
+#endif
     return EncodeInternal(
         batch->codec, item.shard_bytes, item.original, item.recovery,
         item.scratch, item.scratch_bytes, batch->items, batch->item_bytes,
@@ -11682,6 +11793,23 @@ static LEO_FORCE_INLINE void ExecuteGF8AVX2T2PackedTerminal(
 #endif
 }
 
+static bool TryExecuteGF8AVX2T2Prevalidated(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    if (!IsGF8AVX2T2PackedTerminalEligible(codec, shard_bytes) ||
+        !recovery[0] || !recovery[1])
+        return false;
+    const size_t bytes = static_cast<size_t>(shard_bytes);
+    if (codec->original_count == 2)
+        ExecuteGF8AVX2T2PackedTerminal<2>(original, recovery, bytes);
+    else
+        ExecuteGF8AVX2T2PackedTerminal<3>(original, recovery, bytes);
+    return true;
+}
+
 #if defined(_MSC_VER)
 #define LEO2_T2_PACKED_TERMINAL_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
@@ -12612,25 +12740,6 @@ static leo2_result EncodeInternal(
     size_t protected_metadata_bytes,
     bool prevalidated)
 {
-#ifdef LEO_HAS_FF8
-    if (prevalidated &&
-        IsGF8AVX2T2PackedTerminalEligible(codec, shard_bytes) &&
-        recovery[0] && recovery[1])
-    {
-        const size_t bytes = static_cast<size_t>(shard_bytes);
-        if (codec->original_count == 2)
-        {
-            ExecuteGF8AVX2T2PackedTerminal<2>(
-                original, recovery, bytes);
-        }
-        else
-        {
-            ExecuteGF8AVX2T2PackedTerminal<3>(
-                original, recovery, bytes);
-        }
-        return LEO2_SUCCESS;
-    }
-#endif
     const bool single_side = UseSingleSideEncodeLayout(codec);
     if (single_side && IsLegacyHighK1R1Codec(codec))
     {
@@ -12724,6 +12833,7 @@ static leo2_result EncodeInternal(
     leo2_result result = EncodeLayout(codec, shard_bytes, geometry);
     if (result != LEO2_SUCCESS)
         return result;
+    bool dense_packed_full = false;
     if (!prevalidated)
     {
         AddressRange scratch_range;
@@ -12733,19 +12843,25 @@ static leo2_result EncodeInternal(
             return result;
         result = ValidateEncodeBuffers(
             codec, shard_bytes, original, recovery, scratch, scratch_bytes,
-            protected_metadata, protected_metadata_bytes);
+            protected_metadata, protected_metadata_bytes,
+            &dense_packed_full);
         if (result != LEO2_SUCCESS)
             return result;
     }
 
-    uint32_t requested_recovery_count = 0;
-    uint32_t requested_recovery_prefix = 0;
-    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    uint32_t requested_recovery_count = dense_packed_full
+        ? codec->recovery_count : 0;
+    uint32_t requested_recovery_prefix = dense_packed_full
+        ? codec->recovery_count : 0;
+    if (!dense_packed_full)
     {
-        if (!recovery[i])
-            continue;
-        ++requested_recovery_count;
-        requested_recovery_prefix = i + 1;
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        {
+            if (!recovery[i])
+                continue;
+            ++requested_recovery_count;
+            requested_recovery_prefix = i + 1;
+        }
     }
     if (requested_recovery_count == 0)
         return LEO2_SUCCESS;
@@ -12810,7 +12926,10 @@ static leo2_result EncodeInternal(
                 codec, transform_ops, geometry.aligned_prefix_bytes,
                 geometry.aligned_prefix_bytes,
                 requested_recovery_count, requested_recovery_prefix,
-                original, parity, work, &sparse_plans, true);
+                original, parity, work, &sparse_plans, true,
+                codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+                    geometry.work_slot_bytes ==
+                        geometry.aligned_prefix_bytes);
         }
         else
         {
@@ -12856,7 +12975,7 @@ static leo2_result EncodeInternal(
                     codec, transform_ops, pass_bytes,
                     geometry.aligned_prefix_bytes,
                     requested_recovery_count, requested_recovery_prefix,
-                    pass_original, parity, work, &sparse_plans, true);
+                    pass_original, parity, work, &sparse_plans, true, false);
                 first_tile += pass_tiles;
             }
             LEO_DEBUG_ASSERT(first_tile == total_tiles);
@@ -12884,7 +13003,7 @@ static leo2_result EncodeInternal(
             codec, transform_ops, kScratchAlignment, kScratchAlignment,
             requested_recovery_count,
             requested_recovery_prefix,
-            padded_original, parity, work, &sparse_plans, false);
+            padded_original, parity, work, &sparse_plans, false, false);
 
         for (uint32_t i = 0; i < codec->recovery_count; ++i)
         {

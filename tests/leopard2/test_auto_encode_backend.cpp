@@ -1412,9 +1412,12 @@ void test_small_high_encode(
         }
     }
 
-    // Lock the measured sub-2-KiB T=2/T=4 shapes and every adjacent K/side
-    // control.  A ragged public shard may contribute one complete aligned
-    // prefix here; its final staged tile remains on the mature path.
+    // Lock the measured sub-2-KiB T=4 shapes and every adjacent K/side
+    // control.  Dense T=2 calls use their packed public/batch terminal;
+    // irregular T=2 layouts deliberately leave the generic transform
+    // unchanged below 2 KiB.  A ragged public shard may contribute one
+    // complete aligned prefix here; its final staged tile remains on the
+    // mature path.
     const TestCase controls[] = {
         { 1, 2, 65536 },
         { 2, 2, 2047 },
@@ -1444,13 +1447,9 @@ void test_small_high_encode(
             ((test_case.k >= 3 && test_case.k <= 7) ||
              (test_case.k >= 9 && test_case.k <= 11)) &&
             (test_case.bytes / 64U) * 64U >= 32U;
-        const bool sub_2k_t2 =
-            test_case.r == 2 &&
-            (test_case.k == 2 || test_case.k == 3) &&
-            (test_case.bytes / 64U) * 64U >= 32U;
         require(leopard::ff8::TestOnlyGetHighEncodeCounts().
                     small_transform_calls ==
-                        (sub_2k_t2 || sub_2k_t4 ? 1U : 0U),
+                        (sub_2k_t4 ? 1U : 0U),
             "T=2/T=4 coarse-kernel policy escaped its shape bounds");
     }
 }
