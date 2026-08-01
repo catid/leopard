@@ -137,10 +137,47 @@ Repeated execution through 64 KiB is therefore pure byte work; it does not
 revisit descriptor, address-range, alias, plan, or dispatch state. Larger
 payloads and all other shapes retain the general prevalidated executor.
 
-Current-source frozen-binary evidence is collected only after the API and
-backend changes are committed. This keeps the documented executable hashes
-and source identity reproducible instead of carrying forward measurements from
-an intermediate dirty tree.
+A frozen-binary holdout on 2026-08-01 compared the committed path with a
+same-source control that disabled the pre-resolved terminal and with the exact
+`main`-branch Leopard codec at commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`. Candidate and control both attest
+clean source commit `dea78fd4a60f72d0c45c2d8488868da27e573766` and tree
+`62964f199496003600133df4d77f79326fe70ad6`.
+
+Each lane ran twice in each of nine counterbalanced process rounds on pinned
+CPU 4. The reserved SMT sibling CPU 20 accumulated 1,902 idle ticks and zero
+non-idle ticks. Each process retained 11 samples after 100 warmups with one
+thread. The table reports the median of 18 process medians in microseconds per
+call and a deterministic 95-percent bootstrap interval for the geometric-mean
+`main / Leopard2` ratio, resampling whole counterbalanced rounds. Larger ratios
+are better for Leopard2.
+
+| Bytes | Main encode | L2 encode | Encode ratio [95%] | Main decode | L2 decode | Decode ratio [95%] |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 64 | 0.0031985 | 0.0024835 | 1.290 [1.285, 1.296] | 0.0037455 | 0.0025305 | 1.491 [1.469, 1.517] |
+| 1,024 | 0.0060145 | 0.0055740 | 1.074 [1.031, 1.124] | 0.0070950 | 0.0050215 | 1.342 [1.279, 1.423] |
+| 4,096 | 0.0242415 | 0.0203360 | 1.189 [1.172, 1.209] | 0.0234895 | 0.0201060 | 1.166 [1.144, 1.185] |
+| 65,536 | 0.5277055 | 0.5238180 | 1.007 [1.007, 1.008] | 0.5271810 | 0.5239175 | 1.006 [1.005, 1.007] |
+
+Median binding setup was 0.060 microseconds for encode and 0.070 microseconds
+for decode. Against main execution, it amortizes after approximately 84/58,
+137/34, 16/21, and 16/22 encode/decode calls for the four rows respectively.
+The main decode measurement includes the legacy call's setup; Leopard2 codec,
+decode-plan, and binding setup remain separately reported rather than hidden in
+execution. The same-source control was credibly slower in every cell, with
+geometric-mean control/candidate ratios of 1.018-2.480 for encode and
+1.012-2.715 for decode.
+
+The frozen candidate, control, and exact-main SHA-256 values are
+`8fd91ea320447374a502566ca4b6c379508eabe6a963db35c4d51c524de3b0d7`,
+`028dd374bfd6d4b31f69604c47ae8750eb9406306a4c6b87e1a3c05bac2a0288`,
+and `a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910`.
+Candidate and control `.text` are identical at
+`585e47d4653b6babe021e6092fbaa653fa04cc905509bd5fcf375b3b229a7ea4`.
+All 216 processes passed round-trip and workload-digest checks. The strict
+analyzer and compact result are
+`experiments/leopard2/r1_xor/analyze_k1_binding_holdout.py` and
+`experiments/leopard2/r1_xor/results/k1_binding_dea78fd_20260801.json`.
 
 A frozen-binary, one-core diagnostic on 2026-07-30 compared the exact
 `main`-branch Leopard codec with the reusable Leopard2 binding. Each batch item
