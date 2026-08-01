@@ -1,0 +1,110 @@
+{
+  "schema": "leopard2-current-gf8-gap-map-directional/v1",
+  "status": "diagnostic_not_promotion_evidence",
+  "date_utc": "2026-08-01",
+  "ratio_semantics": "exact Leopard main time divided by Leopard2 time; a value below 1 means Leopard2 is slower",
+  "source_identity": {
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "leopard2_commit": "97ee49afcbd17139ef5b59e1b477f19ca830668d",
+    "leopard2_tree": "550bb87b31c45fd0cfd05a2f783c4ba6497fd1f6",
+    "leopard2_tracked_dirty": false,
+    "exact_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "leopard2_executable_sha256": "936eec8b25c603905fe3b51222ed40e73151a320709df42cb257d7062e33d542",
+    "isa": "pure AVX2; no EVEX/ZMM/k-mask instructions",
+    "profile": "legacy-high-v1",
+    "field": "GF8"
+  },
+  "method": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "timed_cpu": 15,
+    "serialization_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "binary_policy": "immutable frozen executables, SHA-256 verified before and after each campaign",
+    "measurement_policy": "single pinned logical CPU; no concurrent build or benchmark load",
+    "classification_reason": "the bounded runner did not replay the canonical reproducible-build proof or coordinator-exclusion protocol",
+    "small_shard_runner_sha256": "6c58cdf53aef8362d3b299848cebac06fd0c70cdf9b0e48870b16cd59168663a",
+    "small_shard_summary_sha256": "7ba708dfd4d8cada8fef543ba50a2fcf9e046aad02f64799b4733092a549c058",
+    "small_shard_isolation_runner_sha256": "0f7d5ea7ddf31038ad4a99d917c8dc747be76edfc70d450d82a50ae0c046f722",
+    "small_shard_isolation_summary_sha256": "0ef031d1a85bbb54adb00ec0cec23c2eeda501ec39c543f068af91d8ba13368e",
+    "large_shard_summary_sha256": "3dce9ecb2a1228e0b1616c436f45cd52950f6fcc183da1a705e0ad1883fad3fa",
+    "large_shard_isolation_summary_sha256": "845f13618d0736174ac3c2e5da51386167704a40ad7f7a3f1e76232cc6e386d5"
+  },
+  "correctness": {
+    "small_shard_cells": 3783,
+    "large_shard_cells": 2522,
+    "total_cells": 6305,
+    "round_trip_failures": 0,
+    "parity_or_recovery_digest_mismatches": 0,
+    "small_shard_matrix": "every K=1..255; low, middle, and maximum legal GF8 R; one and maximum loss; 64, 256, and 1024 bytes",
+    "large_shard_matrix": "every K=1..255; low, middle, and maximum legal GF8 R; one and maximum loss; 4096 and 65536 bytes"
+  },
+  "small_shard_aggregate": {
+    "64": {
+      "cell_count": 1261,
+      "encode": {"geomean": 0.6884, "slower_cells": 1259, "minimum": 0.2408},
+      "public_one_shot_decode": {"geomean": 1.0687, "slower_cells": 672, "minimum": 0.2284},
+      "reused_plan_decode": {"geomean": 2.0034, "slower_cells": 507, "minimum": 0.2910}
+    },
+    "256": {
+      "cell_count": 1261,
+      "encode": {"geomean": 0.8408, "slower_cells": 1257, "minimum": 0.3214},
+      "public_one_shot_decode": {"geomean": 1.6011, "slower_cells": 589, "minimum": 0.4418},
+      "reused_plan_decode": {"geomean": 2.5870, "slower_cells": 255, "minimum": 0.3450}
+    },
+    "1024": {
+      "cell_count": 1261,
+      "encode": {"geomean": 1.0825, "slower_cells": 120, "minimum": 0.5239},
+      "public_one_shot_decode": {"geomean": 2.5459, "slower_cells": 337, "minimum": 0.4937},
+      "reused_plan_decode": {"geomean": 3.2704, "slower_cells": 17, "minimum": 0.5192}
+    }
+  },
+  "regime_findings": [
+    {
+      "regime": "R=1 at 64 and 256 bytes",
+      "finding": "Leopard2 was slower for every K=1..255 in encode, public one-shot decode, and reused-plan decode. The fixed API validation and AVX2 callback cost dominates the very small XOR/copy payload."
+    },
+    {
+      "regime": "R=1 at 1024 bytes",
+      "finding": "Residual losses are concentrated at small K. Encode lost at K=1..15 and K=21..23; public one-shot decode lost at K=1..15, K=19, K=22..23, and K=30; reused-plan decode lost at K=1..15 and K=22..23."
+    },
+    {
+      "regime": "R greater than 1, encode below 1 KiB",
+      "finding": "At 64 bytes, 1004 of 1006 non-R1 cells were slower; at 256 bytes, 1002 of 1006 were slower. At 1024 bytes only 102 of 1006 were slower, led by tiny K/R and K near 249..254 with R=2."
+    },
+    {
+      "regime": "R greater than 1, one missing original",
+      "finding": "Decode was faster in every 64, 256, and 1024-byte cell because the specialized small-loss repair path avoids the full transform."
+    },
+    {
+      "regime": "R greater than 1, maximum loss, public one-shot decode",
+      "finding": "Plan construction dominates tiny payloads: 417 of 503 cells lost at 64 bytes, 334 of 503 at 256 bytes, and 318 of 503 at 1024 bytes. Reusing a plan removed every such loss at 256 and 1024 bytes."
+    },
+    {
+      "regime": "R greater than 1, maximum loss, reused-plan decode",
+      "finding": "At 64 bytes, 252 of 503 cells remained slower. At 256 and 1024 bytes every cell was faster."
+    },
+    {
+      "regime": "4096 and 65536 bytes",
+      "finding": "The broad screen found no stable encoder regression after isolation. Remaining credible decode losses were K=1/R=1 and a narrow K=37/R=1/4096-byte cell; all other isolated apparent losses became ties or Leopard2 wins."
+    }
+  ],
+  "isolated_representatives": [
+    {"K": 1, "R": 1, "bytes": 64, "loss": 1, "encode": {"ratio": 0.871089, "ci95": [0.862881, 0.879376]}, "public_one_shot_decode": {"ratio": 0.413575, "ci95": [0.406607, 0.420663]}},
+    {"K": 2, "R": 1, "bytes": 64, "loss": 1, "encode": {"ratio": 0.307500, "ci95": [0.305180, 0.309838]}, "public_one_shot_decode": {"ratio": 0.396907, "ci95": [0.389971, 0.403966]}, "reused_plan_decode": {"ratio": 0.294966, "ci95": [0.287969, 0.302133]}},
+    {"K": 128, "R": 1, "bytes": 64, "loss": 1, "encode": {"ratio": 0.582208, "ci95": [0.575885, 0.588602]}, "public_one_shot_decode": {"ratio": 0.710460, "ci95": [0.704939, 0.716025]}, "reused_plan_decode": {"ratio": 0.714204, "ci95": [0.708513, 0.719941]}},
+    {"K": 2, "R": 1, "bytes": 256, "loss": 1, "encode": {"ratio": 0.403833, "ci95": [0.394252, 0.413647]}, "public_one_shot_decode": {"ratio": 0.453480, "ci95": [0.445923, 0.461166]}, "reused_plan_decode": {"ratio": 0.347711, "ci95": [0.342565, 0.352934]}},
+    {"K": 128, "R": 1, "bytes": 256, "loss": 1, "encode": {"ratio": 0.689695, "ci95": [0.684184, 0.695251]}, "public_one_shot_decode": {"ratio": 0.723119, "ci95": [0.716818, 0.729475]}, "reused_plan_decode": {"ratio": 0.727035, "ci95": [0.721564, 0.732547]}},
+    {"K": 2, "R": 1, "bytes": 1024, "loss": 1, "encode": {"ratio": 0.641156, "ci95": [0.623847, 0.658944]}, "public_one_shot_decode": {"ratio": 0.628848, "ci95": [0.619345, 0.638497]}, "reused_plan_decode": {"ratio": 0.522938, "ci95": [0.516375, 0.529584]}},
+    {"K": 2, "R": 2, "bytes": 64, "loss": 1, "encode": {"ratio": 0.233521, "ci95": [0.231298, 0.235767]}, "public_one_shot_decode": {"ratio": 4.250924, "ci95": [4.212769, 4.289423]}, "reused_plan_decode": {"ratio": 18.720367, "ci95": [18.608311, 18.833098]}},
+    {"K": 64, "R": 64, "bytes": 64, "loss": 64, "encode": {"ratio": 0.710651, "ci95": [0.704454, 0.716901]}, "public_one_shot_decode": {"ratio": 0.788501, "ci95": [0.785163, 0.791852]}, "reused_plan_decode": {"ratio": 1.351262, "ci95": [1.346309, 1.356234]}},
+    {"K": 106, "R": 53, "bytes": 64, "loss": 53, "encode": {"ratio": 0.832727, "ci95": [0.826126, 0.839381]}, "public_one_shot_decode": {"ratio": 0.260004, "ci95": [0.259319, 0.260690]}, "reused_plan_decode": {"ratio": 0.758240, "ci95": [0.756487, 0.759996]}},
+    {"K": 216, "R": 32, "bytes": 64, "loss": 32, "encode": {"ratio": 0.784087, "ci95": [0.768197, 0.800305]}, "public_one_shot_decode": {"ratio": 0.230339, "ci95": [0.229405, 0.231276]}, "reused_plan_decode": {"ratio": 0.826585, "ci95": [0.821083, 0.832124]}},
+    {"K": 27, "R": 14, "bytes": 256, "loss": 14, "encode": {"ratio": 0.803607, "ci95": [0.794728, 0.812586]}, "public_one_shot_decode": {"ratio": 0.450253, "ci95": [0.448231, 0.452284]}, "reused_plan_decode": {"ratio": 1.058227, "ci95": [1.053327, 1.063150]}},
+    {"K": 12, "R": 6, "bytes": 1024, "loss": 6, "encode": {"ratio": 0.920388, "ci95": [0.914605, 0.926208]}, "public_one_shot_decode": {"ratio": 0.744990, "ci95": [0.741401, 0.748597]}, "reused_plan_decode": {"ratio": 1.313888, "ci95": [1.306450, 1.321368]}},
+    {"K": 254, "R": 2, "bytes": 1024, "loss": 2, "encode": {"ratio": 0.953398, "ci95": [0.928655, 0.978801]}, "public_one_shot_decode": {"ratio": 2.850968, "ci95": [2.836534, 2.865476]}, "reused_plan_decode": {"ratio": 3.470887, "ci95": [3.447365, 3.494569]}},
+    {"K": 1, "R": 1, "bytes": 4096, "loss": 1, "encode": {"ratio": 1.087655, "ci95": [1.065261, 1.110519]}, "public_one_shot_decode": {"ratio": 0.847257, "ci95": [0.831108, 0.863721]}, "reused_plan_decode": {"ratio": 1.053361, "ci95": [1.032185, 1.074971]}},
+    {"K": 37, "R": 1, "bytes": 4096, "loss": 1, "encode": {"ratio": 1.106106, "ci95": [1.102450, 1.109775]}, "public_one_shot_decode": {"ratio": 0.993061, "ci95": [0.989062, 0.997076]}, "reused_plan_decode": {"ratio": 0.983933, "ci95": [0.975458, 0.992483]}},
+    {"K": 1, "R": 1, "bytes": 65536, "loss": 1, "encode": {"ratio": 0.998114, "ci95": [0.994455, 1.001787]}, "public_one_shot_decode": {"ratio": 0.992354, "ci95": [0.991170, 0.993540]}, "reused_plan_decode": {"ratio": 0.998066, "ci95": [0.996917, 0.999216]}},
+    {"K": 254, "R": 1, "bytes": 4096, "loss": 1, "encode": {"ratio": 1.025687, "ci95": [1.010386, 1.041221]}, "public_one_shot_decode": {"ratio": 1.038283, "ci95": [1.022581, 1.054225]}, "reused_plan_decode": {"ratio": 1.040901, "ci95": [1.026335, 1.055673]}}
+  ],
+  "conclusion": "Leopard2's remaining GF8 AVX2 deficits are predominantly tiny-shard fixed-overhead problems, not failures of the specialized Reed-Solomon algorithms. At 4 KiB and above only the degenerate R=1 copy/XOR path has a measurable residual. The largest non-R1 decode losses are one-shot plan-construction costs; plan reuse removes them by 256 bytes. Tiny encoding remains the broadest unresolved gap."
+}
