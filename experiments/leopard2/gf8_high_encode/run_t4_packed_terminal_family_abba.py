@@ -29,7 +29,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 
 SCHEMA = "leopard2-gf8-t4-packed-terminal-family-abba/v1"
@@ -86,6 +86,12 @@ def load_support() -> Any:
 
 T8_SUPPORT = load_support()
 MAIN_SUPPORT = T8_SUPPORT.SUPPORT
+RUNNER_PATH = Path(__file__).resolve()
+# Opt-in provenance and binary-equivalence hooks for configured wrappers.  The
+# original T=4 campaign retains its historical checks when these remain empty.
+RUNNER_DEPENDENCIES: tuple[Path, ...] = ()
+EXPECTED_BINARY_SHA256: Mapping[str, str] | None = None
+REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
 
 
 def sha256(path: Path) -> str:
@@ -94,6 +100,25 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def support_file_identities(paths: Sequence[Path]) -> list[dict[str, Any]]:
+    resolved = [path.resolve(strict=True) for path in paths]
+    require(len(resolved) == len(set(resolved)),
+            "runner dependency paths are not unique")
+    return [T8_SUPPORT.regular_file_identity(path) for path in resolved]
+
+
+def verify_support_file_identities(
+    expected: Sequence[Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    current = [
+        T8_SUPPORT.regular_file_identity(Path(str(identity["path"])))
+        for identity in expected
+    ]
+    require(current == list(expected),
+            "a runner dependency changed during the campaign")
+    return current
 
 
 def output_bytes(value: bytes | str | None) -> bytes:
@@ -171,6 +196,153 @@ def mode_word_identity(executable: Path) -> dict[str, Any]:
         "bytes_hex": payload.hex(),
         "value": int.from_bytes(payload, "little"),
     }
+
+
+def elf_section_file_range(
+    executable: Path,
+    section_name: str,
+) -> dict[str, Any]:
+    """Locate one nonempty ELF section in the immutable file image."""
+    sections = run_tool(("/usr/bin/readelf", "-SW", str(executable)))
+    section_pattern = re.compile(
+        r"^\s*\[\s*(\d+)\]\s+(\S+)\s+(\S+)\s+"
+        r"([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+")
+    matches: list[dict[str, Any]] = []
+    for line in sections.splitlines():
+        match = section_pattern.match(line)
+        if match and match.group(2) == section_name:
+            matches.append({
+                "name": match.group(2),
+                "section_index": int(match.group(1)),
+                "section_type": match.group(3),
+                "virtual_address": int(match.group(4), 16),
+                "file_offset": int(match.group(5), 16),
+                "size": int(match.group(6), 16),
+            })
+    require(len(matches) == 1 and matches[0]["size"] > 0,
+            f"ELF section {section_name} is absent, ambiguous, or empty")
+    selected = matches[0]
+    require(selected["file_offset"] + selected["size"] <=
+            executable.stat().st_size,
+            f"ELF section {section_name} lies outside the file")
+    return selected
+
+
+def difference_ranges(offsets: Sequence[int]) -> list[dict[str, int]]:
+    if not offsets:
+        return []
+    output: list[dict[str, int]] = []
+    start = offsets[0]
+    previous = start
+    for offset in offsets[1:]:
+        if offset != previous + 1:
+            output.append({"file_offset": start,
+                           "size": previous - start + 1})
+            start = offset
+        previous = offset
+    output.append({"file_offset": start, "size": previous - start + 1})
+    return output
+
+
+def normalized_full_file_comparison(
+    candidate: Path,
+    control: Path,
+    allowed_ranges: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Prove two files differ only in named, nonoverlapping byte ranges."""
+    candidate_bytes = candidate.read_bytes()
+    control_bytes = control.read_bytes()
+    candidate_payload = bytearray(candidate_bytes)
+    control_payload = bytearray(control_bytes)
+    require(len(candidate_payload) == len(control_payload),
+            "candidate and control full ELF sizes differ")
+    file_size = len(candidate_payload)
+    normalized_ranges = sorted((
+        {
+            "name": str(item["name"]),
+            "file_offset": int(item["file_offset"]),
+            "size": int(item["size"]),
+        }
+        for item in allowed_ranges
+    ), key=lambda item: item["file_offset"])
+    require(normalized_ranges, "no full-file difference ranges were allowed")
+    previous_end = 0
+    allowed = bytearray(file_size)
+    for item in normalized_ranges:
+        start = item["file_offset"]
+        end = start + item["size"]
+        require(item["size"] > 0 and start >= previous_end and
+                end <= file_size,
+                "allowed full-file difference ranges overlap or are invalid")
+        allowed[start:end] = b"\x01" * item["size"]
+        candidate_payload[start:end] = b"\0" * item["size"]
+        control_payload[start:end] = b"\0" * item["size"]
+        previous_end = end
+
+    differing_offsets = [
+        offset for offset, (candidate_byte, control_byte) in enumerate(
+            zip(candidate_bytes, control_bytes))
+        if candidate_byte != control_byte
+    ]
+    unauthorized = [offset for offset in differing_offsets if not allowed[offset]]
+    require(not unauthorized,
+            "candidate/control differ outside selector and GNU build-id ranges")
+    candidate_digest = hashlib.sha256(candidate_payload).hexdigest()
+    control_digest = hashlib.sha256(control_payload).hexdigest()
+    require(candidate_digest == control_digest,
+            "candidate/control normalized full-file SHA-256 differs")
+    require(differing_offsets,
+            "candidate/control full ELF files are unexpectedly identical")
+    return {
+        "file_size": file_size,
+        "allowed_ranges": normalized_ranges,
+        "difference_count": len(differing_offsets),
+        "difference_ranges": difference_ranges(differing_offsets),
+        "normalized_sha256": candidate_digest,
+    }
+
+
+def candidate_control_full_file_equivalence(
+    candidate: Path,
+    control: Path,
+    mode_words: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Bind the only permitted candidate/control full-ELF differences."""
+    selector_objects = {
+        label: {
+            "symbol": mode_words[label]["symbol"],
+            "file_offset": mode_words[label]["file_offset"],
+            "size": 4,
+        }
+        for label in ("candidate", "control")
+    }
+    require(selector_objects["candidate"] == selector_objects["control"],
+            "candidate/control selector object layouts differ")
+    build_ids = {
+        label: elf_section_file_range(path, ".note.gnu.build-id")
+        for label, path in (("candidate", candidate), ("control", control))
+    }
+    require(
+        all(build_ids["candidate"][key] == build_ids["control"][key]
+            for key in (
+                "name", "section_index", "section_type", "virtual_address",
+                "file_offset", "size")),
+        "candidate/control GNU build-id section layouts differ")
+    selector = {
+        "name": "diagnostic_selector",
+        "file_offset": selector_objects["candidate"]["file_offset"],
+        "size": 4,
+    }
+    build_id = {
+        "name": ".note.gnu.build-id",
+        "file_offset": build_ids["candidate"]["file_offset"],
+        "size": build_ids["candidate"]["size"],
+    }
+    comparison = normalized_full_file_comparison(
+        candidate, control, (selector, build_id))
+    comparison["selector_objects"] = selector_objects
+    comparison["build_id_sections"] = build_ids
+    return comparison
 
 
 def campaign_cells() -> list[dict[str, Any]]:
@@ -323,7 +495,7 @@ def validate_result(
     require(isinstance(digests, dict) and
             digests.get("algorithm") == "fnv1a64" and
             all(isinstance(digests.get(name), str) and
-                len(digests[name]) == 16
+                re.fullmatch(r"[0-9a-f]{16}", digests[name]) is not None
                 for name in (
                     "original_data", "transmitted_parity",
                     "recovered_originals")),
@@ -403,7 +575,9 @@ def run_one(
             f"{implementation} failed: " +
             completed.stderr.decode(
                 "utf-8", errors="replace")[-1000:])
-    require(sha256(executable) == identity["sha256"],
+    if sha256(executable) != identity["sha256"]:
+        persist_failure(completed.stdout, completed.stderr)
+        raise EvidenceError(
             f"{implementation} binary changed after execution")
     try:
         result = json.loads(completed.stdout.decode("utf-8"))
@@ -427,6 +601,16 @@ def run_one(
         "normalized": normalized,
         "result": result,
     }
+
+
+def append_invocations(
+    order: Sequence[str],
+    destination: list[dict[str, Any]],
+    invoke: Callable[[str], dict[str, Any]],
+) -> None:
+    """Retain each successful child before starting the next one."""
+    for label in order:
+        destination.append(invoke(label))
 
 
 def confidence_interval(round_log_ratios: Sequence[float]) -> dict[str, Any]:
@@ -560,11 +744,14 @@ def main() -> int:
         "warmup": options.warmup,
         "rounds": options.rounds,
         "round_orders": [list(order) for order in orders],
-        "runner": T8_SUPPORT.file_identity(Path(__file__)),
         "cells": [],
     }
     lock_descriptor: int | None = None
     try:
+        raw["runner"] = T8_SUPPORT.file_identity(RUNNER_PATH)
+        if RUNNER_DEPENDENCIES:
+            raw["runner_dependencies_before"] = \
+                support_file_identities(RUNNER_DEPENDENCIES)
         lock_descriptor = acquire_global_lock()
         identities = {
             "candidate": T8_SUPPORT.file_identity(options.candidate),
@@ -576,6 +763,17 @@ def main() -> int:
                 "candidate, control, and main paths are not distinct")
         require(len({identity["sha256"] for identity in identities.values()}) == 3,
                 "candidate, control, and main binaries are not distinct")
+        if EXPECTED_BINARY_SHA256 is not None:
+            expected_hashes = dict(EXPECTED_BINARY_SHA256)
+            require(set(expected_hashes) == set(identities) and
+                    all(isinstance(value, str) and
+                        re.fullmatch(r"[0-9a-f]{64}", value) is not None
+                        for value in expected_hashes.values()),
+                    "expected frozen binary SHA-256 mapping is invalid")
+            raw["expected_binary_sha256"] = expected_hashes
+            require(all(identities[label]["sha256"] == expected_hashes[label]
+                        for label in identities),
+                    "a benchmark binary does not match its frozen SHA-256")
 
         executable_sections = {
             label: T8_SUPPORT.executable_sections_identity(
@@ -600,6 +798,11 @@ def main() -> int:
                 "section_name", "file_offset"):
             require(mode_words["candidate"][key] == mode_words["control"][key],
                     "candidate/control T=4 selector layouts differ")
+        if REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE:
+            raw["candidate_control_normalized_full_file"] = \
+                candidate_control_full_file_equivalence(
+                    Path(str(identities["candidate"]["path"])),
+                    Path(str(identities["control"]["path"])), mode_words)
 
         require(set(os.sched_getaffinity(0)) == {options.cpu},
                 "runner must be singleton-pinned to CPU14")
@@ -637,34 +840,34 @@ def main() -> int:
 
             for cell_index, cell in enumerate(cells):
                 cell_raw = {"cell": dict(cell), "rounds": []}
+                raw["cells"].append(cell_raw)
                 for round_index, order in enumerate(orders):
                     before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
                     before_sibling = \
                         MAIN_SUPPORT.cpu_stat_snapshot(options.sibling)
                     before_ns = time.monotonic_ns()
-                    invocations = [
-                        run_one(
+                    round_raw: dict[str, Any] = {
+                        "round": round_index,
+                        "order": list(order),
+                        "invocations": [],
+                        "isolation": None,
+                    }
+                    cell_raw["rounds"].append(round_raw)
+                    append_invocations(
+                        order, round_raw["invocations"], lambda label: run_one(
                             label, identities[label], cell, options.cpu,
                             options.source_commit, options.source_tree,
                             options.iterations, options.warmup,
-                            options.output)
-                        for label in order
-                    ]
+                            options.output))
                     isolation = MAIN_SUPPORT.isolation_record(
                         options.cpu, options.sibling, pair_lease,
                         before_ns, time.monotonic_ns(), before_cpu,
                         MAIN_SUPPORT.cpu_stat_snapshot(options.cpu),
                         before_sibling,
                         MAIN_SUPPORT.cpu_stat_snapshot(options.sibling))
-                    cell_raw["rounds"].append({
-                        "round": round_index,
-                        "order": list(order),
-                        "invocations": invocations,
-                        "isolation": isolation,
-                    })
+                    round_raw["isolation"] = isolation
                     require(isolation["accepted"],
                             f"contaminated {cell['id']} round {round_index}")
-                raw["cells"].append(cell_raw)
                 print(f"{cell_index + 1}/{len(cells)} {cell['id']}",
                       file=sys.stderr, flush=True)
 
@@ -673,6 +876,10 @@ def main() -> int:
             for label, identity in identities.items()
         }
         raw["identities_after"] = post_identities
+        if RUNNER_DEPENDENCIES:
+            raw["runner_dependencies_after"] = \
+                verify_support_file_identities(
+                    raw["runner_dependencies_before"])
         analyses = [
             analyze(item["cell"], item["rounds"])
             for item in raw["cells"]
@@ -727,6 +934,12 @@ def main() -> int:
             "mode_words": mode_words,
             "raw_sha256": sha256(options.output / "raw.json"),
         }
+        for optional_key in (
+                "candidate_control_normalized_full_file",
+                "expected_binary_sha256", "runner_dependencies_before",
+                "runner_dependencies_after"):
+            if optional_key in raw:
+                summary[optional_key] = raw[optional_key]
         T8_SUPPORT.write_exclusive(options.output / "summary.json", summary)
         print(json.dumps({
             "status": summary["status"],
@@ -738,6 +951,18 @@ def main() -> int:
         }, sort_keys=True))
         return 0
     except Exception as error:
+        if (RUNNER_DEPENDENCIES and
+                "runner_dependencies_before" in raw and
+                "runner_dependencies_after" not in raw):
+            try:
+                raw["runner_dependencies_after"] = \
+                    verify_support_file_identities(
+                        raw["runner_dependencies_before"])
+            except Exception as dependency_error:
+                raw["runner_dependencies_after_error"] = {
+                    "type": type(dependency_error).__name__,
+                    "message": str(dependency_error),
+                }
         raw["failed_utc"] = MAIN_SUPPORT.utc_now()
         raw["failure"] = {
             "type": type(error).__name__,
