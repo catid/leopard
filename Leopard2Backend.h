@@ -39,6 +39,26 @@
 
 namespace leopard { namespace backend {
 
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+// Exact GF8 Algorithm 4 terminal for N=64, P=32, and a 64-byte shard.  This
+// research callback is emitted only by the pure-AVX2 member.  It consumes the
+// two live evaluation blocks, performs the locator weighting, inverse
+// transforms, derivative/weighted reduction, final transform, and reveal,
+// then scatters only requested block-zero coordinates.  The caller owns 64
+// pairwise-disjoint 64-byte work rows.
+bool AVX2FF8LowP32B64Terminal(
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    uint32_t requested_count,
+    const uint8_t* locator_logs,
+    uint8_t block_factor,
+    const uint8_t* inverse_skew0,
+    const uint8_t* inverse_skew1,
+    const uint8_t* forward_skew,
+    void* const* restored,
+    void* const* work);
+#endif
+
 typedef uint8_t (*FF8MultiplyLog)(uint8_t value, uint8_t multiplier_log);
 typedef uint16_t (*FF16MultiplyLog)(uint16_t value, uint16_t multiplier_log);
 

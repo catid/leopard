@@ -4702,6 +4702,28 @@ void ReedSolomonDecodeLowPrunedPlannedUnrevealed(
         output_plan, false, work);
 }
 
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+bool ReedSolomonDecodeLowP32B64TerminalExperimental(
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const ffe_t* locator_logs,
+    ffe_t block_factor,
+    void* const* restored,
+    void** work)
+{
+    // Keep coordinate and normalization ownership in the field layer.  The
+    // backend receives the same shift-zero and shift-P tables used by the
+    // mature Algorithm 4 implementation, so the experiment changes only the
+    // execution schedule and never the code definition.
+    return backend::AVX2FF8LowP32B64Terminal(
+        coordinate_data, requested_coordinates, requested_count,
+        locator_logs, block_factor,
+        FFTSkewStorage, FFTSkewStorage + 32, FFTSkewStorage,
+        restored, work);
+}
+#endif
+
 
 void ReedSolomonDecodeLowPlanned(
     const backend::Ops& ops,
