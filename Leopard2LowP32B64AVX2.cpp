@@ -14,13 +14,10 @@ namespace leopard { namespace backend {
 
 namespace {
 
-struct FF8NibbleTable
-{
-    uint8_t low[16];
-    uint8_t high[16];
-};
+static const unsigned kFF8TableBytes = 32;
+static const unsigned kFF8HighTableOffset = 16;
 
-static inline __m256i BroadcastTable(const uint8_t table[16])
+static inline __m256i BroadcastTable(const unsigned char* table)
 {
     return _mm256_broadcastsi128_si256(_mm_loadu_si128(
         reinterpret_cast<const __m128i*>(table)));
@@ -38,13 +35,14 @@ static inline __m256i ProductVector(
 }
 
 static inline __m256i ApplyWeight(
-    const FF8NibbleTable* tables, __m256i data, uint16_t weight_log)
+    const unsigned char* tables, __m256i data, uint16_t weight_log)
 {
     if (weight_log == 0 || weight_log == 255)
         return data;
-    const FF8NibbleTable& table = tables[weight_log];
+    const unsigned char* table = tables + weight_log * kFF8TableBytes;
     return ProductVector(
-        data, BroadcastTable(table.low), BroadcastTable(table.high));
+        data, BroadcastTable(table),
+        BroadcastTable(table + kFF8HighTableOffset));
 }
 
 static inline uint8_t AddLogs(uint8_t first, uint8_t second)
@@ -112,7 +110,7 @@ static void FinishInverse(
 
 static void FinalFFTReveal(
     const Ops& ops,
-    const FF8NibbleTable* tables,
+    const unsigned char* tables,
     void* const* work,
     const uint8_t* forward_skew,
     uint32_t requested_mask,
@@ -149,9 +147,11 @@ static void FinalFFTReveal(
         const uint16_t transform_log = forward_skew[row + 1];
         if (transform_log != 255)
         {
-            const FF8NibbleTable& table = tables[transform_log];
-            const __m256i low = BroadcastTable(table.low);
-            const __m256i high = BroadcastTable(table.high);
+            const unsigned char* table =
+                tables + transform_log * kFF8TableBytes;
+            const __m256i low = BroadcastTable(table);
+            const __m256i high = BroadcastTable(
+                table + kFF8HighTableOffset);
             x0 = _mm256_xor_si256(x0, ProductVector(y0, low, high));
             x1 = _mm256_xor_si256(x1, ProductVector(y1, low, high));
         }
@@ -209,7 +209,11 @@ bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
     void* const* restored,
     void* const* work)
 {
-    const FF8NibbleTable* tables = static_cast<const FF8NibbleTable*>(
+    // uint8_t may inspect any object's representation.  GetAVX2FF8Tables()
+    // deliberately erases the mature translation unit's private table type;
+    // consume only its documented 32-byte low/high object representation here
+    // rather than inventing a second, alias-incompatible struct definition.
+    const unsigned char* tables = static_cast<const unsigned char*>(
         GetAVX2FF8Tables());
     if (ops.kind != LEO2_BACKEND_AVX2 || !ops.ff8_weighted_ifft_butterfly4 ||
         !ops.ff8_ifft_butterfly4_range || !ops.ff8_fft_butterfly4_range ||
