@@ -3414,6 +3414,118 @@ static void AVX2FF8Butterfly4RangePrepared(
             work, distance, log01, log23, log02, byte_count);
 }
 
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+
+#if defined(_MSC_VER)
+#define LEO2_T32_FINAL_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#define LEO2_T32_FINAL_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_t32_final")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T32_FINAL_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_T32_FINAL_NOINLINE
+#endif
+
+// Exact 64-byte T=32 final inverse layer.  The low/high tables remain live
+// across every pair instead of being reloaded by sixteen leaf callbacks.
+static LEO2_T32_FINAL_NOINLINE void AVX2FF8IFFTButterfly2Range(
+    void* const* work,
+    void* const* xor_output,
+    unsigned distance,
+    uint16_t multiplier_log,
+    uint64_t byte_count)
+{
+    static const uint16_t kZeroSkew = 255;
+    LEO_DEBUG_ASSERT(work != NULL);
+    LEO_DEBUG_ASSERT(distance != 0);
+    LEO_DEBUG_ASSERT(multiplier_log != kZeroSkew);
+    LEO_DEBUG_ASSERT(byte_count == 64);
+    if (!work || distance == 0 || multiplier_log == kZeroSkew ||
+        byte_count != 64)
+        return;
+
+    const FF8NibbleTable& table = FF8Tables[multiplier_log];
+    const __m256i low_table = BroadcastTable(table.low);
+    const __m256i high_table = BroadcastTable(table.high);
+
+    if (xor_output)
+    {
+        for (unsigned lane = 0; lane < distance; ++lane)
+        {
+            const uint8_t* x = static_cast<const uint8_t*>(work[lane]);
+            const uint8_t* y = static_cast<const uint8_t*>(
+                work[lane + distance]);
+            uint8_t* out_x = static_cast<uint8_t*>(xor_output[lane]);
+            uint8_t* out_y = static_cast<uint8_t*>(
+                xor_output[lane + distance]);
+
+            const __m256i x0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x));
+            const __m256i x1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x + 32));
+            const __m256i y0 = _mm256_xor_si256(x0,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y)));
+            const __m256i y1 = _mm256_xor_si256(x1,
+                _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(y + 32)));
+            const __m256i transformed_x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(y0, low_table, high_table));
+            const __m256i transformed_x1 = _mm256_xor_si256(x1,
+                AVX2FF8ProductVector(y1, low_table, high_table));
+            const __m256i result_x0 = _mm256_xor_si256(transformed_x0,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(out_x)));
+            const __m256i result_x1 = _mm256_xor_si256(transformed_x1,
+                _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(out_x + 32)));
+            const __m256i result_y0 = _mm256_xor_si256(y0,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(out_y)));
+            const __m256i result_y1 = _mm256_xor_si256(y1,
+                _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(out_y + 32)));
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(out_x), result_x0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(out_x + 32), result_x1);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(out_y), result_y0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(out_y + 32), result_y1);
+        }
+    }
+    else
+    {
+        for (unsigned lane = 0; lane < distance; ++lane)
+        {
+            uint8_t* x = static_cast<uint8_t*>(work[lane]);
+            uint8_t* y = static_cast<uint8_t*>(work[lane + distance]);
+            __m256i x0 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x));
+            __m256i x1 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(x + 32));
+            __m256i y0 = _mm256_xor_si256(x0,
+                _mm256_loadu_si256(reinterpret_cast<const __m256i*>(y)));
+            __m256i y1 = _mm256_xor_si256(x1,
+                _mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(y + 32)));
+            x0 = _mm256_xor_si256(x0,
+                AVX2FF8ProductVector(y0, low_table, high_table));
+            x1 = _mm256_xor_si256(x1,
+                AVX2FF8ProductVector(y1, low_table, high_table));
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(x), x0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(x + 32), x1);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(y), y0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(y + 32), y1);
+        }
+    }
+}
+
+#undef LEO2_T32_FINAL_NOINLINE
+#endif
+
 #if defined(LEO2_AVX512_VARIANT)
 
 static void AVX2FF8IFFTButterfly2RangePrepared(
@@ -7389,6 +7501,12 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
     !defined(LEO2_GFNI_VARIANT)
     , AVX2XorMemorySourcesGroup4
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8IFFTButterfly2Range
 #else
     , NULL
 #endif

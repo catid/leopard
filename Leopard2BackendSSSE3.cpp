@@ -2057,6 +2057,8 @@ static const Ops SSSE3Ops = {
     , NULL
     // xor_memory_sources_group4
     , NULL
+    // ff8_ifft_butterfly2_range
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

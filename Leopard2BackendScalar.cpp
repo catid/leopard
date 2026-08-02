@@ -1408,6 +1408,8 @@ static const Ops ScalarOps = {
     , NULL
     // xor_memory_sources_group4
     , NULL
+    // ff8_ifft_butterfly2_range
+    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

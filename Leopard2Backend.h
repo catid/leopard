@@ -208,6 +208,19 @@ typedef void (*IFFTButterfly2Xor)(
     uint16_t multiplier_log,
     uint64_t byte_count);
 
+// Prepared exact-64-byte inverse radix-two range used by the GF8 high encoder.
+// work names 2 * distance pairwise-disjoint shard buffers.  When xor_output is
+// null the result is written in place to work.  Otherwise work is read-only and
+// the inverse-butterfly result is XORed into 2 * distance pairwise-disjoint
+// output buffers; no work/output range may overlap.  Transform callers
+// specialize the GF8 zero-skew sentinel before entering this callback.
+typedef void (*IFFTButterfly2Range)(
+    void* const* work,
+    void* const* xor_output,
+    unsigned distance,
+    uint16_t multiplier_log,
+    uint64_t byte_count);
+
 // In-place fused two-layer LCH butterfly over four disjoint shard buffers.
 // The three multipliers correspond to pairs (0,1), (2,3), and (0,2)/(1,3).
 // UINT8_MAX and UINT16_MAX are the GF8/GF16 zero-skew sentinels respectively;
@@ -517,6 +530,9 @@ struct Ops
     // register count without perturbing the mature eight-source callback or
     // changing another backend's code generation.
     XorMemorySources xor_memory_sources_group4;
+    // Optional pure-AVX2 GF8 final inverse radix-two range.  It prepares the
+    // shared fixed-multiplier table once for every pair in the range.
+    IFFTButterfly2Range ff8_ifft_butterfly2_range;
 };
 
 struct X86Features

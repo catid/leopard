@@ -6007,6 +6007,7 @@ static void ExecuteTransformEncodePass(
     const leopard::backend::Ops& ops,
     size_t buffer_bytes,
     size_t policy_buffer_bytes,
+    bool exact_public_64_byte_shard,
     uint32_t requested_recovery_count,
     uint32_t requested_recovery_prefix,
     const void* const* padded_original,
@@ -6017,6 +6018,7 @@ static void ExecuteTransformEncodePass(
     bool contiguous_temporary_work)
 {
 #ifndef LEO_HAS_FF8
+    (void)exact_public_64_byte_shard;
     (void)allow_sub_2k_register_kernels;
     (void)contiguous_temporary_work;
 #endif
@@ -6048,6 +6050,7 @@ static void ExecuteTransformEncodePass(
                 requested_recovery_prefix, requested_recovery_count,
                 codec->padded_side,
                 padded_original, work, sparse_plans,
+                exact_public_64_byte_shard,
                 allow_sub_2k_register_kernels,
                 contiguous_temporary_work);
 #else
@@ -13555,6 +13558,11 @@ static leo2_result EncodeInternal(
     const leopard::backend::Ops& transform_ops = SelectTransformEncodeOps(
         codec, static_cast<size_t>(shard_bytes), requested_recovery_count,
         requested_recovery_prefix);
+    // Execution may split or pad one public shard into 64-byte internal passes.
+    // Keep the T=32/B=64 policy tied to the exact public byte count so ragged
+    // inputs cannot inherit a candidate calibrated only for a true 64-byte
+    // shard.
+    const bool exact_public_64_byte_shard = shard_bytes == 64U;
 
     uint8_t* const base = static_cast<uint8_t*>(scratch);
     void** const pointers = reinterpret_cast<void**>(
@@ -13602,6 +13610,7 @@ static leo2_result EncodeInternal(
             ExecuteTransformEncodePass(
                 codec, transform_ops, geometry.aligned_prefix_bytes,
                 geometry.aligned_prefix_bytes,
+                exact_public_64_byte_shard,
                 requested_recovery_count, requested_recovery_prefix,
                 original, parity, work, &sparse_plans, true,
                 codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
@@ -13651,6 +13660,7 @@ static leo2_result EncodeInternal(
                 ExecuteTransformEncodePass(
                     codec, transform_ops, pass_bytes,
                     geometry.aligned_prefix_bytes,
+                    exact_public_64_byte_shard,
                     requested_recovery_count, requested_recovery_prefix,
                     pass_original, parity, work, &sparse_plans, true, false);
                 first_tile += pass_tiles;
@@ -13678,6 +13688,7 @@ static leo2_result EncodeInternal(
             const_cast<const void* const*>(pointers);
         ExecuteTransformEncodePass(
             codec, transform_ops, kScratchAlignment, kScratchAlignment,
+            exact_public_64_byte_shard,
             requested_recovery_count,
             requested_recovery_prefix,
             padded_original, parity, work, &sparse_plans, false, false);

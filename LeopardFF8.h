@@ -160,6 +160,9 @@ void ReedSolomonEncode(
     const void* const * const data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    // True only when buffer_bytes represents an exact public 64-byte shard,
+    // rather than a padded or tiled internal execution pass.
+    bool exact_public_64_byte_shard,
     bool allow_sub_2k_register_kernels = true,
     bool contiguous_temporary_work = false);
 void ReedSolomonEncode(
@@ -405,6 +408,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t t2_packed_calls;
     uint64_t t4_packed_calls;
     uint64_t t8_packed_calls;
+    uint64_t final_ifft2_range_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;
     uint64_t k9r5_tail_calls;
@@ -450,6 +454,10 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
 void TestOnlyRecordT2PackedCall();
 void TestOnlyRecordT4PackedCall();
 void TestOnlyRecordT8PackedCall();
+// Attribution-only selector.  Production archives contain neither this state
+// nor the load in the high encoder's final inverse layer.
+void TestOnlySetHighFinalIFFT2RangeDisabled(bool disabled);
+bool TestOnlyHighFinalIFFT2RangeDisabled();
 void TestOnlyResetSparseEncodeCounts();
 TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();

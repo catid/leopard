@@ -570,14 +570,14 @@ public:
             tracing_.ff8_fft_butterfly8_out = trace_ff8_fft8_out;
         tracing_.ff8_ifft_butterfly4_xor_range =
             trace_ff8_ifft4_xor_range;
-        // The complete-transform callback is an optional production coarse
-        // operation.  This guard traces the established leaf/range table and
-        // therefore deliberately disables the coarse shortcut in its copied
-        // table instead of allowing an untraced call to bypass the assertions.
+        // Optional production coarse operations bypass the established traced
+        // leaf/range table.  Disable them in this copied table instead of
+        // allowing untraced calls to bypass the assertions.
         tracing_.ff8_high_encode_one_block = NULL;
         tracing_.ff8_high_encode_small = NULL;
         tracing_.ff8_multiply_add_outputs = NULL;
         tracing_.ff8_linear_combination4_tiny = NULL;
+        tracing_.ff8_ifft_butterfly2_range = NULL;
         if (entry.table->xor_memory_sources_fused_final)
             tracing_.xor_memory_sources_fused_final =
                 trace_xor_fused_final_sources;

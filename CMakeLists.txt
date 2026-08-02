@@ -1404,6 +1404,22 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        add_executable(leopard2_t32_final_ifft_range_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_t32_final_ifft_range.cpp)
+        target_include_directories(
+            leopard2_t32_final_ifft_range_test PRIVATE tests/leopard2)
+        target_compile_definitions(
+            leopard2_t32_final_ifft_range_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(leopard2_t32_final_ifft_range_test
+            leopard_test_hooks)
+        add_test(NAME leopard2_t32_final_ifft_range
+            COMMAND leopard2_t32_final_ifft_range_test)
+        set_tests_properties(leopard2_t32_final_ifft_range PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
         add_executable(leopard2_t2_packed_terminal_test
             tests/leopard2/direct_oracle.cpp
             tests/leopard2/test_t2_packed_terminal.cpp)

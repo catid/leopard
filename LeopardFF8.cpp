@@ -37,6 +37,16 @@
 #define LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN 1
 #endif
 
+/* Same-text attribution control for the exact-64-byte T=32 final-IFFT range.
+   The macro changes only a nonzero initialized data word. */
+#ifndef LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE
+#define LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE must be 0 or 1"
+#endif
+
 #if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
 #include <stdlib.h>
 #endif
@@ -50,6 +60,9 @@
 #endif
 
 namespace leopard { namespace ff8 {
+
+static volatile uint32_t g_high_final_ifft2_range_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE;
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
@@ -71,6 +84,7 @@ static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighT4PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8PackedCalls(0);
+static std::atomic<uint64_t> TestHighFinalIFFT2RangeCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighK9R5TailCalls(0);
@@ -81,6 +95,7 @@ static std::atomic<uint64_t> TestHighFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighCompatibilityCopyFallbacks(0);
 static std::atomic<uint64_t> TestHighPrunedOutputBlocks(0);
 static std::atomic<uint64_t> TestHighMatureOutputBlocks(0);
+static std::atomic<bool> TestDisableHighFinalIFFT2Range(false);
 static std::atomic<bool> TestForceHighDecodeCopyFallback(false);
 static std::atomic<uint64_t> TestHighSyndromeAccumulatedBlocks(0);
 static std::atomic<uint64_t> TestHighSyndromeMaterializedBlocks(0);
@@ -1447,6 +1462,12 @@ static void IFFT_DIT4_xor_Range(
 }
 
 
+enum EncoderIFFTCallsite
+{
+    EncoderIFFTHigh,
+    EncoderIFFTLow
+};
+
 // Unrolled IFFT for encoder
 static void IFFT_DIT_Encoder(
     const backend::Ops& ops,
@@ -1457,7 +1478,9 @@ static void IFFT_DIT_Encoder(
     void** xor_result,
     const unsigned m,
     const ffe_t* skewLUT,
-    bool contiguous_zero_suffix)
+    bool contiguous_zero_suffix,
+    EncoderIFFTCallsite callsite,
+    bool allow_t32_final_ifft_range)
 {
     // Decimation in time: Unroll 2 layers at a time
     unsigned dist = 1, dist4 = 4;
@@ -1683,6 +1706,16 @@ static void IFFT_DIT_Encoder(
         LEO_DEBUG_ASSERT(dist * 2 == m);
 
         const ffe_t log_m = skewLUT[dist];
+        bool use_prepared_final_range =
+            callsite == EncoderIFFTHigh && m == 32U && bytes == 64U &&
+            allow_t32_final_ifft_range &&
+            g_high_final_ifft2_range_mode == 1U &&
+            log_m != kModulus &&
+            ops.ff8_ifft_butterfly2_range != NULL;
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        use_prepared_final_range = use_prepared_final_range &&
+            !TestDisableHighFinalIFFT2Range.load(std::memory_order_relaxed);
+#endif
 
         if (xor_result)
         {
@@ -1691,6 +1724,15 @@ static void IFFT_DIT_Encoder(
                 for (unsigned i = 0; i < dist; ++i)
                     xor_mem_2to1(
                         ops, xor_result[i], work[i], work[i + dist], bytes);
+            }
+            else if (use_prepared_final_range)
+            {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighFinalIFFT2RangeCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                ops.ff8_ifft_butterfly2_range(
+                    work, xor_result, dist, log_m, bytes);
             }
             else
             {
@@ -1711,6 +1753,15 @@ static void IFFT_DIT_Encoder(
         {
             if (log_m == kModulus)
                 VectorXOR(ops, bytes, dist, work + dist, work);
+            else if (use_prepared_final_range)
+            {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestHighFinalIFFT2RangeCalls.fetch_add(
+                    1, std::memory_order_relaxed);
+#endif
+                ops.ff8_ifft_butterfly2_range(
+                    work, NULL, dist, log_m, bytes);
+            }
             else
             {
                 for (unsigned i = 0; i < dist; ++i)
@@ -2650,9 +2701,11 @@ void ReedSolomonEncode(
     const void* const* data,
     void** work,
     const leopard2_internal::SparseForwardPlanBatchView* sparse_plans,
+    bool exact_public_64_byte_shard,
     bool allow_sub_2k_register_kernels,
     bool contiguous_temporary_work)
 {
+    LEO_DEBUG_ASSERT(!exact_public_64_byte_shard || buffer_bytes == 64U);
 #if !defined(LEO2_ENABLE_TEST_HOOKS)
     (void)requested_output_count;
 #endif
@@ -2728,7 +2781,7 @@ void ReedSolomonEncode(
         // complete upper-half inverse-transform dependency tree.
         ReedSolomonEncode(
             ops, buffer_bytes, 64, recovery_count, requested_output_count,
-            m, data, work, NULL);
+            m, data, work, NULL, exact_public_64_byte_shard);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighHalfTailColumnCalls.fetch_add(
             1, std::memory_order_relaxed);
@@ -2756,7 +2809,7 @@ void ReedSolomonEncode(
         // parity-coordinate space.
         ReedSolomonEncode(
             ops, buffer_bytes, m, m, m, m,
-            data, work, NULL);
+            data, work, NULL, exact_public_64_byte_shard);
         const unsigned tail_count = original_count - m;
         if (tail_count == 2 &&
             ops.ff8_multiply_add_2_sources_2_outputs)
@@ -2836,7 +2889,9 @@ void ReedSolomonEncode(
         nullptr, // No xor output
         m,
         skewLUT,
-        false);
+        false,
+        EncoderIFFTHigh,
+        exact_public_64_byte_shard);
 
     const unsigned last_count = original_count % m;
     if (m >= original_count)
@@ -2859,7 +2914,9 @@ void ReedSolomonEncode(
             work, // xor destination
             m,
             skewLUT,
-            false);
+            false,
+            EncoderIFFTHigh,
+            exact_public_64_byte_shard);
     }
 
     // Handle final partial set of m pieces:
@@ -2879,7 +2936,9 @@ void ReedSolomonEncode(
             work, // xor destination
             m,
             skewLUT,
-            contiguous_temporary_work);
+            contiguous_temporary_work,
+            EncoderIFFTHigh,
+            exact_public_64_byte_shard);
     }
 
 skip_body:
@@ -2940,7 +2999,7 @@ void ReedSolomonEncode(
     void** work)
 {
     ReedSolomonEncode(ops, buffer_bytes, original_count, recovery_count,
-        recovery_count, m, data, work, NULL);
+        recovery_count, m, data, work, NULL, buffer_bytes == 64U);
 }
 
 
@@ -3122,6 +3181,8 @@ void ReedSolomonEncodeLow(
         nullptr,
         p,
         FFTSkewStorage,
+        false,
+        EncoderIFFTLow,
         false);
 
     // Evaluate the immutable coefficient block on each requested parity coset.
@@ -3932,6 +3993,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT2PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT4PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8PackedCalls.store(0, std::memory_order_relaxed);
+    TestHighFinalIFFT2RangeCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighK9R5TailCalls.store(0, std::memory_order_relaxed);
@@ -3962,6 +4024,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT4PackedCalls.load(std::memory_order_relaxed);
     result.t8_packed_calls =
         TestHighT8PackedCalls.load(std::memory_order_relaxed);
+    result.final_ifft2_range_calls =
+        TestHighFinalIFFT2RangeCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =
         TestHighTailColumnCalls.load(std::memory_order_relaxed);
     result.half_tail_column_calls =
@@ -3986,6 +4050,18 @@ void TestOnlyRecordT4PackedCall()
 void TestOnlyRecordT8PackedCall()
 {
     TestHighT8PackedCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+
+void TestOnlySetHighFinalIFFT2RangeDisabled(bool disabled)
+{
+    TestDisableHighFinalIFFT2Range.store(disabled, std::memory_order_relaxed);
+}
+
+
+bool TestOnlyHighFinalIFFT2RangeDisabled()
+{
+    return TestDisableHighFinalIFFT2Range.load(std::memory_order_relaxed);
 }
 
 
