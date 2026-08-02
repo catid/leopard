@@ -69,8 +69,10 @@ BASE.RUNNER_DEPENDENCIES = (
     Path(BASE.MAIN_SUPPORT.link_common.__file__).resolve(),
 )
 BASE.EXPECTED_BINARY_SHA256 = {
-    "candidate": "UNPINNED_CANDIDATE_SHA256_REPLACE_AFTER_FREEZE",
-    "control": "UNPINNED_CONTROL_SHA256_REPLACE_AFTER_FREEZE",
+    "candidate":
+        "a51816b6220ab8212064b01c773ec47fb8442e9f04bc6cbcbc6694e5e62d9841",
+    "control":
+        "aa37d932a8e1551fc92b8b4be5a2ea4928fe2985461a4c9e9a5500d78018c908",
     "main":
         "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
 }
