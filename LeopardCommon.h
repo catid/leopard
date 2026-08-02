@@ -28,6 +28,13 @@
 
 #pragma once
 
+// Default-off exact-size Algorithm 4 terminal used by the AVX2 research
+// campaign.  The option is deliberately shared here because the scalar field
+// wrapper and the isolated ISA translation unit must agree on its ABI.
+#ifndef LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+#define LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL 0
+#endif
+
 /*
     TODO:
 

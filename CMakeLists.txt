@@ -79,6 +79,9 @@ option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
+option(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    "Build the default-off GF8/AVX2 Algorithm 4 P32/N64/B64 terminal"
+    OFF)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
@@ -96,6 +99,10 @@ endif()
 if(NOT LEOPARD_ENABLE_GF8 AND NOT LEOPARD_ENABLE_GF16)
     message(FATAL_ERROR
         "At least one of LEOPARD_ENABLE_GF8 or LEOPARD_ENABLE_GF16 must be ON")
+endif()
+if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL AND NOT LEOPARD_ENABLE_GF8)
+    message(FATAL_ERROR
+        "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL requires GF8")
 endif()
 
 # Diagnostic-only backend selection.  auto is the portable default and does
@@ -510,7 +517,8 @@ if(LEO2_HAVE_SSSE3_BACKEND)
 endif()
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
-        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -529,7 +537,12 @@ if(LEO2_HAVE_AVX2_BACKEND)
     endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
-    target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
+    target_compile_definitions(leopard PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
+elseif(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+    message(FATAL_ERROR
+        "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL requires the AVX2 backend")
 endif()
 if(LEO2_HAVE_AVX512_BACKEND)
     if(NOT LEOPARD_ENABLE_GF8)
@@ -854,7 +867,8 @@ if(LEO2_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1
-            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
         if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
@@ -889,7 +903,8 @@ if(LEO2_BUILD_TESTS)
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
         target_compile_definitions(leopard_test_hooks PRIVATE
-            LEO2_HAVE_AVX2_BACKEND=1)
+            LEO2_HAVE_AVX2_BACKEND=1
+            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
     endif()
     if(LEO2_HAVE_AVX512_BACKEND)
         add_library(leopard2_backend_avx512_test_hooks OBJECT EXCLUDE_FROM_ALL
@@ -1304,6 +1319,24 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_high_direct_production PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+            add_executable(leopard2_low_p32_b64_terminal_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_low_p32_b64_terminal.cpp)
+            target_include_directories(
+                leopard2_low_p32_b64_terminal_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_low_p32_b64_terminal_test PRIVATE
+                LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
+            target_link_libraries(
+                leopard2_low_p32_b64_terminal_test leopard)
+            add_test(NAME leopard2_low_p32_b64_terminal
+                COMMAND leopard2_low_p32_b64_terminal_test)
+            set_tests_properties(leopard2_low_p32_b64_terminal PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
 
         add_executable(leopard2_k5r5_b64_terminal_test
             tests/leopard2/direct_oracle.cpp
