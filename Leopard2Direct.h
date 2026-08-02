@@ -142,6 +142,12 @@ LEO2_EXPORT void leo2_test_reset_direct_four_tiny_calls(void);
 
 LEO2_EXPORT uint64_t leo2_test_direct_four_tiny_calls(void);
 
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+LEO2_EXPORT void leo2_test_reset_low_p32_b64_terminal_calls(void);
+
+LEO2_EXPORT uint64_t leo2_test_low_p32_b64_terminal_calls(void);
+#endif
+
 #ifdef __cplusplus
 } /* extern "C" */
 #endif
