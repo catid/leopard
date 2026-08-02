@@ -52,6 +52,11 @@ BASE.SUMMARY_SCHEMA = "leopard2-gf8-t4-k8-b1024-terminal-summary/v1"
 BASE.BENCHMARK_CPU = BENCHMARK_CPU
 BASE.RESERVED_SIBLING = RESERVED_SIBLING
 BASE.MODE_SYMBOL = K8_T4_MODE_SYMBOL
+BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL = True
+BASE.CONTROL_EXTRA_ARGUMENTS = ("--disable-k8r3r4-t4-terminal",)
+BASE.CONTROL_BUILD_MARKER = \
+    "k8r3r4_t4_terminal_diagnostic_disabled"
+BASE.CONTROL_SCHEMA = "leopard2-benchmark-v11"
 BASE.AUXILIARY_MODE_EXPECTATIONS = {
     FAMILY_T4_MODE_SYMBOL: {
         "candidate": 1,
@@ -69,14 +74,13 @@ BASE.RUNNER_DEPENDENCIES = (
     Path(BASE.MAIN_SUPPORT.link_common.__file__).resolve(),
 )
 BASE.EXPECTED_BINARY_SHA256 = {
-    "candidate":
-        "2fcc1db88da5e4264dc51d7d44769269407b8a42e54a79eaf76cf54ceb352449",
-    "control":
-        "84c82c26049add774aa0629efe0efd5588617ee3c4aeb6fdea60561b4ce1e7ef",
+    "candidate": "0" * 64,
+    "control": "0" * 64,
     "main":
         "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
 }
-BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = True
+BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
+BASE.REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS = True
 
 
 def campaign_cells() -> list[dict[str, Any]]:

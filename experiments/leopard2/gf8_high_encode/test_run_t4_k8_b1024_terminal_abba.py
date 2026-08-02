@@ -164,16 +164,42 @@ def main() -> int:
     require(BASE.RUNNER_DEPENDENCIES == expected_dependencies and
             len(set(expected_dependencies)) == 7,
             "K8/B1024 runner dependency chain changed")
-    require(BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE is True and
+    require(BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL is True and
+            BASE.CONTROL_EXTRA_ARGUMENTS ==
+                ("--disable-k8r3r4-t4-terminal",) and
+            BASE.CONTROL_BUILD_MARKER ==
+                "k8r3r4_t4_terminal_diagnostic_disabled" and
+            BASE.CANDIDATE_SCHEMA == "leopard2-benchmark-v5" and
+            BASE.CONTROL_SCHEMA == "leopard2-benchmark-v11" and
+            BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE is False and
+            BASE.REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS is True and
             BASE.EXPECTED_BINARY_SHA256 == {
-                "candidate":
-                    "2fcc1db88da5e4264dc51d7d44769269407b8a42e54a79eaf76cf54ceb352449",
-                "control":
-                    "84c82c26049add774aa0629efe0efd5588617ee3c4aeb6fdea60561b4ce1e7ef",
+                "candidate": "0" * 64,
+                "control": "0" * 64,
                 "main":
                     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
             },
             "fail-closed frozen binary policy changed")
+    sample_cell = cells[42]
+    candidate_command = BASE.benchmark_command(
+        "candidate", Path("/frozen/a/benchmark"), sample_cell, 14, 15, 6)
+    control_command = BASE.benchmark_command(
+        "control", Path("/frozen/b/benchmark"), sample_cell, 14, 15, 6)
+    require("--disable-k8r3r4-t4-terminal" not in candidate_command and
+            control_command.count("--disable-k8r3r4-t4-terminal") == 1,
+            "runtime control argument attribution changed")
+    equal_paths = {
+        "candidate": {"path": "/frozen/a/benchmark"},
+        "control": {"path": "/frozen/b/benchmark"},
+        "main": {"path": "/frozen/m/benchmark"},
+    }
+    require(BASE.executable_path_lengths(equal_paths) == {
+                "candidate": 19, "control": 19, "main": 19},
+            "equal executable paths were not accepted")
+    unequal_paths = copy.deepcopy(equal_paths)
+    unequal_paths["control"]["path"] = "/frozen/control/benchmark"
+    expect_failure(lambda: BASE.executable_path_lengths(unequal_paths),
+                   "unequal executable paths were accepted")
 
     analyses = passing_analyses(cells)
     passed = RUNNER.evaluate_promotion(analyses)

@@ -92,6 +92,18 @@ RUNNER_PATH = Path(__file__).resolve()
 RUNNER_DEPENDENCIES: tuple[Path, ...] = ()
 EXPECTED_BINARY_SHA256: Mapping[str, str] | None = None
 REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
+# Heap layout in the benchmark executable can depend on argv allocation.  A
+# configured campaign may require equal-length executable paths so that the
+# comparison does not accidentally benchmark different buffer alignments.
+REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS = False
+# Runtime attribution avoids separate-ELF placement bias by invoking hard
+# links to one immutable executable and changing only a setup-time diagnostic
+# selector before codec creation.
+ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
+CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
+CONTROL_BUILD_MARKER: str | None = None
+CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
+CONTROL_SCHEMA = "leopard2-benchmark-v5"
 # Configured wrappers may prove that additional retained selectors have the
 # same expected value in both binaries.  The primary MODE_SYMBOL remains the
 # only selector masked by normalized_full_file_comparison().
@@ -453,11 +465,13 @@ def benchmark_command(
     ]
     if implementation == "main":
         return common
-    return common[:-2] + [
+    command = common[:-2] + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--attest-source",
-        "--json", "-",
     ]
+    if implementation == "control":
+        command.extend(CONTROL_EXTRA_ARGUMENTS)
+    return command + ["--json", "-"]
 
 
 def positive_encode_metric(result: Mapping[str, Any]) -> float:
@@ -527,7 +541,9 @@ def validate_result(
                 build.get("main_source_commit") == MAIN_COMMIT,
                 "exact-main source identity changed")
     else:
-        require(result.get("schema") == "leopard2-benchmark-v5" and
+        expected_schema = CONTROL_SCHEMA if implementation == "control" \
+            else CANDIDATE_SCHEMA
+        require(result.get("schema") == expected_schema and
                 resolved.get("backend") == "avx2" and
                 isinstance(correctness, dict) and
                 correctness.get("leopard2_round_trip") is True,
@@ -541,6 +557,13 @@ def validate_result(
         require("prevalidated_batch_experiment" not in build and
                 "high_t4_batch_selected" not in build,
                 "benchmark is a prevalidated binding binary, not ordinary batch")
+        if CONTROL_BUILD_MARKER is not None:
+            if implementation == "control":
+                require(build.get(CONTROL_BUILD_MARKER) is True,
+                        "runtime attribution marker differs from control")
+            else:
+                require(build.get(CONTROL_BUILD_MARKER) is False,
+                        "candidate unexpectedly disabled the terminal")
     return {
         "encode_us": positive_encode_metric(result),
         "digests": dict(digests),
@@ -731,6 +754,19 @@ def verify_frozen_identity(
     return current
 
 
+def executable_path_lengths(
+    identities: Mapping[str, Mapping[str, Any]],
+) -> dict[str, int]:
+    """Return path lengths and reject allocation-biased lane names."""
+    lengths = {
+        label: len(str(identity["path"]))
+        for label, identity in identities.items()
+    }
+    require(len(set(lengths.values())) == 1,
+            "candidate, control, and main executable path lengths must match")
+    return lengths
+
+
 def main() -> int:
     options = parse_arguments()
     require(options.cpu == BENCHMARK_CPU and
@@ -777,8 +813,33 @@ def main() -> int:
         raw["identities_before"] = identities
         require(len({identity["path"] for identity in identities.values()}) == 3,
                 "candidate, control, and main paths are not distinct")
-        require(len({identity["sha256"] for identity in identities.values()}) == 3,
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            require(
+                identities["candidate"]["sha256"] ==
+                    identities["control"]["sha256"] and
+                identities["candidate"]["sha256"] !=
+                    identities["main"]["sha256"],
+                "runtime attribution requires one shared candidate/control "
+                "binary")
+            candidate_status = Path(
+                str(identities["candidate"]["path"])).stat()
+            control_status = Path(str(identities["control"]["path"])).stat()
+            require(
+                (candidate_status.st_dev, candidate_status.st_ino) ==
+                (control_status.st_dev, control_status.st_ino),
+                "runtime attribution requires candidate/control hard links "
+                "to one inode")
+            raw["candidate_control_shared_inode"] = {
+                "device": candidate_status.st_dev,
+                "inode": candidate_status.st_ino,
+            }
+        else:
+            require(
+                len({identity["sha256"] for identity in identities.values()}) == 3,
                 "candidate, control, and main binaries are not distinct")
+        if REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS:
+            raw["executable_path_lengths"] = \
+                executable_path_lengths(identities)
         if EXPECTED_BINARY_SHA256 is not None:
             expected_hashes = dict(EXPECTED_BINARY_SHA256)
             require(set(expected_hashes) == set(identities) and
@@ -801,18 +862,31 @@ def main() -> int:
                 executable_sections["control"]["sections"],
                 "candidate and control executable instruction sections differ")
 
-        mode_words = {
-            label: mode_word_identity(Path(str(identities[label]["path"])))
-            for label in ("candidate", "control")
-        }
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            mode_words = {
+                "shared_binary_default": mode_word_identity(
+                    Path(str(identities["candidate"]["path"])))
+            }
+        else:
+            mode_words = {
+                label: mode_word_identity(Path(str(identities[label]["path"])))
+                for label in ("candidate", "control")
+            }
         raw["mode_words"] = mode_words
-        require(mode_words["candidate"]["value"] == 1 and
-                mode_words["control"]["value"] == 2,
-                "candidate/control T=4 selector words are not enabled/disabled")
-        for key in (
-                "symbol", "virtual_address", "section_index",
-                "section_name", "file_offset"):
-            require(mode_words["candidate"][key] == mode_words["control"][key],
+        if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
+            require(mode_words["shared_binary_default"]["value"] == 1,
+                    "shared binary does not default to the candidate route")
+        else:
+            require(mode_words["candidate"]["value"] == 1 and
+                    mode_words["control"]["value"] == 2,
+                    "candidate/control T=4 selector words are not "
+                    "enabled/disabled")
+            for key in (
+                    "symbol", "virtual_address", "section_index",
+                    "section_name", "file_offset"):
+                require(
+                    mode_words["candidate"][key] ==
+                    mode_words["control"][key],
                     "candidate/control T=4 selector layouts differ")
         auxiliary_mode_words: dict[str, dict[str, Any]] = {}
         for symbol_name in sorted(AUXILIARY_MODE_EXPECTATIONS):
@@ -839,6 +913,8 @@ def main() -> int:
         if auxiliary_mode_words:
             raw["auxiliary_mode_words"] = auxiliary_mode_words
         if REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE:
+            require(not ALLOW_IDENTICAL_CANDIDATE_CONTROL,
+                    "shared-inode attribution does not need file masking")
             raw["candidate_control_normalized_full_file"] = \
                 candidate_control_full_file_equivalence(
                     Path(str(identities["candidate"]["path"])),
@@ -992,6 +1068,7 @@ def main() -> int:
                 promotion_evaluation["passed"]
         for optional_key in (
                 "candidate_control_normalized_full_file",
+                "candidate_control_shared_inode", "executable_path_lengths",
                 "expected_binary_sha256", "runner_dependencies_before",
                 "runner_dependencies_after", "auxiliary_mode_words"):
             if optional_key in raw:
