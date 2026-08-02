@@ -1,0 +1,87 @@
+{
+  "schema": "leopard2-gf8-t4-k7r4-b1024-recheck/v1",
+  "date_utc": "2026-08-02",
+  "status": "negative_result_no_promotion",
+  "scope": "Fresh frozen-binary recheck of the stale GF8 legacy-high K=7, R=4, B=1024 encode gap",
+  "parameters": {
+    "K": 7,
+    "R": 4,
+    "shard_bytes": 1024,
+    "loss": 1,
+    "batch": 1,
+    "reuse": 8192,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "parent_count": 16,
+    "transform_side": 4,
+    "thread_count": 1,
+    "seed": 1949762047
+  },
+  "binary_provenance": {
+    "candidate": {
+      "source_commit": "38aaf120ffb7b0c136282f0226b54617af188df0",
+      "source_tree": "034366b9dad35d9930a4f4062fa843103f894d79",
+      "source_tracked_dirty": false,
+      "sha256": "adaf51f4a461c1ce2826476e2e35e7c3d633980a9e103ce27b850136ed688611",
+      "compiler": "GCC 13.3.0"
+    },
+    "exact_main": {
+      "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    },
+    "equal_executable_path_lengths": 62,
+    "hashes_unchanged_before_and_after": true
+  },
+  "method": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "cpu_pair_lease": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-14-30.lock",
+    "cpu": 14,
+    "reserved_sibling": 30,
+    "cpu_nonidle_jiffies": 423,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "address_space_max_mib": 256,
+    "rounds": 9,
+    "orders": "alternating MAAM and AMMA",
+    "iterations_per_invocation": 15,
+    "warmups_per_invocation": 6,
+    "statistic": "geometric contrast of the two exact-main and two candidate invocation medians within each round, then geometric mean and Student-t 95 percent interval across rounds"
+  },
+  "round_ratios_main_over_candidate": [
+    1.022800903,
+    1.023288431,
+    0.988838336,
+    0.989775342,
+    1.013250552,
+    1.043160258,
+    1.015303102,
+    1.036017645,
+    0.995419376
+  ],
+  "statistics": {
+    "ratio_orientation": "exact_main_time / leopard2_time; above one favors Leopard2",
+    "geometric_mean": 1.014037963,
+    "median": 1.015303102,
+    "student_t_95_ci": [0.999096839, 1.029202526],
+    "candidate_median_invocation_us": 0.177830000,
+    "exact_main_median_invocation_us": 0.181506500,
+    "ratio_of_invocation_medians": 1.020674239
+  },
+  "correctness": {
+    "workload_digests_matched": true,
+    "original_data_fnv1a64": "6541c6a8cc35637d",
+    "transmitted_parity_fnv1a64": "92f0a0d391cd42e5",
+    "recovered_originals_fnv1a64": "052b544aaa61dd97"
+  },
+  "raw_artifact": {
+    "session_path": "/tmp/leopard2-k7r4-b1024-recheck-38aaf120-20260802.json",
+    "sha256": "c2a92b6e2e8d8089f18111af60a03fde936ce4b43e41c0afa7532047c15109ea",
+    "note": "The raw session artifact retains all 36 benchmark-reported invocation medians. Each is itself the median of 15 retained inner samples; those 540 inner values were not separately persisted."
+  },
+  "comparison_to_stale_map": {
+    "stale_source_commit": "97ee49afcbd17139ef5b59e1b477f19ca830668d",
+    "stale_main_over_candidate": 0.918321,
+    "finding": "Later broad T=4 and validation work removed the apparent 8.2 percent deficit. The fresh interval spans equality and the point estimate favors Leopard2 by 1.4 percent."
+  },
+  "disposition": "Killed before implementation. There is no current five-percent gap to close, so widening the selector would add complexity without a qualifying performance benefit."
+}
