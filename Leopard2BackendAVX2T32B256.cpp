@@ -86,7 +86,13 @@ static LEO_FORCE_INLINE void MulAdd(
         otherwise hoists several pairs across an eight-row group, exhausting
         the sixteen AVX2 registers and spilling live codeword vectors.
     */
-    __asm__ __volatile__("" : "+x"(product) :: "memory");
+    /*
+        Keep the product live across a compiler boundary without imposing a
+        full memory-clobber scheduling barrier on every butterfly.  The read-
+        write vector operand still prevents GCC from carrying the table pair
+        as additional live vectors past this point.
+    */
+    __asm__ __volatile__("" : "+x"(product));
 #endif
     destination = _mm256_xor_si256(destination, product);
 }
