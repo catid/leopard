@@ -1179,8 +1179,9 @@ static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
 // Same-executable benchmark control.  Both states are nonzero so changing the
 // word cannot perturb linked instruction text; production-enabled builds start
-// in state one and the mature Algorithm 4 control is state two.
-static volatile uint32_t g_low_p32_b64_terminal_mode = 1U;
+// in state one and the mature Algorithm 4 control is state two.  Atomic access
+// also keeps an accidental concurrent diagnostic toggle data-race-free.
+static std::atomic<unsigned> g_low_p32_b64_terminal_mode(1U);
 #endif
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
@@ -8266,7 +8267,8 @@ static void ExecuteRawTranslatedLowDecode(
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
         const bool exact_terminal =
-            g_low_p32_b64_terminal_mode == 1U &&
+            g_low_p32_b64_terminal_mode.load(
+                std::memory_order_acquire) == 1U &&
             geometry.aligned_prefix_bytes == 64 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
@@ -12354,7 +12356,8 @@ bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
 bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-    g_low_p32_b64_terminal_mode = enabled ? 1U : 2U;
+    g_low_p32_b64_terminal_mode.store(
+        enabled ? 1U : 2U, std::memory_order_release);
     return true;
 #else
     (void)enabled;
@@ -12365,7 +12368,7 @@ bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
 unsigned LowP32B64TerminalModeForDiagnostics()
 {
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-    return g_low_p32_b64_terminal_mode;
+    return g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
 #else
     return 0;
 #endif
