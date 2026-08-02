@@ -1,0 +1,101 @@
+{
+  "schema": "leopard2-current-allk-gf8-gap-isolation-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "status": "completed_all_selected_saturated_outliers_disproved",
+  "scope": "Single-physical-core isolation of six representative apparent regressions from the saturated all-K diagnostic",
+  "source_identity": {
+    "leopard2_commit": "38aaf120ffb7b0c136282f0226b54617af188df0",
+    "leopard2_tree": "034366b9dad35d9930a4f4062fa843103f894d79",
+    "leopard2_tracked_dirty": false,
+    "leopard2_executable_sha256": "adaf51f4a461c1ce2826476e2e35e7c3d633980a9e103ce27b850136ed688611",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "binary_hashes_unchanged": true,
+    "equal_executable_path_lengths": true
+  },
+  "execution": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "physical_core_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "rounds_per_cell": 9,
+    "order": "alternating MAAM/AMMA with a balanced geometric contrast",
+    "iterations_per_invocation": 15,
+    "warmups_per_invocation": 6,
+    "child_address_space_limit_bytes": 268435456,
+    "elapsed_seconds": 21.360203546006233
+  },
+  "artifacts": {
+    "raw_path": "/tmp/leopard2-six-outlier-isolation-38aaf120-20260802-v1.json",
+    "raw_sha256": "d1ed55acd92aec581a110ebc3d5690b200fe9f14b3f45f545232e2a1baf6bc91",
+    "raw_bytes": 157735
+  },
+  "ratio_orientation": "exact-main time / Leopard2 time; above one favors Leopard2",
+  "cells": [
+    {
+      "K": 128,
+      "R": 1,
+      "bytes": 65536,
+      "losses": 1,
+      "encode": {"geomean": 1.256435584, "student_t_95_ci": [1.194595644, 1.321476757]},
+      "decode_first_use": {"geomean": 1.070132625, "student_t_95_ci": [1.035413996, 1.106015409]},
+      "decode_reuse": {"geomean": 1.071107706, "student_t_95_ci": [1.036340488, 1.107041297]}
+    },
+    {
+      "K": 219,
+      "R": 1,
+      "bytes": 65536,
+      "losses": 1,
+      "encode": {"geomean": 1.263787973, "student_t_95_ci": [1.213251063, 1.316429954]},
+      "decode_first_use": {"geomean": 1.170856013, "student_t_95_ci": [1.101329356, 1.244771871]},
+      "decode_reuse": {"geomean": 1.171738677, "student_t_95_ci": [1.102107187, 1.245769506]}
+    },
+    {
+      "K": 169,
+      "R": 64,
+      "bytes": 65536,
+      "losses": 1,
+      "encode": {"geomean": 1.227764326, "student_t_95_ci": [1.169527209, 1.288901385]},
+      "decode_first_use": {"geomean": 14.057809636, "student_t_95_ci": [13.814515379, 14.305388668]},
+      "decode_reuse": {"geomean": 14.119727229, "student_t_95_ci": [13.874355967, 14.369437939]}
+    },
+    {
+      "K": 147,
+      "R": 64,
+      "bytes": 4096,
+      "losses": 1,
+      "encode": {"geomean": 1.146839389, "student_t_95_ci": [1.143399525, 1.150289601]},
+      "decode_first_use": {"geomean": 14.215532641, "student_t_95_ci": [14.115381610, 14.316394260]},
+      "decode_reuse": {"geomean": 15.590859764, "student_t_95_ci": [15.467491693, 15.715211814]}
+    },
+    {
+      "K": 134,
+      "R": 64,
+      "bytes": 4096,
+      "losses": 64,
+      "encode": {"geomean": 1.138499309, "student_t_95_ci": [1.135469798, 1.141536902]},
+      "decode_first_use": {"geomean": 1.242685058, "student_t_95_ci": [1.238323131, 1.247062350]},
+      "decode_reuse": {"geomean": 1.261484716, "student_t_95_ci": [1.256973290, 1.266012335]}
+    },
+    {
+      "K": 101,
+      "R": 101,
+      "bytes": 65536,
+      "losses": 101,
+      "encode": {"geomean": 1.134494579, "student_t_95_ci": [1.104468825, 1.165336604]},
+      "decode_first_use": {"geomean": 1.478246744, "student_t_95_ci": [1.466480858, 1.490107030]},
+      "decode_reuse": {"geomean": 1.485961054, "student_t_95_ci": [1.474073957, 1.497944009]}
+    }
+  ],
+  "validity": {
+    "all_children_exit_zero": true,
+    "all_digests_matched_within_each_cell": true,
+    "all_leopard2_paths_pure_avx2_gf8_high": true,
+    "canonical_lock_and_cpu_pair_lease_acquired": true
+  },
+  "interpretation": {
+    "conclusion": "Every isolated metric favors Leopard2. The six extreme saturated ratios were heterogeneous co-scheduling artifacts, not current optimization gaps.",
+    "promotion_effect": "No implementation or dispatcher change is justified by the six saturated outliers.",
+    "remaining_scope": "Refresh the structurally untouched R=1 small-shard matrix at 64, 256, and 1024 bytes."
+  }
+}
