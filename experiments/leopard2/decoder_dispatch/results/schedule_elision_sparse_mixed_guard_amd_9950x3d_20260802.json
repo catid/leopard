@@ -1,0 +1,154 @@
+{
+  "schema": "leopard2-schedule-elision-sparse-mixed-guard/v1",
+  "generated_at_utc": "2026-08-02T16:02:52Z",
+  "host": {
+    "architecture": "x86_64",
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "timed_cpu": 13,
+    "smt_sibling_cpu": 29
+  },
+  "change_under_test": {
+    "description": "Omit transient pruned low-input and low-output schedules for exact-byte legacy-high GF8 AVX2 one-shot plans that execute through translated Algorithm 4 at shard sizes through 1024 bytes.",
+    "control_commit": "9d8dcda6bab57268e1cfb9497514fa7fbd896e40",
+    "control_tree": "b5006bf71c20328f55f8413f6d7624f4c942f884",
+    "candidate_commit": "25b8c2a44c960e07d1a73e5566bae2b37c1fc66a",
+    "candidate_tree": "ae5defac65bcd1879068e594a82499d6e9ea6515"
+  },
+  "frozen_artifacts": {
+    "effective_build_configuration_sha256": "37162607696514065377e51145d5e8ca1ca1fdcbf7ae9c47de9ca2a883483756",
+    "control_bench_leopard2_sha256": "eded43f22c315a5b71cf57eb1a7901ba3b6a04f686b49084430b2b5305a909f5",
+    "candidate_bench_leopard2_sha256": "e55e8ccc1ee57a53d480f5799abea7b0b38171bc115410246077fe72d303b164",
+    "control_libleopard_sha256": "be30de872c94c9e28af78ab98c19214f66d05bdf6fc8db6b82af6e5dbf9685b3",
+    "candidate_libleopard_sha256": "786c25f6a2cac94a5a7d7af375585b7c43dbb484ad11d9a944fd876fb4e5f3e5",
+    "mixed_runner_source_sha256": "ae35a051ef2955f33389f5110cbbacea4ed9849b47fd488caea3b5c10a319d6d",
+    "control_mixed_runner_sha256": "4db405257009e611dacf4ebac67ac7198e45b6471c39aedf28b4916ad7cc0a94",
+    "candidate_mixed_runner_sha256": "d222e911e71db5615b330c8c660615a0bd9244020bd511564835f95661ba3f17",
+    "pre_and_post_campaign_hashes_matched": true
+  },
+  "method": {
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "LEO2_FIELD_GF8",
+    "backend": "LEO2_BACKEND_AVX2",
+    "thread_count": 1,
+    "iterations_per_process": 25,
+    "warmup_calls_per_process": 6,
+    "inner_calls_per_sample": 32,
+    "process_order": [
+      "control",
+      "candidate",
+      "candidate",
+      "control",
+      "candidate",
+      "control",
+      "control",
+      "candidate"
+    ],
+    "speedup_definition": "control median time divided by candidate median time; values greater than one favor the candidate",
+    "coordination": "Build and timing were serialized by /tmp/leopard-gf8-authoritative.lock. Each run was pinned to CPU 13 with OMP_NUM_THREADS=1 and OMP_DYNAMIC=FALSE."
+  },
+  "public_all_recovery_present_campaign": {
+    "cell_count": 21,
+    "families": [
+      {
+        "name": "balanced_sparse_and_quarter_loss",
+        "cell_count": 15,
+        "K_R_pairs": [[32, 32], [95, 95], [128, 128]],
+        "shard_bytes": [64, 256, 1024],
+        "missing_original_counts": "9 and approximately R/4 when distinct and greater than 8",
+        "speedup_min": 1.5530770416176969,
+        "speedup_median": 2.6958691463259794,
+        "speedup_max": 4.447944981596668
+      },
+      {
+        "name": "unequal_equal_rounded",
+        "cell_count": 6,
+        "K_R_pairs": [[17, 31], [31, 17]],
+        "shard_bytes": [64, 256, 1024],
+        "missing_original_counts": [9],
+        "speedup_min": 1.6154961609298677,
+        "speedup_median": 2.4554563474059505,
+        "speedup_max": 3.3123713518654556
+      }
+    ],
+    "speedup_min": 1.5530770416176969,
+    "speedup_median": 2.5687319818973746,
+    "speedup_max": 4.447944981596668,
+    "minimum_speedup_cell": {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 1024,
+      "missing_original_count": 32,
+      "control_median_us": 37.863703,
+      "candidate_median_us": 24.379797,
+      "speedup": 1.5530770416176969
+    }
+  },
+  "mixed_original_and_recovery_loss_campaign": {
+    "cell_count": 64,
+    "families": [
+      {
+        "name": "balanced",
+        "cell_count": 54,
+        "K_R_pairs": [[32, 32], [95, 95], [128, 128]],
+        "shard_bytes": [64, 256, 1024],
+        "missing_original_counts": "9 and floor(R/2)",
+        "missing_recovery_counts": "1, 8, and the maximum valid R minus missing_original_count",
+        "speedup_min": 1.4664165474074113,
+        "speedup_median": 2.578279353761201,
+        "speedup_max": 4.674407176138705
+      },
+      {
+        "name": "unequal_equal_rounded",
+        "cell_count": 10,
+        "K_R_pairs": [[17, 31], [31, 17]],
+        "shard_bytes": [64, 1024],
+        "missing_original_counts": [9],
+        "missing_recovery_counts": "1, 8, and the maximum valid R minus 9, with duplicate cases removed",
+        "speedup_min": 1.5666876767198246,
+        "speedup_median": 2.4646112037005765,
+        "speedup_max": 3.3604782408762173
+      }
+    ],
+    "speedup_min": 1.4664165474074113,
+    "speedup_median": 2.578279353761201,
+    "speedup_max": 4.674407176138705,
+    "minimum_speedup_cell": {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 1024,
+      "missing_original_count": 9,
+      "missing_recovery_count": 119,
+      "control_median_us": 37.016203000000004,
+      "candidate_median_us": 25.242625,
+      "speedup": 1.4664165474074113
+    }
+  },
+  "validity_checks": {
+    "all_85_cells_passed_round_trip": true,
+    "workload_digests_matched_between_candidate_and_control_in_every_cell": true,
+    "resolved_profile_field_backend_parent_and_padded_side_matched_in_every_public_cell": true,
+    "mixed_campaign_unique_routes": [["materialized", "translated_low"]],
+    "all_recovery_present_route_probe_pairs": 5,
+    "all_recovery_present_route_probe_K_R_pairs": [[32, 32], [95, 95], [128, 128], [17, 31], [31, 17]],
+    "all_recovery_present_route_probe_unique_routes": [["materialized", "translated_low"]],
+    "control_pruned_schedule_counts": [2, 1, 0, 0],
+    "candidate_pruned_schedule_counts": [0, 0, 0, 0],
+    "pruned_schedule_count_order": ["low_input", "low_output", "high_input", "high_output"],
+    "maximum_smt_sibling_nonidle_jiffies": 0,
+    "candidate_won_every_timed_cell": true
+  },
+  "raw_evidence": {
+    "public_manifest_path": "/tmp/leopard2-schedule-sparse-guard-25b8c2a-2411485/public-guard-manifest.json",
+    "public_manifest_sha256": "7b4c011f632d13a79ee11d1fc3a69cc5c01f791165157bae59d5bc61bb87503f",
+    "mixed_manifest_path": "/tmp/leopard2-schedule-sparse-guard-25b8c2a-2411485/mixed-guard-manifest.json",
+    "mixed_manifest_sha256": "5b00df911616c3752318c9a4d4e712e86aad95b00b36b6e5ab0c0b78244d38a1",
+    "all_recovery_present_route_probe_directory": "/tmp/leopard2-schedule-sparse-guard-25b8c2a-2411485/results/route-probes"
+  },
+  "conclusion": {
+    "decision": "retain_current_predicate",
+    "extra_K_equals_R_guard_required": false,
+    "extra_missing_originals_at_least_half_R_guard_required": false,
+    "extra_all_recovery_present_guard_required": false,
+    "scope": "The evidence supports the existing translated-low branch of the exact-byte legacy-high GF8 AVX2 one-shot schedule-elision predicate through 1024-byte shards. Direct/terminal patterns remain governed by their earlier dispatch and do not reach this transform-plan policy."
+  }
+}

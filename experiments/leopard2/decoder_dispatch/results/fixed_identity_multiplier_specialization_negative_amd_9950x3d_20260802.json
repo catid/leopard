@@ -1,0 +1,206 @@
+{
+  "schema": "leopard2-fixed-identity-multiplier-negative/v1",
+  "recorded_utc": "2026-08-02T16:06:26Z",
+  "status": "rejected_directional_frozen_abba",
+  "hypothesis": "Specializing the fixed-factor wrappers so logarithms 0 and field modulus use copy/no-op or XOR will reduce balanced decode and representative encode costs without changing field or transform semantics.",
+  "candidate": {
+    "scope": "Wrapper-only GF8/GF16 specialization. MultiplyBytes maps identity to memcpy for disjoint buffers and to a no-op for exact alias; MultiplyAddBytes maps identity to backend XOR. Low-level mul_mem and butterfly kernels remain unchanged so the transform-only modulus zero-skew sentinel retains its distinct meaning.",
+    "base_commit": "25b8c2a44c960e07d1a73e5566bae2b37c1fc66a",
+    "base_tree": "ae5defac65bcd1879068e594a82499d6e9ea6515",
+    "tracked_diff_sha256": "df8647ba572daa35da7edb6ca2a9556e89d940f39ab65bb7bd9662680dbb66d2",
+    "changed_file_sha256": {
+      "LeopardFF8.cpp": "b99ca3e3e3c31a83d21d6e72ef4cd70354f040013e9a34708c4686122e407e64",
+      "LeopardFF16.cpp": "469df37e7d33b61a8e75b8ff1308315ea302fd5644197965528cc54f6a7d882e",
+      "LeopardFF8.h": "93371411cb52706e48ec469accad0a842a6a97bfb29de6c3ca860f46a3720dba",
+      "LeopardFF16.h": "7576dd297f47e19b5389ac9715a887f74bf22e6165d2a63cd5f878fab73d3b27",
+      "tests/leopard2/test_backend_ops.cpp": "54691ba416ce9c4b2e473615fc82ed4edefb3892ed08ed61a590094a10639a1c"
+    },
+    "source_changes_promoted": false
+  },
+  "host": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 13,
+    "smt_sibling": 29,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "compiler": "g++ (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0",
+    "cmake": "3.28.3",
+    "ninja": "1.11.1"
+  },
+  "build": {
+    "configuration": "Release",
+    "generator": "Ninja",
+    "parallel_jobs": 2,
+    "virtual_memory_cap_kib": 12582912,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "configure_command": "cmake -S . -B build-idmul-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON",
+    "build_command": "cmake --build build-idmul-release --target leopard2_backend_ops_test leopard2_active_lch_test leopard2_high_low_duality_test bench_leopard2 bench_leopard2_high_low_duality -j2",
+    "frozen_binaries": {
+      "candidate_bench_leopard2_sha256": "5dca60dc097a49e58a7ee8b518400553c514b4393fab6a6d578aea6f864e7cfa",
+      "candidate_high_low_duality_sha256": "6101aad1791a2d993b157f65eb1e7ac25f20500a621f89a6e1cf10ab478358e6",
+      "baseline_bench_leopard2_sha256": "8eb4b59098a708b72b67769224a083c1e8db97a219eda4e2acb2793c0a0ce70c",
+      "baseline_high_low_duality_sha256": "00bb1cb7c177e35b10fa1e5edd10328f1f95b40a4a55f325ef9cf3d3c1d86592",
+      "verified_unchanged_before_and_after": true
+    }
+  },
+  "correctness": {
+    "commands": [
+      "OMP_NUM_THREADS=1 ./build-idmul-release/leopard2_backend_ops_test",
+      "OMP_NUM_THREADS=1 ./build-idmul-release/leopard2_active_lch_test",
+      "OMP_NUM_THREADS=1 ./build-idmul-release/leopard2_high_low_duality_test"
+    ],
+    "backend_ops": {
+      "passed": true,
+      "coverage": "Identity logs 0 and modulus; every GF8 length 0..257; every even GF16 length 0..258; qualified scalar, SSSE3, and AVX2 ops; unaligned guard bytes; disjoint copy/XOR; exact-alias identity no-op; immutable sources.",
+      "result": "Leopard2 backend ops passed: threads=16 iterations=1024 startup_kat=pass"
+    },
+    "active_lch": {
+      "passed": true,
+      "result": "skew_factors=65790 normalizers=65792 subspace_factors=131608 prepared_factors=1837940 forward_symbols=269115 inverse_symbols=666336 independent_inverse_symbols=196544 derivative_symbols=198652 lane_symbols=532480 transforms=2280"
+    },
+    "high_low_duality": {
+      "passed": true,
+      "result": "parity_cases=115 decode_cases=1330 restored_shards=29330 exhaustive_patterns=480 random_patterns=600 parity_rebuilds=1330 backends=5"
+    },
+    "all_32_benchmark_processes_round_trip": true,
+    "per_cell_input_parity_and_recovered_digests_match": true
+  },
+  "method": {
+    "classification": "Directional rather than release-authoritative: executable provenance is strict and immutable, but this early-kill screen did not run the full campaign isolation auditor.",
+    "order_per_cell": ["baseline", "candidate", "candidate", "baseline"],
+    "reported_statistic": "Arithmetic mean of the two process medians for each binary; positive percent_change means candidate speedup, computed as (baseline_us / candidate_us - 1) * 100.",
+    "iterations_per_process": 21,
+    "warmups_per_process": 7,
+    "reuse_per_sample": 128,
+    "batch": 1,
+    "threads": 1,
+    "backend": "avx2",
+    "field": "gf8",
+    "raw_result_count": 32,
+    "raw_directory": "/tmp/leopard-idmul-screen-20260802-2413100",
+    "raw_manifest_sha256": "939ca7e63228a8824e602e1d92389b04be7d378ded4c71fcaf474a6c7463cd64",
+    "raw_manifest_definition": "SHA-256 of sorted absolute-path sha256sum lines for the 32 JSON files."
+  },
+  "balanced_full_loss_cells": [
+    {
+      "K": 32,
+      "R": 32,
+      "shard_bytes": 64,
+      "decode_baseline_process_medians_us": [0.737273, 0.741961],
+      "decode_candidate_process_medians_us": [0.742039, 0.734383],
+      "decode_baseline_mean_us": 0.739617,
+      "decode_candidate_mean_us": 0.738211,
+      "decode_percent_change": 0.190460,
+      "encode_baseline_mean_us": 0.2652775,
+      "encode_candidate_mean_us": 0.2735155,
+      "encode_percent_change": -3.011895
+    },
+    {
+      "K": 32,
+      "R": 32,
+      "shard_bytes": 256,
+      "decode_baseline_process_medians_us": [1.135789, 1.126414],
+      "decode_candidate_process_medians_us": [1.115563, 1.111258],
+      "decode_baseline_mean_us": 1.1311015,
+      "decode_candidate_mean_us": 1.1134105,
+      "decode_percent_change": 1.588902,
+      "encode_baseline_mean_us": 0.611844,
+      "encode_candidate_mean_us": 0.610086,
+      "encode_percent_change": 0.288156
+    },
+    {
+      "K": 32,
+      "R": 32,
+      "shard_bytes": 1024,
+      "decode_baseline_process_medians_us": [3.157070, 3.075344],
+      "decode_candidate_process_medians_us": [3.095430, 3.083156],
+      "decode_baseline_mean_us": 3.116207,
+      "decode_candidate_mean_us": 3.089293,
+      "decode_percent_change": 0.871203,
+      "encode_baseline_mean_us": 2.070848,
+      "encode_candidate_mean_us": 2.056781,
+      "encode_percent_change": 0.683933
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 64,
+      "decode_baseline_process_medians_us": [3.277070, 3.256133],
+      "decode_candidate_process_medians_us": [3.234336, 3.242453],
+      "decode_baseline_mean_us": 3.2666015,
+      "decode_candidate_mean_us": 3.2383945,
+      "decode_percent_change": 0.871018,
+      "encode_baseline_mean_us": 1.3192735,
+      "encode_candidate_mean_us": 1.323375,
+      "encode_percent_change": -0.309927
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 256,
+      "decode_baseline_process_medians_us": [5.482164, 5.415531],
+      "decode_candidate_process_medians_us": [5.482797, 5.482250],
+      "decode_baseline_mean_us": 5.4488475,
+      "decode_candidate_mean_us": 5.4825235,
+      "decode_percent_change": -0.614243,
+      "encode_baseline_mean_us": 3.4152345,
+      "encode_candidate_mean_us": 3.4157425,
+      "encode_percent_change": -0.014872
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 1024,
+      "decode_baseline_process_medians_us": [16.030102, 16.050570],
+      "decode_candidate_process_medians_us": [16.070648, 15.983930],
+      "decode_baseline_mean_us": 16.040336,
+      "decode_candidate_mean_us": 16.027289,
+      "decode_percent_change": 0.081405,
+      "encode_baseline_mean_us": 12.114703,
+      "encode_candidate_mean_us": 11.942363,
+      "encode_percent_change": 1.443098
+    }
+  ],
+  "representative_cells": [
+    {
+      "name": "low_v1_full_loss",
+      "K": 8,
+      "R": 248,
+      "loss": 8,
+      "shard_bytes": 256,
+      "encode_baseline_mean_us": 1.8851365,
+      "encode_candidate_mean_us": 1.8844375,
+      "encode_percent_change": 0.037093,
+      "decode_baseline_mean_us": 0.751805,
+      "decode_candidate_mean_us": 0.7685235,
+      "decode_percent_change": -2.175405
+    },
+    {
+      "name": "legacy_high_one_tail",
+      "K": 33,
+      "R": 32,
+      "loss": 16,
+      "shard_bytes": 1024,
+      "encode_baseline_mean_us": 2.4988945,
+      "encode_candidate_mean_us": 2.4717855,
+      "encode_percent_change": 1.096738,
+      "decode_baseline_mean_us": 7.021133,
+      "decode_candidate_mean_us": 7.125004,
+      "decode_percent_change": -1.457838
+    }
+  ],
+  "decision": {
+    "promotion_criteria": [
+      "All correctness gates pass.",
+      "At least 5 percent credible end-to-end improvement in a meaningful codec region.",
+      "No unexplained regression greater than 2 percent in a target or neighboring cell."
+    ],
+    "kill_criteria_triggered": [
+      "No measured encode or decode gain reached 5 percent; the largest was 1.588902 percent.",
+      "Balanced K=32/R=32, 64-byte encode regressed 3.011895 percent.",
+      "Low K=8/R=248, 256-byte decode regressed 2.175405 percent."
+    ],
+    "unrun_planned_cells": "The broader K=95, half-loss, and R-1 matrix was stopped after the early-kill criteria fired.",
+    "rejection_rationale": "The production codec already branches around most canonical identity logs. Balanced Algorithm 4 executes internal mul_mem/muladd_mem kernels rather than these wrappers, so the candidate seldom removes codec work; sub-threshold differences and code-layout noise dominate. Keep the existing code and pursue optimizations on the actual translated-low hot path instead."
+  }
+}
