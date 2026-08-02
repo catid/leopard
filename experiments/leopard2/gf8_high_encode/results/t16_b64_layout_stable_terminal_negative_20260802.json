@@ -1,0 +1,118 @@
+{
+  "schema": "leopard2-gf8-high-t16-b64-layout-stable-negative/v1",
+  "recorded_utc": "2026-08-02",
+  "bead": "leopard-79h.38.5.10.47.12",
+  "verdict": "rejected_before_timing",
+  "base": {
+    "commit": "e2473ecbf2eac0258e6f7642ea622cc61bc58ff2",
+    "tree": "5cfae6d3b899300723a9cd9495486fe9ec7c8d07"
+  },
+  "hypothesis": "An exact K=R=T=16, GF8, 64-byte pure-AVX2 encoder can fuse the outer inverse and forward radix-4 layers, reduce four full shard passes to three, and enter through the already isolated T4 terminal without moving any pre-existing non-target code.",
+  "candidate_scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 16,
+    "R": 16,
+    "T": 16,
+    "shard_bytes": 64,
+    "default_enabled": false,
+    "algorithm": "generated three-pass radix-4 circuit",
+    "integration": "new AVX2 object plus one new case in the existing T4 terminal"
+  },
+  "correctness": {
+    "command": "ctest --test-dir build/t16-layout-on -R ^leopard2_t16_b64_layout_stable$ --output-on-failure -j1",
+    "result": "passed",
+    "elapsed_seconds": 0.15,
+    "coverage": [
+      "independent direct systematic GF8 generator",
+      "legacy Leopard parity bytes",
+      "mature Leopard2 transform parity",
+      "16 basis messages",
+      "all 32 source/output byte offsets with guards",
+      "ordinary and one-item batch calls",
+      "sparse and detached fallbacks",
+      "validation and overlap errors",
+      "non-AVX2 backend fallbacks",
+      "fixed direct-generator known-answer column"
+    ],
+    "fixed_direct_expected_column0_hex": "76563616f6d6b69676563616f6d6b696"
+  },
+  "binary_identity": {
+    "base_archive_sha256": "295f32b889998f7d9d0c098542e5e3290aaece38b7bef838e1f6703f11641a4b",
+    "option_off_archive_sha256": "295f32b889998f7d9d0c098542e5e3290aaece38b7bef838e1f6703f11641a4b",
+    "option_on_archive_sha256": "df5923751344737dd7a026bac7a1ae03e67e89d100b2658584a5cd575536cb30",
+    "base_benchmark_sha256": "6ee22c654b70d172e60f12286777abec17411f46ce8dabfa79aaa74493fbadfa",
+    "option_off_benchmark_sha256": "f9947a322608a1ce690a4421c07db09214ed7d6303814e7305bccee792e8d2ba",
+    "option_off_benchmark_note": "The benchmark executable differs because its generated dirty-source attestation changed; the production archive is byte-identical.",
+    "option_on_benchmark_sha256": "7edcd6a853ed9e058157b8b000ab8c39f94e755e9c7425d7dbc437e928a09766",
+    "mature_avx2_object_off_sha256": "222d014e7f84e08cf4dc15b9ce8f79516b739a6acb6ebc58e758e880154e01a6",
+    "mature_avx2_object_on_sha256": "222d014e7f84e08cf4dc15b9ce8f79516b739a6acb6ebc58e758e880154e01a6"
+  },
+  "final_section_gate": {
+    "base_or_option_off": {
+      ".text": { "address": "0x4bc0", "size": "0xed8af" },
+      ".leo2_t2_packed_terminal": { "address": "0xf2480", "size": "0xa34" },
+      ".leo2_t4_packed_terminal": { "address": "0xf2ec0", "size": "0x1ad8" },
+      ".fini": { "address": "0xf4998", "size": "0xd" },
+      ".rodata": { "address": "0xf5000", "size": "0x5d70" }
+    },
+    "option_on": {
+      ".text": { "address": "0x4bc0", "size": "0xed8af" },
+      ".leo2_t2_packed_terminal": { "address": "0xf2480", "size": "0xa34" },
+      ".leo2_t4_packed_terminal": { "address": "0xf2ec0", "size": "0x1b7c" },
+      ".leo2_t16_avx2": { "address": "0xf4a40", "size": "0x2842" },
+      ".fini": { "address": "0xf7284", "size": "0xd" },
+      ".rodata": { "address": "0xf8000", "size": "0x6200" },
+      ".leo2_t16_avx2_data": { "address": "0x1130a0", "size": "0x14" }
+    },
+    "common_defined_symbols": 1026,
+    "changed_preexisting_symbol_addresses_or_sizes": 162,
+    "new_candidate_symbols": 9
+  },
+  "representative_symbol_shifts": [
+    {
+      "symbol": "leo2_codec_create",
+      "base": { "address": "0x2f1c0", "size": "0x33d2" },
+      "option_on": { "address": "0x2f1c0", "size": "0x33f1" }
+    },
+    {
+      "symbol": "leo2_encode_batch_binding_create",
+      "base": { "address": "0x325a0", "size": "0xd7d" },
+      "option_on": { "address": "0x325c0", "size": "0xd7d" }
+    },
+    {
+      "symbol": "TryEncodeGF8BalancedB64PackedTerminal<128,0>",
+      "base": { "address": "0x1d500", "size": "0x20c" },
+      "option_on": { "address": "0x1d840", "size": "0x20c" }
+    },
+    {
+      "symbol": "TryEncodeGF8BalancedB64PackedTerminal<64,0>",
+      "base": { "address": "0x1d740", "size": "0x20c" },
+      "option_on": { "address": "0x1da80", "size": "0x20c" }
+    },
+    {
+      "symbol": "TryEncodeGF8K16R8T8B256PackedTerminal<1>",
+      "base": { "address": "0x1d980", "size": "0x331" },
+      "option_on": { "address": "0x1d500", "size": "0x331" }
+    }
+  ],
+  "stable_hot_symbols": [
+    {
+      "symbol": "leo2_encode",
+      "base_and_option_on": { "address": "0x2d780", "size": "0x7b3" }
+    },
+    {
+      "symbol": "leo2_encode_batch",
+      "base_and_option_on": { "address": "0x35640", "size": "0x8c2" }
+    },
+    {
+      "symbol": "TryEncodeGF8T4PackedTerminal",
+      "base": { "address": "0xf2ec0", "size": "0x1ad8" },
+      "option_on": { "address": "0xf2ec0", "size": "0x1b7c" }
+    }
+  ],
+  "no_timing_reason": "The option-on binary moved or resized 162 pre-existing symbols despite restoring the T2/T4 section order. The experiment's hard gate required layout stability before any target or neighbor timing, because earlier T16 candidates produced large apparent target wins while unrelated layout changes regressed B63/B65/T8/T32 controls. Timing this binary would not isolate the algorithmic effect.",
+  "kill_criterion": "Any remaining pre-existing non-target section or symbol movement after moving all candidate classifier code into the appended object exhausts this third and final integration lane.",
+  "result": "kill criterion met; candidate code and tests removed; evidence retained only"
+}
