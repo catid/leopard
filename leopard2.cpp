@@ -41,7 +41,6 @@
 #include <cerrno>
 #include <condition_variable>
 #include <limits>
-#include <memory>
 #include <mutex>
 #include <new>
 #include <stdlib.h>
@@ -15233,16 +15232,8 @@ static leo2_result DecodePlanCreateInternal(
     const uint8_t* recovery_present,
     leo2_decode_plan** plan_out,
     const DecodePresencePrefix* validated_prefix,
-    const DecodePlanSetupHint* setup_hint,
-    leo2_decode_plan* caller_plan_storage)
+    const DecodePlanSetupHint* setup_hint)
 {
-    /*
-        caller_plan_storage is an internal synchronous-only optimization.  It
-        must name a fresh, live, default-constructed object that cannot overlap
-        caller metadata, escape this call chain, or be passed to the public
-        destroy function.  Public and diagnostic factories pass NULL and keep
-        the ordinary heap-owned lifetime.
-    */
     if (!plan_out)
         return LEO2_INVALID_ARGUMENT;
     AddressRange output_range;
@@ -15327,20 +15318,9 @@ static leo2_result DecodePlanCreateInternal(
     if (present_count < codec->original_count)
         return LEO2_NEED_MORE_DATA;
 
-    std::unique_ptr<leo2_decode_plan> heap_plan;
-    leo2_decode_plan* plan = caller_plan_storage;
+    leo2_decode_plan* plan = new (std::nothrow) leo2_decode_plan;
     if (!plan)
-    {
-        heap_plan.reset(new (std::nothrow) leo2_decode_plan);
-        if (!heap_plan)
-            return LEO2_OUT_OF_MEMORY;
-        plan = heap_plan.get();
-    }
-    const auto publish_plan = [&]() -> leo2_result {
-        *plan_out = plan;
-        heap_plan.release();
-        return LEO2_SUCCESS;
-    };
+        return LEO2_OUT_OF_MEMORY;
     try
     {
         plan->codec = codec;
@@ -15350,6 +15330,7 @@ static leo2_result DecodePlanCreateInternal(
         if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO &&
             !CanUseTranslatedLowDecode(codec))
         {
+            delete plan;
             return LEO2_INTERNAL_ERROR;
         }
 #endif
@@ -15373,15 +15354,22 @@ static leo2_result DecodePlanCreateInternal(
             K, R, and N byte vectors cannot preserve observable information.
         */
         if (plan->no_op)
-            return publish_plan();
+        {
+            *plan_out = plan;
+            return LEO2_SUCCESS;
+        }
 #endif
 
         if (plan->direct_xor && UseCompactDirectXorPlan(codec))
         {
             if (single_missing_original >= codec->original_count)
+            {
+                delete plan;
                 return LEO2_INTERNAL_ERROR;
+            }
             plan->direct_xor_original = single_missing_original;
-            return publish_plan();
+            *plan_out = plan;
+            return LEO2_SUCCESS;
         }
 
         bool force_test_transform = false;
@@ -15524,7 +15512,10 @@ static leo2_result DecodePlanCreateInternal(
                 }
             }
             if (public_survivors_needed != 0)
+            {
+                delete plan;
                 return LEO2_NEED_MORE_DATA;
+            }
 
 #ifdef LEO_DEBUG
         /*
@@ -15559,7 +15550,10 @@ static leo2_result DecodePlanCreateInternal(
                 }
                 if (plan->direct_copy_recovery ==
                     std::numeric_limits<uint32_t>::max())
+                {
+                    delete plan;
                     return LEO2_INTERNAL_ERROR;
+                }
             }
         }
 
@@ -15601,7 +15595,10 @@ static leo2_result DecodePlanCreateInternal(
                     plan, *setup_hint, metadata_mask);
             if (!PreparePlanExecutionMetadata(plan, metadata_mask,
                     skip_transient_pruned_schedules))
+            {
+                delete plan;
                 return LEO2_INTERNAL_ERROR;
+            }
             // From this point onward coordinate_erased follows the execution
             // view.  A translated plan has no generic fallback metadata, so
             // constructing its locator directly in low-profile order avoids
@@ -15658,9 +15655,11 @@ static leo2_result DecodePlanCreateInternal(
     }
     catch (const std::bad_alloc&)
     {
+        delete plan;
         return LEO2_OUT_OF_MEMORY;
     }
-    return publish_plan();
+    *plan_out = plan;
+    return LEO2_SUCCESS;
 }
 
 LEO2_EXPORT leo2_result leo2_decode_plan_create(
@@ -15670,8 +15669,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     leo2_decode_plan** plan_out)
 {
     return DecodePlanCreateInternal(
-        codec, original_present, recovery_present, plan_out, NULL, NULL,
-        NULL);
+        codec, original_present, recovery_present, plan_out, NULL, NULL);
 }
 
 } // extern "C"
@@ -15741,7 +15739,7 @@ leo2_result CreateOneShotTransformPlanForDiagnostics(
     };
     const leo2_result result = DecodePlanCreateInternal(
         codec, original_present, recovery_present, plan_out, validated_prefix,
-        setup_mode != 0U ? &hint : NULL, NULL);
+        setup_mode != 0U ? &hint : NULL);
     if (result != LEO2_SUCCESS || !plan_out || !*plan_out)
         return result;
     leo2_decode_plan* const plan = *plan_out;
@@ -17153,7 +17151,6 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
         return one_shot_direct_result;
 #endif
 
-    leo2_decode_plan transient_plan;
     leo2_decode_plan* plan = NULL;
     const unsigned one_shot_setup_mode =
         g_one_shot_plan_setup_mode.load(std::memory_order_acquire);
@@ -17166,11 +17163,9 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
         one_shot_setup_mode != 0U ? &setup_hint : NULL;
     leo2_result result = DecodePlanCreateInternal(
         codec, original_present, recovery_present, &plan, validated_prefix,
-        setup_hint_pointer, &transient_plan);
+        setup_hint_pointer);
     if (result != LEO2_SUCCESS)
         return result;
-    if (plan != &transient_plan)
-        return LEO2_INTERNAL_ERROR;
     const ProtectedMetadataSpan protected_metadata[2] = {
         { original_present,
           codec->original_count * sizeof(*original_present) },
@@ -17180,6 +17175,7 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
     result = DecodePlanExecuteInternal(
         plan, shard_bytes, original, recovery, restored_original, scratch,
         scratch_bytes, false, protected_metadata, 2, false);
+    leo2_decode_plan_destroy(plan);
     return result;
 }
 

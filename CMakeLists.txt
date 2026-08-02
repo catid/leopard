@@ -1734,8 +1734,7 @@ if(LEO2_BUILD_TESTS)
 
     # The production-linked executable observes the public one-shot
     # allocation path.  The hook-linked companion also proves that forced
-    # diagnostic decoder modes retain canonical plan semantics while the
-    # synchronous ephemeral plan object remains stack-owned.
+    # diagnostic decoder modes retain canonical plan construction.
     add_executable(leopard2_one_shot_no_loss_test
         tests/leopard2/test_one_shot_no_loss.cpp)
     target_link_libraries(leopard2_one_shot_no_loss_test leopard)
