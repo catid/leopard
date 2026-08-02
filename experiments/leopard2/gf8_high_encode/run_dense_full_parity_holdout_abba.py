@@ -69,6 +69,11 @@ BASE.RUNNER_DEPENDENCIES = (
     Path(BASE.__file__).resolve(),
     Path(BASE.T8_SUPPORT.__file__).resolve(),
     Path(BASE.MAIN_SUPPORT.__file__).resolve(),
+    Path(BASE.MAIN_SUPPORT.__file__).resolve().with_name("git_capture.py"),
+    Path(BASE.MAIN_SUPPORT.__file__).resolve().parents[1] /
+        "decoder_dispatch" / "balanced_evidence_common.py",
+    Path(BASE.MAIN_SUPPORT.__file__).resolve().parents[3] /
+        "tools" / "leopard2_build_provenance.py",
 )
 
 # Repeat the three balanced label rotations three times.  Every individual
