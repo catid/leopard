@@ -666,7 +666,7 @@ void AVX2FF8HighEncodeT2PackedTail(
     pure AVX2 backend, native layout, complete packed input/output slabs, and
     exact immutable transform shape.
 */
-void AVX2FF8HighEncodeT32B256(
+bool TryAVX2FF8HighEncodeT32B256(
     const void* const* data,
     void* const* recovery);
 #endif

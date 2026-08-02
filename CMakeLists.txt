@@ -76,12 +76,9 @@ option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
     "Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 encoder"
     OFF)
-if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED AND
-   NOT LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
-    message(FATAL_ERROR
-        "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED reuses the enabled "
-        "B=256 packed-terminal call site")
-endif()
+option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
+    "Disable the generated T=32/B=256 kernel without changing code layout"
+    OFF)
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
@@ -520,7 +517,8 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(leopard2_backend_avx2_t32_b256 PRIVATE
         LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1
-        LEO2_HAVE_AVX2_BACKEND=1)
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>)
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
@@ -933,10 +931,6 @@ if(LEO2_BUILD_TESTS)
         endif()
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
-        if(TARGET leopard2_backend_avx2_t32_b256)
-            target_sources(leopard_test_hooks PRIVATE
-                $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
-        endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
     endif()
@@ -1502,6 +1496,30 @@ if(LEO2_BUILD_TESTS)
             leopard2_balanced_b64_terminal_production PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+            # Reuse the production/direct-oracle coverage at the generated
+            # kernel's exact byte count.  This also holds out T=64 and T=128
+            # balanced neighbors, which must retain the mature transform.
+            add_executable(leopard2_t32_b256_generated_production_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_balanced_b64_terminal_production.cpp)
+            target_include_directories(
+                leopard2_t32_b256_generated_production_test
+                PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_t32_b256_generated_production_test PRIVATE
+                LEO2_BALANCED_PRODUCTION_SHARD_BYTES=256
+                "LEO2_EXPECT_T32_B256_GENERATED=$<NOT:$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>>")
+            target_link_libraries(
+                leopard2_t32_b256_generated_production_test leopard)
+            add_test(NAME leopard2_t32_b256_generated_production
+                COMMAND leopard2_t32_b256_generated_production_test)
+            set_tests_properties(
+                leopard2_t32_b256_generated_production PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
 
         add_executable(leopard2_t2_packed_terminal_test
             tests/leopard2/direct_oracle.cpp

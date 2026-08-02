@@ -46,7 +46,13 @@ namespace {
 
 static const unsigned kOriginalCount = 32;
 static const unsigned kRecoveryCount = 32;
-static const size_t kShardBytes = 64;
+#ifndef LEO2_BALANCED_PRODUCTION_SHARD_BYTES
+#define LEO2_BALANCED_PRODUCTION_SHARD_BYTES 64
+#endif
+#ifndef LEO2_EXPECT_T32_B256_GENERATED
+#define LEO2_EXPECT_T32_B256_GENERATED 0
+#endif
+static const size_t kShardBytes = LEO2_BALANCED_PRODUCTION_SHARD_BYTES;
 static const size_t kGuardBytes = 64;
 static const uint8_t kGuardValue = 0x6d;
 
@@ -196,6 +202,11 @@ void ExerciseProduction(leo2_context* context)
     Require(scratch_bytes == ExpectedProductionScratch(kOriginalCount),
         "production scratch differs from the portable fixed geometry");
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
+#if LEO2_EXPECT_T32_B256_GENERATED
+    std::memset(scratch.bytes(), 0x39, scratch.size());
+    const std::vector<uint8_t> scratch_before(
+        scratch.bytes(), scratch.bytes() + scratch.size());
+#endif
 
     const size_t input_bytes = kOriginalCount * kShardBytes;
     const size_t output_bytes = kRecoveryCount * kShardBytes;
@@ -226,6 +237,11 @@ void ExerciseProduction(leo2_context* context)
     RequireResult(leo2_encode(codec, kShardBytes, original, recovery,
         scratch.data(), scratch_bytes), LEO2_SUCCESS,
         "execute production packed terminal");
+#if LEO2_EXPECT_T32_B256_GENERATED
+    Require(std::memcmp(scratch.bytes(), &scratch_before[0],
+            scratch_before.size()) == 0,
+        "generated T32/B256 route unexpectedly staged scratch data");
+#endif
     Require(std::memcmp(input.bytes(), &input_before[0],
             input_before.size()) == 0,
         "production encode modified source data or guards");
@@ -239,6 +255,11 @@ void ExerciseProduction(leo2_context* context)
     };
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute production one-item batch terminal");
+#if LEO2_EXPECT_T32_B256_GENERATED
+    Require(std::memcmp(scratch.bytes(), &scratch_before[0],
+            scratch_before.size()) == 0,
+        "generated T32/B256 batch unexpectedly staged scratch data");
+#endif
     Require(std::memcmp(input.bytes(), &input_before[0],
             input_before.size()) == 0,
         "production batch modified source data or guards");
