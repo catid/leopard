@@ -2059,6 +2059,8 @@ static const Ops SSSE3Ops = {
     , NULL
     // ff8_ifft_butterfly2_range
     , NULL
+    // ff8_walsh_locator
+    , NULL
 };
 
 const Ops* InitializeSSSE3(const InitializeArgs& args)

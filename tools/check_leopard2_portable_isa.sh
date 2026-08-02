@@ -78,7 +78,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpaddq|vpand|vpbroadcastb|vpbroadcastq|vpextrq|vpinsrb|vpshufb|vpsrlq|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpinsrb|vpmovzxbw|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
 # on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI
@@ -885,6 +885,13 @@ run_negative_controls()
     # scan below still rejects EVEX encodings and AVX-512 operands.
     expect_classified_archive_accepted good_avx2_pointer_add \
         'Leopard2BackendAVX2.cpp.o' 'vpaddq %ymm0, %ymm0, %ymm0'
+    # The active GF8 Walsh locator performs packed 16-bit modulo-255
+    # butterflies and byte/word expansion entirely within baseline AVX2.
+    # Keep every newly admitted mnemonic in one classified positive control;
+    # the generic baseline negative controls still reject all VEX code.
+    expect_classified_archive_accepted good_avx2_walsh_locator \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vpackuswb %ymm0, %ymm0, %ymm0; vpaddw %ymm0, %ymm0, %ymm0; vpandn %ymm0, %ymm0, %ymm0; vpblendd $0, %ymm0, %ymm0, %ymm0; vpblendw $0, %ymm0, %ymm0, %ymm0; vpbroadcastw %xmm0, %ymm0; vpcmpeqb %ymm0, %ymm0, %ymm0; vpcmpgtw %ymm0, %ymm0, %ymm0; vperm2i128 $0, %ymm0, %ymm0, %ymm0; vpermq $0, %ymm0, %ymm0; vpmovzxbw %xmm0, %ymm0; vpmullw %ymm0, %ymm0, %ymm0; vpshufd $0, %ymm0, %ymm0; vpshufhw $0, %ymm0, %ymm0; vpshuflw $0, %ymm0, %ymm0; vpsrlw $1, %ymm0, %ymm0; vpsubw %ymm0, %ymm0, %ymm0'
     # The GFNI member carries the affine transform alongside ordinary AVX2 VEX
     # code, so the fixture must prove both are admitted in the same object.
     expect_classified_archive_accepted good_gfni \

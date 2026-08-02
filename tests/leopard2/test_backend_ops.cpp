@@ -646,34 +646,68 @@ int main()
                  ops.kind == LEO2_BACKEND_GFNI) ==
                     (ops.ff8_weighted_ifft_butterfly4 != NULL),
             "weighted locator capability escaped the AVX2 GF8 backend");
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_GFNI_MEMBER)
+        const bool expected_ff8_walsh_locator = false;
+#else
+        const bool expected_ff8_walsh_locator =
+            ops.kind == LEO2_BACKEND_AVX2;
+#endif
+        require(expected_ff8_walsh_locator ==
+                    (ops.ff8_walsh_locator != NULL),
+            "active locator capability escaped the pure AVX2 backend");
         const leopard::backend::Ops* scalar_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_SCALAR);
         require(scalar_ops && !scalar_ops->ff8_weighted_ifft_butterfly4,
             "scalar backend exposed the AVX2-only weighted boundary");
+        require(!scalar_ops->ff8_walsh_locator,
+            "scalar backend exposed the AVX2-only active locator");
         const leopard::backend::Ops* ssse3_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_SSSE3);
         if (ssse3_ops)
+        {
             require(!ssse3_ops->ff8_weighted_ifft_butterfly4,
                 "SSSE3 backend exposed the AVX2-only weighted boundary");
+            require(!ssse3_ops->ff8_walsh_locator,
+                "SSSE3 backend exposed the AVX2-only active locator");
+        }
         const leopard::backend::Ops* avx2_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
         if (avx2_ops)
+        {
             require(avx2_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "AVX2 backend omitted its qualified weighted boundary");
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_GFNI_MEMBER)
+            require(avx2_ops->ff8_walsh_locator == NULL,
+                "in-place GFNI diagnostic exposed pure AVX2 locator");
+#else
+            require(avx2_ops->ff8_walsh_locator != NULL,
+                "AVX2 backend omitted its qualified active locator");
+#endif
+        }
         const leopard::backend::Ops* avx512_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX512);
         if (avx512_ops)
+        {
             require(avx512_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "AVX-512 backend omitted its qualified weighted boundary");
+            require(!avx512_ops->ff8_walsh_locator,
+                "AVX-512 backend exposed the pure-AVX2 active locator");
+        }
         const leopard::backend::Ops* gfni_ops =
             leopard::backend::GetQualifiedOps(LEO2_BACKEND_GFNI);
         if (gfni_ops)
+        {
             require(gfni_ops->ff8_weighted_ifft_butterfly4 != NULL,
                 "GFNI backend omitted its qualified weighted boundary");
+            require(!gfni_ops->ff8_walsh_locator,
+                "GFNI backend exposed the pure-AVX2 active locator");
+        }
         test_avx2_six_output_large();
 #else
         require(!ops.ff8_weighted_ifft_butterfly4,
             "FF8-disabled build exposed a weighted boundary");
+        require(!ops.ff8_walsh_locator,
+            "FF8-disabled build exposed an active locator callback");
 #endif
 
         leo2_context_options options;

@@ -457,6 +457,18 @@ typedef void (*FF8IFFTButterfly8Out)(
     const uint8_t* skews,
     uint64_t byte_count);
 
+// Optional GF8 plan-setup kernel.  It evaluates the active-parent modulo-255
+// Walsh convolution used to form locator logarithms.  n is a power of two in
+// [32, 256].  The input and output ranges contain exactly n bytes, may be
+// unaligned, and must not overlap.  Keeping this setup operation in the
+// runtime-qualified table prevents an explicitly lower-backend context from
+// entering AVX2 code.
+typedef void (*FF8WalshLocator)(
+    const uint8_t* erasures,
+    const uint8_t* transformed_kernel,
+    uint8_t* locator_logs,
+    uint32_t n);
+
 // This table is private to the implementation and immutable.  A backend owns
 // any tables referenced by its functions and publishes this object only after
 // initialization and the startup known-answer tests have succeeded.
@@ -533,6 +545,9 @@ struct Ops
     // Optional pure-AVX2 GF8 final inverse radix-two range.  It prepares the
     // shared fixed-multiplier table once for every pair in the range.
     IFFTButterfly2Range ff8_ifft_butterfly2_range;
+    // Optional pure-AVX2 active-parent locator construction.  Scalar and
+    // other SIMD backends retain the established field implementation.
+    FF8WalshLocator ff8_walsh_locator;
 };
 
 struct X86Features

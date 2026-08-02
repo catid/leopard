@@ -284,6 +284,15 @@ void PrepareDecode(
     const uint8_t* erasures,
     ffe_t* locator_logs); // n elements
 
+// Variant for callers that have already validated and counted erasures.
+// The count selects the direct or Walsh construction; erasures remains the
+// authoritative coordinate mask used to construct the locator.
+void PrepareDecodeKnownCount(
+    unsigned n,
+    const uint8_t* erasures,
+    unsigned erasure_count,
+    ffe_t* locator_logs); // n elements
+
 // Reuses locator contributions for permanent erasures (for example punctured
 // parent coordinates) and adds the pattern-specific erasures.  erasures may
 // include or exclude permanent_erasures; both conventions produce the union.
@@ -296,6 +305,16 @@ void PrepareDecodeWithPermanent(
     const ffe_t* permanent_locator_logs,
     ffe_t* locator_logs); // n elements
 
+// As above, with an already-known count of erasures not contained in the
+// permanent mask.
+void PrepareDecodeWithPermanentKnownCount(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* permanent_erasures,
+    const ffe_t* permanent_locator_logs,
+    unsigned dynamic_erasure_count,
+    ffe_t* locator_logs); // n elements
+
 // Full-field FWHT implementation retained as an independent differential
 // oracle for the sparse and dense active-parent locator paths.
 void PrepareDecodeWalshReference(
@@ -306,6 +325,15 @@ void PrepareDecodeWalshReference(
 // Active-parent Walsh convolution used by the dense production setup path.
 // Its work and output storage are both proportional to n.
 void PrepareDecodeWalshActive(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs); // n elements
+
+// Runtime-backend companion.  A qualified backend may provide the same
+// active-parent convolution directly; unsupported backends and small parents
+// retain PrepareDecodeWalshActive exactly.
+void PrepareDecodeWalshActiveWithBackend(
+    const backend::Ops& ops,
     unsigned n,
     const uint8_t* erasures,
     ffe_t* locator_logs); // n elements

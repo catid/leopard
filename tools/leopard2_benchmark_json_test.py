@@ -29,6 +29,8 @@ PRODUCTION_DECODE_PATH_RULE_PAIRS = frozenset({
     ("materialized", "measured_materialized"),
     ("tiled", "workspace_tiled"),
     ("materialized", "workspace_materialized"),
+    ("tiled", "translated_low"),
+    ("materialized", "translated_low"),
     ("materialized", "unsupported_profile"),
 })
 R1_REDUCTION_PATHS = frozenset({
@@ -42,6 +44,32 @@ R1_TIMED_REUSED_DECODE_API = (
     "leo2_decode_plan_execute_batch:item_count=1:"
     "no_preflight_scratch:one_loss_direct_xor")
 R1_TIMED_ONE_SHOT_DECODE_API = "leo2_decode:one_loss"
+ONE_SHOT_SCHEMAS = frozenset({
+    "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+    "leopard2-benchmark-v12", "leopard2-benchmark-v15",
+    "leopard2-benchmark-v16",
+})
+TRANSIENT_PLAN_SCHEMAS = frozenset({
+    "leopard2-benchmark-v15", "leopard2-benchmark-v16",
+})
+TRANSIENT_SETUP_POLICIES = {
+    0: "reusable_metadata_superset",
+    1: "exact_byte_selected_metadata",
+    2: "exact_byte_tiny_high_regular_metadata",
+    3: "exact_byte_tiny_all_regular_metadata",
+}
+TRANSIENT_EXECUTION_EXCLUDES = [
+    "decode_plan_create_destroy",
+    "public_one_shot_no_loss_and_direct_dispatch",
+]
+TRANSIENT_EXECUTION_GUARDS = [
+    "transform_route_and_exact_shard_bytes",
+    "presence_metadata_overlap",
+]
+TRANSIENT_SETUP_EXCLUDES = [
+    "r1_terminal_probe",
+    "equal_rounded_direct_repair_probe",
+]
 _PROCESS_RUNNER: Any = None
 
 
@@ -318,6 +346,8 @@ def run(
     disable_k9r5_b256_terminal: bool = False,
     disable_k9r6r8_b256_terminal: bool = False,
     r1_small_reduction_mode: int | None = None,
+    one_shot_plan_setup_mode: int | None = None,
+    gf8_avx2_walsh_locator_mode: int | None = None,
     *,
     k: int = 3,
     r: int = 2,
@@ -327,10 +357,22 @@ def run(
             (type(r1_small_reduction_mode) is int and
              r1_small_reduction_mode in {0, 1}),
             "R=1 small-reduction mode must be absent, zero, or one")
+    require(one_shot_plan_setup_mode is None or
+            (type(one_shot_plan_setup_mode) is int and
+             one_shot_plan_setup_mode in {0, 1, 2, 3}),
+            "one-shot setup mode must be absent or an integer from zero to three")
+    require(gf8_avx2_walsh_locator_mode is None or
+            (type(gf8_avx2_walsh_locator_mode) is int and
+             gf8_avx2_walsh_locator_mode in {0, 1}),
+            "GF8 AVX2 Walsh-locator mode must be absent, zero, or one")
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
-        field = "gf8" if r1_small_reduction_mode is not None else "auto"
-        backend = "avx2" if r1_small_reduction_mode is not None else "auto"
+        diagnostic_avx2 = (
+            r1_small_reduction_mode is not None or
+            one_shot_plan_setup_mode is not None or
+            gf8_avx2_walsh_locator_mode is not None)
+        field = "gf8" if diagnostic_avx2 else "auto"
+        backend = "avx2" if diagnostic_avx2 else "auto"
         command = [
             str(executable), "--k", str(k), "--r", str(r), "--profile", "high",
             "--field", field, "--backend", backend, "--bytes", "64",
@@ -358,6 +400,14 @@ def run(
             command.extend((
                 "--r1-small-reduction-mode",
                 str(r1_small_reduction_mode)))
+        if one_shot_plan_setup_mode is not None:
+            command.extend((
+                "--one-shot-plan-setup-mode",
+                str(one_shot_plan_setup_mode)))
+        if gf8_avx2_walsh_locator_mode is not None:
+            command.extend((
+                "--gf8-avx2-walsh-locator-mode",
+                str(gf8_avx2_walsh_locator_mode)))
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -380,7 +430,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v6", "leopard2-benchmark-v7",
                 "leopard2-benchmark-v8", "leopard2-benchmark-v9",
                 "leopard2-benchmark-v10", "leopard2-benchmark-v11",
-                "leopard2-benchmark-v12",
+                "leopard2-benchmark-v12", "leopard2-benchmark-v15",
+                "leopard2-benchmark-v16",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -391,6 +442,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v7", "leopard2-benchmark-v8",
         "leopard2-benchmark-v9", "leopard2-benchmark-v10",
         "leopard2-benchmark-v11", "leopard2-benchmark-v12",
+        "leopard2-benchmark-v15", "leopard2-benchmark-v16",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -418,6 +470,20 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "r1_timed_reused_decode_api",
             "r1_timed_one_shot_decode_api",
         })
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        expected_build.update({
+            "one_shot_plan_setup_diagnostic_mode",
+            "one_shot_plan_setup_policy",
+            "one_shot_transient_execution_scope",
+            "one_shot_transient_execution_excludes",
+            "one_shot_transient_execution_guards",
+            "one_shot_transient_execution_scratch_policy",
+        })
+    if document["schema"] == "leopard2-benchmark-v16":
+        expected_build.update({
+            "gf8_avx2_walsh_locator_diagnostic_mode",
+            "gf8_avx2_walsh_locator_enabled",
+        })
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         expected_build.update({
@@ -425,12 +491,11 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_build.add("equal_rounded_multi_loss_enabled")
-    if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-            "leopard2-benchmark-v12"}:
+    if document["schema"] in ONE_SHOT_SCHEMAS:
         expected_build.add("one_shot_equal_rounded_direct_enabled")
     if document["schema"] in {
-            "leopard2-benchmark-v9", "leopard2-benchmark-v12"}:
+            "leopard2-benchmark-v9", "leopard2-benchmark-v12",
+            "leopard2-benchmark-v15", "leopard2-benchmark-v16"}:
         expected_build.update({
             "one_shot_equal_rounded_direct_enabled",
             "cauchy_log_reuse_enabled",
@@ -467,6 +532,28 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 build["r1_timed_one_shot_decode_api"] ==
                     R1_TIMED_ONE_SHOT_DECODE_API,
                 "R=1 timed API scope changed")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        build = document["build"]
+        mode = build["one_shot_plan_setup_diagnostic_mode"]
+        require(type(mode) is int and mode in TRANSIENT_SETUP_POLICIES and
+                build["one_shot_plan_setup_policy"] ==
+                    TRANSIENT_SETUP_POLICIES[mode] and
+                build["one_shot_transient_execution_scope"] ==
+                    "diagnostic_transform_plan_execution_only" and
+                build["one_shot_transient_execution_excludes"] ==
+                    TRANSIENT_EXECUTION_EXCLUDES and
+                build["one_shot_transient_execution_guards"] ==
+                    TRANSIENT_EXECUTION_GUARDS and
+                build["one_shot_transient_execution_scratch_policy"] ==
+                    "exact_plan_query",
+                "one-shot transient attribution metadata is invalid")
+    if document["schema"] == "leopard2-benchmark-v16":
+        build = document["build"]
+        mode = build["gf8_avx2_walsh_locator_diagnostic_mode"]
+        require(type(mode) is int and mode in {0, 1} and
+                type(build["gf8_avx2_walsh_locator_enabled"]) is bool and
+                build["gf8_avx2_walsh_locator_enabled"] is (mode == 1),
+                "GF8 AVX2 Walsh-locator attribution metadata is invalid")
     if document["schema"] == "leopard2-benchmark-v10":
         require(type(document["build"][
                     "k9r6r8_b256_terminal_diagnostic_disabled"]) is bool,
@@ -476,14 +563,13 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         require(type(document["build"][
                     "equal_rounded_multi_loss_enabled"]) is bool,
                 "equal-rounded build selector is not Boolean")
-    if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-            "leopard2-benchmark-v12"}:
+    if document["schema"] in ONE_SHOT_SCHEMAS:
         require(type(document["build"][
                     "one_shot_equal_rounded_direct_enabled"]) is bool,
                 "one-shot build selector is not Boolean")
     if document["schema"] in {
-            "leopard2-benchmark-v9", "leopard2-benchmark-v12"}:
+            "leopard2-benchmark-v9", "leopard2-benchmark-v12",
+            "leopard2-benchmark-v15", "leopard2-benchmark-v16"}:
         require(type(document["build"][
                     "cauchy_log_reuse_enabled"]) is bool,
                 "Cauchy-log-reuse build selector is not Boolean")
@@ -513,6 +599,20 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
     if document["schema"] in {
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_resolved.add("selected_direct_executor")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        expected_resolved.update({
+            "one_shot_transient_decode_path",
+            "one_shot_transient_decode_rule",
+            "one_shot_transient_low_input_pruned_plans",
+            "one_shot_transient_low_output_pruned_plans",
+            "one_shot_transient_high_input_pruned_plans",
+            "one_shot_transient_high_output_pruned_plans",
+            "one_shot_transient_setup_scope",
+            "one_shot_transient_setup_excludes",
+            "one_shot_transient_setup_includes_no_loss_prefix_probe",
+        })
+    if document["schema"] == "leopard2-benchmark-v16":
+        expected_resolved.add("gf8_avx2_walsh_locator_enabled")
     require(set(document["resolved"]) == expected_resolved,
             "resolved keys changed")
     parameters = document["parameters"]
@@ -531,6 +631,18 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             len(set(parameters["missing_original_indices"])) ==
                 parameters["loss_count"],
             "benchmark loss parameters are invalid")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        mode = parameters.get("one_shot_plan_setup_mode")
+        require(type(mode) is int and mode in TRANSIENT_SETUP_POLICIES and
+                mode == document["build"][
+                    "one_shot_plan_setup_diagnostic_mode"],
+                "one-shot setup parameter is invalid or inconsistent")
+    if document["schema"] == "leopard2-benchmark-v16":
+        mode = parameters.get("gf8_avx2_walsh_locator_mode")
+        require(type(mode) is int and mode in {0, 1} and
+                mode == document["build"][
+                    "gf8_avx2_walsh_locator_diagnostic_mode"],
+                "GF8 AVX2 Walsh-locator parameter is invalid or inconsistent")
     require(type(document["resolved"]["thread_count"]) is int and
             document["resolved"]["thread_count"] > 0 and
             type(document["resolved"]["parent_count"]) is int and
@@ -555,6 +667,35 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 executor in {"none", "output_major", "source_major"} and
                 (executor == "none" or pair == ("direct", "direct")),
                 "resolved direct executor is inconsistent with decode path")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        resolved = document["resolved"]
+        transient_pair = (
+            resolved["one_shot_transient_decode_path"],
+            resolved["one_shot_transient_decode_rule"])
+        require(all(type(item) is str for item in transient_pair) and
+                transient_pair in PRODUCTION_DECODE_PATH_RULE_PAIRS and
+                all(type(resolved[name]) is int and resolved[name] >= 0
+                    for name in (
+                        "one_shot_transient_low_input_pruned_plans",
+                        "one_shot_transient_low_output_pruned_plans",
+                        "one_shot_transient_high_input_pruned_plans",
+                        "one_shot_transient_high_output_pruned_plans")) and
+                resolved["one_shot_transient_setup_scope"] ==
+                    "diagnostic_pattern_setup" and
+                resolved["one_shot_transient_setup_excludes"] ==
+                    TRANSIENT_SETUP_EXCLUDES and
+                type(resolved[
+                    "one_shot_transient_setup_includes_no_loss_prefix_probe"])
+                    is bool,
+                "one-shot transient resolved attribution is invalid")
+    if document["schema"] == "leopard2-benchmark-v16":
+        require(type(document["resolved"][
+                    "gf8_avx2_walsh_locator_enabled"]) is bool and
+                document["resolved"][
+                    "gf8_avx2_walsh_locator_enabled"] is
+                    document["build"][
+                        "gf8_avx2_walsh_locator_enabled"],
+                "resolved GF8 AVX2 Walsh-locator mode is inconsistent")
     require(set(document["correctness"]) == {
         "leopard2_round_trip", "legacy_comparison"}, "correctness keys changed")
     require(document["correctness"]["leopard2_round_trip"] is True and
@@ -565,13 +706,13 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "scratch_alignment", "encode_scratch_bytes_per_stripe",
         "decode_scratch_bytes_per_stripe", "encode_scratch_bytes_batch",
         "decode_scratch_bytes_batch"}
-    if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-            "leopard2-benchmark-v12"}:
+    if document["schema"] in ONE_SHOT_SCHEMAS:
         expected_memory.update({
             "one_shot_decode_scratch_bytes_per_stripe",
             "one_shot_decode_scratch_bytes_batch",
         })
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        expected_memory.add("one_shot_transient_scratch_bytes_per_stripe")
     if document["schema"] == "leopard2-benchmark-v12":
         expected_memory.update({
             "encode_batch_preflight_scratch_bytes",
@@ -583,15 +724,25 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 for value in document["memory"].values()) and
             document["memory"]["scratch_alignment"] > 0,
             "memory values are invalid")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        require(document["memory"][
+                    "one_shot_transient_scratch_bytes_per_stripe"] <=
+                document["memory"][
+                    "one_shot_decode_scratch_bytes_per_stripe"],
+                "transient plan scratch exceeds the public one-shot bound")
     expected_metrics = {
         "codec_setup", "encode_execution", "decode_plan_setup",
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"}
-    if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-            "leopard2-benchmark-v12"}:
+    if document["schema"] in ONE_SHOT_SCHEMAS:
         expected_metrics.add("one_shot_decode_including_setup")
     if document["schema"] == "leopard2-benchmark-v12":
         expected_metrics.add("one_shot_encode")
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        expected_metrics.update({
+            "one_shot_transient_plan_setup",
+            "one_shot_transient_execution",
+            "one_shot_transient_amortized_at_reuse",
+        })
     require(set(document["metrics"]) == expected_metrics,
         "metrics keys changed")
     require(set(document["legacy"]) == {
@@ -634,9 +785,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="offered_received_GB_per_s",
         output_rate_name="repaired_output_GB_per_s",
         input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
-    if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-            "leopard2-benchmark-v12"}:
+    if document["schema"] in ONE_SHOT_SCHEMAS:
         require(parameters.get("measure_one_shot_decode") is True,
                 "one-shot decode benchmark opt-in was not recorded")
         validate_timing_summary(
@@ -648,6 +797,50 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             output_rate_name="repaired_output_GB_per_s",
             input_bytes=decode_input_bytes,
             output_bytes=decode_output_bytes)
+    if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
+        validate_timing_summary(
+            document["metrics"]["one_shot_transient_plan_setup"],
+            "one_shot_transient_plan_setup",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=False)
+        validate_timing_summary(
+            document["metrics"]["one_shot_transient_execution"],
+            "one_shot_transient_execution",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=True,
+            input_rate_name="offered_received_GB_per_s",
+            output_rate_name="repaired_output_GB_per_s",
+            input_bytes=decode_input_bytes,
+            output_bytes=decode_output_bytes)
+        transient_amortized = document["metrics"][
+            "one_shot_transient_amortized_at_reuse"]
+        require(isinstance(transient_amortized, dict) and
+                set(transient_amortized) == {
+                    "reuse_count", "derived_median_us_per_batch_call",
+                    "offered_received_GB_per_s", "repaired_output_GB_per_s",
+                } and type(transient_amortized["reuse_count"]) is int and
+                transient_amortized["reuse_count"] == parameters["reuse"],
+                "transient plan amortization structure changed")
+        transient_derived = finite_metric(
+            transient_amortized["derived_median_us_per_batch_call"],
+            "transient plan amortized median", positive=True)
+        transient_expected = (
+            float(document["metrics"]["one_shot_transient_execution"][
+                "median_us_per_batch_call"]) +
+            float(document["metrics"]["one_shot_transient_plan_setup"][
+                "median_us"]) / parameters["reuse"])
+        require(approximately_equal(transient_derived, transient_expected),
+                "transient plan amortization is inconsistent with its medians")
+        for name, byte_count in (
+                ("offered_received_GB_per_s", decode_input_bytes),
+                ("repaired_output_GB_per_s", decode_output_bytes)):
+            if byte_count == 0:
+                require(transient_amortized[name] is None,
+                        f"transient amortized {name} is non-null for zero bytes")
+            else:
+                finite_metric(
+                    transient_amortized[name],
+                    f"transient amortized {name}", positive=True)
 
     amortized = document["metrics"]["decode_amortized_at_reuse"]
     require(isinstance(amortized, dict) and set(amortized) == {
@@ -712,15 +905,23 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
 
 def validate_workload_digests(document: dict[str, Any]) -> None:
     digests = document.get("workload_digests")
-    require(isinstance(digests, dict) and set(digests) == {
+    expected = {
         "algorithm", "original_data", "transmitted_parity",
-        "recovered_originals"}, "workload digest structure changed")
+        "recovered_originals"}
+    if document.get("schema") in TRANSIENT_PLAN_SCHEMAS:
+        expected.add("recovered_originals_provenance")
+    require(isinstance(digests, dict) and set(digests) == expected,
+            "workload digest structure changed")
     require(digests["algorithm"] == "fnv1a64", "workload digest algorithm changed")
     for name in ("original_data", "transmitted_parity", "recovered_originals"):
         value = digests[name]
         require(isinstance(value, str) and len(value) == 16 and
                 all(character in "0123456789abcdef" for character in value),
                 f"workload digest {name} is not lowercase FNV-1a hex")
+    if document.get("schema") in TRANSIENT_PLAN_SCHEMAS:
+        require(digests["recovered_originals_provenance"] ==
+                "diagnostic_one_shot_transform_execution_after_poison",
+                "transient recovered digest provenance changed")
 
 
 def validate_r1_small_reduction_report(
@@ -845,6 +1046,66 @@ def require_common_rejected(document: dict[str, Any], label: str) -> None:
     except (KeyError, RuntimeError, TypeError, ValueError):
         return
     raise RuntimeError(f"benchmark validator accepted {label}")
+
+
+def require_workload_digests_rejected(
+    document: dict[str, Any],
+    label: str,
+) -> None:
+    try:
+        validate_workload_digests(document)
+    except (KeyError, RuntimeError, TypeError, ValueError):
+        return
+    raise RuntimeError(f"workload-digest validator accepted {label}")
+
+
+def validate_transient_plan_report(
+    document: dict[str, Any],
+    expected_parameters: set[str],
+    *,
+    setup_mode: int,
+    walsh_mode: int | None,
+) -> None:
+    expected_schema = (
+        "leopard2-benchmark-v16" if walsh_mode is not None else
+        "leopard2-benchmark-v15")
+    require(document.get("schema") == expected_schema,
+            "transient-plan attribution schema changed")
+    validate_common(document, True)
+    validate_workload_digests(document)
+    parameters = document["parameters"]
+    require(set(parameters) == expected_parameters and
+            parameters["requested_profile"] == "legacy_high_v1" and
+            parameters["requested_field"] == "gf8" and
+            parameters["requested_backend"] == "avx2" and
+            parameters["batch"] == 1 and parameters["thread_count"] == 1 and
+            parameters["skip_legacy"] is True and
+            parameters["retain_samples"] is True and
+            parameters["measure_one_shot_decode"] is True and
+            parameters["one_shot_plan_setup_mode"] == setup_mode,
+            "transient-plan attribution parameters changed")
+    require(document["resolved"]["profile"] == "legacy_high_v1" and
+            document["resolved"]["field"] == "gf8" and
+            document["resolved"]["backend"] == "avx2" and
+            document["resolved"]["one_shot_transient_decode_path"] not in {
+                "no_op", "direct"},
+            "transient-plan attribution did not select an AVX2 transform")
+    require(document["legacy"] == {
+        "available": False,
+        "unavailable_reason": "disabled by --skip-legacy",
+        "codec_setup": None,
+        "decode_timing_includes_setup": True,
+        "encode_execution": None,
+        "decode_including_setup": None,
+    }, "transient-plan attribution did not exclude the legacy lane")
+    if walsh_mode is None:
+        require("gf8_avx2_walsh_locator_mode" not in parameters,
+                "v15 unexpectedly records a Walsh-locator mode")
+    else:
+        require(parameters["gf8_avx2_walsh_locator_mode"] == walsh_mode and
+                document["resolved"][
+                    "gf8_avx2_walsh_locator_enabled"] is (walsh_mode == 1),
+                "v16 did not resolve the requested Walsh-locator mode")
 
 
 def validate_prevalidated_batch_variant(
@@ -1073,6 +1334,73 @@ def main() -> int:
                 one_shot["memory"][
                     "one_shot_decode_scratch_bytes_per_stripe"],
             "one-shot decode scratch accounting changed")
+
+    transient_parameters = expected_external_parameters | {
+        "measure_one_shot_decode", "one_shot_plan_setup_mode"}
+    transient = run(
+        executable, True, measure_one_shot_decode=True,
+        one_shot_plan_setup_mode=3, k=17, r=5, losses=5)
+    validate_transient_plan_report(
+        transient, transient_parameters, setup_mode=3, walsh_mode=None)
+
+    walsh_parameters = transient_parameters | {
+        "gf8_avx2_walsh_locator_mode"}
+    walsh_disabled = run(
+        executable, True, measure_one_shot_decode=True,
+        one_shot_plan_setup_mode=3, gf8_avx2_walsh_locator_mode=0,
+        k=17, r=5, losses=5)
+    walsh_enabled = run(
+        executable, True, measure_one_shot_decode=True,
+        one_shot_plan_setup_mode=3, gf8_avx2_walsh_locator_mode=1,
+        k=17, r=5, losses=5)
+    validate_transient_plan_report(
+        walsh_disabled, walsh_parameters, setup_mode=3, walsh_mode=0)
+    validate_transient_plan_report(
+        walsh_enabled, walsh_parameters, setup_mode=3, walsh_mode=1)
+    require(transient["workload_digests"] ==
+                walsh_disabled["workload_digests"] ==
+                walsh_enabled["workload_digests"],
+            "transient setup or Walsh attribution changed recovered data")
+
+    malformed_transient_mode = copy.deepcopy(transient)
+    malformed_transient_mode["build"][
+        "one_shot_plan_setup_diagnostic_mode"] = False
+    require_common_rejected(
+        malformed_transient_mode, "Boolean transient setup mode")
+    malformed_transient_policy = copy.deepcopy(transient)
+    malformed_transient_policy["build"][
+        "one_shot_plan_setup_policy"] = "unknown"
+    require_common_rejected(
+        malformed_transient_policy, "unknown transient setup policy")
+    malformed_transient_exclusions = copy.deepcopy(transient)
+    malformed_transient_exclusions["build"][
+        "one_shot_transient_execution_excludes"] = []
+    require_common_rejected(
+        malformed_transient_exclusions, "omitted transient wrapper exclusions")
+    malformed_transient_guards = copy.deepcopy(transient)
+    malformed_transient_guards["build"][
+        "one_shot_transient_execution_guards"] = [
+            "transform_route_and_exact_shard_bytes"]
+    require_common_rejected(
+        malformed_transient_guards, "omitted transient wrapper guard")
+    malformed_setup_exclusions = copy.deepcopy(transient)
+    malformed_setup_exclusions["resolved"][
+        "one_shot_transient_setup_excludes"] = []
+    require_common_rejected(
+        malformed_setup_exclusions, "omitted transient setup exclusions")
+    malformed_walsh_mode = copy.deepcopy(walsh_enabled)
+    malformed_walsh_mode["build"][
+        "gf8_avx2_walsh_locator_diagnostic_mode"] = True
+    require_common_rejected(malformed_walsh_mode, "Boolean Walsh mode")
+    inconsistent_walsh = copy.deepcopy(walsh_enabled)
+    inconsistent_walsh["resolved"][
+        "gf8_avx2_walsh_locator_enabled"] = False
+    require_common_rejected(inconsistent_walsh, "inconsistent Walsh mode")
+    malformed_digest_provenance = copy.deepcopy(transient)
+    malformed_digest_provenance["workload_digests"][
+        "recovered_originals_provenance"] = "ordinary_reused_plan"
+    require_workload_digests_rejected(
+        malformed_digest_provenance, "incorrect recovered digest provenance")
 
     r1_parameters = expected_external_parameters | {"measure_one_shot_decode"}
     r1_mode_zero = run(

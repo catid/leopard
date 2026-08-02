@@ -48,11 +48,11 @@ namespace leopard { namespace backend {
 // the order the exhaustive experiment under experiments/leopard2/gfni_affine
 // validated against all 65,536 GF8 products.
 //
-// The variant deliberately reuses the nibble-table storage shape so that no
-// vector call site changes: each 16-byte row instead holds one affine matrix
-// duplicated, and a 128-bit broadcast therefore fills every 64-bit lane with
-// that matrix.  Scalar tails keep using the ordinary shared nibble tables
-// through the separate scalar table pointers below.
+// GF8 deliberately reuses the nibble-table storage shape: each 16-byte row
+// instead holds one affine matrix duplicated, and a 128-bit broadcast fills
+// every 64-bit lane with that matrix.  GF16 uses four packed 64-bit matrices
+// per multiplier and broadcasts them at use sites, reducing its table from
+// 8 MiB to 2 MiB.  Scalar tails evaluate these same affine operands directly.
 #if defined(LEO2_GFNI_VARIANT)
 static LEO_FORCE_INLINE uint64_t GFNIAffineMatrixBit(
     unsigned output_bit, unsigned input_bit)
@@ -161,6 +161,198 @@ static uint8_t FF8Product(uint16_t log, uint8_t value)
     return static_cast<uint8_t>(
         table.low[value & 15U] ^ table.high[value >> 4]);
 #endif
+}
+#endif
+
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+static LEO_FORCE_INLINE __m256i AVX2AddMod255(
+    __m256i a, __m256i b)
+{
+    const __m256i mask = _mm256_set1_epi16(255);
+    __m256i sum = _mm256_add_epi16(a, b);
+    sum = _mm256_add_epi16(sum, _mm256_srli_epi16(sum, 8));
+    return _mm256_and_si256(sum, mask);
+}
+
+static LEO_FORCE_INLINE __m256i AVX2SubMod255(
+    __m256i a, __m256i b)
+{
+    const __m256i modulus = _mm256_set1_epi16(255);
+    const __m256i borrow = _mm256_cmpgt_epi16(b, a);
+    return _mm256_add_epi16(
+        _mm256_sub_epi16(a, b), _mm256_and_si256(borrow, modulus));
+}
+
+static LEO_FORCE_INLINE void AVX2WalshPair(
+    __m256i a, __m256i b, __m256i& sum, __m256i& difference)
+{
+    sum = AVX2AddMod255(a, b);
+    difference = AVX2SubMod255(a, b);
+}
+
+template<int Distance>
+static LEO_FORCE_INLINE __m256i AVX2Walsh16Stage(__m256i value)
+{
+    __m256i swapped;
+    if (Distance == 1)
+    {
+        swapped = _mm256_shufflelo_epi16(value, 0xb1);
+        swapped = _mm256_shufflehi_epi16(swapped, 0xb1);
+    }
+    else if (Distance == 2)
+    {
+        swapped = _mm256_shufflelo_epi16(value, 0x4e);
+        swapped = _mm256_shufflehi_epi16(swapped, 0x4e);
+    }
+    else if (Distance == 4)
+        swapped = _mm256_shuffle_epi32(value, 0x4e);
+    else
+        swapped = _mm256_permute2x128_si256(value, value, 0x01);
+
+    __m256i sum, difference;
+    AVX2WalshPair(value, swapped, sum, difference);
+    if (Distance == 1)
+    {
+        difference = _mm256_shufflelo_epi16(difference, 0xb1);
+        difference = _mm256_shufflehi_epi16(difference, 0xb1);
+        return _mm256_blend_epi16(sum, difference, 0xaa);
+    }
+    if (Distance == 2)
+    {
+        difference = _mm256_shufflelo_epi16(difference, 0x4e);
+        difference = _mm256_shufflehi_epi16(difference, 0x4e);
+        return _mm256_blend_epi16(sum, difference, 0xcc);
+    }
+    if (Distance == 4)
+    {
+        difference = _mm256_shuffle_epi32(difference, 0x4e);
+        return _mm256_blend_epi16(sum, difference, 0xf0);
+    }
+    difference = _mm256_permute2x128_si256(
+        difference, difference, 0x01);
+    return _mm256_blend_epi32(sum, difference, 0xf0);
+}
+
+static LEO_FORCE_INLINE __m256i AVX2Walsh16(__m256i value)
+{
+    value = AVX2Walsh16Stage<1>(value);
+    value = AVX2Walsh16Stage<2>(value);
+    value = AVX2Walsh16Stage<4>(value);
+    return AVX2Walsh16Stage<8>(value);
+}
+
+static LEO_FORCE_INLINE __m256i AVX2PackMod255(
+    __m256i low, __m256i high)
+{
+    // vpackuswb operates independently in each 128-bit lane.  Restore the
+    // original contiguous element order after packing.
+    return _mm256_permute4x64_epi64(
+        _mm256_packus_epi16(low, high), 0xd8);
+}
+
+static LEO_FORCE_INLINE void AVX2ExpandBytes(
+    __m256i bytes, __m256i& low, __m256i& high)
+{
+    low = _mm256_cvtepu8_epi16(_mm256_castsi256_si128(bytes));
+    high = _mm256_cvtepu8_epi16(_mm256_extracti128_si256(bytes, 1));
+}
+
+static void AVX2WalshTransform(uint8_t* data, uint32_t n)
+{
+    for (uint32_t offset = 0; offset < n; offset += 32)
+    {
+        const __m256i packed = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(data + offset));
+        __m256i low, high;
+        AVX2ExpandBytes(packed, low, high);
+        low = AVX2Walsh16(low);
+        high = AVX2Walsh16(high);
+        AVX2WalshPair(low, high, low, high);
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(data + offset),
+            AVX2PackMod255(low, high));
+    }
+
+    for (uint32_t distance = 32; distance < n; distance <<= 1)
+    {
+        const uint32_t group_size = distance << 1;
+        for (uint32_t group = 0; group < n; group += group_size)
+        {
+            for (uint32_t offset = 0; offset < distance; offset += 32)
+            {
+                uint8_t* const a_pointer = data + group + offset;
+                uint8_t* const b_pointer = a_pointer + distance;
+                __m256i a_low, a_high, b_low, b_high;
+                AVX2ExpandBytes(_mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(a_pointer)),
+                    a_low, a_high);
+                AVX2ExpandBytes(_mm256_loadu_si256(
+                    reinterpret_cast<const __m256i*>(b_pointer)),
+                    b_low, b_high);
+                __m256i sum_low, sum_high, difference_low, difference_high;
+                AVX2WalshPair(
+                    a_low, b_low, sum_low, difference_low);
+                AVX2WalshPair(
+                    a_high, b_high, sum_high, difference_high);
+                _mm256_storeu_si256(
+                    reinterpret_cast<__m256i*>(a_pointer),
+                    AVX2PackMod255(sum_low, sum_high));
+                _mm256_storeu_si256(
+                    reinterpret_cast<__m256i*>(b_pointer),
+                    AVX2PackMod255(difference_low, difference_high));
+            }
+        }
+    }
+}
+
+static LEO_FORCE_INLINE __m256i AVX2MultiplyMod255(
+    __m256i a, __m256i b)
+{
+    const __m256i mask = _mm256_set1_epi16(255);
+    const __m256i cutoff = _mm256_set1_epi16(254);
+    const __m256i product = _mm256_mullo_epi16(a, b);
+    __m256i folded = _mm256_add_epi16(
+        _mm256_and_si256(product, mask), _mm256_srli_epi16(product, 8));
+    const __m256i reduce = _mm256_cmpgt_epi16(folded, cutoff);
+    folded = _mm256_sub_epi16(folded, _mm256_and_si256(reduce, mask));
+    return folded;
+}
+
+static void AVX2FF8WalshLocator(
+    const uint8_t* erasures,
+    const uint8_t* transformed_kernel,
+    uint8_t* locator_logs,
+    uint32_t n)
+{
+    const __m256i zero = _mm256_setzero_si256();
+    const __m256i one = _mm256_set1_epi8(1);
+    for (uint32_t offset = 0; offset < n; offset += 32)
+    {
+        __m256i erased = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(erasures + offset));
+        erased = _mm256_andnot_si256(
+            _mm256_cmpeq_epi8(erased, zero), one);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(locator_logs + offset), erased);
+    }
+
+    AVX2WalshTransform(locator_logs, n);
+    for (uint32_t offset = 0; offset < n; offset += 32)
+    {
+        __m256i value_low, value_high, kernel_low, kernel_high;
+        AVX2ExpandBytes(_mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(locator_logs + offset)),
+            value_low, value_high);
+        AVX2ExpandBytes(_mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(transformed_kernel + offset)),
+            kernel_low, kernel_high);
+        value_low = AVX2MultiplyMod255(value_low, kernel_low);
+        value_high = AVX2MultiplyMod255(value_high, kernel_high);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(locator_logs + offset),
+            AVX2PackMod255(value_low, value_high));
+    }
+    AVX2WalshTransform(locator_logs, n);
 }
 #endif
 
@@ -7514,6 +7706,12 @@ static const Ops AVX2Ops = {
 #else
     , NULL
 #endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8WalshLocator
+#else
+    , NULL
+#endif
 };
 
 #if defined(LEO2_GFNI_VARIANT)
@@ -7739,8 +7937,14 @@ const void* GetAVX2FF16Tables()
 }
 #endif
 
+/*
+    The ordinary AVX2 member and the documented in-place GFNI diagnostic both
+    own these concrete symbols.  The separately linked production GFNI member
+    must not emit a second copy; its core dispatch never calls them under the
+    GFNI backend identity.
+*/
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
-    !defined(LEO2_GFNI_VARIANT)
+    !defined(LEO2_GFNI_MEMBER)
 void AVX2FF8HighEncodeT2Packed(
     const void* const* data,
     void* const* recovery,

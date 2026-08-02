@@ -2867,6 +2867,125 @@ static bool TestFF8Butterfly8Out(const Ops& ops, FF8MultiplyLog reference)
         }
     return true;
 }
+
+static uint8_t ReferenceWalshAddMod255(uint8_t a, uint8_t b)
+{
+    return static_cast<uint8_t>(
+        (static_cast<unsigned>(a) + static_cast<unsigned>(b)) % 255U);
+}
+
+static uint8_t ReferenceWalshSubMod255(uint8_t a, uint8_t b)
+{
+    return static_cast<uint8_t>(
+        (static_cast<unsigned>(a) + 255U - static_cast<unsigned>(b)) % 255U);
+}
+
+static void ReferenceFF8WalshTransform(uint8_t* values, uint32_t n)
+{
+    for (uint32_t distance = 1; distance < n; distance <<= 1)
+    {
+        const uint32_t group_size = distance << 1;
+        for (uint32_t group = 0; group < n; group += group_size)
+        {
+            for (uint32_t offset = 0; offset < distance; ++offset)
+            {
+                const uint32_t a_index = group + offset;
+                const uint32_t b_index = a_index + distance;
+                const uint8_t a = values[a_index];
+                const uint8_t b = values[b_index];
+                values[a_index] = ReferenceWalshAddMod255(a, b);
+                values[b_index] = ReferenceWalshSubMod255(a, b);
+            }
+        }
+    }
+}
+
+static bool TestFF8WalshLocator(const Ops& ops)
+{
+    if (!ops.ff8_walsh_locator)
+        return true;
+
+    static const uint32_t sizes[] = { 32, 256 };
+    for (size_t size_i = 0;
+         size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+    {
+        const uint32_t n = sizes[size_i];
+        for (unsigned pattern = 0; pattern < 3; ++pattern)
+        {
+            uint8_t erasure_storage[258];
+            uint8_t kernel_storage[258];
+            uint8_t output_storage[258];
+            uint8_t original_erasures[258];
+            uint8_t original_kernel[258];
+            uint8_t original_output[258];
+            uint8_t expected[256];
+            std::memset(erasure_storage, 0xa7, sizeof(erasure_storage));
+            std::memset(kernel_storage, 0x6d, sizeof(kernel_storage));
+            std::memset(output_storage, 0xc3, sizeof(output_storage));
+            uint8_t* const erasures = erasure_storage + 1;
+            uint8_t* const kernel = kernel_storage + 1;
+            uint8_t* const output = output_storage + 1;
+
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                bool erased;
+                if (pattern == 0)
+                    erased = i == n / 3;
+                else if (pattern == 1)
+                    erased = ((i * 13U + n) & 31U) < 7U;
+                else
+                    erased = ((i * 29U + 11U) & 15U) != 0;
+                erasures[i] = erased ?
+                    static_cast<uint8_t>((i & 1U) ? 0x80U : 0xffU) : 0;
+                kernel[i] = static_cast<uint8_t>(i * 73U +
+                    pattern * 41U + n);
+                expected[i] = erased ? 1 : 0;
+            }
+            // Exercise all special modulo-255 representations explicitly.
+            kernel[0] = 0;
+            kernel[1] = 1;
+            kernel[2] = 254;
+            kernel[3] = 255;
+
+            std::memcpy(original_erasures, erasure_storage,
+                sizeof(erasure_storage));
+            std::memcpy(original_kernel, kernel_storage,
+                sizeof(kernel_storage));
+            std::memcpy(original_output, output_storage,
+                sizeof(output_storage));
+
+            ReferenceFF8WalshTransform(expected, n);
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                const unsigned kernel_value = kernel[i] == 255 ? 0 : kernel[i];
+                expected[i] = static_cast<uint8_t>(
+                    (static_cast<unsigned>(expected[i]) * kernel_value) %
+                    255U);
+            }
+            ReferenceFF8WalshTransform(expected, n);
+
+            ops.ff8_walsh_locator(erasures, kernel, output, n);
+            if (std::memcmp(erasure_storage, original_erasures,
+                    sizeof(erasure_storage)) != 0 ||
+                std::memcmp(kernel_storage, original_kernel,
+                    sizeof(kernel_storage)) != 0)
+                return false;
+            for (size_t i = 0; i < sizeof(output_storage); ++i)
+            {
+                if ((i == 0 || i > n) &&
+                    output_storage[i] != original_output[i])
+                    return false;
+            }
+            for (uint32_t i = 0; i < n; ++i)
+            {
+                const uint8_t actual = output[i] == 255 ? 0 : output[i];
+                if (actual != expected[i])
+                    return false;
+            }
+        }
+    }
+    return true;
+}
 #endif // LEO_HAS_FF8
 
 static bool TestOps(const Ops& ops, const InitializeArgs& args)
@@ -2882,11 +3001,25 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.xor_memory_sources_fused_final != NULL))
         return false;
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_GFNI_MEMBER)
+    /*
+        The documented in-place GFNI diagnostic build retains AVX2 identity
+        but intentionally omits pure-nibble AVX2 helper callbacks.  They are
+        not part of the arithmetic surface being compared by that build.
+    */
+    const bool expected_pure_avx2_callbacks = false;
+#else
+    const bool expected_pure_avx2_callbacks =
+        ops.kind == LEO2_BACKEND_AVX2;
+#endif
+    if (expected_pure_avx2_callbacks !=
         (ops.xor_memory_sources_group4 != NULL))
         return false;
-    if ((ops.kind == LEO2_BACKEND_AVX2) !=
+    if (expected_pure_avx2_callbacks !=
         (ops.ff8_high_encode_t4_batch != NULL))
+        return false;
+    if (expected_pure_avx2_callbacks !=
+        (ops.ff8_walsh_locator != NULL))
         return false;
 #else
     if (ops.xor_memory_sources_fused_final)
@@ -2894,6 +3027,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (ops.xor_memory_sources_group4)
         return false;
     if (ops.ff8_high_encode_t4_batch)
+        return false;
+    if (ops.ff8_walsh_locator)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
@@ -2945,7 +3080,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8HighEncodeOneBlock(ops) ||
         !TestFF8HighEncodeTwoBlocksT8(ops) ||
         !TestFF8HighEncodeSmall(ops) ||
-        !TestFF8HighEncodeT4Batch(ops))
+        !TestFF8HighEncodeT4Batch(ops) ||
+        !TestFF8WalshLocator(ops))
         return false;
 #if LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     const bool four_tiny_backend = ops.kind == LEO2_BACKEND_AVX2;
@@ -3027,7 +3163,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_ifft_butterfly8_out ||
         ops.ff8_fft_butterfly8_out ||
         ops.ff8_linear_combination4_tiny ||
-        ops.ff8_ifft_butterfly2_range)
+        ops.ff8_ifft_butterfly2_range ||
+        ops.ff8_walsh_locator)
         return false;
 #endif
 #ifdef LEO_HAS_FF16

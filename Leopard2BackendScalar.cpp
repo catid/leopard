@@ -1410,6 +1410,8 @@ static const Ops ScalarOps = {
     , NULL
     // ff8_ifft_butterfly2_range
     , NULL
+    // ff8_walsh_locator
+    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

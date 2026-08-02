@@ -713,6 +713,240 @@ void test_direct_dispatch_bypass(leo2_context* context)
     leo2_codec_destroy(translated);
 }
 
+void test_exact_transient_route_fail_closed(leo2_context* context)
+{
+    if (leo2_context_backend(context) != LEO2_BACKEND_AVX2)
+        return;
+    const unsigned k = 128;
+    const unsigned r = 128;
+    const size_t maximum_bytes = 256;
+    leo2_codec* codec = create_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 0);
+    require_success(leo2_test_codec_set_decode_mode(codec,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+        "force native-high exact-route test");
+    require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
+        "enable exact transient metadata test");
+
+    const Shards originals = make_originals(
+        k, maximum_bytes, UINT64_C(0x4558414354524f55));
+    const Shards parity = encode(codec, originals, r, maximum_bytes);
+    std::vector<uint8_t> original_present(k, 0);
+    std::vector<uint8_t> recovery_present(r, 1);
+    const std::vector<uint8_t> original_present_before = original_present;
+    const std::vector<uint8_t> recovery_present_before = recovery_present;
+    std::vector<const void*> original_input(k, NULL);
+    std::vector<const void*> recovery_input = const_pointers(parity);
+    Shards restored(k, Bytes(maximum_bytes, 0xa5));
+    std::vector<void*> output = mutable_pointers(&restored);
+
+    leo2_decode_plan* failed_plan = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    require_result(
+        leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+            codec, 0, original_present.data(), recovery_present.data(),
+            &failed_plan),
+        LEO2_INVALID_ARGUMENT,
+        "zero-byte transient-plan factory failure atomicity");
+    require(failed_plan == NULL,
+        "zero-byte transient-plan failure retained caller sentinel");
+    std::vector<uint8_t> invalid_original_present = original_present;
+    invalid_original_present[0] = 2;
+    failed_plan = reinterpret_cast<leo2_decode_plan*>(
+        static_cast<uintptr_t>(1));
+    require_result(
+        leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+            codec, 64, invalid_original_present.data(),
+            recovery_present.data(), &failed_plan),
+        LEO2_INVALID_ARGUMENT,
+        "invalid-presence transient-plan factory failure atomicity");
+    require(failed_plan == NULL,
+        "invalid-presence transient-plan failure retained caller sentinel");
+
+    const auto check_direction = [&](size_t create_bytes,
+                                     size_t execute_bytes,
+                                     leopard2_internal::DecodePath
+                                         expected_create_path) {
+        require_success(leo2_test_codec_set_decode_mode(codec,
+            LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+            "restore native-high exact-route mode");
+        leo2_decode_plan* plan = NULL;
+        require_success(
+            leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+                codec, create_bytes, original_present.data(),
+                recovery_present.data(), &plan),
+            "exact-route transient plan create");
+        leopard2_internal::DecodePathInfo path;
+        require_success(leopard2_internal::GetDecodePlanPathInfo(
+            plan, create_bytes, false, &path),
+            "exact-route path introspection");
+        require(path.path == expected_create_path,
+            "exact-route plan selected an unexpected creation path");
+
+        size_t scratch_bytes = 0;
+        require_success(leo2_decode_plan_scratch_size(
+            plan, create_bytes, &scratch_bytes),
+            "exact-byte plan scratch query");
+        AlignedBuffer scratch(scratch_bytes);
+        memset(scratch.data(), 0x3c, scratch_bytes);
+        for (size_t i = 0; i < restored.size(); ++i)
+            std::fill(restored[i].begin(), restored[i].end(), 0xa5);
+        require_result(
+            leopard2_internal::ExecuteOneShotTransformPlanForDiagnostics(
+                plan, execute_bytes, original_present.data(),
+                recovery_present.data(), &original_input[0],
+                &recovery_input[0], &output[0], scratch.data(),
+                scratch_bytes),
+            LEO2_INVALID_ARGUMENT,
+            "exact-byte transient-plan mismatch");
+        require_result(leo2_decode_plan_execute(
+                plan, execute_bytes, &original_input[0],
+                &recovery_input[0], &output[0], scratch.data(),
+                scratch_bytes),
+            LEO2_INVALID_ARGUMENT,
+            "ordinary exact-byte plan mismatch");
+        leo2_decode_batch_item item = {};
+        item.shard_bytes = execute_bytes;
+        item.original = &original_input[0];
+        item.recovery = &recovery_input[0];
+        item.restored_original = &output[0];
+        item.scratch = scratch.data();
+        item.scratch_bytes = scratch_bytes;
+        require_result(leo2_decode_plan_execute_batch(plan, &item, 1),
+            LEO2_INVALID_ARGUMENT,
+            "batch exact-byte plan mismatch");
+        leo2_decode_batch_binding* binding = NULL;
+        require_result(leo2_decode_batch_binding_create(
+                plan, &item, 1, &binding),
+            LEO2_INVALID_ARGUMENT,
+            "binding exact-byte plan mismatch");
+        require(binding == NULL,
+            "exact-byte mismatch returned a decode binding");
+        if (create_bytes == 64 && execute_bytes == 256)
+        {
+            /*
+                Exercise the scalable (two-or-more item) entry point with a
+                valid first descriptor and an exact-byte mismatch in the
+                second.  The batch-wide byte preflight must reject the whole
+                operation before the valid first item can modify output or
+                per-item/preflight scratch.
+            */
+            Shards second_restored(k, Bytes(maximum_bytes, 0xa5));
+            std::vector<void*> second_output =
+                mutable_pointers(&second_restored);
+            AlignedBuffer second_scratch(scratch_bytes);
+            memset(second_scratch.data(), 0x3c, scratch_bytes);
+            leo2_decode_batch_item batch_items[2] = {};
+            batch_items[0].shard_bytes = create_bytes;
+            batch_items[0].original = &original_input[0];
+            batch_items[0].recovery = &recovery_input[0];
+            batch_items[0].restored_original = &output[0];
+            batch_items[0].scratch = scratch.data();
+            batch_items[0].scratch_bytes = scratch_bytes;
+            batch_items[1].shard_bytes = execute_bytes;
+            batch_items[1].original = &original_input[0];
+            batch_items[1].recovery = &recovery_input[0];
+            batch_items[1].restored_original = &second_output[0];
+            batch_items[1].scratch = second_scratch.data();
+            batch_items[1].scratch_bytes = scratch_bytes;
+            size_t preflight_scratch_bytes = 0;
+            require_success(leo2_decode_plan_batch_preflight_scratch_size(
+                    plan, 2, &preflight_scratch_bytes),
+                "scalable exact-byte preflight scratch query");
+            require(preflight_scratch_bytes != 0,
+                "two-item decode did not select scalable preflight");
+            AlignedBuffer preflight_scratch(preflight_scratch_bytes);
+            memset(preflight_scratch.data(), 0x6d,
+                preflight_scratch_bytes);
+            require_result(
+                leo2_decode_plan_execute_batch_with_preflight_scratch(
+                    plan, batch_items, 2, preflight_scratch.data(),
+                    preflight_scratch_bytes),
+                LEO2_INVALID_ARGUMENT,
+                "scalable batch exact-byte plan mismatch");
+            for (size_t i = 0; i < preflight_scratch_bytes; ++i)
+            {
+                require(static_cast<const uint8_t*>(
+                            preflight_scratch.data())[i] == 0x6d,
+                    "exact-byte mismatch modified preflight scratch");
+            }
+            for (size_t i = 0; i < scratch_bytes; ++i)
+            {
+                require(static_cast<const uint8_t*>(
+                            second_scratch.data())[i] == 0x3c,
+                    "exact-byte mismatch modified second-item scratch");
+            }
+            for (size_t shard = 0; shard < second_restored.size(); ++shard)
+            {
+                require(static_cast<size_t>(std::count(
+                            second_restored[shard].begin(),
+                            second_restored[shard].end(),
+                            static_cast<uint8_t>(0xa5))) ==
+                        second_restored[shard].size(),
+                    "exact-byte mismatch modified a second-item output");
+            }
+        }
+        for (size_t i = 0; i < scratch_bytes; ++i)
+        {
+            require(static_cast<const uint8_t*>(scratch.data())[i] == 0x3c,
+                "exact-route mismatch modified scratch");
+        }
+        for (size_t shard = 0; shard < restored.size(); ++shard)
+        {
+            require(static_cast<size_t>(std::count(
+                        restored[shard].begin(), restored[shard].end(),
+                        static_cast<uint8_t>(0xa5))) ==
+                    restored[shard].size(),
+                "exact-route mismatch modified an output");
+        }
+        require(original_present == original_present_before &&
+                recovery_present == recovery_present_before,
+            "exact-route mismatch modified a presence map");
+        leo2_decode_plan_destroy(plan);
+    };
+
+    check_direction(64, 256,
+        leopard2_internal::kDecodePathMaterialized);
+    check_direction(256, 64,
+        leopard2_internal::kDecodePathGeneric);
+    check_direction(1024, 1025,
+        leopard2_internal::kDecodePathGeneric);
+
+    const uint64_t oversized_aligned_bytes =
+        UINT64_MAX - (leo2_scratch_alignment() - 1U);
+    size_t ignored_scratch_bytes = 0;
+    const leo2_result oversized_geometry_result =
+        leo2_decode_scratch_size(
+            codec, oversized_aligned_bytes, &ignored_scratch_bytes);
+    require(oversized_geometry_result != LEO2_SUCCESS,
+        "oversized aligned byte geometry unexpectedly had valid scratch");
+    leo2_decode_plan* invalid_geometry_plan = NULL;
+    require_result(
+        leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+            codec, oversized_aligned_bytes, original_present.data(),
+            recovery_present.data(), &invalid_geometry_plan),
+        oversized_geometry_result,
+        "oversized aligned transient-plan byte geometry");
+    require(invalid_geometry_plan == NULL,
+        "unrepresentable byte geometry returned a diagnostic plan");
+
+    leo2_codec* gf16_codec = create_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16, 0);
+    require_success(leo2_test_codec_set_decode_mode(gf16_codec,
+        LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+        "force native-high GF16 byte-geometry test");
+    require_result(
+        leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+            gf16_codec, 65, original_present.data(),
+            recovery_present.data(), &invalid_geometry_plan),
+        LEO2_UNSUPPORTED,
+        "odd native-GF16 transient-plan byte geometry");
+    require(invalid_geometry_plan == NULL,
+        "odd native-GF16 byte geometry returned a diagnostic plan");
+    leo2_codec_destroy(gf16_codec);
+    leo2_codec_destroy(codec);
+}
+
 void test_legacy_wire_and_recovery(leo2_context* context)
 {
     const unsigned k = 8;
@@ -957,6 +1191,7 @@ void run_backend_suite(leo2_context* context, Counts* counts)
 {
     test_rejection(context);
     test_direct_dispatch_bypass(context);
+    test_exact_transient_route_fail_closed(context);
     test_legacy_wire_and_recovery(context);
     test_unaligned_tail(context, LEO2_FIELD_GF8, 17, 17, 65);
     test_unaligned_tail(context, LEO2_FIELD_GF16, 17, 17, 66);

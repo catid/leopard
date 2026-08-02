@@ -116,6 +116,8 @@ struct Options
     bool report_direct_executor;
     bool attest_source;
     bool measure_one_shot_decode;
+    int one_shot_plan_setup_mode;
+    int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
     bool disable_k16r8_b256_terminal;
@@ -162,6 +164,8 @@ struct Options
         , report_direct_executor(false)
         , attest_source(false)
         , measure_one_shot_decode(false)
+        , one_shot_plan_setup_mode(-1)
+        , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , disable_k16r8_b256_terminal(false)
@@ -433,10 +437,18 @@ static void Usage(std::ostream& output, const char* program)
         << "  --force-tiled         Use the side-sized specialized kernel\n"
         << "  --force-materialized  Use the retained N-slot specialized kernel\n"
         << "  --skip-legacy         Do not run the in-tree legacy comparison\n"
-        << "  --retain-samples      Emit raw timing samples using benchmark schema v2\n"
-        << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
+        << "  --retain-samples      Emit raw timing samples (base schema v2; later\n"
+        << "                         diagnostic schemas take precedence)\n"
+        << "  --report-decode-path  Emit selected-path metadata (base schema v3; later\n"
+        << "                         diagnostic schemas take precedence)\n"
         << "  --measure-one-shot-decode\n"
-        << "                         Time the public one-shot decode wrapper using schema v8\n"
+        << "                         Time the public one-shot decode wrapper using schema v9\n"
+        << "  --one-shot-plan-setup-mode 0|1|2|3\n"
+        << "                         Attribution-only: time internal transform-plan setup and\n"
+        << "                         execution (not public one-shot dispatch) using schema v15\n"
+        << "  --gf8-avx2-walsh-locator-mode 0|1\n"
+        << "                         Attribution-only: disable or enable the dense setup kernel\n"
+        << "                         within one-shot setup mode 3 using schema v16\n"
         << "  --r1-small-reduction-mode 0|1\n"
         << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
         << "  --k8r3r4-t4-terminal-mode 0|1\n"
@@ -506,6 +518,30 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--report-decode-path") options.report_decode_path = true;
         else if (argument == "--measure-one-shot-decode")
             options.measure_one_shot_decode = true;
+        else if (argument == "--one-shot-plan-setup-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.one_shot_plan_setup_mode = 0;
+            else if (mode == "1")
+                options.one_shot_plan_setup_mode = 1;
+            else if (mode == "2")
+                options.one_shot_plan_setup_mode = 2;
+            else if (mode == "3")
+                options.one_shot_plan_setup_mode = 3;
+            else
+                Fail("--one-shot-plan-setup-mode must be 0, 1, 2, or 3");
+        }
+        else if (argument == "--gf8-avx2-walsh-locator-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.gf8_avx2_walsh_locator_mode = 0;
+            else if (mode == "1")
+                options.gf8_avx2_walsh_locator_mode = 1;
+            else
+                Fail("--gf8-avx2-walsh-locator-mode must be exactly 0 or 1");
+        }
         else if (argument == "--r1-small-reduction-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -600,19 +636,53 @@ static Options ParseOptions(int argc, char** argv)
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
-         options.disable_k9r6r8_b256_terminal ||
-         options.force_generic_decode || options.force_specialized_decode ||
-         options.force_tiled_decode || options.force_materialized_decode))
+         options.disable_k9r6r8_b256_terminal))
     {
         Fail("--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
              "R=1, one loss, batch=1, one thread, --skip-legacy, "
              "--retain-samples, and --measure-one-shot-decode");
+    }
+    if (options.one_shot_plan_setup_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_decode ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal))
+    {
+        Fail("--one-shot-plan-setup-mode requires explicit high/GF8/AVX2, "
+             "batch=1, one thread, --skip-legacy, --retain-samples, and "
+             "--measure-one-shot-decode without another setup-attribution mode");
+    }
+    if (options.gf8_avx2_walsh_locator_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode != 3 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal))
+    {
+        Fail("--gf8-avx2-walsh-locator-mode requires explicit GF8/AVX2, "
+             "one-shot plan setup mode 3, batch=1, one thread, "
+             "--skip-legacy, --retain-samples, and --measure-one-shot-decode");
     }
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH) || \
     defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if (options.r1_small_reduction_mode >= 0)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
+    if (options.one_shot_plan_setup_mode >= 0)
+        Fail("--one-shot-plan-setup-mode requires the ordinary benchmark");
 #endif
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
@@ -1015,6 +1085,23 @@ static void CheckRestored(
     }
 }
 
+static void PoisonRestored(
+    Stripe& stripe,
+    const Options& options,
+    const std::vector<uint32_t>& losses)
+{
+    for (size_t loss_i = 0; loss_i < losses.size(); ++loss_i)
+    {
+        const uint32_t index = losses[loss_i];
+        const uint8_t* const expected = stripe.original_storage.bytes() +
+            static_cast<size_t>(index) * static_cast<size_t>(options.bytes);
+        uint8_t* const restored = stripe.restored_storage.bytes() +
+            static_cast<size_t>(index) * static_cast<size_t>(options.bytes);
+        for (uint64_t byte = 0; byte < options.bytes; ++byte)
+            restored[byte] = static_cast<uint8_t>(expected[byte] ^ 0xffU);
+    }
+}
+
 static void InitializeLegacyStripe(
     LegacyStripe& legacy,
     const Stripe& stripe,
@@ -1202,6 +1289,10 @@ static std::string LegacyUnavailableReason(
 
 static int Run(const Options& options)
 {
+    if (options.one_shot_plan_setup_mode >= 0 &&
+        !leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(
+            static_cast<unsigned>(options.one_shot_plan_setup_mode)))
+        Fail("cannot set the one-shot plan-setup attribution mode");
     if (options.r1_small_reduction_mode >= 0 &&
         !leopard2_internal::SetR1SmallReductionModeForDiagnostics(
             static_cast<unsigned>(options.r1_small_reduction_mode)))
@@ -1227,6 +1318,11 @@ static int Run(const Options& options)
     context_options.thread_count = options.threads;
     leo2_context* context = NULL;
     RequireLeo2(leo2_context_create(&context_options, &context), "context create");
+    if (options.gf8_avx2_walsh_locator_mode >= 0 &&
+        !leopard2_internal::
+            SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
+                context, options.gf8_avx2_walsh_locator_mode == 1))
+        Fail("cannot set the GF8 AVX2 Walsh-locator attribution mode");
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     if (options.disable_high_t4_binding)
     {
@@ -1309,6 +1405,36 @@ static int Run(const Options& options)
 #endif
     RequireLeo2(leo2_decode_plan_scratch_size(plan, options.bytes, &decode_scratch_bytes),
         "decode scratch query");
+
+    leo2_decode_plan* one_shot_transient_plan = NULL;
+    size_t one_shot_transient_scratch_bytes = 0;
+    AlignedBuffer one_shot_transient_scratch;
+    leopard2_internal::DecodePathInfo one_shot_transient_path_info = {};
+    leopard2_internal::DecodePlanPrunedScheduleInfo
+        one_shot_transient_schedule_info = {};
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        RequireLeo2(
+            leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+                codec, options.bytes, &original_present[0],
+                &recovery_present[0], &one_shot_transient_plan),
+            "one-shot transient decode plan create");
+        RequireLeo2(leo2_decode_plan_scratch_size(
+            one_shot_transient_plan, options.bytes,
+            &one_shot_transient_scratch_bytes),
+            "one-shot transient decode scratch query");
+        if (one_shot_transient_scratch_bytes > one_shot_decode_scratch_bytes)
+            Fail("transient one-shot plan exceeds public scratch query");
+        one_shot_transient_scratch.Reset(one_shot_transient_scratch_bytes);
+        RequireLeo2(leopard2_internal::GetDecodePlanPathInfo(
+            one_shot_transient_plan, options.bytes, false,
+            &one_shot_transient_path_info),
+            "one-shot transient decode path introspection");
+        if (!leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+                one_shot_transient_plan,
+                &one_shot_transient_schedule_info))
+            Fail("one-shot transient schedule introspection failed");
+    }
 
     leopard2_internal::DecodePathInfo decode_path_info;
     if (options.report_decode_path)
@@ -1442,6 +1568,19 @@ static int Run(const Options& options)
                 "one-shot decode");
         }
     };
+    const auto run_one_shot_transient_execution = [&]() {
+        if (!one_shot_transient_plan || stripes.size() != 1)
+            Fail("transient one-shot execution requires its one-stripe plan");
+        Stripe& stripe = *stripes[0];
+        RequireLeo2(
+            leopard2_internal::ExecuteOneShotTransformPlanForDiagnostics(
+                one_shot_transient_plan, options.bytes,
+                &original_present[0], &recovery_present[0],
+                &stripe.received_original[0], &stripe.received_recovery[0],
+                &stripe.restored[0], one_shot_transient_scratch.data(),
+                one_shot_transient_scratch.size()),
+            "one-shot transient decode execution");
+    };
     const auto run_encode_batch_execution = [&]() {
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         RequireLeo2(leo2_encode_batch_binding_execute(
@@ -1454,6 +1593,7 @@ static int Run(const Options& options)
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
         options.attest_source || options.measure_one_shot_decode ||
+        options.one_shot_plan_setup_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
@@ -1461,6 +1601,8 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
+        options.one_shot_plan_setup_mode >= 0 ? 15 :
         options.r1_small_reduction_mode >= 0 ? 12 :
         options.k8r3r4_t4_terminal_mode == 0 ? 11 :
         options.disable_k9r6r8_b256_terminal ? 10 :
@@ -1515,15 +1657,26 @@ static int Run(const Options& options)
             Fail("one-shot and ordinary batch encode parity differ");
     }
 
+    for (size_t i = 0; i < stripes.size(); ++i)
+        PoisonRestored(*stripes[i], options, losses);
     run_decode_batch();
     for (size_t i = 0; i < stripes.size(); ++i)
         CheckRestored(*stripes[i], options, losses, "Leopard2");
     if (options.measure_one_shot_decode)
     {
+        for (size_t i = 0; i < stripes.size(); ++i)
+            PoisonRestored(*stripes[i], options, losses);
         run_one_shot_decode();
         for (size_t i = 0; i < stripes.size(); ++i)
             CheckRestored(*stripes[i], options, losses,
                 "Leopard2 one-shot");
+    }
+    if (one_shot_transient_plan)
+    {
+        PoisonRestored(*stripes[0], options, losses);
+        run_one_shot_transient_execution();
+        CheckRestored(*stripes[0], options, losses,
+            "Leopard2 one-shot transient plan");
     }
     if (extended_schema)
     {
@@ -1577,6 +1730,20 @@ static int Run(const Options& options)
             "timed decode plan create");
         leo2_decode_plan_destroy(temporary);
     });
+    Summary one_shot_transient_plan_setup = Summary();
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        one_shot_transient_plan_setup = Measure(
+            options.iterations, 1, options.retain_samples, [&]() {
+            leo2_decode_plan* temporary = NULL;
+            RequireLeo2(
+                leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+                    codec, options.bytes, &original_present[0],
+                    &recovery_present[0], &temporary),
+                "timed one-shot transient decode plan create");
+            leo2_decode_plan_destroy(temporary);
+        });
+    }
 
     for (size_t i = 0; i < options.warmup; ++i)
     {
@@ -1586,6 +1753,8 @@ static int Run(const Options& options)
         run_decode_batch();
         if (options.measure_one_shot_decode)
             run_one_shot_decode();
+        if (one_shot_transient_plan)
+            run_one_shot_transient_execution();
     }
 
     const Summary encode_execution = Measure(
@@ -1610,6 +1779,14 @@ static int Run(const Options& options)
         one_shot_decode = Measure(
             options.iterations, options.reuse, options.retain_samples, [&]() {
             run_one_shot_decode();
+        });
+    }
+    Summary one_shot_transient_execution = Summary();
+    if (one_shot_transient_plan)
+    {
+        one_shot_transient_execution = Measure(
+            options.iterations, options.reuse, options.retain_samples, [&]() {
+            run_one_shot_transient_execution();
         });
     }
 
@@ -1787,6 +1964,40 @@ static int Run(const Options& options)
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k9r5_b256_terminal ? "true" : "false");
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"one_shot_plan_setup_diagnostic_mode\": "
+             << options.one_shot_plan_setup_mode << ",\n"
+             << "    \"one_shot_plan_setup_policy\": \""
+             << (options.one_shot_plan_setup_mode == 0
+                    ? "reusable_metadata_superset"
+                    : options.one_shot_plan_setup_mode == 1
+                        ? "exact_byte_selected_metadata"
+                        : options.one_shot_plan_setup_mode == 2
+                            ? "exact_byte_tiny_high_regular_metadata"
+                            : "exact_byte_tiny_all_regular_metadata")
+             << "\",\n"
+             << "    \"one_shot_transient_execution_scope\": "
+                "\"diagnostic_transform_plan_execution_only\",\n"
+             << "    \"one_shot_transient_execution_excludes\": ["
+                "\"decode_plan_create_destroy\", "
+                "\"public_one_shot_no_loss_and_direct_dispatch\"],\n"
+             << "    \"one_shot_transient_execution_guards\": ["
+                "\"transform_route_and_exact_shard_bytes\", "
+                "\"presence_metadata_overlap\"],\n"
+             << "    \"one_shot_transient_execution_scratch_policy\": "
+                "\"exact_plan_query\"";
+    }
+    if (options.gf8_avx2_walsh_locator_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"gf8_avx2_walsh_locator_diagnostic_mode\": "
+             << options.gf8_avx2_walsh_locator_mode << ",\n"
+             << "    \"gf8_avx2_walsh_locator_enabled\": "
+             << (options.gf8_avx2_walsh_locator_mode == 1
+                    ? "true" : "false");
+    }
     if (options.r1_small_reduction_mode >= 0)
     {
         json << ",\n"
@@ -1885,6 +2096,12 @@ static int Run(const Options& options)
             json << "    \"attest_source\": true,\n";
         if (options.measure_one_shot_decode)
             json << "    \"measure_one_shot_decode\": true,\n";
+        if (options.one_shot_plan_setup_mode >= 0)
+            json << "    \"one_shot_plan_setup_mode\": "
+                 << options.one_shot_plan_setup_mode << ",\n";
+        if (options.gf8_avx2_walsh_locator_mode >= 0)
+            json << "    \"gf8_avx2_walsh_locator_mode\": "
+                 << options.gf8_avx2_walsh_locator_mode << ",\n";
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
@@ -1910,6 +2127,13 @@ static int Run(const Options& options)
          << "    \"thread_count\": " << leo2_context_thread_count(context) << ",\n"
          << "    \"parent_count\": " << leo2_codec_parent_count(codec) << ",\n"
          << "    \"padded_side\": " << leo2_codec_padded_side(codec);
+    if (options.gf8_avx2_walsh_locator_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"gf8_avx2_walsh_locator_enabled\": "
+             << (options.gf8_avx2_walsh_locator_mode == 1
+                    ? "true" : "false");
+    }
     if (options.report_decode_path)
     {
         json << ",\n"
@@ -1936,6 +2160,39 @@ static int Run(const Options& options)
                         decode_path_info.direct_executor)
                  << "\"";
     }
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"one_shot_transient_decode_path\": \""
+             << leopard2_internal::DecodePathName(
+                    one_shot_transient_path_info.path)
+             << "\",\n"
+             << "    \"one_shot_transient_decode_rule\": \""
+             << leopard2_internal::DecodePathRuleName(
+                    one_shot_transient_path_info.rule)
+             << "\",\n"
+             << "    \"one_shot_transient_low_input_pruned_plans\": "
+             << one_shot_transient_schedule_info.low_input_plan_count
+             << ",\n"
+             << "    \"one_shot_transient_low_output_pruned_plans\": "
+             << one_shot_transient_schedule_info.low_output_plan_count
+             << ",\n"
+             << "    \"one_shot_transient_high_input_pruned_plans\": "
+             << one_shot_transient_schedule_info.high_input_plan_count
+             << ",\n"
+             << "    \"one_shot_transient_high_output_pruned_plans\": "
+             << one_shot_transient_schedule_info.high_output_plan_count
+             << ",\n"
+             << "    \"one_shot_transient_setup_scope\": "
+                "\"diagnostic_pattern_setup\",\n"
+             << "    \"one_shot_transient_setup_excludes\": ["
+                "\"r1_terminal_probe\", "
+                "\"equal_rounded_direct_repair_probe\"],\n"
+             << "    \"one_shot_transient_setup_includes_no_loss_prefix_probe\": "
+             << (leopard2_internal::
+                    OneShotNoLossShortCircuitExperimentEnabled()
+                    ? "true" : "false");
+    }
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
     json << ",\n"
          << "    \"high_evaluator_mode\": \""
@@ -1957,7 +2214,14 @@ static int Run(const Options& options)
              << "    \"algorithm\": \"fnv1a64\",\n"
              << "    \"original_data\": \"" << HexU64(original_digest) << "\",\n"
              << "    \"transmitted_parity\": \"" << HexU64(parity_digest) << "\",\n"
-             << "    \"recovered_originals\": \"" << HexU64(recovered_digest) << "\"\n"
+             << "    \"recovered_originals\": \"" << HexU64(recovered_digest) << "\"";
+        if (options.one_shot_plan_setup_mode >= 0)
+        {
+            json << ",\n"
+                 << "    \"recovered_originals_provenance\": "
+                    "\"diagnostic_one_shot_transform_execution_after_poison\"";
+        }
+        json << "\n"
              << "  },\n";
     }
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
@@ -2000,6 +2264,12 @@ static int Run(const Options& options)
              << "    \"one_shot_decode_scratch_bytes_batch\": "
              << one_shot_decode_scratch_batch;
     }
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"one_shot_transient_scratch_bytes_per_stripe\": "
+             << one_shot_transient_scratch_bytes;
+    }
     json << "\n"
          << "  },\n"
          << "  \"metrics\": {\n"
@@ -2019,6 +2289,21 @@ static int Run(const Options& options)
             encode_input_bytes, "input_GB_per_s",
             encode_output_bytes, "parity_output_GB_per_s",
             4, options.retain_samples);
+    }
+    if (options.one_shot_plan_setup_mode >= 0)
+    {
+        json << ",\n    \"one_shot_transient_plan_setup\": ";
+        WriteSetupSummary(json, one_shot_transient_plan_setup,
+            4, options.retain_samples);
+        json << ",\n    \"one_shot_transient_execution\": ";
+        WriteSummary(json, one_shot_transient_execution,
+            decode_input_bytes, "offered_received_GB_per_s",
+            decode_output_bytes, "repaired_output_GB_per_s",
+            4, options.retain_samples);
+        json << ",\n    \"one_shot_transient_amortized_at_reuse\": ";
+        WriteAmortizedDecodeSummary(json, one_shot_transient_plan_setup,
+            one_shot_transient_execution, options.reuse,
+            decode_input_bytes, decode_output_bytes, 4);
     }
     json << ",\n    \"decode_plan_setup\": ";
     WriteSetupSummary(json, plan_setup, 4, options.retain_samples);
@@ -2081,6 +2366,7 @@ static int Run(const Options& options)
 
     leo2_decode_batch_binding_destroy(decode_batch_binding);
     leo2_encode_batch_binding_destroy(encode_batch_binding);
+    leo2_decode_plan_destroy(one_shot_transient_plan);
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);

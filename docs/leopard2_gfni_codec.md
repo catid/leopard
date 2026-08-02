@@ -7,10 +7,10 @@
 `-mgfni`; a GFNI-capable host selects it with `LEO2_BACKEND_GFNI` at context
 creation.  `AUTO` never selects it (explicit-only, mirroring the AVX-512
 policy), parity is byte-identical to the AVX2 member, and the same-binary
-speedup over AVX2 is 1.33x-1.73x on the measured cells.  Requirement 1 of the
-production integration list at the end of this document is satisfied;
-requirements 2-6 (packed GF16 tables, AUTO selector policy, isolated exact-main
-evidence, a second microarchitecture, and the 512-bit follow-up) remain open.
+speedup over AVX2 is 1.33x-1.73x on the measured cells.  Requirements 1 and 2
+of the production integration list at the end of this document are satisfied;
+requirements 3-6 (AUTO selector policy, isolated exact-main evidence, a second
+microarchitecture, and the 512-bit follow-up) remain open.
 
 The historical evaluation path — `LEO2_GFNI_VARIANT` via compiler flags,
 running under the AVX2 identity — remains available for A/B experiments and
@@ -38,12 +38,13 @@ it in one instruction.
   `product_high = A10 * low ^ A11 * high`.
   That is four affine operations and two XORs per 64-byte tile, replacing four
   ANDs, two shifts, eight shuffles and eight XORs.
-- **Storage.**  The variant reuses the nibble-table storage shape unchanged:
-  each 16-byte row instead holds one affine matrix duplicated, so the existing
-  128-bit `BroadcastTable` fills all four 64-bit lanes with that matrix.  No
-  vector call site changed.  The matrices are derived from the same
-  `ff8_multiply_log` / `ff16_multiply_log` callbacks that build the nibble
-  tables, so both backends come from one field definition.
+- **Storage.**  GF8 reuses its 32-byte nibble-table storage shape: each 16-byte
+  row holds one affine matrix duplicated, so the existing 128-bit broadcast
+  fills all four 64-bit lanes.  GF16 stores only the four required 64-bit
+  matrices in `FF16AffineTable`, reducing its table from 8 MiB to 2 MiB, and
+  broadcasts each packed matrix at its use site.  The matrices are derived
+  from the same `ff8_multiply_log` / `ff16_multiply_log` callbacks that build
+  the nibble tables, so both backends come from one field definition.
 - **Tails.**  Sub-vector scalar tails evaluate the stored matrix bitwise
   (`GFNIApplyMatrix`), so the variant needs no second table and no extra memory.
 - **Unrolling.**  The GF8 multiply / multiply-add loop advances 64 bytes per

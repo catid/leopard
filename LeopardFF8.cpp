@@ -3493,6 +3493,26 @@ void PrepareDecodeWalshActive(
 }
 
 
+void PrepareDecodeWalshActiveWithBackend(
+    const backend::Ops& ops,
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+
+    if (n >= 32 && ops.ff8_walsh_locator)
+    {
+        const ffe_t* transformed_kernel =
+            n == kOrder ? LogWalsh : ActiveLogWalsh + n - 2;
+        ops.ff8_walsh_locator(
+            erasures, transformed_kernel, locator_logs, n);
+        return;
+    }
+    PrepareDecodeWalshActive(n, erasures, locator_logs);
+}
+
+
 static unsigned CountErasures(
     unsigned n,
     const uint8_t* erasures,
@@ -3560,14 +3580,15 @@ void PrepareDecodeDirect(
 }
 
 
-void PrepareDecode(
+void PrepareDecodeKnownCount(
     unsigned n,
     const uint8_t* erasures,
+    unsigned erasure_count,
     ffe_t* locator_logs)
 {
     LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+    LEO_DEBUG_ASSERT(erasure_count <= n);
 
-    const unsigned erasure_count = CountErasures(n, erasures, nullptr);
     if (!IsDirectLocatorPreferred(n, erasure_count))
     {
         PrepareDecodeWalshActive(n, erasures, locator_logs);
@@ -3578,18 +3599,28 @@ void PrepareDecode(
 }
 
 
-void PrepareDecodeWithPermanent(
+void PrepareDecode(
+    unsigned n,
+    const uint8_t* erasures,
+    ffe_t* locator_logs)
+{
+    PrepareDecodeKnownCount(
+        n, erasures, CountErasures(n, erasures, nullptr), locator_logs);
+}
+
+
+void PrepareDecodeWithPermanentKnownCount(
     unsigned n,
     const uint8_t* erasures,
     const uint8_t* permanent_erasures,
     const ffe_t* permanent_locator_logs,
+    unsigned dynamic_erasure_count,
     ffe_t* locator_logs)
 {
     LEO_DEBUG_ASSERT(n >= 2 && n <= kOrder);
+    LEO_DEBUG_ASSERT(dynamic_erasure_count <= n);
 
-    const unsigned dynamic_count = CountErasures(
-        n, erasures, permanent_erasures);
-    if (!IsDirectLocatorPreferred(n, dynamic_count))
+    if (!IsDirectLocatorPreferred(n, dynamic_erasure_count))
     {
         PrepareDecodeWalshActiveCombined(
             n, erasures, permanent_erasures, locator_logs);
@@ -3599,6 +3630,19 @@ void PrepareDecodeWithPermanent(
     memcpy(locator_logs, permanent_locator_logs, n * sizeof(ffe_t));
     AddDirectLocatorContributions(
         n, erasures, permanent_erasures, locator_logs);
+}
+
+
+void PrepareDecodeWithPermanent(
+    unsigned n,
+    const uint8_t* erasures,
+    const uint8_t* permanent_erasures,
+    const ffe_t* permanent_locator_logs,
+    ffe_t* locator_logs)
+{
+    PrepareDecodeWithPermanentKnownCount(
+        n, erasures, permanent_erasures, permanent_locator_logs,
+        CountErasures(n, erasures, permanent_erasures), locator_logs);
 }
 
 

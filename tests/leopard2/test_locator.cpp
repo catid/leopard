@@ -26,8 +26,10 @@
     POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include "Leopard2Backend.h"
 #include "LeopardFF8.h"
 #include "LeopardFF16.h"
+#include "leopard.h"
 
 #include <algorithm>
 #include <atomic>
@@ -789,6 +791,222 @@ static uint64_t CheckFF8()
     return compared;
 }
 
+template<class Ffe>
+static uint64_t CheckKnownCountSize(
+    unsigned n,
+    bool (*is_direct_preferred)(unsigned, unsigned),
+    void (*prepare_direct)(unsigned, const uint8_t*, Ffe*),
+    void (*prepare_active)(unsigned, const uint8_t*, Ffe*),
+    void (*prepare_known)(unsigned, const uint8_t*, unsigned, Ffe*),
+    void (*prepare_permanent_known)(
+        unsigned, const uint8_t*, const uint8_t*, const Ffe*, unsigned, Ffe*),
+    const char* standalone_message,
+    const char* permanent_union_message,
+    const char* permanent_dynamic_message)
+{
+    uint64_t compared = 0;
+    unsigned cutoff = 0;
+    while (cutoff < n && is_direct_preferred(n, cutoff + 1U))
+        ++cutoff;
+    const unsigned counts[] = {
+        0, cutoff, std::min(n, cutoff + 1U), n
+    };
+    for (size_t count_i = 0;
+         count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
+    {
+        const unsigned count = counts[count_i];
+        bool duplicate = false;
+        for (size_t prior = 0; prior < count_i; ++prior)
+            duplicate = duplicate || counts[prior] == count;
+        if (duplicate)
+            continue;
+
+        std::vector<uint8_t> erasures(n, 0);
+        for (unsigned i = 0; i < count; ++i)
+            erasures[(i * 5U + 1U) & (n - 1U)] = 1;
+        std::vector<Ffe> reference(n), known(n);
+        if (is_direct_preferred(n, count))
+            prepare_direct(n, erasures.data(), reference.data());
+        else
+            prepare_active(n, erasures.data(), reference.data());
+        prepare_known(n, erasures.data(), count, known.data());
+        Require(EquivalentLogs(reference, known), standalone_message);
+        compared += n;
+    }
+
+    // Keep the largest GF16 parent's direct oracle bounded while still
+    // exercising a nonempty immutable base at both sides of the dynamic
+    // direct/Walsh crossover.
+    const unsigned permanent_count = n == 65536 ? 13U :
+        std::max(1U, n / 8U);
+    std::vector<uint8_t> permanent(n, 0);
+    for (unsigned i = 0; i < permanent_count; ++i)
+        permanent[(i * 3U) & (n - 1U)] = 1;
+    std::vector<Ffe> permanent_locator(n);
+    prepare_direct(n, permanent.data(), permanent_locator.data());
+    const unsigned dynamic_capacity = n - permanent_count;
+    const unsigned dynamic_counts[] = {
+        0, std::min(cutoff, dynamic_capacity),
+        std::min(cutoff + 1U, dynamic_capacity), dynamic_capacity
+    };
+    for (size_t count_i = 0;
+         count_i < sizeof(dynamic_counts) / sizeof(dynamic_counts[0]);
+         ++count_i)
+    {
+        const unsigned dynamic_count = dynamic_counts[count_i];
+        bool duplicate = false;
+        for (size_t prior = 0; prior < count_i; ++prior)
+            duplicate = duplicate || dynamic_counts[prior] == dynamic_count;
+        if (duplicate)
+            continue;
+
+        std::vector<uint8_t> dynamic(n, 0);
+        unsigned added = 0;
+        for (unsigned coordinate = 0;
+             coordinate < n && added < dynamic_count; ++coordinate)
+        {
+            const unsigned candidate =
+                (coordinate * 5U + 1U) & (n - 1U);
+            if (!permanent[candidate] && !dynamic[candidate])
+            {
+                dynamic[candidate] = 1;
+                ++added;
+            }
+        }
+        Require(added == dynamic_count,
+            "known-count test did not construct its requested dynamic mask");
+
+        std::vector<uint8_t> union_mask(permanent);
+        for (unsigned i = 0; i < n; ++i)
+            union_mask[i] = static_cast<uint8_t>(
+                union_mask[i] || dynamic[i]);
+        std::vector<Ffe> reference(n), union_known(n), dynamic_known(n);
+        const unsigned union_count = permanent_count + dynamic_count;
+        if (is_direct_preferred(n, union_count))
+            prepare_direct(n, union_mask.data(), reference.data());
+        else
+            prepare_active(n, union_mask.data(), reference.data());
+        prepare_permanent_known(n, union_mask.data(), permanent.data(),
+            permanent_locator.data(), dynamic_count, union_known.data());
+        prepare_permanent_known(n, dynamic.data(), permanent.data(),
+            permanent_locator.data(), dynamic_count, dynamic_known.data());
+        Require(EquivalentLogs(reference, union_known),
+            permanent_union_message);
+        Require(EquivalentLogs(reference, dynamic_known),
+            permanent_dynamic_message);
+        compared += 2U * n;
+    }
+    return compared;
+}
+
+static uint64_t CheckFF8KnownCounts()
+{
+    uint64_t compared = 0;
+    for (unsigned n = 2; n <= leopard::ff8::kOrder; n <<= 1)
+    {
+        compared += CheckKnownCountSize<leopard::ff8::ffe_t>(n,
+            leopard::ff8::IsDirectLocatorPreferred,
+            leopard::ff8::PrepareDecodeDirect,
+            leopard::ff8::PrepareDecodeWalshActive,
+            leopard::ff8::PrepareDecodeKnownCount,
+            leopard::ff8::PrepareDecodeWithPermanentKnownCount,
+            "GF8 known-count locator differs from its scalar oracle",
+            "GF8 union-mask known-count locator differs from its oracle",
+            "GF8 dynamic-only known-count locator differs from its oracle");
+    }
+    return compared;
+}
+
+#if !defined(LEO2_GFNI_VARIANT) || defined(LEO2_GFNI_MEMBER)
+static uint64_t CheckFF8BackendPattern(
+    const leopard::backend::Ops& ops,
+    unsigned n,
+    const std::vector<uint8_t>& mask)
+{
+    Require(mask.size() == n, "GF8 backend locator mask size mismatch");
+    std::vector<uint8_t> erasure_storage(n + 2, 0xa7);
+    std::copy(mask.begin(), mask.end(), erasure_storage.begin() + 1);
+    const std::vector<uint8_t> original_erasures(erasure_storage);
+    std::vector<leopard::ff8::ffe_t> scalar_storage(n + 2, 0xc3);
+    std::vector<leopard::ff8::ffe_t> backend_storage(n + 2, 0x6d);
+
+    leopard::ff8::PrepareDecodeWalshActive(
+        n, &erasure_storage[1], &scalar_storage[1]);
+    leopard::ff8::PrepareDecodeWalshActiveWithBackend(
+        ops, n, &erasure_storage[1], &backend_storage[1]);
+
+    Require(erasure_storage == original_erasures,
+        "GF8 backend locator modified its erasure mask");
+    Require(scalar_storage[0] == 0xc3 && scalar_storage[n + 1] == 0xc3,
+        "GF8 scalar locator overwrote an output guard");
+    Require(backend_storage[0] == 0x6d && backend_storage[n + 1] == 0x6d,
+        "GF8 backend locator overwrote an output guard");
+    for (unsigned i = 0; i < n; ++i)
+    {
+        Require(CanonicalLog(scalar_storage[i + 1]) ==
+                CanonicalLog(backend_storage[i + 1]),
+            "GF8 AVX2/scalar active locator mismatch");
+    }
+    return n;
+}
+#endif
+
+static uint64_t CheckFF8AVX2Walsh()
+{
+    Require(leo_init() == Leopard_Success,
+        "backend initialization for GF8 locator test");
+    const leopard::backend::Ops* ops =
+        leopard::backend::GetQualifiedOps(LEO2_BACKEND_AVX2);
+    if (!ops)
+        return 0;
+#if defined(LEO2_GFNI_VARIANT) && !defined(LEO2_GFNI_MEMBER)
+    Require(ops->ff8_walsh_locator == NULL,
+        "in-place GFNI diagnostic exposed pure AVX2 locator callback");
+    return 0;
+#else
+    Require(ops->ff8_walsh_locator != NULL,
+        "qualified AVX2 backend omitted its GF8 locator callback");
+
+    static const unsigned sizes[] = { 32, 64, 128, 256 };
+    uint64_t compared = 0;
+    for (size_t size_i = 0;
+         size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+    {
+        const unsigned n = sizes[size_i];
+        std::vector<uint8_t> mask(n, 0);
+        for (unsigned erased = 0; erased < n; ++erased)
+        {
+            std::fill(mask.begin(), mask.end(), uint8_t(0));
+            mask[erased] = static_cast<uint8_t>(
+                (erased & 1U) ? 0x80U : 0xffU);
+            compared += CheckFF8BackendPattern(*ops, n, mask);
+        }
+
+        // Model the production union of permanent punctures and dynamic or
+        // virtual erasures.  Non-canonical nonzero bytes verify that the
+        // backend observes the mask as boolean, just like the scalar path.
+        for (uint32_t pattern = 0; pattern < 1024; ++pattern)
+        {
+            for (unsigned i = 0; i < n; ++i)
+            {
+                const uint32_t permanent = Mix(
+                    pattern * 0x9e3779b9U + i * 0x85ebca6bU + n);
+                const uint32_t dynamic = Mix(
+                    pattern * 0xc2b2ae35U + i * 0x27d4eb2fU + n * 3U);
+                const bool permanently_erased = (permanent & 31U) < 5U;
+                const bool dynamically_erased =
+                    !permanently_erased && (dynamic & 15U) < 3U;
+                mask[i] = permanently_erased || dynamically_erased ?
+                    static_cast<uint8_t>((i + pattern) & 1U ? 0x80U : 0xffU) :
+                    0;
+            }
+            compared += CheckFF8BackendPattern(*ops, n, mask);
+        }
+    }
+    return compared;
+#endif
+}
+
 static uint64_t CheckFF16()
 {
     uint64_t compared = 0;
@@ -849,6 +1067,31 @@ static uint64_t CheckFF16()
             n <= 2048);
     }
 
+    return compared;
+}
+
+static uint64_t CheckFF16KnownCounts()
+{
+    // One representative from every distinct GF16 cutoff regime, plus the
+    // full field.  The geometric progression keeps this edge suite bounded
+    // while covering direct, first-Walsh, zero, and full-count dispatch.
+    const unsigned sizes[] = {
+        2, 32, 64, 128, 256, 512, 1024, 65536
+    };
+    uint64_t compared = 0;
+    for (size_t size_i = 0;
+         size_i < sizeof(sizes) / sizeof(sizes[0]); ++size_i)
+    {
+        compared += CheckKnownCountSize<leopard::ff16::ffe_t>(sizes[size_i],
+            leopard::ff16::IsDirectLocatorPreferred,
+            leopard::ff16::PrepareDecodeDirect,
+            leopard::ff16::PrepareDecodeWalshActive,
+            leopard::ff16::PrepareDecodeKnownCount,
+            leopard::ff16::PrepareDecodeWithPermanentKnownCount,
+            "GF16 known-count locator differs from its scalar oracle",
+            "GF16 union-mask known-count locator differs from its oracle",
+            "GF16 dynamic-only known-count locator differs from its oracle");
+    }
     return compared;
 }
 
@@ -915,7 +1158,8 @@ int main()
     const uint64_t selection_patterns = CheckSelectedErasureInvariant();
     const uint64_t compared = CheckExhaustiveGF4Normalization() +
         CheckExhaustiveGF4PermanentDecomposition() +
-        CheckExhaustiveGF8Active() + CheckFF8() + CheckFF16();
+        CheckExhaustiveGF8Active() + CheckFF8() + CheckFF8KnownCounts() +
+        CheckFF8AVX2Walsh() + CheckFF16() + CheckFF16KnownCounts();
     CheckConcurrentSetup();
     std::cout << "leopard2 locator tests passed: locator_entries_compared="
               << compared << " permanent_cache_structural_cases="

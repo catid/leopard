@@ -22,14 +22,18 @@ When it is defined:
   blocks over Leopard's split low-byte/high-byte block layout, so a 64-byte
   GF16 tile costs four affine operations and two XORs instead of four ANDs, two
   shifts, eight shuffles and eight XORs;
-- the nibble-table storage shape is reused unchanged, with each 16-byte row
-  holding one affine matrix duplicated so a 128-bit broadcast fills all four
-  64-bit lanes.  No vector call site changes;
+- GF8 reuses the 32-byte nibble-table storage shape, with each 16-byte row
+  holding one affine matrix duplicated.  GF16 now uses the packed
+  `FF16AffineTable { uint64_t block[4]; }` layout, reducing its table from
+  8 MiB to 2 MiB while preserving the four matrix operands;
 - sub-vector scalar tails evaluate the same stored matrix bitwise, so the
   variant needs no second table.
 
-The vector data path stays 256 bits wide and the backend identity, dispatch,
-selectors, and wire profile are untouched.
+The vector data path stays 256 bits wide and the wire profile is untouched.
+The historical in-place build retains the AVX2 backend identity but omits
+pure-nibble-only helper callbacks; affected experimental selectors therefore
+fall back to their ops-based paths.  The production GFNI member has its own
+runtime-qualified identity and separately documented selector policy.
 
 ## Building the evaluation binaries
 

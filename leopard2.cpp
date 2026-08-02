@@ -458,6 +458,7 @@ struct leo2_context
     bool auto_avx512_encode_host;
     bool calibrated_k1_avx2_copy_host;
     bool high_t4_batch_binding_enabled;
+    bool gf8_avx2_walsh_locator_enabled;
     uint32_t thread_count;
     size_t gf16_effective_l3_bytes;
     size_t gf16_live_set_target_bytes;
@@ -739,10 +740,17 @@ struct leo2_decode_plan
     */
     std::vector<leo2_direct_source_row> direct_source_rows;
 #endif
+    // Nonzero only for the exact-byte diagnostic transient plan.  Public
+    // reusable plans deliberately remain byte-count agnostic.
+    uint64_t diagnostic_shard_bytes;
     uint32_t generic_input_count;
     uint32_t direct_copy_recovery;
     uint32_t direct_xor_original;
     uint32_t missing_original_count;
+    // Bitmask of transform metadata prepared for this immutable plan.  Public
+    // reusable plans own all routes they can execute; ephemeral one-shot
+    // plans may own only the exact route selected for their known byte count.
+    uint8_t prepared_transform_metadata;
     bool no_op;
     bool direct_xor;
     bool direct_copy;
@@ -1149,6 +1157,13 @@ static bool IsHighT8TwoBlockByteCount(
     and therefore never observe a later benchmark-mode change.
 */
 static std::atomic<unsigned> g_r1_small_reduction_mode(0U);
+/*
+    Production prepares only the exact transient route and omits pruned-plan
+    compilation in the measured tiny GF8/AVX2 maximum-loss region.  Mode zero
+    is retained only for same-executable benchmark attribution.  The public
+    reusable-plan API never consults this switch.
+*/
+static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
@@ -1493,6 +1508,13 @@ struct DecodePresencePrefix
     uint32_t present_count;
     uint32_t missing_original_count;
     uint32_t single_missing_original;
+};
+
+struct DecodePlanSetupHint
+{
+    uint64_t shard_bytes;
+    bool multi_item_batch;
+    unsigned setup_mode;
 };
 
 struct BatchRangeRecord
@@ -1872,6 +1894,29 @@ static bool CodecMayUseNativeLocator(const leo2_codec* codec)
 #endif
 }
 
+#ifdef LEO_HAS_FF8
+static void PrepareGF8LocatorKnownCount(
+    const leo2_codec* codec,
+    const uint8_t* erasures,
+    uint32_t erasure_count,
+    uint8_t* locator_logs)
+{
+    LEO_DEBUG_ASSERT(codec && codec->context && codec->context->ops);
+    if (codec->context->gf8_avx2_walsh_locator_enabled &&
+        codec->context->ops->ff8_walsh_locator &&
+        !leopard::ff8::IsDirectLocatorPreferred(
+            codec->parent_count, erasure_count))
+    {
+        leopard::ff8::PrepareDecodeWalshActiveWithBackend(
+            *codec->context->ops, codec->parent_count, erasures,
+            locator_logs);
+        return;
+    }
+    leopard::ff8::PrepareDecodeKnownCount(
+        codec->parent_count, erasures, erasure_count, locator_logs);
+}
+#endif
+
 static bool PlanUsesTranslatedLowDecode(const leo2_decode_plan* plan)
 {
     return plan && plan->translated_low;
@@ -2026,7 +2071,14 @@ static bool SkipMeasuredDenseGF8AVX2HighPrunedSchedules(
 static bool SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
     const leo2_decode_plan* plan);
 
-static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
+enum DecodeTransformMetadata
+{
+    kDecodeTransformMetadataGeneric = 1U << 0,
+    kDecodeTransformMetadataSpecialized = 1U << 1
+};
+
+static uint8_t ReusablePlanTransformMetadataMask(
+    const leo2_decode_plan* plan)
 {
     const leo2_codec* codec = plan->codec;
     const bool translated_low = PlanUsesTranslatedLowDecode(plan);
@@ -2037,12 +2089,34 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
                          LEO2_CODEC_FORCE_TILED_DECODE |
                          LEO2_CODEC_FORCE_MATERIALIZED_DECODE)) != 0 ||
         translated_low;
-    // AUTO owns both immutable paths because dispatch may depend on shard
-    // bytes, backend, or a future offline table.  A forced diagnostic path
-    // pays only for the metadata it can execute.
-    const bool needs_generic = !force_specialized;
-    const bool needs_specialized = !force_generic;
+    uint8_t mask = 0;
+    if (!force_specialized)
+        mask |= kDecodeTransformMetadataGeneric;
+    if (!force_generic)
+        mask |= kDecodeTransformMetadataSpecialized;
+    return mask;
+}
+
+static bool PreparePlanExecutionMetadata(
+    leo2_decode_plan* plan,
+    uint8_t metadata_mask,
+    bool skip_transient_pruned_schedules)
+{
+    const leo2_codec* codec = plan->codec;
+    const bool translated_low = PlanUsesTranslatedLowDecode(plan);
+    const uint8_t supported_metadata =
+        kDecodeTransformMetadataGeneric |
+        kDecodeTransformMetadataSpecialized;
+    if (metadata_mask == 0 || (metadata_mask & ~supported_metadata) != 0 ||
+        (translated_low &&
+         (metadata_mask & kDecodeTransformMetadataSpecialized) == 0))
+        return false;
+    const bool needs_generic =
+        (metadata_mask & kDecodeTransformMetadataGeneric) != 0;
+    const bool needs_specialized =
+        (metadata_mask & kDecodeTransformMetadataSpecialized) != 0;
     const bool compile_pruned_schedules =
+        !skip_transient_pruned_schedules &&
         !SkipMeasuredDenseGF8AVX2HighPrunedSchedules(plan) &&
         !SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(plan);
 
@@ -2050,14 +2124,17 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
         DecodeExecutionRequestedCoordinates(plan);
     if (execution_requested_coordinates.empty())
         return false;
+#ifdef LEO_DEBUG
     for (size_t i = 1; i < execution_requested_coordinates.size(); ++i)
-        if (execution_requested_coordinates[i - 1] >=
-            execution_requested_coordinates[i])
-            return false;
+    {
+        LEO_DEBUG_ASSERT(execution_requested_coordinates[i - 1] <
+            execution_requested_coordinates[i]);
+    }
+#endif
 
     plan->generic_input_count = 0;
     std::vector<uint8_t> selected_coordinates;
-    if (needs_specialized)
+    if (needs_specialized && compile_pruned_schedules)
         selected_coordinates.assign(codec->parent_count, 0);
     if (needs_specialized)
     {
@@ -2095,14 +2172,32 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
     for (uint32_t i = 0; i < codec->original_count; ++i)
     {
         const uint32_t coordinate = CoordinateForOriginal(codec, i);
-        if (plan->original_present[i] && !plan->coordinate_erased[coordinate])
+        if (PlanOriginalPresent(plan, i) &&
+            !plan->coordinate_erased[coordinate])
             observe_selected_coordinate(coordinate);
     }
-    for (uint32_t i = 0; i < codec->recovery_count; ++i)
+    const bool known_full_recovery_prefix =
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        needs_specialized && !needs_generic && !compile_pruned_schedules &&
+        plan->missing_original_count == codec->recovery_count;
+    if (known_full_recovery_prefix)
     {
-        const uint32_t coordinate = CoordinateForRecovery(codec, i);
-        if (plan->recovery_present[i] && !plan->coordinate_erased[coordinate])
-            observe_selected_coordinate(coordinate);
+        // Availability proves all R transmitted parity coordinates are
+        // selected in this maximum-loss case.  They form one contiguous
+        // prefix of block zero (or block one after xor-T translation), so the
+        // last coordinate establishes the same block-input prefix as R scans.
+        observe_selected_coordinate(
+            CoordinateForRecovery(codec, codec->recovery_count - 1U));
+    }
+    else
+    {
+        for (uint32_t i = 0; i < codec->recovery_count; ++i)
+        {
+            const uint32_t coordinate = CoordinateForRecovery(codec, i);
+            if (PlanRecoveryPresent(plan, i) &&
+                !plan->coordinate_erased[coordinate])
+                observe_selected_coordinate(coordinate);
+        }
     }
 
     if (needs_generic)
@@ -2129,57 +2224,68 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
                 plan->specialized_output_dependencies.size()))
             return false;
 
-        const uint32_t side = codec->padded_side;
-        const uint32_t block_count = codec->parent_count / side;
-        std::vector<uint8_t> input_mask(side, 0);
-        std::vector<uint8_t> output_mask(side, 1);
-        for (uint32_t block = 0; block < block_count; ++block)
+        if (compile_pruned_schedules)
         {
-            const uint32_t offset = block * side;
-            uint32_t live_count = 0;
-            for (uint32_t i = 0; i < side; ++i)
+            const uint32_t side = codec->padded_side;
+            const uint32_t block_count = codec->parent_count / side;
+            std::vector<uint8_t> input_mask(side, 0);
+            std::vector<uint8_t> output_mask(side, 1);
+            for (uint32_t block = 0; block < block_count; ++block)
             {
-                input_mask[i] = selected_coordinates[offset + i];
-                live_count += input_mask[i];
+                const uint32_t offset = block * side;
+                uint32_t live_count = 0;
+                for (uint32_t i = 0; i < side; ++i)
+                {
+                    input_mask[i] = selected_coordinates[offset + i];
+                    live_count += input_mask[i];
+                }
+                if (live_count == 0 || live_count == side)
+                    continue;
+                leopard2_internal::PrunedTransformPlan candidate;
+                if (PrepareCodecPrunedTransform(
+                        codec, side, offset, true, input_mask.data(),
+                        output_mask.data(), candidate) &&
+                    PrunedPlanSavesByteHeavyWork(candidate))
+                {
+                    leopard2_internal::PrunedTransformBlock entry;
+                    entry.block = block;
+                    entry.plan = std::move(candidate);
+                    plan->low_pruned_input_blocks.push_back(std::move(entry));
+                }
             }
-            if (live_count == 0 || live_count == side)
-                continue;
-            leopard2_internal::PrunedTransformPlan candidate;
-            if (PrepareCodecPrunedTransform(
-                    codec, side, offset, true, input_mask.data(),
-                    output_mask.data(), candidate) &&
-                PrunedPlanSavesByteHeavyWork(candidate))
-            {
-                leopard2_internal::PrunedTransformBlock entry;
-                entry.block = block;
-                entry.plan = std::move(candidate);
-                plan->low_pruned_input_blocks.push_back(std::move(entry));
-            }
-        }
 
-        input_mask.assign(side, 1);
-        output_mask.assign(side, 0);
-        for (size_t i = 0; i < execution_requested_coordinates.size(); ++i)
-        {
-            const uint32_t coordinate = execution_requested_coordinates[i];
-            if (coordinate >= side)
-                return false;
-            output_mask[coordinate] = 1;
-        }
-        // A complete requested message block is exactly the mature transform;
-        // avoid expanding its full graph merely to discard the candidate.
-        if (execution_requested_coordinates.size() < side)
-        {
-            leopard2_internal::PrunedTransformPlan candidate;
-            if (PrepareCodecPrunedTransform(
-                    codec, side, 0, false, input_mask.data(),
-                    output_mask.data(), candidate) &&
-                PrunedPlanSavesByteHeavyWork(candidate))
-                plan->low_pruned_output_plan = std::move(candidate);
+            input_mask.assign(side, 1);
+            output_mask.assign(side, 0);
+            for (size_t i = 0;
+                 i < execution_requested_coordinates.size(); ++i)
+            {
+                const uint32_t coordinate =
+                    execution_requested_coordinates[i];
+                if (coordinate >= side)
+                    return false;
+                output_mask[coordinate] = 1;
+            }
+            // A complete requested message block is exactly the mature
+            // transform; avoid expanding its full graph merely to discard the
+            // candidate.
+            if (execution_requested_coordinates.size() < side)
+            {
+                leopard2_internal::PrunedTransformPlan candidate;
+                if (PrepareCodecPrunedTransform(
+                        codec, side, 0, false, input_mask.data(),
+                        output_mask.data(), candidate) &&
+                    PrunedPlanSavesByteHeavyWork(candidate))
+                    plan->low_pruned_output_plan = std::move(candidate);
+            }
         }
     }
     else if (needs_specialized)
     {
+        const size_t output_block_capacity = std::min(
+            execution_requested_coordinates.size(),
+            static_cast<size_t>(
+                codec->parent_count / codec->padded_side - 1U));
+        plan->high_output_blocks.reserve(output_block_capacity);
         size_t begin = 0;
         while (begin < execution_requested_coordinates.size())
         {
@@ -2208,71 +2314,79 @@ static bool PreparePlanExecutionMetadata(leo2_decode_plan* plan)
             begin = end;
         }
 
-        const uint32_t side = codec->padded_side;
-        const uint32_t block_count = codec->parent_count / side;
-        std::vector<uint8_t> input_mask(side, 0);
-        std::vector<uint8_t> output_mask(side, 1);
-        /*
-            Start at block 1: block 0's inverse is elided outright by the
-            FFT_0(IFFT_0(F_0) + H_later) = F_0 + FFT_0(H_later) cancellation
-            (docs/leopard2_math_and_sources.md), and all four Algorithm 5
-            executors discard a block-0 entry unexecuted behind a conditional
-            `.block == 0` guard (LeopardFF8.cpp:4554, LeopardFF16.cpp:3878,
-            :4264, :4538), so the compiled schedule had no consumer at all.
-            It cost a Theta((T/2) log2 T) sparsity-independent compile plus up
-            to ~12 bytes per raw butterfly of retained plan storage -- a
-            planner update missed by commit bd13ef7, recorded as open finding
-            1.  The low branch above must keep block 0: its executors
-            genuinely run it.
-        */
-        for (uint32_t block = 1; block < block_count; ++block)
+        if (compile_pruned_schedules)
         {
-            const uint32_t offset = block * side;
-            uint32_t live_count = 0;
-            for (uint32_t i = 0; i < side; ++i)
+            const uint32_t side = codec->padded_side;
+            const uint32_t block_count = codec->parent_count / side;
+            std::vector<uint8_t> input_mask(side, 0);
+            std::vector<uint8_t> output_mask(side, 1);
+            /*
+                Start at block 1: block 0's inverse is elided outright by the
+                FFT_0(IFFT_0(F_0) + H_later) = F_0 + FFT_0(H_later)
+                cancellation (docs/leopard2_math_and_sources.md), and all four
+                Algorithm 5 executors discard a block-0 entry unexecuted
+                behind a conditional `.block == 0` guard
+                (LeopardFF8.cpp:4554, LeopardFF16.cpp:3878, :4264, :4538), so
+                the compiled schedule had no consumer at all.  It cost a
+                Theta((T/2) log2 T) sparsity-independent compile plus up to
+                ~12 bytes per raw butterfly of retained plan storage -- a
+                planner update missed by commit bd13ef7, recorded as open
+                finding 1.  The low branch above must keep block 0: its
+                executors genuinely run it.
+            */
+            for (uint32_t block = 1; block < block_count; ++block)
             {
-                input_mask[i] = selected_coordinates[offset + i];
-                live_count += input_mask[i];
+                const uint32_t offset = block * side;
+                uint32_t live_count = 0;
+                for (uint32_t i = 0; i < side; ++i)
+                {
+                    input_mask[i] = selected_coordinates[offset + i];
+                    live_count += input_mask[i];
+                }
+                if (live_count == 0 || live_count == side)
+                    continue;
+                leopard2_internal::PrunedTransformPlan candidate;
+                if (PrepareCodecPrunedTransform(
+                        codec, side, offset, true, input_mask.data(),
+                        output_mask.data(), candidate) &&
+                    PrunedPlanSavesByteHeavyWork(candidate))
+                {
+                    leopard2_internal::PrunedTransformBlock entry;
+                    entry.block = block;
+                    entry.plan = std::move(candidate);
+                    plan->high_pruned_input_blocks.push_back(
+                        std::move(entry));
+                }
             }
-            if (live_count == 0 || live_count == side)
-                continue;
-            leopard2_internal::PrunedTransformPlan candidate;
-            if (compile_pruned_schedules && PrepareCodecPrunedTransform(
-                    codec, side, offset, true, input_mask.data(),
-                    output_mask.data(), candidate) &&
-                PrunedPlanSavesByteHeavyWork(candidate))
-            {
-                leopard2_internal::PrunedTransformBlock entry;
-                entry.block = block;
-                entry.plan = std::move(candidate);
-                plan->high_pruned_input_blocks.push_back(std::move(entry));
-            }
-        }
 
-        input_mask.assign(side, 1);
-        plan->high_pruned_output_plans.reserve(
-            plan->high_output_blocks.size());
-        for (size_t block_index = 0;
-             block_index < plan->high_output_blocks.size();
-             ++block_index)
-        {
-            const leopard2_internal::DecodeOutputBlock& descriptor =
-                plan->high_output_blocks[block_index];
-            output_mask.assign(side, 0);
-            const uint32_t offset = descriptor.block * side;
-            for (uint32_t i = descriptor.requested_begin;
-                 i < descriptor.requested_end;
-                 ++i)
-                output_mask[execution_requested_coordinates[i] - offset] = 1;
-            leopard2_internal::PrunedTransformPlan candidate;
-            if (!compile_pruned_schedules || !PrepareCodecPrunedTransform(
-                    codec, side, offset, false, input_mask.data(),
-                    output_mask.data(), candidate) ||
-                !PrunedPlanSavesByteHeavyWork(candidate))
-                candidate = leopard2_internal::PrunedTransformPlan();
-            plan->high_pruned_output_plans.push_back(std::move(candidate));
+            input_mask.assign(side, 1);
+            plan->high_pruned_output_plans.reserve(
+                plan->high_output_blocks.size());
+            for (size_t block_index = 0;
+                 block_index < plan->high_output_blocks.size();
+                 ++block_index)
+            {
+                const leopard2_internal::DecodeOutputBlock& descriptor =
+                    plan->high_output_blocks[block_index];
+                output_mask.assign(side, 0);
+                const uint32_t offset = descriptor.block * side;
+                for (uint32_t i = descriptor.requested_begin;
+                     i < descriptor.requested_end;
+                     ++i)
+                    output_mask[execution_requested_coordinates[i] - offset] =
+                        1;
+                leopard2_internal::PrunedTransformPlan candidate;
+                if (!PrepareCodecPrunedTransform(
+                        codec, side, offset, false, input_mask.data(),
+                        output_mask.data(), candidate) ||
+                    !PrunedPlanSavesByteHeavyWork(candidate))
+                    candidate = leopard2_internal::PrunedTransformPlan();
+                plan->high_pruned_output_plans.push_back(
+                    std::move(candidate));
+            }
         }
     }
+    plan->prepared_transform_metadata = metadata_mask;
     return true;
 }
 
@@ -4893,6 +5007,62 @@ static bool SelectTransformDecodePath(
     input.plan_known = plan != NULL;
     input.multi_item_batch = multi_item_batch;
     return leopard2_internal::SelectDecodePath(input, selection);
+}
+
+static bool SelectOneShotTransformMetadataMask(
+    const leo2_codec* codec,
+    const leo2_decode_plan* plan,
+    const DecodePlanSetupHint& hint,
+    uint8_t& metadata_mask)
+{
+    DecodeScratchGeometry geometry = DecodeScratchGeometry();
+    if (!codec || !plan || hint.shard_bytes == 0 ||
+        !RoundShardBytes(hint.shard_bytes, geometry.rounded_bytes) ||
+        (codec->field == LEO2_FIELD_GF16 &&
+         (hint.shard_bytes & 1U) != 0))
+        return false;
+
+    geometry.tail_bytes = static_cast<size_t>(hint.shard_bytes) &
+        (kScratchAlignment - 1);
+    geometry.aligned_prefix_bytes =
+        static_cast<size_t>(hint.shard_bytes) - geometry.tail_bytes;
+    leopard2_internal::DecodePathInfo selection;
+    if (!SelectTransformDecodePath(codec, plan, hint.shard_bytes,
+            hint.multi_item_batch, geometry, selection))
+        return false;
+
+    switch (selection.path)
+    {
+    case leopard2_internal::kDecodePathGeneric:
+        metadata_mask = kDecodeTransformMetadataGeneric;
+        return true;
+    case leopard2_internal::kDecodePathMaterialized:
+    case leopard2_internal::kDecodePathTiled:
+        metadata_mask = kDecodeTransformMetadataSpecialized;
+        return true;
+    default:
+        return false;
+    }
+}
+
+static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
+    const leo2_decode_plan* plan,
+    const DecodePlanSetupHint& hint,
+    uint8_t metadata_mask)
+{
+    if (hint.setup_mode < 2U || !plan || !plan->codec)
+        return false;
+    const leo2_codec* codec = plan->codec;
+    const bool translated_low = PlanUsesTranslatedLowDecode(plan);
+    return metadata_mask == kDecodeTransformMetadataSpecialized &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        (!translated_low || hint.setup_mode >= 3U) && codec->context &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->recovery_count > 1 &&
+        plan->missing_original_count == codec->recovery_count &&
+        hint.shard_bytes <= 1024;
 }
 
 static size_t AVX2DecodeExecutionTileBytes(
@@ -7850,7 +8020,7 @@ static leo2_result ExecuteGF8DirectEncodeSourceMajor(
     if (output_count != codec->recovery_count)
         return LEO2_UNSUPPORTED;
 
-#if defined(LEO2_HAVE_AVX2_BACKEND)
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT)
     if (shard_bytes <= 64)
     {
         const uint32_t output_group_width =
@@ -10606,6 +10776,11 @@ LEO2_EXPORT leo2_result leo2_context_create(
 #else
     context->high_t4_batch_binding_enabled = false;
 #endif
+    // Pinned same-binary end-to-end attribution across active parents 32..256
+    // promoted the dense kernel for qualified pure AVX2 tables.  Direct and
+    // permanent-cache construction remain on their established scalar path.
+    context->gf8_avx2_walsh_locator_enabled =
+        ops->kind == LEO2_BACKEND_AVX2 && ops->ff8_walsh_locator != NULL;
     context->thread_count = threads;
     /*
         The retained cache-policy campaigns used an explicitly requested AVX2
@@ -11519,6 +11694,24 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     return true;
 }
 
+bool SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    if (!context || !context->ops ||
+        context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !context->ops->ff8_walsh_locator)
+        return false;
+    context->gf8_avx2_walsh_locator_enabled = enabled;
+    return true;
+#else
+    (void)context;
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled)
 {
 #ifdef LEO_HAS_FF8
@@ -11569,6 +11762,42 @@ bool SetR1SmallReductionModeForDiagnostics(unsigned mode)
         return false;
     g_r1_small_reduction_mode.store(mode, std::memory_order_release);
     return true;
+}
+
+bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
+{
+    if (mode > 3U)
+        return false;
+    g_one_shot_plan_setup_mode.store(mode, std::memory_order_release);
+    return true;
+}
+
+leo2_result ExecuteOneShotTransformPlanForDiagnostics(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    if (!plan || !original_present || !recovery_present ||
+        plan->no_op || plan->direct_xor || plan->direct_copy ||
+        plan->direct_repair || plan->prepared_transform_metadata == 0 ||
+        plan->diagnostic_shard_bytes == 0 ||
+        shard_bytes != plan->diagnostic_shard_bytes)
+        return LEO2_INVALID_ARGUMENT;
+    const ProtectedMetadataSpan protected_metadata[2] = {
+        { original_present,
+          plan->codec->original_count * sizeof(*original_present) },
+        { recovery_present,
+          plan->codec->recovery_count * sizeof(*recovery_present) }
+    };
+    return DecodePlanExecuteInternal(plan, shard_bytes,
+        original, recovery, restored_original, scratch, scratch_bytes,
+        false, protected_metadata, 2, false);
 }
 
 bool GetCodecR1ReductionPathInfo(
@@ -15002,7 +15231,8 @@ static leo2_result DecodePlanCreateInternal(
     const uint8_t* original_present,
     const uint8_t* recovery_present,
     leo2_decode_plan** plan_out,
-    const DecodePresencePrefix* validated_prefix)
+    const DecodePresencePrefix* validated_prefix,
+    const DecodePlanSetupHint* setup_hint)
 {
     if (!plan_out)
         return LEO2_INVALID_ARGUMENT;
@@ -15095,6 +15325,7 @@ static leo2_result DecodePlanCreateInternal(
     {
         plan->codec = codec;
         plan->translated_low = false;
+        plan->diagnostic_shard_bytes = 0;
 #ifdef LEO2_ENABLE_TEST_HOOKS
         if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO &&
             !CanUseTranslatedLowDecode(codec))
@@ -15107,6 +15338,7 @@ static leo2_result DecodePlanCreateInternal(
         plan->direct_copy_recovery = std::numeric_limits<uint32_t>::max();
         plan->direct_xor_original = std::numeric_limits<uint32_t>::max();
         plan->missing_original_count = missing_original_count;
+        plan->prepared_transform_metadata = 0;
         plan->no_op = missing_original_count == 0;
         plan->direct_xor = codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
@@ -15140,6 +15372,15 @@ static leo2_result DecodePlanCreateInternal(
             return LEO2_SUCCESS;
         }
 
+        bool force_test_transform = false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        force_test_transform =
+            codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
+#endif
+        const bool attempt_direct_repair =
+            !plan->no_op && !plan->direct_xor && !plan->direct_copy &&
+            !force_test_transform &&
+            missing_original_count <= DirectRepairLossLimit(codec);
         plan->original_present.assign(
             original_present, original_present + codec->original_count);
         plan->recovery_present.assign(
@@ -15149,14 +15390,7 @@ static leo2_result DecodePlanCreateInternal(
             if (!original_present[i])
                 plan->missing_originals.push_back(i);
 
-        bool force_test_transform = false;
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        force_test_transform =
-            codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
-#endif
-        if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
-            !force_test_transform &&
-            missing_original_count <= DirectRepairLossLimit(codec))
+        if (attempt_direct_repair)
         {
 #ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8 &&
@@ -15214,18 +15448,36 @@ static leo2_result DecodePlanCreateInternal(
         if (!plan->direct_repair)
         {
             plan->coordinate_erased = codec->permanent_erased;
-            plan->requested_coordinates.reserve(missing_original_count);
             for (uint32_t i = 0; i < missing_original_count; ++i)
             {
                 const uint32_t original = plan->missing_originals[i];
                 const uint32_t coordinate =
                     CoordinateForOriginal(codec, original);
                 plan->coordinate_erased[coordinate] = 1;
-                plan->requested_coordinates.push_back(coordinate);
             }
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
-                if (!recovery_present[i])
-                    plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
+            const bool maximum_original_loss =
+                missing_original_count == codec->recovery_count;
+            if (!maximum_original_loss)
+            {
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                {
+                    if (!recovery_present[i])
+                    {
+                        plan->coordinate_erased[
+                            CoordinateForRecovery(codec, i)] = 1;
+                    }
+                }
+            }
+#ifdef LEO_DEBUG
+            else
+            {
+                // With R missing originals, availability requires all R
+                // transmitted recovery shards.  There can be no surplus
+                // received parity coordinate to convert into an erasure.
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                    LEO_DEBUG_ASSERT(recovery_present[i] != 0);
+            }
+#endif
 
         /*
             Specialized decoders use exactly parent redundancy erasures.  Keep
@@ -15233,18 +15485,31 @@ static leo2_result DecodePlanCreateInternal(
             shards needed to reach K public survivors; mark surplus received
             parity as deterministic virtual erasures.
         */
-            uint32_t public_survivors_needed = codec->original_count;
-            for (uint32_t i = 0; i < codec->original_count; ++i)
-                if (original_present[i])
-                    --public_survivors_needed;
-            for (uint32_t i = 0; i < codec->recovery_count; ++i)
+            // Presence validation already counted the missing originals.
+            // Retaining every surviving systematic shard therefore leaves
+            // exactly that many public coordinates to select from recovery.
+            uint32_t public_survivors_needed = missing_original_count;
+            if (maximum_original_loss)
             {
-                if (!recovery_present[i])
-                    continue;
-                if (public_survivors_needed != 0)
-                    --public_survivors_needed;
-                else
-                    plan->coordinate_erased[CoordinateForRecovery(codec, i)] = 1;
+                // The proof above also establishes that these are exactly
+                // the R recovery coordinates needed, already in deterministic
+                // lowest-index order.  Avoid rescanning the presence vector.
+                public_survivors_needed = 0;
+            }
+            else
+            {
+                for (uint32_t i = 0; i < codec->recovery_count; ++i)
+                {
+                    if (!recovery_present[i])
+                        continue;
+                    if (public_survivors_needed != 0)
+                        --public_survivors_needed;
+                    else
+                    {
+                        plan->coordinate_erased[
+                            CoordinateForRecovery(codec, i)] = 1;
+                    }
+                }
             }
             if (public_survivors_needed != 0)
             {
@@ -15305,7 +15570,31 @@ static leo2_result DecodePlanCreateInternal(
                      LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW)
                 plan->translated_low = true;
 #endif
-            if (!PreparePlanExecutionMetadata(plan))
+            if (!plan->translated_low)
+            {
+                plan->requested_coordinates.reserve(missing_original_count);
+                for (uint32_t i = 0; i < missing_original_count; ++i)
+                {
+                    plan->requested_coordinates.push_back(
+                        CoordinateForOriginal(
+                            codec, plan->missing_originals[i]));
+                }
+            }
+            uint8_t metadata_mask =
+                ReusablePlanTransformMetadataMask(plan);
+            uint8_t exact_metadata_mask = 0;
+            const uint8_t reusable_auto_metadata =
+                kDecodeTransformMetadataGeneric |
+                kDecodeTransformMetadataSpecialized;
+            if (setup_hint && metadata_mask == reusable_auto_metadata &&
+                SelectOneShotTransformMetadataMask(
+                    codec, plan, *setup_hint, exact_metadata_mask))
+                metadata_mask = exact_metadata_mask;
+            const bool skip_transient_pruned_schedules = setup_hint &&
+                SkipOneShotTinyGF8AVX2PrunedSchedules(
+                    plan, *setup_hint, metadata_mask);
+            if (!PreparePlanExecutionMetadata(plan, metadata_mask,
+                    skip_transient_pruned_schedules))
             {
                 delete plan;
                 return LEO2_INTERNAL_ERROR;
@@ -15315,6 +15604,9 @@ static leo2_result DecodePlanCreateInternal(
             // constructing its locator directly in low-profile order avoids
             // retaining and touching a second N-entry locator vector.
             TranslatePlanErasureMaskForExecution(plan);
+            const uint32_t total_erasure_count =
+                codec->parent_count - codec->parent_dimension;
+            LEO_DEBUG_ASSERT(total_erasure_count <= codec->parent_count);
 #ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8)
             {
@@ -15327,13 +15619,14 @@ static leo2_result DecodePlanCreateInternal(
                     ? codec->translated_low_permanent_erased
                     : codec->permanent_erased;
                 if (permanent_locator.empty())
-                    leopard::ff8::PrepareDecode(codec->parent_count,
-                        &plan->coordinate_erased[0], &plan->locator8[0]);
+                    PrepareGF8LocatorKnownCount(codec,
+                        &plan->coordinate_erased[0], total_erasure_count,
+                        &plan->locator8[0]);
                 else
-                    leopard::ff8::PrepareDecodeWithPermanent(
+                    leopard::ff8::PrepareDecodeWithPermanentKnownCount(
                         codec->parent_count, &plan->coordinate_erased[0],
                         permanent_erased.data(), permanent_locator.data(),
-                        &plan->locator8[0]);
+                        codec->recovery_count, &plan->locator8[0]);
             }
 #endif
 #ifdef LEO_HAS_FF16
@@ -15348,13 +15641,14 @@ static leo2_result DecodePlanCreateInternal(
                     ? codec->translated_low_permanent_erased
                     : codec->permanent_erased;
                 if (permanent_locator.empty())
-                    leopard::ff16::PrepareDecode(codec->parent_count,
-                        &plan->coordinate_erased[0], &plan->locator16[0]);
+                    leopard::ff16::PrepareDecodeKnownCount(
+                        codec->parent_count, &plan->coordinate_erased[0],
+                        total_erasure_count, &plan->locator16[0]);
                 else
-                    leopard::ff16::PrepareDecodeWithPermanent(
+                    leopard::ff16::PrepareDecodeWithPermanentKnownCount(
                         codec->parent_count, &plan->coordinate_erased[0],
                         permanent_erased.data(), permanent_locator.data(),
-                        &plan->locator16[0]);
+                        codec->recovery_count, &plan->locator16[0]);
             }
 #endif
         }
@@ -15375,8 +15669,114 @@ LEO2_EXPORT leo2_result leo2_decode_plan_create(
     leo2_decode_plan** plan_out)
 {
     return DecodePlanCreateInternal(
-        codec, original_present, recovery_present, plan_out, NULL);
+        codec, original_present, recovery_present, plan_out, NULL, NULL);
 }
+
+} // extern "C"
+
+namespace leopard2_internal {
+
+leo2_result CreateOneShotTransformPlanForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    leo2_decode_plan** plan_out)
+{
+    /*
+        This diagnostic factory exposes the same output-handle failure
+        atomicity as the public plan constructor even though it performs the
+        one-shot prefix scan first.  Validate overlap before clearing the
+        handle: a handle stored inside either presence array cannot be safely
+        modified before reporting LEO2_OVERLAP.
+    */
+    if (!plan_out)
+        return LEO2_INVALID_ARGUMENT;
+    AddressRange output_range;
+    if (!MakeArrayRange(plan_out, 1, sizeof(*plan_out), output_range))
+        return LEO2_INVALID_ARGUMENT;
+    if (!codec)
+    {
+        *plan_out = NULL;
+        return LEO2_INVALID_ARGUMENT;
+    }
+    AddressRange original_range = { 0, 0 };
+    AddressRange recovery_range = { 0, 0 };
+    if ((original_present &&
+         !MakeArrayRange(original_present, codec->original_count,
+             sizeof(*original_present), original_range)) ||
+        (recovery_present &&
+         !MakeArrayRange(recovery_present, codec->recovery_count,
+             sizeof(*recovery_present), recovery_range)))
+        return LEO2_INVALID_ARGUMENT;
+    if ((original_present && RangesOverlap(output_range, original_range)) ||
+        (recovery_present && RangesOverlap(output_range, recovery_range)))
+        return LEO2_OVERLAP;
+    *plan_out = NULL;
+    if (shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+#if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
+    DecodePresencePrefix presence_prefix;
+    bool no_loss = false;
+    bool prefix_valid = false;
+    const leo2_result prefix_result = TryOneShotNoLoss(
+        codec, original_present, recovery_present, no_loss, prefix_valid,
+        presence_prefix);
+    if (prefix_result != LEO2_SUCCESS)
+        return prefix_result;
+    (void)no_loss;
+    const DecodePresencePrefix* const validated_prefix =
+        prefix_valid ? &presence_prefix : NULL;
+#else
+    const DecodePresencePrefix* const validated_prefix = NULL;
+#endif
+    const unsigned setup_mode =
+        g_one_shot_plan_setup_mode.load(std::memory_order_acquire);
+    const DecodePlanSetupHint hint = {
+        shard_bytes,
+        false,
+        setup_mode
+    };
+    const leo2_result result = DecodePlanCreateInternal(
+        codec, original_present, recovery_present, plan_out, validated_prefix,
+        setup_mode != 0U ? &hint : NULL);
+    if (result != LEO2_SUCCESS || !plan_out || !*plan_out)
+        return result;
+    leo2_decode_plan* const plan = *plan_out;
+    if (plan->no_op || plan->direct_xor || plan->direct_copy ||
+        plan->direct_repair)
+    {
+        delete plan;
+        *plan_out = NULL;
+        return LEO2_UNSUPPORTED;
+    }
+
+    /*
+        The exact-byte hint is allowed to influence which immutable transform
+        metadata the diagnostic plan retains.  Do not publish that plan until
+        the same exact execution geometry accepted by the public scratch
+        query has been validated.  In particular, metadata selection treats
+        an unrepresentable byte count or an odd native-GF16 byte count as
+        "no exact route" and otherwise falls back to the reusable superset;
+        that fallback must not turn an invalid execution geometry into a
+        successfully-created exact-byte plan.
+    */
+    DecodeScratchGeometry geometry;
+    const leo2_result geometry_result = DecodeLayout(
+        codec, plan, shard_bytes, false, geometry);
+    if (geometry_result != LEO2_SUCCESS)
+    {
+        delete plan;
+        *plan_out = NULL;
+        return geometry_result;
+    }
+    plan->diagnostic_shard_bytes = shard_bytes;
+    return LEO2_SUCCESS;
+}
+
+} // namespace leopard2_internal
+
+extern "C" {
 
 LEO2_EXPORT void leo2_decode_plan_destroy(leo2_decode_plan* plan)
 {
@@ -15398,6 +15798,9 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
         return LEO2_INVALID_ARGUMENT;
     *scratch_bytes_out = 0;
     if (!plan || shard_bytes == 0)
+        return LEO2_INVALID_ARGUMENT;
+    if (plan->diagnostic_shard_bytes != 0 &&
+        shard_bytes != plan->diagnostic_shard_bytes)
         return LEO2_INVALID_ARGUMENT;
     if (plan->no_op)
         return LEO2_SUCCESS;
@@ -15639,6 +16042,9 @@ static leo2_result DecodePlanExecuteInternal(
 {
     if (!plan)
         return LEO2_INVALID_ARGUMENT;
+    if (plan->diagnostic_shard_bytes != 0 &&
+        shard_bytes != plan->diagnostic_shard_bytes)
+        return LEO2_INVALID_ARGUMENT;
     if (plan->no_op)
         return LEO2_SUCCESS;
     if (shard_bytes == 0)
@@ -15734,6 +16140,15 @@ static leo2_result DecodePlanExecuteInternal(
             multi_item_batch, geometry);
     if (result != LEO2_SUCCESS)
         return result;
+    if (!direct_execution)
+    {
+        const uint8_t required_metadata =
+            geometry.selection.path == leopard2_internal::kDecodePathGeneric
+                ? kDecodeTransformMetadataGeneric
+                : kDecodeTransformMetadataSpecialized;
+        if ((plan->prepared_transform_metadata & required_metadata) == 0)
+            return LEO2_INTERNAL_ERROR;
+    }
     const ScratchLayout& layout = direct_execution
         ? direct_layout
         : geometry.layout;
@@ -16025,6 +16440,14 @@ static leo2_result DecodeBatchCompatibilityInternal(
         (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
          !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range)))
         return LEO2_INVALID_ARGUMENT;
+    if (plan->diagnostic_shard_bytes != 0)
+    {
+        for (size_t i = 0; i < item_count; ++i)
+        {
+            if (items[i].shard_bytes != plan->diagnostic_shard_bytes)
+                return LEO2_INVALID_ARGUMENT;
+        }
+    }
     /* A no-loss plan is a true no-op: after validating only the top-level
        plan/item-array address arithmetic, do not inspect per-item pointers,
        scratch, sizes, or aliases and do not start the worker pool. */
@@ -16172,6 +16595,14 @@ leo2_decode_plan_execute_batch_with_preflight_scratch(
     if (!CheckedMultiply(item_count, sizeof(*items), item_bytes) ||
         !MakeRange(items, static_cast<uint64_t>(item_bytes), item_range))
         return LEO2_INVALID_ARGUMENT;
+    if (plan->diagnostic_shard_bytes != 0)
+    {
+        for (size_t i = 0; i < item_count; ++i)
+        {
+            if (items[i].shard_bytes != plan->diagnostic_shard_bytes)
+                return LEO2_INVALID_ARGUMENT;
+        }
+    }
 
     ScalableDecodeBatchPreflightContext scalable = {
         { plan, items, item_bytes, item_range, true },
@@ -16382,6 +16813,14 @@ LEO2_EXPORT leo2_result leo2_decode_batch_binding_create(
     if (output_check != LEO2_SUCCESS)
         return output_check;
     *binding_out = NULL;
+    if (plan->diagnostic_shard_bytes != 0)
+    {
+        for (size_t i = 0; i < item_count; ++i)
+        {
+            if (items[i].shard_bytes != plan->diagnostic_shard_bytes)
+                return LEO2_INVALID_ARGUMENT;
+        }
+    }
 
     leo2_decode_batch_binding* binding =
         new (std::nothrow) leo2_decode_batch_binding;
@@ -16713,8 +17152,18 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
 #endif
 
     leo2_decode_plan* plan = NULL;
+    const unsigned one_shot_setup_mode =
+        g_one_shot_plan_setup_mode.load(std::memory_order_acquire);
+    const DecodePlanSetupHint setup_hint = {
+        shard_bytes,
+        false,
+        one_shot_setup_mode
+    };
+    const DecodePlanSetupHint* const setup_hint_pointer =
+        one_shot_setup_mode != 0U ? &setup_hint : NULL;
     leo2_result result = DecodePlanCreateInternal(
-        codec, original_present, recovery_present, &plan, validated_prefix);
+        codec, original_present, recovery_present, &plan, validated_prefix,
+        setup_hint_pointer);
     if (result != LEO2_SUCCESS)
         return result;
     const ProtectedMetadataSpan protected_metadata[2] = {

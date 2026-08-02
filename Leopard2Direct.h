@@ -214,6 +214,15 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     bool enabled);
 
 /*
+    Context-local setup-only attribution control for the pure-AVX2 dense GF8
+    Walsh locator.  Call immediately after context creation and before codec
+    or plan construction.  It changes neither public ABI nor wire identity.
+*/
+bool SetContextGF8AVX2WalshLocatorEnabledForDiagnostics(
+    leo2_context* context,
+    bool enabled);
+
+/*
     Process-local benchmark control for the exact-byte K=8/R=3..4 packed
     T=4 terminals.  Change it only while no encode call is executing and
     invoke it before constructing the codec under test.  This remains outside
@@ -252,6 +261,45 @@ bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled);
     an internal benchmark control, not public ABI.
 */
 bool SetR1SmallReductionModeForDiagnostics(unsigned mode);
+
+/*
+    Same-executable attribution for ephemeral one-shot decode-plan setup.
+    Mode zero prepares the reusable AUTO metadata superset; mode one uses the
+    call's exact shard byte count to prepare only the transform route that
+    execution selects; mode two additionally omits
+    high-rate pruned schedules in the bounded tiny-GF8/AVX2 attribution
+    region; mode three (the production default) extends that policy to the
+    translated low-rate execution view.  Public reusable plans are unaffected.
+    Change this only while no one-shot decode is executing.
+*/
+bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode);
+
+/*
+    Construct the ephemeral transform plan for the current diagnostic mode
+    and exact shard byte count.  The factory includes the same no-loss prefix
+    probe used by the public wrapper so it does not duplicate that prefix in
+    plan validation.  Terminal and direct-repair shapes return
+    LEO2_UNSUPPORTED.  This exists only so benchmarks can report transient
+    pattern setup separately from execution.  The plan may execute only at
+    the byte count supplied here.  Destroy it with leo2_decode_plan_destroy().
+*/
+leo2_result CreateOneShotTransformPlanForDiagnostics(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    leo2_decode_plan** plan_out);
+
+leo2_result ExecuteOneShotTransformPlanForDiagnostics(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    const uint8_t* original_present,
+    const uint8_t* recovery_present,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes);
 
 enum R1ReductionPath
 {
