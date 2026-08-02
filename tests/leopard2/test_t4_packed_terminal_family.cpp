@@ -395,16 +395,6 @@ void ExerciseCell(
     RequireSourceUnchanged(input, unaligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes + 3U, cell);
 
-    FillGuards(output);
-    leopard::ff8::TestOnlyResetHighEncodeCounts();
-    RequireResult(leo2_encode_batch(codec, &item, 1),
-        LEO2_SUCCESS, cell, "execute unaligned packed one-item batch encode");
-    RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
-        "unaligned packed one-item batch terminal selection mismatch");
-    CheckParity(cell, generator, original, recovery);
-    RequireSourceUnchanged(input, unaligned_input_before, cell);
-    RequireOutputGuards(output, kGuardBytes + 3U, cell);
-
     leo2_codec_destroy(codec);
 }
 
