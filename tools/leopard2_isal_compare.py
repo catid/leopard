@@ -1795,6 +1795,7 @@ def validate_leopard_result(
     build = document.get("build", {})
     base_build_keys = {"compiler", "compiler_version", "cplusplus"}
     terminal_markers = {
+        "k8r3r4_t4_terminal_diagnostic_disabled",
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
         "k9r6r8_b256_terminal_diagnostic_disabled",

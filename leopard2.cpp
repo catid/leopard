@@ -540,6 +540,8 @@ enum TerminalR1Shape : uint8_t
     kTerminalT8K8R8 = 3
 };
 
+static const uint32_t kCodecR1SmallReductionModeFlag = UINT32_C(0x80000000);
+
 enum TerminalT4Shape : uint8_t
 {
     kTerminalT4None = 0,
@@ -567,9 +569,10 @@ struct leo2_codec
     leo2_profile profile;
     leo2_field field;
     leo2_shard_layout shard_layout;
+    /* The high bit is reserved for the internal R=1 attribution snapshot;
+       public codec options reject it. */
     uint32_t flags;
     bool high_t4_batch_binding_enabled;
-    bool r1_small_reduction_mode_enabled;
     /* Immutable hot-path classification stored in existing alignment
        padding beside the other setup-resolved dispatch state. */
     uint8_t terminal_r1_t8_shape;
@@ -627,6 +630,13 @@ struct leo2_codec
     leo2_test_decode_mode test_decode_mode;
 #endif
 };
+
+static LEO_FORCE_INLINE bool R1SmallReductionModeEnabled(
+    const leo2_codec* codec)
+{
+    return codec &&
+        (codec->flags & kCodecR1SmallReductionModeFlag) != 0;
+}
 
 struct leo2_encode_batch_binding
 {
@@ -4875,7 +4885,7 @@ static bool SelectTransformDecodePath(
             ? plan->requested_coordinates.size()
             : codec->recovery_count)
         : 0;
-    input.codec_flags = codec->flags;
+    input.codec_flags = codec->flags & ~kCodecR1SmallReductionModeFlag;
     input.actual_shard_bytes = shard_bytes;
     input.aligned_prefix_bytes = geometry.aligned_prefix_bytes;
     input.tail_bytes = geometry.tail_bytes;
@@ -5315,7 +5325,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
         return codec->context->backend == LEO2_BACKEND_AVX2 ||
             codec->context->backend == LEO2_BACKEND_GFNI;
     }
-    return codec->r1_small_reduction_mode_enabled &&
+    return R1SmallReductionModeEnabled(codec) &&
         (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024);
 }
 
@@ -6256,7 +6266,7 @@ static bool UseCoarseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
 {
-    if (codec->r1_small_reduction_mode_enabled)
+    if (R1SmallReductionModeEnabled(codec))
     {
         if (codec->original_count == 3 &&
             (shard_bytes == 64 || shard_bytes == 256 ||
@@ -6412,7 +6422,7 @@ SelectCoarseR1XorReduction(
 {
     if (UseGroup4R1Xor(codec, ops, shard_bytes, decoding))
         return ops.xor_memory_sources_group4;
-    if (codec->r1_small_reduction_mode_enabled &&
+    if (R1SmallReductionModeEnabled(codec) &&
         codec->original_count == 3 &&
         (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024) &&
         ops.xor_memory_sources_fused_final)
@@ -6428,11 +6438,15 @@ static LEO_FORCE_INLINE bool UseDenseR1Xor(
     size_t shard_bytes)
 {
     const bool eligible =
-        (codec->original_count == 2 && shard_bytes >=
-            (codec->field == LEO2_FIELD_GF8 ? 2048U : 4096U)) ||
+        (codec->original_count == 2 &&
+            (shard_bytes >=
+                (codec->field == LEO2_FIELD_GF8 ? 2048U : 4096U) ||
+             (R1SmallReductionModeEnabled(codec) &&
+              (shard_bytes == 64 || shard_bytes == 256 ||
+               shard_bytes == 1024)))) ||
         (codec->original_count == 4 &&
             (shard_bytes >= 2048 ||
-             (codec->r1_small_reduction_mode_enabled &&
+             (R1SmallReductionModeEnabled(codec) &&
               (shard_bytes == 64 || shard_bytes == 256 ||
                shard_bytes == 1024))));
 #if defined(__GNUC__) || defined(__clang__)
@@ -10890,7 +10904,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->flags = options ? options->flags : 0;
     codec->high_t4_batch_binding_enabled =
         context->high_t4_batch_binding_enabled;
-    codec->r1_small_reduction_mode_enabled =
+    const bool r1_small_reduction_mode_enabled =
         g_r1_small_reduction_mode.load(std::memory_order_acquire) == 1U &&
         profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         field == LEO2_FIELD_GF8 && recovery_count == 1 && padded == 1 &&
@@ -10917,6 +10931,8 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->terminal_r1_t8_shape = ClassifyTerminalR1Shape(codec);
     if (codec->terminal_r1_t8_shape == kTerminalR1None)
         codec->terminal_r1_t8_shape = ClassifyTerminalT8Shape(codec);
+    if (r1_small_reduction_mode_enabled)
+        codec->flags |= kCodecR1SmallReductionModeFlag;
     codec->terminal_t2_original_count = ClassifyTerminalT2Shape(codec);
     codec->terminal_t4_shape = ClassifyTerminalT4Shape(codec);
     try
@@ -11561,8 +11577,7 @@ bool GetCodecR1ReductionPathInfo(
         return false;
 
     CodecR1ReductionPathInfo info = {};
-    info.small_reduction_mode_enabled =
-        codec->r1_small_reduction_mode_enabled;
+    info.small_reduction_mode_enabled = R1SmallReductionModeEnabled(codec);
     info.encode_path = kR1ReductionNotApplicable;
     info.decode_path = kR1ReductionNotApplicable;
     if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||

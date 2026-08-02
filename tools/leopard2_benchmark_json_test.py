@@ -31,6 +31,17 @@ PRODUCTION_DECODE_PATH_RULE_PAIRS = frozenset({
     ("materialized", "workspace_materialized"),
     ("materialized", "unsupported_profile"),
 })
+R1_REDUCTION_PATHS = frozenset({
+    "not_applicable", "k1_copy", "k2_terminal", "pairwise", "dense",
+    "coarse", "fused_final", "group4",
+})
+R1_TIMED_ENCODE_API = (
+    "leo2_encode_batch:item_count=1:no_preflight_scratch")
+R1_TIMED_ONE_SHOT_ENCODE_API = "leo2_encode"
+R1_TIMED_REUSED_DECODE_API = (
+    "leo2_decode_plan_execute_batch:item_count=1:"
+    "no_preflight_scratch:one_loss_direct_xor")
+R1_TIMED_ONE_SHOT_DECODE_API = "leo2_decode:one_loss"
 _PROCESS_RUNNER: Any = None
 
 
@@ -306,16 +317,23 @@ def run(
     disable_k16r8_b256_terminal: bool = False,
     disable_k9r5_b256_terminal: bool = False,
     disable_k9r6r8_b256_terminal: bool = False,
+    r1_small_reduction_mode: int | None = None,
     *,
     k: int = 3,
     r: int = 2,
     losses: int = 1,
 ) -> dict[str, Any]:
+    require(r1_small_reduction_mode is None or
+            (type(r1_small_reduction_mode) is int and
+             r1_small_reduction_mode in {0, 1}),
+            "R=1 small-reduction mode must be absent, zero, or one")
     with tempfile.TemporaryDirectory(prefix="leo2-benchmark-json-") as temporary:
         output = Path(temporary) / "result.json"
+        field = "gf8" if r1_small_reduction_mode is not None else "auto"
+        backend = "avx2" if r1_small_reduction_mode is not None else "auto"
         command = [
             str(executable), "--k", str(k), "--r", str(r), "--profile", "high",
-            "--field", "auto", "--backend", "auto", "--bytes", "64",
+            "--field", field, "--backend", backend, "--bytes", "64",
             "--loss", str(losses), "--batch", "1", "--reuse", "1",
             "--iterations", "1", "--warmup", "0", "--threads", "1",
             "--seed", "7",
@@ -336,6 +354,10 @@ def run(
             command.append("--disable-k9r5-b256-terminal")
         if disable_k9r6r8_b256_terminal:
             command.append("--disable-k9r6r8-b256-terminal")
+        if r1_small_reduction_mode is not None:
+            command.extend((
+                "--r1-small-reduction-mode",
+                str(r1_small_reduction_mode)))
         command.extend(("--json", str(output)))
         completed = run_process(command)
         require(completed.returncode == 0,
@@ -357,7 +379,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v3", "leopard2-benchmark-v5",
                 "leopard2-benchmark-v6", "leopard2-benchmark-v7",
                 "leopard2-benchmark-v8", "leopard2-benchmark-v9",
-                "leopard2-benchmark-v10",
+                "leopard2-benchmark-v10", "leopard2-benchmark-v11",
+                "leopard2-benchmark-v12",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -367,6 +390,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v5", "leopard2-benchmark-v6",
         "leopard2-benchmark-v7", "leopard2-benchmark-v8",
         "leopard2-benchmark-v9", "leopard2-benchmark-v10",
+        "leopard2-benchmark-v11", "leopard2-benchmark-v12",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -377,11 +401,23 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 f"benchmark {section} is not an object")
     expected_build = {
         "compiler", "compiler_version", "cplusplus",
+        "k8r3r4_t4_terminal_diagnostic_disabled",
         "k16r8_b256_terminal_diagnostic_disabled",
         "k9r5_b256_terminal_diagnostic_disabled",
     }
     if document["schema"] == "leopard2-benchmark-v10":
         expected_build.add("k9r6r8_b256_terminal_diagnostic_disabled")
+    if document["schema"] == "leopard2-benchmark-v12":
+        expected_build.update({
+            "r1_small_reduction_diagnostic_mode",
+            "r1_small_reduction_codec_enabled",
+            "r1_encode_reduction_path",
+            "r1_decode_reduction_path",
+            "r1_timed_encode_api",
+            "r1_timed_one_shot_encode_api",
+            "r1_timed_reused_decode_api",
+            "r1_timed_one_shot_decode_api",
+        })
     if document["schema"] in {
             "leopard2-benchmark-v5", "leopard2-benchmark-v7"}:
         expected_build.update({
@@ -390,9 +426,11 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             "leopard2-benchmark-v6", "leopard2-benchmark-v7"}:
         expected_build.add("equal_rounded_multi_loss_enabled")
     if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+            "leopard2-benchmark-v12"}:
         expected_build.add("one_shot_equal_rounded_direct_enabled")
-    if document["schema"] == "leopard2-benchmark-v9":
+    if document["schema"] in {
+            "leopard2-benchmark-v9", "leopard2-benchmark-v12"}:
         expected_build.update({
             "one_shot_equal_rounded_direct_enabled",
             "cauchy_log_reuse_enabled",
@@ -402,11 +440,33 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
             type(document["build"]["compiler_version"]) is str and
             type(document["build"]["cplusplus"]) is int and
             type(document["build"][
+                "k8r3r4_t4_terminal_diagnostic_disabled"]) is bool and
+            type(document["build"][
                 "k16r8_b256_terminal_diagnostic_disabled"]) is bool and
             type(document["build"][
                 "k9r5_b256_terminal_diagnostic_disabled"]) is bool and
             document["build"]["cplusplus"] > 0,
             "benchmark build value types changed")
+    if document["schema"] == "leopard2-benchmark-v12":
+        build = document["build"]
+        mode = build["r1_small_reduction_diagnostic_mode"]
+        require(type(mode) is int and mode in {0, 1} and
+                type(build["r1_small_reduction_codec_enabled"]) is bool and
+                build["r1_small_reduction_codec_enabled"] is (mode == 1),
+                "R=1 small-reduction mode metadata is invalid")
+        for name in (
+                "r1_encode_reduction_path", "r1_decode_reduction_path"):
+            require(type(build[name]) is str and
+                    build[name] in R1_REDUCTION_PATHS,
+                    f"R=1 reduction path {name} is invalid")
+        require(build["r1_timed_encode_api"] == R1_TIMED_ENCODE_API and
+                build["r1_timed_one_shot_encode_api"] ==
+                    R1_TIMED_ONE_SHOT_ENCODE_API and
+                build["r1_timed_reused_decode_api"] ==
+                    R1_TIMED_REUSED_DECODE_API and
+                build["r1_timed_one_shot_decode_api"] ==
+                    R1_TIMED_ONE_SHOT_DECODE_API,
+                "R=1 timed API scope changed")
     if document["schema"] == "leopard2-benchmark-v10":
         require(type(document["build"][
                     "k9r6r8_b256_terminal_diagnostic_disabled"]) is bool,
@@ -417,11 +477,13 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                     "equal_rounded_multi_loss_enabled"]) is bool,
                 "equal-rounded build selector is not Boolean")
     if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+            "leopard2-benchmark-v12"}:
         require(type(document["build"][
                     "one_shot_equal_rounded_direct_enabled"]) is bool,
                 "one-shot build selector is not Boolean")
-    if document["schema"] == "leopard2-benchmark-v9":
+    if document["schema"] in {
+            "leopard2-benchmark-v9", "leopard2-benchmark-v12"}:
         require(type(document["build"][
                     "cauchy_log_reuse_enabled"]) is bool,
                 "Cauchy-log-reuse build selector is not Boolean")
@@ -504,10 +566,16 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "decode_scratch_bytes_per_stripe", "encode_scratch_bytes_batch",
         "decode_scratch_bytes_batch"}
     if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+            "leopard2-benchmark-v12"}:
         expected_memory.update({
             "one_shot_decode_scratch_bytes_per_stripe",
             "one_shot_decode_scratch_bytes_batch",
+        })
+    if document["schema"] == "leopard2-benchmark-v12":
+        expected_memory.update({
+            "encode_batch_preflight_scratch_bytes",
+            "decode_batch_preflight_scratch_bytes",
         })
     require(set(document["memory"]) == expected_memory,
             "memory keys changed")
@@ -519,8 +587,11 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "codec_setup", "encode_execution", "decode_plan_setup",
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"}
     if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+            "leopard2-benchmark-v12"}:
         expected_metrics.add("one_shot_decode_including_setup")
+    if document["schema"] == "leopard2-benchmark-v12":
+        expected_metrics.add("one_shot_encode")
     require(set(document["metrics"]) == expected_metrics,
         "metrics keys changed")
     require(set(document["legacy"]) == {
@@ -550,6 +621,13 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="input_GB_per_s",
         output_rate_name="parity_output_GB_per_s",
         input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
+    if document["schema"] == "leopard2-benchmark-v12":
+        validate_timing_summary(
+            document["metrics"]["one_shot_encode"], "one_shot_encode",
+            retain_samples=retain_samples, iterations=iterations,
+            execution=True, input_rate_name="input_GB_per_s",
+            output_rate_name="parity_output_GB_per_s",
+            input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
     validate_timing_summary(
         document["metrics"]["decode_execution"], "decode_execution",
         retain_samples=retain_samples, iterations=iterations, execution=True,
@@ -557,7 +635,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         output_rate_name="repaired_output_GB_per_s",
         input_bytes=decode_input_bytes, output_bytes=decode_output_bytes)
     if document["schema"] in {
-            "leopard2-benchmark-v8", "leopard2-benchmark-v9"}:
+            "leopard2-benchmark-v8", "leopard2-benchmark-v9",
+            "leopard2-benchmark-v12"}:
         require(parameters.get("measure_one_shot_decode") is True,
                 "one-shot decode benchmark opt-in was not recorded")
         validate_timing_summary(
@@ -642,6 +721,68 @@ def validate_workload_digests(document: dict[str, Any]) -> None:
         require(isinstance(value, str) and len(value) == 16 and
                 all(character in "0123456789abcdef" for character in value),
                 f"workload digest {name} is not lowercase FNV-1a hex")
+
+
+def validate_r1_small_reduction_report(
+    document: dict[str, Any],
+    expected_mode: int,
+    expected_parameters: set[str],
+) -> None:
+    require(type(expected_mode) is int and expected_mode in {0, 1},
+            "invalid expected R=1 small-reduction mode")
+    require(document.get("schema") == "leopard2-benchmark-v12",
+            "R=1 small-reduction benchmark schema changed")
+    validate_common(document, True)
+    validate_workload_digests(document)
+
+    build = document["build"]
+    expected_path = "k2_terminal" if expected_mode == 1 else "pairwise"
+    require(build["r1_small_reduction_diagnostic_mode"] == expected_mode and
+            build["r1_small_reduction_codec_enabled"] is
+                (expected_mode == 1) and
+            build["r1_encode_reduction_path"] == expected_path and
+            build["r1_decode_reduction_path"] == expected_path,
+            "R=1 K=2 reduction attribution selected an unexpected path")
+
+    parameters = document["parameters"]
+    require(set(parameters) == expected_parameters and
+            parameters["K"] == 2 and parameters["R"] == 1 and
+            parameters["requested_profile"] == "legacy_high_v1" and
+            parameters["requested_field"] == "gf8" and
+            parameters["requested_backend"] == "avx2" and
+            parameters["shard_bytes"] == 64 and
+            parameters["loss_count"] == 1 and
+            parameters["batch"] == 1 and parameters["reuse"] == 1 and
+            parameters["iterations"] == 1 and
+            parameters["warmup"] == 0 and
+            parameters["thread_count"] == 1 and
+            parameters["skip_legacy"] is True and
+            parameters["retain_samples"] is True and
+            parameters["measure_one_shot_decode"] is True,
+            "R=1 small-reduction benchmark is not the ordinary one-item cell")
+
+    require(document["resolved"] == {
+        "profile": "legacy_high_v1",
+        "field": "gf8",
+        "backend": "avx2",
+        "thread_count": 1,
+        "parent_count": 4,
+        "padded_side": 1,
+    }, "R=1 small-reduction resolved codec identity changed")
+    memory = document["memory"]
+    require(memory["encode_batch_preflight_scratch_bytes"] == 0 and
+            memory["decode_batch_preflight_scratch_bytes"] == 0 and
+            memory["one_shot_decode_scratch_bytes_batch"] ==
+                memory["one_shot_decode_scratch_bytes_per_stripe"],
+            "R=1 benchmark did not retain the no-preflight one-item API scope")
+    require(document["legacy"] == {
+        "available": False,
+        "unavailable_reason": "disabled by --skip-legacy",
+        "codec_setup": None,
+        "decode_timing_includes_setup": True,
+        "encode_execution": None,
+        "decode_including_setup": None,
+    }, "R=1 attribution did not completely exclude the legacy timing lane")
 
 
 def validate_direct_executor_report(
@@ -928,6 +1069,63 @@ def main() -> int:
                 one_shot["memory"][
                     "one_shot_decode_scratch_bytes_per_stripe"],
             "one-shot decode scratch accounting changed")
+
+    r1_parameters = expected_external_parameters | {"measure_one_shot_decode"}
+    r1_mode_zero = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_small_reduction_mode=0, k=2, r=1, losses=1)
+    r1_mode_one = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_small_reduction_mode=1, k=2, r=1, losses=1)
+    validate_r1_small_reduction_report(
+        r1_mode_zero, 0, r1_parameters)
+    validate_r1_small_reduction_report(
+        r1_mode_one, 1, r1_parameters)
+    require(r1_mode_zero["workload_digests"] ==
+                r1_mode_one["workload_digests"],
+            "R=1 reduction attribution changed the encoded or recovered data")
+
+    malformed_r1_mode = copy.deepcopy(r1_mode_zero)
+    malformed_r1_mode["build"][
+        "r1_small_reduction_diagnostic_mode"] = False
+    require_common_rejected(malformed_r1_mode, "Boolean R=1 mode")
+    malformed_r1_enabled = copy.deepcopy(r1_mode_zero)
+    malformed_r1_enabled["build"][
+        "r1_small_reduction_codec_enabled"] = 0
+    require_common_rejected(
+        malformed_r1_enabled, "numeric R=1 codec-enabled marker")
+    malformed_r1_path = copy.deepcopy(r1_mode_zero)
+    malformed_r1_path["build"]["r1_encode_reduction_path"] = "unknown"
+    require_common_rejected(malformed_r1_path, "unknown R=1 reduction path")
+    malformed_r1_api = copy.deepcopy(r1_mode_zero)
+    malformed_r1_api["build"]["r1_timed_encode_api"] = "leo2_encode"
+    require_common_rejected(malformed_r1_api, "ambiguous R=1 timed API")
+
+    require_schema_modes_rejected(
+        executable, ("--r1-small-reduction-mode", "2"),
+        "--r1-small-reduction-mode must be exactly 0 or 1")
+    require_schema_modes_rejected(
+        executable, ("--r1-small-reduction-mode", "0"),
+        "--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
+        "R=1, one loss, batch=1, one thread, --skip-legacy, "
+        "--retain-samples, and --measure-one-shot-decode")
+    r1_contract_arguments = (
+        "--k", "2", "--r", "1", "--profile", "high",
+        "--field", "gf8", "--backend", "avx2", "--bytes", "64",
+        "--loss", "1", "--batch", "1", "--reuse", "1",
+        "--iterations", "1", "--warmup", "0", "--threads", "1",
+        "--skip-legacy", "--retain-samples", "--measure-one-shot-decode",
+        "--r1-small-reduction-mode", "0",
+    )
+    require_schema_modes_rejected(
+        executable,
+        r1_contract_arguments + ("--disable-k9r6r8-b256-terminal",),
+        "--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
+        "R=1, one loss, batch=1, one thread, --skip-legacy, "
+        "--retain-samples, and --measure-one-shot-decode")
+    require_schema_modes_rejected(
+        prevalidated_executable, r1_contract_arguments,
+        "--r1-small-reduction-mode requires the ordinary benchmark")
 
     path_diagnostic = (
         "--attest-source and --report-decode-path use distinct JSON schemas")

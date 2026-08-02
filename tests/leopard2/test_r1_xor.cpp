@@ -1687,6 +1687,82 @@ void execute_k2_one_shot_without_scratch(
             "small K=2 zero-scratch decode changed a suffix guard");
 }
 
+void execute_k2_encode_batch_routes(const R1Fixture& fixture)
+{
+    require(fixture.k == 2, "K=2 batch encode received another code");
+    static const size_t batch_count = 2;
+    size_t item_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &item_scratch_bytes), LEO2_SUCCESS,
+        "small K=2 batch encode scratch query");
+
+    std::vector<Bytes> output_storage(
+        batch_count, Bytes(fixture.bytes + 11U, 0x5a));
+    std::vector<std::vector<void*> > output_pointers(
+        batch_count, std::vector<void*>(1, NULL));
+    std::vector<std::unique_ptr<AlignedScratch> > scratch;
+    std::vector<leo2_encode_batch_item> items(batch_count);
+    for (size_t i = 0; i < batch_count; ++i)
+    {
+        output_pointers[i][0] = &output_storage[i][5];
+        scratch.push_back(std::unique_ptr<AlignedScratch>(
+            new AlignedScratch(item_scratch_bytes)));
+        items[i].shard_bytes = fixture.bytes;
+        items[i].original = &fixture.original[0];
+        items[i].recovery = &output_pointers[i][0];
+        items[i].scratch = scratch[i]->data();
+        items[i].scratch_bytes = item_scratch_bytes;
+    }
+    const auto reset_outputs = [&]() {
+        for (size_t i = 0; i < batch_count; ++i)
+            std::fill(output_storage[i].begin(), output_storage[i].end(), 0x5a);
+    };
+    const auto check_outputs = [&]() {
+        for (size_t item_i = 0; item_i < batch_count; ++item_i)
+        {
+            require(std::memcmp(output_pointers[item_i][0],
+                        fixture.recovery[0], fixture.bytes) == 0,
+                "small K=2 batch encode parity mismatch");
+            for (size_t i = 0; i < 5; ++i)
+                require(output_storage[item_i][i] == 0x5a,
+                    "small K=2 batch encode changed a prefix guard");
+            for (size_t i = 5 + fixture.bytes;
+                 i < output_storage[item_i].size(); ++i)
+                require(output_storage[item_i][i] == 0x5a,
+                    "small K=2 batch encode changed a suffix guard");
+        }
+    };
+
+    require_result(leo2_encode_batch(
+        fixture.codec, &items[0], items.size()), LEO2_SUCCESS,
+        "small K=2 multi-item batch encode");
+    check_outputs();
+
+    size_t preflight_bytes = 0;
+    require_result(leo2_encode_batch_preflight_scratch_size(
+        fixture.codec, items.size(), &preflight_bytes), LEO2_SUCCESS,
+        "small K=2 batch preflight scratch query");
+    require(preflight_bytes != 0,
+        "small K=2 multi-item batch omitted scalable preflight scratch");
+    AlignedScratch preflight(preflight_bytes);
+    reset_outputs();
+    require_result(leo2_encode_batch_with_preflight_scratch(
+        fixture.codec, &items[0], items.size(),
+        preflight.data(), preflight_bytes), LEO2_SUCCESS,
+        "small K=2 scalable batch encode");
+    check_outputs();
+
+    leo2_encode_batch_binding* binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        fixture.codec, &items[0], items.size(), &binding), LEO2_SUCCESS,
+        "small K=2 encode binding create");
+    reset_outputs();
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "small K=2 encode binding execute");
+    check_outputs();
+    leo2_encode_batch_binding_destroy(binding);
+}
+
 void test_r1_small_reduction_diagnostic()
 {
     using namespace leopard2_internal;
@@ -1745,6 +1821,8 @@ void test_r1_small_reduction_diagnostic()
                 true, kR1ReductionK2Terminal, kR1ReductionK2Terminal);
             execute_and_check_decode(fixture);
             execute_k2_one_shot_without_scratch(fixture, missing);
+            if (missing == 0)
+                execute_k2_encode_batch_routes(fixture);
         }
     }
 

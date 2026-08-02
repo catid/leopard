@@ -589,6 +589,31 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed K");
     if (options.losses > options.r)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
+    if (options.r1_small_reduction_mode >= 0 &&
+        (options.r != 1 || options.batch != 1 || options.losses != 1 ||
+         options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_decode ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal ||
+         options.force_generic_decode || options.force_specialized_decode ||
+         options.force_tiled_decode || options.force_materialized_decode))
+    {
+        Fail("--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
+             "R=1, one loss, batch=1, one thread, --skip-legacy, "
+             "--retain-samples, and --measure-one-shot-decode");
+    }
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH) || \
+    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
+    defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
+    if (options.r1_small_reduction_mode >= 0)
+        Fail("--r1-small-reduction-mode requires the ordinary benchmark");
+#endif
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
     if (options.force_tiled_decode && options.force_materialized_decode)
@@ -1330,6 +1355,13 @@ static int Run(const Options& options)
     RequireLeo2(leo2_decode_plan_batch_preflight_scratch_size(
         plan, decode_items.size(), &decode_batch_preflight_bytes),
         "decode batch preflight scratch query");
+    if (options.r1_small_reduction_mode >= 0 &&
+        (encode_batch_preflight_bytes != 0 ||
+         decode_batch_preflight_bytes != 0))
+    {
+        Fail("R=1 attribution requires the ordinary one-item batch APIs "
+             "without batch-preflight scratch");
+    }
     AlignedBuffer encode_batch_preflight(encode_batch_preflight_bytes);
     AlignedBuffer decode_batch_preflight(decode_batch_preflight_bytes);
     leo2_encode_batch_binding* encode_batch_binding = NULL;
@@ -1367,6 +1399,18 @@ static int Run(const Options& options)
                 encode_batch_preflight.data(),
                 encode_batch_preflight.size());
         RequireLeo2(result, "encode batch");
+    };
+    const auto run_one_shot_encode = [&]() {
+        for (size_t i = 0; i < stripes.size(); ++i)
+        {
+            Stripe& stripe = *stripes[i];
+            RequireLeo2(leo2_encode(
+                codec, options.bytes,
+                &stripe.original[0], &stripe.recovery_output[0],
+                stripe.encode_scratch.data(),
+                stripe.encode_scratch.size()),
+                "one-shot encode");
+        }
     };
     const auto run_decode_batch = [&]() {
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
@@ -1445,6 +1489,31 @@ static int Run(const Options& options)
                 CheckedSize(options.r, options.bytes, "parity digest"));
         }
     }
+    if (options.r1_small_reduction_mode >= 0)
+    {
+        for (size_t stripe_index = 0;
+             stripe_index < stripes.size(); ++stripe_index)
+        {
+            Stripe& stripe = *stripes[stripe_index];
+            memset(stripe.recovery_storage.data(), 0xa5,
+                CheckedSize(options.r, options.bytes,
+                    "one-shot parity reset"));
+        }
+        run_one_shot_encode();
+        uint64_t one_shot_parity_digest = kFnv1a64Offset;
+        for (size_t stripe_index = 0;
+             stripe_index < stripes.size(); ++stripe_index)
+        {
+            const Stripe& stripe = *stripes[stripe_index];
+            one_shot_parity_digest = Fnv1a64Update(
+                one_shot_parity_digest,
+                stripe.recovery_storage.data(),
+                CheckedSize(options.r, options.bytes,
+                    "one-shot parity digest"));
+        }
+        if (one_shot_parity_digest != parity_digest)
+            Fail("one-shot and ordinary batch encode parity differ");
+    }
 
     run_decode_batch();
     for (size_t i = 0; i < stripes.size(); ++i)
@@ -1512,6 +1581,8 @@ static int Run(const Options& options)
     for (size_t i = 0; i < options.warmup; ++i)
     {
         run_encode_batch_execution();
+        if (options.r1_small_reduction_mode >= 0)
+            run_one_shot_encode();
         run_decode_batch();
         if (options.measure_one_shot_decode)
             run_one_shot_decode();
@@ -1521,6 +1592,14 @@ static int Run(const Options& options)
         options.iterations, options.reuse, options.retain_samples, [&]() {
         run_encode_batch_execution();
     });
+    Summary one_shot_encode = Summary();
+    if (options.r1_small_reduction_mode >= 0)
+    {
+        one_shot_encode = Measure(
+            options.iterations, options.reuse, options.retain_samples, [&]() {
+            run_one_shot_encode();
+        });
+    }
     const Summary decode_execution = Measure(
         options.iterations, options.reuse, options.retain_samples, [&]() {
         run_decode_batch();
@@ -1721,7 +1800,16 @@ static int Run(const Options& options)
              << "\",\n"
              << "    \"r1_decode_reduction_path\": \""
              << R1ReductionPathName(r1_reduction_path_info.decode_path)
-             << "\"";
+             << "\",\n"
+             << "    \"r1_timed_encode_api\": "
+                "\"leo2_encode_batch:item_count=1:no_preflight_scratch\",\n"
+             << "    \"r1_timed_one_shot_encode_api\": "
+                "\"leo2_encode\",\n"
+             << "    \"r1_timed_reused_decode_api\": "
+                "\"leo2_decode_plan_execute_batch:item_count=1:"
+                "no_preflight_scratch:one_loss_direct_xor\",\n"
+             << "    \"r1_timed_one_shot_decode_api\": "
+                "\"leo2_decode:one_loss\"";
     }
     if (options.disable_k9r6r8_b256_terminal)
     {
@@ -1896,6 +1984,14 @@ static int Run(const Options& options)
          << "    \"decode_scratch_bytes_per_stripe\": " << decode_scratch_bytes << ",\n"
          << "    \"encode_scratch_bytes_batch\": " << encode_scratch_batch << ",\n"
          << "    \"decode_scratch_bytes_batch\": " << decode_scratch_batch;
+    if (options.r1_small_reduction_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"encode_batch_preflight_scratch_bytes\": "
+             << encode_batch_preflight_bytes << ",\n"
+             << "    \"decode_batch_preflight_scratch_bytes\": "
+             << decode_batch_preflight_bytes;
+    }
     if (options.measure_one_shot_decode)
     {
         json << ",\n"
@@ -1916,6 +2012,14 @@ static int Run(const Options& options)
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
         encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
+    if (options.r1_small_reduction_mode >= 0)
+    {
+        json << ",\n    \"one_shot_encode\": ";
+        WriteSummary(json, one_shot_encode,
+            encode_input_bytes, "input_GB_per_s",
+            encode_output_bytes, "parity_output_GB_per_s",
+            4, options.retain_samples);
+    }
     json << ",\n    \"decode_plan_setup\": ";
     WriteSetupSummary(json, plan_setup, 4, options.retain_samples);
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)

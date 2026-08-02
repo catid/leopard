@@ -246,8 +246,10 @@ bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled);
     Same-executable R=1 small-reduction attribution.  Mode zero preserves the
     production policy and mode one enables only the bounded GF8/AVX2 candidate
     cells.  A codec snapshots the process-local mode during construction, so
-    changing it cannot alter an existing immutable codec.  Values above one
-    are rejected.  This is an internal benchmark control, not public ABI.
+    changing it cannot alter an existing immutable codec.  Serialize each
+    set-and-create pair: concurrent codec construction can otherwise observe
+    another benchmark lane's mode.  Values above one are rejected.  This is
+    an internal benchmark control, not public ABI.
 */
 bool SetR1SmallReductionModeForDiagnostics(unsigned mode);
 
@@ -270,7 +272,11 @@ struct CodecR1ReductionPathInfo
     R1ReductionPath decode_path;
 };
 
-/* Reports the exact immutable-codec route for this byte count. */
+/*
+    Reports the reduction body selected by encode execution and by a one-loss
+    direct-XOR decode plan for this byte count.  A no-loss or non-direct
+    decode plan may not execute the reported decode reduction.
+*/
 bool GetCodecR1ReductionPathInfo(
     const leo2_codec* codec,
     uint64_t shard_bytes,
