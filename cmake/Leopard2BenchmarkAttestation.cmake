@@ -53,6 +53,8 @@ function(leopard2_enable_benchmark_source_attestation target)
             LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
             LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
             LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
+            LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
             LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
             LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT
             LEO2_EXPERIMENT_CAUCHY_LOG_REUSE
@@ -95,7 +97,7 @@ function(leopard2_enable_benchmark_source_attestation target)
         LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256
         "${build_configuration_sha256}")
     set(LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA
-        "leopard2-benchmark-build-configuration/v4"
+        "leopard2-benchmark-build-configuration/v5"
         CACHE INTERNAL
         "Leopard2 benchmark effective-configuration schema"
         FORCE)

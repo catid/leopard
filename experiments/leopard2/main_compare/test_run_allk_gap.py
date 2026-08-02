@@ -268,9 +268,11 @@ class ProductionBuildFixture:
                 "0" * 64,
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED:BOOL": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR:BOOL": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL": "ON",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL": "OFF",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING:BOOL": "ON",
@@ -330,6 +332,8 @@ class AllKIdentityTests(unittest.TestCase):
                 runner.ALL_K_BUILD_CACHE_KEYS_V2,
             runner.RUN_CONTRACT_SCHEMA_V5:
                 runner.ALL_K_BUILD_CACHE_KEYS_V3,
+            runner.RUN_CONTRACT_SCHEMA_V6:
+                runner.ALL_K_BUILD_CACHE_KEYS_V4,
             runner.RUN_CONTRACT_SCHEMA:
                 runner.ALL_K_BUILD_CACHE_KEYS,
         }[schema]
@@ -345,7 +349,8 @@ class AllKIdentityTests(unittest.TestCase):
         })
         if schema == runner.RUN_CONTRACT_SCHEMA_V5:
             cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
-        elif schema == runner.RUN_CONTRACT_SCHEMA:
+        elif schema in (runner.RUN_CONTRACT_SCHEMA_V6,
+                        runner.RUN_CONTRACT_SCHEMA):
             cache.update({
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
@@ -355,6 +360,12 @@ class AllKIdentityTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             })
+            if schema == runner.RUN_CONTRACT_SCHEMA:
+                cache.update({
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
+                        "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                })
         return {
             "schema": schema,
             "main_commit": "a" * 40,
@@ -1281,10 +1292,13 @@ class AllKIdentityTests(unittest.TestCase):
         validated_proof = proof_validator.start()
         self.addCleanup(proof_validator.stop)
         current = self.run_contract()
+        v6 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V6)
         v5 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V5)
         v4 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
         self.assertIs(
             runner.validate_run_contract_evidence(current), current)
+        self.assertIs(
+            runner.validate_run_contract_evidence(v6), v6)
         self.assertIs(
             runner.validate_run_contract_evidence(v5), v5)
         self.assertIs(
@@ -1294,11 +1308,17 @@ class AllKIdentityTests(unittest.TestCase):
         # the outer contract cannot upgrade or downgrade its nested closure.
         for body, schema in (
                 (v4, runner.RUN_CONTRACT_SCHEMA_V5),
+                (v4, runner.RUN_CONTRACT_SCHEMA_V6),
                 (v4, runner.RUN_CONTRACT_SCHEMA),
                 (v5, runner.RUN_CONTRACT_SCHEMA_V4),
+                (v5, runner.RUN_CONTRACT_SCHEMA_V6),
                 (v5, runner.RUN_CONTRACT_SCHEMA),
+                (v6, runner.RUN_CONTRACT_SCHEMA_V4),
+                (v6, runner.RUN_CONTRACT_SCHEMA_V5),
+                (v6, runner.RUN_CONTRACT_SCHEMA),
                 (current, runner.RUN_CONTRACT_SCHEMA_V4),
-                (current, runner.RUN_CONTRACT_SCHEMA_V5)):
+                (current, runner.RUN_CONTRACT_SCHEMA_V5),
+                (current, runner.RUN_CONTRACT_SCHEMA_V6)):
             with self.subTest(body=body["schema"], label=schema):
                 relabeled = copy.deepcopy(body)
                 relabeled["schema"] = schema
@@ -1329,6 +1349,19 @@ class AllKIdentityTests(unittest.TestCase):
                         runner.validate_run_contract_evidence(extended_v5),
                     "schema tuple")
 
+        for selector in (
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"):
+            with self.subTest(v6_extra=selector):
+                extended_v6 = copy.deepcopy(v6)
+                extended_v6["current_build_initial"]["validated_cache"][
+                    selector] = "OFF"
+                expect_rejected(
+                    self,
+                    lambda extended_v6=extended_v6:
+                        runner.validate_run_contract_evidence(extended_v6),
+                    "schema tuple")
+
         for label, variable, value in (
             ("direct-source", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("high-direct", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
@@ -1344,6 +1377,9 @@ class AllKIdentityTests(unittest.TestCase):
              "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING", "OFF"),
             ("T8-ragged", "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING", "OFF"),
             ("T8-disable", "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR", "ON"),
+            ("T32-B256", "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED", "ON"),
+            ("T32-B256-disable",
+             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED", "ON"),
         ):
             with self.subTest(selector=label):
                 changed = copy.deepcopy(current)
