@@ -1176,6 +1176,12 @@ static std::atomic<unsigned> g_r1_small_reduction_mode(0U);
     reusable-plan API never consults this switch.
 */
 static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+// Same-executable benchmark control.  Both states are nonzero so changing the
+// word cannot perturb linked instruction text; production-enabled builds start
+// in state one and the mature Algorithm 4 control is state two.
+static volatile uint32_t g_low_p32_b64_terminal_mode = 1U;
+#endif
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
@@ -8260,13 +8266,14 @@ static void ExecuteRawTranslatedLowDecode(
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
         const bool exact_terminal =
+            g_low_p32_b64_terminal_mode == 1U &&
             geometry.aligned_prefix_bytes == 64 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
             ops.kind == LEO2_BACKEND_AVX2 &&
             codec->translated_low_factors8.size() == 1 &&
             leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
-                const_cast<const void* const*>(coordinate_data),
+                ops, const_cast<const void* const*>(coordinate_data),
                 pattern.missing_originals, pattern.missing_original_count,
                 pattern.locator, codec->translated_low_factors8[0],
                 restored, work);
@@ -12341,6 +12348,26 @@ bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
         return false;
     g_one_shot_plan_setup_mode.store(mode, std::memory_order_release);
     return true;
+}
+
+bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    g_low_p32_b64_terminal_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned LowP32B64TerminalModeForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    return g_low_p32_b64_terminal_mode;
+#else
+    return 0;
+#endif
 }
 
 leo2_result ExecuteOneShotTransformPlanForDiagnostics(

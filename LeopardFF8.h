@@ -614,6 +614,7 @@ void ReedSolomonDecodeLowPrunedPlannedUnrevealed(
 // Direct research entry point for the exact P=32/N=64/B=64 AVX2 Algorithm 4
 // terminal.  It is intentionally not part of the public Leopard2 API.
 bool ReedSolomonDecodeLowP32B64TerminalExperimental(
+    const backend::Ops& ops,
     const void* const* coordinate_data,
     const uint32_t* requested_coordinates,
     unsigned requested_count,

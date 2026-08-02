@@ -288,6 +288,17 @@ bool SetR1SmallReductionModeForDiagnostics(unsigned mode);
 bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode);
 
 /*
+    Same-executable attribution for the exact GF8/AVX2 Algorithm 4
+    P=32/N=64/B=64 terminal.  Enabled maps to initialized-data mode word one;
+    disabled maps to word two and retains the mature translated-low decoder.
+    Both modes execute from identical text.  Change this only while no decode
+    is executing; this is an internal benchmark control, not public ABI.
+*/
+bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled);
+
+unsigned LowP32B64TerminalModeForDiagnostics();
+
+/*
     Construct the ephemeral transform plan for the current diagnostic mode
     and exact shard byte count.  The factory includes the same no-loss prefix
     probe used by the public wrapper so it does not duplicate that prefix in

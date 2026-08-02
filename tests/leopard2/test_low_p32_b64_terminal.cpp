@@ -259,7 +259,7 @@ void ExercisePattern(
     }
 
     Require(leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
-            coordinates, requested_coordinates,
+            avx2, coordinates, requested_coordinates,
             static_cast<unsigned>(missing.size()), locator, factor,
             restored, candidate_work),
         "P32/B64 AVX2 terminal rejected a valid pattern");
@@ -446,14 +446,27 @@ int main()
         leo2_context* context = NULL;
         RequireResult(leo2_context_create(&options, &context),
             "create public-route AVX2 context");
+        Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
+            "production terminal mode did not start enabled");
         ExercisePublicRoute(context, 64, 16, false, 1);
         ExercisePublicRoute(context, 64, 31, false, 1);
         ExercisePublicRoute(context, 63, 16, false, 0);
         ExercisePublicRoute(context, 65, 31, false, 0);
         ExercisePublicRoute(context, 64, 16, true, 0);
+        Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
+                false),
+            "disable terminal for same-executable control");
+        Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 2,
+            "disabled terminal did not select mode word two");
+        ExercisePublicRoute(context, 64, 31, false, 0);
+        Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
+                true),
+            "restore terminal after same-executable control");
+        Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
+            "enabled terminal did not restore mode word one");
         leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=5\n",
+            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=6\n",
             patterns.size());
         return 0;
     }
