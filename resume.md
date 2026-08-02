@@ -6,6 +6,40 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-08-02 GF8/AVX2 R=1 small-reduction closure
+
+Commit `78a38547b9b11fafa5b8143324066af6d9fac509`, tree
+`46a3b65dde6073ec6625af28fbe28af3e839eb2a`, promotes only the four cells
+that cleared the predeclared all-lane 95% confidence floor: K=2 at exactly
+64, 256, and 1024 bytes uses the terminal reduction, and K=4 at exactly 1024
+bytes uses the dense reduction.  K=3, K=4 at 64/256 bytes, and the broad
+small-byte coarse thresholds remain deliberately unpromoted.
+
+The frozen pure-AVX2 campaign at
+`/tmp/leopard2-r1-small-8ff4ed9-abba-r3-v1` retained 111 cells and 2,664
+accepted processes.  All input, parity, and recovered-data digests match;
+CPU 14 was pinned with sibling 30 recording zero non-idle jiffies.  Candidate
+arithmetic improved the same-source public lanes by 1.16x--2.13x in the four
+promoted cells, although exact Leopard main still wins these tiny calls by
+0.494x--0.954x for one-shot encode and 0.571x--0.892x for one-shot decode.
+The next R=1 work is therefore validation/dispatch/setup, not another broad
+reduction threshold.
+
+GNU Release/API gates and the final Clang 18 ASan+UBSan+LSan R1 test pass;
+the latter was rerun after the multi-item/backend/GF16 coverage expansion and
+completed 1/1 in 13.14 seconds.  Builds remain serialized at `-j1` under
+`/tmp/leopard-gf8-authoritative.lock` because earlier parallel compilation
+repeatedly exhausted memory.  Bead `leopard-79h.38.5.10.23.1` is closed.
+
+The generic exact-main ABBA runner correctly rejected a final-source attempt
+before timing because its v9 contract predates current benchmark-attestation
+v4, the production selector defaults, an AVX-512-disabled effective-AVX2
+candidate, and a public pure-AVX2 main selector.  No result from that failed
+preflight was retained.  Follow-up `leopard-79h.16.2.2` owns the evidence
+schema migration.  The next ready codec optimization is P0
+`leopard-79h.38.2.5`: reduce tiny GF8 maximum-loss one-shot plan overhead,
+starting with a byte-aware one-shot setup that builds only the selected path.
+
 ## 2026-07-31 GF8/AVX2 Cauchy-setup checkpoint
 
 Commit `568877cb36264d95aa980be58b6265d56fee704c`, tree
