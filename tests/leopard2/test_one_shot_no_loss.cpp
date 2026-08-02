@@ -267,6 +267,504 @@ leo2_codec* create_codec(
     return codec;
 }
 
+#if LEO2_TEST_EXPECT_GF8
+class RawTransientFixture
+{
+public:
+    RawTransientFixture(
+        leo2_context* context,
+        uint32_t original_count,
+        uint32_t recovery_count,
+        size_t shard_bytes)
+        : k(original_count)
+        , r(recovery_count)
+        , bytes(shard_bytes)
+        , codec(create_codec(context, k, r,
+              LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8))
+        , originals(k, std::vector<uint8_t>(bytes))
+        , parity(r, std::vector<uint8_t>(bytes))
+        , restored_storage(k, std::vector<uint8_t>(bytes, 0xa5))
+        , original_present(k, 1)
+        , recovery_present(r, 1)
+        , original(k, NULL)
+        , recovery(r, NULL)
+        , restored(k, NULL)
+        , encode_scratch(NULL)
+        , decode_scratch(NULL)
+        , decode_scratch_bytes(0)
+    {
+        for (uint32_t shard = 0; shard < k; ++shard)
+        {
+            for (size_t i = 0; i < bytes; ++i)
+            {
+                originals[shard][i] = static_cast<uint8_t>(
+                    shard * 53u + i * 29u + (shard ^ i) * 7u + 11u);
+            }
+            original[shard] = originals[shard].data();
+        }
+        std::vector<void*> parity_output(r, NULL);
+        for (uint32_t i = 0; i < r; ++i)
+            parity_output[i] = parity[i].data();
+        size_t encode_scratch_bytes = 0;
+        require_result(leo2_encode_scratch_size(
+            codec, bytes, &encode_scratch_bytes),
+            LEO2_SUCCESS, "raw transient encode scratch query");
+        encode_scratch = new AlignedBuffer(encode_scratch_bytes);
+        require_result(leo2_encode(codec, bytes, original.data(),
+            parity_output.data(), encode_scratch->data(),
+            encode_scratch->size()), LEO2_SUCCESS,
+            "raw transient fixture encode");
+        require_result(leo2_decode_scratch_size(
+            codec, bytes, &decode_scratch_bytes),
+            LEO2_SUCCESS, "raw transient decode scratch query");
+        decode_scratch = new AlignedBuffer(decode_scratch_bytes);
+    }
+
+    ~RawTransientFixture()
+    {
+        delete decode_scratch;
+        delete encode_scratch;
+        leo2_codec_destroy(codec);
+    }
+
+    void Configure(uint32_t losses, unsigned shape, bool mixed_recovery)
+    {
+        require(losses > 0 && losses <= k && losses <= r,
+            "invalid raw transient fixture loss count");
+        std::fill(original_present.begin(), original_present.end(), 1);
+        std::fill(recovery_present.begin(), recovery_present.end(), 1);
+        if (shape == 0)
+        {
+            for (uint32_t i = 0; i < losses; ++i)
+                original_present[i] = 0;
+        }
+        else if (shape == 1)
+        {
+            for (uint32_t i = 0; i < losses; ++i)
+                original_present[k - 1U - i] = 0;
+        }
+        else
+        {
+            uint32_t marked = 0;
+            uint32_t candidate = 3U % k;
+            while (marked < losses)
+            {
+                if (original_present[candidate])
+                {
+                    original_present[candidate] = 0;
+                    ++marked;
+                }
+                candidate = (candidate + 7U) % k;
+            }
+        }
+
+        if (mixed_recovery && losses < r)
+        {
+            const uint32_t target = std::min<uint32_t>(r, losses + 3U);
+            uint32_t present = r;
+            for (uint32_t i = 1; i < r && present > target; i += 3)
+            {
+                recovery_present[i] = 0;
+                --present;
+            }
+            for (uint32_t i = 0; i < r && present > target; ++i)
+            {
+                if (recovery_present[i])
+                {
+                    recovery_present[i] = 0;
+                    --present;
+                }
+            }
+        }
+
+        for (uint32_t i = 0; i < k; ++i)
+        {
+            original[i] = original_present[i]
+                ? static_cast<const void*>(originals[i].data()) : NULL;
+            restored[i] = original_present[i]
+                ? NULL : static_cast<void*>(restored_storage[i].data());
+        }
+        for (uint32_t i = 0; i < r; ++i)
+        {
+            recovery[i] = recovery_present[i]
+                ? static_cast<const void*>(parity[i].data()) : NULL;
+        }
+        ResetOutputs();
+    }
+
+    void ResetOutputs()
+    {
+        for (uint32_t i = 0; i < k; ++i)
+            std::fill(restored_storage[i].begin(),
+                restored_storage[i].end(), 0xa5);
+    }
+
+    bool OutputsMatch() const
+    {
+        for (uint32_t i = 0; i < k; ++i)
+        {
+            if (!original_present[i] &&
+                restored_storage[i] != originals[i])
+                return false;
+        }
+        return true;
+    }
+
+    bool OutputsUntouched() const
+    {
+        for (uint32_t i = 0; i < k; ++i)
+        {
+            if (!original_present[i])
+            {
+                for (size_t j = 0; j < bytes; ++j)
+                    if (restored_storage[i][j] != 0xa5)
+                        return false;
+            }
+        }
+        return true;
+    }
+
+    std::vector<uint32_t> Missing() const
+    {
+        std::vector<uint32_t> result;
+        for (uint32_t i = 0; i < k; ++i)
+            if (!original_present[i])
+                result.push_back(i);
+        return result;
+    }
+
+    DecodeObservation Observe(
+        void* scratch_override = NULL,
+        size_t scratch_bytes_override = std::numeric_limits<size_t>::max())
+    {
+        void* selected_scratch = scratch_override
+            ? scratch_override : decode_scratch->data();
+        const size_t selected_bytes =
+            scratch_bytes_override == std::numeric_limits<size_t>::max()
+                ? decode_scratch_bytes : scratch_bytes_override;
+        return observe_decode(codec, bytes, original_present.data(),
+            recovery_present.data(), original.data(), recovery.data(),
+            restored.data(), selected_scratch, selected_bytes);
+    }
+
+    uint32_t k;
+    uint32_t r;
+    size_t bytes;
+    leo2_codec* codec;
+    std::vector<std::vector<uint8_t> > originals;
+    std::vector<std::vector<uint8_t> > parity;
+    std::vector<std::vector<uint8_t> > restored_storage;
+    std::vector<uint8_t> original_present;
+    std::vector<uint8_t> recovery_present;
+    std::vector<const void*> original;
+    std::vector<const void*> recovery;
+    std::vector<void*> restored;
+    AlignedBuffer* encode_scratch;
+    AlignedBuffer* decode_scratch;
+    size_t decode_scratch_bytes;
+
+private:
+    RawTransientFixture(const RawTransientFixture&);
+    RawTransientFixture& operator=(const RawTransientFixture&);
+};
+
+void require_raw_transient_success(
+    const DecodeObservation& observation,
+    const RawTransientFixture& fixture,
+    bool expect_allocation_free,
+    const char* operation)
+{
+    require_result(observation.result, LEO2_SUCCESS, operation);
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    if (expect_allocation_free)
+        require(observation.allocations == 0,
+            "eligible raw transient decode allocated");
+    else
+        require(observation.allocations > 0,
+            "raw transient fallback unexpectedly avoided plan allocation");
+#else
+    (void)expect_allocation_free;
+#endif
+    require(fixture.OutputsMatch(),
+        "raw transient decode restored incorrect bytes");
+}
+
+void run_raw_transient_case(
+    leo2_context* context,
+    uint32_t k,
+    uint32_t r,
+    size_t bytes,
+    uint32_t losses,
+    unsigned shape,
+    bool mixed_recovery,
+    bool expect_allocation_free)
+{
+    RawTransientFixture fixture(context, k, r, bytes);
+    fixture.Configure(losses, shape, mixed_recovery);
+    require_raw_transient_success(fixture.Observe(), fixture,
+        expect_allocation_free, "raw transient one-shot decode");
+}
+
+void require_raw_transient_failure(
+    const DecodeObservation& observation,
+    leo2_result expected,
+    const RawTransientFixture& fixture,
+    const char* operation)
+{
+    require_result(observation.result, expected, operation);
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    require(observation.allocations == 0,
+        "raw transient validation failure allocated");
+#endif
+    require(fixture.OutputsUntouched(),
+        "raw transient validation failure modified an output");
+}
+
+void test_raw_transient_failure_atomicity(leo2_context* context)
+{
+    RawTransientFixture fixture(context, 32, 32, 65);
+    fixture.Configure(9, 2, true);
+    require(fixture.decode_scratch_bytes > 1,
+        "raw transient fixture has no decode scratch");
+
+    require_raw_transient_failure(
+        fixture.Observe(fixture.decode_scratch->data(),
+            fixture.decode_scratch_bytes - 1U),
+        LEO2_SCRATCH_TOO_SMALL, fixture,
+        "raw transient short scratch");
+
+    AlignedBuffer misaligned(fixture.decode_scratch_bytes + 64U);
+    fixture.ResetOutputs();
+    require_raw_transient_failure(fixture.Observe(
+        static_cast<uint8_t*>(misaligned.data()) + 1,
+        fixture.decode_scratch_bytes), LEO2_BAD_ALIGNMENT, fixture,
+        "raw transient misaligned scratch");
+
+    const std::vector<uint32_t> missing = fixture.Missing();
+    require(missing.size() == 9, "raw transient missing fixture mismatch");
+    const uint32_t missing0 = missing[0];
+    const uint32_t missing1 = missing[1];
+    uint32_t survivor = 0;
+    while (!fixture.original_present[survivor])
+        ++survivor;
+
+    fixture.ResetOutputs();
+    fixture.original[missing0] = fixture.originals[missing0].data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_INVALID_ARGUMENT, fixture,
+        "raw transient presence pointer mismatch");
+    fixture.original[missing0] = NULL;
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = NULL;
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_INVALID_ARGUMENT, fixture,
+        "raw transient null restored output");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = const_cast<void*>(fixture.original[survivor]);
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture, "raw transient output input overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing1] = fixture.restored[missing0];
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture, "raw transient output output overlap");
+    fixture.restored[missing1] = fixture.restored_storage[missing1].data();
+
+    // Every immutable metadata array is protected independently.  Exercise
+    // the raw validator's complete five-span contract on this eligible route.
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = fixture.original.data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture,
+        "raw transient output original-pointer metadata overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = fixture.recovery.data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture,
+        "raw transient output recovery-pointer metadata overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = fixture.restored.data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture,
+        "raw transient output restored-pointer metadata overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = fixture.original_present.data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture,
+        "raw transient output original-presence metadata overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    fixture.restored[missing0] = fixture.recovery_present.data();
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_OVERLAP, fixture,
+        "raw transient output recovery-presence metadata overlap");
+    fixture.restored[missing0] = fixture.restored_storage[missing0].data();
+
+    fixture.ResetOutputs();
+    const void* const saved_original = fixture.original[survivor];
+    fixture.original[survivor] = reinterpret_cast<const void*>(
+        std::numeric_limits<uintptr_t>::max() - fixture.bytes / 2U);
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_INVALID_ARGUMENT, fixture,
+        "raw transient overflowing original shard range");
+    fixture.original[survivor] = saved_original;
+
+    uint32_t recovery_survivor = 0;
+    while (!fixture.recovery_present[recovery_survivor])
+        ++recovery_survivor;
+    fixture.ResetOutputs();
+    const void* const saved_recovery = fixture.recovery[recovery_survivor];
+    fixture.recovery[recovery_survivor] = reinterpret_cast<const void*>(
+        std::numeric_limits<uintptr_t>::max() - fixture.bytes / 2U);
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_INVALID_ARGUMENT, fixture,
+        "raw transient overflowing recovery shard range");
+    fixture.recovery[recovery_survivor] = saved_recovery;
+
+    fixture.ResetOutputs();
+    const uint8_t saved_recovery_presence = fixture.recovery_present.back();
+    fixture.recovery_present.back() = 2;
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_INVALID_ARGUMENT, fixture,
+        "raw transient invalid late presence");
+    fixture.recovery_present.back() = saved_recovery_presence;
+
+    fixture.Configure(9, 2, false);
+    std::fill(fixture.recovery_present.begin(),
+        fixture.recovery_present.end(), 0);
+    std::fill(fixture.recovery.begin(), fixture.recovery.end(),
+        static_cast<const void*>(NULL));
+    require_raw_transient_failure(fixture.Observe(),
+        LEO2_NEED_MORE_DATA, fixture,
+        "raw transient insufficient data");
+
+    fixture.Configure(9, 2, true);
+    AlignedBuffer presence_scratch(fixture.decode_scratch_bytes);
+    memcpy(presence_scratch.data(), fixture.original_present.data(), fixture.k);
+    fixture.ResetOutputs();
+    begin_allocation_audit();
+    const leo2_result overlap_result = leo2_decode(fixture.codec,
+        fixture.bytes, static_cast<const uint8_t*>(presence_scratch.data()),
+        fixture.recovery_present.data(), fixture.original.data(),
+        fixture.recovery.data(), fixture.restored.data(),
+        presence_scratch.data(), presence_scratch.size());
+    const uint64_t overlap_allocations = end_allocation_audit();
+    require_result(overlap_result, LEO2_OVERLAP,
+        "raw transient scratch presence overlap");
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    require(overlap_allocations == 0,
+        "raw transient scratch metadata overlap allocated");
+#endif
+    require(fixture.OutputsUntouched(),
+        "raw transient scratch metadata overlap modified output");
+}
+
+void test_raw_transient_reusable_plan(leo2_context* context)
+{
+    RawTransientFixture fixture(context, 32, 32, 255);
+    fixture.Configure(9, 2, true);
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(fixture.codec,
+        fixture.original_present.data(), fixture.recovery_present.data(),
+        &plan), LEO2_SUCCESS, "raw transient reusable plan create");
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, fixture.bytes, &scratch_bytes),
+        LEO2_SUCCESS, "raw transient reusable plan scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    fixture.ResetOutputs();
+    begin_allocation_audit();
+    const leo2_result result = leo2_decode_plan_execute(plan, fixture.bytes,
+        fixture.original.data(), fixture.recovery.data(),
+        fixture.restored.data(), scratch.data(), scratch.size());
+    const uint64_t allocations = end_allocation_audit();
+    require_result(result, LEO2_SUCCESS,
+        "raw transient reusable plan execute");
+#if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
+    require(allocations == 0,
+        "reusable plan execution allocated after raw transient refactor");
+#endif
+    require(fixture.OutputsMatch(),
+        "reusable plan diverged from raw transient one-shot decode");
+    leo2_decode_plan_destroy(plan);
+}
+
+void test_raw_transient_decode(leo2_context* automatic_context)
+{
+    leo2_context_options options;
+    memset(&options, 0, sizeof(options));
+    options.struct_size = sizeof(options);
+    options.backend = LEO2_BACKEND_AVX2;
+    options.thread_count = 1;
+    leo2_context* avx2 = NULL;
+    const leo2_result context_result = leo2_context_create(&options, &avx2);
+    if (context_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(context_result, LEO2_SUCCESS,
+        "raw transient AVX2 context create");
+    require(leo2_context_backend(avx2) == LEO2_BACKEND_AVX2,
+        "raw transient explicit context did not select AVX2");
+
+    const size_t boundary_bytes[] = { 1, 63, 64, 65, 255, 256 };
+    for (size_t i = 0;
+         i < sizeof(boundary_bytes) / sizeof(boundary_bytes[0]); ++i)
+    {
+        run_raw_transient_case(avx2, 32, 32, boundary_bytes[i],
+            9, static_cast<unsigned>(i % 3), true, true);
+    }
+    // Exercise the smallest reachable translated-low parent above the
+    // eight-loss direct-repair limit, then both sides of the P=32 count
+    // boundary.  These are eligibility boundaries, not merely larger-shape
+    // repetitions of the P=32/P=128 cases below.
+    run_raw_transient_case(avx2, 9, 9, 1, 9, 0, true, true);
+    run_raw_transient_case(avx2, 16, 16, 256, 9, 1, true, true);
+    run_raw_transient_case(avx2, 17, 17, 64, 9, 2, true, true);
+    run_raw_transient_case(avx2, 17, 17, 255, 17, 0, false, true);
+    run_raw_transient_case(avx2, 95, 95, 65, 47, 2, true, true);
+    run_raw_transient_case(avx2, 95, 95, 256, 95, 1, false, true);
+    run_raw_transient_case(avx2, 17, 31, 255, 17, 0, true, true);
+    run_raw_transient_case(avx2, 31, 17, 64, 17, 2, false, true);
+
+    // The first promotion is intentionally bounded to 256 bytes.
+    run_raw_transient_case(avx2, 32, 32, 257, 9, 2, true, false);
+    test_raw_transient_failure_atomicity(avx2);
+    test_raw_transient_reusable_plan(avx2);
+
+#if defined(LEO2_TEST_ONE_SHOT_NO_LOSS_HOOK_BUILD)
+    {
+        RawTransientFixture fixture(avx2, 32, 32, 65);
+        fixture.Configure(9, 2, true);
+        require_result(leo2_test_codec_set_decode_mode(fixture.codec,
+            LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
+            LEO2_SUCCESS, "raw transient force translated-low mode");
+        require_raw_transient_success(fixture.Observe(), fixture, false,
+            "forced mode raw transient fallback");
+        require_result(leo2_test_codec_set_decode_mode(fixture.codec,
+            LEO2_TEST_DECODE_AUTO), LEO2_SUCCESS,
+            "raw transient restore automatic mode");
+    }
+#endif
+
+    if (leo2_context_backend(automatic_context) == LEO2_BACKEND_AVX2)
+    {
+        run_raw_transient_case(automatic_context,
+            32, 32, 65, 9, 2, true, true);
+    }
+    leo2_context_destroy(avx2);
+}
+#endif
+
 void test_no_loss_shape(
     leo2_context* context,
     uint32_t k,
@@ -604,6 +1102,7 @@ int main()
             context, LEO2_FIELD_GF8);
         test_r1_presence_validation(context, LEO2_FIELD_GF8);
         test_loss_fallback(context, LEO2_FIELD_GF8);
+        test_raw_transient_decode(context);
 #endif
 #if LEO2_TEST_EXPECT_GF16
         test_no_loss_shape(context, 9, 7,
