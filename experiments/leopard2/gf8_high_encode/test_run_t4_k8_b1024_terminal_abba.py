@@ -165,8 +165,10 @@ def main() -> int:
             len(set(expected_dependencies)) == 7,
             "K8/B1024 runner dependency chain changed")
     require(BASE.ALLOW_IDENTICAL_CANDIDATE_CONTROL is True and
+            BASE.CANDIDATE_EXTRA_ARGUMENTS ==
+                ("--k8r3r4-t4-terminal-mode", "1") and
             BASE.CONTROL_EXTRA_ARGUMENTS ==
-                ("--disable-k8r3r4-t4-terminal",) and
+                ("--k8r3r4-t4-terminal-mode", "0") and
             BASE.CONTROL_BUILD_MARKER ==
                 "k8r3r4_t4_terminal_diagnostic_disabled" and
             BASE.CANDIDATE_SCHEMA == "leopard2-benchmark-v5" and
@@ -187,8 +189,14 @@ def main() -> int:
         "candidate", Path("/frozen/a/benchmark"), sample_cell, 14, 15, 6)
     control_command = BASE.benchmark_command(
         "control", Path("/frozen/b/benchmark"), sample_cell, 14, 15, 6)
-    require("--disable-k8r3r4-t4-terminal" not in candidate_command and
-            control_command.count("--disable-k8r3r4-t4-terminal") == 1,
+    option = "--k8r3r4-t4-terminal-mode"
+    candidate_index = candidate_command.index(option)
+    control_index = control_command.index(option)
+    require(candidate_command[candidate_index + 1] == "1" and
+            control_command[control_index + 1] == "0" and
+            len(candidate_command) == len(control_command) and
+            all(len(left) == len(right) for left, right in
+                zip(candidate_command, control_command)),
             "runtime control argument attribution changed")
     equal_paths = {
         "candidate": {"path": "/frozen/a/benchmark"},

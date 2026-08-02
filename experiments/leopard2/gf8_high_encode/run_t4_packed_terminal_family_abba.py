@@ -100,6 +100,7 @@ REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS = False
 # links to one immutable executable and changing only a setup-time diagnostic
 # selector before codec creation.
 ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
+CANDIDATE_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_BUILD_MARKER: str | None = None
 CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
@@ -469,7 +470,9 @@ def benchmark_command(
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--attest-source",
     ]
-    if implementation == "control":
+    if implementation == "candidate":
+        command.extend(CANDIDATE_EXTRA_ARGUMENTS)
+    elif implementation == "control":
         command.extend(CONTROL_EXTRA_ARGUMENTS)
     return command + ["--json", "-"]
 
