@@ -6,6 +6,48 @@ Beads is the durable task source. Use the Beads 1.x binary explicitly:
 
 The legacy `~/.local/bin/bd` is 0.47 and must not touch this checkout.
 
+## 2026-08-02 GF8/AVX2 transient-plan and active Walsh checkpoint
+
+Commit `949afe3` makes public one-shot transform plans byte-aware, retains only
+the selected execution-route metadata, skips dead tiny/full-loss pruned
+schedules, removes redundant presence/selection scans, and routes dense GF8
+locator setup through a parent-sized AVX2 Walsh kernel.  Reusable public plans
+remain a byte-independent superset; the byte identity is diagnostic/transient
+metadata and is enforced by scratch queries, ordinary/scalable execution, and
+batch bindings.  The same milestone restores the documented historical global
+`LEO2_GFNI_VARIANT` build, including its high-direct fallback, without changing
+production GFNI ownership or AUTO dispatch.
+
+Focused GNU Release gates pass 10/10: portable ISA and registration,
+backend ops, public API, random differential, locator, dense-plan policy,
+low-decoder acceptance, high/low duality, and benchmark JSON.  The latest
+failure-atomicity audit found that the diagnostic factory could retain a
+caller sentinel on zero bytes or an invalid presence value; the commit clears
+the handle after canonical overlap validation and adds both regressions.  That
+test also passes under Clang ASan+UBSan.  Expanded known-count locator coverage
+performs 162 comparisons over 816,480 coordinates, including every GF8
+power-of-two parent and GF16 up to 65,536.  The documented global-GFNI
+`bench_leopard2` build and a GF8 K=16/R=8 round trip pass; the default,
+in-place-GFNI, high-direct-GFNI, GF8-only, and GF16-only focused variants were
+also rebuilt serially.
+
+Pinned same-binary CPU14 ABBA at
+`/tmp/leopard2-oneshot-walsh-abba-v1` matched all workload digests in 21/21
+cells across N=32/64/128/256 and 64/256/1024-byte shards.  Enabling the active
+Walsh kernel improves full one-shot time by 1.095x--1.157x at 64 bytes,
+1.062x--1.097x at 256 bytes, and 1.025x--1.054x at 1024 bytes; isolated setup
+improves 1.217x--1.939x.  A preliminary exact-main screen leaves only three
+sampled 64-byte losses (K/R 24/20, 40/12, and 95/95); because that candidate
+was frozen before the final commit, retain it as directional only.
+
+Bead `leopard-79h.38.2.5` remains open until a final clean-source exact-main
+ABBA is complete.  The next bounded candidate is stack ownership for the
+synchronous ephemeral one-shot plan (the plan object's internal vectors may
+still allocate).  Benchmark the three residual 64-byte shapes plus neighboring
+controls before promotion.  Builds and tests must stay `-j1`, memory-capped,
+and serialized through `/tmp/leopard-gf8-authoritative.lock`; prior compilation
+parallelism repeatedly OOMed the session.
+
 ## 2026-08-02 GF8/AVX2 R=1 small-reduction closure
 
 Commit `78a38547b9b11fafa5b8143324066af6d9fac509`, tree
