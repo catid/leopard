@@ -116,7 +116,6 @@ def benchmark_command(
         implementation, executable, cell, cpu, iterations, warmup)
     if implementation == "main":
         return command
-    command = [value for value in command if value != "--attest-source"]
     if cell["role"] == "target":
         command[-2:-2] = [
             "--t16-b64-three-pass-mode",
@@ -150,7 +149,6 @@ def validate_result(
     iterations: int,
     warmup: int,
 ) -> dict[str, Any]:
-    del source_commit, source_tree
     BASE.require(isinstance(result, dict), "benchmark output is not an object")
     expected = {
         "K": cell["K"], "R": cell["R"],
@@ -193,13 +191,17 @@ def validate_result(
         target = cell["role"] == "target"
         BASE.require(result.get("schema") == (
                          "leopard2-benchmark-v17" if target
-                         else "leopard2-benchmark-v2") and
+                         else "leopard2-benchmark-v5") and
                      resolved.get("backend") == "avx2" and
                      isinstance(correctness, dict) and
                      correctness.get("leopard2_round_trip") is True,
                      "Leopard2 schema/backend/round trip failed")
         build = result.get("build")
-        BASE.require(isinstance(build, dict), "Leopard2 build identity absent")
+        BASE.require(isinstance(build, dict) and
+                     build.get("source_commit") == source_commit and
+                     build.get("source_tree") == source_tree and
+                     build.get("source_tracked_dirty") is False,
+                     "Leopard2 embedded source identity changed")
         if target:
             expected_mode = 1 if implementation == "candidate" else 2
             BASE.require(
