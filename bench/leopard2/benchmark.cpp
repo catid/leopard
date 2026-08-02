@@ -116,7 +116,7 @@ struct Options
     bool report_direct_executor;
     bool attest_source;
     bool measure_one_shot_decode;
-    bool disable_k8r3r4_t4_terminal;
+    int k8r3r4_t4_terminal_mode;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
     bool disable_k9r6r8_b256_terminal;
@@ -161,7 +161,7 @@ struct Options
         , report_direct_executor(false)
         , attest_source(false)
         , measure_one_shot_decode(false)
-        , disable_k8r3r4_t4_terminal(false)
+        , k8r3r4_t4_terminal_mode(-1)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
@@ -435,8 +435,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
         << "  --measure-one-shot-decode\n"
         << "                         Time the public one-shot decode wrapper using schema v8\n"
-        << "  --disable-k8r3r4-t4-terminal\n"
-        << "                         Attribution-only: retain the prior ordinary encode path\n"
+        << "  --k8r3r4-t4-terminal-mode 0|1\n"
+        << "                         Attribution-only: disable or enable the terminal\n"
         << "  --disable-k16r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
@@ -502,8 +502,16 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--report-decode-path") options.report_decode_path = true;
         else if (argument == "--measure-one-shot-decode")
             options.measure_one_shot_decode = true;
-        else if (argument == "--disable-k8r3r4-t4-terminal")
-            options.disable_k8r3r4_t4_terminal = true;
+        else if (argument == "--k8r3r4-t4-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.k8r3r4_t4_terminal_mode = 0;
+            else if (mode == "1")
+                options.k8r3r4_t4_terminal_mode = 1;
+            else
+                Fail("--k8r3r4-t4-terminal-mode must be exactly 0 or 1");
+        }
         else if (argument == "--disable-k16r8-b256-terminal")
             options.disable_k16r8_b256_terminal = true;
         else if (argument == "--disable-k9r5-b256-terminal")
@@ -1137,10 +1145,11 @@ static std::string LegacyUnavailableReason(
 
 static int Run(const Options& options)
 {
-    if (options.disable_k8r3r4_t4_terminal &&
+    if (options.k8r3r4_t4_terminal_mode >= 0 &&
         !leopard2_internal::
-            SetK8R3R4T4TerminalEnabledForDiagnostics(false))
-        Fail("cannot disable the K8/R=3..4 T=4 terminal for attribution");
+            SetK8R3R4T4TerminalEnabledForDiagnostics(
+                options.k8r3r4_t4_terminal_mode == 1))
+        Fail("cannot set the K8/R=3..4 T=4 terminal attribution mode");
     if (options.disable_k16r8_b256_terminal &&
         !leopard2_internal::SetK16R8B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K16/R8/256-byte terminal for attribution");
@@ -1361,12 +1370,12 @@ static int Run(const Options& options)
         options.report_decode_path || options.report_direct_executor ||
         options.attest_source || options.measure_one_shot_decode ||
         options.disable_k9r6r8_b256_terminal ||
-        options.disable_k8r3r4_t4_terminal;
+        options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
-        options.disable_k8r3r4_t4_terminal ? 11 :
+        options.k8r3r4_t4_terminal_mode == 0 ? 11 :
         options.disable_k9r6r8_b256_terminal ? 10 :
         options.measure_one_shot_decode ? 9 :
         (options.report_direct_executor && options.attest_source) ? 7 :
@@ -1649,7 +1658,7 @@ static int Run(const Options& options)
 #endif
     json << ",\n"
          << "    \"k8r3r4_t4_terminal_diagnostic_disabled\": "
-         << (options.disable_k8r3r4_t4_terminal ? "true" : "false")
+         << (options.k8r3r4_t4_terminal_mode == 0 ? "true" : "false")
          << ",\n"
          << "    \"k16r8_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k16r8_b256_terminal ? "true" : "false")
