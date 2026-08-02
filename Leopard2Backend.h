@@ -685,7 +685,11 @@ void AVX2FF8HighEncodeT2PackedTail(
 #endif
 // Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen
 // variants.  The erased pointer types keep the private table layouts local to
-// their implementation translation unit.
+// their implementation translation unit.  GF8's object representation is one
+// contiguous 32-byte record per logarithm: low-nibble bytes [0,16), followed
+// by high-nibble bytes [16,32).  Consumers outside the defining translation
+// unit must inspect this representation through uint8_t/unsigned-char access,
+// never by declaring and dereferencing a structurally similar C++ type.
 const void* GetAVX2FF8Tables();
 const void* GetAVX2FF16Tables();
 #endif
