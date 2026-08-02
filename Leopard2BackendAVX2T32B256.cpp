@@ -78,8 +78,17 @@ static LEO_FORCE_INLINE void MulAdd(
     __m256i source)
 {
     const uint8_t* const table = tables + Log * 32U;
-    destination = _mm256_xor_si256(destination,
-        Product(source, Broadcast(table), Broadcast(table + 16)));
+    __m256i product =
+        Product(source, Broadcast(table), Broadcast(table + 16));
+#if defined(__GNUC__) || defined(__clang__)
+    /*
+        Confine each fixed product's broadcast pair to this butterfly.  GCC
+        otherwise hoists several pairs across an eight-row group, exhausting
+        the sixteen AVX2 registers and spilling live codeword vectors.
+    */
+    __asm__ __volatile__("" : "+x"(product) :: "memory");
+#endif
+    destination = _mm256_xor_si256(destination, product);
 }
 
 template<unsigned Log>
