@@ -296,7 +296,7 @@ int main()
         if (result != LEO2_SUCCESS)
             throw std::runtime_error("create production AVX2 context");
 
-        static const size_t bytes[] = { 64, 128, 256 };
+        static const size_t bytes[] = { 64, 128, 256, 512 };
         for (unsigned k = 4; k <= 7; ++k)
         {
             for (unsigned r = 3; r <= 4; ++r)

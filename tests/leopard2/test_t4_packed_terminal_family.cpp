@@ -29,6 +29,7 @@
 #include "direct_oracle.h"
 #include "Leopard2Direct.h"
 #include "LeopardFF8.h"
+#include "leopard.h"
 #include "leopard2.h"
 
 #include <cstdint>
@@ -249,6 +250,34 @@ void CheckParity(
     }
 }
 
+void CheckLegacyParity(
+    const Cell& cell,
+    const std::vector<const void*>& original,
+    const std::vector<void*>& recovery)
+{
+    if (cell.shard_bytes != 512)
+        return;
+    const unsigned work_count = leo_encode_work_count(
+        cell.original_count, cell.recovery_count);
+    RequireCell(work_count >= cell.recovery_count, cell,
+        "legacy work-count query failed");
+    std::vector<std::vector<uint8_t> > work(
+        work_count, std::vector<uint8_t>(cell.shard_bytes));
+    std::vector<void*> work_pointers(work_count);
+    for (unsigned i = 0; i < work_count; ++i)
+        work_pointers[i] = &work[i][0];
+    RequireCell(leo_encode(cell.shard_bytes, cell.original_count,
+            cell.recovery_count, work_count, &original[0], &work_pointers[0]) ==
+            Leopard_Success,
+        cell, "legacy B=512 control encode failed");
+    for (unsigned parity = 0; parity < cell.recovery_count; ++parity)
+    {
+        RequireCell(std::memcmp(recovery[parity], &work[parity][0],
+                cell.shard_bytes) == 0,
+            cell, "packed B=512 parity differs from old Leopard");
+    }
+}
+
 uint64_t T4PackedCalls()
 {
     return leopard::ff8::TestOnlyGetHighEncodeCounts().t4_packed_calls;
@@ -311,6 +340,7 @@ void ExerciseCell(
     RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed public terminal selection mismatch");
     CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     RequireSourceUnchanged(input, aligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes, cell);
 
@@ -346,12 +376,22 @@ void ExerciseCell(
     RequireSourceUnchanged(input, unaligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes + 3U, cell);
 
+    FillGuards(output);
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode_batch(codec, &item, 1),
+        LEO2_SUCCESS, cell, "execute unaligned packed one-item batch encode");
+    RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
+        "unaligned packed one-item batch terminal selection mismatch");
+    CheckParity(cell, generator, original, recovery);
+    RequireSourceUnchanged(input, unaligned_input_before, cell);
+    RequireOutputGuards(output, kGuardBytes + 3U, cell);
+
     leo2_codec_destroy(codec);
 }
 
 void ExercisePromotedMatrix(leo2_context* context)
 {
-    static const size_t bytes[] = { 64, 128, 256 };
+    static const size_t bytes[] = { 64, 128, 256, 512 };
     for (unsigned k = 4; k <= 7; ++k)
     {
         for (unsigned r = 3; r <= 4; ++r)
@@ -371,18 +411,27 @@ void ExerciseNonPromotedCells(leo2_context* context)
 {
     static const Cell cells[] = {
         { 4, 3, 63 },
-        { 4, 4, 512 },
         { 5, 3, 1024 },
         { 7, 4, 1024 },
-        { 8, 4, 64 }
+        /* K=8 may gain the terminal at smaller byte counts independently,
+           but must not inherit this K=4..7 B=512 promotion. */
+        { 8, 4, 512 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
+    for (unsigned k = 4; k <= 7; ++k)
+    {
+        for (unsigned r = 3; r <= 4; ++r)
+        {
+            ExerciseCell(context, Cell{ k, r, 511 }, false);
+            ExerciseCell(context, Cell{ k, r, 513 }, false);
+        }
+    }
 }
 
 void ExerciseForcedTransform(leo2_context* context)
 {
-    const Cell cell = { 7, 4, 256 };
+    const Cell cell = { 7, 4, 512 };
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes);
@@ -428,6 +477,37 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
     FillInput(input.bytes(), cell, UINT64_C(0x46414c4c4241434b));
     const leopard2_test::Matrix generator = MakeGenerator(cell);
 
+    /* An all-null output set is a valid no-op through both public forms. */
+    ResetOutput(output.bytes(), cell);
+    const std::vector<uint8_t> no_output_before(
+        output.bytes(), output.bytes() + output.size());
+    for (unsigned i = 0; i < cell.recovery_count; ++i)
+        recovery[i] = NULL;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, cell.shard_bytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_SUCCESS, cell, "execute all-null public no-op");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "all-null public output entered the dense terminal");
+    RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
+            no_output_before.size()) == 0,
+        cell, "all-null public encode modified output");
+
+    leo2_encode_batch_item no_output_item = {
+        cell.shard_bytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode_batch(codec, &no_output_item, 1),
+        LEO2_SUCCESS, cell, "execute all-null one-item batch no-op");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "all-null batch output entered the dense terminal");
+    RequireCell(std::memcmp(output.bytes(), &no_output_before[0],
+            no_output_before.size()) == 0,
+        cell, "all-null batch encode modified output");
+
+    SetPackedPointers(
+        input.bytes(), output.bytes(), cell, original, recovery);
     ResetOutput(output.bytes(), cell);
     const unsigned omitted_index = cell.recovery_count / 2U;
     void* const omitted_output = recovery[omitted_index];
@@ -467,12 +547,49 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
                     cell.shard_bytes + i] == 0xa5,
             cell, "detached-output fallback wrote the abandoned packed row");
 
+    /* Input aliases are part of the public contract, but the dense terminal
+       requires distinct packed rows.  Exercise exact and partial aliases. */
+    const unsigned aliased_input_index = cell.original_count / 2U;
+    for (unsigned alias_kind = 0; alias_kind < 2; ++alias_kind)
+    {
+        SetPackedPointers(
+            input.bytes(), output.bytes(), cell, original, recovery);
+        original[aliased_input_index] = alias_kind == 0
+            ? original[0] : input.bytes() + 1U;
+        const std::vector<uint8_t> aliased_input_before = Snapshot(input);
+
+        ResetOutput(output.bytes(), cell);
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, cell.shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, cell, "execute input-alias public fallback");
+        RequireCell(T4PackedCalls() == 0, cell,
+            "input alias entered the dense packed terminal");
+        CheckParity(cell, generator, original, recovery);
+        CheckLegacyParity(cell, original, recovery);
+        RequireSourceUnchanged(input, aliased_input_before, cell);
+
+        ResetOutput(output.bytes(), cell);
+        leo2_encode_batch_item aliased_item = {
+            cell.shard_bytes, &original[0], &recovery[0],
+            scratch.data(), scratch.size()
+        };
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode_batch(codec, &aliased_item, 1),
+            LEO2_SUCCESS, cell,
+            "execute input-alias one-item batch fallback");
+        RequireCell(T4PackedCalls() == 0, cell,
+            "batched input alias entered the dense packed terminal");
+        CheckParity(cell, generator, original, recovery);
+        CheckLegacyParity(cell, original, recovery);
+        RequireSourceUnchanged(input, aliased_input_before, cell);
+    }
+
     leo2_codec_destroy(codec);
 }
 
-void ExerciseValidationAtomicity(leo2_context* context)
+void ExerciseValidationAtomicity(leo2_context* context, const Cell& cell)
 {
-    const Cell cell = { 4, 4, 64 };
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
@@ -490,6 +607,47 @@ void ExerciseValidationAtomicity(leo2_context* context)
     const std::vector<uint8_t> output_before(
         output.bytes(), output.bytes() +
             static_cast<size_t>(cell.recovery_count) * cell.shard_bytes);
+
+    /* Scratch errors retain precedence even when pointer arrays are null. */
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, cell.shard_bytes,
+        NULL, NULL, scratch.data(), scratch_bytes - 1U),
+        LEO2_SCRATCH_TOO_SMALL, cell,
+        "preserve scratch precedence over null pointer arrays");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "invalid scratch/null arrays reached the packed terminal");
+    RequireCell(std::memcmp(output.bytes(), &output_before[0],
+            output_before.size()) == 0,
+        cell, "scratch-precedence rejection modified output");
+
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, cell.shard_bytes,
+        NULL, &recovery[0], scratch.data(), scratch_bytes),
+        LEO2_INVALID_ARGUMENT, cell, "reject null original pointer array");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "null original array reached the packed terminal");
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, cell.shard_bytes,
+        &original[0], NULL, scratch.data(), scratch_bytes),
+        LEO2_INVALID_ARGUMENT, cell, "reject null recovery pointer array");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "null recovery array reached the packed terminal");
+    RequireCell(std::memcmp(output.bytes(), &output_before[0],
+            output_before.size()) == 0,
+        cell, "null-array rejection modified output");
+
+    original[cell.original_count / 2U] = NULL;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, cell.shard_bytes,
+        &original[0], &recovery[0], scratch.data(), scratch_bytes),
+        LEO2_INVALID_ARGUMENT, cell, "reject null source shard");
+    RequireCell(T4PackedCalls() == 0, cell,
+        "null source shard reached the packed terminal");
+    RequireCell(std::memcmp(output.bytes(), &output_before[0],
+            output_before.size()) == 0,
+        cell, "null-source rejection modified output");
+    SetPackedPointers(
+        input.bytes(), output.bytes(), cell, original, recovery);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, cell.shard_bytes,
         &original[0], &recovery[0], scratch.data(), scratch_bytes - 1U),
@@ -542,25 +700,27 @@ void ExerciseValidationAtomicity(leo2_context* context)
 
     SetPackedPointers(
         input.bytes(), output.bytes(), cell, original, recovery);
-    alignas(64) uint8_t protected_storage[4U * 64U] = {};
+    AlignedBuffer protected_storage(
+        static_cast<size_t>(cell.recovery_count) * cell.shard_bytes);
     leo2_encode_batch_item* const protected_item =
-        new (protected_storage) leo2_encode_batch_item;
+        new (protected_storage.data()) leo2_encode_batch_item;
     protected_item->shard_bytes = cell.shard_bytes;
     protected_item->original = &original[0];
     protected_item->recovery = &recovery[0];
     protected_item->scratch = scratch.data();
     protected_item->scratch_bytes = scratch_bytes;
     for (unsigned i = 0; i < cell.recovery_count; ++i)
-        recovery[i] = protected_storage +
+        recovery[i] = protected_storage.bytes() +
             static_cast<size_t>(i) * cell.shard_bytes;
     const std::vector<uint8_t> protected_before(
-        protected_storage, protected_storage + sizeof(protected_storage));
+        protected_storage.bytes(),
+        protected_storage.bytes() + protected_storage.size());
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, protected_item, 1),
         LEO2_OVERLAP, cell, "reject output/batch-metadata overlap");
     RequireCell(T4PackedCalls() == 0, cell,
         "batch-metadata overlap reached the packed terminal");
-    RequireCell(std::memcmp(protected_storage, &protected_before[0],
+    RequireCell(std::memcmp(protected_storage.bytes(), &protected_before[0],
             protected_before.size()) == 0,
         cell, "batch-metadata-overlap rejection was not atomic");
 
@@ -580,6 +740,7 @@ void ExerciseScalarFallbacks()
         { 4, 3, 64 },
         { 5, 4, 128 },
         { 7, 3, 256 },
+        { 6, 4, 512 },
         { 4, 4, 1024 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
@@ -593,6 +754,9 @@ int main()
 {
     try
     {
+        Require(leo_init() == Leopard_Success,
+            "initialize legacy Leopard parity oracle");
+
         /* Scalar correctness remains useful on hosts without AVX2. */
         ExerciseScalarFallbacks();
 
@@ -617,7 +781,9 @@ int main()
         ExerciseForcedTransform(context);
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 256 });
-        ExerciseValidationAtomicity(context);
+        ExerciseFallbackLayouts(context, Cell{ 7, 4, 512 });
+        ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
+        ExerciseValidationAtomicity(context, Cell{ 7, 4, 512 });
 
         leo2_context_destroy(context);
         std::printf("T=4 packed terminal family checks passed\n");

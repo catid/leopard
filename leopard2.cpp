@@ -12237,10 +12237,19 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
     uint8_t terminal_shape,
     uint64_t shard_bytes)
 {
+    /* The 512-byte promotion is exact; its 511/513-byte neighbors retain the
+       mature tail-capable path. */
     if (shard_bytes == 64 || shard_bytes == 128 || shard_bytes == 256)
     {
         /* K=5/R=4/B=64 has its fixed specialized terminal above. */
         return terminal_shape != kTerminalT4K5R4 || shard_bytes != 64;
+    }
+    if (shard_bytes == 512)
+    {
+        /* Keep this promotion local to its measured K=4..7 family.  A later
+           shape may share this classifier without inheriting B=512. */
+        return terminal_shape >= kTerminalT4K4R3 &&
+            terminal_shape <= kTerminalT4K7R4;
     }
     return shard_bytes == 1024 &&
         (terminal_shape == kTerminalT4K4R3 ||
