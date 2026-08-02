@@ -174,8 +174,10 @@ def main() -> int:
             BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE is False and
             BASE.REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS is True and
             BASE.EXPECTED_BINARY_SHA256 == {
-                "candidate": "0" * 64,
-                "control": "0" * 64,
+                "candidate":
+                    "b52e01f87fd2095e4a590ef5df1fc1fb0b8dc303eb65c2a0defa73d49696ad43",
+                "control":
+                    "b52e01f87fd2095e4a590ef5df1fc1fb0b8dc303eb65c2a0defa73d49696ad43",
                 "main":
                     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
             },
