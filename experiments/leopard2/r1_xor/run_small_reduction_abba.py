@@ -313,7 +313,9 @@ def selected_loss(k: int, seed: int) -> int:
         selected = state % remaining
         order[remaining - 1], order[selected] = \
             order[selected], order[remaining - 1]
-    return order[-1]
+    # Both benchmark adapters keep the prefix after the Fisher-Yates shuffle
+    # (`order.resize(losses)`), so the one-loss selection is order[0].
+    return order[0]
 
 
 def desired_loss(k: int, position: str) -> int:
@@ -1437,6 +1439,10 @@ def self_test() -> int:
             expected_reduction_path(8, 64, 0) == "pairwise" and
             expected_reduction_path(3, 1025, 1) == "pairwise",
             "self-test reduction boundary failed")
+    # Fixed vector from both C++ benchmark adapters.  This independently
+    # guards their prefix-after-shuffle loss-selection convention.
+    require(selected_loss(2, 90370406875137) == 1,
+            "self-test benchmark loss-selection vector changed")
     require(inspect_isa_disassembly(
         "  10: c5 fd ef c0 vpxor ymm0,ymm0,ymm0") == {
             "evex_prefixed_instruction_count": 0,
