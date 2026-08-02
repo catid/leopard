@@ -1,0 +1,128 @@
+{
+  "schema": "leopard2-gf8-k8r8-b64-terminal-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high AVX2 ordinary and one-item-batch encode at K=8, R=8, T=8, and 64-byte shards",
+  "candidate_source": {
+    "implementation_commit": "26cfc62bcecbd9d95c6b85acc2c6c7cb67e73759",
+    "tree": "db894853d03a604b9d8c69c7d996fb1c3c397569",
+    "tracked_dirty": false,
+    "benchmark_sha256": "dcad6f40e1947a081ba3cc2f653386da23bff90521c57e371dfd88fc7a6874d8"
+  },
+  "comparators": {
+    "same_source_compile_time_disabled": {
+      "definition": "LEO2_DIAGNOSTIC_DISABLE_K8R8_B64_TERMINAL=1",
+      "benchmark_sha256": "02a82bfe446e9b2215f04b301ff8fdcb33d38add6bdf666f388f2db1f14fb5f1",
+      "selector_word": 2
+    },
+    "candidate_selector_word": 1,
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "implementation": [
+    "Classify the exact GF8 legacy-high native-layout K=8/R=8/T=8 AVX2 codec once at creation without growing leo2_codec.",
+    "Recognize only dense packed 64-byte input and output slabs after scratch, metadata, range, and overlap validation completes.",
+    "Reuse the mature runtime-qualified ReedSolomonEncodeOneBlockT8 callback without adding a finite-field kernel.",
+    "Route ordinary encode and one-item encode_batch calls; sparse, detached, null, aliased, forced-transform, scalar, and all other shapes fall back unchanged.",
+    "Treat failed aggregate packed-range recognition as fallback rather than a definitive invalid argument so the mature per-shard validator retains authority."
+  ],
+  "authoritative_campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_k8r8_b64_terminal_abba.py",
+    "runner_sha256": "4c158399dda6127820e802bbd7be79358dd1caabd56b1c2588b04e95500b1c23",
+    "base_runner_sha256": "82f30aa9fce6a52e175a99b46415d30629c499dbceec2502e2ff6283e61832cb",
+    "raw_directory": "/tmp/leopard2-k8r8-26cfc62-authoritative/campaign-r3-i15-v1",
+    "raw_sha256": "53f229b543fbe0b7e99833e6643dd861573ad858967e492d7abaeeab47303614",
+    "summary_sha256": "8a54a248c3820fd8d15c038d94e52dd33547adf64c1671b98e97c8e60f8c237d",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds_per_cell": 3,
+    "iterations_per_process": 15,
+    "warmups_per_process": 6,
+    "reuse": 8192,
+    "cells": 9,
+    "processes": 114,
+    "all_measured_rounds_accepted": true,
+    "all_reserved_sibling_nonidle_jiffies_zero": true,
+    "all_workload_digests_matched": true,
+    "pre_sample_benchmark_and_sibling_nonidle_jiffies": [0, 0],
+    "candidate_control_executable_sections_sha256": "c514500677a7545e43fb2f1d7289840beddd4b06625feec8feaaea6cdf43255e",
+    "candidate_text_and_leo2_code_bytes": 925050,
+    "pre_k8r8_76d0cdd_text_and_leo2_code_bytes": 923450,
+    "text_and_leo2_code_growth_bytes": 1600,
+    "performance_statistic": "geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence interval"
+  },
+  "target_result": {
+    "K": 8,
+    "R": 8,
+    "bytes": 64,
+    "batch": 1,
+    "same_source_control_over_candidate": 1.9989559729624053,
+    "same_source_control_ci95": [1.9190682623755728, 2.0821692798440283],
+    "exact_main_over_candidate": 1.6665408094440355,
+    "exact_main_ci95": [1.59065608027399, 1.746045737972461],
+    "interpretation": "The promoted ordinary Leopard2 call takes about half the same-source general-path time and about 60 percent of exact Leopard main time."
+  },
+  "neighbor_summary": {
+    "cells": 8,
+    "minimum_control_over_candidate": 0.9959003251978992,
+    "maximum_control_over_candidate": 1.004754963461545,
+    "regressions_over_two_percent": 0,
+    "credible_subthreshold_regressions": [
+      {
+        "K": 8,
+        "R": 7,
+        "bytes": 64,
+        "control_over_candidate": 0.9959003251978992,
+        "ci95": [0.9943776031144715, 0.9974253790741348],
+        "observed_slowdown_percent": 0.411655132,
+        "interpretation": "This reproducible 0.41 percent same-text neighbor cost is retained and is below the two-percent promotion threshold."
+      }
+    ],
+    "covered_regions": [
+      "K=8/R=8 at bytes 63, 65, and 128",
+      "K=8/R=7, K=7/R=8, and K=9/R=8 at 64 bytes",
+      "K=64/R=32 and K=100/R=28 at 64 bytes"
+    ]
+  },
+  "correctness_and_build_gates": {
+    "release": [
+      "leopard2_k8r8_b64_terminal",
+      "leopard2_k8r8_b64_terminal_production",
+      "leopard2_public_api_contract",
+      "leopard2_t4_packed_terminal_family",
+      "leopard2_t4_packed_terminal_family_production"
+    ],
+    "strict_compilers": ["GCC 13.3.0", "Clang 18.1.3"],
+    "sanitizers": ["Clang AddressSanitizer", "Clang UndefinedBehaviorSanitizer"],
+    "independent_oracles": [
+      "direct systematic GF8 generator",
+      "legacy-high parity and workload digests",
+      "mature runtime-qualified T=8 callback"
+    ],
+    "contract_cases": [
+      "ordinary and one-item batch execution",
+      "unaligned dense packed slabs and guard bytes",
+      "interior sparse output, all-null output, and detached fallback",
+      "undersized and misaligned scratch precedence and failure atomicity",
+      "input/output, output/output, metadata, and batch-descriptor overlap rejection",
+      "source immutability, forced-transform fallback, and scalar fallback"
+    ],
+    "independent_static_review": "No release blocker remained after the aggregate-range fallback fix; the codec keeps its prior size and public ABI."
+  },
+  "resource_policy": {
+    "build_parallelism": 1,
+    "build_memory_max_mib": 512,
+    "test_memory_max_mib": 512,
+    "benchmark_address_space_max_mib": 192,
+    "external_campaign_scope_memory_max_mib": 256,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_less_than_host_parallelism": "Builds and tests were serialized after prior session OOMs; cache-sensitive authoritative timing exclusively pinned CPU14 and reserved SMT sibling CPU30."
+  },
+  "reproduce": {
+    "candidate_build": "cmake -S <clean-26cfc62-worktree> -B <candidate-build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF && cmake --build <candidate-build> -j1 --target bench_leopard2",
+    "control_build": "cmake -S <clean-26cfc62-worktree> -B <control-build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_K8R8_B64_TERMINAL=1 && cmake --build <control-build> -j1 --target bench_leopard2",
+    "campaign": "taskset -c 14 python3 experiments/leopard2/gf8_high_encode/run_k8r8_b64_terminal_abba.py --candidate <frozen-candidate> --control <frozen-control> --main <frozen-exact-main> --source-commit 26cfc62bcecbd9d95c6b85acc2c6c7cb67e73759 --source-tree db894853d03a604b9d8c69c7d996fb1c3c397569 --output <new-output> --cpu 14 --sibling 30 --iterations 15 --warmup 6"
+  },
+  "disposition": "Promoted. The target credibly beats both same-source control and exact Leopard main, all parity and recovery digests match, correctness and sanitizer gates pass, and no measured neighbor violates the two-percent regression policy."
+}

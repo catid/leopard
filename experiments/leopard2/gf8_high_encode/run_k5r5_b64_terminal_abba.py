@@ -88,6 +88,12 @@ def load_t8_support() -> Any:
 
 T8_SUPPORT = load_t8_support()
 MAIN_SUPPORT = T8_SUPPORT.SUPPORT
+RUNNER_PATH = Path(__file__).resolve()
+RUNNER_DEPENDENCIES = (
+    RUNNER_PATH,
+    Path(T8_SUPPORT.__file__).resolve(),
+    Path(MAIN_SUPPORT.__file__).resolve(),
+)
 
 
 def sha256(path: Path) -> str:
@@ -96,6 +102,19 @@ def sha256(path: Path) -> str:
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def support_file_identity(path: Path) -> dict[str, Any]:
+    """Identify imported Python support without requiring executable mode."""
+    resolved = path.resolve(strict=True)
+    status = resolved.stat()
+    require(resolved.is_file() and status.st_size > 0,
+            f"runner support is not a nonempty regular file: {resolved}")
+    return {
+        "path": str(resolved),
+        "size": status.st_size,
+        "sha256": sha256(resolved),
+    }
 
 
 def run_tool(arguments: Sequence[str]) -> str:
@@ -351,6 +370,7 @@ def run_one(
             from error
     return {
         "implementation": implementation,
+        "command": command,
         "elapsed_ns": elapsed_ns,
         "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
         "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
@@ -444,22 +464,28 @@ def main() -> int:
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient benchmark repetitions")
     require(not options.output.exists(), "output path already exists")
-    options.output.mkdir(parents=True)
     raw: dict[str, Any] = {
         "schema": SCHEMA,
         "created_utc": MAIN_SUPPORT.utc_now(),
-        "source_commit": options.source_commit,
-        "source_tree": options.source_tree,
-        "main_commit": MAIN_COMMIT,
-        "cpu": options.cpu,
-        "reserved_sibling": options.sibling,
-        "iterations": options.iterations,
-        "warmup": options.warmup,
-        "runner": T8_SUPPORT.file_identity(Path(__file__)),
-        "cells": [],
     }
     lock_descriptor: int | None = None
     try:
+        options.output.mkdir(parents=True)
+        raw.update({
+            "source_commit": options.source_commit,
+            "source_tree": options.source_tree,
+            "main_commit": MAIN_COMMIT,
+            "cpu": options.cpu,
+            "reserved_sibling": options.sibling,
+            "iterations": options.iterations,
+            "warmup": options.warmup,
+            "runner": T8_SUPPORT.file_identity(RUNNER_PATH),
+            "runner_dependencies": [
+                support_file_identity(path)
+                for path in RUNNER_DEPENDENCIES
+            ],
+            "cells": [],
+        })
         lock_descriptor = acquire_global_lock()
         identities = {
             "candidate": T8_SUPPORT.file_identity(options.candidate),
@@ -568,6 +594,13 @@ def main() -> int:
                 print(f"{cell_index + 1}/{len(all_cells)} {cell['id']}",
                       file=sys.stderr, flush=True)
 
+        post_identities = {
+            name: T8_SUPPORT.file_identity(Path(str(identity["path"])))
+            for name, identity in identities.items()
+        }
+        require(post_identities == identities,
+                "a benchmark binary identity changed during the campaign")
+        raw["identities_after"] = post_identities
         analyses = [
             analyze(item["cell"], item["rounds"]) for item in raw["cells"]]
         targets = [item for item in analyses
