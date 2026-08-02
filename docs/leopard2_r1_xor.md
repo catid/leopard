@@ -38,6 +38,31 @@ The dedicated test extends this through every byte count 0 through 257, selected
 boundaries through 1,048,579 bytes, offsets, partially overlapping read-only
 inputs, and concurrent immutable-table execution.
 
+## GF8 AVX2 small-shard update: 2026-08-02
+
+A provenance-bound same-inode campaign evaluated the existing R=1 reduction
+kernels at 64, 256, and 1024 bytes.  The production selector now uses the
+two-source AVX2 dense terminal for K=2 at exactly those three byte counts and
+the four-source dense reduction for K=4 at exactly 1024 bytes.  Every promoted
+batch-encode, reused-decode, one-shot-encode, and one-shot-decode interval had
+a lower 95% confidence bound above 1.05 versus the prior pairwise route.  The
+smallest retained lower bound was 1.1387x.
+
+The experiment did not justify a general small-shard coarse selector.  K=3
+fused-final regressed at 64 and 256 bytes; K=4 at 64/256 bytes missed the
+strict all-lane gate; and the K>=8 coarse crossover was nonmonotonic.  Those
+cells retain the prior path.  Scalar, SSSE3, GFNI, AVX-512, GF16, arbitrary
+byte tails, and the wire profile are unchanged.
+
+This reduction win narrows rather than eliminates the tiny public-API gap to
+Leopard main.  At the four promoted cells, exact-main/Leopard2 point ratios
+range from 0.494x to 0.974x for encoding and 0.571x to 0.892x for one-shot
+decode.  Validation, dispatch, and plan setup therefore remain the next R=1
+targets.  Full hashes, API-lane definitions, confidence intervals, rejected
+regions, and raw-artifact digests are in
+`experiments/leopard2/r1_xor/results/`
+`8ff4ed9-small-reduction-abba-20260802.json`.
+
 For legacy-high R=1 encoding, Leopard2 copies original zero to parity and then
 pairs the remaining originals.  For direct one-loss recovery it copies parity
 to the missing-original output, pairs all surviving originals, and handles one
@@ -68,10 +93,11 @@ performance conclusion is therefore scoped to the exact executable hashes;
 source reproducibility additionally depends on the documented clean-build
 procedure.
 
-The runner executed 51 cells: ten R=1 targets and seven neighbors on each of
+The historical `800e036` runner executed 51 cells: ten R=1 targets and seven neighbors on each of
 scalar, SSSE3, and AVX2.  It spans K=3 through K=240, one byte through one MiB,
-and batches 1, 8, and 64.  K=2 R=1 cells exercise the unaffected single-source
-tail; R=2 cells exercise a neighboring non-fused transform path.  Every cell
+and batches 1, 8, and 64.  In that pre-small-terminal campaign, K=2 R=1 cells
+exercised the then-unaffected single-source tail; R=2 cells exercise a
+neighboring non-fused transform path.  Every cell
 used five baseline/candidate/candidate/baseline rounds, nine retained inner
 samples, stable data seeds, and adaptive reuse targeting 256 MiB of offered
 work.  Runs were pinned to logical CPU 14 while SMT sibling 30 stayed idle.

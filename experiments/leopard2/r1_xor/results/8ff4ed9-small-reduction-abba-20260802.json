@@ -1,0 +1,196 @@
+{
+  "schema": "leopard2-r1-small-reduction-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "status": "completed_pre_promotion_evidence",
+  "scope": "Legacy-high GF8 AVX2 R=1, one loss, one thread, batch one, 64/256/1024-byte target classes",
+  "ratio_orientation": "baseline time divided by candidate time; values above one favor the candidate",
+  "source_identity": {
+    "candidate_commit": "8ff4ed9f7e02343763ab133ff50b70f76d0f4327",
+    "candidate_tree": "af404318034483d15148eedb868d9d9eb7f53bdb",
+    "candidate_executable_sha256": "18c9ad5bc664c8a339ab63e6e6c391237b4d4ccf808d9aa7993dfed7d1d086d5",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "e252aa2c03c1efdda9f7de256ea0d5bf459310d8cef5a9ba69c8cf2619cd3048",
+    "candidate_and_control_same_inode": true,
+    "pure_avx2_zero_evex": true,
+    "candidate_ymm_operand_instructions": 17559,
+    "main_ymm_operand_instructions": 2529
+  },
+  "execution": {
+    "cells": 111,
+    "target_cells": 53,
+    "inactive_controls": 58,
+    "rounds": 3,
+    "processes": 2664,
+    "iterations_per_process": 15,
+    "warmups_per_process": 6,
+    "benchmark_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "child_address_space_mib": 256,
+    "all_rounds_accepted": true,
+    "all_workload_digests_matched": true,
+    "api_paths": {
+      "batch_encode": "leo2_encode_batch(item_count=1, no preflight scratch)",
+      "one_shot_encode": "leo2_encode",
+      "reused_decode": "leo2_decode_plan_execute_batch(item_count=1, no preflight scratch)",
+      "one_shot_decode": "leo2_decode",
+      "exact_main_encode": "leo_encode",
+      "exact_main_decode": "leo_decode"
+    }
+  },
+  "candidate_over_same_inode_control": {
+    "metric_order": [
+      "batch_encode",
+      "reused_decode",
+      "one_shot_encode",
+      "one_shot_decode"
+    ],
+    "value_format": ["geometric_speedup", "ci95_low", "ci95_high"],
+    "production_promotions": [
+      {
+        "K": 2,
+        "bytes": 64,
+        "path": "k2_terminal",
+        "values": [
+          [1.855911, 1.489115, 2.313056],
+          [2.125940, 2.108223, 2.143805],
+          [1.611699, 1.566285, 1.658430],
+          [1.609915, 1.522806, 1.702008]
+        ]
+      },
+      {
+        "K": 2,
+        "bytes": 256,
+        "path": "k2_terminal",
+        "values": [
+          [1.784341, 1.690779, 1.883082],
+          [1.909793, 1.840015, 1.982217],
+          [1.635355, 1.508113, 1.773334],
+          [1.528245, 1.491124, 1.566291]
+        ]
+      },
+      {
+        "K": 2,
+        "bytes": 1024,
+        "path": "k2_terminal",
+        "values": [
+          [1.616056, 1.577872, 1.655164],
+          [1.744945, 1.695016, 1.796345],
+          [1.562089, 1.544350, 1.580031],
+          [1.460104, 1.327140, 1.606390]
+        ]
+      },
+      {
+        "K": 4,
+        "bytes": 1024,
+        "path": "dense",
+        "values": [
+          [1.261955, 1.219804, 1.305563],
+          [1.155859, 1.138669, 1.173307],
+          [1.257195, 1.191613, 1.326386],
+          [1.164067, 1.144812, 1.183646]
+        ]
+      }
+    ],
+    "not_promoted": [
+      {
+        "region": "K=3 at 64 and 256 bytes",
+        "reason": "fused-final credibly regressed every API lane",
+        "point_speedup_range": [0.899922, 0.918695]
+      },
+      {
+        "region": "K=3 at 1024 bytes",
+        "reason": "point estimates were at most 1.047770 and three of four confidence intervals included one"
+      },
+      {
+        "region": "K=4 at 64 bytes",
+        "reason": "not every API lane cleared the strict five-percent confidence gate; weakest CI95 lower bound was 1.027950"
+      },
+      {
+        "region": "K=4 at 256 bytes",
+        "reason": "not every API lane cleared the strict five-percent confidence gate; one-shot encode CI95 included one"
+      },
+      {
+        "region": "coarse reduction at 64 bytes",
+        "reason": "sampled K=24..128 was favorable, but larger-K reused-decode intervals were inconclusive and unsampled K values precluded a safe contiguous selector"
+      },
+      {
+        "region": "coarse reduction at 256 bytes",
+        "reason": "crossover was nonmonotonic; sampled failures included K=30,31,127,128,224,255 under the strict all-lane gate"
+      }
+    ]
+  },
+  "exact_main_over_candidate_at_promoted_cells": {
+    "metric_order": [
+      "main_encode_over_leo2_batch_encode",
+      "main_encode_over_leo2_one_shot_encode",
+      "main_decode_over_leo2_one_shot_decode"
+    ],
+    "value_format": ["geometric_speedup", "ci95_low", "ci95_high"],
+    "cells": [
+      {
+        "K": 2,
+        "bytes": 64,
+        "values": [
+          [0.519695, 0.495614, 0.544947],
+          [0.493689, 0.469036, 0.519638],
+          [0.570796, 0.553322, 0.588822]
+        ]
+      },
+      {
+        "K": 2,
+        "bytes": 256,
+        "values": [
+          [0.649014, 0.576498, 0.730652],
+          [0.623352, 0.556549, 0.698172],
+          [0.661049, 0.646346, 0.676086]
+        ]
+      },
+      {
+        "K": 2,
+        "bytes": 1024,
+        "values": [
+          [0.973568, 0.911889, 1.039420],
+          [0.953958, 0.901110, 1.009905],
+          [0.856894, 0.772132, 0.950961]
+        ]
+      },
+      {
+        "K": 4,
+        "bytes": 1024,
+        "values": [
+          [0.919155, 0.863993, 0.977838],
+          [0.921800, 0.856552, 0.992019],
+          [0.891982, 0.868895, 0.915683]
+        ]
+      }
+    ],
+    "interpretation": "The promoted reductions materially narrow the gap but do not yet make these tiny public-API cells faster than exact Leopard main. Validation, plan setup, and generic API dispatch remain visible."
+  },
+  "diagnostic_control_warning": {
+    "interpretation": "Mode one stores a diagnostic flag even when the resolved kernel is unchanged, so inactive controls measure that branch overhead as well as noise. These two nominal intervals crossed the literal two-percent neighbor gate; no production selector was inferred from them.",
+    "cells": [
+      {
+        "id": "control_k-k5-r1-b64-mmiddle-q1",
+        "metric": "one_shot_encode",
+        "speedup": 0.971413,
+        "ci95": [0.969212, 0.973618]
+      },
+      {
+        "id": "control_small_aligned_bytes-k2-r1-b128-mfirst-q1",
+        "metric": "reused_decode",
+        "speedup": 0.965304,
+        "ci95": [0.955931, 0.974769]
+      }
+    ]
+  },
+  "raw_artifacts": {
+    "ephemeral_directory": "/tmp/leopard2-r1-small-8ff4ed9-abba-r3-v1",
+    "manifest_sha256": "d2b42be691a88c4c4c7e1ef10ceb972fb1e29ca197d4e2c98f99db5e28a46b12",
+    "summary_sha256": "c31867a0437d6f58dfb27a402bd56f6f3af1d69c57e9aaca79e3607f8f2c5549",
+    "contract_sha256": "d54f0bfd58c0d842afd245226a137b3c710ef03d97a95dc1ac45ca8e020df344",
+    "reproducer": "experiments/leopard2/r1_xor/run_small_reduction_abba.py",
+    "reproducer_is_frozen_to_candidate_identity": true
+  },
+  "next_gate": "Rebuild the narrowed production source, rerun Release and sanitizer correctness, then compare the promoted public API cells against exact main from frozen provenance-bound binaries."
+}

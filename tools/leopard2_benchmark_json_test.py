@@ -727,26 +727,30 @@ def validate_r1_small_reduction_report(
     document: dict[str, Any],
     expected_mode: int,
     expected_parameters: set[str],
+    expected_k: int,
+    expected_path: str,
 ) -> None:
     require(type(expected_mode) is int and expected_mode in {0, 1},
             "invalid expected R=1 small-reduction mode")
+    require(type(expected_k) is int and expected_k >= 2 and
+            expected_path in {"pairwise", "k2_terminal", "fused_final"},
+            "invalid expected R=1 small-reduction path")
     require(document.get("schema") == "leopard2-benchmark-v12",
             "R=1 small-reduction benchmark schema changed")
     validate_common(document, True)
     validate_workload_digests(document)
 
     build = document["build"]
-    expected_path = "k2_terminal" if expected_mode == 1 else "pairwise"
     require(build["r1_small_reduction_diagnostic_mode"] == expected_mode and
             build["r1_small_reduction_codec_enabled"] is
                 (expected_mode == 1) and
             build["r1_encode_reduction_path"] == expected_path and
             build["r1_decode_reduction_path"] == expected_path,
-            "R=1 K=2 reduction attribution selected an unexpected path")
+            "R=1 reduction attribution selected an unexpected path")
 
     parameters = document["parameters"]
     require(set(parameters) == expected_parameters and
-            parameters["K"] == 2 and parameters["R"] == 1 and
+            parameters["K"] == expected_k and parameters["R"] == 1 and
             parameters["requested_profile"] == "legacy_high_v1" and
             parameters["requested_field"] == "gf8" and
             parameters["requested_backend"] == "avx2" and
@@ -1078,12 +1082,26 @@ def main() -> int:
         executable, True, measure_one_shot_decode=True,
         r1_small_reduction_mode=1, k=2, r=1, losses=1)
     validate_r1_small_reduction_report(
-        r1_mode_zero, 0, r1_parameters)
+        r1_mode_zero, 0, r1_parameters, 2, "k2_terminal")
     validate_r1_small_reduction_report(
-        r1_mode_one, 1, r1_parameters)
+        r1_mode_one, 1, r1_parameters, 2, "k2_terminal")
     require(r1_mode_zero["workload_digests"] ==
                 r1_mode_one["workload_digests"],
             "R=1 reduction attribution changed the encoded or recovered data")
+
+    r1_differential_zero = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_small_reduction_mode=0, k=3, r=1, losses=1)
+    r1_differential_one = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_small_reduction_mode=1, k=3, r=1, losses=1)
+    validate_r1_small_reduction_report(
+        r1_differential_zero, 0, r1_parameters, 3, "pairwise")
+    validate_r1_small_reduction_report(
+        r1_differential_one, 1, r1_parameters, 3, "fused_final")
+    require(r1_differential_zero["workload_digests"] ==
+                r1_differential_one["workload_digests"],
+            "R=1 differential attribution changed encoded or recovered data")
 
     malformed_r1_mode = copy.deepcopy(r1_mode_zero)
     malformed_r1_mode["build"][

@@ -5325,7 +5325,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
         return codec->context->backend == LEO2_BACKEND_AVX2 ||
             codec->context->backend == LEO2_BACKEND_GFNI;
     }
-    return R1SmallReductionModeEnabled(codec) &&
+    return codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
         (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024);
 }
 
@@ -6437,15 +6438,21 @@ static LEO_FORCE_INLINE bool UseDenseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
 {
+    const bool production_small_avx2 =
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context->backend == LEO2_BACKEND_AVX2;
     const bool eligible =
         (codec->original_count == 2 &&
             (shard_bytes >=
                 (codec->field == LEO2_FIELD_GF8 ? 2048U : 4096U) ||
-             (R1SmallReductionModeEnabled(codec) &&
+             (production_small_avx2 &&
               (shard_bytes == 64 || shard_bytes == 256 ||
                shard_bytes == 1024)))) ||
         (codec->original_count == 4 &&
             (shard_bytes >= 2048 ||
+             (production_small_avx2 &&
+              shard_bytes == 1024) ||
              (R1SmallReductionModeEnabled(codec) &&
               (shard_bytes == 64 || shard_bytes == 256 ||
                shard_bytes == 1024))));

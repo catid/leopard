@@ -268,10 +268,13 @@ def full_grid(backends):
         for k in (2, 3, 4, 9, 10, 31, 32, 33, 64, 127, 128, 240):
             for shard_bytes in (
                     1, 2, 3, 7, 15, 16, 17, 31, 32, 33,
-                    63, 64, 65, 127, 128, 129, 257, 1024,
+                    63, 64, 65, 127, 128, 129, 256, 257, 1024,
                     4096, 65536, 1048576):
-                item = cell("neighbor_k2" if k == 2 else "target_r1",
-                            backend, k, 1, shard_bytes, 1)
+                promoted_k2 = backend == "avx2" and k == 2 and \
+                    shard_bytes in (64, 256, 1024)
+                item = cell(
+                    "target_r1" if k != 2 or promoted_k2 else "neighbor_k2",
+                    backend, k, 1, shard_bytes, 1)
                 identity = digest_value(item)
                 if identity not in seen:
                     seen.add(identity)
@@ -289,18 +292,23 @@ def full_grid(backends):
 def tiny_threshold_grid(backends):
     """R=1 selector boundaries and unaffected binary-layout controls.
 
-    K=2 exercises the dense two-input reducer and K=7 the exact-arity
-    fused-final reducer.  Adjacent K values and both sides of the byte
-    thresholds make a compiler-layout or overly broad selector change visible
-    instead of attributing every small-code movement to the target kernel.
+    K=2 exercises the dense two-input reducer, K=4 its retained 1024-byte
+    dense selector, and K=7 the exact-arity fused-final reducer.  Adjacent K
+    values and both sides of the byte thresholds make a compiler-layout or
+    overly broad selector change visible instead of attributing every
+    small-code movement to the target kernel.
     """
     result = []
     counts = (2, 3, 4, 6, 7, 8)
-    shard_sizes = (1024, 2047, 2048, 2049, 3072, 4095, 4096)
+    shard_sizes = (64, 256, 1024, 2047, 2048, 2049, 3072, 4095, 4096)
     for backend in backends:
         for k in counts:
             for shard_bytes in shard_sizes:
                 target = k in (2, 7) and 2048 <= shard_bytes < 4096
+                if backend == "avx2":
+                    target = target or \
+                        (k == 2 and shard_bytes in (64, 256, 1024)) or \
+                        (k == 4 and shard_bytes == 1024)
                 result.append(cell(
                     "target_r1" if target else "neighbor_r1",
                     backend, k, 1, shard_bytes, 1))
@@ -1182,20 +1190,35 @@ def command_self_test(_args):
                     "neighbor_r1",
             "K={} upper-bound neighbor classification".format(k))
     tiny = tiny_threshold_grid(["avx2"])
-    checks.require(len(tiny) == 42, "tiny-threshold grid size")
-    for k in (2, 7):
-        for shard_bytes in (2048, 2049, 3072, 4095):
+    checks.require(len(tiny) == 54, "tiny-threshold grid size")
+    for k, shard_sizes in (
+            (2, (64, 256, 1024, 2048, 2049, 3072, 4095)),
+            (4, (1024,)),
+            (7, (2048, 2049, 3072, 4095))):
+        for shard_bytes in shard_sizes:
             checks.require(
                 next(item for item in tiny
                      if item["k"] == k and
                      item["shard_bytes"] == shard_bytes)["region"] ==
                     "target_r1",
                 "tiny-threshold target classification")
-    for k in (3, 4, 6, 8):
+    for k in (3, 6, 8):
         checks.require(
             all(item["region"] == "neighbor_r1"
                 for item in tiny if item["k"] == k),
             "tiny-threshold control classification")
+    checks.require(
+        all(item["region"] == "neighbor_r1"
+            for item in tiny if item["k"] == 4 and
+            item["shard_bytes"] != 1024),
+        "K=4 tiny-threshold control classification")
+    full = full_grid(["avx2"])
+    for k, shard_bytes in ((2, 64), (2, 256), (2, 1024), (4, 1024)):
+        checks.require(
+            next(item for item in full if item["k"] == k and
+                 item["r"] == 1 and item["shard_bytes"] == shard_bytes and
+                 item["batch"] == 1)["region"] == "target_r1",
+            "full-grid promoted selector classification")
     fake = {
         "job_id": "0" * 24,
         "measurements": [],

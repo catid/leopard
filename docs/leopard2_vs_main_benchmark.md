@@ -1,5 +1,40 @@
 # Leopard2 versus exact Leopard main
 
+## GF8 R=1 small-shard update: 2026-08-02
+
+The latest isolated campaign compares a frozen pure-AVX2 Leopard2 candidate
+with exact Leopard main commit `6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`.
+It completed 111 cells and 2,664 fresh timed processes on CPU 14 while sibling
+30 accumulated zero non-idle jiffies.  Original, parity, and recovered-output
+digests matched in every process.  Candidate and control were equal-length
+hard links to one immutable executable, and both executables contained zero
+EVEX instructions.
+
+Four exact selector cells cleared a strict five-percent lower-confidence gate
+in batch encode, reused decode, one-shot encode, and one-shot decode:
+
+| K, bytes | Internal batch encode | Internal reused decode | Exact main / Leopard2 one-shot encode | Exact main / Leopard2 one-shot decode |
+| --- | ---: | ---: | ---: | ---: |
+| 2, 64 | 1.856x | 2.126x | 0.494x | 0.571x |
+| 2, 256 | 1.784x | 1.910x | 0.623x | 0.661x |
+| 2, 1024 | 1.616x | 1.745x | 0.954x | 0.857x |
+| 4, 1024 | 1.262x | 1.156x | 0.922x | 0.892x |
+
+The internal columns compare the selected kernel with Leopard2's preceding
+pairwise route.  The exact-main columns include the real public one-shot APIs.
+Thus the new kernels materially reduce work but do not yet erase Leopard2's
+validation, dispatch, and setup overhead at these tiny cells.  Across the full
+111-cell sample, Leopard2 was credibly slower than exact main in 76 of 111
+one-shot-encode cells and 92 of 111 one-shot-decode cells.  This is scoped to
+GF8, legacy-high R=1, one loss, one thread, batch one, and cache-hot repeated
+execution; it is not a statement about the high/low transform decoders.
+
+K=3 fused-final at 64/256 bytes, K=4 dense at 64/256 bytes, and broad 64/256
+byte coarse thresholds were rejected.  Their crossovers were losing,
+inconclusive, or nonmonotonic.  The machine-readable checkpoint is
+`experiments/leopard2/r1_xor/results/`
+`8ff4ed9-small-reduction-abba-20260802.json`.
+
 ## GF8 T=8 ragged 65--928-byte update: 2026-07-31
 
 Dense legacy-high GF8/AVX2 T=8 profiles now reuse the prepared binding over

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""Fail-closed same-inode evidence for the GF8 AVX2 R=1 small reductions.
+"""Reproduce the frozen pre-promotion GF8 AVX2 R=1 campaign.
 
 The runner never builds code.  Candidate and control are two equal-length hard
 links to one frozen ``bench_leopard2`` inode; the only behavioral difference is
 ``--r1-small-reduction-mode 1`` versus ``0``.  Exact Leopard main is measured in
 alternating MAAM/AMMA segments.  Every completed cell is an atomic resume unit.
+
+The path model is intentionally bound to the clean candidate commit below.
+Later production selectors may make mode zero resolve to a promoted path, so a
+post-promotion binary is rejected rather than silently changing this campaign.
 
 API names in the evidence are deliberately literal.  The Leopard2 benchmark
 uses the ordinary one-item batch APIs for encode and reusable-plan
@@ -40,6 +44,10 @@ FAILURE_SCHEMA = "leopard2-r1-small-reduction-failure/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MAIN_SHA256 = \
     "e252aa2c03c1efdda9f7de256ea0d5bf459310d8cef5a9ba69c8cf2619cd3048"
+CANDIDATE_COMMIT = "8ff4ed9f7e02343763ab133ff50b70f76d0f4327"
+CANDIDATE_TREE = "af404318034483d15148eedb868d9d9eb7f53bdb"
+CANDIDATE_SHA256 = \
+    "18c9ad5bc664c8a339ab63e6e6c391237b4d4ccf808d9aa7993dfed7d1d086d5"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L25g_r1_small_reduction_modeE"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 BENCHMARK_CPU = 14
@@ -165,6 +173,21 @@ class EvidenceError(RuntimeError):
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise EvidenceError(message)
+
+
+def validate_frozen_candidate_identity(
+    commit: str,
+    tree: str,
+    executable_sha256: str,
+) -> None:
+    require(re.fullmatch(r"[0-9a-f]{40}", commit or "") is not None and
+            re.fullmatch(r"[0-9a-f]{40}", tree or "") is not None and
+            re.fullmatch(r"[0-9a-f]{64}", executable_sha256 or "") is not
+                None,
+            "candidate identities must be full lowercase hashes")
+    require(commit == CANDIDATE_COMMIT and tree == CANDIDATE_TREE and
+            executable_sha256 == CANDIDATE_SHA256,
+            "candidate is not the frozen pre-promotion source and binary")
 
 
 def load_module(path: Path, name: str) -> Any:
@@ -1236,12 +1259,11 @@ def run_campaign(options: argparse.Namespace) -> int:
             options.warmup >= 1 and options.timeout > 0 and
             math.isfinite(options.timeout),
             "benchmark timing controls are invalid")
-    require(re.fullmatch(r"[0-9a-f]{40}", options.source_commit or "") and
-            re.fullmatch(r"[0-9a-f]{40}", options.source_tree or "") and
-            re.fullmatch(r"[0-9a-f]{64}",
-                         options.candidate_sha256 or "") and
-            re.fullmatch(r"[0-9a-f]{64}", options.main_sha256 or ""),
-            "source and binary identities must be full lowercase hashes")
+    validate_frozen_candidate_identity(
+        options.source_commit or "", options.source_tree or "",
+        options.candidate_sha256 or "")
+    require(re.fullmatch(r"[0-9a-f]{64}", options.main_sha256 or ""),
+            "exact-main identity must be a full lowercase hash")
     require(options.main_sha256 == MAIN_SHA256,
             "exact-main SHA-256 is not the frozen pure-AVX2 baseline")
     output = options.output.resolve()
@@ -1417,6 +1439,22 @@ def run_campaign(options: argparse.Namespace) -> int:
 
 
 def self_test() -> int:
+    validate_frozen_candidate_identity(
+        CANDIDATE_COMMIT, CANDIDATE_TREE, CANDIDATE_SHA256)
+    rejected_identities = (
+        ("0" * 40, CANDIDATE_TREE, CANDIDATE_SHA256),
+        (CANDIDATE_COMMIT, "0" * 40, CANDIDATE_SHA256),
+        (CANDIDATE_COMMIT, CANDIDATE_TREE, "0" * 64),
+        ("not-a-commit", CANDIDATE_TREE, CANDIDATE_SHA256),
+    )
+    for identity in rejected_identities:
+        try:
+            validate_frozen_candidate_identity(*identity)
+        except EvidenceError:
+            pass
+        else:
+            raise EvidenceError(
+                "self-test accepted a non-frozen candidate identity")
     cells = campaign_cells()
     require(len(cells) == 111 and
             sum(cell["candidate_selected"] for cell in cells) == 53 and

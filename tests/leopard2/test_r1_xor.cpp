@@ -573,9 +573,13 @@ void execute_public_r1_multi_item_batch(
        policy boundary through that independent entry point instead of relying
        on the compatibility preflight above to cover reconstructed metadata. */
     const size_t scalable_minimum = fixture.k == 1 ? 9 : 2;
-    if (batch_count >= scalable_minimum &&
-        (fixture.k == 1 || fixture.k == 3 || fixture.k == 5 ||
-         fixture.k == 6 || fixture.k == 9) && fixture.bytes == 4097)
+    const bool scalable_compact_shape =
+        (fixture.k == 2 &&
+         (fixture.bytes == 64 || fixture.bytes == 256 ||
+          fixture.bytes == 1024)) ||
+        ((fixture.k == 1 || fixture.k == 3 || fixture.k == 5 ||
+          fixture.k == 6 || fixture.k == 9) && fixture.bytes == 4097);
+    if (batch_count >= scalable_minimum && scalable_compact_shape)
     {
         size_t preflight_bytes = 0;
         require_result(leo2_decode_plan_batch_preflight_scratch_size(
@@ -1780,8 +1784,80 @@ void test_r1_small_reduction_diagnostic()
         R1Fixture fixture(LEO2_BACKEND_AVX2, off_counts[count_i], 256,
             false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
             off_counts[count_i] / 2U);
+        const R1ReductionPath expected = off_counts[count_i] == 2
+            ? kR1ReductionK2Terminal : kR1ReductionPairwise;
         require_r1_reduction_paths(fixture.codec, 256, false,
+            expected, expected);
+        execute_and_check_decode(fixture);
+    }
+
+    /* The production selectors are deliberately exact byte/count regions.
+       Exercise both sides of every retained crossover before enabling the
+       wider diagnostic mode below. */
+    static const uint64_t production_k2_sizes[] = { 64, 256, 1024 };
+    for (size_t i = 0;
+         i < sizeof(production_k2_sizes) / sizeof(production_k2_sizes[0]);
+         ++i)
+    {
+        R1Fixture fixture(LEO2_BACKEND_AVX2, 2, production_k2_sizes[i],
+            false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
+        require_r1_reduction_paths(fixture.codec, production_k2_sizes[i],
+            false, kR1ReductionK2Terminal, kR1ReductionK2Terminal);
+        execute_and_check_decode(fixture);
+        execute_public_r1_multi_item_batch(fixture, 2, false);
+    }
+
+    const uint64_t production_k4_sizes[] = { 1024 };
+    for (size_t i = 0;
+         i < sizeof(production_k4_sizes) / sizeof(production_k4_sizes[0]);
+         ++i)
+    {
+        R1Fixture fixture(LEO2_BACKEND_AVX2, 4, production_k4_sizes[i],
+            false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 2);
+        require_r1_reduction_paths(fixture.codec, production_k4_sizes[i],
+            false, kR1ReductionDense, kR1ReductionDense);
+        execute_and_check_decode(fixture);
+    }
+    const uint64_t production_k4_control_sizes[] = { 64, 256 };
+    for (size_t i = 0; i < sizeof(production_k4_control_sizes) /
+             sizeof(production_k4_control_sizes[0]); ++i)
+    {
+        R1Fixture fixture(LEO2_BACKEND_AVX2, 4,
+            production_k4_control_sizes[i], false, LEO2_FIELD_GF8,
+            LEO2_SHARD_LAYOUT_NATIVE_V1, 2);
+        require_r1_reduction_paths(fixture.codec,
+            production_k4_control_sizes[i], false,
             kR1ReductionPairwise, kR1ReductionPairwise);
+        execute_and_check_decode(fixture);
+    }
+
+    struct ProductionCoarseCase
+    {
+        uint32_t k;
+        uint64_t bytes;
+        R1ReductionPath expected;
+    };
+    /* The diagnostic coarse ranges did not clear the production evidence
+       gate.  Preserve representative boundaries as negative selectors. */
+    static const ProductionCoarseCase production_coarse_cases[] = {
+        { 23, 64, kR1ReductionPairwise },
+        { 24, 64, kR1ReductionPairwise },
+        { 24, 256, kR1ReductionPairwise },
+        { 25, 256, kR1ReductionPairwise },
+        { 255, 64, kR1ReductionPairwise },
+        { 255, 256, kR1ReductionPairwise },
+        { 255, 192, kR1ReductionPairwise },
+        { 255, 320, kR1ReductionPairwise }
+    };
+    for (size_t i = 0; i < sizeof(production_coarse_cases) /
+             sizeof(production_coarse_cases[0]); ++i)
+    {
+        const ProductionCoarseCase& c = production_coarse_cases[i];
+        R1Fixture fixture(LEO2_BACKEND_AVX2, c.k, c.bytes, false,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, c.k / 2U);
+        require_r1_reduction_paths(fixture.codec, c.bytes, false,
+            c.expected, c.expected);
+        execute_and_check_decode(fixture);
     }
 
     /* A later process-level change must not mutate an already constructed
@@ -1928,22 +2004,41 @@ void test_r1_small_reduction_diagnostic()
         LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3,
         LEO2_BACKEND_AVX512, LEO2_BACKEND_GFNI
     };
+    struct BackendControlCase
+    {
+        uint32_t k;
+        uint64_t bytes;
+    };
+    static const BackendControlCase backend_control_cases[] = {
+        { 2, 64 }, { 2, 256 }, { 2, 1024 },
+        { 3, 256 }, { 4, 256 }, { 4, 1024 },
+        { 8, 256 }, { 25, 256 }
+    };
     for (size_t backend_i = 0;
          backend_i < sizeof(controls) / sizeof(controls[0]); ++backend_i)
     {
         if (!public_backend_available(controls[backend_i]))
             continue;
         for (size_t count_i = 0;
-             count_i < sizeof(candidate_counts) /
-                 sizeof(candidate_counts[0]); ++count_i)
+             count_i < sizeof(backend_control_cases) /
+                 sizeof(backend_control_cases[0]); ++count_i)
         {
+            const BackendControlCase& c = backend_control_cases[count_i];
             R1Fixture fixture(controls[backend_i],
-                candidate_counts[count_i], 256, false, LEO2_FIELD_GF8,
-                LEO2_SHARD_LAYOUT_NATIVE_V1,
-                candidate_counts[count_i] / 2U);
-            require_r1_reduction_paths(fixture.codec, 256, false,
+                c.k, c.bytes, false, LEO2_FIELD_GF8,
+                LEO2_SHARD_LAYOUT_NATIVE_V1, c.k / 2U);
+            require_r1_reduction_paths(fixture.codec, c.bytes, false,
                 kR1ReductionPairwise, kR1ReductionPairwise);
         }
+    }
+
+    for (uint32_t k = 2; k <= 4; k += 2)
+    {
+        R1Fixture fixture(LEO2_BACKEND_AVX2, k, 1024, false,
+            LEO2_FIELD_GF16, LEO2_SHARD_LAYOUT_NATIVE_V1, k / 2U);
+        require_r1_reduction_paths(fixture.codec, 1024, false,
+            kR1ReductionPairwise, kR1ReductionPairwise);
+        execute_and_check_decode(fixture);
     }
 
     require(SetR1SmallReductionModeForDiagnostics(0),
