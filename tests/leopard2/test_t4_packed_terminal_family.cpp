@@ -412,7 +412,7 @@ void ExercisePromotedMatrix(leo2_context* context)
             }
         }
     }
-    static const size_t k8_bytes[] = { 64, 128, 256 };
+    static const size_t k8_bytes[] = { 64, 128, 256, 512 };
     for (unsigned r = 3; r <= 4; ++r)
     {
         for (size_t i = 0;
@@ -441,14 +441,14 @@ void ExerciseNonPromotedCells(leo2_context* context)
         { 8, 4, 255 },
         { 8, 3, 257 },
         { 8, 4, 257 },
-        { 8, 3, 512 },
-        { 8, 4, 512 },
+        { 8, 3, 1024 },
+        { 8, 4, 1024 },
         { 8, 8, 64 },
         { 9, 4, 64 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
-    for (unsigned k = 4; k <= 7; ++k)
+    for (unsigned k = 4; k <= 8; ++k)
     {
         for (unsigned r = 3; r <= 4; ++r)
         {
@@ -777,7 +777,8 @@ void ExerciseScalarFallbacks()
         { 6, 4, 512 },
         { 4, 4, 1024 },
         { 8, 3, 128 },
-        { 8, 4, 256 }
+        { 8, 4, 256 },
+        { 8, 4, 512 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -817,14 +818,17 @@ int main()
         ExerciseForcedTransform(context, Cell{ 7, 4, 256 });
         ExerciseForcedTransform(context, Cell{ 7, 4, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
+        ExerciseForcedTransform(context, Cell{ 8, 3, 512 });
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 512 });
         ExerciseFallbackLayouts(context, Cell{ 8, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 256 });
+        ExerciseFallbackLayouts(context, Cell{ 8, 4, 512 });
         ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 7, 4, 512 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 64 });
+        ExerciseValidationAtomicity(context, Cell{ 8, 4, 512 });
 
         leo2_context_destroy(context);
         std::printf("T=4 packed terminal family checks passed\n");

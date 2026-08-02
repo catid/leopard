@@ -305,7 +305,7 @@ int main()
                     ExerciseCell(context, Cell{ k, r, bytes[i] });
             }
         }
-        static const size_t k8_bytes[] = { 64, 128, 256 };
+        static const size_t k8_bytes[] = { 64, 128, 256, 512 };
         for (unsigned r = 3; r <= 4; ++r)
         {
             for (size_t i = 0;

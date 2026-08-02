@@ -12267,10 +12267,10 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
     }
     if (shard_bytes == 512)
     {
-        /* Keep this promotion local to its measured K=4..7 family.  A later
+        /* Keep this promotion local to its measured K=4..8 family.  A later
            shape may share this classifier without inheriting B=512. */
         return terminal_shape >= kTerminalT4K4R3 &&
-            terminal_shape <= kTerminalT4K7R4;
+            terminal_shape <= kTerminalT4K8R4;
     }
     return shard_bytes == 1024 &&
         (terminal_shape == kTerminalT4K4R3 ||
