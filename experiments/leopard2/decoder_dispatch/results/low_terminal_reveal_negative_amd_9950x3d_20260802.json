@@ -1,0 +1,160 @@
+{
+  "schema": "leopard2-low-terminal-reveal-negative-v1",
+  "generated_utc": "2026-08-02T16:21:10Z",
+  "decision": {
+    "status": "rejected",
+    "promotion_justified": false,
+    "reason": "The exact full-loss K=32 cell improved reusable execution by 15.9% and public one-shot decode by 7.6%, but K=128 improved by only 7.8% and 4.2%, respectively. No partial-loss cell used the sink, and the candidate adds 453 lines plus an internal backend callback for two exact 64-byte shapes. This is too narrow for the maintenance and code-size cost.",
+    "neighbor_gate": "No neighbor regressed by more than 2%, but K=95/R-1 and K=128/R-1 reusable execution were credibly about 0.9% slower.",
+    "exact_main_context": "The candidate Leopard2 public one-shot decoder remained 17.2% faster than exact Leopard main at K=32 full loss and 18.1% faster at K=128 full loss. Those are Leopard2-versus-main wins, not evidence that this incremental sink is broad enough to promote.",
+    "source_disposition": "Keep the prototype uncommitted and do not merge it."
+  },
+  "provenance": {
+    "artifact_root": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg",
+    "candidate_source_root": "/tmp/leopard2-low-terminal-reveal-25b8c2a-XFoAXV",
+    "control_source_root": "/tmp/leopard2-low-terminal-control-25b8c2a-GpcbmI",
+    "leopard2_base_commit": "25b8c2a44c960e07d1a73e5566bae2b37c1fc66a",
+    "leopard2_base_tree": "ae5defac65bcd1879068e594a82499d6e9ea6515",
+    "candidate_git_diff_sha256": "cc17b4e6e3f96ac4324dd43a38e301963a9366967c954225e4c0022331d3c440",
+    "candidate_binary": {
+      "path": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg/artifacts/candidate/bench_leopard2",
+      "sha256": "7c8cb8d1f12c5c2973e023f872e52a1d04b353ab216fc42aec2823d452ca52a4"
+    },
+    "control_binary": {
+      "path": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg/artifacts/control/bench_leopard2",
+      "sha256": "e55e8ccc1ee57a53d480f5799abea7b0b38171bc115410246077fe72d303b164"
+    },
+    "exact_main_binary": {
+      "path": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg/artifacts/main/leopard_main_benchmark",
+      "sha256": "834137ef13e8c3e5afd86c213ea080183490bca89415c212ce0a802d7ddd0887",
+      "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "compile_profile": "pure AVX2"
+    },
+    "frozen_identity_manifests": {
+      "candidate_and_control_sha256": "5154dfd22ee8e96da9a6994a49e44ea5fcd9fc5269b650033e7fed6d8fae094b",
+      "exact_main_sha256": "55312205c47b39741a7da1911883a08daec37105b16f7cd4dc174c4d4fe41753"
+    },
+    "immutable_bytes_verified_before_and_after": true
+  },
+  "method": {
+    "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 13,
+    "idle_smt_sibling": 29,
+    "sibling_nonidle_jiffies_all_invocations": 0,
+    "profile_field_backend": "legacy_high_v1/gf8/avx2",
+    "workspace": "forced materialized translated_low",
+    "shard_bytes": 64,
+    "batch": 1,
+    "reuse": 16,
+    "warmup_per_process": 5,
+    "iterations_per_process": 21,
+    "rounds": 3,
+    "same_source_order": [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    "exact_main_order": [
+      "main",
+      "candidate",
+      "candidate",
+      "main"
+    ],
+    "confidence_interval": "Student-t 95% interval over three independent round mean-log ABBA contrasts, df=2",
+    "ratio_direction": "control_or_main_time_over_candidate_time; values above 1 mean candidate faster",
+    "loss_patterns": [
+      "floor(R/2)",
+      "R-1",
+      "R"
+    ]
+  },
+  "validation": {
+    "routes": {
+      "cell_count": 9,
+      "candidate_control_match": true,
+      "selected_path_all": "materialized",
+      "selected_rule_all": "translated_low",
+      "round_trip_all": true,
+      "workload_digest_match_all": true
+    },
+    "sink_hooks": {
+      "candidate_k32_full_two_reusable_executions": 64,
+      "candidate_k128_full_two_reusable_executions": 256,
+      "ineligible_and_control_cells": 0,
+      "asserted_by": "leopard2_high_low_duality_test"
+    },
+    "focused_release": "4/4 passed: backend ops, API, low acceptance, high/low duality",
+    "focused_debug_assertions": "2/2 passed: backend ops and high/low duality",
+    "clang18_asan_ubsan": "4/4 focused tests passed",
+    "backend_oracle": "Distinct reveal logs, zero-skew, log-255 identity, two/one-live masks, null output, source immutability, and guard bytes passed."
+  },
+  "pair_density": {
+    "eligibility": "The production gate requires K=P, full systematic loss, and therefore every final pair fully live. A nonempty pruned output plan disables the sink.",
+    "cells": [
+      {"K": 32, "loss": 16, "P": 32, "occupied_pairs": 12, "pair_capacity": 16, "two_live_pairs": 4, "one_live_pairs": 8, "sink_eligible": false},
+      {"K": 32, "loss": 31, "P": 32, "occupied_pairs": 16, "pair_capacity": 16, "two_live_pairs": 15, "one_live_pairs": 1, "sink_eligible": false},
+      {"K": 32, "loss": 32, "P": 32, "occupied_pairs": 16, "pair_capacity": 16, "two_live_pairs": 16, "one_live_pairs": 0, "sink_eligible": true},
+      {"K": 95, "loss": 47, "P": 128, "occupied_pairs": 34, "pair_capacity": 64, "two_live_pairs": 13, "one_live_pairs": 21, "sink_eligible": false},
+      {"K": 95, "loss": 94, "P": 128, "occupied_pairs": 48, "pair_capacity": 64, "two_live_pairs": 46, "one_live_pairs": 2, "sink_eligible": false},
+      {"K": 95, "loss": 95, "P": 128, "occupied_pairs": 48, "pair_capacity": 64, "two_live_pairs": 47, "one_live_pairs": 1, "sink_eligible": false},
+      {"K": 128, "loss": 64, "P": 128, "occupied_pairs": 50, "pair_capacity": 64, "two_live_pairs": 14, "one_live_pairs": 36, "sink_eligible": false},
+      {"K": 128, "loss": 127, "P": 128, "occupied_pairs": 64, "pair_capacity": 64, "two_live_pairs": 63, "one_live_pairs": 1, "sink_eligible": false},
+      {"K": 128, "loss": 128, "P": 128, "occupied_pairs": 64, "pair_capacity": 64, "two_live_pairs": 64, "one_live_pairs": 0, "sink_eligible": true}
+    ]
+  },
+  "code_cost": {
+    "files_changed": 10,
+    "insertions": 453,
+    "deletions": 10,
+    "production_benchmark_text_bytes": {
+      "control": 1087452,
+      "candidate": 1090652,
+      "delta": 3200,
+      "delta_percent": 0.2943
+    },
+    "production_benchmark_data_delta_bytes": 8,
+    "production_benchmark_bss_delta_bytes": 0,
+    "production_benchmark_file_size_delta_bytes": 4400,
+    "production_archive_file_size_delta_bytes": 4174,
+    "object_text_deltas": {
+      "Leopard2BackendAVX2.cpp.o": 1392,
+      "LeopardFF8.cpp.o": 1280,
+      "leopard2.cpp.o": 488
+    }
+  },
+  "same_source_results": [
+    {"K": 32, "loss": 16, "reusable_speedup": 1.0015, "reusable_ci95": [0.9757, 1.0280], "one_shot_speedup": 1.0074, "one_shot_ci95": [0.9810, 1.0345]},
+    {"K": 32, "loss": 31, "reusable_speedup": 0.9895, "reusable_ci95": [0.9784, 1.0007], "one_shot_speedup": 1.0367, "one_shot_ci95": [1.0126, 1.0614]},
+    {"K": 32, "loss": 32, "reusable_speedup": 1.1592, "reusable_ci95": [1.1161, 1.2041], "one_shot_speedup": 1.0760, "one_shot_ci95": [1.0662, 1.0858]},
+    {"K": 95, "loss": 47, "reusable_speedup": 1.0002, "reusable_ci95": [0.9891, 1.0113], "one_shot_speedup": 1.0191, "one_shot_ci95": [0.9973, 1.0415]},
+    {"K": 95, "loss": 94, "reusable_speedup": 0.9907, "reusable_ci95": [0.9832, 0.9984], "one_shot_speedup": 1.0141, "one_shot_ci95": [0.9826, 1.0466]},
+    {"K": 95, "loss": 95, "reusable_speedup": 1.0008, "reusable_ci95": [0.9931, 1.0085], "one_shot_speedup": 1.0366, "one_shot_ci95": [1.0312, 1.0419]},
+    {"K": 128, "loss": 64, "reusable_speedup": 0.9933, "reusable_ci95": [0.9833, 1.0034], "one_shot_speedup": 1.0297, "one_shot_ci95": [1.0262, 1.0333]},
+    {"K": 128, "loss": 127, "reusable_speedup": 0.9907, "reusable_ci95": [0.9850, 0.9964], "one_shot_speedup": 1.0059, "one_shot_ci95": [0.9300, 1.0881]},
+    {"K": 128, "loss": 128, "reusable_speedup": 1.0782, "reusable_ci95": [1.0741, 1.0823], "one_shot_speedup": 1.0422, "one_shot_ci95": [1.0317, 1.0527]}
+  ],
+  "exact_main_results": [
+    {"K": 32, "loss": 32, "main_over_candidate_public_one_shot": 1.1722, "ci95": [1.1646, 1.1798]},
+    {"K": 128, "loss": 128, "main_over_candidate_public_one_shot": 1.1806, "ci95": [1.1717, 1.1897]}
+  ],
+  "retained_evidence": {
+    "same_source_analysis": {
+      "path": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg/evidence/abba/analysis.json",
+      "sha256": "106ffea3985d8c1ecf3ad4961b74183d80ee3736107f87c0a85b04cf73ac8882"
+    },
+    "same_source_invocations_tsv_sha256": "8b71de6c75c29202cfd21afecb0f632c1d8401138eaa47fd05f27e3d9e7ad0f7",
+    "same_source_raw_file_count": 324,
+    "same_source_raw_sorted_sha256_manifest_sha256": "c611b6766735fb962d78ad2727316252e77fe0688a75fe46b9d4ead2b9cf4943",
+    "exact_main_analysis": {
+      "path": "/tmp/leopard2-low-terminal-qualification-25b8c2a-Uk09vg/evidence/exact-main/analysis.json",
+      "sha256": "2526c53e0a82fad6273f56ef429d89ef58ae2fe2e0ede9d24d19ba3d426ae23"
+    },
+    "exact_main_invocations_tsv_sha256": "0228254e18c7531d5251c4403b4ccaafcee964b384b830a648140267cffcb57d",
+    "exact_main_raw_file_count": 72,
+    "exact_main_raw_sorted_sha256_manifest_sha256": "a2db605dde2d051a2bcbd2094804a4588890f5a911d22b4a935fdd92cdaadcbd",
+    "route_file_count": 18,
+    "route_sorted_sha256_manifest_sha256": "556e90d0666ed024acf010d3e1b912ccb970c04b09638883d50677d55c5c7b7e"
+  }
+}
