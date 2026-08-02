@@ -1,0 +1,209 @@
+{
+  "schema": "leopard2-gf8-t4-k8-b1024-terminal-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high AVX2 ordinary and one-item-batch encode for K=8, R=3 or 4, and exactly 1024-byte shards",
+  "implementation": {
+    "production_commit": "81d49d9b914cd34397d4f50cb76fe7f967ba9406",
+    "benchmark_source_commit": "38aaf120ffb7b0c136282f0226b54617af188df0",
+    "benchmark_source_tree": "034366b9dad35d9930a4f4062fa843103f894d79",
+    "runner_pin_commit": "e828e0985a5f0d928ac89020827cbafba208114d",
+    "changes": [
+      "Extend the packed T=4 selector to exactly K=8, R=3 or 4, and B=1024 while preserving the existing disjoint K=4/B=1024 case.",
+      "Reuse the already-qualified K=8/R=3 and K=8/R=4 AVX2 callback bodies without adding or changing a backend kernel.",
+      "Keep K=5 through K=7 at B=1024 and K=8 at B=1023, B=1025, and B=2048 on the mature fallback.",
+      "Keep K=8 excluded from reusable multi-item T=4 binding; only ordinary encode and the one-item batch wrapper select this terminal.",
+      "Add an internal setup-only diagnostic selector and benchmark-only symmetric mode argument so one immutable shared-inode executable can provide the same-source fallback attribution."
+    ]
+  },
+  "comparators": {
+    "candidate_and_same_source_control": {
+      "benchmark_sha256": "adaf51f4a461c1ce2826476e2e35e7c3d633980a9e103ce27b850136ed688611",
+      "shared_device": 66307,
+      "shared_inode": 41967064,
+      "candidate_definition": "--k8r3r4-t4-terminal-mode 1",
+      "control_definition": "--k8r3r4-t4-terminal-mode 0",
+      "candidate_control_path_length": 62,
+      "argument_count_and_per_argument_lengths_equal": true
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+      "path_length": 62
+    }
+  },
+  "authoritative_campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t4_k8_b1024_terminal_abba.py",
+    "frozen_runner_sha256": "a5bdaf39456d54e565aa579ff00834236c9be2f342f25c4169c90832f4e6f76c",
+    "frozen_base_sha256": "fb0cb2802f92f00671e11b401b613de85d46df7b696a3ec440dce91d18e3b13f",
+    "raw_directory": "/tmp/leopard2-k8-b1024-symmetric-38aaf12-v1/campaign-r9-i15-w6-v1",
+    "raw_sha256": "6e170ed2264768e43d2758829e74cfa72c8b2e725f0f4bbcced85792c7839920",
+    "summary_sha256": "ff0a5d58f257ac4475b2025ee584d2d385d7f03f8a3924ffd74bfc764f25336b",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds": 9,
+    "accepted_cell_rounds": 414,
+    "iterations_per_process": 15,
+    "warmups_per_process": 6,
+    "reuse": 8192,
+    "cells": 46,
+    "processes": 2484,
+    "all_rounds_accepted": true,
+    "all_workload_digests_matched": true,
+    "binary_identities_unchanged": true,
+    "runner_dependencies_unchanged": true,
+    "candidate_control_shared_inode": true,
+    "candidate_control_executable_sections_sha256": "479c4131ecf2f69813a6eca2fe3e71a0fe51a0a95b29d64d2d7a709a0bcfd6bd",
+    "performance_statistic": "geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence intervals"
+  },
+  "promotion_gate": {
+    "passed": true,
+    "failure_count": 0,
+    "minimum_new_target_ci95_lower": 1.05,
+    "maximum_neighbor_regression_factor": 1.02,
+    "maximum_production_library_executable_growth_bytes": 256,
+    "new_backend_body_allowed": false
+  },
+  "new_targets": [
+    {
+      "K": 8,
+      "R": 3,
+      "bytes": 1024,
+      "fallback_over_candidate": 1.412800187,
+      "fallback_ci95": [1.392007329, 1.433903635],
+      "main_over_candidate": 1.226612549,
+      "main_ci95": [1.215149392, 1.238183844]
+    },
+    {
+      "K": 8,
+      "R": 4,
+      "bytes": 1024,
+      "fallback_over_candidate": 1.356910536,
+      "fallback_ci95": [1.346634766, 1.367264718],
+      "main_over_candidate": 1.166157832,
+      "main_ci95": [1.157755797, 1.174620843]
+    }
+  ],
+  "retained_k8_b512_targets": [
+    {
+      "K": 8,
+      "R": 3,
+      "fallback_over_candidate": 1.578509692,
+      "fallback_ci95": [1.572304067, 1.584739811],
+      "main_over_candidate": 1.189940730,
+      "main_ci95": [1.180797353, 1.199154908]
+    },
+    {
+      "K": 8,
+      "R": 4,
+      "fallback_over_candidate": 1.514427846,
+      "fallback_ci95": [1.507795900, 1.521088962],
+      "main_over_candidate": 1.136620887,
+      "main_ci95": [1.130649004, 1.142624313]
+    }
+  ],
+  "region_summaries": {
+    "new_k8_b1024": {
+      "cells": 2,
+      "same_source_geomean": 1.384573386,
+      "minimum_same_source_ci95_lower": 1.346634766,
+      "exact_main_geomean": 1.196003274,
+      "minimum_exact_main_ci95_lower": 1.157755797
+    },
+    "k4_through_k7_same_path": {
+      "cells": 34,
+      "candidate_control_speedup_range": [0.984791968, 1.010246459],
+      "regressions_over_two_percent": 0
+    },
+    "k8_b2048_inert": {
+      "cells": 2,
+      "candidate_control_speedup_range": [0.995139840, 0.998158864],
+      "regressions_over_two_percent": 0
+    },
+    "all_44_selected_cells_vs_exact_main": {
+      "cells": 44,
+      "geomean": 1.257186159,
+      "range": [1.056208342, 1.713723439]
+    }
+  },
+  "rejected_predecessor_campaigns": [
+    {
+      "source_commit": "81d49d9b914cd34397d4f50cb76fe7f967ba9406",
+      "summary": "/tmp/leopard2-k8-b1024-81d49d9-screen-v2/campaign-r9-i15-w6-v5/summary.json",
+      "summary_sha256": "b9c975deccf15e120fcd94c0f34ff1aa731f5be24a77681a4458c4fe89d7a438",
+      "reason_rejected": "Separate candidate and control ELFs produced impossible same-path K<8 differences from 0.7795x through 2.2193x despite identical executable code for those cells; executable/page placement invalidated attribution."
+    },
+    {
+      "source_commit": "a054b0ce771b84605300b7e75372a5244e1d6311",
+      "summary": "/tmp/leopard2-k8-b1024-runtime-a054b0c-v1/campaign-runtime-r9-i15-w6-v1/summary.json",
+      "summary_sha256": "35e86f54bf61a0b0b4d3e79f2018c5bf2ef20dcd45fd020ae448bfe9b84ad2f1",
+      "reason_rejected": "Shared-inode attribution removed ELF placement bias, but only the control received an extra command-line argument; a 1.02306x same-path control violated the two-percent gate. The final run supplies equal-count, equal-length mode arguments to both sides."
+    }
+  ],
+  "static_evidence": {
+    "prior_production_archive_sha256": "05d39f7e06ac91bbc2dc1e6021322c100c65577ba31fbc76033d14ba66eacb9a",
+    "candidate_production_archive_sha256": "a63adec6e6e9721c511e719225ff889ff80ba84973622aa18d18807f8f44d1c2",
+    "prior_production_archive_executable_section_bytes": 882327,
+    "candidate_production_archive_executable_section_bytes": 882391,
+    "production_library_executable_growth_bytes": 64,
+    "production_library_growth_gate_passed": true,
+    "leopard2_object_executable_growth_bytes": 64,
+    "diagnostic_benchmark_elf_executable_growth_bytes": 512,
+    "diagnostic_benchmark_elf_growth_gate_passed": false,
+    "diagnostic_growth_explanation": "The timing-only benchmark CLI adds 402 executable bytes and link alignment adds 46; production leopard2.cpp.o adds 64 bytes, including the 27-byte setup-only diagnostic setter. The promotion limit is applied to production library code, not evidence-harness CLI code; the larger diagnostic ELF is explicitly not claimed to pass it.",
+    "packed_terminal_section_bytes": 6872,
+    "packed_terminal_relocatable_sha256": "0084f7350b5f0aba40c38f87933dd668d463f6fc138d946804be753e42324e75",
+    "packed_terminal_relocatable_body_changed": false,
+    "k8_r3_backend_body_bytes": 2562,
+    "k8_r3_backend_relocatable_sha256": "459cfe2f867759fe1e5aaad52094d1411ae6769f25b9d21bdc5de3ecc1175697",
+    "k8_r4_backend_body_bytes": 2537,
+    "k8_r4_backend_relocatable_sha256": "9029a83a915139d02ae63013999475735c39bf184f797422aab89dab5f74d7ad",
+    "k8_backend_bodies_changed": false,
+    "k8_backend_bodies_are_leaf_and_call_free": true,
+    "avx512_evex_zmm_or_opmask_in_k8_bodies": false,
+    "non_leopard2_library_objects_compared": 13,
+    "non_leopard2_library_objects_changed": 0
+  },
+  "correctness_and_build_gates": {
+    "evidence_scope": "Session-observed command results; authoritative timing and provenance are retained separately above.",
+    "release_gcc_13": "hooked and production T=4 focused tests passed",
+    "strict_gcc_13": "library, hooked test, production test, and benchmark passed with -Wall -Wextra -Wpedantic -Werror",
+    "strict_clang_18": "library, hooked test, production test, and benchmark passed with -Wall -Wextra -Wpedantic -Werror",
+    "clang_asan_ubsan": "hooked and production tests passed with a 16-MiB ASan quarantine",
+    "runner_tests": "normal Python, python -O, py_compile, dependency-integrity, shared-inode, equal-path, and symmetric-argument tests passed",
+    "benchmark_mode_validation": "mode 0 and 1 emitted the expected schemas and markers; all other integer values fail before timing",
+    "oracles": [
+      "independent direct systematic GF8 generator",
+      "exact Leopard1 parity",
+      "same-source runtime-disabled fallback",
+      "exact Leopard main benchmark round trip and workload digests"
+    ],
+    "covered_boundaries": [
+      "K=8/R=3 and R=4 at B=1024",
+      "aligned and unaligned ordinary encode",
+      "one-item batch encode",
+      "K=5 through K=7 at B=1024 fallback",
+      "K=8 at B=1023, B=1025, and B=2048 fallback",
+      "scalar and forced-transform fallback",
+      "sparse, detached, and aliased layouts",
+      "scratch, metadata, null, overlap, and failure-atomicity checks",
+      "production archive without test hooks",
+      "reusable multi-item binding remains excluded"
+    ]
+  },
+  "resource_policy": {
+    "host_logical_cpus_allowed": 30,
+    "host_physical_cores": 15,
+    "build_parallelism": 1,
+    "build_memory_max_mib": 512,
+    "benchmark_address_space_max_mib": 256,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_less_than_host_parallelism": "Prior OOMs required serialized capped compiler and sanitizer work; authoritative cache-sensitive timing pinned CPU14 and reserved sibling CPU30. Read-only source, runner, and binary audits ran concurrently."
+  },
+  "reproduce": {
+    "build": "cmake -S <clean-38aaf12-worktree> -B <external-build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=OFF -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF && cmake --build <external-build> -j1 --target bench_leopard2",
+    "freeze": "install -m 0555 <external-build>/bench_leopard2 <frozen>/a/benchmark && ln <frozen>/a/benchmark <frozen>/b/benchmark; place exact-main benchmark at an equal-length path and verify SHA-256 plus shared device/inode",
+    "campaign": "taskset -c 14 <frozen-runner>/experiments/leopard2/gf8_high_encode/run_t4_k8_b1024_terminal_abba.py --candidate <frozen>/a/benchmark --control <frozen>/b/benchmark --main <frozen>/m/benchmark --source-commit 38aaf120ffb7b0c136282f0226b54617af188df0 --source-tree 034366b9dad35d9930a4f4062fa843103f894d79 --output <new-output> --cpu 14 --sibling 30 --rounds 9 --iterations 15 --warmup 6"
+  },
+  "next_experiment": "Reconfirm and then close the GF8 legacy-high K=7/R=4/B=1024 gap against exact Leopard main using the corrected shared-inode symmetric-argument methodology.",
+  "disposition": "Promoted. Both new B=1024 cells credibly exceed the five-percent threshold versus same-source fallback and exact Leopard main; the retained B=512 cells remain faster, all predeclared same-path controls remain within two percent, parity and contract tests pass, and production library executable growth is 64 bytes with no backend-body change."
+}
