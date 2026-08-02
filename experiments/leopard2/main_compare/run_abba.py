@@ -316,6 +316,8 @@ COMPILE_COMMANDS_SCHEMA_V4 = "leopard2-main-compare-compile-commands/v4"
 COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v5"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
+BASELINE_PURE_AVX2_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-pure-avx2-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE = \
@@ -389,7 +391,12 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEOPARD_ENABLE_GF8": frozenset(("BOOL",)),
     "LEOPARD_ENABLE_GF16": frozenset(("BOOL",)),
     "LEOPARD_MAIN_SOURCE_DIR": frozenset(("PATH",)),
+    "LEO_MAIN_PURE_AVX2": frozenset(("BOOL",)),
     "LEO_MAIN_HAS_MARCH_NATIVE": frozenset(("INTERNAL",)),
+    "LEO_MAIN_HAS_MARCH_X86_64": frozenset(("INTERNAL",)),
+    "LEO_MAIN_HAS_MTUNE_GENERIC": frozenset(("INTERNAL",)),
+    "LEO_MAIN_HAS_MAVX2": frozenset(("INTERNAL",)),
+    "LEO_MAIN_HAS_MNO_AVX512F": frozenset(("INTERNAL",)),
     "LEO2_BACKEND_VARIANT": frozenset(("STRING",)),
     "LEO2_BENCHMARK_GIT_EXECUTABLE": frozenset(("FILEPATH",)),
     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
@@ -3527,6 +3534,29 @@ def compile_profile_for_implementation(
             CANDIDATE_COMPILE_PROFILE_V1)
 
 
+def baseline_pure_avx2(specification: Mapping[str, Any]) -> bool:
+    value = specification.get("baseline_pure_avx2", False)
+    require(type(value) is bool,
+            "baseline pure-AVX2 profile selector is not boolean")
+    return value
+
+
+def baseline_compile_profile(
+    specification: Mapping[str, Any],
+) -> str:
+    return (BASELINE_PURE_AVX2_COMPILE_PROFILE
+            if baseline_pure_avx2(specification) else
+            BASELINE_COMPILE_PROFILE)
+
+
+def baseline_isa_policy(specification: Mapping[str, Any]) -> str:
+    return (
+        "whole-build -march=x86-64 -mtune=generic -mavx2 "
+        "-mno-avx512f"
+        if baseline_pure_avx2(specification) else
+        "whole-build -march=native")
+
+
 def expected_compile_output(
     implementation: str, source: Path, specification: Mapping[str, Any],
     selected_configuration: str | None = None,
@@ -3594,10 +3624,15 @@ def expected_compile_argv(
         configuration_definition = (
             [f'-DCMAKE_INTDIR="{selected_configuration}"']
             if selected_configuration else [])
+        isa_flags = (
+            ["-march=x86-64", "-mtune=generic", "-mavx2",
+             "-mno-avx512f"]
+            if baseline_pure_avx2(specification) else
+            ["-march=native"])
         return [
             compiler_invocation, *definitions, *configuration_definition,
             f"-I{baseline_root}",
-            "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
+            "-g", "-O0", "-O3", "-std=gnu++11", *isa_flags,
             "-Wall", "-Wextra", "-fopenmp",
             "-o", output, "-c", str(source),
         ]
@@ -3910,12 +3945,17 @@ def validate_compile_commands(
                 implementation, source, specification, compiler_invocation,
                 raw_schema, build_configuration=build_configuration,
                 selected_configuration=selected_configuration)
+            expected_profile = (
+                baseline_compile_profile(specification)
+                if implementation == "baseline" else
+                compile_profile_for_implementation(
+                    implementation, raw_schema))
             require(tokens == expected_tokens and
                     entry["output"] == expected_compile_output(
                         implementation, source, specification,
                         selected_configuration),
                     f"compile command for {source} differs from the exact "
-                    f"{compile_profile_for_implementation(implementation, raw_schema)} "
+                    f"{expected_profile} "
                     "profile")
     available_selected = {
         source for source, configuration in by_source
@@ -3962,7 +4002,8 @@ def validate_compile_commands(
         "required_source_object_pairs": sorted(
             object_records, key=lambda record: record["source"]["path"]),
         "isa_policy": (
-            "whole-build -march=native" if implementation == "baseline" else
+            baseline_isa_policy(specification)
+            if implementation == "baseline" else
             "portable core with ISA flags only on SSSE3, AVX2, and "
             "AVX-512VL translation units"),
     }
@@ -3970,8 +4011,11 @@ def validate_compile_commands(
         result.update({
             "schema": compile_commands_schema_for_raw_schema(raw_schema),
             "implementation": implementation,
-            "profile": compile_profile_for_implementation(
-                implementation, raw_schema),
+            "profile": (
+                baseline_compile_profile(specification)
+                if implementation == "baseline" else
+                compile_profile_for_implementation(
+                    implementation, raw_schema)),
             "required_entries": sorted(
                 required_entries, key=lambda entry: entry["file"]),
         })
@@ -4408,6 +4452,17 @@ def build_provenance(
         require(Path(cache.get("LEOPARD_MAIN_SOURCE_DIR", "")).resolve() == baseline_root,
                 "baseline CMake cache points at the wrong exact-main source")
         required_cache = {"LEO_MAIN_HAS_MARCH_NATIVE": "1"}
+        if "baseline_pure_avx2" in specification:
+            pure_avx2 = baseline_pure_avx2(specification)
+            required_cache["LEO_MAIN_PURE_AVX2"] = \
+                "ON" if pure_avx2 else "OFF"
+            if pure_avx2:
+                required_cache.update({
+                    "LEO_MAIN_HAS_MARCH_X86_64": "1",
+                    "LEO_MAIN_HAS_MTUNE_GENERIC": "1",
+                    "LEO_MAIN_HAS_MAVX2": "1",
+                    "LEO_MAIN_HAS_MNO_AVX512F": "1",
+                })
         expected_archive_name = "libleopard_main_exact.a"
     else:
         require(Path(cache.get("CMAKE_HOME_DIRECTORY", "")).resolve() == candidate_root,
@@ -5418,10 +5473,21 @@ def validate_complete_build_identity(
             "CMAKE_CXX_FLAGS_RELEASE": None,
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
         }
+        if "baseline_pure_avx2" in specification:
+            pure_avx2 = baseline_pure_avx2(specification)
+            required_cache["LEO_MAIN_PURE_AVX2"] = \
+                "ON" if pure_avx2 else "OFF"
+            if pure_avx2:
+                required_cache.update({
+                    "LEO_MAIN_HAS_MARCH_X86_64": "1",
+                    "LEO_MAIN_HAS_MTUNE_GENERIC": "1",
+                    "LEO_MAIN_HAS_MAVX2": "1",
+                    "LEO_MAIN_HAS_MNO_AVX512F": "1",
+                })
         benchmark_suffix = \
             "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp"
-        isa_policy = "whole-build -march=native"
-        compile_profile = BASELINE_COMPILE_PROFILE
+        isa_policy = baseline_isa_policy(specification)
+        compile_profile = baseline_compile_profile(specification)
         library_sources = BASELINE_LIBRARY_SOURCES
         expected_entry_count = BASELINE_EXPECTED_COMPILE_COMMAND_COUNT
     else:

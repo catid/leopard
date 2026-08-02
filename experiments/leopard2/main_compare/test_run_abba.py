@@ -1584,6 +1584,31 @@ class MainCompareRunnerTests(unittest.TestCase):
             completed.returncode, 0,
             completed.stderr.decode("utf-8", errors="replace"))
 
+    def test_exact_main_pure_avx2_compile_profile(self) -> None:
+        specification = dict(SPECIFICATION)
+        specification["baseline_pure_avx2"] = True
+        source = Path(specification["baseline_source_root"]) / \
+            "LeopardFF8.cpp"
+        arguments = runner.expected_compile_argv(
+            "baseline", source, specification, "/usr/bin/c++")
+        first = arguments.index("-march=x86-64")
+        self.assertEqual(arguments[first:first + 4], [
+            "-march=x86-64", "-mtune=generic", "-mavx2",
+            "-mno-avx512f",
+        ])
+        self.assertNotIn("-march=native", arguments)
+        self.assertEqual(
+            runner.baseline_compile_profile(specification),
+            runner.BASELINE_PURE_AVX2_COMPILE_PROFILE)
+        self.assertEqual(
+            runner.baseline_isa_policy(specification),
+            "whole-build -march=x86-64 -mtune=generic -mavx2 "
+            "-mno-avx512f")
+        specification["baseline_pure_avx2"] = 1
+        with self.assertRaises(runner.EvidenceError):
+            runner.expected_compile_argv(
+                "baseline", source, specification, "/usr/bin/c++")
+
     @unittest.skipUnless(Path("/proc/self/fd").is_dir(),
                          "descriptor-count regression needs procfs")
     def test_git_symlink_type_failure_closes_untransferred_descriptor(

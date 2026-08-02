@@ -199,7 +199,7 @@ def check_padded_case(
     positive_summary(first.get("metrics", {}).get("encode_execution"))
 
 
-def check_compile_commands(path: Path) -> None:
+def check_compile_commands(path: Path, pure_avx2: bool) -> None:
     commands = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(commands, list):
         raise RuntimeError("compile_commands is not an array")
@@ -214,9 +214,11 @@ def check_compile_commands(path: Path) -> None:
             selected[source] = shlex.split(row.get("command", ""))
     if set(selected) != required_sources:
         raise RuntimeError("compile_commands omits an exact-main source")
-    required_flags = {
-        "-march=native", "-Wall", "-Wextra", "-fopenmp",
-        "-g", "-O0", "-O3",
+    isa_flags = ({
+        "-march=x86-64", "-mtune=generic", "-mavx2", "-mno-avx512f",
+    } if pure_avx2 else {"-march=native"})
+    required_flags = isa_flags | {
+        "-Wall", "-Wextra", "-fopenmp", "-g", "-O0", "-O3",
     }
     for source, command in selected.items():
         missing = required_flags - set(command)
@@ -225,15 +227,19 @@ def check_compile_commands(path: Path) -> None:
                 f"{source} is missing canonical flags: {sorted(missing)}")
         if "-DNDEBUG" in command:
             raise RuntimeError(f"{source} unexpectedly defines NDEBUG")
+        if pure_avx2 and any(flag.startswith("-mavx512") for flag in command):
+            raise RuntimeError(f"{source} unexpectedly enables AVX-512")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--benchmark", required=True, type=Path)
     parser.add_argument("--compile-commands", required=True, type=Path)
+    parser.add_argument("--pure-avx2", action="store_true")
     options = parser.parse_args()
     executable = options.benchmark.resolve()
-    check_compile_commands(options.compile_commands.resolve())
+    check_compile_commands(
+        options.compile_commands.resolve(), options.pure_avx2)
     check_case(executable, 8, 4, 0, 1)
     check_case(executable, 8, 4, 4, 7)
     check_case(executable, 129, 1, 1, 11)

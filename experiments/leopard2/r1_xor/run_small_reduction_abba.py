@@ -39,7 +39,7 @@ SUMMARY_SCHEMA = "leopard2-r1-small-reduction-summary/v1"
 FAILURE_SCHEMA = "leopard2-r1-small-reduction-failure/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MAIN_SHA256 = \
-    "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    "e252aa2c03c1efdda9f7de256ea0d5bf459310d8cef5a9ba69c8cf2619cd3048"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L25g_r1_small_reduction_modeE"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 BENCHMARK_CPU = 14
@@ -1099,6 +1099,7 @@ def capture_sources_and_builds(options: argparse.Namespace) -> dict[str, Any]:
         "baseline_archive": str(main_archive),
         "baseline_source_root": str(main_source),
         "candidate_source_root": str(candidate_source),
+        "baseline_pure_avx2": True,
     }
     try:
         main_provenance = MAIN_SUPPORT.build_provenance(

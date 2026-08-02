@@ -55,6 +55,14 @@ For a single JSON cell:
         --reuse 8 --iterations 9 --warmup 2 --threads 1 \
         --seed 1 --json -
 
+For ISA-matched AVX2 attribution on hosts that also expose AVX-512, configure
+the separate, default-off exact-main profile with
+`-DLEO_MAIN_PURE_AVX2=ON`.  It keeps the same exact main sources and API while
+using the explicit compiler ceiling
+`-march=x86-64 -mtune=generic -mavx2 -mno-avx512f`.  This option is for
+controlled comparison builds; the default continues to reproduce main's
+historical `-march=native` policy.
+
 The broad, CPU-saturating `run_allk_gap.py` diagnostic is deliberately separate
 from the isolated promotion runner below. It requires the Leopard2 source root
 and requested commit explicitly. The source must be the clean Git top level at

@@ -21,6 +21,9 @@ set(CMAKE_CXX_FLAGS_RELEASE "-g -O0 -O3" CACHE STRING
 
 set(LEOPARD_MAIN_SOURCE_DIR "" CACHE PATH
     "Detached Leopard master source at the required comparison revision")
+option(LEO_MAIN_PURE_AVX2
+    "Build the exact-main comparison with a generic pure-AVX2 ISA ceiling"
+    OFF)
 # This is deliberately not a cache option: callers may choose the source path,
 # but cannot redefine what "main baseline" means for this adapter.
 set(LEOPARD_MAIN_EXPECTED_COMMIT
@@ -106,8 +109,23 @@ if(NOT LEO_MAIN_HAS_MARCH_NATIVE OR NOT LEO_MAIN_HAS_WALL OR
     message(FATAL_ERROR
         "Compiler cannot reproduce canonical master -march=native/-Wall/-Wextra flags")
 endif()
+if(LEO_MAIN_PURE_AVX2)
+    check_cxx_compiler_flag("-march=x86-64" LEO_MAIN_HAS_MARCH_X86_64)
+    check_cxx_compiler_flag("-mtune=generic" LEO_MAIN_HAS_MTUNE_GENERIC)
+    check_cxx_compiler_flag("-mavx2" LEO_MAIN_HAS_MAVX2)
+    check_cxx_compiler_flag("-mno-avx512f" LEO_MAIN_HAS_MNO_AVX512F)
+    if(NOT LEO_MAIN_HAS_MARCH_X86_64 OR NOT LEO_MAIN_HAS_MTUNE_GENERIC OR
+       NOT LEO_MAIN_HAS_MAVX2 OR NOT LEO_MAIN_HAS_MNO_AVX512F)
+        message(FATAL_ERROR
+            "Compiler cannot reproduce the pure-AVX2 exact-main profile")
+    endif()
+    set(LEO_MAIN_ISA_FLAGS
+        -march=x86-64 -mtune=generic -mavx2 -mno-avx512f)
+else()
+    set(LEO_MAIN_ISA_FLAGS -march=native)
+endif()
 target_compile_options(leopard_main_exact PRIVATE
-    -march=native -Wall -Wextra)
+    ${LEO_MAIN_ISA_FLAGS} -Wall -Wextra)
 
 find_package(OpenMP REQUIRED)
 if(TARGET OpenMP::OpenMP_CXX)
@@ -121,17 +139,22 @@ add_executable(leopard_main_benchmark legacy_main_benchmark.cpp)
 target_compile_definitions(leopard_main_benchmark PRIVATE
     LEOPARD_MAIN_SOURCE_COMMIT="${LEOPARD_MAIN_EXPECTED_COMMIT}")
 target_compile_options(leopard_main_benchmark PRIVATE
-    -march=native -Wall -Wextra)
+    ${LEO_MAIN_ISA_FLAGS} -Wall -Wextra)
 target_link_libraries(leopard_main_benchmark PRIVATE leopard_main_exact)
 
 find_program(LEO_MAIN_PYTHON_EXECUTABLE NAMES python3 python)
 if(LEO_MAIN_PYTHON_EXECUTABLE)
     enable_testing()
+    set(LEO_MAIN_SMOKE_ISA_ARGUMENTS)
+    if(LEO_MAIN_PURE_AVX2)
+        list(APPEND LEO_MAIN_SMOKE_ISA_ARGUMENTS --pure-avx2)
+    endif()
     add_test(NAME leopard_main_benchmark_smoke
         COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/test_legacy_main_benchmark.py"
             --benchmark $<TARGET_FILE:leopard_main_benchmark>
-            --compile-commands "${CMAKE_BINARY_DIR}/compile_commands.json")
+            --compile-commands "${CMAKE_BINARY_DIR}/compile_commands.json"
+            ${LEO_MAIN_SMOKE_ISA_ARGUMENTS})
     add_test(NAME leopard_main_compare_runner_selftest
         COMMAND "${LEO_MAIN_PYTHON_EXECUTABLE}"
             "${CMAKE_CURRENT_SOURCE_DIR}/test_run_abba.py")
