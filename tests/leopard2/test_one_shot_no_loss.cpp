@@ -570,8 +570,8 @@ void test_forced_hook_modes(
         require_result(observation.result, LEO2_SUCCESS,
             "forced-mode one-shot no-loss decode");
 #if LEO2_TEST_ALLOCATION_AUDIT_AVAILABLE
-        require(observation.allocations > 0,
-            "forced hook mode bypassed canonical plan construction");
+        require(observation.allocations == 0,
+            "forced hook mode allocated its ephemeral no-op plan");
 #endif
     }
     leo2_codec_destroy(codec);
