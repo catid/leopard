@@ -245,6 +245,16 @@ bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled);
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 
 /*
+    Process-local calibration control for the count-generic dense full-parity
+    GF8 one-block terminal.  Mode zero uses the production allowlist, mode one
+    forces every shape in the bounded prototype envelope, and mode two forces
+    the mature control route.  The production allowlist is initially empty.
+    Change this only while no encode call is executing.  This remains outside
+    the public API and changes no codec or wire identity.
+*/
+bool SetDenseFullParityOneBlockModeForDiagnostics(unsigned mode);
+
+/*
     Process-local benchmark control for the exact K=9/R=5/256-byte packed
     terminal.  Change it only while no encode call is executing.  This remains
     outside the public API and changes no codec or wire identity.

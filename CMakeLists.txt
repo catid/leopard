@@ -1454,6 +1454,47 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        add_executable(leopard2_dense_full_parity_one_block_terminal_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_dense_full_parity_one_block_terminal.cpp)
+        target_include_directories(
+            leopard2_dense_full_parity_one_block_terminal_test PRIVATE
+            tests/leopard2)
+        target_compile_definitions(
+            leopard2_dense_full_parity_one_block_terminal_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(
+            leopard2_dense_full_parity_one_block_terminal_test
+            leopard_test_hooks)
+        add_test(NAME leopard2_dense_full_parity_one_block_terminal
+            COMMAND leopard2_dense_full_parity_one_block_terminal_test)
+        set_tests_properties(
+            leopard2_dense_full_parity_one_block_terminal PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        # The hook target above observes routing.  This companion links the
+        # ordinary archive and therefore exercises the fixed non-hook scratch
+        # formula used by a forced candidate-mode production binary.
+        add_executable(
+            leopard2_dense_full_parity_one_block_terminal_production_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_dense_full_parity_one_block_terminal.cpp)
+        target_include_directories(
+            leopard2_dense_full_parity_one_block_terminal_production_test
+            PRIVATE tests/leopard2)
+        target_link_libraries(
+            leopard2_dense_full_parity_one_block_terminal_production_test
+            leopard)
+        add_test(NAME
+            leopard2_dense_full_parity_one_block_terminal_production
+            COMMAND
+                leopard2_dense_full_parity_one_block_terminal_production_test)
+        set_tests_properties(
+            leopard2_dense_full_parity_one_block_terminal_production
+            PROPERTIES ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
         add_executable(leopard2_t2_packed_terminal_test
             tests/leopard2/direct_oracle.cpp
             tests/leopard2/test_t2_packed_terminal.cpp)
@@ -2440,6 +2481,11 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/operation_counts/test_decode_scratch_crosscheck.py
                     --probe $<TARGET_FILE:leopard2_decode_scratch_probe>)
+            add_test(
+                NAME leopard2_dense_full_parity_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/run_dense_full_parity_one_block_screen.py
+                    --self-test)
         endif()
         add_test(
             NAME leopard2_tiled_high_runner_self_test

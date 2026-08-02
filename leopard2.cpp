@@ -210,6 +210,17 @@
 #error "LEO2_DIAGNOSTIC_DISABLE_BALANCED_B64_TERMINAL must be 0 or 1"
 #endif
 
+/* Same-text attribution mode for the count-generic dense full-parity
+   one-block prototype.  Zero uses its production calibration table, one
+   forces the bounded candidate envelope, and two forces the mature route. */
+#ifndef LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE
+#define LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE 0
+#endif
+#if LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE < 0 || \
+    LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE > 2
+#error "LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE must be 0, 1, or 2"
+#endif
+
 /* Same-text attribution controls for the packed ordinary K=9/256-byte
    terminals.  The macros change only nonzero initialized data words. */
 #ifndef LEO2_DIAGNOSTIC_DISABLE_K9R5_B256_TERMINAL
@@ -934,6 +945,16 @@ static volatile uint32_t g_k8r3r4_t4_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K8R3R4_T4_TERMINAL;
 static volatile uint32_t g_balanced_b64_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_BALANCED_B64_TERMINAL;
+/*
+    Calibration mode for the count-generic dense full-parity one-block
+    terminal.  Zero consults the production allowlist, which is deliberately
+    empty until the all-K sweep is complete.  Test and benchmark binaries may
+    select one to force the bounded candidate envelope or two to force the
+    mature control route.  Same-executable A/B attribution changes only this
+    process-local word and does not perturb text layout.
+*/
+static volatile uint32_t g_dense_full_parity_one_block_mode =
+    LEO2_DIAGNOSTIC_DENSE_FULL_PARITY_ONE_BLOCK_MODE;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 static volatile uint32_t g_k16r8_b256_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K16R8_B256_TERMINAL;
@@ -12263,6 +12284,19 @@ bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetDenseFullParityOneBlockModeForDiagnostics(unsigned mode)
+{
+#ifdef LEO_HAS_FF8
+    if (mode > 2U)
+        return false;
+    g_dense_full_parity_one_block_mode = mode;
+    return true;
+#else
+    (void)mode;
+    return false;
+#endif
+}
+
 bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -13756,6 +13790,225 @@ TryEncodeGF8K8R8T8B64PackedTerminal(
 #endif
 
 #ifdef LEO_HAS_FF8
+struct DenseFullParityOneBlockCalibrationRegion
+{
+    uint16_t minimum_original_count;
+    uint16_t maximum_original_count;
+    /* K=T/B64 at T=32/64/128 already has a qualified packed terminal.
+       Replacing it needs a direct head-to-head win in addition to interval
+       membership. */
+    bool replace_balanced_b64;
+};
+
+/*
+    Filled only from a pinned all-K crossover sweep.  Each row is a shard-byte
+    size (64, 256) and each column is T (16, 32, 64, 128).  Zero/zero is an
+    empty interval, so the initial production selector is fail-closed while a
+    diagnostic mode can exercise the complete bounded envelope in one binary.
+    At T=32/64/128 the third field must be set explicitly only when the dense
+    terminal beats the already-qualified balanced B64 terminal at K=T;
+    interval membership alone may never displace that route.  Contiguous
+    intervals keep the eventual policy compact; disjoint winning regions
+    should be represented only after a second table is justified by repeatable
+    measurements.
+*/
+static const DenseFullParityOneBlockCalibrationRegion
+    kDenseFullParityOneBlockCalibration[2][4] = {
+        { { 0, 0, false }, { 0, 0, false },
+          { 0, 0, false }, { 0, 0, false } },
+        { { 0, 0, false }, { 0, 0, false },
+          { 0, 0, false }, { 0, 0, false } }
+    };
+
+static LEO_FORCE_INLINE int DenseFullParityOneBlockSideIndex(uint32_t side)
+{
+    switch (side)
+    {
+    case 16: return 0;
+    case 32: return 1;
+    case 64: return 2;
+    case 128: return 3;
+    default: return -1;
+    }
+}
+
+static LEO_FORCE_INLINE bool
+IsDenseFullParityOneBlockProductionCalibrated(
+    uint32_t original_count,
+    uint32_t side,
+    uint64_t shard_bytes)
+{
+    const int side_index = DenseFullParityOneBlockSideIndex(side);
+    const int byte_index = shard_bytes == 64U ? 0 :
+        (shard_bytes == 256U ? 1 : -1);
+    if (side_index < 0 || byte_index < 0)
+        return false;
+    const DenseFullParityOneBlockCalibrationRegion& region =
+        kDenseFullParityOneBlockCalibration[byte_index][side_index];
+    return region.minimum_original_count != 0 &&
+        original_count >= region.minimum_original_count &&
+        original_count <= region.maximum_original_count &&
+        !(side >= 32U && shard_bytes == 64U && original_count == side &&
+          !region.replace_balanced_b64);
+}
+
+static LEO_FORCE_INLINE bool
+IsGF8AVX2DenseFullParityOneBlockTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec ||
+        (shard_bytes != 64U && shard_bytes != 256U))
+        return false;
+    const uint32_t side = codec->padded_side;
+    if (DenseFullParityOneBlockSideIndex(side) < 0 ||
+        codec->original_count > side || codec->recovery_count != side)
+        return false;
+
+    const uint32_t mode = g_dense_full_parity_one_block_mode;
+    if (mode == 2U ||
+        (mode == 0U &&
+         !IsDenseFullParityOneBlockProductionCalibrated(
+             codec->original_count, side, shard_bytes)) ||
+        mode > 2U)
+        return false;
+    if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+#if defined(_MSC_VER)
+#define LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE \
+    __attribute__((noinline, noipa, \
+        section(".leo2_dense_full_parity_one_block"), aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE \
+    __attribute__((noinline, \
+        section(".leo2_dense_full_parity_one_block"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE
+#endif
+
+/*
+    For R=T and K<=T the mature high encoder consumes only work[0..T), and
+    every one of those rows is a transmitted parity destination.  A packed
+    recovery array can therefore serve as the complete transform workspace:
+    no temporary-half pointer array or work-data row is touched.  The public
+    scratch upper bound is nevertheless checked unchanged so enabling this
+    execution optimization never weakens the API contract.
+
+    This body is intentionally runtime-counted.  The calibration table may
+    admit broad K intervals without generating another body for each K/T/byte
+    tuple.  Any non-packed layout falls through to the mature validator and
+    executor before an output byte is written.
+*/
+static LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE bool
+TryEncodeGF8DenseFullParityOneBlockTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    uint64_t shard_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2DenseFullParityOneBlockTerminalEligible(
+            codec, shard_bytes));
+    const size_t original_count = codec->original_count;
+    const size_t side = codec->padded_side;
+
+    /* Exact aligned GF8 production geometry.  All quantities are bounded by
+       the 256-coordinate field before this terminal can be selected. */
+    ScratchLayout layout;
+    layout.range_offset = 0;
+    const size_t ranges_bytes =
+        (original_count + side) * sizeof(AddressRange);
+    layout.pointer_offset = ranges_bytes;
+    const size_t pointers_end = layout.pointer_offset +
+        (original_count + 2U * side) * sizeof(void*);
+    layout.data_offset =
+        (pointers_end + kScratchAlignment - 1U) &
+        ~(kScratchAlignment - 1U);
+    layout.total_bytes = layout.data_offset +
+        2U * side * static_cast<size_t>(shard_bytes);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* Hook codecs reserve a call-local diagnostic sparse schedule. */
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, shard_bytes, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[3];
+    size_t metadata_count = 2;
+    if (!MakeArrayRange(original, original_count, sizeof(*original),
+            metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, side, sizeof(*recovery),
+            metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    if (protected_range)
+        metadata_ranges[metadata_count++] = *protected_range;
+    if (RangeOverlapsAny(scratch_range, metadata_ranges, metadata_count))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    leo2_result packed_result = LEO2_INTERNAL_ERROR;
+    if (!TryValidateDensePackedGF8EncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch_range,
+            metadata_ranges, metadata_count, packed_result))
+        return false;
+    if (packed_result != LEO2_SUCCESS)
+    {
+        result_out = packed_result;
+        return true;
+    }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordDenseFullParityOneBlockCall();
+#endif
+    leopard::ff8::ReedSolomonEncode(
+        *codec->context->ops, shard_bytes,
+        static_cast<unsigned>(original_count), static_cast<unsigned>(side),
+        static_cast<unsigned>(side), original, const_cast<void**>(recovery));
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_DENSE_FULL_PARITY_ONE_BLOCK_NOINLINE
+
 static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
@@ -15153,6 +15406,15 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
                 terminal_result))
             return terminal_result;
     }
+    if (IsGF8AVX2DenseFullParityOneBlockTerminalEligible(
+            codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8DenseFullParityOneBlockTerminal(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                shard_bytes, terminal_result))
+            return terminal_result;
+    }
     if (IsGF8AVX2BalancedB64PackedTerminalEligible(codec, shard_bytes))
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
@@ -15321,6 +15583,17 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+        if (IsGF8AVX2DenseFullParityOneBlockTerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8DenseFullParityOneBlockTerminal(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, items[0].shard_bytes,
+                    terminal_result))
                 return terminal_result;
         }
         if (IsGF8AVX2BalancedB64PackedTerminalEligible(

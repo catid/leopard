@@ -33,10 +33,16 @@ MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
 ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
 ALLOW_MULTIPLE_TARGETS = False
+TARGET_ROLES = ("target",)
+MAIN_TARGET_ROLES = ("target",)
 CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_BUILD_MARKER: str | None = None
+REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
+AUXILIARY_MODE_EXPECTATIONS: Mapping[
+    str, Mapping[str, int]
+] = {}
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 T95_DF2 = 4.302652729911275
 T95_DF3 = 3.182446305284263
@@ -127,13 +133,17 @@ def run_tool(arguments: Sequence[str]) -> str:
     return completed.stdout.decode("utf-8", errors="strict")
 
 
-def mode_word_identity(executable: Path) -> dict[str, Any]:
+def mode_word_identity(
+    executable: Path,
+    symbol_name: str | None = None,
+) -> dict[str, Any]:
     """Read the retained selector word by mapping its ELF symbol to the file."""
+    selected_symbol = MODE_SYMBOL if symbol_name is None else symbol_name
     symbols = run_tool(("/usr/bin/readelf", "-sW", str(executable)))
     matches = []
     for line in symbols.splitlines():
         tokens = line.split()
-        if len(tokens) >= 8 and tokens[-1] == MODE_SYMBOL:
+        if len(tokens) >= 8 and tokens[-1] == selected_symbol:
             matches.append(tokens)
     require(len(matches) == 1, "diagnostic selector symbol is missing or ambiguous")
     symbol = matches[0]
@@ -171,7 +181,7 @@ def mode_word_identity(executable: Path) -> dict[str, Any]:
         payload = source.read(4)
     require(len(payload) == 4, "diagnostic selector word is truncated")
     return {
-        "symbol": MODE_SYMBOL,
+        "symbol": selected_symbol,
         "virtual_address": address,
         "section_index": section_index,
         "section_name": section_name,
@@ -179,6 +189,157 @@ def mode_word_identity(executable: Path) -> dict[str, Any]:
         "bytes_hex": payload.hex(),
         "value": int.from_bytes(payload, "little"),
     }
+
+
+def elf_section_file_range(
+    executable: Path,
+    section_name: str,
+) -> dict[str, Any]:
+    """Locate one nonempty ELF section in the immutable file image."""
+    sections = run_tool(("/usr/bin/readelf", "-SW", str(executable)))
+    section_pattern = re.compile(
+        r"^\s*\[\s*(\d+)\]\s+(\S+)\s+(\S+)\s+"
+        r"([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+")
+    matches: list[dict[str, Any]] = []
+    for line in sections.splitlines():
+        match = section_pattern.match(line)
+        if match and match.group(2) == section_name:
+            matches.append({
+                "name": match.group(2),
+                "section_index": int(match.group(1)),
+                "section_type": match.group(3),
+                "virtual_address": int(match.group(4), 16),
+                "file_offset": int(match.group(5), 16),
+                "size": int(match.group(6), 16),
+            })
+    require(len(matches) == 1 and matches[0]["size"] > 0,
+            f"ELF section {section_name} is absent, ambiguous, or empty")
+    selected = matches[0]
+    require(selected["file_offset"] + selected["size"] <=
+            executable.stat().st_size,
+            f"ELF section {section_name} lies outside the file")
+    return selected
+
+
+def difference_ranges(offsets: Sequence[int]) -> list[dict[str, int]]:
+    if not offsets:
+        return []
+    output: list[dict[str, int]] = []
+    start = offsets[0]
+    previous = start
+    for offset in offsets[1:]:
+        if offset != previous + 1:
+            output.append({
+                "file_offset": start,
+                "size": previous - start + 1,
+            })
+            start = offset
+        previous = offset
+    output.append({
+        "file_offset": start,
+        "size": previous - start + 1,
+    })
+    return output
+
+
+def normalized_full_file_comparison(
+    candidate: Path,
+    control: Path,
+    allowed_ranges: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Prove two files differ only in named, nonoverlapping byte ranges."""
+    candidate_bytes = candidate.read_bytes()
+    control_bytes = control.read_bytes()
+    candidate_payload = bytearray(candidate_bytes)
+    control_payload = bytearray(control_bytes)
+    require(len(candidate_payload) == len(control_payload),
+            "candidate and control full ELF sizes differ")
+    file_size = len(candidate_payload)
+    normalized_ranges = sorted(({
+        "name": str(item["name"]),
+        "file_offset": int(item["file_offset"]),
+        "size": int(item["size"]),
+    } for item in allowed_ranges), key=lambda item: item["file_offset"])
+    require(normalized_ranges, "no full-file difference ranges were allowed")
+    previous_end = 0
+    allowed = bytearray(file_size)
+    for item in normalized_ranges:
+        start = item["file_offset"]
+        end = start + item["size"]
+        require(item["size"] > 0 and start >= previous_end and
+                end <= file_size,
+                "allowed full-file difference ranges overlap or are invalid")
+        allowed[start:end] = b"\x01" * item["size"]
+        candidate_payload[start:end] = b"\0" * item["size"]
+        control_payload[start:end] = b"\0" * item["size"]
+        previous_end = end
+
+    differing_offsets = [
+        offset for offset, (candidate_byte, control_byte) in enumerate(
+            zip(candidate_bytes, control_bytes))
+        if candidate_byte != control_byte
+    ]
+    unauthorized = [
+        offset for offset in differing_offsets if not allowed[offset]
+    ]
+    require(not unauthorized,
+            "candidate/control differ outside selector and GNU build-id ranges")
+    candidate_digest = hashlib.sha256(candidate_payload).hexdigest()
+    control_digest = hashlib.sha256(control_payload).hexdigest()
+    require(candidate_digest == control_digest,
+            "candidate/control normalized full-file SHA-256 differs")
+    require(differing_offsets,
+            "candidate/control full ELF files are unexpectedly identical")
+    return {
+        "file_size": file_size,
+        "allowed_ranges": normalized_ranges,
+        "difference_count": len(differing_offsets),
+        "difference_ranges": difference_ranges(differing_offsets),
+        "normalized_sha256": candidate_digest,
+    }
+
+
+def candidate_control_full_file_equivalence(
+    candidate: Path,
+    control: Path,
+    mode_words: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Bind the only permitted candidate/control full-ELF differences."""
+    selector_objects = {
+        label: {
+            "symbol": mode_words[label]["symbol"],
+            "file_offset": mode_words[label]["file_offset"],
+            "size": 4,
+        }
+        for label in ("candidate", "control")
+    }
+    require(selector_objects["candidate"] == selector_objects["control"],
+            "candidate/control selector object layouts differ")
+    build_ids = {
+        label: elf_section_file_range(path, ".note.gnu.build-id")
+        for label, path in (("candidate", candidate), ("control", control))
+    }
+    require(all(
+        build_ids["candidate"][key] == build_ids["control"][key]
+        for key in (
+            "name", "section_index", "section_type", "virtual_address",
+            "file_offset", "size")),
+        "candidate/control GNU build-id section layouts differ")
+    selector = {
+        "name": "diagnostic_selector",
+        "file_offset": selector_objects["candidate"]["file_offset"],
+        "size": 4,
+    }
+    build_id = {
+        "name": ".note.gnu.build-id",
+        "file_offset": build_ids["candidate"]["file_offset"],
+        "size": build_ids["candidate"]["size"],
+    }
+    comparison = normalized_full_file_comparison(
+        candidate, control, (selector, build_id))
+    comparison["selector_objects"] = selector_objects
+    comparison["build_id_sections"] = build_ids
+    return comparison
 
 
 def cells() -> list[dict[str, Any]]:
@@ -395,12 +556,20 @@ def confidence_interval(values: Sequence[float]) -> dict[str, Any]:
     }
 
 
+def cell_is_target(cell: Mapping[str, Any]) -> bool:
+    return str(cell["role"]) in TARGET_ROLES
+
+
+def cell_uses_main(cell: Mapping[str, Any]) -> bool:
+    return str(cell["role"]) in MAIN_TARGET_ROLES
+
+
 def analyze(
     cell: Mapping[str, Any],
     rounds: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     reference = rounds[0]["invocations"][0]["normalized"]["digests"]
-    labels = ("control", "main") if cell["role"] == "target" \
+    labels = ("control", "main") if cell_uses_main(cell) \
         else ("control",)
     contrasts: dict[str, list[float]] = {label: [] for label in labels}
     for round_value in rounds:
@@ -529,6 +698,44 @@ def main() -> int:
             require(mode_words["candidate"]["value"] == 1 and
                     mode_words["control"]["value"] == 2,
                     "candidate/control selectors are not enabled/disabled")
+            for key in (
+                    "symbol", "virtual_address", "section_index",
+                    "section_name", "file_offset"):
+                require(
+                    mode_words["candidate"][key] ==
+                    mode_words["control"][key],
+                    "candidate/control selector layouts differ")
+        auxiliary_mode_words: dict[str, dict[str, Any]] = {}
+        for symbol_name in sorted(AUXILIARY_MODE_EXPECTATIONS):
+            expected_values = AUXILIARY_MODE_EXPECTATIONS[symbol_name]
+            require(
+                set(expected_values) == {"candidate", "control"} and
+                all(isinstance(value, int) and not isinstance(value, bool)
+                    for value in expected_values.values()),
+                "auxiliary selector expectations are invalid")
+            words = {
+                label: mode_word_identity(
+                    Path(str(identities[label]["path"])), symbol_name)
+                for label in ("candidate", "control")
+            }
+            for label in ("candidate", "control"):
+                require(words[label]["value"] == expected_values[label],
+                        f"{label} auxiliary selector value changed")
+            for key in (
+                    "symbol", "virtual_address", "section_index",
+                    "section_name", "file_offset"):
+                require(words["candidate"][key] == words["control"][key],
+                        "candidate/control auxiliary selector layouts differ")
+            auxiliary_mode_words[symbol_name] = words
+        if auxiliary_mode_words:
+            raw["auxiliary_mode_words"] = auxiliary_mode_words
+        if REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE:
+            require(not ALLOW_IDENTICAL_CANDIDATE_CONTROL,
+                    "shared-inode attribution does not need file masking")
+            raw["candidate_control_normalized_full_file"] = \
+                candidate_control_full_file_equivalence(
+                    Path(str(identities["candidate"]["path"])),
+                    Path(str(identities["control"]["path"])), mode_words)
         require(set(os.sched_getaffinity(0)) == {options.cpu},
                 "runner must be singleton-pinned to the benchmark CPU")
         sibling_text = Path(
@@ -563,7 +770,7 @@ def main() -> int:
             all_cells = cells()
             for cell_index, cell in enumerate(all_cells):
                 cell_raw = {"cell": dict(cell), "rounds": []}
-                orders = TARGET_ORDER if cell["role"] == "target" \
+                orders = TARGET_ORDER if cell_uses_main(cell) \
                     else NEIGHBOR_ORDER
                 for round_index, order in enumerate(orders):
                     before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
@@ -604,7 +811,7 @@ def main() -> int:
         analyses = [
             analyze(item["cell"], item["rounds"]) for item in raw["cells"]]
         targets = [item for item in analyses
-                   if item["cell"]["role"] == "target"]
+                   if cell_is_target(item["cell"])]
         require(len(targets) >= 1, "campaign has no target cell")
         if not ALLOW_MULTIPLE_TARGETS:
             require(len(targets) == 1,
@@ -615,10 +822,10 @@ def main() -> int:
             for target in targets)
         target_main_failure = any(
             target["main_over_candidate"]["ci95"][0] < TARGET_MAIN_FLOOR
-            for target in targets)
+            for target in targets if "main_over_candidate" in target)
         credible_neighbor_regressions = [
             item["cell"]["id"] for item in analyses
-            if item["cell"]["role"] == "neighbor" and
+            if not cell_is_target(item["cell"]) and
             item["control_over_candidate"]["ci95"][1] < NEIGHBOR_FLOOR
         ]
         raw["completed_utc"] = MAIN_SUPPORT.utc_now()
@@ -644,6 +851,10 @@ def main() -> int:
                 for round_value in cell_value["rounds"]),
             "target_control_failure": target_control_failure,
             "target_main_failure": target_main_failure,
+            "target_main_count": sum(
+                cell_uses_main(item["cell"]) for item in targets),
+            "target_control_count": sum(
+                not cell_uses_main(item["cell"]) for item in targets),
             "credible_neighbor_regressions": credible_neighbor_regressions,
             "cells": analyses,
             "binary_sha256": {
@@ -653,6 +864,11 @@ def main() -> int:
             "mode_words": mode_words,
             "raw_sha256": sha256(options.output / "raw.json"),
         }
+        for optional_key in (
+                "candidate_control_normalized_full_file",
+                "auxiliary_mode_words"):
+            if optional_key in raw:
+                summary[optional_key] = raw[optional_key]
         T8_SUPPORT.write_exclusive(options.output / "summary.json", summary)
         result_line = {
             "status": summary["status"],
@@ -663,15 +879,18 @@ def main() -> int:
         if len(targets) == 1:
             result_line["target_control"] = \
                 targets[0]["control_over_candidate"]
-            result_line["target_main"] = targets[0]["main_over_candidate"]
+            if "main_over_candidate" in targets[0]:
+                result_line["target_main"] = \
+                    targets[0]["main_over_candidate"]
         else:
-            result_line["targets"] = {
-                target["cell"]["id"]: {
+            result_line["targets"] = {}
+            for target in targets:
+                result = {
                     "control": target["control_over_candidate"],
-                    "main": target["main_over_candidate"],
                 }
-                for target in targets
-            }
+                if "main_over_candidate" in target:
+                    result["main"] = target["main_over_candidate"]
+                result_line["targets"][target["cell"]["id"]] = result
         print(json.dumps(result_line, sort_keys=True))
         return 0 if summary["status"] == "accepted" else 2
     except Exception as error:
