@@ -13933,6 +13933,26 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K16R8T8B256TerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) && \
+    defined(LEO2_HAVE_AVX2_BACKEND)
+    /* Reuse this existing B=256 call site so the experiment adds no new
+       top-level branch when it is disabled. */
+    if (codec && shard_bytes == 256 && codec->original_count == 32 &&
+        codec->recovery_count == 32 && codec->padded_side == 32 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context && codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2)
+    {
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+        return true;
+#endif
+    }
+#endif
     if (!codec || shard_bytes != 256 || codec->original_count != 16 ||
         g_k16r8_b256_terminal_mode != 1U ||
         codec->recovery_count != 8 || codec->padded_side != 8 ||
@@ -13963,6 +13983,101 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K16R8T8B256TerminalEligible(
 #define LEO2_K16R8_B256_TERMINAL_NOINLINE
 #endif
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) && \
+    defined(LEO2_HAVE_AVX2_BACKEND)
+template<size_t ProtectedCount>
+static LEO2_K16R8_B256_TERMINAL_NOINLINE bool
+TryEncodeGF8K32R32T32B256GeneratedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(codec != NULL && codec->original_count == 32 &&
+        codec->recovery_count == 32 && codec->padded_side == 32);
+    LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+
+    /* Exact mature contract: K+R ranges, K+2T pointers, and 2T work rows. */
+    ScratchLayout layout = { 0, 0, 0,
+        ((64U * sizeof(AddressRange) + 96U * sizeof(void*) +
+            kScratchAlignment - 1U) & ~(kScratchAlignment - 1U)) +
+            64U * 256U };
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 256, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, 32, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 32, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[2 + i] = protected_ranges[i];
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    /* A non-packed valid layout belongs to the mature validator/executor. */
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], 32U * 256U, input_range) ||
+        !MakeRange(recovery[0], 32U * 256U, output_range))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    uintptr_t pointer_mismatch = 0;
+    for (size_t i = 0; i < 32; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
+            (input_range.begin + i * 256U);
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
+            (output_range.begin + i * 256U);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    leopard::backend::AVX2FF8HighEncodeT32B256(original, recovery);
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+#endif
+
 /*
     This exact profile has no shortened input or punctured output rows: the
     caller's sixteen packed 256-byte originals and eight packed parity shards
@@ -13986,6 +14101,14 @@ TryEncodeGF8K16R8T8B256PackedTerminal(
 {
     LEO_DEBUG_ASSERT(IsGF8AVX2K16R8T8B256TerminalEligible(codec, 256));
     LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) && \
+    defined(LEO2_HAVE_AVX2_BACKEND)
+    if (codec->original_count == 32)
+        return TryEncodeGF8K32R32T32B256GeneratedTerminal<ProtectedCount>(
+            codec, protected_ranges, original, recovery,
+            scratch, scratch_bytes, result_out);
+#endif
 
     /* 24 range records, 16 + 2T pointers, and 2T 256-byte work rows. */
     ScratchLayout layout = { 0, 0, 0,

@@ -73,6 +73,15 @@ option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
 option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     "Enable the promoted two-message-block AVX2 T=8 binding fast path"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
+    "Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 encoder"
+    OFF)
+if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED AND
+   NOT LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING)
+    message(FATAL_ERROR
+        "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED reuses the enabled "
+        "B=256 packed-terminal call site")
+endif()
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
@@ -337,6 +346,12 @@ target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+    # Only the public routing TU consumes this selector.  The generated AVX2
+    # arithmetic has its own conditional object below.
+    set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1)
+endif()
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -495,6 +510,32 @@ if(LEO2_X86_TARGET)
     endif()
 endif()
 
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+   LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+    # Keep the generated candidate in a trailing object of its own.  Enabling
+    # it must not change compilation or layout of the mature AVX2 backend TU.
+    add_library(leopard2_backend_avx2_t32_b256 OBJECT
+        Leopard2BackendAVX2T32B256.cpp)
+    target_include_directories(leopard2_backend_avx2_t32_b256 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_backend_avx2_t32_b256 PRIVATE
+        LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1
+        LEO2_HAVE_AVX2_BACKEND=1)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_backend_avx2_t32_b256 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_avx2_t32_b256 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_backend_avx2_t32_b256 PRIVATE
+            /arch:AVX2)
+    endif()
+endif()
+
 if(LEO2_HAVE_SSSE3_BACKEND)
     if(NOT LEOPARD_ENABLE_GF8)
         target_compile_definitions(leopard2_backend_ssse3 PRIVATE
@@ -529,6 +570,10 @@ if(LEO2_HAVE_AVX2_BACKEND)
     endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
+    if(TARGET leopard2_backend_avx2_t32_b256)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
+    endif()
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
 endif()
 if(LEO2_HAVE_AVX512_BACKEND)
@@ -888,6 +933,10 @@ if(LEO2_BUILD_TESTS)
         endif()
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
+        if(TARGET leopard2_backend_avx2_t32_b256)
+            target_sources(leopard_test_hooks PRIVATE
+                $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
+        endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
     endif()
