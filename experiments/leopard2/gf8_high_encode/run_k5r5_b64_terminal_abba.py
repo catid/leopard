@@ -223,7 +223,7 @@ def benchmark_command(
         "/usr/bin/prlimit", "--as=201326592",
         "/usr/bin/taskset", "-c", str(cpu), str(executable),
         "--k", str(cell["K"]), "--r", str(cell["R"]),
-        "--bytes", str(cell["bytes"]), "--loss", "1",
+        "--bytes", str(cell["bytes"]), "--loss", str(cell.get("loss", 1)),
         "--batch", str(cell["batch"]), "--reuse", str(cell["reuse"]),
         "--iterations", str(iterations), "--warmup", str(warmup),
         "--threads", "1", "--seed", str(cell["seed"]), "--json", "-",
@@ -264,7 +264,7 @@ def validate_result(
     require(isinstance(result, dict), "benchmark output is not an object")
     expected_parameters = {
         "K": cell["K"], "R": cell["R"],
-        "shard_bytes": cell["bytes"], "loss_count": 1,
+        "shard_bytes": cell["bytes"], "loss_count": cell.get("loss", 1),
         "batch": cell["batch"], "reuse": cell["reuse"],
         "iterations": iterations, "warmup": warmup,
         "thread_count": 1, "seed": cell["seed"],
@@ -400,7 +400,8 @@ def analyze(
     rounds: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
     reference = rounds[0]["invocations"][0]["normalized"]["digests"]
-    labels = ("control", "main") if cell["role"] == "target" \
+    labels = ("control", "main") if cell.get(
+        "compare_main", cell["role"] == "target") \
         else ("control",)
     contrasts: dict[str, list[float]] = {label: [] for label in labels}
     for round_value in rounds:
@@ -563,7 +564,8 @@ def main() -> int:
             all_cells = cells()
             for cell_index, cell in enumerate(all_cells):
                 cell_raw = {"cell": dict(cell), "rounds": []}
-                orders = TARGET_ORDER if cell["role"] == "target" \
+                orders = TARGET_ORDER if cell.get(
+                    "compare_main", cell["role"] == "target") \
                     else NEIGHBOR_ORDER
                 for round_index, order in enumerate(orders):
                     before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
