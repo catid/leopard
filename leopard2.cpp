@@ -8270,6 +8270,7 @@ static void ExecuteRawTranslatedLowDecode(
             geometry.aligned_prefix_bytes == 64 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
+            pattern.missing_original_count < 32 &&
             ops.kind == LEO2_BACKEND_AVX2 &&
             codec->translated_low_factors8.size() == 1 &&
             leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
