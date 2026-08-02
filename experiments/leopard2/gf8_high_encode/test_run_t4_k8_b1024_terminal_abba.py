@@ -177,9 +177,9 @@ def main() -> int:
             BASE.REQUIRE_EQUAL_EXECUTABLE_PATH_LENGTHS is True and
             BASE.EXPECTED_BINARY_SHA256 == {
                 "candidate":
-                    "b52e01f87fd2095e4a590ef5df1fc1fb0b8dc303eb65c2a0defa73d49696ad43",
+                    "adaf51f4a461c1ce2826476e2e35e7c3d633980a9e103ce27b850136ed688611",
                 "control":
-                    "b52e01f87fd2095e4a590ef5df1fc1fb0b8dc303eb65c2a0defa73d49696ad43",
+                    "adaf51f4a461c1ce2826476e2e35e7c3d633980a9e103ce27b850136ed688611",
                 "main":
                     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
             },
