@@ -63,6 +63,10 @@ namespace leopard { namespace ff8 {
 
 static volatile uint32_t g_high_final_ifft2_range_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE;
+// Default fail-closed until the fixed kernel passes correctness, assembly,
+// and frozen-binary timing qualification.  Values 1 and 2 give candidate and
+// control identical text and differ only in this initialized data word.
+static volatile uint32_t g_high_t16_b64_three_pass_mode = 2U;
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
@@ -85,6 +89,7 @@ static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighT4PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8PackedCalls(0);
 static std::atomic<uint64_t> TestHighBalancedB64PackedCalls(0);
+static std::atomic<uint64_t> TestHighT16B64ThreePassCalls(0);
 static std::atomic<uint64_t> TestHighFinalIFFT2RangeCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
@@ -873,6 +878,11 @@ static void FFTInitialize()
                 (static_cast<unsigned>(active[i]) * inverse_n) % kModulus);
         }
     }
+}
+
+const ffe_t* CanonicalFFTSkewStorage()
+{
+    return FFTSkewStorage;
 }
 
 /*
@@ -2850,6 +2860,31 @@ void ReedSolomonEncode(
 #endif
         return;
     }
+    // Check the exact public shape before reading the same-text experiment
+    // mode so every neighboring K/R/byte/profile route executes identical
+    // candidate and control instructions.  The dedicated callback has no
+    // general shortened/skew/tail contract and must never be widened here.
+    const bool exact_t16_b64_three_pass_shape =
+        exact_public_64_byte_shard && buffer_bytes == 64U &&
+        original_count == 16U && recovery_count == 16U &&
+        requested_output_count == 16U && m == 16U && dense_schedule &&
+        ops.kind == LEO2_BACKEND_AVX2 &&
+        ops.ff8_high_encode_t16_b64 != NULL;
+    if (exact_t16_b64_three_pass_shape &&
+        g_high_t16_b64_three_pass_mode == 1U)
+    {
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighIFFTButterfly4OutCalls.fetch_add(
+            4, std::memory_order_relaxed);
+        TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+        TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+        TestHighT16B64ThreePassCalls.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
+        ops.ff8_high_encode_t16_b64(data, work);
+        return;
+    }
+
     bool use_one_block_callback =
         (ops.kind == LEO2_BACKEND_AVX512 && buffer_bytes > 1024) ||
         (ops.kind == LEO2_BACKEND_AVX2 &&
@@ -3974,6 +4009,17 @@ bool PreparePrunedTransformPlan(
         FFTSkewStorage, plan);
 }
 
+bool SetHighT16B64ThreePassEnabledForDiagnostics(bool enabled)
+{
+    g_high_t16_b64_three_pass_mode = enabled ? 1U : 2U;
+    return true;
+}
+
+bool HighT16B64ThreePassEnabledForDiagnostics()
+{
+    return g_high_t16_b64_three_pass_mode == 1U;
+}
+
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 
@@ -4039,6 +4085,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT4PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8PackedCalls.store(0, std::memory_order_relaxed);
     TestHighBalancedB64PackedCalls.store(0, std::memory_order_relaxed);
+    TestHighT16B64ThreePassCalls.store(0, std::memory_order_relaxed);
     TestHighFinalIFFT2RangeCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
@@ -4072,6 +4119,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT8PackedCalls.load(std::memory_order_relaxed);
     result.balanced_b64_packed_calls =
         TestHighBalancedB64PackedCalls.load(std::memory_order_relaxed);
+    result.t16_b64_three_pass_calls =
+        TestHighT16B64ThreePassCalls.load(std::memory_order_relaxed);
     result.final_ifft2_range_calls =
         TestHighFinalIFFT2RangeCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =

@@ -373,6 +373,7 @@ int main()
         RequireResult(result, LEO2_SUCCESS,
             "create production AVX2 context");
         ExerciseProduction(context);
+        ExerciseProductionBalancedSide(context, 16);
         ExerciseProductionBalancedSide(context, 64);
         ExerciseProductionBalancedSide(context, 128);
         leo2_context_destroy(context);

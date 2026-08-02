@@ -46,6 +46,8 @@ struct InitializeArgs
 {
     FF8MultiplyLog ff8_multiply_log;
     FF16MultiplyLog ff16_multiply_log;
+    // Canonical legacy GF8 transform skews, initialized before backend KATs.
+    const uint8_t* ff8_fft_skew;
 };
 
 typedef void (*FixedMultiply)(
@@ -329,6 +331,18 @@ typedef void (*FF8HighEncodeOneBlock)(
     uint64_t byte_count);
 
 /*
+    Exact dense K=R=T=16 legacy-high GF8 encode for one 64-byte stripe.
+    This deliberately remains separate from FF8HighEncodeOneBlock: the latter
+    accepts arbitrary byte counts, caller-provided skews, and a shortened final
+    input, while this callback is a generated kernel for one immutable wire
+    transform.  data[0..16) are readable, work[0..16) are pairwise-disjoint
+    writable outputs, and every input range is disjoint from every output.
+*/
+typedef void (*FF8HighEncodeT16B64)(
+    const void* const* data,
+    void* const* work);
+
+/*
     Complete dense encode for exactly two T=8 message blocks and a shard whose
     byte count is a 64-byte multiple through 1024.  data has 16 readable rows,
     work has eight pairwise-disjoint output rows, and all input/output ranges
@@ -548,6 +562,8 @@ struct Ops
     // Optional pure-AVX2 active-parent locator construction.  Scalar and
     // other SIMD backends retain the established field implementation.
     FF8WalshLocator ff8_walsh_locator;
+    // Optional exact pure-AVX2 K=R=T=16, 64-byte legacy-high transform.
+    FF8HighEncodeT16B64 ff8_high_encode_t16_b64;
 };
 
 struct X86Features

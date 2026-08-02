@@ -6202,6 +6202,217 @@ static void AVX2FF8FFTButterfly8Out(
 #undef LEO2_R8_STORE
 #endif
 
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+
+/*
+    Generated exact K=R=T=16, B=64 legacy-high transform.
+
+    FFTSkewStorage + 16 supplies the inverse skews
+
+      255,219,153,7,17,111,102,28,85,183,51,224,34,131,187,222
+
+    and FFTSkewStorage supplies the forward skews
+
+      0,255,255,85,255,17,85,34,255,153,17,102,85,51,34,187.
+
+    The ordinary traversal makes four complete shard passes: contiguous
+    inverse radix-four groups, an outer inverse group, the matching outer
+    forward group, and contiguous forward groups.  The two outer groups touch
+    exactly the same four columns, so this kernel retains each column in eight
+    YMM registers and executes both groups before storing it.  The resulting
+    three passes preserve the legacy operation order within every butterfly
+    while removing one 16-shard load/store round.
+
+    Each group processes one 32-byte slice at a time.  Four data registers,
+    two table registers, the nibble mask, and product temporaries fit the
+    16-register AVX2 file without relying on spills.  Both slices still execute
+    within the same three complete shard passes.  Do not widen this live range
+    without a spill audit.
+*/
+static LEO_FORCE_INLINE __m256i AVX2FF8T16B64Load(
+    const void* pointer,
+    unsigned offset)
+{
+    const uint8_t* const bytes = static_cast<const uint8_t*>(pointer) + offset;
+    return _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bytes));
+}
+
+static LEO_FORCE_INLINE void AVX2FF8T16B64Store(
+    void* pointer,
+    unsigned offset,
+    __m256i value)
+{
+    uint8_t* const bytes = static_cast<uint8_t*>(pointer) + offset;
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(bytes), value);
+}
+
+static LEO_FORCE_INLINE void AVX2FF8T16B64Xor(
+    __m256i& destination,
+    __m256i source)
+{
+    destination = _mm256_xor_si256(destination, source);
+}
+
+template<unsigned Log>
+static LEO_FORCE_INLINE void AVX2FF8T16B64MulAdd(
+    __m256i& destination,
+    __m256i source)
+{
+    static_assert(Log <= 255, "T16 fixed multiplier log is out of range");
+    const FF8NibbleTable& table = FF8Tables[Log];
+    const __m256i low_table = BroadcastTable(table.low);
+    const __m256i high_table = BroadcastTable(table.high);
+    destination = _mm256_xor_si256(destination,
+        AVX2FF8ProductVector(source, low_table, high_table));
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void AVX2FF8T16B64IFFTRadix4(
+    __m256i& value0,
+    __m256i& value1,
+    __m256i& value2,
+    __m256i& value3)
+{
+    AVX2FF8T16B64Xor(value1, value0);
+    AVX2FF8T16B64MulAdd<Log01>(value0, value1);
+    AVX2FF8T16B64Xor(value3, value2);
+    AVX2FF8T16B64MulAdd<Log23>(value2, value3);
+    AVX2FF8T16B64Xor(value2, value0);
+    AVX2FF8T16B64Xor(value3, value1);
+    AVX2FF8T16B64MulAdd<Log02>(value0, value2);
+    AVX2FF8T16B64MulAdd<Log02>(value1, value3);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void AVX2FF8T16B64FFTRadix4(
+    __m256i& value0,
+    __m256i& value1,
+    __m256i& value2,
+    __m256i& value3)
+{
+    if (Log02 != 255)
+    {
+        AVX2FF8T16B64MulAdd<Log02>(value0, value2);
+        AVX2FF8T16B64MulAdd<Log02>(value1, value3);
+    }
+    AVX2FF8T16B64Xor(value2, value0);
+    AVX2FF8T16B64Xor(value3, value1);
+    if (Log01 != 255)
+        AVX2FF8T16B64MulAdd<Log01>(value0, value1);
+    AVX2FF8T16B64Xor(value1, value0);
+    if (Log23 != 255)
+        AVX2FF8T16B64MulAdd<Log23>(value2, value3);
+    AVX2FF8T16B64Xor(value3, value2);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void AVX2FF8T16B64InverseGroup(
+    const void* const* data,
+    void* const* work,
+    unsigned base,
+    unsigned offset)
+{
+    __m256i value0 = AVX2FF8T16B64Load(data[base], offset);
+    __m256i value1 = AVX2FF8T16B64Load(data[base + 1], offset);
+    __m256i value2 = AVX2FF8T16B64Load(data[base + 2], offset);
+    __m256i value3 = AVX2FF8T16B64Load(data[base + 3], offset);
+    AVX2FF8T16B64IFFTRadix4<Log01, Log23, Log02>(
+        value0, value1, value2, value3);
+    AVX2FF8T16B64Store(work[base], offset, value0);
+    AVX2FF8T16B64Store(work[base + 1], offset, value1);
+    AVX2FF8T16B64Store(work[base + 2], offset, value2);
+    AVX2FF8T16B64Store(work[base + 3], offset, value3);
+}
+
+static LEO_FORCE_INLINE void AVX2FF8T16B64OuterGroups(
+    void* const* work,
+    unsigned column,
+    unsigned offset)
+{
+    __m256i value0 = AVX2FF8T16B64Load(work[column], offset);
+    __m256i value1 = AVX2FF8T16B64Load(work[column + 4], offset);
+    __m256i value2 = AVX2FF8T16B64Load(work[column + 8], offset);
+    __m256i value3 = AVX2FF8T16B64Load(work[column + 12], offset);
+    AVX2FF8T16B64IFFTRadix4<17, 34, 85>(
+        value0, value1, value2, value3);
+    AVX2FF8T16B64FFTRadix4<255, 85, 255>(
+        value0, value1, value2, value3);
+    AVX2FF8T16B64Store(work[column], offset, value0);
+    AVX2FF8T16B64Store(work[column + 4], offset, value1);
+    AVX2FF8T16B64Store(work[column + 8], offset, value2);
+    AVX2FF8T16B64Store(work[column + 12], offset, value3);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void AVX2FF8T16B64ForwardGroup(
+    void* const* work,
+    unsigned base,
+    unsigned offset)
+{
+    __m256i value0 = AVX2FF8T16B64Load(work[base], offset);
+    __m256i value1 = AVX2FF8T16B64Load(work[base + 1], offset);
+    __m256i value2 = AVX2FF8T16B64Load(work[base + 2], offset);
+    __m256i value3 = AVX2FF8T16B64Load(work[base + 3], offset);
+    AVX2FF8T16B64FFTRadix4<Log01, Log23, Log02>(
+        value0, value1, value2, value3);
+    AVX2FF8T16B64Store(work[base], offset, value0);
+    AVX2FF8T16B64Store(work[base + 1], offset, value1);
+    AVX2FF8T16B64Store(work[base + 2], offset, value2);
+    AVX2FF8T16B64Store(work[base + 3], offset, value3);
+}
+
+#if defined(_MSC_VER)
+#define LEO2_AVX2_T16_B64_ENTRY __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_AVX2_T16_B64_ENTRY \
+    __attribute__((noinline, noipa, section(".text.leo2_t16_b64"), aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_AVX2_T16_B64_ENTRY \
+    __attribute__((noinline, section(".text.leo2_t16_b64"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_AVX2_T16_B64_ENTRY __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_AVX2_T16_B64_ENTRY
+#endif
+
+static LEO2_AVX2_T16_B64_ENTRY void AVX2FF8HighEncodeT16B64(
+    const void* const* data,
+    void* const* work)
+{
+    LEO_DEBUG_ASSERT(data != NULL && work != NULL);
+
+    AVX2FF8T16B64InverseGroup<219, 7, 153>(data, work, 0, 0);
+    AVX2FF8T16B64InverseGroup<111, 28, 102>(data, work, 4, 0);
+    AVX2FF8T16B64InverseGroup<183, 224, 51>(data, work, 8, 0);
+    AVX2FF8T16B64InverseGroup<131, 222, 187>(data, work, 12, 0);
+    AVX2FF8T16B64InverseGroup<219, 7, 153>(data, work, 0, 32);
+    AVX2FF8T16B64InverseGroup<111, 28, 102>(data, work, 4, 32);
+    AVX2FF8T16B64InverseGroup<183, 224, 51>(data, work, 8, 32);
+    AVX2FF8T16B64InverseGroup<131, 222, 187>(data, work, 12, 32);
+
+    AVX2FF8T16B64OuterGroups(work, 0, 0);
+    AVX2FF8T16B64OuterGroups(work, 1, 0);
+    AVX2FF8T16B64OuterGroups(work, 2, 0);
+    AVX2FF8T16B64OuterGroups(work, 3, 0);
+    AVX2FF8T16B64OuterGroups(work, 0, 32);
+    AVX2FF8T16B64OuterGroups(work, 1, 32);
+    AVX2FF8T16B64OuterGroups(work, 2, 32);
+    AVX2FF8T16B64OuterGroups(work, 3, 32);
+
+    AVX2FF8T16B64ForwardGroup<255, 85, 255>(work, 0, 0);
+    AVX2FF8T16B64ForwardGroup<17, 34, 85>(work, 4, 0);
+    AVX2FF8T16B64ForwardGroup<153, 102, 17>(work, 8, 0);
+    AVX2FF8T16B64ForwardGroup<51, 187, 34>(work, 12, 0);
+    AVX2FF8T16B64ForwardGroup<255, 85, 255>(work, 0, 32);
+    AVX2FF8T16B64ForwardGroup<17, 34, 85>(work, 4, 32);
+    AVX2FF8T16B64ForwardGroup<153, 102, 17>(work, 8, 32);
+    AVX2FF8T16B64ForwardGroup<51, 187, 34>(work, 12, 32);
+}
+
+#undef LEO2_AVX2_T16_B64_ENTRY
+#endif
+
 #if defined(LEO_HAS_FF8) && \
     !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
     !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
@@ -7709,6 +7920,12 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
     !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8WalshLocator
+#else
+    , NULL
+#endif
+#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    , AVX2FF8HighEncodeT16B64
 #else
     , NULL
 #endif

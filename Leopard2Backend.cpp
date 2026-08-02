@@ -69,7 +69,7 @@ enum QualificationState
 };
 static QualificationState QualificationStates[LEO2_BACKEND_GFNI + 1] = {};
 static QualificationStatus QualificationFailures[LEO2_BACKEND_GFNI + 1] = {};
-static InitializeArgs SavedInitializeArgs = { NULL, NULL };
+static InitializeArgs SavedInitializeArgs = { NULL, NULL, NULL };
 static uint32_t QualifiableBackendMask = 0;
 static bool SelfTestPassed = false;
 static QualificationStatus StartupFailure = QualificationAvailable;
@@ -1454,6 +1454,64 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
         }
     }
     return true;
+}
+
+static bool TestFF8HighEncodeT16B64(
+    const Ops& ops,
+    const InitializeArgs& args)
+{
+    if (!ops.ff8_high_encode_t16_b64)
+        return true;
+    if (ops.kind != LEO2_BACKEND_AVX2)
+        return false;
+
+    static const unsigned kSide = 16;
+    static const uint64_t kBytes = 64;
+    static const uint8_t kInverseSkew[kSide] = {
+        255, 219, 153, 7, 17, 111, 102, 28,
+        85, 183, 51, 224, 34, 131, 187, 222
+    };
+    static const uint8_t kForwardSkew[kSide] = {
+        0, 255, 255, 85, 255, 17, 85, 34,
+        255, 153, 17, 102, 85, 51, 34, 187
+    };
+    // The generated kernel hardcodes these two 16-entry slices.  Anchor both
+    // the kernel and the primitive reference below to the independently
+    // initialized canonical transform rather than allowing duplicated typoed
+    // arrays to qualify one another.
+    if (!args.ff8_fft_skew ||
+        std::memcmp(args.ff8_fft_skew, kForwardSkew, kSide) != 0 ||
+        std::memcmp(args.ff8_fft_skew + kSide, kInverseSkew, kSide) != 0)
+        return false;
+    uint8_t input[kSide][96];
+    uint8_t input_before[kSide][96];
+    uint8_t actual[kSide][96];
+    uint8_t expected[kSide][96];
+    const void* input_pointers[kSide];
+    void* actual_pointers[kSide];
+    void* expected_pointers[kSide];
+    for (unsigned lane = 0; lane < kSide; ++lane)
+    {
+        for (size_t i = 0; i < sizeof(input[lane]); ++i)
+        {
+            input[lane][i] = input_before[lane][i] =
+                static_cast<uint8_t>(lane * 29U + i * 47U + 11U);
+            actual[lane][i] = expected[lane][i] =
+                static_cast<uint8_t>(0xc3U + lane * 7U + i * 13U);
+        }
+        const unsigned input_offset = lane;
+        const unsigned output_offset = 31U - lane;
+        input_pointers[lane] = input[lane] + input_offset;
+        actual_pointers[lane] = actual[lane] + output_offset;
+        expected_pointers[lane] = expected[lane] + output_offset;
+    }
+
+    ReferenceFF8HighEncodeOneBlock(
+        ops, input_pointers, expected_pointers, kSide,
+        kInverseSkew, kForwardSkew, kBytes);
+    ops.ff8_high_encode_t16_b64(input_pointers, actual_pointers);
+    return std::memcmp(input, input_before, sizeof(input)) == 0 &&
+        std::memcmp(actual, expected, sizeof(actual)) == 0;
 }
 
 static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
@@ -3021,6 +3079,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (expected_pure_avx2_callbacks !=
         (ops.ff8_walsh_locator != NULL))
         return false;
+    if (expected_pure_avx2_callbacks !=
+        (ops.ff8_high_encode_t16_b64 != NULL))
+        return false;
 #else
     if (ops.xor_memory_sources_fused_final)
         return false;
@@ -3029,6 +3090,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (ops.ff8_high_encode_t4_batch)
         return false;
     if (ops.ff8_walsh_locator)
+        return false;
+    if (ops.ff8_high_encode_t16_b64)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
@@ -3078,6 +3141,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8ButterflyRanges(ops) ||
         !TestFF8IFFTButterfly2Range(ops) ||
         !TestFF8HighEncodeOneBlock(ops) ||
+        !TestFF8HighEncodeT16B64(ops, args) ||
         !TestFF8HighEncodeTwoBlocksT8(ops) ||
         !TestFF8HighEncodeSmall(ops) ||
         !TestFF8HighEncodeT4Batch(ops) ||
@@ -3164,7 +3228,8 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         ops.ff8_fft_butterfly8_out ||
         ops.ff8_linear_combination4_tiny ||
         ops.ff8_ifft_butterfly2_range ||
-        ops.ff8_walsh_locator)
+        ops.ff8_walsh_locator ||
+        ops.ff8_high_encode_t16_b64)
         return false;
 #endif
 #ifdef LEO_HAS_FF16

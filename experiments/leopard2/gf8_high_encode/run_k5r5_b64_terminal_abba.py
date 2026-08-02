@@ -32,6 +32,7 @@ SUMMARY_SCHEMA = "leopard2-gf8-k5r5-b64-terminal-summary/v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_k5r5_b64_terminal_modeE"
 ALLOW_IDENTICAL_CANDIDATE_CONTROL = False
+SHARED_MODE_DEFAULT = 1
 ALLOW_MULTIPLE_TARGETS = False
 CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_SCHEMA = "leopard2-benchmark-v5"
@@ -523,8 +524,9 @@ def main() -> int:
             }
         raw["mode_words"] = mode_words
         if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
-            require(mode_words["shared_binary_default"]["value"] == 1,
-                    "shared binary does not default to the candidate route")
+            require(mode_words["shared_binary_default"]["value"] ==
+                    SHARED_MODE_DEFAULT,
+                    "shared binary has an unexpected default selector word")
         else:
             require(mode_words["candidate"]["value"] == 1 and
                     mode_words["control"]["value"] == 2,

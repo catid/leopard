@@ -78,6 +78,9 @@ ffe_t MultiplyElements(ffe_t a, ffe_t b);
 ffe_t InverseElement(ffe_t value);
 ffe_t ElementLog(ffe_t value); // value must be nonzero
 ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log);
+// Canonical legacy transform skew storage.  Backend startup KATs use this to
+// anchor generated fixed-size kernels to the initialized wire transform.
+const ffe_t* CanonicalFFTSkewStorage();
 
 // Fixed-multiplier execution helpers.  multiplier_log is produced by
 // ElementLog(), source and destination must not overlap, and byte_count may be
@@ -406,6 +409,11 @@ void PrepareHighDecode(
     unsigned t,
     ffe_t* output_factors); // n elements; t..n-1 are initialized
 
+// Same-text attribution selector for the default-off exact T=16/B=64 AVX2
+// encoder candidate.  This is internal experiment control, not public API.
+bool SetHighT16B64ThreePassEnabledForDiagnostics(bool enabled);
+bool HighT16B64ThreePassEnabledForDiagnostics();
+
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 // Internal test-only access to the exact production LCH kernels and constants.
 // These are deliberately absent from leopard2.h and from non-test builds.
@@ -437,6 +445,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t t4_packed_calls;
     uint64_t t8_packed_calls;
     uint64_t balanced_b64_packed_calls;
+    uint64_t t16_b64_three_pass_calls;
     uint64_t final_ifft2_range_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;

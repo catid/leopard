@@ -1436,6 +1436,21 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        add_executable(leopard2_t16_b64_three_pass_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_t16_b64_three_pass.cpp)
+        target_include_directories(leopard2_t16_b64_three_pass_test PRIVATE
+            tests/leopard2)
+        target_compile_definitions(leopard2_t16_b64_three_pass_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(leopard2_t16_b64_three_pass_test
+            leopard_test_hooks)
+        add_test(NAME leopard2_t16_b64_three_pass
+            COMMAND leopard2_t16_b64_three_pass_test)
+        set_tests_properties(leopard2_t16_b64_three_pass PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
         # Exercise the fixed non-hook scratch geometry and ordinary archive;
         # the hook test above intentionally derives its larger diagnostic
         # workspace through EncodeLayout.

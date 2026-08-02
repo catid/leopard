@@ -13763,7 +13763,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     if (!codec || shard_bytes != 64)
         return false;
     const uint32_t side = codec->padded_side;
-    if (side < 32 || side > 128 ||
+    if (side < 16 || side > 128 ||
         ((codec->original_count ^ side) |
          (codec->recovery_count ^ side)) != 0)
         return false;
@@ -13773,8 +13773,15 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
         codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
         !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
         !codec->context->ops ||
-        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
-        !codec->context->ops->ff8_ifft_butterfly2_range)
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+    if (side == 16)
+    {
+        if (!codec->context->ops->ff8_high_encode_t16_b64 ||
+            !leopard::ff8::HighT16B64ThreePassEnabledForDiagnostics())
+            return false;
+    }
+    else if (!codec->context->ops->ff8_ifft_butterfly2_range)
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
@@ -13804,8 +13811,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     A balanced K=R=T code is one complete T-point inverse transform followed
     by one complete forward transform.  The exact-64-byte AVX2 transform
     layers are already independently qualified; this terminal changes only
-    the public-call boundary around that arithmetic.  T=16 remains excluded
-    because its direct screen did not recover the exact-main gap.
+    the public-call boundary around that arithmetic.  T=16 is admitted so its
+    separately gated three-pass kernel can be measured without paying the
+    general public validator overhead.
 
     All 2T public pointer entries are compared with their expected
     packed-slab coordinate before any output byte is written.  A mismatch is
@@ -13813,7 +13821,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     layouts retain the general validator and executor.  The aggregate ranges
     then provide the same scratch, metadata, and input/output disjointness
     proof as the mature path without rebuilding output masks, sparse plans, or
-    transform pointer geometry.
+    transform pointer geometry.  T=16 enters this wrapper only when the
+    separately selectable generated three-pass experiment is enabled; its
+    default-off control retains the mature validator and transform together.
 */
 template<size_t FixedSide, size_t ProtectedCount>
 static LEO2_BALANCED_B64_TERMINAL_NOINLINE bool
@@ -13829,7 +13839,8 @@ TryEncodeGF8BalancedB64PackedTerminal(
     LEO_DEBUG_ASSERT(
         IsGF8AVX2BalancedB64PackedTerminalEligible(codec, 64));
 
-    static_assert(FixedSide == 32 || FixedSide == 64 || FixedSide == 128,
+    static_assert(FixedSide == 16 || FixedSide == 32 || FixedSide == 64 ||
+            FixedSide == 128,
         "balanced 64-byte terminal side is not qualified");
     static_assert(ProtectedCount <= 1,
         "balanced terminal protects at most one batch descriptor");
@@ -15157,7 +15168,11 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
         bool handled;
-        if (codec->padded_side == 32)
+        if (codec->padded_side == 16)
+            handled = TryEncodeGF8BalancedB64PackedTerminal<16, 0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result);
+        else if (codec->padded_side == 32)
             handled = TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
                 codec, NULL, original, recovery, scratch, scratch_bytes,
                 terminal_result);
@@ -15328,7 +15343,12 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
         {
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             bool handled;
-            if (codec->padded_side == 32)
+            if (codec->padded_side == 16)
+                handled = TryEncodeGF8BalancedB64PackedTerminal<16, 1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result);
+            else if (codec->padded_side == 32)
                 handled = TryEncodeGF8BalancedB64PackedTerminal<32, 1>(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,

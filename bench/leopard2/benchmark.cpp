@@ -30,6 +30,7 @@
 #include "leopard2.h"
 #include "Leopard2Direct.h"
 #include "Leopard2Dispatch.h"
+#include "LeopardFF8.h"
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
 #if !defined(LEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER)
 #error "source-attested benchmark requires its exact generated header path"
@@ -42,7 +43,6 @@
 #endif
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
-#include "LeopardFF8.h"
 #include "LeopardFF16.h"
 #endif
 
@@ -120,6 +120,7 @@ struct Options
     int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
+    int t16_b64_three_pass_mode;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
     bool disable_k9r6r8_b256_terminal;
@@ -168,6 +169,7 @@ struct Options
         , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
+        , t16_b64_three_pass_mode(-1)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
@@ -453,6 +455,8 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
         << "  --k8r3r4-t4-terminal-mode 0|1\n"
         << "                         Attribution-only: disable or enable the terminal\n"
+        << "  --t16-b64-three-pass-mode 1|2\n"
+        << "                         Attribution-only: candidate or same-binary control\n"
         << "  --disable-k16r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
@@ -562,6 +566,16 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--k8r3r4-t4-terminal-mode must be exactly 0 or 1");
         }
+        else if (argument == "--t16-b64-three-pass-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "1")
+                options.t16_b64_three_pass_mode = 1;
+            else if (mode == "2")
+                options.t16_b64_three_pass_mode = 2;
+            else
+                Fail("--t16-b64-three-pass-mode must be exactly 1 or 2");
+        }
         else if (argument == "--disable-k16r8-b256-terminal")
             options.disable_k16r8_b256_terminal = true;
         else if (argument == "--disable-k9r5-b256-terminal")
@@ -625,6 +639,18 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--loss cannot exceed K");
     if (options.losses > options.r)
         Fail("--loss cannot exceed R when only transmitted recovery shards are used");
+    if (options.t16_b64_three_pass_mode >= 0 &&
+        (options.k != 16 || options.r != 16 || options.bytes != 64 ||
+         options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples))
+    {
+        Fail("--t16-b64-three-pass-mode requires K=R=16, 64-byte shards, "
+             "explicit high/GF8/AVX2, batch=1, one thread, --skip-legacy, "
+             "and --retain-samples");
+    }
     if (options.r1_small_reduction_mode >= 0 &&
         (options.r != 1 || options.batch != 1 || options.losses != 1 ||
          options.threads != 1 ||
@@ -683,6 +709,8 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
     if (options.one_shot_plan_setup_mode >= 0)
         Fail("--one-shot-plan-setup-mode requires the ordinary benchmark");
+    if (options.t16_b64_three_pass_mode >= 0)
+        Fail("--t16-b64-three-pass-mode requires the ordinary benchmark");
 #endif
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
@@ -1289,6 +1317,22 @@ static std::string LegacyUnavailableReason(
 
 static int Run(const Options& options)
 {
+    const bool time_one_shot_encode =
+        options.r1_small_reduction_mode >= 0 ||
+        options.t16_b64_three_pass_mode >= 0;
+    if (options.t16_b64_three_pass_mode >= 0)
+    {
+#ifdef LEO_HAS_FF8
+        const bool enabled = options.t16_b64_three_pass_mode == 1;
+        if (!leopard::ff8::
+                SetHighT16B64ThreePassEnabledForDiagnostics(enabled) ||
+            leopard::ff8::HighT16B64ThreePassEnabledForDiagnostics() !=
+                enabled)
+            Fail("cannot set the T16/B64 three-pass attribution mode");
+#else
+        Fail("--t16-b64-three-pass-mode requires a GF8-enabled build");
+#endif
+    }
     if (options.one_shot_plan_setup_mode >= 0 &&
         !leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(
             static_cast<unsigned>(options.one_shot_plan_setup_mode)))
@@ -1595,12 +1639,14 @@ static int Run(const Options& options)
         options.attest_source || options.measure_one_shot_decode ||
         options.one_shot_plan_setup_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
+        options.t16_b64_three_pass_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.t16_b64_three_pass_mode >= 0 ? 17 :
         options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
         options.one_shot_plan_setup_mode >= 0 ? 15 :
         options.r1_small_reduction_mode >= 0 ? 12 :
@@ -1631,7 +1677,7 @@ static int Run(const Options& options)
                 CheckedSize(options.r, options.bytes, "parity digest"));
         }
     }
-    if (options.r1_small_reduction_mode >= 0)
+    if (time_one_shot_encode)
     {
         for (size_t stripe_index = 0;
              stripe_index < stripes.size(); ++stripe_index)
@@ -1748,7 +1794,7 @@ static int Run(const Options& options)
     for (size_t i = 0; i < options.warmup; ++i)
     {
         run_encode_batch_execution();
-        if (options.r1_small_reduction_mode >= 0)
+        if (time_one_shot_encode)
             run_one_shot_encode();
         run_decode_batch();
         if (options.measure_one_shot_decode)
@@ -1762,7 +1808,7 @@ static int Run(const Options& options)
         run_encode_batch_execution();
     });
     Summary one_shot_encode = Summary();
-    if (options.r1_small_reduction_mode >= 0)
+    if (time_one_shot_encode)
     {
         one_shot_encode = Measure(
             options.iterations, options.reuse, options.retain_samples, [&]() {
@@ -2027,6 +2073,19 @@ static int Run(const Options& options)
         json << ",\n"
              << "    \"k9r6r8_b256_terminal_diagnostic_disabled\": true";
     }
+    if (options.t16_b64_three_pass_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"t16_b64_three_pass_diagnostic_mode\": "
+             << options.t16_b64_three_pass_mode << ",\n"
+             << "    \"t16_b64_three_pass_enabled\": "
+             << (options.t16_b64_three_pass_mode == 1 ? "true" : "false")
+             << ",\n"
+             << "    \"t16_b64_timed_q1_encode_api\": "
+                "\"leo2_encode_batch:item_count=1:no_preflight_scratch\",\n"
+             << "    \"t16_b64_timed_direct_encode_api\": "
+                "\"leo2_encode\"";
+    }
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)
     {
@@ -2282,7 +2341,7 @@ static int Run(const Options& options)
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
         encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
-    if (options.r1_small_reduction_mode >= 0)
+    if (time_one_shot_encode)
     {
         json << ",\n    \"one_shot_encode\": ";
         WriteSummary(json, one_shot_encode,
