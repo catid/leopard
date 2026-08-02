@@ -2486,6 +2486,11 @@ if(LEO2_BUILD_TESTS)
                 COMMAND ${LEO2_PYTHON_EXECUTABLE}
                     ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/run_dense_full_parity_one_block_screen.py
                     --self-test)
+            add_test(
+                NAME leopard2_dense_full_parity_holdout_runner_self_test
+                COMMAND ${LEO2_PYTHON_EXECUTABLE}
+                    ${CMAKE_CURRENT_SOURCE_DIR}/experiments/leopard2/gf8_high_encode/run_dense_full_parity_holdout_abba.py
+                    --self-test)
         endif()
         add_test(
             NAME leopard2_tiled_high_runner_self_test
