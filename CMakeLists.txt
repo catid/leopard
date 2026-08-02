@@ -1335,6 +1335,40 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        add_executable(leopard2_t4_packed_terminal_family_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_t4_packed_terminal_family.cpp)
+        target_include_directories(
+            leopard2_t4_packed_terminal_family_test PRIVATE tests/leopard2)
+        target_compile_definitions(
+            leopard2_t4_packed_terminal_family_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(leopard2_t4_packed_terminal_family_test
+            leopard_test_hooks)
+        add_test(NAME leopard2_t4_packed_terminal_family
+            COMMAND leopard2_t4_packed_terminal_family_test)
+        set_tests_properties(leopard2_t4_packed_terminal_family PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        # This target intentionally links the regular production archive.  In
+        # particular it exercises the non-hook T=4 terminal's fixed scratch
+        # geometry instead of the diagnostic EncodeLayout branch above.
+        add_executable(leopard2_t4_packed_terminal_family_production_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_t4_packed_terminal_family_production.cpp)
+        target_include_directories(
+            leopard2_t4_packed_terminal_family_production_test PRIVATE
+            tests/leopard2)
+        target_link_libraries(
+            leopard2_t4_packed_terminal_family_production_test leopard)
+        add_test(NAME leopard2_t4_packed_terminal_family_production
+            COMMAND leopard2_t4_packed_terminal_family_production_test)
+        set_tests_properties(
+            leopard2_t4_packed_terminal_family_production PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
         add_executable(leopard2_t2_packed_terminal_test
             tests/leopard2/direct_oracle.cpp
             tests/leopard2/test_t2_packed_terminal.cpp)

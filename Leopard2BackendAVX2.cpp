@@ -2683,56 +2683,6 @@ static void AVX2FF8HighEncodeT4BatchBlocks(
     }
 }
 
-template<uint32_t RecoveryCount>
-static void AVX2FF8HighEncodeT4BatchDispatch(
-    const void* const* data,
-    void* const* recovery,
-    uint32_t item_count,
-    uint32_t original_count,
-    const uint8_t* inverse_skew,
-    const uint8_t* forward_skew,
-    uint64_t byte_count)
-{
-    switch (original_count)
-    {
-    case 3: AVX2FF8HighEncodeT4BatchBlocks<3, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 4: AVX2FF8HighEncodeT4BatchBlocks<4, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 5: AVX2FF8HighEncodeT4BatchBlocks<5, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 6: AVX2FF8HighEncodeT4BatchBlocks<6, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 7: AVX2FF8HighEncodeT4BatchBlocks<7, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 9: AVX2FF8HighEncodeT4BatchBlocks<9, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 10: AVX2FF8HighEncodeT4BatchBlocks<10, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    case 11: AVX2FF8HighEncodeT4BatchBlocks<11, RecoveryCount>(
-        data, recovery, item_count,
-        inverse_skew, forward_skew, byte_count);
-        return;
-    default:
-        LEO_DEBUG_BREAK;
-        return;
-    }
-}
-
 static void AVX2FF8HighEncodeT4Batch(
     const void* const* data,
     void* const* recovery,
@@ -2750,21 +2700,44 @@ static void AVX2FF8HighEncodeT4Batch(
     LEO_DEBUG_ASSERT(
         byte_count >= 32 && byte_count <= 16U * 1024U &&
         (byte_count & 31U) == 0);
-    if (!data || !recovery || item_count == 0 ||
-        (recovery_count != 3 && recovery_count != 4) ||
-        byte_count < 32 || byte_count > 16U * 1024U ||
-        (byte_count & 31U) != 0)
-        return;
 
-    if (recovery_count == 3)
-        AVX2FF8HighEncodeT4BatchDispatch<3>(
-            data, recovery, item_count, original_count,
-            inverse_skew, forward_skew, byte_count);
-    else
-        AVX2FF8HighEncodeT4BatchDispatch<4>(
-            data, recovery, item_count, original_count,
-            inverse_skew, forward_skew, byte_count);
+    /* This callback is private to already-qualified Leopard2 codecs and its
+       startup known-answer test.  Collapse the old recovery branch followed
+       by an original-count jump table into one fixed-shape dispatch. */
+#define LEO2_AVX2_T4_SHAPE_CASE(OriginalCount, RecoveryCount) \
+    case (RecoveryCount << 4) | OriginalCount: \
+        AVX2FF8HighEncodeT4BatchBlocks<OriginalCount, RecoveryCount>( \
+            data, recovery, item_count, inverse_skew, forward_skew, \
+            byte_count); \
+        return
+
+    switch ((recovery_count << 4) | original_count)
+    {
+    /* Retain the mature R=4-first instantiation order. */
+    LEO2_AVX2_T4_SHAPE_CASE(3, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(4, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(5, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(6, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(7, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(9, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(10, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(11, 4);
+    LEO2_AVX2_T4_SHAPE_CASE(3, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(4, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(5, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(6, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(7, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(9, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(10, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(11, 3);
+    default:
+        LEO_DEBUG_BREAK;
+        return;
+    }
+
+#undef LEO2_AVX2_T4_SHAPE_CASE
 }
+
 #endif
 
 static void AVX2FF8HighEncodeSmall(

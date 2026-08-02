@@ -516,6 +516,19 @@ enum TerminalR1Shape : uint8_t
     kTerminalR1K2AVX2Xor = 2
 };
 
+enum TerminalT4Shape : uint8_t
+{
+    kTerminalT4None = 0,
+    kTerminalT4K4R3,
+    kTerminalT4K4R4,
+    kTerminalT4K5R3,
+    kTerminalT4K5R4,
+    kTerminalT4K6R3,
+    kTerminalT4K6R4,
+    kTerminalT4K7R3,
+    kTerminalT4K7R4
+};
+
 struct leo2_codec
 {
     leo2_context* context;
@@ -536,6 +549,9 @@ struct leo2_codec
     /* Zero disables the packed GF8 AVX2 T=2 terminal.  Otherwise this is the
        fixed original count (2 or 3), resolved once during codec setup. */
     uint8_t terminal_t2_original_count;
+    /* Immutable GF8 AVX2 T=4 packed-terminal shape.  Byte-length routing is
+       kept separate because it remains a property of each encode call. */
+    uint8_t terminal_t4_shape;
     // Zero disables the optional AVX2 two-source one-loss executor.  A
     // nonzero value is derived once from the immutable profile/count/backend
     // identity so byte execution does not rescan the measured-shape table.
@@ -5174,6 +5190,45 @@ static uint8_t ClassifyTerminalT2Shape(const leo2_codec* codec)
     static_cast<void>(codec);
 #endif
     return 0;
+}
+
+static uint8_t ClassifyTerminalT4Shape(const leo2_codec* codec)
+{
+#ifdef LEO_HAS_FF8
+    if (!codec || !codec->high_t4_batch_binding_enabled ||
+        codec->original_count < 4 || codec->original_count > 7 ||
+        (codec->recovery_count != 3 && codec->recovery_count != 4) ||
+        codec->padded_side != 4 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_high_encode_t4_batch)
+        return kTerminalT4None;
+
+    switch (codec->original_count)
+    {
+    case 4:
+        return codec->recovery_count == 3
+            ? kTerminalT4K4R3 : kTerminalT4K4R4;
+    case 5:
+        return codec->recovery_count == 3
+            ? kTerminalT4K5R3 : kTerminalT4K5R4;
+    case 6:
+        return codec->recovery_count == 3
+            ? kTerminalT4K6R3 : kTerminalT4K6R4;
+    case 7:
+        return codec->recovery_count == 3
+            ? kTerminalT4K7R3 : kTerminalT4K7R4;
+    default:
+        break;
+    }
+#else
+    static_cast<void>(codec);
+#endif
+    return kTerminalT4None;
 }
 
 static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
@@ -10758,6 +10813,7 @@ LEO2_EXPORT leo2_result leo2_codec_create(
 #endif
     codec->terminal_r1_shape = ClassifyTerminalR1Shape(codec);
     codec->terminal_t2_original_count = ClassifyTerminalT2Shape(codec);
+    codec->terminal_t4_shape = ClassifyTerminalT4Shape(codec);
     try
     {
         codec->permanent_erased.assign(parent, 0);
@@ -12039,10 +12095,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K5R4T4B64TerminalEligible(
 #endif
 
 /*
-    Reuse the qualified prevalidated T=4 batch circuit for the common
-    one-stripe packed public layout.  The terminal proves the same scratch,
-    descriptor, shard, and output-disjointness contract as EncodeInternal;
-    any layout it does not recognize falls back without changing semantics.
+    Keep the already-promoted K=5/R=4/64-byte terminal independent of the
+    wider T=4 family.  Its fixed validation geometry and ProtectedCount
+    specializations are materially faster at this setup-dominated size.
 */
 template<size_t ProtectedCount>
 static LEO2_K5R4_B64_TERMINAL_NOINLINE bool
@@ -12134,6 +12189,281 @@ TryEncodeGF8K5R4T4B64PackedTerminal(
 }
 
 #undef LEO2_K5R4_B64_TERMINAL_NOINLINE
+
+static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
+    uint8_t terminal_shape,
+    uint64_t shard_bytes)
+{
+    if (shard_bytes == 64 || shard_bytes == 128 || shard_bytes == 256)
+    {
+        /* K=5/R=4/B=64 has its fixed specialized terminal above. */
+        return terminal_shape != kTerminalT4K5R4 || shard_bytes != 64;
+    }
+    return shard_bytes == 1024 &&
+        (terminal_shape == kTerminalT4K4R3 ||
+         terminal_shape == kTerminalT4K4R4);
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || codec->terminal_t4_shape == kTerminalT4None ||
+        !IsGF8AVX2T4PackedTerminalByteCount(
+            codec->terminal_t4_shape, shard_bytes))
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* A test may replace the otherwise immutable context table.  Fail closed
+       if that diagnostic table no longer supplies the classified callback. */
+    if (codec->test_encode_mode != LEO2_TEST_ENCODE_AUTO ||
+        !codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_high_encode_t4_batch)
+        return false;
+#endif
+
+    LEO_DEBUG_ASSERT(codec->original_count >= 4 &&
+        codec->original_count <= 7);
+    LEO_DEBUG_ASSERT(codec->recovery_count == 3 ||
+        codec->recovery_count == 4);
+    LEO_DEBUG_ASSERT(codec->padded_side == 4);
+    LEO_DEBUG_ASSERT(codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1);
+    LEO_DEBUG_ASSERT(codec->field == LEO2_FIELD_GF8);
+    LEO_DEBUG_ASSERT(codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1);
+    LEO_DEBUG_ASSERT(codec->high_t4_batch_binding_enabled);
+    LEO_DEBUG_ASSERT(codec->context && codec->context->ops);
+    LEO_DEBUG_ASSERT(codec->context->backend == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(codec->context->ops->kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(codec->context->ops->ff8_high_encode_t4_batch);
+    return true;
+}
+
+#if defined(_MSC_VER)
+#define LEO2_T4_PACKED_TERMINAL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_T4_PACKED_TERMINAL_NOINLINE \
+    __attribute__((noinline, noipa, section(".leo2_t4_packed_terminal"), \
+        aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_T4_PACKED_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".leo2_t4_packed_terminal"), \
+        aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T4_PACKED_TERMINAL_NOINLINE \
+    __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T4_PACKED_TERMINAL_NOINLINE
+#endif
+
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+static LEO_FORCE_INLINE uint8_t GF8T4TerminalShape()
+{
+    static_assert(OriginalCount >= 4 && OriginalCount <= 7,
+        "T=4 packed terminal instantiated outside its fixed K set");
+    static_assert(RecoveryCount == 3 || RecoveryCount == 4,
+        "T=4 packed terminal instantiated outside its fixed R set");
+    return static_cast<uint8_t>(
+        kTerminalT4K4R3 + (OriginalCount - 4U) * 2U +
+        (RecoveryCount - 3U));
+}
+
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+static LEO_FORCE_INLINE bool GF8T4ScratchLayout(
+    size_t shard_bytes,
+    ScratchLayout& layout)
+{
+    static_assert(OriginalCount >= 4 && OriginalCount <= 7,
+        "T=4 packed terminal instantiated outside its fixed K set");
+    static_assert(RecoveryCount == 3 || RecoveryCount == 4,
+        "T=4 packed terminal instantiated outside its fixed R set");
+    size_t work_data_offset = 0;
+    return ComputeSplitScratchLayout(
+        OriginalCount + RecoveryCount, OriginalCount + 8U,
+        0, 8, shard_bytes, layout, work_data_offset);
+}
+
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+struct GF8T4PackedExecutor
+{
+    static LEO_FORCE_INLINE void Run(
+        const leo2_codec* codec,
+        const void* const* original,
+        void* const* recovery,
+        uint64_t shard_bytes)
+    {
+        leopard::ff8::ReedSolomonEncodeT4Batch(
+            *codec->context->ops, original, recovery, 1,
+            OriginalCount, RecoveryCount, shard_bytes);
+    }
+};
+
+/*
+    Reuse the qualified T=4 batch circuit for one packed ordinary stripe.
+    K/R stay compile-time constants in each switch arm, while byte count is
+    restricted to the independently promoted cells above.  Public encode and
+    a one-item batch share these proofs; the optional protected range is the
+    batch descriptor.  Sparse outputs, input aliases, non-contiguous slabs,
+    and every irregular layout fall back before any output byte is written.
+*/
+template<uint32_t OriginalCount, uint32_t RecoveryCount>
+static LEO_FORCE_INLINE bool TryEncodeGF8T4PackedShape(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2T4PackedTerminalEligible(
+        codec, shard_bytes));
+    LEO_DEBUG_ASSERT((codec->terminal_t4_shape ==
+        GF8T4TerminalShape<OriginalCount, RecoveryCount>()));
+    LEO_DEBUG_ASSERT(codec->original_count == OriginalCount);
+    LEO_DEBUG_ASSERT(codec->recovery_count == RecoveryCount);
+
+    const size_t bytes = static_cast<size_t>(shard_bytes);
+    ScratchLayout layout;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, shard_bytes, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#else
+    if (!GF8T4ScratchLayout<OriginalCount, RecoveryCount>(bytes, layout))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[3];
+    size_t metadata_count = 2;
+    if (!MakeArrayRange(original, OriginalCount,
+            sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, RecoveryCount,
+            sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    if (protected_range)
+        metadata_ranges[metadata_count++] = *protected_range;
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, metadata_count))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], OriginalCount * bytes, input_range) ||
+        !MakeRange(recovery[0], RecoveryCount * bytes, output_range))
+        return false;
+
+    uintptr_t pointer_mismatch = 0;
+    for (size_t i = 0; i < OriginalCount; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
+            (input_range.begin + i * bytes);
+    }
+    for (size_t i = 0; i < RecoveryCount; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
+            (output_range.begin + i * bytes);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(output_range, metadata_ranges, metadata_count))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordT4PackedCall();
+#endif
+    GF8T4PackedExecutor<OriginalCount, RecoveryCount>::Run(
+        codec, original, recovery, shard_bytes);
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+static LEO2_T4_PACKED_TERMINAL_NOINLINE bool
+TryEncodeGF8T4PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_range,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(IsGF8AVX2T4PackedTerminalEligible(
+        codec, shard_bytes));
+    switch (codec->terminal_t4_shape)
+    {
+    case kTerminalT4K4R3:
+        return TryEncodeGF8T4PackedShape<4, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K4R4:
+        return TryEncodeGF8T4PackedShape<4, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K5R3:
+        return TryEncodeGF8T4PackedShape<5, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K5R4:
+        return TryEncodeGF8T4PackedShape<5, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K6R3:
+        return TryEncodeGF8T4PackedShape<6, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K6R4:
+        return TryEncodeGF8T4PackedShape<6, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K7R3:
+        return TryEncodeGF8T4PackedShape<7, 3>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    case kTerminalT4K7R4:
+        return TryEncodeGF8T4PackedShape<7, 4>(codec, protected_range,
+            shard_bytes, original, recovery, scratch, scratch_bytes,
+            result_out);
+    default:
+        LEO_DEBUG_ASSERT(false);
+        result_out = LEO2_INTERNAL_ERROR;
+        return true;
+    }
+}
+
+#undef LEO2_T4_PACKED_TERMINAL_NOINLINE
 
 static LEO_FORCE_INLINE bool IsGF8AVX2K5R5T8B64TerminalEligible(
     const leo2_codec* codec,
@@ -13472,6 +13802,13 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
                 terminal_result))
             return terminal_result;
     }
+    if (IsGF8AVX2T4PackedTerminalEligible(codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8T4PackedTerminal(codec, NULL, shard_bytes,
+                original, recovery, scratch, scratch_bytes, terminal_result))
+            return terminal_result;
+    }
     if (IsGF8AVX2K5R5T8B64TerminalEligible(codec, shard_bytes))
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
@@ -13596,6 +13933,17 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             if (TryEncodeGF8K5R4T4B64PackedTerminal<1>(
                     codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+        if (IsGF8AVX2T4PackedTerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8T4PackedTerminal(
+                    codec, &item_range, items[0].shard_bytes,
+                    items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result))
                 return terminal_result;
