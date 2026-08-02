@@ -78,7 +78,7 @@ forbidden_mnemonics='^(addsubp[ds]|haddp[ds]|hsubp[ds]|lddqu|movddup|movshdup|mo
 # kernel starts using another AVX/AVX2 mnemonic, reviewers must add that
 # mnemonic after checking its architectural feature contract.  A broad `v*'
 # exemption would silently admit instructions whose CPUID bits are not probed.
-allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinserti128|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpinsrb|vpmovzxbw|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
+allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vbroadcastss|vextracti128|vinserti128|vmovaps|vmovd|vmovdqa|vmovdqu|vmovq|vmovups|vpackuswb|vpaddq|vpaddw|vpand|vpandn|vpblendd|vpblendw|vpbroadcastb|vpbroadcastd|vpbroadcastq|vpbroadcastw|vpcmpeqb|vpcmpeqd|vpcmpgtw|vperm2i128|vpermq|vpextrq|vpinsrb|vpminub|vpmovsxbw|vpmovzxbw|vpmullw|vpshufb|vpshufd|vpshufhw|vpshuflw|vpsrlq|vpsrlw|vpsubw|vpunpckldq|vpunpcklqdq|vpunpcklwd|vpxor|vxorps|vzeroupper)$'
 
 # The GFNI candidate is compiled with `-mavx2 -mgfni -mno-avx512f' and is gated
 # on a runtime probe that establishes AVX2 *and* the separately enumerated GFNI
@@ -92,7 +92,7 @@ allowed_avx2_vex_mnemonics='^(vbroadcastf128|vbroadcasti128|vextracti128|vinsert
 # affine-multiply helpers and fused radix-eight kernels, which additionally
 # emit these plain AVX2 integer mnemonics.  All are baseline AVX2: no new ISA
 # floor beyond the member's AVX2+GFNI runtime probe.
-allowed_gfni_extra_mnemonics='^(vpaddb|vpor|vpsllw|vpsrlw)$'
+allowed_gfni_extra_mnemonics='^(vpackusdw|vpaddb|vpextrb|vpinsrd|vpinsrw|vpmovsxdq|vpor|vpslld|vpsllq|vpsllw|vpsrad|vpsrld|vpsrlvq|vpsrlw|vpunpcklbw)$'
 allowed_gfni_vex_mnemonics="$allowed_avx2_vex_mnemonics|$allowed_gfni_extra_mnemonics|^vgf2p8affineqb\$"
 
 # The AVX-512 candidate is separately gated on F/BW/VL and complete OS ZMM
@@ -960,6 +960,12 @@ run_negative_controls()
     expect_classified_archive_accepted good_gfni \
         'Leopard2BackendGFNI.cpp.o' \
         'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0; vpxor %ymm0, %ymm0, %ymm0'
+    # Clang 18's GFNI translation unit uses these additional ordinary
+    # VEX-encoded AVX/AVX2 operations around the affine primitive.  They do
+    # not widen the runtime contract beyond the already-required AVX2 bit.
+    expect_classified_archive_accepted good_clang18_gfni_vectorization \
+        'Leopard2BackendGFNI.cpp.o' \
+        'vpackusdw %ymm0, %ymm0, %ymm0; vpextrb $0, %xmm0, %eax; vpinsrd $0, %eax, %xmm0, %xmm0; vpinsrw $0, %eax, %xmm0, %xmm0; vpmovsxdq %xmm0, %ymm0; vpslld $1, %ymm0, %ymm0; vpsllq $1, %ymm0, %ymm0; vpsrad $1, %ymm0, %ymm0; vpsrld $1, %ymm0, %ymm0; vpsrlvq %ymm0, %ymm0, %ymm0; vpunpcklbw %ymm0, %ymm0, %ymm0; vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx512vl \
         'Leopard2BackendAVX512.cpp.o' \
         'vpternlogq $0, %ymm0, %ymm0, %ymm0'
@@ -979,6 +985,13 @@ run_negative_controls()
     # established together with OS-managed YMM state by the AVX2 probe.
     expect_classified_archive_accepted good_avx_broadcast \
         'Leopard2BackendAVX2.cpp.o' 'vbroadcastf128 (%rax), %ymm0'
+    # Clang 18 selects these VEX-encoded AVX/AVX2 forms while vectorizing the
+    # same fixed-table and tail-map code for which GCC uses the reviewed forms
+    # above.  Each instruction remains inside the AVX2 probe contract.  The
+    # raw-prefix and operand checks still reject EVEX, ZMM, and opmask forms.
+    expect_classified_archive_accepted good_clang18_avx2_vectorization \
+        'Leopard2BackendAVX2.cpp.o' \
+        'vbroadcastss (%rax), %ymm0; vmovaps %ymm0, %ymm1; vpbroadcastd %xmm0, %ymm0; vpcmpeqd %ymm0, %ymm0, %ymm0; vpminub %ymm0, %ymm0, %ymm0; vpmovsxbw %xmm0, %ymm0'
     # GCC can use these AVX/AVX2 extraction forms while scalarizing a local
     # pointer vector at -O2.  The AVX2 runtime probe already establishes their
     # architectural and OS-state requirements.  Keep them class-scoped so a
