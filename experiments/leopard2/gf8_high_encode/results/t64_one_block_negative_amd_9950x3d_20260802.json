@@ -1,0 +1,238 @@
+{
+  "schema": "leopard2-gf8-avx2-t64-one-block-negative/v1",
+  "date_utc": "2026-08-02",
+  "bead": "leopard-79h.38.5.10.47.11",
+  "related_open_bead": "leopard-79h.38.5.10.47.12",
+  "status": "rejected",
+  "hypothesis": "Publishing the existing coarse one-block transform traversal as a pure-AVX2 callback for exact legacy-high GF8 K=R=T=64 with 64-byte shards will remove enough indirect butterfly dispatch to improve complete public encoding by at least five percent without regressing adjacent public shapes by more than two percent.",
+  "scope": {
+    "target": {
+      "profile": "legacy-high-v1",
+      "field": "gf8",
+      "backend": "pure avx2 nibble tables",
+      "K": 64,
+      "R": 64,
+      "T": 64,
+      "shard_bytes": 64,
+      "layout": "native packed input and output slabs"
+    },
+    "callback": "A separately KAT-qualified Ops slot ran the coarse direct-input inverse LCH traversal and forward parity transform. The mature T=8 callback, generic ReedSolomonEncode implementation, wire profile, and public ABI remained unchanged.",
+    "promotion_gate": "Target lower 95 percent confidence bound at least 1.05; no exact-current neighboring regression greater than two percent; independent parity/correctness, zero-EVEX pure-AVX2 object, and bounded code growth."
+  },
+  "source_identity": {
+    "discovery_base_commit": "4ad03203edc2968cdc1e668641478de32be3e7bc",
+    "discovery_base_tree": "573bcff4e4be55b4b795e4b7969c190a76c6b3fa",
+    "final_integration_base_commit": "068659e1dbcc8a2c75fef1348f1f916a8557599f",
+    "final_integration_base_tree": "e042f3d15f9e13e886d28ad1c18f161109950e13",
+    "final_rejected_candidate_diff_sha256": "16c17f399306f6b568d8cb8cd2097e75fca68228d5e2f112204c3df232fd95a0",
+    "compiler": "GNU C++ 13.3.0",
+    "cmake": "3.28.3",
+    "ninja": "1.11.1",
+    "build_type": "Release",
+    "final_frozen_binaries": {
+      "candidate_sha256": "9630a48ae91143e7519090aa65c03124728532e9a5ad4d751a02cc2e1eedf2e5",
+      "same_source_callback_disabled_control_sha256": "9a972af477c7e8823d5a74ee8930310b821308be6dc7f91dcf65676ec3f104e2",
+      "exact_current_068659e_sha256": "5c3b0fcb4411b9c6a6e856c7a58968ac39fdbdfcc2a410c92ea09112050e77bf"
+    },
+    "final_text_attestation": {
+      "candidate_and_same_source_control_text_sha256": "5545d05192ead3b14f5786044a735b6d8df142c991ab393f5cd374f59fa4dd37",
+      "candidate_and_control_text_byte_identical": true,
+      "leo2_encode_batch_address_and_size_match_exact_current": true,
+      "candidate_and_exact_current_normalized_leo2_encode_batch_sha256": "dca693cd55694cb0a3eb9cf701cb6d7066fdb92596f5290274320f22a675d95e",
+      "normalization": "Symbol addresses, branch targets, and RIP-relative displacements were normalized. The instruction stream matched; raw bytes differed only where the late callback shifted linked global addresses."
+    },
+    "result_summary_sha256": {
+      "v3_broad_screen": "056fe77250b6e0f63e03b3805c97d42a173cabb02cf151673269b3ee5034619a",
+      "v5_shim_screen": "508b6b0091f5563df139b3ecdf4cd716b6c17b6fbf0fea77122163a3a85490ac",
+      "v6_full": "3904e1566c248778f5bba5d5719ad7daee2d25efe3403f42dfb3c3cdb1cc7a8d",
+      "v6_split_screen": "b20a9ce165b9cbaf7f0d3a81cd1b7845eefe79ec0c0def9cde3842e9a028f6c8",
+      "v7_neighbor_screen": "c47fc3f30c5e8b2fe897a60b8f6099df234af33bc4c8702a6e9bb1a1edc50e8e",
+      "v9_neighbor_screen": "50caf4b65764f7a07008d8789998deace1a84341f947696d57e647cbdd80235f",
+      "v10_exact_current_screen": "c54578b2e1ecd8df451b4b60429c0320e30fad4bbfcc6d6521028fc2db8d9a19"
+    }
+  },
+  "host": {
+    "model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "allowed_logical_cpus": 28,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "governor": "powersave"
+  },
+  "resource_policy": {
+    "canonical_campaign_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "build_jobs": 2,
+    "build_virtual_memory_limit_bytes": 4294967296,
+    "timed_cpu": 7,
+    "reserved_smt_sibling": 23,
+    "lower_parallelism_reason": "Builds were capped at two jobs and 4 GiB after repeated host OOM incidents. Authoritative cache-sensitive timings were pinned to one physical core while its SMT sibling was checked for non-idle ticks."
+  },
+  "correctness": {
+    "backend_startup_kat": "Passed an independent scalar reference for T=64 normal and one-coordinate-shortened input, unaligned input/output, vector tails including 65 bytes, guard bytes, and source immutability.",
+    "balanced_terminal_test": "Passed ordinary and one-item-batch K=R in {32,64,128}, independent direct-generator parity, legacy parity where representable, unaligned packed slabs, sparse/detached fallback, byte neighbors 63/65/256, count neighbors, nulls, overlap, metadata overlap, and undersized/misaligned scratch.",
+    "candidate_focused_ctest": "7 of 7 passed: leopard2_backend_ops, leopard2_balanced_b64_terminal, leopard2_balanced_b64_terminal_production, leopard2_direct_encode, leopard2_auto_encode_backend, leopard2_api, and leopard2_public_api_contract.",
+    "same_source_control_ctest": "3 of 3 passed: leopard2_backend_ops, leopard2_balanced_b64_terminal, and leopard2_balanced_b64_terminal_production.",
+    "direct_encode_summary": "profiles=1024 basis_messages=8704 random_messages=1024 parity_symbols=48749869 mask_executions=8192",
+    "api_summary": "high_compatibility_bytes=3736998 low_oracle_symbols=17017 recovered_shards=4693 plan_executions=1051 tail_cases=486",
+    "zero_evex": true,
+    "zero_evex_check": "The frozen pure-AVX2 object disassembly contained no zmm registers, ymm16-ymm31 registers, or mask-register operands.",
+    "sanitizers": "Not run for the final layout candidate because the mandatory exact-current neighbor performance kill criterion fired before promotion qualification."
+  },
+  "measurement": {
+    "metric": "metrics.encode_execution.samples_us_per_batch_call",
+    "protocol": {
+      "batch": 1,
+      "reuse": 8192,
+      "iterations_per_invocation": 21,
+      "warmup": 256,
+      "outer_abba_runs": 4,
+      "retained_samples_per_implementation_per_cell": 84,
+      "bootstrap_resamples": 10000,
+      "seed": 1,
+      "affinity": "CPU 7; sibling CPU 23 required zero non-idle ticks or the invocation was retried",
+      "binary_integrity": "Every executable was copied to a lane-owned read-only artifact directory and SHA-256 verified before and after timing."
+    },
+    "ratio_definition": "reference median time divided by candidate median time; values above one favor the candidate",
+    "attempts": [
+      {
+        "id": "v4",
+        "integration": "Published a side-switching pure-AVX2 callback through the mature primary one-block Ops slot.",
+        "candidate_binary_sha256": "cf3bcb9014cb7f2be62e2b2a167cfd396f21dd50b6a280660a5fab08b95725f7",
+        "result": "Rejected structurally because the extra primary-slot wrapper perturbed the established nanosecond-scale T=8 route. The follow-up shim screen quantified a 4.91 percent T=8 slowdown while T=64 improved 11.74 percent."
+      },
+      {
+        "id": "v6",
+        "integration": "Added a separate T=64 Ops slot so the T=8 pointer and side mask stayed unchanged, but selected it inside the generic encoder.",
+        "candidate_binary_sha256": "2f74b01487c546f7404bc9b81d84d9d2d18cf2dbff7108290c22748f835188a8",
+        "same_source_rows": [
+          {
+            "cell": "K16_R16_B64",
+            "ratio": 0.9521959770177129,
+            "bootstrap_95pct": [0.9499837983798379, 0.9544697229801767]
+          },
+          {
+            "cell": "K63_R64_B64",
+            "ratio": 0.9718757061440448,
+            "bootstrap_95pct": [0.9701677750191717, 0.9758142863532674]
+          },
+          {
+            "cell": "K64_R64_B64",
+            "ratio": 1.1073975482249592,
+            "bootstrap_95pct": [1.1002733727655287, 1.1143518480983923]
+          }
+        ],
+        "result": "Rejected: both non-target neighbors exceeded the two percent regression gate."
+      },
+      {
+        "id": "v7",
+        "integration": "Moved selection to ExecuteTransformEncodePass and put the callback and wrapper in a late dedicated text section. The mature ReedSolomonEncode executable region was restored byte-for-byte against its same-source control.",
+        "candidate_binary_sha256": "aaf1ae8adbd33d024936f39d0068a2c986ada7ea3b6743053ca0058674139f13",
+        "mature_encoder_text_sha256": "82aa93a38be99cf3cfaabe36de246e7577303d88ba476e0165fd5481a5325fb9",
+        "same_source_rows": [
+          {
+            "cell": "K16_R16_B64",
+            "ratio": 0.9231705738504973,
+            "bootstrap_95pct": [0.9206754300097889, 0.9252025974480599]
+          },
+          {
+            "cell": "K63_R64_B64",
+            "ratio": 0.9796110047184764,
+            "bootstrap_95pct": [0.9765942930529358, 0.9824157188804734]
+          },
+          {
+            "cell": "K64_R64_B64",
+            "ratio": 1.1196042060845162,
+            "bootstrap_95pct": [1.1152951760367942, 1.12353904924827]
+          }
+        ],
+        "result": "Rejected: K=16 was 8.3 percent slower and K=63 was 2.1 percent slower despite restoring the mature encoder bytes."
+      },
+      {
+        "id": "v9",
+        "integration": "Rebased onto 068659e and reused the already-promoted balanced-B64 public terminal. A separate callback was selected only after its aggregate packed-layout proof.",
+        "candidate_binary_sha256": "18a733e5dbbed9e007e049049e99c78ba084842ae8a09400ad80ad3588242dcd",
+        "same_source_callback_disabled_rows": [
+          {
+            "cell": "K16_R16_B64",
+            "ratio": 1.0039578974613377,
+            "bootstrap_95pct": [0.999369148493842, 1.0072195923308043]
+          },
+          {
+            "cell": "K63_R64_B64",
+            "ratio": 0.9977788330721329,
+            "bootstrap_95pct": [0.9948062793734841, 1.0016246106682472]
+          },
+          {
+            "cell": "K64_R64_B64",
+            "ratio": 1.1394427275153143,
+            "bootstrap_95pct": [1.1367836143955548, 1.1506614736122585]
+          }
+        ],
+        "exact_current_rows": [
+          {
+            "cell": "K16_R16_B64",
+            "ratio": 0.9418347076729593,
+            "bootstrap_95pct": [0.9393327784465791, 0.9449830552099868]
+          },
+          {
+            "cell": "K63_R64_B64",
+            "ratio": 0.9953326115067856,
+            "bootstrap_95pct": [0.9883618161694523, 0.9990520768135268]
+          },
+          {
+            "cell": "K64_R64_B64",
+            "ratio": 1.124946793252459,
+            "bootstrap_95pct": [1.1152378711546622, 1.1299494744177943]
+          }
+        ],
+        "result": "Rejected: same-source isolation passed, but the integration changed public executable layout and K=16 was 6.2 percent slower than exact current 068659e."
+      },
+      {
+        "id": "v10",
+        "integration": "The final permitted attempt gave the late wrapper the exact generic call signature, restoring K=16 hot-symbol addresses, sizes, and normalized instruction streams to exact current 068659e.",
+        "candidate_binary_sha256": "9630a48ae91143e7519090aa65c03124728532e9a5ad4d751a02cc2e1eedf2e5",
+        "exact_current_rows": [
+          {
+            "cell": "K16_R16_B64",
+            "candidate_median_us": 0.1393315,
+            "reference_median_us": 0.135464,
+            "ratio": 0.972242457735688,
+            "bootstrap_95pct": [0.9620074829422446, 0.9816190242918481]
+          },
+          {
+            "cell": "K63_R64_B64",
+            "candidate_median_us": 0.5616795,
+            "reference_median_us": 0.5508945,
+            "ratio": 0.9807986583095877,
+            "bootstrap_95pct": [0.9771550000753552, 0.9843423994785253]
+          },
+          {
+            "cell": "K64_R64_B64",
+            "candidate_median_us": 0.438094,
+            "reference_median_us": 0.4938595,
+            "ratio": 1.1272911749533205,
+            "bootstrap_95pct": [1.1179785024760949, 1.1290641170264752]
+          }
+        ],
+        "result": "Rejected: the target improved 12.7 percent, but K=16 remained 2.9 percent slower by time ratio and failed the mandatory two percent neighboring-regression gate. K=63 was 2.0 percent slower at the median and its confidence interval crossed the two percent boundary."
+      }
+    ],
+    "invalid_tooling_attempt": {
+      "stage": "v7 executable-text attestation",
+      "failure": "The first objcopy --dump-section command omitted a disposable output object. Because the frozen executable was read-only, objcopy attempted an in-place rewrite and exited nonzero before any timing began.",
+      "disposition": "No performance conclusion was retained. The corrected command supplied a separate disposable output object, reverified frozen input hashes, and the authoritative campaign was restarted."
+    }
+  },
+  "decision": {
+    "result": "reject",
+    "reason": "The coarse T=64 callback consistently saved about 11 to 14 percent in its exact target, proving that prepared in-translation-unit traversal is useful. Every integration that exposed it to the public codec, however, produced a credible neighboring regression above the two percent gate. The final layout-preserving attempt still slowed exact-current K=16/R=16 by about 2.9 percent.",
+    "production_change": "None. All T=64 callback, Ops-table, wrapper, selector, and route-test changes were removed. Only this negative result is retained.",
+    "follow_up": "Do not close leopard-79h.38.5.10.47.12: its required generated/fused T=16 candidate remains independent work. A future T=64 revisit should start from a generated per-size circuit that can replace, rather than add beside, an existing hot terminal and must repeat exact-current neighbors."
+  },
+  "reproduction": {
+    "configure_candidate": "cmake -S CANDIDATE_TREE -B BUILD_CANDIDATE -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON",
+    "configure_same_source_control": "cmake -S CANDIDATE_TREE -B BUILD_CONTROL -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T64_ONE_BLOCK=1",
+    "benchmark_template": "taskset -c 7 FROZEN_BINARY --profile high --field gf8 --backend avx2 --skip-legacy --retain-samples --attest-source --k K --r R --bytes 64 --loss 1 --batch 1 --reuse 8192 --iterations 21 --warmup 256 --threads 1 --seed 1 --json RESULT.json"
+  }
+}
