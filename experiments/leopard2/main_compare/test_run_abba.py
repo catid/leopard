@@ -187,6 +187,7 @@ SPECIFICATION = {
     "baseline_source_root": "/fixture/main",
     "candidate_source_root": "/fixture/candidate-source",
     "candidate_commit": CANDIDATE_COMMIT,
+    "baseline_pure_avx2": True,
 }
 CAMPAIGN = {
     "rounds": runner.ROUNDS,
@@ -403,6 +404,8 @@ def candidate_result(
         "skip_legacy": True,
         "retain_samples": True,
     })
+    if raw_schema == runner.RAW_SCHEMA:
+        parameters["measure_one_shot_decode"] = True
     flags = runner.candidate_mode_flags(
         runner.candidate_mode_for_campaign(campaign))
     parameters.update({
@@ -416,14 +419,24 @@ def candidate_result(
     plan = summary([4.0, 4.1, 4.2], setup=True)
     encode = summary([10.0 * scale, 11.0 * scale, 12.0 * scale])
     decode = summary([12.0 * scale, 13.0 * scale, 14.0 * scale])
+    one_shot_decode = summary(
+        [8.0 * scale, 9.0 * scale, 10.0 * scale])
     encode.update({"input_GB_per_s": 1.0, "parity_output_GB_per_s": 0.5})
     decode.update({"offered_received_GB_per_s": 1.0,
                    "repaired_output_GB_per_s": 0.5})
+    one_shot_decode.update({"offered_received_GB_per_s": 1.0,
+                            "repaired_output_GB_per_s": 0.5})
     amortized = decode["median_us_per_batch_call"] + \
         plan["median_us"] / CAMPAIGN["reuse"]
-    return {
-        "schema": "leopard2-benchmark-v2",
-        "build": {"compiler": "fixture"},
+    result = {
+        "schema": ("leopard2-benchmark-v9"
+                   if raw_schema == runner.RAW_SCHEMA
+                   else "leopard2-benchmark-v2"),
+        "build": ({
+            "compiler": "fixture",
+            "one_shot_equal_rounded_direct_enabled": True,
+            "cauchy_log_reuse_enabled": True,
+        } if raw_schema == runner.RAW_SCHEMA else {"compiler": "fixture"}),
         "parameters": parameters,
         "resolved": {
             "profile": "legacy_high_v1", "field": "gf8", "backend": "avx2",
@@ -453,6 +466,14 @@ def candidate_result(
             "decode_including_setup": None,
         },
     }
+    if raw_schema == runner.RAW_SCHEMA:
+        result["memory"] = {
+            "one_shot_decode_scratch_bytes_per_stripe": 128,
+            "one_shot_decode_scratch_bytes_batch": 128,
+        }
+        result["metrics"]["one_shot_decode_including_setup"] = \
+            one_shot_decode
+    return result
 
 
 def archive_recipe_fixture_text(cmake: dict | Mapping[str, str]) -> str:
@@ -562,9 +583,15 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
             "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
             "LEO2_BUILD_BENCHMARKS": "ON",
             "LEO2_BUILD_TESTS": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
         }
         material = runner.build_configuration_material(configuration_entries)
@@ -580,6 +607,11 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         helper.write_text("# fixture helper\n", encoding="utf-8")
         cache_values = {
             **configuration_entries,
+            **{
+                name: value for name, value in
+                runner.candidate_required_cache(runner.RAW_SCHEMA).items()
+                if value is not None
+            },
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 runner.BUILD_CONFIGURATION_FILE_SCHEMA,
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
@@ -608,19 +640,26 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
         sources.append(adapter)
     else:
         sources = [
-            candidate_root / name for name in runner.CANDIDATE_CONFIGURED_SOURCES
+            (candidate_root / name, target) for name, target in
+            runner.candidate_compile_actions_for_raw_schema(runner.RAW_SCHEMA)
         ]
     entries = []
-    for source in sources:
+    if role == "baseline":
+        actions = [(source, None) for source in sources]
+    else:
+        actions = sources
+    for source, target in actions:
         source.parent.mkdir(parents=True, exist_ok=True)
         source.write_text("// fixture source\n", encoding="utf-8")
-        output = runner.expected_compile_output(role, source, specification)
+        output = runner.expected_compile_output(
+            role, source, specification, candidate_target=target)
         output_path = build / output
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_bytes(b"fixture object\n")
         arguments = runner.expected_compile_argv(
             role, source, specification, str(compiler),
-            build_configuration=build_configuration)
+            build_configuration=build_configuration,
+            candidate_target=target)
         entry = {
             "directory": str(build), "file": str(source), "output": output,
         }
@@ -642,8 +681,11 @@ def complete_build_fixture(
     if multi_config and raw_schema not in runner.BUILD_CLOSURE_V7_SCHEMAS:
         raise ValueError("multi-config fixture requires the current schema")
     baseline = role == "baseline"
-    build_dir = SPECIFICATION[f"{role}_build_dir"]
-    source_root = SPECIFICATION[f"{role}_source_root"]
+    specification = copy.deepcopy(SPECIFICATION)
+    if raw_schema != runner.RAW_SCHEMA:
+        specification.pop("baseline_pure_avx2", None)
+    build_dir = specification[f"{role}_build_dir"]
+    source_root = specification[f"{role}_source_root"]
     selected_configuration = "Release" if multi_config else None
     configuration_types = "Debug;Release" if multi_config else ""
     generator = "Ninja Multi-Config" if multi_config else "Unix Makefiles"
@@ -651,7 +693,7 @@ def complete_build_fixture(
         archive_name = "libleopard_main_exact.a"
         executable_name = "leopard_main_benchmark"
         target_directory = "leopard_main_exact.dir"
-        benchmark_source = (SPECIFICATION["candidate_source_root"] +
+        benchmark_source = (specification["candidate_source_root"] +
             "/experiments/leopard2/main_compare/legacy_main_benchmark.cpp")
         cache = {
             "CMAKE_BUILD_TYPE": "" if multi_config else "Release",
@@ -659,7 +701,15 @@ def complete_build_fixture(
             "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
         }
-        isa_policy = "whole-build -march=native"
+        if raw_schema == runner.RAW_SCHEMA:
+            cache.update({
+                "LEO_MAIN_PURE_AVX2": "ON",
+                "LEO_MAIN_HAS_MARCH_X86_64": "1",
+                "LEO_MAIN_HAS_MTUNE_GENERIC": "1",
+                "LEO_MAIN_HAS_MAVX2": "1",
+                "LEO_MAIN_HAS_MNO_AVX512F": "1",
+            })
+        isa_policy = runner.baseline_isa_policy(specification)
         library_names = runner.BASELINE_LIBRARY_SOURCES
         entry_count = 5
     else:
@@ -683,12 +733,9 @@ def complete_build_fixture(
              configuration_variables) = \
                 runner.build_configuration_contract_for_raw_schema(raw_schema)
             cache.update({
-                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-                **({
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
-                } if raw_schema == runner.RAW_SCHEMA else {}),
-                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+                name: value for name, value in
+                runner.candidate_required_cache(raw_schema).items()
+                if value is not None
             })
             configuration_entries = {
                 "CMAKE_BUILD_TYPE": "" if multi_config else "Release",
@@ -707,12 +754,11 @@ def complete_build_fixture(
                 "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
                 "LEO2_BUILD_BENCHMARKS": "ON",
                 "LEO2_BUILD_TESTS": "OFF",
-                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
                 **({
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
-                } if raw_schema == runner.RAW_SCHEMA else {}),
-                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+                    name: value for name, value in
+                    runner.candidate_required_cache(raw_schema).items()
+                    if name in configuration_variables and value is not None
+                }),
             }
             configuration_material = runner.build_configuration_material(
                 configuration_entries, configuration_variables)
@@ -753,19 +799,19 @@ def complete_build_fixture(
             })
         else:
             effective_configuration = None
-        isa_policy = (
-            "portable core with ISA flags only on SSSE3, AVX2, and "
-            "AVX-512VL translation units")
-        library_names = runner.CANDIDATE_LIBRARY_SOURCES
-        entry_count = runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
+        isa_policy = runner.candidate_isa_policy(raw_schema)
+        library_names = runner.candidate_library_sources_for_raw_schema(
+            raw_schema)
+        entry_count = runner.candidate_expected_compile_command_count(
+            raw_schema)
     if multi_config and not baseline:
-        object_library_sources = (
+        object_library_sources = tuple(name for name in (
             "Leopard2BackendSSSE3.cpp",
             "Leopard2BackendAVX2.cpp",
             "Leopard2BackendAVX2Xor.cpp",
             "Leopard2BackendAVX512.cpp",
             "Leopard2BackendGFNI.cpp",
-        )
+        ) if name in library_names)
         library_names = (
             *object_library_sources,
             *(name for name in library_names
@@ -780,14 +826,17 @@ def complete_build_fixture(
             cache["CMAKE_MAKE_PROGRAM"] = "/usr/bin/ninja"
     entry_count *= 2 if multi_config else 1
     benchmark_object_relative = runner.expected_compile_output(
-        role, Path(benchmark_source), SPECIFICATION, selected_configuration)
+        role, Path(benchmark_source), specification, selected_configuration,
+        "bench_leopard2.dir" if not baseline else None, raw_schema)
     benchmark_object = build_dir + "/" + benchmark_object_relative
     library_pairs = []
     archive_objects = []
     for index, name in enumerate(library_names):
         source_path = source_root + "/" + name
         object_relative = runner.expected_compile_output(
-            role, Path(source_path), SPECIFICATION, selected_configuration)
+            role, Path(source_path), specification, selected_configuration,
+            (runner.candidate_library_target(name)
+             if not baseline else None), raw_schema)
         archive_objects.append(object_relative)
         library_pairs.append({
             "source": complete_artifact(
@@ -863,7 +912,10 @@ def complete_build_fixture(
     compile_identity = {
         "schema": runner.compile_commands_schema_for_raw_schema(raw_schema),
         "implementation": role,
-        "profile": runner.compile_profile_for_implementation(role, raw_schema),
+        "profile": (runner.baseline_compile_profile(specification)
+                    if baseline else
+                    runner.compile_profile_for_implementation(
+                        role, raw_schema)),
         "entry_count": entry_count,
         "required_sources": sorted(pair["source"]["path"] for pair in pairs),
         "validated_optimization": "-O3",
@@ -873,20 +925,35 @@ def complete_build_fixture(
             "directory": build_dir,
             "file": pair["source"]["path"],
             "output": runner.expected_compile_output(
-                role, Path(pair["source"]["path"]), SPECIFICATION,
-                selected_configuration),
+                role, Path(pair["source"]["path"]), specification,
+                selected_configuration,
+                ("bench_leopard2.dir"
+                 if not baseline and
+                    pair["source"]["path"].endswith(
+                        "/bench/leopard2/benchmark.cpp") else
+                 runner.candidate_library_target(
+                    Path(pair["source"]["path"]).name)
+                 if not baseline else None), raw_schema),
             "arguments": runner.expected_compile_argv(
-                role, Path(pair["source"]["path"]), SPECIFICATION,
+                role, Path(pair["source"]["path"]), specification,
                 "/usr/bin/compiler", raw_schema,
                 CANDIDATE_TREE if role == "candidate" else None,
                 effective_configuration if not baseline else None,
-                selected_configuration),
+                selected_configuration,
+                ("bench_leopard2.dir"
+                 if not baseline and
+                    pair["source"]["path"].endswith(
+                        "/bench/leopard2/benchmark.cpp") else
+                 runner.candidate_library_target(
+                    Path(pair["source"]["path"]).name)
+                 if not baseline else None)),
         } for pair in pairs], key=lambda entry: entry["file"]),
         "isa_policy": isa_policy,
     }
     if raw_schema in (
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
-            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
+            runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -1001,7 +1068,8 @@ def complete_runtime_fixture(
             raw, "fixture raw ldd output")
     elif raw_schema in (
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
-            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
+            runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1225,6 +1293,8 @@ def cmake_fixture_identity(
                 SPECIFICATION["candidate_source_root"] + "/" +
                 runner.EVIDENCE_HELPER_RELATIVE_PATH, "file", "6")
         specification = copy.deepcopy(SPECIFICATION)
+        if raw_schema != runner.RAW_SCHEMA:
+            specification.pop("baseline_pure_avx2", None)
         specification.update({
             "baseline_executable": baseline_executable["path"],
             "candidate_executable": candidate_executable["path"],
@@ -1283,6 +1353,8 @@ def cmake_fixture_identity(
         "candidate_build": build,
     }
     specification = copy.deepcopy(SPECIFICATION)
+    if raw_schema != runner.RAW_SCHEMA:
+        specification.pop("baseline_pure_avx2", None)
     specification["candidate_archive"] = archive_path
     return identity, specification
 
@@ -1319,6 +1391,7 @@ def synthetic_raw(
         sealed_executable_fixtures(identity)
         if raw_schema in runner.SEALED_EXECUTABLE_SCHEMAS else None)
     campaign = copy.deepcopy(CAMPAIGN)
+    campaign["statistics"] = runner.statistics_policy(raw_schema)
     if raw_schema in runner.CANDIDATE_MODE_SCHEMAS:
         campaign["candidate_mode"] = candidate_mode
     else:
@@ -1343,7 +1416,7 @@ def synthetic_raw(
                         (Path(runner.SEALED_EXECUTABLE_COMMAND[implementation])
                          if executable_snapshots is not None else
                          Path(specification[f"{implementation}_executable"])),
-                        CELL, campaign),
+                        CELL, campaign, raw_schema),
                 ],
                 "environment": copy.deepcopy(runner.CHILD_ENVIRONMENT),
                 "pinned_cpu": 0,
@@ -1412,7 +1485,7 @@ def write_complete_evidence_bundle(
         stderr_path.write_bytes(b"")
         if manifest_schema in (
                 runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
-                runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1449,11 +1522,12 @@ def write_complete_evidence_bundle(
     if manifest_schema in (
         runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA_V6,
         runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
-        runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
-            runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA):
+            runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA_V9,
+            runner.MANIFEST_SCHEMA):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1534,6 +1608,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V6: runner.FAILURE_SCHEMA_V6,
         runner.RAW_SCHEMA_V7: runner.FAILURE_SCHEMA_V7,
         runner.RAW_SCHEMA_V8: runner.FAILURE_SCHEMA_V8,
+        runner.RAW_SCHEMA_V9: runner.FAILURE_SCHEMA_V9,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1554,7 +1629,9 @@ def synthetic_failure(raw_schema: str) -> dict:
         "retained_files": [],
         "traceback": "fixture traceback",
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema == runner.RAW_SCHEMA_V9:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V9
+    elif raw_schema == runner.RAW_SCHEMA:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
     if raw_schema in runner.SUPERVISION_SCHEMAS:
         payload["supervision"] = copy.deepcopy(raw["supervision"])
@@ -1894,6 +1971,208 @@ class MainCompareRunnerTests(unittest.TestCase):
             self.assertTrue(math.isfinite(result["ci95_lower"]))
             self.assertTrue(result["performance_result_does_not_affect_evidence_validity"])
 
+    def test_run_cli_requires_explicit_pure_avx2_baseline_opt_in(
+            self) -> None:
+        arguments = [
+            "run",
+            "--baseline", "/fixture/baseline",
+            "--candidate", "/fixture/candidate",
+            "--baseline-archive", "/fixture/baseline.a",
+            "--candidate-archive", "/fixture/candidate.a",
+            "--baseline-build-dir", "/fixture/baseline-build",
+            "--candidate-build-dir", "/fixture/candidate-build",
+            "--baseline-source-root", "/fixture/baseline-source",
+            "--candidate-source-root", "/fixture/candidate-source",
+            "--candidate-commit", CANDIDATE_COMMIT,
+            "--reservation-file", "/fixture/reservation.json",
+            "--output", "/fixture/output",
+            "--cpu", "0",
+            "--reserved-sibling", "1",
+        ]
+        with mock.patch.object(runner, "run_campaign") as run_campaign, \
+                mock.patch.object(runner.sys, "stderr"):
+            with self.assertRaises(SystemExit) as failure:
+                runner.main(arguments)
+            self.assertEqual(failure.exception.code, 2)
+            run_campaign.assert_not_called()
+
+        with mock.patch.object(
+                runner, "run_campaign", return_value=0) as run_campaign:
+            self.assertEqual(
+                runner.main([*arguments, "--baseline-pure-avx2"]), 0)
+            run_campaign.assert_called_once()
+            self.assertIs(
+                run_campaign.call_args.args[0].baseline_pure_avx2, True)
+
+    def test_v10_uses_public_one_shot_and_v9_replays_derived_first_use(
+            self) -> None:
+        current = synthetic_raw()
+        current_analysis = runner.validate_raw(
+            current, None, check_files=False, check_current_inputs=False)
+        current_candidate = current["invocations"][1]
+        self.assertEqual(
+            current_candidate["result"]["schema"],
+            "leopard2-benchmark-v9")
+        self.assertTrue(current_candidate["result"]["parameters"]
+                        ["measure_one_shot_decode"])
+        self.assertEqual(
+            current_candidate["normalized"]["one_shot_decode"],
+            current_candidate["result"]["metrics"]
+                ["one_shot_decode_including_setup"]
+                ["samples_us_per_batch_call"])
+        current_candidate_command = current_candidate["command"]
+        self.assertEqual(
+            current_candidate_command.count("--measure-one-shot-decode"), 1)
+        self.assertNotIn(
+            "--measure-one-shot-decode", current["invocations"][0]["command"])
+        self.assertAlmostEqual(
+            current_analysis[CELL.identifier]["decode_first_use"]
+                ["geometric_speedup"],
+            21.0 / (9.0 * 0.8))
+        self.assertAlmostEqual(
+            current_analysis[CELL.identifier]["decode_reuse_amortized"]
+                ["geometric_speedup"],
+            21.0 / (13.0 * 0.8 + 4.1 / CAMPAIGN["reuse"]))
+        self.assertIn(
+            "public leo2_decode one-shot call",
+            current["campaign"]["statistics"]["decode_first_use_semantics"])
+
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V9)
+        historical_analysis = runner.validate_raw(
+            historical, None, check_files=False, check_current_inputs=False)
+        historical_candidate = historical["invocations"][1]
+        self.assertEqual(
+            historical_candidate["result"]["schema"],
+            "leopard2-benchmark-v2")
+        self.assertNotIn(
+            "measure_one_shot_decode",
+            historical_candidate["result"]["parameters"])
+        self.assertNotIn("one_shot_decode", historical_candidate["normalized"])
+        self.assertNotIn(
+            "--measure-one-shot-decode", historical_candidate["command"])
+        self.assertAlmostEqual(
+            historical_analysis[CELL.identifier]["decode_first_use"]
+                ["geometric_speedup"],
+            21.0 / (13.0 * 0.8 + 4.1))
+        self.assertIn(
+            "derived median plan-create",
+            historical["campaign"]["statistics"]
+                ["decode_first_use_semantics"])
+
+    def test_v10_one_shot_result_contract_mutations_fail_closed(self) -> None:
+        def candidate_result_in(value: dict) -> dict:
+            return value["invocations"][1]["result"]
+
+        mutations = {
+            "candidate-schema-downgrade": lambda value:
+                candidate_result_in(value).__setitem__(
+                    "schema", "leopard2-benchmark-v2"),
+            "missing-measure-opt-in": lambda value:
+                candidate_result_in(value)["parameters"].pop(
+                    "measure_one_shot_decode"),
+            "false-measure-opt-in": lambda value:
+                candidate_result_in(value)["parameters"].__setitem__(
+                    "measure_one_shot_decode", False),
+            "wrong-current-auto-backend": lambda value:
+                candidate_result_in(value)["resolved"].__setitem__(
+                    "backend", "avx512"),
+            "disabled-equal-rounded-selector": lambda value:
+                candidate_result_in(value)["build"].__setitem__(
+                    "one_shot_equal_rounded_direct_enabled", False),
+            "nonboolean-cauchy-selector": lambda value:
+                candidate_result_in(value)["build"].__setitem__(
+                    "cauchy_log_reuse_enabled", 1),
+            "missing-cauchy-selector": lambda value:
+                candidate_result_in(value)["build"].pop(
+                    "cauchy_log_reuse_enabled"),
+            "missing-one-shot-summary": lambda value:
+                candidate_result_in(value)["metrics"].pop(
+                    "one_shot_decode_including_setup"),
+            "edited-one-shot-median": lambda value:
+                candidate_result_in(value)["metrics"]
+                    ["one_shot_decode_including_setup"].__setitem__(
+                        "median_us_per_batch_call", 99.0),
+            "short-one-shot-sample-list": lambda value:
+                candidate_result_in(value)["metrics"]
+                    ["one_shot_decode_including_setup"]
+                    ["samples_us_per_batch_call"].pop(),
+            "boolean-one-shot-scratch": lambda value:
+                candidate_result_in(value)["memory"].__setitem__(
+                    "one_shot_decode_scratch_bytes_per_stripe", False),
+            "negative-one-shot-scratch": lambda value:
+                candidate_result_in(value)["memory"].__setitem__(
+                    "one_shot_decode_scratch_bytes_per_stripe", -1),
+            "mismatched-one-shot-batch-scratch": lambda value:
+                candidate_result_in(value)["memory"].__setitem__(
+                    "one_shot_decode_scratch_bytes_batch", 129),
+        }
+        for label, mutate in mutations.items():
+            with self.subTest(label=label):
+                value = synthetic_raw()
+                mutate(value)
+                self.assert_rejected(value)
+
+        normalized = synthetic_raw()
+        normalized["invocations"][1]["normalized"]["one_shot_decode"][1] += 1.0
+        self.assert_rejected(normalized)
+
+    def test_v9_v10_result_command_statistics_and_schema_relabels_rejected(
+            self) -> None:
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V9)
+        injected = copy.deepcopy(historical)
+        historical_result = injected["invocations"][1]["result"]
+        historical_result["parameters"]["measure_one_shot_decode"] = True
+        historical_result["metrics"]["one_shot_decode_including_setup"] = \
+            summary([1.0, 1.1, 1.2])
+        self.assert_rejected(injected)
+
+        missing_current_flag = synthetic_raw()
+        missing_current_flag["invocations"][1]["command"].remove(
+            "--measure-one-shot-decode")
+        self.assert_rejected(missing_current_flag)
+
+        swapped_current_statistics = synthetic_raw()
+        swapped_current_statistics["campaign"]["statistics"] = \
+            runner.statistics_policy(runner.RAW_SCHEMA_V9)
+        self.assert_rejected(swapped_current_statistics)
+        swapped_historical_statistics = synthetic_raw(
+            raw_schema=runner.RAW_SCHEMA_V9)
+        swapped_historical_statistics["campaign"]["statistics"] = \
+            runner.statistics_policy(runner.RAW_SCHEMA)
+        self.assert_rejected(swapped_historical_statistics)
+
+        upgraded = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V9)
+        upgraded["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(upgraded)
+        downgraded = synthetic_raw()
+        downgraded["schema"] = runner.RAW_SCHEMA_V9
+        self.assert_rejected(downgraded)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory),
+                synthetic_raw(raw_schema=runner.RAW_SCHEMA_V9),
+                runner.MANIFEST_SCHEMA_V9)
+            manifest, raw, _, _ = runner.verified_campaign_bundle(
+                manifest_path, no_current_input_check=True)
+            self.assertEqual(
+                (manifest["schema"], raw["schema"]),
+                (runner.MANIFEST_SCHEMA_V9, runner.RAW_SCHEMA_V9))
+
+        historical_failure = synthetic_failure(runner.RAW_SCHEMA_V9)
+        runner.validate_failure(
+            historical_failure, Path("/unused"), check_files=False)
+        upgraded_failure = copy.deepcopy(historical_failure)
+        upgraded_failure["schema"] = runner.FAILURE_SCHEMA
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(upgraded_failure), Path("/unused"), check_files=False)
+        current_failure = synthetic_failure(runner.RAW_SCHEMA)
+        current_failure["schema"] = runner.FAILURE_SCHEMA_V9
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(current_failure), Path("/unused"), check_files=False)
+
     def test_v8_exact_shapes_and_timestamps_fail_closed(self) -> None:
         mutations = []
 
@@ -2061,6 +2340,22 @@ class MainCompareRunnerTests(unittest.TestCase):
         failure = failure_with_invocation()
         runner.validate_failure(
             resign(failure), Path("/unused"), check_files=False)
+
+        failure = failure_with_invocation()
+        # Slot zero is baseline in ABBA.  Retain the first candidate too so the
+        # failed-prefix validator reconstructs the v10 one-shot command.
+        candidate = copy.deepcopy(raw["invocations"][1])
+        candidate["stdout"]["path"] = "candidate-unused.stdout"
+        candidate["stderr"]["path"] = "candidate-unused.stderr"
+        failure["invocations"].append(candidate)
+        failure["retained_files"].extend((
+            copy.deepcopy(candidate["stdout"]),
+            copy.deepcopy(candidate["stderr"])))
+        failure["invocations"][1]["command"].remove(
+            "--measure-one-shot-decode")
+        with self.assertRaises(runner.EvidenceError):
+            runner.validate_failure(
+                resign(failure), Path("/unused"), check_files=False)
 
         failure = failure_with_invocation()
         failure["invocations"][0]["unbound"] = True
@@ -2726,6 +3021,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                 for name, expected in flags.items():
                     self.assertIs(parameters[name], expected)
                 command = invocation["command"]
+                self.assertEqual(
+                    command.count("--measure-one-shot-decode"), 1)
                 for argument in expected_arguments[mode]:
                     self.assertIn(argument, command)
 
@@ -3011,7 +3308,7 @@ class MainCompareRunnerTests(unittest.TestCase):
         for variable, invalid_value in (
             ("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
-            ("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", "ON"),
+            ("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", "OFF"),
             ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "1"),
         ):
             with self.subTest(selector=variable):
@@ -3478,8 +3775,18 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_ENABLE_CUDA=OFF",
                 "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
                 "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
-                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF",
+                "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF",
+                "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON",
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON",
+                "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=ON",
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON",
+                "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=ON",
+                "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=ON",
                 "-DLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0",
+                "-DLEO2_FLAG_MAVX512F=FALSE",
+                "-DLEO2_FLAG_MAVX512BW=FALSE",
+                "-DLEO2_FLAG_MAVX512VL=FALSE",
+                "-DLEO2_FLAG_MPREFER_VECTOR_WIDTH_256=FALSE",
             ]
             for label, generator, configure_extra, output_prefix in (
                 ("single", "Unix Makefiles",
@@ -3496,7 +3803,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                         check=True, stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT, timeout=120)
                     build_command = [
-                        "cmake", "--build", str(build), "--parallel", "16",
+                        "cmake", "--build", str(build), "--parallel", "1",
                         "--target", "bench_leopard2",
                     ]
                     if label == "multi":
@@ -3892,7 +4199,9 @@ class MainCompareRunnerTests(unittest.TestCase):
                     proof["implementation"], role)
                 self.assertEqual(
                     proof["profile"],
-                    runner.compile_profile_for_implementation(role))
+                    (runner.baseline_compile_profile(specification)
+                     if role == "baseline" else
+                     runner.compile_profile_for_implementation(role)))
                 self.assertEqual(
                     len(proof["required_entries"]),
                     len(proof["required_source_object_pairs"]))
@@ -4677,6 +4986,8 @@ class MainCompareRunnerTests(unittest.TestCase):
             legacy["schema"] = runner.FAILURE_SCHEMA_V2
             legacy.pop("evidence_contract")
             legacy["campaign"].pop("candidate_mode", None)
+            legacy["campaign"]["statistics"] = runner.statistics_policy(
+                runner.RAW_SCHEMA_V2)
             legacy.pop("supervision", None)
             legacy.pop("executable_snapshots", None)
             old_identity, old_specification = cmake_fixture_identity(
@@ -4999,6 +5310,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                 baseline_source_root=root,
                 candidate_source_root=root,
                 candidate_commit="1" * 40,
+                baseline_pure_avx2=True,
                 candidate_mode="auto",
                 cpu=0,
                 reserved_sibling=1,
@@ -5149,7 +5461,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             runner.BUILD_CONFIGURATION_FILE_SCHEMA)
         self.assertEqual(
             current_configuration["entries"][
-                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "OFF")
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"], "ON")
 
         # The old body remains internally coherent, but changing only its
         # enclosing schema cannot upgrade its compile/configuration contract.

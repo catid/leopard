@@ -30,17 +30,19 @@ STAGE_SCHEMA = "leopard2-balanced-promotion-stage/v5"
 ATTESTATION_SCHEMA = "leopard2-balanced-auto-path-attestation/v5"
 ATTESTATION_RESULT_SCHEMA_V5 = "leopard2-balanced-auto-path-result/v5"
 ATTESTATION_RESULT_SCHEMA_V6 = "leopard2-balanced-auto-path-result/v6"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v7"
+ATTESTATION_RESULT_SCHEMA_V7 = "leopard2-balanced-auto-path-result/v7"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v8"
 PROMOTION_TIMING_SCHEMA = "leopard2-balanced-promotion-timing-evidence/v1"
 EXACT_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
 EXACT_MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
 EXACT_MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
 EXACT_MANIFEST_SCHEMA_V8 = "leopard2-main-compare-manifest/v8"
-EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v9"
+EXACT_MANIFEST_SCHEMA_V9 = "leopard2-main-compare-manifest/v9"
+EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v10"
 EXACT_MANIFEST_SCHEMAS = frozenset((
     EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA_V6,
     EXACT_MANIFEST_SCHEMA_V7, EXACT_MANIFEST_SCHEMA_V8,
-    EXACT_MANIFEST_SCHEMA,
+    EXACT_MANIFEST_SCHEMA_V9, EXACT_MANIFEST_SCHEMA,
 ))
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 EXACT_MAIN_TREE = "b7c8830d96a978f6ec14fe747095f066e351ae72"
@@ -99,16 +101,18 @@ EXACT_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 EXACT_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 EXACT_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
 EXACT_RAW_SCHEMA_V8 = "leopard2-main-compare-raw/v8"
-EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v9"
+EXACT_RAW_SCHEMA_V9 = "leopard2-main-compare-raw/v9"
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v10"
 EXACT_RAW_SCHEMAS = frozenset((
     EXACT_RAW_SCHEMA_V5, EXACT_RAW_SCHEMA_V6, EXACT_RAW_SCHEMA_V7,
-    EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA,
+    EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA_V9, EXACT_RAW_SCHEMA,
 ))
 EXACT_SCHEMA_PAIRS = frozenset((
     (EXACT_MANIFEST_SCHEMA_V5, EXACT_RAW_SCHEMA_V5),
     (EXACT_MANIFEST_SCHEMA_V6, EXACT_RAW_SCHEMA_V6),
     (EXACT_MANIFEST_SCHEMA_V7, EXACT_RAW_SCHEMA_V7),
     (EXACT_MANIFEST_SCHEMA_V8, EXACT_RAW_SCHEMA_V8),
+    (EXACT_MANIFEST_SCHEMA_V9, EXACT_RAW_SCHEMA_V9),
     (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA),
 ))
 CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
@@ -127,7 +131,7 @@ MAX_CPU_LIST_ENTRIES = 4096
 BASELINE_LIBRARY_SOURCES = (
     "leopard.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
 )
-CANDIDATE_LIBRARY_SOURCES = (
+CANDIDATE_LIBRARY_SOURCES_V9 = (
     "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
     "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp", "Leopard2Plan.cpp",
     "LeopardCommon.cpp", "LeopardFF8.cpp", "LeopardFF16.cpp",
@@ -135,26 +139,47 @@ CANDIDATE_LIBRARY_SOURCES = (
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp", "Leopard2BackendGFNI.cpp",
 )
+CANDIDATE_LIBRARY_SOURCES = tuple(
+    source for source in CANDIDATE_LIBRARY_SOURCES_V9
+    if source != "Leopard2BackendAVX512.cpp")
 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT = 5
 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT = 22
 COMPILE_COMMANDS_SCHEMA_V2 = "leopard2-main-compare-compile-commands/v2"
 COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
 COMPILE_COMMANDS_SCHEMA_V4 = "leopard2-main-compare-compile-commands/v4"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v5"
+COMPILE_COMMANDS_SCHEMA_V5 = "leopard2-main-compare-compile-commands/v5"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v6"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
+BASELINE_PURE_AVX2_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-pure-avx2-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V2 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v2"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v3"
+BASELINE_NATIVE_ISA_POLICY = "whole-build -march=native"
+BASELINE_PURE_AVX2_ISA_POLICY = (
+    "whole-build -march=x86-64 -mtune=generic -mavx2 -mno-avx512f")
+CANDIDATE_ISA_POLICY_V9 = (
+    "portable core with ISA flags only on SSSE3, AVX2, and "
+    "AVX-512VL translation units")
+CANDIDATE_ISA_POLICY = (
+    "portable core with ISA flags only on SSSE3, AVX2, and GFNI "
+    "translation units; AVX-512 probes disabled; AUTO resolved AVX2")
 BUILD_CONFIGURATION_RECORD_SCHEMA_V2 = \
     "leopard2-main-compare-build-configuration/v2"
-BUILD_CONFIGURATION_RECORD_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA_V3 = \
     "leopard2-main-compare-build-configuration/v3"
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v4"
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
-BUILD_CONFIGURATION_FILE_SCHEMA = \
+BUILD_CONFIGURATION_FILE_SCHEMA_V3 = \
     "leopard2-benchmark-build-configuration/v3"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v4"
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -167,15 +192,20 @@ BALANCED_ANALYZER_RELATIVE_PATH = \
     "experiments/leopard2/decoder_dispatch/analyze_balanced.py"
 EVIDENCE_SCOPE_SCHEMA_V3 = "leopard2-balanced-evidence-scope/v3"
 EVIDENCE_SCOPE_SCHEMA_V4 = "leopard2-balanced-evidence-scope/v4"
-EVIDENCE_SCOPE_SCHEMA = "leopard2-balanced-evidence-scope/v5"
+EVIDENCE_SCOPE_SCHEMA_V5 = "leopard2-balanced-evidence-scope/v5"
+EVIDENCE_SCOPE_SCHEMA = "leopard2-balanced-evidence-scope/v6"
 CANONICAL_BUILD_VALIDATOR_V2 = \
     "exact-main/run_abba.py build_provenance schema v8"
-CANONICAL_BUILD_VALIDATOR = \
+CANONICAL_BUILD_VALIDATOR_V3 = \
     "exact-main/run_abba.py build_provenance schema v9"
+CANONICAL_BUILD_VALIDATOR = \
+    "exact-main/run_abba.py build_provenance schema v10"
 CANONICAL_PRODUCTION_BUILD_SCHEMA_V2 = \
     "leopard2-canonical-production-build/v2"
-CANONICAL_PRODUCTION_BUILD_SCHEMA = \
+CANONICAL_PRODUCTION_BUILD_SCHEMA_V3 = \
     "leopard2-canonical-production-build/v3"
+CANONICAL_PRODUCTION_BUILD_SCHEMA = \
+    "leopard2-canonical-production-build/v4"
 BUILD_CONFIGURATION_VARIABLES_V2 = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_CONFIGURATION_TYPES",
     "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_DEBUG",
@@ -187,12 +217,23 @@ BUILD_CONFIGURATION_VARIABLES_V2 = (
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V3 = (
     *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
     BUILD_CONFIGURATION_VARIABLES_V2[-1],
 )
-REQUIRED_BUILD_CONFIGURATION_ENTRIES = {
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
+)
+REQUIRED_BUILD_CONFIGURATION_ENTRIES_V2 = {
     "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
     "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
     "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
@@ -207,8 +248,21 @@ REQUIRED_BUILD_CONFIGURATION_ENTRIES = {
     "LEO2_BUILD_TESTS": "OFF",
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+}
+REQUIRED_BUILD_CONFIGURATION_ENTRIES_V3 = {
+    **REQUIRED_BUILD_CONFIGURATION_ENTRIES_V2,
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+}
+REQUIRED_BUILD_CONFIGURATION_ENTRIES = {
+    **REQUIRED_BUILD_CONFIGURATION_ENTRIES_V2,
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
 }
 REQUIRED_LEGACY_CANDIDATE_CACHE = {
     "ENABLE_OPENMP": "ON",
@@ -224,13 +278,41 @@ REQUIRED_CANDIDATE_CACHE_V2 = {
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
 }
-REQUIRED_CANDIDATE_CACHE = {
+REQUIRED_CANDIDATE_CACHE_V3 = {
     **REQUIRED_CANDIDATE_CACHE_V2,
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+}
+REQUIRED_CANDIDATE_CACHE = {
+    **REQUIRED_CANDIDATE_CACHE_V2,
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+    "LEO2_FLAG_MSSSE3": "1",
+    "LEO2_FLAG_MNO_AVX": "1",
+    "LEO2_FLAG_MAVX2": "1",
+    "LEO2_FLAG_MNO_AVX512F": "1",
+    "LEO2_FLAG_FALIGN_FUNCTIONS_64": "1",
+    "LEO2_FLAG_MGFNI": "1",
+    "LEO2_FLAG_MAVX512F": "FALSE",
+    "LEO2_FLAG_MAVX512BW": "FALSE",
+    "LEO2_FLAG_MAVX512VL": "FALSE",
+    "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256": "FALSE",
 }
 CANONICAL_NINJA_PATH = "/usr/bin/ninja"
 REQUIRED_BASELINE_CACHE = {
     "LEO_MAIN_HAS_MARCH_NATIVE": "1",
+}
+REQUIRED_PURE_AVX2_BASELINE_CACHE = {
+    **REQUIRED_BASELINE_CACHE,
+    "LEO_MAIN_PURE_AVX2": "ON",
+    "LEO_MAIN_HAS_MARCH_X86_64": "1",
+    "LEO_MAIN_HAS_MTUNE_GENERIC": "1",
+    "LEO_MAIN_HAS_MAVX2": "1",
+    "LEO_MAIN_HAS_MNO_AVX512F": "1",
 }
 EXCLUDED_CAMPAIGN_BACKENDS = {
     "avx512": "no forced AVX-512 runner coverage in this campaign schema",
@@ -1188,6 +1270,12 @@ def _build_configuration_contract(
             BUILD_CONFIGURATION_VARIABLES,
             REQUIRED_CANDIDATE_CACHE,
         )
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V3:
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V3,
+            BUILD_CONFIGURATION_VARIABLES_V3,
+            REQUIRED_CANDIDATE_CACHE_V3,
+        )
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V2:
         return (
             BUILD_CONFIGURATION_RECORD_SCHEMA_V2,
@@ -1204,11 +1292,16 @@ def _build_configuration_contract_for_compile_schema(
     """Bind sidecar versions to the compile-command contract that names them."""
     require(compile_schema in {
                 COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3,
-                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA},
+                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+                COMPILE_COMMANDS_SCHEMA},
             "normalized compile-command schema differs")
     if compile_schema == COMPILE_COMMANDS_SCHEMA:
         require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA,
                 "current compile-command schema requires the current "
+                "effective-configuration schema")
+    elif compile_schema == COMPILE_COMMANDS_SCHEMA_V5:
+        require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V3,
+                "v9 compile-command schema requires the v9 "
                 "effective-configuration schema")
     else:
         require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V2,
@@ -1217,12 +1310,26 @@ def _build_configuration_contract_for_compile_schema(
     return _build_configuration_contract(file_schema)
 
 
+def _required_build_configuration_entries(
+    file_schema: str,
+) -> Mapping[str, str]:
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
+        return REQUIRED_BUILD_CONFIGURATION_ENTRIES
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V3:
+        return REQUIRED_BUILD_CONFIGURATION_ENTRIES_V3
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V2:
+        return REQUIRED_BUILD_CONFIGURATION_ENTRIES_V2
+    raise PlanError(
+        "candidate normalized effective-configuration schema differs")
+
+
 def _build_configuration_material(
     entries: Mapping[str, str],
     variables: Sequence[str] = BUILD_CONFIGURATION_VARIABLES,
 ) -> bytes:
     require(tuple(variables) in (
                 BUILD_CONFIGURATION_VARIABLES,
+                BUILD_CONFIGURATION_VARIABLES_V3,
                 BUILD_CONFIGURATION_VARIABLES_V2) and
             set(entries) == set(variables),
             "candidate normalized effective-configuration variables differ")
@@ -1513,13 +1620,8 @@ def _validate_normalized_build_configuration(
                 cache.get("CMAKE_CXX_COMPILER") and
             all(parsed["entries"].get(name) == expected
                 for name, expected in
-                (REQUIRED_BUILD_CONFIGURATION_ENTRIES.items()
-                 if parsed["configuration_schema"] ==
-                    BUILD_CONFIGURATION_FILE_SCHEMA else
-                 ((name, expected) for name, expected in
-                    REQUIRED_BUILD_CONFIGURATION_ENTRIES.items()
-                  if name !=
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"))) and
+                _required_build_configuration_entries(
+                    parsed["configuration_schema"]).items()) and
             all(cache.get(name) == expected
                 for name, expected in required_entries.items()),
             "candidate normalized effective configuration differs from "
@@ -1667,7 +1769,8 @@ def _normalized_compile_argv(
 ) -> list[str]:
     require(compile_schema in {
                 COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3,
-                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA},
+                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+                COMPILE_COMMANDS_SCHEMA},
             "normalized compile argv schema differs")
     output = _normalized_compile_output(
         role, source, selected_configuration)
@@ -1680,10 +1783,15 @@ def _normalized_compile_argv(
         configuration_definition = (
             [f'-DCMAKE_INTDIR="{selected_configuration}"']
             if selected_configuration else [])
+        isa_flags = (
+            ["-march=x86-64", "-mtune=generic", "-mavx2",
+             "-mno-avx512f"]
+            if compile_schema == COMPILE_COMMANDS_SCHEMA else
+            ["-march=native"])
         return [
             compiler_invocation, *definitions, *configuration_definition,
             "-I$BASELINE_SOURCE",
-            "-g", "-O0", "-O3", "-std=gnu++11", "-march=native",
+            "-g", "-O0", "-O3", "-std=gnu++11", *isa_flags,
             "-Wall", "-Wextra", "-fopenmp",
             "-o", output, "-c", source,
         ]
@@ -1701,10 +1809,18 @@ def _normalized_compile_argv(
         "Leopard2BackendGFNI.cpp": [
             "-mavx2", "-mgfni", "-mno-avx512f", "-falign-functions=64"],
     }
+    current = compile_schema == COMPILE_COMMANDS_SCHEMA
+    source_definitions: list[str] = []
+    global_definitions = ([
+        "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+        "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+    ] if current else [])
     if relative == "Leopard2BackendAVX512.cpp":
+        require(not current,
+                "current effective-AVX2 profile contains an AVX-512 source")
         definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
     elif relative == "Leopard2BackendGFNI.cpp":
-        definitions = [
+        definitions = [*global_definitions,
             "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_GFNI_BACKEND=1"]
     elif relative == "bench/leopard2/benchmark.cpp":
         if compile_schema == COMPILE_COMMANDS_SCHEMA_V2:
@@ -1750,24 +1866,44 @@ def _normalized_compile_argv(
                 "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
                 '"$CANDIDATE_BUILD/generated/leopard2-benchmark-attestation/'
                 'leopard2_benchmark_source_attestation.h"',
+                *global_definitions,
             ]
     elif relative in isolated_flags:
-        definitions = []
+        definitions = list(global_definitions)
+        if current and relative in {
+                "Leopard2BackendAVX2.cpp",
+                "Leopard2BackendAVX2Xor.cpp"}:
+            definitions.insert(
+                1, "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
+        if current and relative == "Leopard2BackendAVX2.cpp":
+            source_definitions.append(
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
     else:
         definitions = [
             "-DLEO2_DISABLE_AVX2_CODEGEN=1",
             "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            *global_definitions[:1],
+            *(["-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+               "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+               "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1"]
+              if current else []),
+            *global_definitions[1:],
             "-DLEO2_HAVE_AVX2_BACKEND=1",
-            "-DLEO2_HAVE_AVX512_BACKEND=1",
+            *([] if current else ["-DLEO2_HAVE_AVX512_BACKEND=1"]),
             "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
+        if current and relative in {
+                "leopard2.cpp", "Leopard2Backend.cpp"}:
+            source_definitions.append(
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
     includes = ["-I$CANDIDATE_SOURCE"]
     configuration_definition = (
         [f'-DCMAKE_INTDIR="{selected_configuration}"']
         if selected_configuration else [])
     return [
-        compiler_invocation, *definitions, *configuration_definition, *includes,
+        compiler_invocation, *definitions, *configuration_definition,
+        *source_definitions, *includes,
         "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
         "-std=gnu++11", *isolated_flags.get(relative, []),
         *([] if relative in isolated_flags else ["-fopenmp"]),
@@ -1786,10 +1922,12 @@ def _validate_scope_build(
     compile_schema = semantics.get("schema")
     require(compile_schema in {
                 COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3,
-                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA},
+                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+                COMPILE_COMMANDS_SCHEMA},
             f"{role} normalized compile-command schema differs")
     complete_build = compile_schema in (
-        COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA)
+        COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+        COMPILE_COMMANDS_SCHEMA)
     expected_build_keys = {
                 "build_dir", "cmake_cache", "compile_commands",
                 "executable_link_recipe", "archive_link_recipe", "compiler",
@@ -1816,7 +1954,10 @@ def _validate_scope_build(
     require(isinstance(cache, dict),
             f"{role} validated CMake cache is absent")
     if baseline:
-        required_cache = REQUIRED_BASELINE_CACHE
+        required_cache = (
+            REQUIRED_PURE_AVX2_BASELINE_CACHE
+            if compile_schema == COMPILE_COMMANDS_SCHEMA else
+            REQUIRED_BASELINE_CACHE)
     elif complete_build:
         unused_record_schema, unused_variables, required_cache = \
             _build_configuration_contract_for_compile_schema(
@@ -1860,6 +2001,8 @@ def _validate_scope_build(
              cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
                 (BUILD_CONFIGURATION_FILE_SCHEMA
                  if compile_schema == COMPILE_COMMANDS_SCHEMA else
+                 BUILD_CONFIGURATION_FILE_SCHEMA_V3
+                 if compile_schema == COMPILE_COMMANDS_SCHEMA_V5 else
                  BUILD_CONFIGURATION_FILE_SCHEMA_V2)) and
             (baseline or not complete_build or re.fullmatch(
                 r"[0-9a-f]{64}", str(cache.get(
@@ -1870,7 +2013,10 @@ def _validate_scope_build(
     executable_name = "leopard_main_benchmark" if baseline else "bench_leopard2"
     archive_target = "leopard_main_exact.dir" if baseline else "leopard.dir"
     library_sources = (
-        BASELINE_LIBRARY_SOURCES if baseline else CANDIDATE_LIBRARY_SOURCES)
+        BASELINE_LIBRARY_SOURCES if baseline else
+        CANDIDATE_LIBRARY_SOURCES
+        if compile_schema == COMPILE_COMMANDS_SCHEMA else
+        CANDIDATE_LIBRARY_SOURCES_V9)
     expected_entry_count = (
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
         CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT) * configured_variant_count
@@ -1982,15 +2128,29 @@ def _validate_scope_build(
                 "schema", "implementation", "profile", "required_entries"}
     if compile_schema in (
             COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA_V4,
-            COMPILE_COMMANDS_SCHEMA):
+            COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA):
         expected_semantics_keys.add("generated_attestation_header")
-    if compile_schema in (COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA):
+    if compile_schema in (
+            COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+            COMPILE_COMMANDS_SCHEMA):
         expected_semantics_keys.add("effective_build_configuration")
     expected_profile = (
-        BASELINE_COMPILE_PROFILE if baseline else
-        CANDIDATE_COMPILE_PROFILE if compile_schema in (
-            COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA) else
+        (BASELINE_PURE_AVX2_COMPILE_PROFILE
+         if compile_schema == COMPILE_COMMANDS_SCHEMA else
+         BASELINE_COMPILE_PROFILE) if baseline else
+        CANDIDATE_COMPILE_PROFILE
+        if compile_schema == COMPILE_COMMANDS_SCHEMA else
+        CANDIDATE_COMPILE_PROFILE_V2
+        if compile_schema in (
+            COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5) else
         CANDIDATE_COMPILE_PROFILE_V1)
+    expected_isa_policy = (
+        (BASELINE_PURE_AVX2_ISA_POLICY
+         if compile_schema == COMPILE_COMMANDS_SCHEMA else
+         BASELINE_NATIVE_ISA_POLICY) if baseline else
+        CANDIDATE_ISA_POLICY
+        if compile_schema == COMPILE_COMMANDS_SCHEMA else
+        CANDIDATE_ISA_POLICY_V9)
     require(set(semantics) == expected_semantics_keys and
             type(semantics.get("entry_count")) is int and
             semantics["entry_count"] == expected_entry_count and
@@ -1998,8 +2158,7 @@ def _validate_scope_build(
             semantics.get("profile") == expected_profile and
             semantics.get("validated_optimization") == "-O3" and
             semantics.get("validated_openmp") is True and
-            isinstance(semantics.get("isa_policy"), str) and
-            semantics["isa_policy"] and
+            semantics.get("isa_policy") == expected_isa_policy and
             isinstance(semantics.get("required_sources"), list) and
             semantics["required_sources"] and
             len(semantics["required_sources"]) == len(set(
@@ -2080,7 +2239,7 @@ def _validate_scope_build(
             f"{role} normalized benchmark/build object closure differs")
     if compile_schema in (
             COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA_V4,
-            COMPILE_COMMANDS_SCHEMA):
+            COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA):
         if baseline:
             require(semantics.get("generated_attestation_header") is None,
                     "baseline normalized build unexpectedly has an attestation")
@@ -2091,7 +2250,9 @@ def _validate_scope_build(
                 semantics, source_identity.get("head"),
                 source_identity.get("tree"),
                 "$CANDIDATE_BUILD", "$CANDIDATE_SOURCE")
-    if compile_schema in (COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA):
+    if compile_schema in (
+            COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+            COMPILE_COMMANDS_SCHEMA):
         if baseline:
             require(semantics.get("effective_build_configuration") is None,
                     "baseline normalized build has candidate configuration")
@@ -2109,13 +2270,16 @@ def _validate_scope_build(
     members = build.get("validated_archive_members")
     archive_source_order = library_sources
     if selected_configuration and not baseline:
-        object_library_sources = (
+        object_library_source_order = (
             "Leopard2BackendSSSE3.cpp",
             "Leopard2BackendAVX2.cpp",
             "Leopard2BackendAVX2Xor.cpp",
             "Leopard2BackendAVX512.cpp",
             "Leopard2BackendGFNI.cpp",
         )
+        object_library_sources = tuple(
+            name for name in object_library_source_order
+            if name in library_sources)
         archive_source_order = (
             *object_library_sources,
             *(name for name in library_sources
@@ -2560,6 +2724,10 @@ def selection_scope_from_verified_bundle(
     require(resolved_backend in CAMPAIGN_BACKENDS,
             "resolved AUTO backend lacks forced confirmation coverage; "
             "AVX-512 and NEON are outside this campaign")
+    if raw.get("schema") == EXACT_RAW_SCHEMA:
+        require(resolved_backend == "avx2",
+                "v10 exact-main candidate did not resolve the effective-AVX2 "
+                "AUTO backend")
 
     replacements = (
         (baseline_source_root, "$BASELINE_SOURCE"),
@@ -2569,7 +2737,8 @@ def selection_scope_from_verified_bundle(
     )
     raw_schema = raw.get("schema")
     rich_scope = raw_schema in {
-        EXACT_RAW_SCHEMA_V7, EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA}
+        EXACT_RAW_SCHEMA_V7, EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA_V9,
+        EXACT_RAW_SCHEMA}
     tool_names = ["runner", "taskset", "ldd"]
     if rich_scope:
         tool_names.append("evidence_helper")
@@ -2589,6 +2758,8 @@ def selection_scope_from_verified_bundle(
     scope = {
         "schema": (
             EVIDENCE_SCOPE_SCHEMA if raw_schema == EXACT_RAW_SCHEMA else
+            EVIDENCE_SCOPE_SCHEMA_V5
+            if raw_schema == EXACT_RAW_SCHEMA_V9 else
             EVIDENCE_SCOPE_SCHEMA_V4 if rich_scope else
             EVIDENCE_SCOPE_SCHEMA_V3),
         # Retain the exact pinned CPU pair.  This is intentionally stricter than
@@ -2638,10 +2809,11 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         "excluded_backends",
     } and scope_schema in {
         EVIDENCE_SCOPE_SCHEMA_V3, EVIDENCE_SCOPE_SCHEMA_V4,
-        EVIDENCE_SCOPE_SCHEMA},
+        EVIDENCE_SCOPE_SCHEMA_V5, EVIDENCE_SCOPE_SCHEMA},
             "gate evidence scope shape differs")
     backend = scope.get("resolved_auto_backend")
     require(backend in CAMPAIGN_BACKENDS and
+            (scope_schema != EVIDENCE_SCOPE_SCHEMA or backend == "avx2") and
             scope.get("forced_confirmation_backends") ==
                 list(BACKENDS[:BACKENDS.index(backend) + 1]) and
             scope.get("excluded_backends") == EXCLUDED_CAMPAIGN_BACKENDS,
@@ -2670,6 +2842,10 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         EVIDENCE_SCOPE_SCHEMA_V3: frozenset((
             COMPILE_COMMANDS_SCHEMA_V2, COMPILE_COMMANDS_SCHEMA_V3)),
         EVIDENCE_SCOPE_SCHEMA_V4: frozenset((COMPILE_COMMANDS_SCHEMA_V4,)),
+        # v5 replays historical raw v9 evidence, where decode_first_use was
+        # derived as plan setup plus execution.  v6 is deliberately distinct:
+        # raw v10 measures the public one-shot decode call itself.
+        EVIDENCE_SCOPE_SCHEMA_V5: frozenset((COMPILE_COMMANDS_SCHEMA_V5,)),
         EVIDENCE_SCOPE_SCHEMA: frozenset((COMPILE_COMMANDS_SCHEMA,)),
     }
     require(
@@ -2678,7 +2854,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         "gate evidence scope schema differs from its compile-command schema")
     if candidate_compile["schema"] in (
         COMPILE_COMMANDS_SCHEMA_V3, COMPILE_COMMANDS_SCHEMA_V4,
-        COMPILE_COMMANDS_SCHEMA,
+        COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA,
     ):
         attestation = candidate_compile["generated_attestation_header"]
         require(attestation["source_commit"] == sources["candidate"]["head"] and
@@ -2690,7 +2866,9 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             builds["baseline"]["compiler_version_stdout"] ==
                 builds["candidate"]["compiler_version_stdout"],
             "gate evidence baseline/candidate compiler identity differs")
-    if scope_schema in (EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA):
+    if scope_schema in (
+            EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA_V5,
+            EVIDENCE_SCOPE_SCHEMA):
         require(
             builds["baseline"]["multi_config_build_tool"] ==
                 builds["candidate"]["multi_config_build_tool"] and
@@ -2731,7 +2909,9 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
                 artifacts["candidate_executable"].get("path"),
             "gate evidence runtime closure names a different executable")
     expected_tools = {"runner", "taskset", "ldd"}
-    if scope_schema in (EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA):
+    if scope_schema in (
+            EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA_V5,
+            EVIDENCE_SCOPE_SCHEMA):
         expected_tools.add("evidence_helper")
     require(isinstance(tools, dict) and set(tools) == expected_tools,
             "gate evidence tool scope shape differs")
@@ -2739,7 +2919,9 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         _validate_scope_artifact(
             tool, key,
             "file" if key in {"runner", "evidence_helper"} else "executable")
-    if scope_schema in (EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA):
+    if scope_schema in (
+            EVIDENCE_SCOPE_SCHEMA_V4, EVIDENCE_SCOPE_SCHEMA_V5,
+            EVIDENCE_SCOPE_SCHEMA):
         require(
             tools["evidence_helper"]["path"] ==
                 f"$CANDIDATE_SOURCE/{EVIDENCE_HELPER_RELATIVE_PATH}",
@@ -4076,12 +4258,13 @@ def validate_promotion_timing_evidence(
 
 
 def _attestation_result_build_contract(
-        result_schema: str,
-) -> tuple[str, str, str, Mapping[str, str], bool]:
+    result_schema: str,
+) -> tuple[str, str, str, str, Mapping[str, str], bool]:
     """Select one exact canonical-build generation for an outer result."""
     require(result_schema in {
                 ATTESTATION_RESULT_SCHEMA_V5,
                 ATTESTATION_RESULT_SCHEMA_V6,
+                ATTESTATION_RESULT_SCHEMA_V7,
                 ATTESTATION_RESULT_SCHEMA},
             "attestation result schema is unsupported")
     if result_schema == ATTESTATION_RESULT_SCHEMA:
@@ -4089,13 +4272,24 @@ def _attestation_result_build_contract(
             CANONICAL_PRODUCTION_BUILD_SCHEMA,
             CANONICAL_BUILD_VALIDATOR,
             COMPILE_COMMANDS_SCHEMA,
+            CANDIDATE_COMPILE_PROFILE,
             REQUIRED_CANDIDATE_CACHE,
+            True,
+        )
+    if result_schema == ATTESTATION_RESULT_SCHEMA_V7:
+        return (
+            CANONICAL_PRODUCTION_BUILD_SCHEMA_V3,
+            CANONICAL_BUILD_VALIDATOR_V3,
+            COMPILE_COMMANDS_SCHEMA_V5,
+            CANDIDATE_COMPILE_PROFILE_V2,
+            REQUIRED_CANDIDATE_CACHE_V3,
             True,
         )
     return (
         CANONICAL_PRODUCTION_BUILD_SCHEMA_V2,
         CANONICAL_BUILD_VALIDATOR_V2,
         COMPILE_COMMANDS_SCHEMA_V4,
+        CANDIDATE_COMPILE_PROFILE_V2,
         REQUIRED_CANDIDATE_CACHE_V2,
         result_schema == ATTESTATION_RESULT_SCHEMA_V6,
     )
@@ -4131,7 +4325,7 @@ def derive_attestation_result(
             source.get("status") == "clean" and
             source.get("status_sha256") == common.EMPTY_SHA256,
             "attestation source is not the exact clean candidate commit")
-    (canonical_schema, canonical_validator, compile_schema,
+    (canonical_schema, canonical_validator, compile_schema, compile_profile,
      required_candidate_cache, require_timing) = \
         _attestation_result_build_contract(result_schema)
     if require_timing:
@@ -4169,7 +4363,7 @@ def derive_attestation_result(
             canonical["provenance"]["validated_compile_commands"].get(
                 "implementation") == "candidate" and
             canonical["provenance"]["validated_compile_commands"].get(
-                "profile") == CANDIDATE_COMPILE_PROFILE and
+                "profile") == compile_profile and
             canonical["provenance"]["validated_compile_commands"].get(
                 "validated_optimization") == "-O3" and
             canonical["provenance"]["validated_compile_commands"].get(
@@ -4357,13 +4551,15 @@ def validate_attestation_result_files(
     require(isinstance(result_schema, str) and result_schema in {
                 ATTESTATION_RESULT_SCHEMA_V5,
                 ATTESTATION_RESULT_SCHEMA_V6,
+                ATTESTATION_RESULT_SCHEMA_V7,
                 ATTESTATION_RESULT_SCHEMA},
             "attestation result schema differs")
     unused_canonical_schema, unused_validator, unused_compile_schema, \
+        unused_compile_profile, \
         unused_cache, require_timing = \
             _attestation_result_build_contract(result_schema)
     del (unused_canonical_schema, unused_validator, unused_compile_schema,
-         unused_cache)
+         unused_compile_profile, unused_cache)
     value = unsigned(retained, result_schema, "attestation result")
     expected_fields = {
         "schema", "status", "valid", "plan_content_sha256",
@@ -4474,8 +4670,24 @@ def adversarial_resign(path: Path, mutator) -> None:
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
+def fake_evidence_scope(
+    backend: str = "avx2",
+    compile_schema: str = COMPILE_COMMANDS_SCHEMA,
+) -> dict[str, Any]:
     require(backend in CAMPAIGN_BACKENDS, "fixture backend is outside campaign")
+    require(compile_schema in {
+                COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
+                COMPILE_COMMANDS_SCHEMA},
+            "fixture compile schema is unsupported")
+    current = compile_schema == COMPILE_COMMANDS_SCHEMA
+    configuration_file_schema = (
+        BUILD_CONFIGURATION_FILE_SCHEMA if current else
+        BUILD_CONFIGURATION_FILE_SCHEMA_V3
+        if compile_schema == COMPILE_COMMANDS_SCHEMA_V5 else
+        BUILD_CONFIGURATION_FILE_SCHEMA_V2)
+    configuration_record_schema, configuration_variables, candidate_cache = \
+        _build_configuration_contract_for_compile_schema(
+            compile_schema, configuration_file_schema)
     def fixture_artifact(path: str, kind: str, character: str,
                          mode: int = 0o644) -> dict[str, Any]:
         return {"path": path, "kind": kind, "sha256": character * 64,
@@ -4515,19 +4727,21 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         root: str, source_root: str,
     ) -> dict[str, Any]:
         entries = {
-            variable: "" for variable in BUILD_CONFIGURATION_VARIABLES
+            variable: "" for variable in configuration_variables
         }
-        entries.update(REQUIRED_BUILD_CONFIGURATION_ENTRIES)
+        entries.update(_required_build_configuration_entries(
+            configuration_file_schema))
         entries.update({
             "CMAKE_BUILD_TYPE": "Release",
             "CMAKE_GENERATOR": "Unix Makefiles",
             "CMAKE_CONFIGURATION_TYPES": "",
             "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
         })
-        material = _build_configuration_material(entries)
+        material = _build_configuration_material(
+            entries, configuration_variables)
         digest = hashlib.sha256(material).hexdigest()
         text = (
-            f"schema={BUILD_CONFIGURATION_FILE_SCHEMA}\n"
+            f"schema={configuration_file_schema}\n"
             f"sha256={digest}\n").encode("ascii") + material
         content = fixture_text(text.decode("utf-8"))
         artifact = fixture_artifact(
@@ -4537,10 +4751,10 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "size": content["size"], "sha256": content["sha256"],
         })
         return {
-            "schema": BUILD_CONFIGURATION_RECORD_SCHEMA,
+            "schema": configuration_record_schema,
             "artifact": artifact,
             "content": content,
-            "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA,
+            "configuration_schema": configuration_file_schema,
             "configuration_sha256": digest,
             "entries": entries,
             "embedded_build_type": "Release",
@@ -4565,7 +4779,9 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
         executable_name = "leopard_main_benchmark" if baseline else "bench_leopard2"
         archive_name = "libleopard_main_exact.a" if baseline else "libleopard.a"
         library_names = (
-            BASELINE_LIBRARY_SOURCES if baseline else CANDIDATE_LIBRARY_SOURCES)
+            BASELINE_LIBRARY_SOURCES if baseline else
+            CANDIDATE_LIBRARY_SOURCES if current else
+            CANDIDATE_LIBRARY_SOURCES_V9)
         library_pairs = []
         for name in library_names:
             source_path = f"{source_root}/{name}"
@@ -4600,12 +4816,13 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "CMAKE_CXX_FLAGS_RELEASE": (
                 "-O3 -DNDEBUG" if baseline else "-O3 -DNDEBUG -O3"),
             "CMAKE_GENERATOR": "Unix Makefiles",
-            **(REQUIRED_BASELINE_CACHE if baseline else REQUIRED_CANDIDATE_CACHE),
+            **((REQUIRED_PURE_AVX2_BASELINE_CACHE if current else
+                REQUIRED_BASELINE_CACHE) if baseline else candidate_cache),
         }
         if not baseline:
             cache.update({
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                    BUILD_CONFIGURATION_FILE_SCHEMA,
+                    configuration_file_schema,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                     build_configuration["configuration_sha256"],
             })
@@ -4679,10 +4896,12 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                 f"{root}/{executable_name}", "executable", character, 0o755),
             "validated_archive_members": members,
             "validated_compile_commands": {
-                "schema": COMPILE_COMMANDS_SCHEMA,
+                "schema": compile_schema,
                 "implementation": role,
-                "profile": (BASELINE_COMPILE_PROFILE if baseline else
-                            CANDIDATE_COMPILE_PROFILE),
+                "profile": ((BASELINE_PURE_AVX2_COMPILE_PROFILE if current else
+                             BASELINE_COMPILE_PROFILE) if baseline else
+                            CANDIDATE_COMPILE_PROFILE if current else
+                            CANDIDATE_COMPILE_PROFILE_V2),
                 "entry_count": (
                     BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
                     CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT),
@@ -4696,13 +4915,14 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
                         role, pair["source"]["path"]),
                     "arguments": _normalized_compile_argv(
                         role, pair["source"]["path"], "/usr/bin/compiler",
-                        COMPILE_COMMANDS_SCHEMA,
+                        compile_schema,
                         build_configuration=build_configuration),
                 } for pair in pairs], key=lambda entry: entry["file"]),
                 "isa_policy": (
-                    "whole-build -march=native" if baseline else
-                    "portable core with ISA flags only on SSSE3, AVX2, and "
-                    "AVX-512VL translation units"),
+                    (BASELINE_PURE_AVX2_ISA_POLICY if current else
+                     BASELINE_NATIVE_ISA_POLICY) if baseline else
+                    CANDIDATE_ISA_POLICY if current else
+                    CANDIDATE_ISA_POLICY_V9),
                 "generated_attestation_header": None,
                 "effective_build_configuration": build_configuration,
             },
@@ -4824,7 +5044,11 @@ def fake_evidence_scope(backend: str = "avx2") -> dict[str, Any]:
             "source_tracked_dirty": False,
         }
     return {
-        "schema": EVIDENCE_SCOPE_SCHEMA,
+        "schema": (
+            EVIDENCE_SCOPE_SCHEMA if current else
+            EVIDENCE_SCOPE_SCHEMA_V5
+            if compile_schema == COMPILE_COMMANDS_SCHEMA_V5 else
+            EVIDENCE_SCOPE_SCHEMA_V4),
         "host": {
             "system": {
                 "system": "Linux", "node": "fixture", "release": "fixture",
@@ -5031,18 +5255,35 @@ def self_test() -> None:
     exact_runner = load_exact_main_runner()
     require(tuple(exact_runner.BASELINE_LIBRARY_SOURCES) ==
                 BASELINE_LIBRARY_SOURCES and
+            tuple(exact_runner.CANDIDATE_LIBRARY_SOURCES_V9) ==
+                CANDIDATE_LIBRARY_SOURCES_V9 and
             tuple(exact_runner.CANDIDATE_LIBRARY_SOURCES) ==
                 CANDIDATE_LIBRARY_SOURCES and
             exact_runner.BASELINE_EXPECTED_COMPILE_COMMAND_COUNT ==
                 BASELINE_EXPECTED_COMPILE_COMMAND_COUNT and
             exact_runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT ==
                 CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT and
+            exact_runner.COMPILE_COMMANDS_SCHEMA_V5 ==
+                COMPILE_COMMANDS_SCHEMA_V5 and
+            exact_runner.COMPILE_COMMANDS_SCHEMA == COMPILE_COMMANDS_SCHEMA and
+            exact_runner.BASELINE_PURE_AVX2_COMPILE_PROFILE ==
+                BASELINE_PURE_AVX2_COMPILE_PROFILE and
+            exact_runner.CANDIDATE_COMPILE_PROFILE_V2 ==
+                CANDIDATE_COMPILE_PROFILE_V2 and
+            exact_runner.CANDIDATE_COMPILE_PROFILE ==
+                CANDIDATE_COMPILE_PROFILE and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES) ==
                 BUILD_CONFIGURATION_VARIABLES and
+            tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V3) ==
+                BUILD_CONFIGURATION_VARIABLES_V3 and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA ==
                 BUILD_CONFIGURATION_FILE_SCHEMA and
+            exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V3 ==
+                BUILD_CONFIGURATION_FILE_SCHEMA_V3 and
             exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA ==
                 BUILD_CONFIGURATION_RECORD_SCHEMA and
+            exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V3 ==
+                BUILD_CONFIGURATION_RECORD_SCHEMA_V3 and
             exact_runner.BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH ==
                 BENCHMARK_ATTESTATION_HELPER_RELATIVE_PATH and
             exact_runner.EVIDENCE_HELPER_RELATIVE_PATH ==
@@ -5055,6 +5296,8 @@ def self_test() -> None:
         {"schema": EXACT_MANIFEST_SCHEMA},
         {"schema": EXACT_RAW_SCHEMA})
     for manifest_schema, raw_schema in (
+        (EXACT_MANIFEST_SCHEMA_V9, EXACT_RAW_SCHEMA),
+        (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V9),
         (EXACT_MANIFEST_SCHEMA_V8, EXACT_RAW_SCHEMA),
         (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V8),
         (EXACT_MANIFEST_SCHEMA_V7, EXACT_RAW_SCHEMA),
@@ -5372,97 +5615,64 @@ def self_test() -> None:
                     "effective_build_configuration"].update({
                         "embedded_build_type": "Debug"}))
 
-        def coherently_downgrade_effective_configuration(
-            value: dict[str, Any],
-        ) -> None:
-            build = value["builds"]["candidate"]
-            semantics = build["validated_compile_commands"]
-            configuration = semantics["effective_build_configuration"]
-            entries = configuration["entries"]
-            require(entries.pop(
-                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-                    "current fixture lacks the default-off experiment selector")
-            material = _build_configuration_material(
-                entries, BUILD_CONFIGURATION_VARIABLES_V2)
-            digest = hashlib.sha256(material).hexdigest()
-            text = (
-                f"schema={BUILD_CONFIGURATION_FILE_SCHEMA_V2}\n"
-                f"sha256={digest}\n").encode("ascii") + material
-            content = retained_text(text.decode("utf-8"))
-            configuration.update({
-                "schema": BUILD_CONFIGURATION_RECORD_SCHEMA_V2,
-                "content": content,
-                "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA_V2,
-                "configuration_sha256": digest,
-            })
-            configuration["artifact"].update({
-                "size": content["size"], "sha256": content["sha256"],
-            })
-            cache = build["validated_cache"]
-            require(cache.pop(
-                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-                    "current cache fixture lacks the default-off selector")
-            cache.update({
-                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                    BUILD_CONFIGURATION_FILE_SCHEMA_V2,
-                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
-            })
-            benchmark = next(
-                entry for entry in semantics["required_entries"]
-                if entry["file"].endswith("/bench/leopard2/benchmark.cpp"))
-            benchmark["arguments"] = [
-                (f'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="{digest}"'
-                 if token.startswith(
-                     "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=") else
-                 token)
-                for token in benchmark["arguments"]
-            ]
-
-        historical_configuration_fixture = fake_evidence_scope()
-        coherently_downgrade_effective_configuration(
-            historical_configuration_fixture)
-        historical_configuration = historical_configuration_fixture[
+        historical_v8_scope = fake_evidence_scope(
+            compile_schema=COMPILE_COMMANDS_SCHEMA_V4)
+        validate_evidence_scope(historical_v8_scope)
+        historical_v8_configuration = historical_v8_scope[
             "builds"]["candidate"]["validated_compile_commands"][
                 "effective_build_configuration"]
-        parsed_historical_configuration = _parse_build_configuration_bytes(
-            historical_configuration["content"]["text"].encode("utf-8"))
+        parsed_historical_v8 = _parse_build_configuration_bytes(
+            historical_v8_configuration["content"]["text"].encode("utf-8"))
         historical_record_schema, historical_variables, historical_cache = \
             _build_configuration_contract_for_compile_schema(
                 COMPILE_COMMANDS_SCHEMA_V4,
-                parsed_historical_configuration["configuration_schema"])
+                parsed_historical_v8["configuration_schema"])
         require(
             historical_record_schema == BUILD_CONFIGURATION_RECORD_SCHEMA_V2 and
             historical_variables == BUILD_CONFIGURATION_VARIABLES_V2 and
             historical_cache == REQUIRED_CANDIDATE_CACHE_V2 and
-            parsed_historical_configuration["entries"] ==
-                historical_configuration["entries"],
-            "historical effective-configuration fixture no longer replays")
-        historical_configuration_fixture["schema"] = \
-            EVIDENCE_SCOPE_SCHEMA_V4
-        for historical_build in historical_configuration_fixture[
-                "builds"].values():
-            historical_build["validated_compile_commands"]["schema"] = \
-                COMPILE_COMMANDS_SCHEMA_V4
-        validate_evidence_scope(historical_configuration_fixture)
+            parsed_historical_v8["entries"] ==
+                historical_v8_configuration["entries"],
+            "historical v8 effective-configuration fixture no longer replays")
 
-        relabeled_historical_scope = fake_evidence_scope()
-        relabeled_historical_scope["schema"] = EVIDENCE_SCOPE_SCHEMA_V4
-        for relabeled_build in relabeled_historical_scope["builds"].values():
-            relabeled_build["validated_compile_commands"]["schema"] = \
-                COMPILE_COMMANDS_SCHEMA_V4
-        try:
-            validate_evidence_scope(relabeled_historical_scope)
-        except PlanError:
-            pass
-        else:
-            raise PlanError(
-                "scope v4 accepted a coherently relabeled v3 "
-                "effective-configuration body")
-        reject_scope_mutation(
-            "uniform coherent current-to-historical effective configuration",
-            lambda values: [
-                coherently_downgrade_effective_configuration(value)
-                for value in values])
+        historical_v9_scope = fake_evidence_scope(
+            compile_schema=COMPILE_COMMANDS_SCHEMA_V5)
+        validate_evidence_scope(historical_v9_scope)
+        historical_v9_configuration = historical_v9_scope[
+            "builds"]["candidate"]["validated_compile_commands"][
+                "effective_build_configuration"]
+        parsed_historical_v9 = _parse_build_configuration_bytes(
+            historical_v9_configuration["content"]["text"].encode("utf-8"))
+        v9_record_schema, v9_variables, v9_cache = \
+            _build_configuration_contract_for_compile_schema(
+                COMPILE_COMMANDS_SCHEMA_V5,
+                parsed_historical_v9["configuration_schema"])
+        require(
+            v9_record_schema == BUILD_CONFIGURATION_RECORD_SCHEMA_V3 and
+            v9_variables == BUILD_CONFIGURATION_VARIABLES_V3 and
+            v9_cache == REQUIRED_CANDIDATE_CACHE_V3 and
+            parsed_historical_v9["entries"] ==
+                historical_v9_configuration["entries"],
+            "historical v9 effective-configuration fixture no longer replays")
+
+        for label, relabeled_scope, scope_schema, compile_version in (
+            ("v10 body as v9", fake_evidence_scope(),
+             EVIDENCE_SCOPE_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA_V5),
+            ("v9 body as v10", historical_v9_scope,
+             EVIDENCE_SCOPE_SCHEMA, COMPILE_COMMANDS_SCHEMA),
+        ):
+            relabeled = json.loads(json.dumps(relabeled_scope))
+            relabeled["schema"] = scope_schema
+            for relabeled_build in relabeled["builds"].values():
+                relabeled_build["validated_compile_commands"]["schema"] = \
+                    compile_version
+            try:
+                validate_evidence_scope(relabeled)
+            except PlanError:
+                pass
+            else:
+                raise PlanError(
+                    f"evidence scope accepted coherent {label} relabel")
 
         def coherently_enable_small_direct(values) -> None:
             value = values[-1]
@@ -6426,6 +6636,8 @@ def self_test() -> None:
             "-DLEO2_BENCHMARK_SOURCE_ATTESTATION=1",
             "-DLEO2_BENCHMARK_SOURCE_ATTESTATION_HEADER="
             f'"{canonical_header_path}"',
+            "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+            "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
             "-I$SOURCE",
             "-Wall", "-Wextra", "-fopenmp", "-O3", "-DNDEBUG", "-O3",
             "-std=gnu++11", "-fopenmp",
@@ -6721,64 +6933,95 @@ def self_test() -> None:
         validate_attestation_result_files(
             stage_root, manifest_path, source, build, collector,
             verified_timing_evidence=timing_evidence)
-        historical_build = json.loads(json.dumps(build))
-        historical_canonical = historical_build["canonical_production"]
-        historical_canonical.update({
-            "schema": CANONICAL_PRODUCTION_BUILD_SCHEMA_V2,
-            "validator": CANONICAL_BUILD_VALIDATOR_V2,
-        })
-        historical_provenance = historical_canonical["provenance"]
-        historical_cache = historical_provenance["validated_cache"]
-        require(historical_cache.pop(
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-                "canonical build fixture lacks the default-off selector")
-        historical_semantics = historical_provenance[
-            "validated_compile_commands"]
-        historical_semantics["schema"] = COMPILE_COMMANDS_SCHEMA_V4
-        historical_configuration = historical_semantics[
-            "effective_build_configuration"]
-        historical_configuration_entries = historical_configuration["entries"]
-        require(historical_configuration_entries.pop(
-                    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF",
-                "canonical configuration fixture lacks the default-off selector")
-        historical_configuration_material = _build_configuration_material(
-            historical_configuration_entries,
-            BUILD_CONFIGURATION_VARIABLES_V2)
-        historical_configuration_digest = hashlib.sha256(
-            historical_configuration_material).hexdigest()
-        historical_configuration_text = (
-            f"schema={BUILD_CONFIGURATION_FILE_SCHEMA_V2}\n"
-            f"sha256={historical_configuration_digest}\n"
-        ).encode("ascii") + historical_configuration_material
-        historical_configuration_content = retained_text(
-            historical_configuration_text.decode("utf-8"))
-        historical_configuration.update({
-            "schema": BUILD_CONFIGURATION_RECORD_SCHEMA_V2,
-            "content": historical_configuration_content,
-            "configuration_schema": BUILD_CONFIGURATION_FILE_SCHEMA_V2,
-            "configuration_sha256": historical_configuration_digest,
-        })
-        historical_configuration["artifact"].update({
-            "size": historical_configuration_content["size"],
-            "sha256": historical_configuration_content["sha256"],
-        })
-        historical_cache.update({
-            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                BUILD_CONFIGURATION_FILE_SCHEMA_V2,
-            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
-                historical_configuration_digest,
-        })
-        historical_benchmark_arguments = historical_semantics[
-            "required_entries"][0]["arguments"]
-        historical_semantics["required_entries"][0]["arguments"] = [
-            (f'-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256="'
-             f'{historical_configuration_digest}"'
-             if token.startswith(
-                 "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=") else token)
-            for token in historical_benchmark_arguments
-        ]
-        historical_canonical["provenance_sha256"] = canonical_sha256(
-            historical_provenance)
+        def historical_canonical_build_fixture(
+            compile_schema: str,
+        ) -> dict[str, Any]:
+            require(compile_schema in {
+                        COMPILE_COMMANDS_SCHEMA_V4,
+                        COMPILE_COMMANDS_SCHEMA_V5},
+                    "historical canonical fixture schema differs")
+            if compile_schema == COMPILE_COMMANDS_SCHEMA_V5:
+                file_schema = BUILD_CONFIGURATION_FILE_SCHEMA_V3
+                canonical_schema = CANONICAL_PRODUCTION_BUILD_SCHEMA_V3
+                validator = CANONICAL_BUILD_VALIDATOR_V3
+                profile = CANDIDATE_COMPILE_PROFILE_V2
+            else:
+                file_schema = BUILD_CONFIGURATION_FILE_SCHEMA_V2
+                canonical_schema = CANONICAL_PRODUCTION_BUILD_SCHEMA_V2
+                validator = CANONICAL_BUILD_VALIDATOR_V2
+                profile = CANDIDATE_COMPILE_PROFILE_V2
+            record_schema, variables, required_cache = \
+                _build_configuration_contract_for_compile_schema(
+                    compile_schema, file_schema)
+            entries = {variable: "" for variable in variables}
+            entries.update(_required_build_configuration_entries(file_schema))
+            entries.update({
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_GENERATOR": "Unix Makefiles",
+                "CMAKE_CONFIGURATION_TYPES": "",
+                "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+            })
+            material = _build_configuration_material(entries, variables)
+            digest = hashlib.sha256(material).hexdigest()
+            configuration_text = (
+                f"schema={file_schema}\n"
+                f"sha256={digest}\n"
+            ).encode("ascii") + material
+            configuration_content = retained_text(
+                configuration_text.decode("utf-8"))
+            configuration = json.loads(json.dumps(canonical_configuration))
+            configuration.update({
+                "schema": record_schema,
+                "content": configuration_content,
+                "configuration_schema": file_schema,
+                "configuration_sha256": digest,
+                "entries": entries,
+            })
+            configuration["artifact"].update({
+                "size": configuration_content["size"],
+                "sha256": configuration_content["sha256"],
+            })
+            historical_build = json.loads(json.dumps(build))
+            historical_canonical = historical_build["canonical_production"]
+            historical_canonical.update({
+                "schema": canonical_schema,
+                "validator": validator,
+            })
+            provenance = historical_canonical["provenance"]
+            provenance["validated_cache"] = {
+                **required_cache,
+                "CMAKE_BUILD_TYPE": "Release",
+                "CMAKE_CXX_COMPILER": "/usr/bin/compiler",
+                "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG -O3",
+                "CMAKE_CONFIGURATION_TYPES": "",
+                "CMAKE_GENERATOR": "Unix Makefiles",
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA": file_schema,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+            }
+            semantics = provenance["validated_compile_commands"]
+            semantics.update({
+                "schema": compile_schema,
+                "profile": profile,
+                "effective_build_configuration": configuration,
+            })
+            arguments = _normalized_compile_argv(
+                "candidate",
+                "$CANDIDATE_SOURCE/bench/leopard2/benchmark.cpp",
+                "/usr/bin/compiler", compile_schema,
+                source["head"], source["tree"], configuration)
+            semantics["required_entries"][0]["arguments"] = [
+                token.replace("$CANDIDATE_SOURCE", "$SOURCE").replace(
+                    "$CANDIDATE_BUILD", "$BUILD")
+                for token in arguments
+            ]
+            historical_canonical["provenance_sha256"] = canonical_sha256(
+                provenance)
+            return historical_build
+
+        historical_build = historical_canonical_build_fixture(
+            COMPILE_COMMANDS_SCHEMA_V4)
+        historical_v9_build = historical_canonical_build_fixture(
+            COMPILE_COMMANDS_SCHEMA_V5)
         historical_root = root / "historical-attestation-result"
         shutil.copytree(raw_root, historical_root / "raw")
         historical = derive_attestation_result(
@@ -6810,11 +7053,31 @@ def self_test() -> None:
                 ATTESTATION_RESULT_SCHEMA_V6,
                 "historical timing attestation schema did not replay strictly")
 
+        historical_v9_root = root / "historical-v9-attestation-result"
+        shutil.copytree(raw_root, historical_v9_root / "raw")
+        historical_v9 = derive_attestation_result(
+            stage_root, source, historical_v9_build, collector,
+            raw_documents, raw_artifacts, timing_evidence,
+            result_schema=ATTESTATION_RESULT_SCHEMA_V7)
+        historical_v9_manifest = historical_v9_root / "manifest.json"
+        write_json(historical_v9_manifest, historical_v9)
+        validated_historical_v9 = validate_attestation_result_files(
+            stage_root, historical_v9_manifest, source,
+            historical_v9_build, collector,
+            verified_timing_evidence=timing_evidence)
+        require(validated_historical_v9["schema"] ==
+                ATTESTATION_RESULT_SCHEMA_V7,
+                "historical v9 attestation schema did not replay strictly")
+
         for label, result_schema, candidate_build, candidate_timing in (
             ("current body under historical result",
              ATTESTATION_RESULT_SCHEMA_V6, build, timing_evidence),
             ("historical body under current result",
              ATTESTATION_RESULT_SCHEMA, historical_build, timing_evidence),
+            ("v10 body under v9 result",
+             ATTESTATION_RESULT_SCHEMA_V7, build, timing_evidence),
+            ("v9 body under v10 result",
+             ATTESTATION_RESULT_SCHEMA, historical_v9_build, timing_evidence),
         ):
             try:
                 derive_attestation_result(
