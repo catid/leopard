@@ -92,6 +92,18 @@ RUNNER_PATH = Path(__file__).resolve()
 RUNNER_DEPENDENCIES: tuple[Path, ...] = ()
 EXPECTED_BINARY_SHA256: Mapping[str, str] | None = None
 REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
+# Configured wrappers may prove that additional retained selectors have the
+# same expected value in both binaries.  The primary MODE_SYMBOL remains the
+# only selector masked by normalized_full_file_comparison().
+AUXILIARY_MODE_EXPECTATIONS: Mapping[
+    str, Mapping[str, int]
+] = {}
+# Performance evidence remains descriptive by default.  A configured wrapper
+# may attach a deterministic promotion policy without changing the validity or
+# retention of a completed negative campaign.
+PROMOTION_EVALUATOR: Callable[
+    [Sequence[Mapping[str, Any]]], Mapping[str, Any]
+] | None = None
 
 
 def sha256(path: Path) -> str:
@@ -140,13 +152,17 @@ def run_tool(arguments: Sequence[str]) -> str:
     return completed.stdout.decode("utf-8", errors="strict")
 
 
-def mode_word_identity(executable: Path) -> dict[str, Any]:
+def mode_word_identity(
+    executable: Path,
+    symbol_name: str | None = None,
+) -> dict[str, Any]:
     """Map the retained T=4 selector symbol to its initialized ELF word."""
+    selected_symbol = MODE_SYMBOL if symbol_name is None else symbol_name
     symbols = run_tool(("/usr/bin/readelf", "-sW", str(executable)))
     matches = []
     for line in symbols.splitlines():
         tokens = line.split()
-        if len(tokens) >= 8 and tokens[-1] == MODE_SYMBOL:
+        if len(tokens) >= 8 and tokens[-1] == selected_symbol:
             matches.append(tokens)
     require(len(matches) == 1,
             "T=4 diagnostic selector symbol is missing or ambiguous")
@@ -188,7 +204,7 @@ def mode_word_identity(executable: Path) -> dict[str, Any]:
     require(len(payload) == 4,
             "T=4 diagnostic selector word is truncated")
     return {
-        "symbol": MODE_SYMBOL,
+        "symbol": selected_symbol,
         "virtual_address": address,
         "section_index": section_index,
         "section_name": section_name,
@@ -798,6 +814,30 @@ def main() -> int:
                 "section_name", "file_offset"):
             require(mode_words["candidate"][key] == mode_words["control"][key],
                     "candidate/control T=4 selector layouts differ")
+        auxiliary_mode_words: dict[str, dict[str, Any]] = {}
+        for symbol_name in sorted(AUXILIARY_MODE_EXPECTATIONS):
+            expected_values = AUXILIARY_MODE_EXPECTATIONS[symbol_name]
+            require(
+                set(expected_values) == {"candidate", "control"} and
+                all(isinstance(value, int) and not isinstance(value, bool)
+                    for value in expected_values.values()),
+                "auxiliary selector expectations are invalid")
+            words = {
+                label: mode_word_identity(
+                    Path(str(identities[label]["path"])), symbol_name)
+                for label in ("candidate", "control")
+            }
+            for label in ("candidate", "control"):
+                require(words[label]["value"] == expected_values[label],
+                        f"{label} auxiliary selector value changed")
+            for key in (
+                    "symbol", "virtual_address", "section_index",
+                    "section_name", "file_offset"):
+                require(words["candidate"][key] == words["control"][key],
+                        "candidate/control auxiliary selector layouts differ")
+            auxiliary_mode_words[symbol_name] = words
+        if auxiliary_mode_words:
+            raw["auxiliary_mode_words"] = auxiliary_mode_words
         if REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE:
             raw["candidate_control_normalized_full_file"] = \
                 candidate_control_full_file_equivalence(
@@ -901,12 +941,24 @@ def main() -> int:
             if item["candidate_vs_main"]["ci95"][1] < 1.0
         ]
 
+        promotion_evaluation: dict[str, Any] | None = None
+        if PROMOTION_EVALUATOR is not None:
+            evaluated = PROMOTION_EVALUATOR(analyses)
+            require(isinstance(evaluated, Mapping),
+                    "promotion evaluator did not return a mapping")
+            promotion_evaluation = dict(evaluated)
+            require(
+                isinstance(promotion_evaluation.get("passed"), bool),
+                "promotion evaluator omitted its boolean result")
+            raw["promotion_evaluation"] = promotion_evaluation
+
         raw["completed_utc"] = MAIN_SUPPORT.utc_now()
         T8_SUPPORT.write_exclusive(options.output / "raw.json", raw)
         summary = {
             "schema": SUMMARY_SCHEMA,
             "status": "completed",
-            "performance_gate_applied": False,
+            "performance_gate_applied":
+                promotion_evaluation is not None,
             "source_commit": options.source_commit,
             "source_tree": options.source_tree,
             "main_commit": MAIN_COMMIT,
@@ -934,10 +986,14 @@ def main() -> int:
             "mode_words": mode_words,
             "raw_sha256": sha256(options.output / "raw.json"),
         }
+        if promotion_evaluation is not None:
+            summary["promotion_evaluation"] = promotion_evaluation
+            summary["promotion_gate_passed"] = \
+                promotion_evaluation["passed"]
         for optional_key in (
                 "candidate_control_normalized_full_file",
                 "expected_binary_sha256", "runner_dependencies_before",
-                "runner_dependencies_after"):
+                "runner_dependencies_after", "auxiliary_mode_words"):
             if optional_key in raw:
                 summary[optional_key] = raw[optional_key]
         T8_SUPPORT.write_exclusive(options.output / "summary.json", summary)
