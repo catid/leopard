@@ -12,6 +12,7 @@ must be inert there.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import fcntl
 import hashlib
 import importlib.util
@@ -19,6 +20,7 @@ import json
 import math
 import os
 import re
+import stat
 import statistics
 import subprocess
 import sys
@@ -40,6 +42,8 @@ CONTROL_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_BUILD_MARKER: str | None = None
 REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = False
+REQUIRE_STRICT_ISOLATION = True
+REQUIRE_STABLE_LEASE_ANCHOR = True
 AUXILIARY_MODE_EXPECTATIONS: Mapping[
     str, Mapping[str, int]
 ] = {}
@@ -573,8 +577,9 @@ def analyze(
         else ("control",)
     contrasts: dict[str, list[float]] = {label: [] for label in labels}
     for round_value in rounds:
-        require(round_value["isolation"]["accepted"] is True,
-                "contaminated round cannot be analyzed")
+        if REQUIRE_STRICT_ISOLATION:
+            require(round_value["isolation"]["accepted"] is True,
+                    "contaminated round cannot be analyzed")
         invocations = round_value["invocations"]
         require(all(item["normalized"]["digests"] == reference
                     for item in invocations),
@@ -603,7 +608,48 @@ def analyze(
     return output
 
 
-def acquire_global_lock() -> int:
+def acquire_global_lock(inherited_descriptor: int | None = None) -> int:
+    if inherited_descriptor is not None:
+        require(isinstance(inherited_descriptor, int) and
+                not isinstance(inherited_descriptor, bool) and
+                inherited_descriptor >= 0,
+                "inherited canonical-lock descriptor is invalid")
+        try:
+            descriptor = os.dup(inherited_descriptor)
+            inherited_status = os.fstat(descriptor)
+            lock_status = LOCK_PATH.stat()
+        except OSError as error:
+            raise EvidenceError(
+                "cannot duplicate or identify inherited canonical lock") \
+                from error
+        try:
+            require(stat.S_ISREG(inherited_status.st_mode) and
+                    inherited_status.st_dev == lock_status.st_dev and
+                    inherited_status.st_ino == lock_status.st_ino,
+                    "inherited descriptor is not the canonical lock file")
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+            # A separately opened file description must still conflict.  This
+            # distinguishes a merely inherited descriptor from an inherited
+            # descriptor carrying the coordinator's live flock lease.
+            contender = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
+            blocked = False
+            try:
+                try:
+                    fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocked = True
+                if not blocked:
+                    fcntl.flock(contender, fcntl.LOCK_UN)
+            finally:
+                os.close(contender)
+            require(blocked,
+                    "inherited canonical-lock descriptor carries no live lease")
+            return descriptor
+        except Exception:
+            os.close(descriptor)
+            raise
+
     descriptor = os.open(LOCK_PATH, os.O_RDWR | os.O_CREAT, 0o600)
     try:
         fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -625,6 +671,8 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=15)
     parser.add_argument("--warmup", type=int, default=64)
+    parser.add_argument("--inherited-lock-fd", type=int,
+                        help=argparse.SUPPRESS)
     return parser.parse_args()
 
 
@@ -655,7 +703,12 @@ def main() -> int:
             ],
             "cells": [],
         })
-        lock_descriptor = acquire_global_lock()
+        lock_descriptor = acquire_global_lock(options.inherited_lock_fd)
+        raw["canonical_lock"] = {
+            "path": str(LOCK_PATH),
+            "mode": ("inherited_umbrella" if
+                     options.inherited_lock_fd is not None else "standalone"),
+        }
         identities = {
             "candidate": T8_SUPPORT.file_identity(options.candidate),
             "control": T8_SUPPORT.file_identity(options.control),
@@ -749,7 +802,12 @@ def main() -> int:
             "benchmark_cpu": MAIN_SUPPORT.cpu_policy_identity(options.cpu),
             "reserved_sibling": MAIN_SUPPORT.cpu_policy_identity(options.sibling),
         }
-        with MAIN_SUPPORT.StableLeaseAnchor(), \
+        require(REQUIRE_STABLE_LEASE_ANCHOR or
+                options.inherited_lock_fd is not None,
+                "saturated runner requires an inherited umbrella lock")
+        lease_anchor = MAIN_SUPPORT.StableLeaseAnchor() if \
+            REQUIRE_STABLE_LEASE_ANCHOR else contextlib.nullcontext()
+        with lease_anchor, \
                 MAIN_SUPPORT.PairLease(
                     options.cpu, options.sibling) as pair_lease:
             raw["pair_lease"] = pair_lease
@@ -763,7 +821,9 @@ def main() -> int:
                 MAIN_SUPPORT.cpu_stat_snapshot(options.cpu), before_sibling,
                 MAIN_SUPPORT.cpu_stat_snapshot(options.sibling))
             raw["presample"] = presample
-            require(presample["delta"]["benchmark_cpu"]["nonidle_jiffies"] <= 1 and
+            if REQUIRE_STRICT_ISOLATION:
+                require(
+                    presample["delta"]["benchmark_cpu"]["nonidle_jiffies"] <= 1 and
                     presample["delta"]["reserved_sibling"]["nonidle_jiffies"] == 0,
                     "CPU pair was not quiet during the presample")
 
@@ -795,7 +855,9 @@ def main() -> int:
                         "invocations": invocations,
                         "isolation": isolation,
                     })
-                    require(isolation["accepted"],
+                    if REQUIRE_STRICT_ISOLATION:
+                        require(
+                            isolation["accepted"],
                             f"contaminated {cell['id']} round {round_index}")
                 raw["cells"].append(cell_raw)
                 print(f"{cell_index + 1}/{len(all_cells)} {cell['id']}",

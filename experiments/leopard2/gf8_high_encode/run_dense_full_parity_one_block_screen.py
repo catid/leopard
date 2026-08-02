@@ -20,7 +20,9 @@ nine-round campaign with the ordinary five-percent promotion gate.
 from __future__ import annotations
 
 import argparse
+import fcntl
 import importlib.util
+import os
 import sys
 import tempfile
 from pathlib import Path
@@ -53,6 +55,11 @@ BASE.MAIN_TARGET_ROLES = ("target_main",)
 BASE.TARGET_CONTROL_FLOOR = 0.0
 BASE.TARGET_MAIN_FLOOR = 0.0
 BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE = True
+# This is a saturated all-physical-core crossover diagnostic, not promotion
+# evidence.  Retain every isolation record but do not reject a shard merely
+# because unrelated activity reached a measured CPU or its SMT sibling.
+BASE.REQUIRE_STRICT_ISOLATION = False
+BASE.REQUIRE_STABLE_LEASE_ANCHOR = False
 BALANCED_MODE_SYMBOL = \
     "_ZN12_GLOBAL__N_1L28g_balanced_b64_terminal_modeE"
 BASE.AUXILIARY_MODE_EXPECTATIONS = {
@@ -222,8 +229,16 @@ def self_test() -> int:
         main_cell, synthetic_rounds(BASE.TARGET_ORDER[0]))
     BASE.require("main_over_candidate" in main_analysis,
                  "K>=R analysis omitted exact main")
+    contaminated = synthetic_rounds(BASE.NEIGHBOR_ORDER[0])
+    for round_value in contaminated:
+        round_value["isolation"]["accepted"] = False
+    BASE.analyze(control_cell, contaminated)
     BASE.require(BASE.REQUIRE_NORMALIZED_FULL_FILE_EQUIVALENCE,
                  "dense screen does not require full-file provenance")
+    BASE.require(not BASE.REQUIRE_STRICT_ISOLATION,
+                 "saturated dense diagnostic unexpectedly claims isolation")
+    BASE.require(not BASE.REQUIRE_STABLE_LEASE_ANCHOR,
+                 "saturated dense diagnostic unexpectedly serializes shards")
     BASE.require(BASE.AUXILIARY_MODE_EXPECTATIONS == {
         BALANCED_MODE_SYMBOL: {"candidate": 1, "control": 1}},
         "balanced B64 selector provenance is not pinned enabled/equal")
@@ -252,6 +267,44 @@ def self_test() -> int:
             rejected = True
         BASE.require(rejected,
                      "unauthorized full-file difference was accepted")
+    with tempfile.TemporaryDirectory(
+            prefix="leopard-dense-lock-self-test-") as directory:
+        original_lock_path = BASE.LOCK_PATH
+        lock_path = Path(directory) / "campaign.lock"
+        BASE.LOCK_PATH = lock_path
+        owner = os.open(lock_path, os.O_RDWR | os.O_CREAT, 0o600)
+        adopted = None
+        try:
+            fcntl.flock(owner, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            adopted = BASE.acquire_global_lock(owner)
+            os.close(owner)
+            owner = -1
+            contender = os.open(lock_path, os.O_RDWR)
+            blocked = False
+            try:
+                try:
+                    fcntl.flock(contender,
+                                fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    blocked = True
+            finally:
+                os.close(contender)
+            BASE.require(blocked,
+                         "adopted descriptor did not retain umbrella lease")
+            os.close(adopted)
+            adopted = None
+            contender = os.open(lock_path, os.O_RDWR)
+            try:
+                fcntl.flock(contender, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                fcntl.flock(contender, fcntl.LOCK_UN)
+            finally:
+                os.close(contender)
+        finally:
+            if adopted is not None:
+                os.close(adopted)
+            if owner >= 0:
+                os.close(owner)
+            BASE.LOCK_PATH = original_lock_path
     print("dense full-parity runner self-test passed")
     return 0
 
