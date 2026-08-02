@@ -255,26 +255,29 @@ void CheckLegacyParity(
     const std::vector<const void*>& original,
     const std::vector<void*>& recovery)
 {
-    if (cell.shard_bytes != 512)
+    if ((cell.shard_bytes & 63U) != 0)
         return;
+
     const unsigned work_count = leo_encode_work_count(
         cell.original_count, cell.recovery_count);
     RequireCell(work_count >= cell.recovery_count, cell,
         "legacy work-count query failed");
     std::vector<std::vector<uint8_t> > work(
-        work_count, std::vector<uint8_t>(cell.shard_bytes));
+        work_count, std::vector<uint8_t>(cell.shard_bytes, 0));
     std::vector<void*> work_pointers(work_count);
     for (unsigned i = 0; i < work_count; ++i)
         work_pointers[i] = &work[i][0];
-    RequireCell(leo_encode(cell.shard_bytes, cell.original_count,
-            cell.recovery_count, work_count, &original[0], &work_pointers[0]) ==
-            Leopard_Success,
-        cell, "legacy B=512 control encode failed");
+    RequireCell(leo_encode(cell.shard_bytes,
+            cell.original_count, cell.recovery_count, work_count,
+            &original[0], &work_pointers[0]) == Leopard_Success,
+        cell, "legacy Leopard1 encode failed");
     for (unsigned parity = 0; parity < cell.recovery_count; ++parity)
     {
+        if (!recovery[parity])
+            continue;
         RequireCell(std::memcmp(recovery[parity], &work[parity][0],
                 cell.shard_bytes) == 0,
-            cell, "packed B=512 parity differs from old Leopard");
+            cell, "parity differs from legacy Leopard1");
     }
 }
 
@@ -355,6 +358,7 @@ void ExerciseCell(
     RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed one-item batch terminal selection mismatch");
     CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     RequireSourceUnchanged(input, aligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes, cell);
 
@@ -373,6 +377,21 @@ void ExerciseCell(
     RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "unaligned packed terminal selection mismatch");
     CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
+    RequireSourceUnchanged(input, unaligned_input_before, cell);
+    RequireOutputGuards(output, kGuardBytes + 3U, cell);
+
+    FillGuards(output);
+    item.shard_bytes = cell.shard_bytes;
+    item.original = &original[0];
+    item.recovery = &recovery[0];
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode_batch(codec, &item, 1),
+        LEO2_SUCCESS, cell, "execute unaligned packed one-item batch encode");
+    RequireCell(T4PackedCalls() == (expect_terminal ? 1U : 0U), cell,
+        "unaligned one-item batch terminal selection mismatch");
+    CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     RequireSourceUnchanged(input, unaligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes + 3U, cell);
 
@@ -403,6 +422,13 @@ void ExercisePromotedMatrix(leo2_context* context)
             }
         }
     }
+    static const size_t k8_bytes[] = { 64, 128, 256 };
+    for (unsigned r = 3; r <= 4; ++r)
+    {
+        for (size_t i = 0;
+             i < sizeof(k8_bytes) / sizeof(k8_bytes[0]); ++i)
+            ExerciseCell(context, Cell{ 8, r, k8_bytes[i] }, true);
+    }
     ExerciseCell(context, Cell{ 4, 3, 1024 }, true);
     ExerciseCell(context, Cell{ 4, 4, 1024 }, true);
 }
@@ -413,9 +439,22 @@ void ExerciseNonPromotedCells(leo2_context* context)
         { 4, 3, 63 },
         { 5, 3, 1024 },
         { 7, 4, 1024 },
-        /* K=8 may gain the terminal at smaller byte counts independently,
-           but must not inherit this K=4..7 B=512 promotion. */
-        { 8, 4, 512 }
+        { 8, 3, 63 },
+        { 8, 4, 63 },
+        { 8, 3, 65 },
+        { 8, 4, 65 },
+        { 8, 3, 127 },
+        { 8, 4, 127 },
+        { 8, 3, 129 },
+        { 8, 4, 129 },
+        { 8, 3, 255 },
+        { 8, 4, 255 },
+        { 8, 3, 257 },
+        { 8, 4, 257 },
+        { 8, 3, 512 },
+        { 8, 4, 512 },
+        { 8, 8, 64 },
+        { 9, 4, 64 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -429,9 +468,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
     }
 }
 
-void ExerciseForcedTransform(leo2_context* context)
+void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
 {
-    const Cell cell = { 7, 4, 512 };
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes);
@@ -455,6 +493,7 @@ void ExerciseForcedTransform(leo2_context* context)
     RequireCell(T4PackedCalls() == 0, cell,
         "forced transform entered the packed T=4 terminal");
     CheckParity(cell, MakeGenerator(cell), original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     RequireResult(leo2_test_codec_set_encode_mode(
         codec, LEO2_TEST_ENCODE_AUTO),
         LEO2_SUCCESS, cell, "restore AUTO encode mode");
@@ -519,6 +558,7 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
     RequireCell(T4PackedCalls() == 0, cell,
         "sparse output entered the dense packed terminal");
     CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
         RequireCell(static_cast<const uint8_t*>(omitted_output)[i] == 0xa5,
             cell, "sparse fallback modified a null parity shard");
@@ -541,6 +581,7 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
     RequireCell(T4PackedCalls() == 0, cell,
         "detached layout entered the packed terminal");
     CheckParity(cell, generator, original, recovery);
+    CheckLegacyParity(cell, original, recovery);
     for (size_t i = 0; i < cell.shard_bytes; ++i)
         RequireCell(output.bytes()[
                 static_cast<size_t>(detached_output_index) *
@@ -590,6 +631,9 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
 
 void ExerciseValidationAtomicity(leo2_context* context, const Cell& cell)
 {
+    RequireCell(cell.recovery_count == 4 &&
+            (cell.shard_bytes == 64 || cell.shard_bytes == 512),
+        cell, "invalid validation-atomicity fixture");
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
@@ -741,7 +785,9 @@ void ExerciseScalarFallbacks()
         { 5, 4, 128 },
         { 7, 3, 256 },
         { 6, 4, 512 },
-        { 4, 4, 1024 }
+        { 4, 4, 1024 },
+        { 8, 3, 128 },
+        { 8, 4, 256 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -778,12 +824,17 @@ int main()
 
         ExercisePromotedMatrix(context);
         ExerciseNonPromotedCells(context);
-        ExerciseForcedTransform(context);
+        ExerciseForcedTransform(context, Cell{ 7, 4, 256 });
+        ExerciseForcedTransform(context, Cell{ 7, 4, 512 });
+        ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 512 });
+        ExerciseFallbackLayouts(context, Cell{ 8, 3, 64 });
+        ExerciseFallbackLayouts(context, Cell{ 8, 4, 256 });
         ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 7, 4, 512 });
+        ExerciseValidationAtomicity(context, Cell{ 8, 4, 64 });
 
         leo2_context_destroy(context);
         std::printf("T=4 packed terminal family checks passed\n");

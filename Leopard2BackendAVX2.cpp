@@ -2529,9 +2529,9 @@ static LEO2_AVX2_FORCE_INLINE void AVX2FF8HighEncodeT4BlocksPrepared(
     const AVX2FF8T4Tables& forward)
 {
     static_assert(
-        (OriginalCount >= 3 && OriginalCount <= 7) ||
+        (OriginalCount >= 3 && OriginalCount <= 8) ||
         (OriginalCount >= 9 && OriginalCount <= 11),
-        "T=4 fused encoder instantiated outside its measured K set");
+        "T=4 fused encoder instantiated outside its supported K set");
     static_assert(
         RecoveryCount == 3 || RecoveryCount == 4,
         "T=4 batch encoder instantiated outside its parity prefix");
@@ -2719,6 +2719,9 @@ static void AVX2FF8HighEncodeT4Batch(
     LEO2_AVX2_T4_SHAPE_CASE(5, 4);
     LEO2_AVX2_T4_SHAPE_CASE(6, 4);
     LEO2_AVX2_T4_SHAPE_CASE(7, 4);
+    /* K=8 is selected only by the exact-byte packed public terminal.  The
+       general ff8_high_encode_small route below deliberately still omits it. */
+    LEO2_AVX2_T4_SHAPE_CASE(8, 4);
     LEO2_AVX2_T4_SHAPE_CASE(9, 4);
     LEO2_AVX2_T4_SHAPE_CASE(10, 4);
     LEO2_AVX2_T4_SHAPE_CASE(11, 4);
@@ -2727,6 +2730,7 @@ static void AVX2FF8HighEncodeT4Batch(
     LEO2_AVX2_T4_SHAPE_CASE(5, 3);
     LEO2_AVX2_T4_SHAPE_CASE(6, 3);
     LEO2_AVX2_T4_SHAPE_CASE(7, 3);
+    LEO2_AVX2_T4_SHAPE_CASE(8, 3);
     LEO2_AVX2_T4_SHAPE_CASE(9, 3);
     LEO2_AVX2_T4_SHAPE_CASE(10, 3);
     LEO2_AVX2_T4_SHAPE_CASE(11, 3);

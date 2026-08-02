@@ -1724,7 +1724,7 @@ static bool TestFF8HighEncodeT4Batch(const Ops& ops)
     static const unsigned kMaximumRecoveries = 4;
     static const unsigned kMaximumWork = 8;
     static const uint64_t kBytes = 64;
-    static const unsigned kCounts[] = { 3, 4, 5, 6, 7, 9, 10, 11 };
+    static const unsigned kCounts[] = { 3, 4, 5, 6, 7, 8, 9, 10, 11 };
     uint8_t input[kItems][kMaximumOriginals][68];
     uint8_t input_before[kItems][kMaximumOriginals][68];
     uint8_t actual[kItems][kMaximumRecoveries][68];
