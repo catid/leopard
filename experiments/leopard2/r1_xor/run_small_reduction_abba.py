@@ -398,16 +398,19 @@ def campaign_cells() -> list[dict[str, Any]]:
                 ("first", "middle", "last")[(index + byte_index) % 3]
             specifications.append(("control_k", k, shard_bytes, position))
 
-    neighbors = (63, 65, 255, 257, 1023, 1025)
+    # Exact Leopard main accepts only positive shard sizes divisible by 64.
+    # These aligned sizes remain inert in both diagnostic modes while probing
+    # byte-count sensitivity away from the selected 64/256/1024 cells.
+    aligned_controls = (128, 192, 320, 512, 768, 1088)
     for k_index, k in enumerate((2, 3, 4)):
-        for byte_index, shard_bytes in enumerate(neighbors):
+        for byte_index, shard_bytes in enumerate(aligned_controls):
             specifications.append((
-                "control_small_byte_neighbor", k, shard_bytes,
+                "control_small_aligned_bytes", k, shard_bytes,
                 ("first", "middle", "last")[(k_index + byte_index) % 3]))
 
-    for byte_index, shard_bytes in enumerate(neighbors):
+    for byte_index, shard_bytes in enumerate(aligned_controls):
         specifications.append((
-            "control_wide_byte_neighbor", 8, shard_bytes,
+            "control_wide_aligned_bytes", 8, shard_bytes,
             ("first", "middle", "last")[byte_index % 3]))
 
     for index, k in enumerate(wide_k):
@@ -446,8 +449,8 @@ def campaign_cells() -> list[dict[str, Any]]:
         "target_small_exact": 9,
         "target_wide_exact": 44,
         "control_k": 12,
-        "control_small_byte_neighbor": 18,
-        "control_wide_byte_neighbor": 6,
+        "control_small_aligned_bytes": 18,
+        "control_wide_aligned_bytes": 6,
         "control_wide_b1024": 22,
     }
     role_counts = {
@@ -459,6 +462,8 @@ def campaign_cells() -> list[dict[str, Any]]:
         sum(bool(cell["candidate_selected"]) for cell in cells) == 53 and
         len({cell["id"] for cell in cells}) == len(cells) and
         len({cell["seed"] for cell in cells}) == len(cells) and
+        all(cell["bytes"] > 0 and cell["bytes"] % 64 == 0
+            for cell in cells) and
         all(cell["reuse"] == reuse_for_cell(cell["K"], cell["bytes"])
             for cell in cells) and
         all(selected_loss(cell["K"], cell["seed"]) ==
@@ -616,6 +621,53 @@ def validate_shared_binary_identities(
         "candidate_control_inode": candidate["inode"],
         "candidate_control_link_count": candidate["links"],
         "executable_path_lengths": lengths,
+    }
+
+
+def validate_lane_owned_copy_identities(
+    identities: Mapping[str, Mapping[str, Any]],
+    provenance: Mapping[str, Any],
+) -> dict[str, Any]:
+    candidate_build = provenance.get("candidate_build")
+    main_build = provenance.get("main_build")
+    require(isinstance(candidate_build, Mapping) and
+            isinstance(main_build, Mapping),
+            "build provenance is incomplete")
+    candidate_build_executable = candidate_build.get("executable")
+    main_build_executable = main_build.get("validated_executable")
+    require(isinstance(candidate_build_executable, Mapping) and
+            isinstance(main_build_executable, Mapping),
+            "build executable provenance is incomplete")
+    candidate = identities.get("candidate")
+    control = identities.get("control")
+    main = identities.get("main")
+    require(isinstance(candidate, Mapping) and
+            isinstance(control, Mapping) and isinstance(main, Mapping),
+            "frozen lane identity set is incomplete")
+    require(candidate_build_executable.get("sha256") ==
+                candidate.get("sha256") == control.get("sha256") and
+            main_build_executable.get("sha256") == main.get("sha256"),
+            "frozen executable bytes differ from exact build provenance")
+    candidate_build_inode = (
+        candidate_build_executable.get("device"),
+        candidate_build_executable.get("inode"))
+    main_build_inode = (
+        main_build_executable.get("device"),
+        main_build_executable.get("inode"))
+    candidate_lane_inode = (candidate.get("device"), candidate.get("inode"))
+    control_lane_inode = (control.get("device"), control.get("inode"))
+    main_lane_inode = (main.get("device"), main.get("inode"))
+    require(candidate_lane_inode == control_lane_inode and
+            candidate_lane_inode != candidate_build_inode and
+            main_lane_inode != main_build_inode,
+            "benchmark lanes are hard links to mutable build artifacts instead "
+            "of lane-owned copies")
+    return {
+        "candidate_build_device_inode": list(candidate_build_inode),
+        "candidate_lane_device_inode": list(candidate_lane_inode),
+        "main_build_device_inode": list(main_build_inode),
+        "main_lane_device_inode": list(main_lane_inode),
+        "lane_inodes_distinct_from_build_artifacts": True,
     }
 
 
@@ -917,7 +969,9 @@ def analyze_cell(
         "candidate_vs_main": {
             name: [] for name in exact_main_comparisons},
     }
-    for round_value in rounds:
+    for round_index, round_value in enumerate(rounds):
+        require(round_value.get("round") == round_index,
+                "round sequence is not contiguous and zero-based")
         isolation = round_value.get("isolation")
         require(isinstance(isolation, Mapping) and
                 isolation.get("accepted") is True and
@@ -927,15 +981,26 @@ def analyze_cell(
         segments = round_value.get("segments")
         require(isinstance(segments, list) and len(segments) == 2,
                 "round does not contain two balanced segments")
-        for segment in segments:
-            invocations = segment["invocations"]
-            require(len(invocations) == 4 and
+        expected_segments = ROUND_SEGMENTS[round_index % 2]
+        for segment_index, segment in enumerate(segments):
+            require(isinstance(segment, Mapping),
+                    "round segment is not an object")
+            expected_order = expected_segments[segment_index]
+            invocations = segment.get("invocations")
+            require(isinstance(invocations, list) and
+                    segment.get("order") == list(expected_order) and
+                    [item.get("implementation")
+                     if isinstance(item, Mapping) else None
+                     for item in invocations] == list(expected_order) and
+                    len(invocations) == 4 and
                     all(item["normalized"]["digests"] == reference
                         for item in invocations),
-                    "candidate/control/main workload digests differ")
-            baseline = segment["baseline"]
-            require(baseline in {"main", "control"},
-                    "segment baseline is invalid")
+                    "balanced segment order or workload digests differ")
+            baseline = segment.get("baseline")
+            expected_baseline = "main" if "main" in expected_order \
+                else "control"
+            require(baseline == expected_baseline,
+                    "segment baseline differs from its declared order")
             candidates = [item for item in invocations
                           if item["implementation"] == "candidate"]
             baselines = [item for item in invocations
@@ -1058,14 +1123,8 @@ def make_contract(
     isa: Mapping[str, Any],
     dependencies: Sequence[Mapping[str, Any]],
 ) -> dict[str, Any]:
-    candidate_build_executable = provenance[
-        "candidate_build"]["executable"]
-    main_build_executable = provenance[
-        "main_build"]["validated_executable"]
-    require(candidate_build_executable["sha256"] ==
-            identities["candidate"]["sha256"] and
-            main_build_executable["sha256"] == identities["main"]["sha256"],
-            "frozen executable bytes differ from exact build provenance")
+    lane_owned_copy_proof = validate_lane_owned_copy_identities(
+        identities, provenance)
     mode_word = mode_word_identity(
         Path(str(identities["candidate"]["path"])))
     require(mode_word["value"] == 0,
@@ -1087,6 +1146,7 @@ def make_contract(
         "source_tree": options.source_tree,
         "binary_identities": dict(identities),
         "shared_inode_and_equal_path_proof": dict(shared),
+        "lane_owned_copy_proof": lane_owned_copy_proof,
         "source_archive_build_provenance": dict(provenance),
         "pure_avx2_no_evex": dict(isa),
         "mode_word_default": mode_word,
@@ -1357,6 +1417,8 @@ def self_test() -> int:
     cells = campaign_cells()
     require(len(cells) == 111 and
             sum(cell["candidate_selected"] for cell in cells) == 53 and
+            all(cell["bytes"] > 0 and cell["bytes"] % 64 == 0
+                for cell in cells) and
             reuse_for_cell(1, 64) == MAX_REUSE and
             reuse_for_cell(2, 64) == 131072 and
             reuse_for_cell(255, 1024) == MIN_REUSE and
@@ -1537,42 +1599,34 @@ def self_test() -> int:
             "self-test exact-main API lanes were mislabeled")
 
     normalized_control = json.loads(json.dumps(normalized_fixture))
+    normalized_by_implementation = {
+        "candidate": normalized_fixture,
+        "control": normalized_control,
+        "main": normalized_main,
+    }
     synthetic_rounds: list[dict[str, Any]] = []
     for round_index in range(3):
+        synthetic_segments = []
+        for order in ROUND_SEGMENTS[round_index % 2]:
+            synthetic_segments.append({
+                "baseline": "main" if "main" in order else "control",
+                "order": list(order),
+                "invocations": [
+                    {
+                        "implementation": implementation,
+                        "normalized": normalized_by_implementation[
+                            implementation],
+                    }
+                    for implementation in order
+                ],
+            })
         synthetic_rounds.append({
             "round": round_index,
             "isolation": {
                 "accepted": True,
                 "delta": {"reserved_sibling": {"nonidle_jiffies": 0}},
             },
-            "segments": [
-                {
-                    "baseline": "main",
-                    "invocations": [
-                        {"implementation": "main",
-                         "normalized": normalized_main},
-                        {"implementation": "candidate",
-                         "normalized": normalized_fixture},
-                        {"implementation": "candidate",
-                         "normalized": normalized_fixture},
-                        {"implementation": "main",
-                         "normalized": normalized_main},
-                    ],
-                },
-                {
-                    "baseline": "control",
-                    "invocations": [
-                        {"implementation": "control",
-                         "normalized": normalized_control},
-                        {"implementation": "candidate",
-                         "normalized": normalized_fixture},
-                        {"implementation": "candidate",
-                         "normalized": normalized_fixture},
-                        {"implementation": "control",
-                         "normalized": normalized_control},
-                    ],
-                },
-            ],
+            "segments": synthetic_segments,
         })
     synthetic_analysis = analyze_cell(sample, synthetic_rounds)
     require(
@@ -1588,6 +1642,23 @@ def self_test() -> int:
         math.isclose(synthetic_analysis["candidate_vs_main"][
             "legacy_decode_vs_one_shot_decode"]["speedup"], 2.0),
         "self-test exact-main comparison mapping changed")
+    for mutation in ("round_number", "serialized_order", "invocation_order"):
+        changed_rounds = json.loads(json.dumps(synthetic_rounds))
+        if mutation == "round_number":
+            changed_rounds[1]["round"] = 9
+        elif mutation == "serialized_order":
+            changed_rounds[0]["segments"][0]["order"][0:2] = \
+                reversed(changed_rounds[0]["segments"][0]["order"][0:2])
+        else:
+            invocations = changed_rounds[0]["segments"][0]["invocations"]
+            invocations[0], invocations[1] = invocations[1], invocations[0]
+        rejected = False
+        try:
+            analyze_cell(sample, changed_rounds)
+        except EvidenceError:
+            rejected = True
+        require(rejected,
+                f"self-test accepted malformed resume order: {mutation}")
     for mutation in (
             "prevalidated_marker", "binding_metric",
             "missing_one_shot_encode", "missing_one_shot_decode",
@@ -1641,6 +1712,38 @@ def self_test() -> int:
             identities, sha256(shared), sha256(main))
         require(proof["candidate_control_inode"] == shared.stat().st_ino,
                 "self-test shared-inode proof failed")
+        candidate_build = directory / "candidate-build"
+        main_build = directory / "main-build"
+        candidate_build.write_bytes(shared.read_bytes())
+        main_build.write_bytes(main.read_bytes())
+        provenance_fixture = {
+            "candidate_build": {
+                "executable": file_identity(candidate_build),
+            },
+            "main_build": {
+                "validated_executable": file_identity(main_build),
+            },
+        }
+        copy_proof = validate_lane_owned_copy_identities(
+            identities, provenance_fixture)
+        require(copy_proof["lane_inodes_distinct_from_build_artifacts"] is True,
+                "self-test lane-owned copy proof failed")
+        for direct_lane in ("candidate", "main"):
+            direct_provenance = json.loads(json.dumps(provenance_fixture))
+            if direct_lane == "candidate":
+                direct_provenance["candidate_build"]["executable"] = \
+                    dict(identities["candidate"])
+            else:
+                direct_provenance["main_build"]["validated_executable"] = \
+                    dict(identities["main"])
+            rejected = False
+            try:
+                validate_lane_owned_copy_identities(
+                    identities, direct_provenance)
+            except EvidenceError:
+                rejected = True
+            require(rejected,
+                    f"self-test accepted direct {direct_lane} build hardlink")
         copied = directory / "cccccccc"
         copied.write_bytes(shared.read_bytes())
         bad = dict(identities)
