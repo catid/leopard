@@ -1,0 +1,892 @@
+{
+  "schema": "leopard2-partial-schedule-skip-summary-v1",
+  "generated_utc": "2026-08-02T15:29:14.641142+00:00",
+  "provenance": {
+    "binary_hashes_verified_before_and_after_each_campaign": true,
+    "branch": "codex/leopard2",
+    "build_configuration_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/build-configuration.txt",
+    "build_configuration_sha256": "57c5c1242f641d2a540525ac3a9f749d47e7de75ae33ae6619146f35bbbac99c",
+    "candidate_binary": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/bin/candidate",
+    "candidate_binary_sha256": "a84253ea26203cf18ba564a75722f7d0b53d336448ab9245c43fa8bcd471e313",
+    "candidate_git_diff_sha256_at_build": "d5e5bf686b8fac3479179b7a56b2d58582287e75f431021b82006cc039b1c015",
+    "candidate_source_file_sha256_at_build": "cff4eee0811039d6b76632e1293bdfb81a2c68c721a1a0cce232d04081bc319c",
+    "control_binary": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/bin/control-9d8dcda",
+    "control_binary_sha256": "6f3e55ac125c460df9f5e0035cc74beb9d6e94852d422eb8e90c1ec550fde766",
+    "exact_main_binary": "/tmp/leopard2-route-attribution-9d8dcda-2363721/bin/main-pure-avx2",
+    "exact_main_binary_sha256": "e252aa2c03c1efdda9f7de256ea0d5bf459310d8cef5a9ba69c8cf2619cd3048",
+    "exact_main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "frozen_binary_paths_lane_owned": true,
+    "leopard2_base_commit": "9d8dcda6bab57268e1cfb9497514fa7fbd896e40",
+    "leopard2_base_tree": "b5006bf71c20328f55f8413f6d7624f4c942f884",
+    "source_attestation_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/source-attestation.h",
+    "source_attestation_sha256": "59a87711b1244d6c9eb341eec34100c04b89efbdaacf2f0720b8333626635a01"
+  },
+  "manifests": {
+    "attribution_candidate_vs_control": {
+      "directory": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/attribution",
+      "file_count": 216,
+      "manifest_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/attribution_candidate_vs_control.manifest.sha256",
+      "manifest_sha256": "e9b11e014ccfb149c25281cf46d381fe40ae4da1d434b00d52059e4cbd191eb7"
+    },
+    "candidate_vs_exact_main": {
+      "directory": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/vs-main",
+      "file_count": 216,
+      "manifest_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/candidate_vs_exact_main.manifest.sha256",
+      "manifest_sha256": "48fdc5dd51b6959b797b98ebb515eaea8bab8ada4de9fb66ad70262c2b0646f0"
+    },
+    "path_candidate_vs_control": {
+      "directory": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/path-v2",
+      "file_count": 54,
+      "manifest_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/path_candidate_vs_control.manifest.sha256",
+      "manifest_sha256": "fe11e7fb32376f4045f613cce84e11c439088ddf0d76e0649ebb41e9e3f216be"
+    },
+    "public_candidate_vs_control": {
+      "directory": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/results",
+      "file_count": 216,
+      "manifest_path": "/tmp/leopard2-partial-schedule-skip-9d8dcda-2363721/public_candidate_vs_control.manifest.sha256",
+      "manifest_sha256": "5cdabf6d63b3873676e100b961e9736c60a0455bca468afbcedabf4dc71098bf"
+    }
+  },
+  "method": {
+    "K": [
+      32,
+      95,
+      128
+    ],
+    "R_rule": "R=K",
+    "aggregate_definition": "median/min/max over per-cell ratios; each cell uses median of four process-level medians",
+    "batch": 1,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "cpu": "14",
+    "interleave_order": "control/candidate/candidate/control repeated twice; exact-main campaign main/candidate/candidate/main repeated twice",
+    "iterations_per_process": 15,
+    "loss_patterns": [
+      "floor(R/2)",
+      "R-1",
+      "R"
+    ],
+    "omp_dynamic": false,
+    "omp_num_threads": 1,
+    "omp_proc_bind": true,
+    "pinning": "taskset -c 14",
+    "process_median_repetitions_per_variant_per_cell": 4,
+    "ratio_direction": "control_over_candidate and main_over_candidate; values >1 mean candidate faster",
+    "reuse": 8,
+    "seed": 515151,
+    "shard_bytes": [
+      64,
+      256,
+      1024
+    ],
+    "thread_count": 1,
+    "warmup_per_process": 5
+  },
+  "validation": {
+    "attribution_candidate_vs_control": {
+      "cells": 27,
+      "files": 216,
+      "full_both_pruned_plan_counts": "0",
+      "partial_candidate_pruned_plan_counts": "0",
+      "partial_control_pruned_plan_counts": "2 low input + 1 low output",
+      "round_trip": true,
+      "rounds_per_variant": 4,
+      "schema": "leopard2-benchmark-v15",
+      "status": "PASS",
+      "workload_digest_match": true
+    },
+    "candidate_vs_exact_main": {
+      "cells": 27,
+      "files": 216,
+      "round_trip": true,
+      "rounds_per_variant": 4,
+      "schemas": [
+        "leopard2-benchmark-v9",
+        "leopard-main-benchmark-v1"
+      ],
+      "status": "PASS",
+      "workload_digest_match": true
+    },
+    "path_candidate_vs_control": {
+      "candidate_control_match": true,
+      "cells": 27,
+      "files": 54,
+      "round_trip": true,
+      "schema": "leopard2-benchmark-v3",
+      "selected_path_all": "materialized",
+      "selected_rule_all": "translated_low",
+      "status": "PASS",
+      "workload_digest_match": true
+    },
+    "public_candidate_vs_control": {
+      "cells": 27,
+      "files": 216,
+      "resolved_profile_field_backend": "legacy_high_v1/gf8/avx2",
+      "round_trip": true,
+      "rounds_per_variant": 4,
+      "schema": "leopard2-benchmark-v9",
+      "status": "PASS",
+      "workload_digest_match": true
+    }
+  },
+  "recommendation": {
+    "decision": "keep_narrowed_policy",
+    "equivalence_note": "All tested balanced K=R cells resolved to materialized/translated_low, so the frozen broad binary is behaviorally equivalent to the recommended narrowed source policy in this matrix.",
+    "frozen_candidate_scope": "Broad candidate removed the full-loss condition entirely.",
+    "policy": "skip one-shot tiny GF8 AVX2 pruned schedules when full loss OR translated_low, for shard_bytes <= 1024 and R > 1",
+    "reason": "Large one-shot gains in every tested partial translated-low cell; no material full-loss or reusable-plan regression. Narrowing avoids applying the broad frozen candidate to unmeasured native Algorithm 5 partial-loss cells."
+  },
+  "candidate_vs_control": {
+    "aggregate": {
+      "all": {
+        "decode_amortized_reuse8": {
+          "cell_count": 27,
+          "maximum": 1.0031255015585272,
+          "median": 0.9996813186813187,
+          "minimum": 0.9912562850777341
+        },
+        "decode_execution": {
+          "cell_count": 27,
+          "maximum": 1.0048011651156477,
+          "median": 1.0002195839615873,
+          "minimum": 0.9909004418146985
+        },
+        "decode_plan_setup": {
+          "cell_count": 27,
+          "maximum": 1.0049980923311712,
+          "median": 0.9963636363636365,
+          "minimum": 0.9778597785977862
+        },
+        "one_shot": {
+          "cell_count": 27,
+          "maximum": 4.1917725596633355,
+          "median": 1.6124240615233345,
+          "minimum": 0.9905195297686764
+        }
+      },
+      "full": {
+        "decode_amortized_reuse8": {
+          "cell_count": 9,
+          "maximum": 1.0030187389645155,
+          "median": 1.000013194352817,
+          "minimum": 0.9934533551554829
+        },
+        "decode_execution": {
+          "cell_count": 9,
+          "maximum": 1.0034555317464915,
+          "median": 1.0011822406386441,
+          "minimum": 0.9929577464788734
+        },
+        "decode_plan_setup": {
+          "cell_count": 9,
+          "maximum": 1.0,
+          "median": 0.9994824016563149,
+          "minimum": 0.9778597785977862
+        },
+        "one_shot": {
+          "cell_count": 9,
+          "maximum": 1.0084784470453896,
+          "median": 1.0003398470688192,
+          "minimum": 0.9905195297686764
+        }
+      },
+      "partial": {
+        "decode_amortized_reuse8": {
+          "cell_count": 18,
+          "maximum": 1.0031255015585272,
+          "median": 0.9995462193014784,
+          "minimum": 0.9912562850777341
+        },
+        "decode_execution": {
+          "cell_count": 18,
+          "maximum": 1.0048011651156477,
+          "median": 0.9999635931503843,
+          "minimum": 0.9909004418146985
+        },
+        "decode_plan_setup": {
+          "cell_count": 18,
+          "maximum": 1.0049980923311712,
+          "median": 0.9953971656650084,
+          "minimum": 0.9867768595041324
+        },
+        "one_shot": {
+          "cell_count": 18,
+          "maximum": 4.1917725596633355,
+          "median": 2.355811292508475,
+          "minimum": 1.4560973647615876
+        }
+      }
+    },
+    "per_cell": [
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "one_shot_control_us": 1.1688125,
+        "one_shot_candidate_us": 1.1756250000000001,
+        "control_over_candidate": 0.9942052099946835
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "one_shot_control_us": 4.60075,
+        "one_shot_candidate_us": 1.4412500000000001,
+        "control_over_candidate": 3.1921942758022546
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "one_shot_control_us": 4.493875,
+        "one_shot_candidate_us": 1.53125,
+        "control_over_candidate": 2.934775510204082
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "one_shot_control_us": 1.6324999999999998,
+        "one_shot_candidate_us": 1.648125,
+        "control_over_candidate": 0.9905195297686764
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "one_shot_control_us": 5.29125,
+        "one_shot_candidate_us": 2.2538125,
+        "control_over_candidate": 2.347688638695544
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "one_shot_control_us": 5.157562499999999,
+        "one_shot_candidate_us": 2.24125,
+        "control_over_candidate": 2.301199107640825
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "one_shot_control_us": 3.6793750000000003,
+        "one_shot_candidate_us": 3.6781249999999996,
+        "control_over_candidate": 1.0003398470688192
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "one_shot_control_us": 8.6094375,
+        "one_shot_candidate_us": 5.339437500000001,
+        "control_over_candidate": 1.6124240615233345
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "one_shot_control_us": 8.448875000000001,
+        "one_shot_candidate_us": 5.605125,
+        "control_over_candidate": 1.5073481858120918
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "one_shot_control_us": 3.3925,
+        "one_shot_candidate_us": 3.42375,
+        "control_over_candidate": 0.990872581234027
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "one_shot_control_us": 19.112125,
+        "one_shot_candidate_us": 4.5594375,
+        "control_over_candidate": 4.1917725596633355
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "one_shot_control_us": 18.4745625,
+        "one_shot_candidate_us": 5.02375,
+        "control_over_candidate": 3.6774446379696446
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "one_shot_control_us": 5.558125,
+        "one_shot_candidate_us": 5.5920000000000005,
+        "control_over_candidate": 0.9939422389127325
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "one_shot_control_us": 22.754625,
+        "one_shot_candidate_us": 8.3894375,
+        "control_over_candidate": 2.712294477430698
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "one_shot_control_us": 22.2065,
+        "one_shot_candidate_us": 9.393875,
+        "control_over_candidate": 2.363933946321406
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "one_shot_control_us": 14.5689375,
+        "one_shot_candidate_us": 14.4895625,
+        "control_over_candidate": 1.0054780812050055
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "one_shot_control_us": 37.417874999999995,
+        "one_shot_candidate_us": 23.120874999999998,
+        "control_over_candidate": 1.6183589505154974
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "one_shot_control_us": 36.5185,
+        "one_shot_candidate_us": 25.0459375,
+        "control_over_candidate": 1.4580608132556427
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "one_shot_control_us": 3.9688749999999997,
+        "one_shot_candidate_us": 3.9606250000000003,
+        "control_over_candidate": 1.0020830045762978
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "one_shot_control_us": 19.969625,
+        "one_shot_candidate_us": 5.1913125,
+        "control_over_candidate": 3.8467391435210265
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "one_shot_control_us": 18.973875,
+        "one_shot_candidate_us": 5.483750000000001,
+        "control_over_candidate": 3.460018235696375
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "one_shot_control_us": 6.6238125,
+        "one_shot_candidate_us": 6.568125,
+        "control_over_candidate": 1.0084784470453896
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "one_shot_control_us": 24.0428125,
+        "one_shot_candidate_us": 9.838875,
+        "control_over_candidate": 2.443654635311456
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "one_shot_control_us": 22.868375,
+        "one_shot_candidate_us": 10.058250000000001,
+        "control_over_candidate": 2.2735938160216738
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "one_shot_control_us": 17.7195,
+        "one_shot_candidate_us": 17.645812499999998,
+        "control_over_candidate": 1.0041759199243447
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "one_shot_control_us": 41.526062499999995,
+        "one_shot_candidate_us": 27.427750000000003,
+        "control_over_candidate": 1.514016370281922
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "one_shot_control_us": 39.593562500000004,
+        "one_shot_candidate_us": 27.1915625,
+        "control_over_candidate": 1.4560973647615876
+      }
+    ]
+  },
+  "transient_attribution": {
+    "aggregate": {
+      "all": {
+        "public_one_shot": {
+          "cell_count": 27,
+          "maximum": 4.191285343532304,
+          "median": 1.60461767219679,
+          "minimum": 0.9942813572245519
+        },
+        "transient_amortized_reuse8": {
+          "cell_count": 27,
+          "maximum": 2.011484489745359,
+          "median": 1.1522445780285522,
+          "minimum": 0.9950823702975166
+        },
+        "transient_execution": {
+          "cell_count": 27,
+          "maximum": 1.584509227651923,
+          "median": 1.0309458514814216,
+          "minimum": 0.9507605895029692
+        },
+        "transient_plan_setup": {
+          "cell_count": 27,
+          "maximum": 15.477011494252874,
+          "median": 9.515625,
+          "minimum": 0.9817073170731708
+        }
+      },
+      "full": {
+        "public_one_shot": {
+          "cell_count": 9,
+          "maximum": 1.0037549778591819,
+          "median": 1.0006945620870744,
+          "minimum": 0.9942813572245519
+        },
+        "transient_amortized_reuse8": {
+          "cell_count": 9,
+          "maximum": 1.0047995659522964,
+          "median": 0.9994932165406683,
+          "minimum": 0.9950823702975166
+        },
+        "transient_execution": {
+          "cell_count": 9,
+          "maximum": 1.0052263670216242,
+          "median": 0.9997703971660451,
+          "minimum": 0.9904934750669778
+        },
+        "transient_plan_setup": {
+          "cell_count": 9,
+          "maximum": 1.0625,
+          "median": 0.995,
+          "minimum": 0.9817073170731708
+        }
+      },
+      "partial": {
+        "public_one_shot": {
+          "cell_count": 18,
+          "maximum": 4.191285343532304,
+          "median": 2.4300431005396095,
+          "minimum": 1.4511622311228298
+        },
+        "transient_amortized_reuse8": {
+          "cell_count": 18,
+          "maximum": 2.011484489745359,
+          "median": 1.317020055561239,
+          "minimum": 1.015701426496878
+        },
+        "transient_execution": {
+          "cell_count": 18,
+          "maximum": 1.584509227651923,
+          "median": 1.112374525441377,
+          "minimum": 0.9507605895029692
+        },
+        "transient_plan_setup": {
+          "cell_count": 18,
+          "maximum": 15.477011494252874,
+          "median": 11.484801185908616,
+          "minimum": 7.846153846153845
+        }
+      }
+    }
+  },
+  "candidate_vs_exact_main": {
+    "aggregate": {
+      "all": {
+        "decode_main_over_candidate": {
+          "cell_count": 27,
+          "maximum": 2.14096066173931,
+          "median": 1.1387243051934715,
+          "minimum": 0.8291960828968344
+        },
+        "encode_main_over_candidate": {
+          "cell_count": 27,
+          "maximum": 1.0951476235953914,
+          "median": 0.9834386204541576,
+          "minimum": 0.8974943052391798
+        }
+      },
+      "full": {
+        "decode_main_over_candidate": {
+          "cell_count": 9,
+          "maximum": 2.14096066173931,
+          "median": 1.607241310711342,
+          "minimum": 1.108974358974359
+        },
+        "encode_main_over_candidate": {
+          "cell_count": 9,
+          "maximum": 1.0946955072846605,
+          "median": 0.98892330114775,
+          "minimum": 0.8974943052391798
+        }
+      },
+      "partial": {
+        "decode_main_over_candidate": {
+          "cell_count": 18,
+          "maximum": 1.328175430921807,
+          "median": 1.0555075336945978,
+          "minimum": 0.8291960828968344
+        },
+        "encode_main_over_candidate": {
+          "cell_count": 18,
+          "maximum": 1.0951476235953914,
+          "median": 0.9824734799152587,
+          "minimum": 0.9059633027522935
+        }
+      }
+    },
+    "per_cell": [
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "main_us": 1.2975,
+        "candidate_us": 1.17,
+        "main_over_candidate": 1.108974358974359
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "main_us": 1.283125,
+        "candidate_us": 1.4456250000000002,
+        "main_over_candidate": 0.8875918720276696
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "main_us": 1.31,
+        "candidate_us": 1.52875,
+        "main_over_candidate": 0.856909239574816
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "main_us": 2.241875,
+        "candidate_us": 1.635625,
+        "main_over_candidate": 1.3706534199465035
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "main_us": 2.2075,
+        "candidate_us": 2.2525,
+        "main_over_candidate": 0.9800221975582686
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "main_us": 2.2575624999999997,
+        "candidate_us": 2.3425624999999997,
+        "main_over_candidate": 0.9637149489074465
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 32,
+        "main_us": 6.9595,
+        "candidate_us": 3.6875625,
+        "main_over_candidate": 1.887290045931425
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 16,
+        "main_us": 6.898187500000001,
+        "candidate_us": 5.3169375,
+        "main_over_candidate": 1.2973986434860294
+      },
+      {
+        "K": 32,
+        "R": 32,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 31,
+        "main_us": 6.9663125,
+        "candidate_us": 5.600625,
+        "main_over_candidate": 1.2438455529516794
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "main_us": 4.2281875,
+        "candidate_us": 3.3743749999999997,
+        "main_over_candidate": 1.2530283385812189
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "main_us": 4.1300625,
+        "candidate_us": 4.5663125,
+        "main_over_candidate": 0.904463393602606
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "main_us": 4.262625,
+        "candidate_us": 4.9688125,
+        "main_over_candidate": 0.8578760015597288
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "main_us": 9.763874999999999,
+        "candidate_us": 5.481375,
+        "main_over_candidate": 1.7812820688239719
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "main_us": 9.690750000000001,
+        "candidate_us": 8.558875,
+        "main_over_candidate": 1.1322457682814624
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "main_us": 9.8194375,
+        "candidate_us": 9.32575,
+        "main_over_candidate": 1.0529381014931776
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 95,
+        "main_us": 30.994687499999998,
+        "candidate_us": 14.477,
+        "main_over_candidate": 2.14096066173931
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 47,
+        "main_us": 31.120312499999997,
+        "candidate_us": 23.430875,
+        "main_over_candidate": 1.328175430921807
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 94,
+        "main_us": 30.871000000000002,
+        "candidate_us": 25.2071875,
+        "main_over_candidate": 1.2246903784882786
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "main_us": 4.5044375,
+        "candidate_us": 3.9556875,
+        "main_over_candidate": 1.1387243051934715
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "main_us": 4.4400625,
+        "candidate_us": 5.2369375,
+        "main_over_candidate": 0.847835686410235
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 64,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "main_us": 4.55125,
+        "candidate_us": 5.48875,
+        "main_over_candidate": 0.8291960828968344
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "main_us": 10.603874999999999,
+        "candidate_us": 6.5975625,
+        "main_over_candidate": 1.607241310711342
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "main_us": 10.552,
+        "candidate_us": 9.730125000000001,
+        "main_over_candidate": 1.0844670546370163
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 256,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "main_us": 10.692,
+        "candidate_us": 10.105125,
+        "main_over_candidate": 1.0580769658960183
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "full",
+        "loss_count": 128,
+        "main_us": 33.450375,
+        "candidate_us": 17.558999999999997,
+        "main_over_candidate": 1.9050273364086796
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "half",
+        "loss_count": 64,
+        "main_us": 33.906,
+        "candidate_us": 27.6485,
+        "main_over_candidate": 1.22632330867859
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "shard_bytes": 1024,
+        "loss_pattern": "rminus1",
+        "loss_count": 127,
+        "main_us": 33.579750000000004,
+        "candidate_us": 27.475375,
+        "main_over_candidate": 1.2221762214346485
+      }
+    ]
+  }
+}

@@ -1159,8 +1159,8 @@ static bool IsHighT8TwoBlockByteCount(
 static std::atomic<unsigned> g_r1_small_reduction_mode(0U);
 /*
     Production prepares only the exact transient route and omits pruned-plan
-    compilation in the measured tiny GF8/AVX2 maximum-loss region.  Mode zero
-    is retained only for same-executable benchmark attribution.  The public
+    compilation in measured tiny GF8/AVX2 dense-loss regions.  Mode zero is
+    retained only for same-executable benchmark attribution.  The public
     reusable-plan API never consults this switch.
 */
 static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
@@ -5054,6 +5054,13 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         return false;
     const leo2_codec* codec = plan->codec;
     const bool translated_low = PlanUsesTranslatedLowDecode(plan);
+    /*
+        Exact-byte one-shot plans never escape the call.  For translated
+        Algorithm 4, compiling sparse input/output graphs costs more through
+        1 KiB than executing the mature prefix transforms, including partial
+        high-loss patterns.  Preserve the narrower maximum-loss policy for
+        native Algorithm 5, whose partial-pattern crossover is independent.
+    */
     return metadata_mask == kDecodeTransformMetadataSpecialized &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
@@ -5061,7 +5068,8 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         codec->context->ops &&
         codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
         codec->recovery_count > 1 &&
-        plan->missing_original_count == codec->recovery_count &&
+        (plan->missing_original_count == codec->recovery_count ||
+         translated_low) &&
         hint.shard_bytes <= 1024;
 }
 

@@ -958,6 +958,63 @@ void test_exact_transient_route_fail_closed(leo2_context* context)
     leo2_codec_destroy(codec);
 }
 
+void test_partial_loss_transient_schedule_policy(leo2_context* context)
+{
+    if (leo2_context_backend(context) != LEO2_BACKEND_AVX2)
+        return;
+    const unsigned k = 32;
+    const unsigned r = 32;
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+
+    leo2_codec* codec = create_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 0);
+    const auto schedule_count = [&](unsigned setup_mode,
+                                    bool native_high,
+                                    unsigned missing_count) {
+        std::fill(original_present.begin(), original_present.end(), 1);
+        for (unsigned i = 0; i < missing_count; ++i)
+            original_present[i] = 0;
+        require_success(leo2_test_codec_set_decode_mode(codec,
+            native_high ? LEO2_TEST_DECODE_FORCE_NATIVE_HIGH
+                        : LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW),
+            "select transient schedule policy decoder");
+        require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(
+                setup_mode),
+            "select transient schedule policy mode");
+        leo2_decode_plan* plan = NULL;
+        require_success(
+            leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+                codec, 256, original_present.data(), recovery_present.data(),
+                &plan),
+            "partial-loss transient plan create");
+        leopard2_internal::DecodePlanPrunedScheduleInfo info;
+        require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+                plan, &info),
+            "partial-loss transient schedule introspection");
+        const size_t count = info.low_input_plan_count +
+            info.low_output_plan_count + info.high_input_plan_count +
+            info.high_output_plan_count;
+        leo2_decode_plan_destroy(plan);
+        return count;
+    };
+
+    require(schedule_count(2, false, r / 2) != 0,
+        "translated partial-loss attribution control had no schedules");
+    require(schedule_count(3, false, r / 2) == 0,
+        "production translated partial-loss plan retained schedules");
+    require(schedule_count(3, true, r / 2) != 0,
+        "native-high partial-loss plan unexpectedly omitted schedules");
+    require(schedule_count(3, true, r) == 0,
+        "native-high maximum-loss plan lost its regular-transform policy");
+    require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
+        "restore production transient schedule policy");
+    require_success(leo2_test_codec_set_decode_mode(
+        codec, LEO2_TEST_DECODE_AUTO),
+        "restore automatic transient schedule decoder");
+    leo2_codec_destroy(codec);
+}
+
 void test_legacy_wire_and_recovery(leo2_context* context)
 {
     const unsigned k = 8;
@@ -1203,6 +1260,7 @@ void run_backend_suite(leo2_context* context, Counts* counts)
     test_rejection(context);
     test_direct_dispatch_bypass(context);
     test_exact_transient_route_fail_closed(context);
+    test_partial_loss_transient_schedule_policy(context);
     test_legacy_wire_and_recovery(context);
     test_unaligned_tail(context, LEO2_FIELD_GF8, 17, 17, 65);
     test_unaligned_tail(context, LEO2_FIELD_GF16, 17, 17, 66);
