@@ -1,0 +1,370 @@
+{
+  "schema": "leopard2-balanced-generic-one-shot-negative/v1",
+  "date_utc": "2026-08-02",
+  "bead": "leopard-79h.38.20",
+  "status": "rejected",
+  "hypothesis": "For balanced GF8 AVX2 codes at 64-byte shards and floor(R/2) losses, the generic decoder's lower byte-execution time will outweigh one-shot plan setup and beat the translated low-rate Algorithm 4 path by at least 5%.",
+  "source_identity": {
+    "git_commit": "25b8c2a44c960e07d1a73e5566bae2b37c1fc66a",
+    "backend_variant": "avx2",
+    "build_type": "Release",
+    "control_binary_sha256": "0560527897d3a240e87d6322ef0ae990959d7b78ee5aeb12d2710b10aea63f63",
+    "candidate_binary_sha256": "1237138f24bde3bf3dd1910cef8a4a530f100e1c2b89778d8b8515e8b49c29f5",
+    "candidate_source_diff_sha256": "21ae375c43ac17dc2b1b0c76681ee1cb556a3b887508dd501671cf012a599fce",
+    "forced_core_raw_summary_sha256": "150de8ec31eed9502e6c617fcc9c74c50a7ef7dc3e1c9e6782fd67a80b770e8a",
+    "public_one_shot_raw_summary_sha256": "ca3bc67ce7d45cb454f3c8f48b7b530f0f7239734491aba82622dcff4572178e"
+  },
+  "host": {
+    "model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "sockets": 1,
+    "numa_nodes": 1
+  },
+  "affinity_and_lease": {
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "lease_path": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-13-29.lock",
+    "lease_payload_sha256": "42a6ceb432977fc02963c2ae86e19b6a077107e58fb641b5e8322d562f083b6c",
+    "kernel_lease_schema": "leopard2-kernel-cpu-pair-lease/v1",
+    "kernel_lease_name_sha256": "5e7dcb77399e3829d755bcb34e82b5f30063ac9044ca09a87eabb7fb3c8840b7",
+    "campaign_lock": "/tmp/leopard-gf8-authoritative.lock"
+  },
+  "correctness": {
+    "tests_passed": [
+      "leopard2_decode_high_acceptance",
+      "leopard2_high_low_duality"
+    ],
+    "independent_oracle": "tests/leopard2/direct_oracle.cpp direct systematic RS encoder/interpolator, exercised by leopard2_decode_high_acceptance",
+    "forced_core_accepted_invocations": 96,
+    "public_one_shot_accepted_invocations": 72,
+    "all_benchmark_round_trips_passed": true,
+    "per_case_workload_digests_equal_across_roles": true,
+    "digest_algorithm": "fnv1a64",
+    "binary_hashes_verified_before_and_after_timing": true
+  },
+  "forced_core": {
+    "comparison": "same frozen control binary; --force-decoder-specialized translated_low versus --force-decoder-generic",
+    "metric": "decode_execution.median_us_per_batch_call",
+    "ratio_definition": "specialized_time / generic_time; greater than 1 favors generic",
+    "iterations_per_invocation": 31,
+    "warmup": 5,
+    "reuse": 512,
+    "orders": [
+      ["specialized", "generic", "generic", "specialized"],
+      ["generic", "specialized", "specialized", "generic"]
+    ],
+    "routes": {
+      "specialized": {"path": "materialized", "rule": "translated_low"},
+      "generic": {"path": "generic", "rule": "forced_generic"}
+    },
+    "promotion_gate": "both round ratios >= 1.05",
+    "rows": [
+      {
+        "case": "k32-r32-b64-half",
+        "K": 32,
+        "R": 32,
+        "loss": 16,
+        "bytes": 64,
+        "specialized_median_us": 1.2517815,
+        "generic_median_us": 1.0955395,
+        "generic_speedup": 1.1426164916919925,
+        "round_speedups": [1.13656383240983, 1.1469401372224737],
+        "passes_gate": true
+      },
+      {
+        "case": "k32-r32-b64-rminus1",
+        "K": 32,
+        "R": 32,
+        "loss": 31,
+        "bytes": 64,
+        "specialized_median_us": 1.178461,
+        "generic_median_us": 1.2417825,
+        "generic_speedup": 0.9490075758033311,
+        "round_speedups": [0.9441205338946174, 0.9559986262572082],
+        "passes_gate": false
+      },
+      {
+        "case": "k32-r32-b256-half",
+        "K": 32,
+        "R": 32,
+        "loss": 16,
+        "bytes": 256,
+        "specialized_median_us": 2.0050135,
+        "generic_median_us": 2.169752,
+        "generic_speedup": 0.9240749634059561,
+        "round_speedups": [0.9085170239456779, 0.9432337697762887],
+        "passes_gate": false
+      },
+      {
+        "case": "k32-r32-b256-rminus1",
+        "K": 32,
+        "R": 32,
+        "loss": 31,
+        "bytes": 256,
+        "specialized_median_us": 1.8765935,
+        "generic_median_us": 2.518222,
+        "generic_speedup": 0.7452057443704329,
+        "round_speedups": [0.7414142303212155, 0.749751633541923],
+        "passes_gate": false
+      },
+      {
+        "case": "k95-r95-b64-half",
+        "K": 95,
+        "R": 95,
+        "loss": 47,
+        "bytes": 64,
+        "specialized_median_us": 5.3350615,
+        "generic_median_us": 4.462426,
+        "generic_speedup": 1.1955518141925492,
+        "round_speedups": [1.1980652885752416, 1.1976704612864535],
+        "passes_gate": true
+      },
+      {
+        "case": "k95-r95-b64-rminus1",
+        "K": 95,
+        "R": 95,
+        "loss": 94,
+        "bytes": 64,
+        "specialized_median_us": 4.8833865,
+        "generic_median_us": 4.6057655,
+        "generic_speedup": 1.060276842144916,
+        "round_speedups": [1.0596185828778295, 1.064959385816178],
+        "passes_gate": true
+      },
+      {
+        "case": "k95-r95-b256-half",
+        "K": 95,
+        "R": 95,
+        "loss": 47,
+        "bytes": 256,
+        "specialized_median_us": 8.6072275,
+        "generic_median_us": 9.8410995,
+        "generic_speedup": 0.8746205136936173,
+        "round_speedups": [0.8758957529395743, 0.8734373293374096],
+        "passes_gate": false
+      },
+      {
+        "case": "k95-r95-b256-rminus1",
+        "K": 95,
+        "R": 95,
+        "loss": 94,
+        "bytes": 256,
+        "specialized_median_us": 7.937748,
+        "generic_median_us": 10.0640115,
+        "generic_speedup": 0.7887260462689257,
+        "round_speedups": [0.7851403387719432, 0.7906401502533433],
+        "passes_gate": false
+      },
+      {
+        "case": "k128-r128-b64-half",
+        "K": 128,
+        "R": 128,
+        "loss": 64,
+        "bytes": 64,
+        "specialized_median_us": 5.6884835,
+        "generic_median_us": 4.8904865,
+        "generic_speedup": 1.1631733366404347,
+        "round_speedups": [1.1657680675696254, 1.160392526607559],
+        "passes_gate": true
+      },
+      {
+        "case": "k128-r128-b64-rminus1",
+        "K": 128,
+        "R": 128,
+        "loss": 127,
+        "bytes": 64,
+        "specialized_median_us": 5.208565,
+        "generic_median_us": 5.331829,
+        "generic_speedup": 0.9768814791322078,
+        "round_speedups": [0.9740854264965076, 0.9792087694303551],
+        "passes_gate": false
+      },
+      {
+        "case": "k128-r128-b256-half",
+        "K": 128,
+        "R": 128,
+        "loss": 64,
+        "bytes": 256,
+        "specialized_median_us": 9.4022375,
+        "generic_median_us": 10.977617,
+        "generic_speedup": 0.8564916684559136,
+        "round_speedups": [0.8560939788537759, 0.8605765539620353],
+        "passes_gate": false
+      },
+      {
+        "case": "k128-r128-b256-rminus1",
+        "K": 128,
+        "R": 128,
+        "loss": 127,
+        "bytes": 256,
+        "specialized_median_us": 8.924049,
+        "generic_median_us": 12.201371,
+        "generic_speedup": 0.7313972339665764,
+        "round_speedups": [0.7351478934426372, 0.7269161951681431],
+        "passes_gate": false
+      }
+    ]
+  },
+  "public_one_shot": {
+    "comparison": "frozen unmodified control versus candidate one-shot-only generic dispatch guard",
+    "metric": "one_shot_decode_including_setup.median_us_per_batch_call",
+    "ratio_definition": "control_time / candidate_time; greater than 1 favors candidate",
+    "iterations_per_invocation": 31,
+    "warmup": 5,
+    "reuse": 256,
+    "orders": [
+      ["control", "candidate", "candidate", "control"],
+      ["candidate", "control", "control", "candidate"]
+    ],
+    "target_routes": [
+      {"K": 32, "R": 32, "bytes": 64, "loss": 16, "path": "generic", "rule": "one_shot_balanced_generic"},
+      {"K": 95, "R": 95, "bytes": 64, "loss": 47, "path": "generic", "rule": "one_shot_balanced_generic"},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 64, "path": "generic", "rule": "one_shot_balanced_generic"}
+    ],
+    "promotion_gate": "both target round ratios >= 1.05 and neighboring controls >= 0.98",
+    "rows": [
+      {
+        "case": "k32-r32-b64-target-half64",
+        "label": "target",
+        "K": 32,
+        "R": 32,
+        "loss": 16,
+        "bytes": 64,
+        "control_median_us": 1.3834925,
+        "candidate_median_us": 1.600684,
+        "candidate_speedup": 0.8643133185563172,
+        "round_speedups": [0.8682637985048903, 0.8614358441594799],
+        "passes_gate": false
+      },
+      {
+        "case": "k32-r32-b256-control-half256",
+        "label": "byte-control",
+        "K": 32,
+        "R": 32,
+        "loss": 16,
+        "bytes": 256,
+        "control_median_us": 2.24491,
+        "candidate_median_us": 2.2479375,
+        "candidate_speedup": 0.9986532098868407,
+        "round_speedups": [1.0248078133459197, 0.9984318428394847]
+      },
+      {
+        "case": "k32-r32-b64-control-rminus1-64",
+        "label": "loss-control",
+        "K": 32,
+        "R": 32,
+        "loss": 31,
+        "bytes": 64,
+        "control_median_us": 1.535078,
+        "candidate_median_us": 1.5742365,
+        "candidate_speedup": 0.9751254020599827,
+        "round_speedups": [0.9782071256343496, 0.97538878594962]
+      },
+      {
+        "case": "k95-r95-b64-target-half64",
+        "label": "target",
+        "K": 95,
+        "R": 95,
+        "loss": 47,
+        "bytes": 64,
+        "control_median_us": 4.440793,
+        "candidate_median_us": 5.446,
+        "candidate_speedup": 0.815422879177378,
+        "round_speedups": [0.817716485916706, 0.8118180913884433],
+        "passes_gate": false
+      },
+      {
+        "case": "k95-r95-b256-control-half256",
+        "label": "byte-control",
+        "K": 95,
+        "R": 95,
+        "loss": 47,
+        "bytes": 256,
+        "control_median_us": 8.487715,
+        "candidate_median_us": 8.4105075,
+        "candidate_speedup": 1.0091798859938,
+        "round_speedups": [1.00801035817473, 1.0522487464069883]
+      },
+      {
+        "case": "k95-r95-b64-control-rminus1-64",
+        "label": "loss-control",
+        "K": 95,
+        "R": 95,
+        "loss": 94,
+        "bytes": 64,
+        "control_median_us": 4.641848,
+        "candidate_median_us": 4.643529,
+        "candidate_speedup": 0.9996379908470475,
+        "round_speedups": [0.9990289836645798, 0.9972984084794856]
+      },
+      {
+        "case": "k128-r128-b64-target-half64",
+        "label": "target",
+        "K": 128,
+        "R": 128,
+        "loss": 64,
+        "bytes": 64,
+        "control_median_us": 5.1344335,
+        "candidate_median_us": 6.0222575,
+        "candidate_speedup": 0.852576214152251,
+        "round_speedups": [0.8508392134481854, 0.8564511948108139],
+        "passes_gate": false
+      },
+      {
+        "case": "k128-r128-b256-control-half256",
+        "label": "byte-control",
+        "K": 128,
+        "R": 128,
+        "loss": 64,
+        "bytes": 256,
+        "control_median_us": 9.5060645,
+        "candidate_median_us": 9.592963,
+        "candidate_speedup": 0.9909414327981876,
+        "round_speedups": [0.9858201092401697, 0.9910828282421394]
+      },
+      {
+        "case": "k128-r128-b64-control-rminus1-64",
+        "label": "loss-control",
+        "K": 128,
+        "R": 128,
+        "loss": 127,
+        "bytes": 64,
+        "control_median_us": 5.5818825,
+        "candidate_median_us": 5.5651605,
+        "candidate_speedup": 1.0030047650916807,
+        "round_speedups": [0.9978215641086959, 1.0090277084958104]
+      }
+    ]
+  },
+  "conclusion": {
+    "result": "reject the one-shot balanced generic dispatch guard",
+    "evidence": "Generic byte execution was 14.3%, 19.6%, and 16.3% faster at K=32,95,128 for the 64-byte half-loss cells, but the complete public one-shot call was 13.6%, 18.5%, and 14.7% slower. The setup/metadata cost reverses the core-only win.",
+    "production_change": "none",
+    "reusable_plan_semantics": "unchanged",
+    "wire_identity": "unchanged"
+  },
+  "combined_raw_generic_follow_up": {
+    "hypothesis": "A generic execution path can retain its 14-20% core advantage only if it is paired with the one-shot raw/minimal metadata representation and avoids compiling transient pruned schedules. Selecting generic before removing those setup costs cannot win the public call.",
+    "design": [
+      "Start from any separately accepted raw-view or one-shot schedule-elision candidate rather than stacking the rejected guard onto production code.",
+      "For eligible exact one-shot plans, build only the locator state and minimal generic input/output dependency view required by ReedSolomonDecodePlanned; do not build reusable pruned transform schedules.",
+      "Compare four same-source variants: translated-low regular metadata, translated-low raw metadata, generic regular metadata, and generic raw metadata.",
+      "Select generic only after comparing complete public one-shot time for the raw translated-low and raw generic variants; the forced-core result is not a dispatch oracle.",
+      "Keep caller-created reusable plans byte-agnostic and unchanged, and make the candidate internal-only so code/profile/field/wire identity cannot change."
+    ],
+    "initial_scope": {
+      "field": "GF8",
+      "backend": "AVX2",
+      "profile": "LEGACY_HIGH_V1",
+      "K_equals_R": true,
+      "K_values": [32, 95, 128],
+      "bytes": 64,
+      "loss": "floor(R/2)",
+      "batch_count": 1,
+      "plan_kind": "exact one-shot transient"
+    },
+    "correctness_gate": "direct-oracle acceptance plus route assertions and identical per-case original/parity/recovered digests",
+    "performance_gate": "two counterbalanced ABBA rounds must each show at least 5% complete public one-shot improvement in every target cell; B=256 and R-1 controls must not regress more than 2%",
+    "kill_criterion": "reject if raw generic remains slower than raw translated-low in any target, or if metadata removal changes route determinism, reusable-plan behavior, correctness, or wire identity"
+  }
+}
