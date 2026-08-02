@@ -1205,6 +1205,9 @@ static std::atomic<uint64_t>
 static std::atomic<uint64_t> g_test_high_scratch_reveal_shards(0);
 static std::atomic<uint64_t> g_test_direct_pair_calls(0);
 static std::atomic<uint64_t> g_test_direct_four_tiny_calls(0);
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+static std::atomic<uint64_t> g_test_low_p32_b64_terminal_calls(0);
+#endif
 
 static bool TestConsumeThreadStartFault()
 {
@@ -8255,18 +8258,44 @@ static void ExecuteRawTranslatedLowDecode(
         PopulateRawTranslatedLowCoordinates(codec, pattern,
             original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
-        leopard::ff8::ReedSolomonDecodeLowPrunedPlannedUnrevealed(
-            ops, geometry.aligned_prefix_bytes, n, p,
-            const_cast<const void* const*>(coordinate_data),
-            pattern.block_input_counts, pattern.missing_originals,
-            pattern.missing_original_count, dependencies, pattern.locator,
-            codec->translated_low_factors8.data(), NULL, 0, NULL, work);
-        for (uint32_t i = 0; i < pattern.missing_original_count; ++i)
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+        const bool exact_terminal =
+            geometry.aligned_prefix_bytes == 64 &&
+            geometry.tail_bytes == 0 && n == 64 && p == 32 &&
+            codec->original_count == 32 && codec->recovery_count == 32 &&
+            ops.kind == LEO2_BACKEND_AVX2 &&
+            codec->translated_low_factors8.size() == 1 &&
+            leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
+                const_cast<const void* const*>(coordinate_data),
+                pattern.missing_originals, pattern.missing_original_count,
+                pattern.locator, codec->translated_low_factors8[0],
+                restored, work);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (exact_terminal)
+            g_test_low_p32_b64_terminal_calls.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+#else
+        const bool exact_terminal = false;
+#endif
+        if (!exact_terminal)
         {
-            const uint32_t original_index = pattern.missing_originals[i];
-            ops.ff8_multiply(restored[original_index], work[original_index],
-                static_cast<uint16_t>(255U - pattern.locator[original_index]),
-                geometry.aligned_prefix_bytes);
+            leopard::ff8::ReedSolomonDecodeLowPrunedPlannedUnrevealed(
+                ops, geometry.aligned_prefix_bytes, n, p,
+                const_cast<const void* const*>(coordinate_data),
+                pattern.block_input_counts, pattern.missing_originals,
+                pattern.missing_original_count, dependencies, pattern.locator,
+                codec->translated_low_factors8.data(), NULL, 0, NULL, work);
+            for (uint32_t i = 0;
+                 i < pattern.missing_original_count; ++i)
+            {
+                const uint32_t original_index = pattern.missing_originals[i];
+                ops.ff8_multiply(
+                    restored[original_index], work[original_index],
+                    static_cast<uint16_t>(
+                        255U - pattern.locator[original_index]),
+                    geometry.aligned_prefix_bytes);
+            }
         }
     }
 
@@ -11468,6 +11497,19 @@ LEO2_EXPORT uint64_t leo2_test_direct_four_tiny_calls(void)
 {
     return g_test_direct_four_tiny_calls.load(std::memory_order_acquire);
 }
+
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+LEO2_EXPORT void leo2_test_reset_low_p32_b64_terminal_calls(void)
+{
+    g_test_low_p32_b64_terminal_calls.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_low_p32_b64_terminal_calls(void)
+{
+    return g_test_low_p32_b64_terminal_calls.load(
+        std::memory_order_acquire);
+}
+#endif
 #endif
 
 LEO2_EXPORT leo2_result leo2_codec_create(

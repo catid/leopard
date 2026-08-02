@@ -28,8 +28,10 @@
 
 #include "direct_oracle.h"
 #include "Leopard2Backend.h"
+#include "Leopard2Direct.h"
 #include "LeopardFF8.h"
 #include "leopard.h"
+#include "leopard2.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -55,6 +57,13 @@ void Require(bool condition, const char* message)
 {
     if (!condition)
         throw std::runtime_error(message);
+}
+
+void RequireResult(leo2_result result, const char* message)
+{
+    if (result != LEO2_SUCCESS)
+        throw std::runtime_error(std::string(message) + ": " +
+            leo2_result_string(result));
 }
 
 class AlignedBuffer
@@ -286,6 +295,114 @@ void ExercisePattern(
     }
 }
 
+void ExercisePublicRoute(
+    leo2_context* context,
+    size_t shard_bytes,
+    unsigned missing_count,
+    bool reusable_plan,
+    uint64_t expected_terminal_calls)
+{
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context,
+        kOriginalCount, kRecoveryCount, LEO2_PROFILE_LEGACY_HIGH_V1,
+        LEO2_FIELD_GF8, NULL, &codec), "create public-route codec");
+
+    std::vector<uint8_t> message(kOriginalCount * shard_bytes);
+    std::vector<uint8_t> parity(kRecoveryCount * shard_bytes);
+    uint64_t state = UINT64_C(0x5055424c49435032) ^ shard_bytes ^
+        (static_cast<uint64_t>(missing_count) << 32);
+    for (size_t i = 0; i < message.size(); ++i)
+    {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        message[i] = static_cast<uint8_t>(state >> 24);
+    }
+    std::vector<const void*> original(kOriginalCount);
+    std::vector<void*> recovery_output(kRecoveryCount);
+    for (unsigned i = 0; i < kOriginalCount; ++i)
+        original[i] = &message[static_cast<size_t>(i) * shard_bytes];
+    for (unsigned i = 0; i < kRecoveryCount; ++i)
+        recovery_output[i] = &parity[static_cast<size_t>(i) * shard_bytes];
+
+    size_t encode_scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        codec, shard_bytes, &encode_scratch_bytes),
+        "query public-route encode scratch");
+    AlignedBuffer encode_scratch(encode_scratch_bytes);
+    RequireResult(leo2_encode(codec, shard_bytes, &original[0],
+        &recovery_output[0], encode_scratch.bytes(), encode_scratch_bytes),
+        "encode public-route parity");
+
+    std::vector<uint8_t> original_present(kOriginalCount, 1);
+    std::vector<uint8_t> recovery_present(kRecoveryCount, 1);
+    std::vector<const void*> decode_original(original);
+    std::vector<const void*> decode_recovery(kRecoveryCount);
+    std::vector<void*> restored(kOriginalCount, static_cast<void*>(NULL));
+    std::vector<uint8_t> restored_storage(
+        static_cast<size_t>(kOriginalCount) * shard_bytes, 0xa5);
+    for (unsigned i = 0; i < kRecoveryCount; ++i)
+        decode_recovery[i] = recovery_output[i];
+    for (unsigned i = 0; i < missing_count; ++i)
+    {
+        const unsigned coordinate =
+            missing_count == 16 ? i * 2U : i;
+        original_present[coordinate] = 0;
+        decode_original[coordinate] = NULL;
+        restored[coordinate] = &restored_storage[
+            static_cast<size_t>(coordinate) * shard_bytes];
+    }
+
+    leo2_decode_plan* plan = NULL;
+    size_t decode_scratch_bytes = 0;
+    if (reusable_plan)
+    {
+        RequireResult(leo2_decode_plan_create(codec,
+            &original_present[0], &recovery_present[0], &plan),
+            "create reusable public-route plan");
+        RequireResult(leo2_decode_plan_scratch_size(
+            plan, shard_bytes, &decode_scratch_bytes),
+            "query reusable public-route scratch");
+    }
+    else
+    {
+        RequireResult(leo2_decode_scratch_size(
+            codec, shard_bytes, &decode_scratch_bytes),
+            "query one-shot public-route scratch");
+    }
+    AlignedBuffer decode_scratch(decode_scratch_bytes);
+    leo2_test_reset_low_p32_b64_terminal_calls();
+    if (reusable_plan)
+    {
+        RequireResult(leo2_decode_plan_execute(plan, shard_bytes,
+            &decode_original[0], &decode_recovery[0], &restored[0],
+            decode_scratch.bytes(), decode_scratch_bytes),
+            "execute reusable public-route plan");
+    }
+    else
+    {
+        RequireResult(leo2_decode(codec, shard_bytes,
+            &original_present[0], &recovery_present[0],
+            &decode_original[0], &decode_recovery[0], &restored[0],
+            decode_scratch.bytes(), decode_scratch_bytes),
+            "execute one-shot public route");
+    }
+    Require(leo2_test_low_p32_b64_terminal_calls() ==
+            expected_terminal_calls,
+        "public-route terminal call count differs from exact predicate");
+    for (unsigned i = 0; i < kOriginalCount; ++i)
+    {
+        if (original_present[i])
+            continue;
+        Require(std::memcmp(restored[i],
+                &message[static_cast<size_t>(i) * shard_bytes],
+                shard_bytes) == 0,
+            "public-route terminal recovered incorrect bytes");
+    }
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
 } // namespace
 
 int main()
@@ -322,8 +439,21 @@ int main()
             for (size_t i = 0; i < patterns.size(); ++i)
                 ExercisePattern(*avx2, message, parity, patterns[i]);
         }
+        leo2_context_options options = {};
+        options.struct_size = sizeof(options);
+        options.backend = LEO2_BACKEND_AVX2;
+        options.thread_count = 1;
+        leo2_context* context = NULL;
+        RequireResult(leo2_context_create(&options, &context),
+            "create public-route AVX2 context");
+        ExercisePublicRoute(context, 64, 16, false, 1);
+        ExercisePublicRoute(context, 64, 31, false, 1);
+        ExercisePublicRoute(context, 63, 16, false, 0);
+        ExercisePublicRoute(context, 65, 31, false, 0);
+        ExercisePublicRoute(context, 64, 16, true, 0);
+        leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu\n",
+            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=5\n",
             patterns.size());
         return 0;
     }

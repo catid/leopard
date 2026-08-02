@@ -1328,9 +1328,10 @@ if(LEO2_BUILD_TESTS)
                 leopard2_low_p32_b64_terminal_test PRIVATE tests/leopard2)
             target_compile_definitions(
                 leopard2_low_p32_b64_terminal_test PRIVATE
+                LEO2_ENABLE_TEST_HOOKS=1
                 LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
             target_link_libraries(
-                leopard2_low_p32_b64_terminal_test leopard)
+                leopard2_low_p32_b64_terminal_test leopard_test_hooks)
             add_test(NAME leopard2_low_p32_b64_terminal
                 COMMAND leopard2_low_p32_b64_terminal_test)
             set_tests_properties(leopard2_low_p32_b64_terminal PROPERTIES
