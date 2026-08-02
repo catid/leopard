@@ -1,0 +1,109 @@
+{
+  "schema": "leopard2-empty-first-block-seed-screen/v1",
+  "recorded_utc": "2026-08-02T14:53:49Z",
+  "status": "directional_non_authoritative",
+  "reason_not_authoritative": "This frozen pinned screen predates the v11 short-isolation evidence runner; the v10 campaign remained fail-closed because immutable-source snapshots made each benchmark child span about 69 seconds and admitted one unrelated sibling jiffy.",
+  "host": {
+    "cpu_model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpu": 14,
+    "reserved_smt_sibling": 30,
+    "sockets": 1,
+    "cores_per_socket": 16,
+    "threads_per_core": 2,
+    "numa_nodes": 1
+  },
+  "source": {
+    "base_commit": "fb623f34d37a646a2e85801117c6c5691713f751",
+    "base_tree": "6497b12dcb0f8fdd31d3c72890908357a92dde71",
+    "candidate_tracked_dirty": true,
+    "candidate_ff8_sha256": "454432f78e31c97baadb929c7fba1cb7f9a3258ce49ae11b4d6f3d48a5b61e91",
+    "candidate_ff16_sha256": "fd27e72cb09068d83bc32b23acf49c6d133382579f109d6cfa227361c43d8cbf",
+    "candidate_production_diff_sha256": "68ce0c451e80ca873b0dd5be61c94c2ede7b060bee951e7383c4f23005fafee7",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "build": {
+    "configuration_schema": "leopard2-benchmark-build-configuration/v4",
+    "configuration_sha256": "37162607696514065377e51145d5e8ca1ca1fdcbf7ae9c47de9ca2a883483756",
+    "candidate_binary_sha256": "507f74e649bde6288c4d2c11864f23ba8dbf208e1f5566898ef8a791c7fd01bc",
+    "prechange_binary_sha256": "fd7be1da02f6fa0d4dfa8efd895f62e044eca1a42d0f63dd7af999329a7883dd",
+    "exact_main_binary_sha256": "e252aa2c03c1efdda9f7de256ea0d5bf459310d8cef5a9ba69c8cf2619cd3048",
+    "compile_action_count": 22,
+    "candidate_and_prechange_closure_identical": true,
+    "candidate_backend": "avx2",
+    "candidate_field": "gf8",
+    "candidate_profile": "legacy_high_v1",
+    "exact_main_backend": "pure_avx2"
+  },
+  "method": {
+    "order": "M-old-new-new-old-M, repeated twice",
+    "reported_cell_statistic": "median of four process medians",
+    "timed_samples_per_process": 15,
+    "warmups_per_process": 5,
+    "process_medians_per_binary_per_cell": 4,
+    "batch": 1,
+    "reuse": 1,
+    "decode_metric": "one-shot decode including plan setup",
+    "raw_result_count": 324,
+    "raw_result_manifest_sha256": "63afb03b12607b8c148008126f14411f48679488821b0950f8e6a9ca40e6eff3",
+    "raw_result_local_path": "/tmp/leopard2-seed-quick-perf-2356142/results-effective-avx2",
+    "auto_control_result_count": 216,
+    "auto_control_manifest_sha256": "11ec328e2890183044bf936a805a320922cae35f4cb57509a584972a4e3998da",
+    "auto_control_local_path": "/tmp/leopard2-seed-quick-perf-2356142/results-auto-controls"
+  },
+  "full_original_loss_cells": [
+    {"K": 32, "R": 32, "shard_bytes": 64, "main_us": 1.305, "prechange_us": 1.415, "candidate_us": 1.215, "prechange_over_candidate": 1.164609, "main_over_candidate": 1.074074},
+    {"K": 32, "R": 32, "shard_bytes": 256, "main_us": 2.240, "prechange_us": 2.100, "candidate_us": 1.695, "prechange_over_candidate": 1.238938, "main_over_candidate": 1.321534},
+    {"K": 32, "R": 32, "shard_bytes": 1024, "main_us": 6.9305, "prechange_us": 5.105, "candidate_us": 3.720, "prechange_over_candidate": 1.372312, "main_over_candidate": 1.863038},
+    {"K": 95, "R": 95, "shard_bytes": 64, "main_us": 4.225, "prechange_us": 4.465, "candidate_us": 3.390, "prechange_over_candidate": 1.317109, "main_over_candidate": 1.246313},
+    {"K": 95, "R": 95, "shard_bytes": 256, "main_us": 9.740, "prechange_us": 7.745, "candidate_us": 5.450, "prechange_over_candidate": 1.421101, "main_over_candidate": 1.787156},
+    {"K": 95, "R": 95, "shard_bytes": 1024, "main_us": 33.005, "prechange_us": 22.8355, "candidate_us": 15.5805, "prechange_over_candidate": 1.465646, "main_over_candidate": 2.118353},
+    {"K": 128, "R": 128, "shard_bytes": 64, "main_us": 4.490, "prechange_us": 4.980, "candidate_us": 4.010, "prechange_over_candidate": 1.241895, "main_over_candidate": 1.119701},
+    {"K": 128, "R": 128, "shard_bytes": 256, "main_us": 10.535, "prechange_us": 8.660, "candidate_us": 6.5805, "prechange_over_candidate": 1.316009, "main_over_candidate": 1.600942},
+    {"K": 128, "R": 128, "shard_bytes": 1024, "main_us": 35.575, "prechange_us": 25.6955, "candidate_us": 18.930, "prechange_over_candidate": 1.357396, "main_over_candidate": 1.879292}
+  ],
+  "production_auto_neighbor_cells": [
+    {"loss": "R-1", "K": 32, "R": 32, "shard_bytes": 64, "main_us": 1.3100, "prechange_us": 4.5100, "candidate_us": 4.5350, "prechange_over_candidate": 0.994487, "candidate_over_main_latency": 3.461832},
+    {"loss": "R-1", "K": 32, "R": 32, "shard_bytes": 256, "main_us": 2.2555, "prechange_us": 5.2400, "candidate_us": 5.2600, "prechange_over_candidate": 0.996198, "candidate_over_main_latency": 2.332077},
+    {"loss": "R-1", "K": 32, "R": 32, "shard_bytes": 1024, "main_us": 6.9150, "prechange_us": 8.5850, "candidate_us": 8.5900, "prechange_over_candidate": 0.999418, "candidate_over_main_latency": 1.242227},
+    {"loss": "R-1", "K": 95, "R": 95, "shard_bytes": 64, "main_us": 4.2600, "prechange_us": 18.3660, "candidate_us": 18.3750, "prechange_over_candidate": 0.999510, "candidate_over_main_latency": 4.313380},
+    {"loss": "R-1", "K": 95, "R": 95, "shard_bytes": 256, "main_us": 9.7700, "prechange_us": 21.8055, "candidate_us": 21.7750, "prechange_over_candidate": 1.001401, "candidate_over_main_latency": 2.228762},
+    {"loss": "R-1", "K": 95, "R": 95, "shard_bytes": 1024, "main_us": 32.9910, "prechange_us": 37.8905, "candidate_us": 38.1055, "prechange_over_candidate": 0.994358, "candidate_over_main_latency": 1.155027},
+    {"loss": "R-1", "K": 128, "R": 128, "shard_bytes": 64, "main_us": 4.5300, "prechange_us": 19.1100, "candidate_us": 19.0850, "prechange_over_candidate": 1.001310, "candidate_over_main_latency": 4.213024},
+    {"loss": "R-1", "K": 128, "R": 128, "shard_bytes": 256, "main_us": 10.6150, "prechange_us": 23.0350, "candidate_us": 23.0355, "prechange_over_candidate": 0.999978, "candidate_over_main_latency": 2.170089},
+    {"loss": "R-1", "K": 128, "R": 128, "shard_bytes": 1024, "main_us": 35.6605, "prechange_us": 41.2755, "candidate_us": 41.4510, "prechange_over_candidate": 0.995766, "candidate_over_main_latency": 1.162379},
+    {"loss": "R/2", "K": 32, "R": 32, "shard_bytes": 64, "main_us": 1.2850, "prechange_us": 4.5850, "candidate_us": 4.5950, "prechange_over_candidate": 0.997824, "candidate_over_main_latency": 3.575875},
+    {"loss": "R/2", "K": 32, "R": 32, "shard_bytes": 256, "main_us": 2.2000, "prechange_us": 5.2550, "candidate_us": 5.2500, "prechange_over_candidate": 1.000952, "candidate_over_main_latency": 2.386364},
+    {"loss": "R/2", "K": 32, "R": 32, "shard_bytes": 1024, "main_us": 6.7850, "prechange_us": 8.5600, "candidate_us": 8.5505, "prechange_over_candidate": 1.001111, "candidate_over_main_latency": 1.260206},
+    {"loss": "R/2", "K": 95, "R": 95, "shard_bytes": 64, "main_us": 4.1505, "prechange_us": 18.9550, "candidate_us": 18.9655, "prechange_over_candidate": 0.999446, "candidate_over_main_latency": 4.569449},
+    {"loss": "R/2", "K": 95, "R": 95, "shard_bytes": 256, "main_us": 9.7100, "prechange_us": 22.5650, "candidate_us": 22.5455, "prechange_over_candidate": 1.000865, "candidate_over_main_latency": 2.321885},
+    {"loss": "R/2", "K": 95, "R": 95, "shard_bytes": 1024, "main_us": 32.9505, "prechange_us": 39.1605, "candidate_us": 39.1210, "prechange_over_candidate": 1.001010, "candidate_over_main_latency": 1.187266},
+    {"loss": "R/2", "K": 128, "R": 128, "shard_bytes": 64, "main_us": 4.4850, "prechange_us": 19.9200, "candidate_us": 19.7900, "prechange_over_candidate": 1.006569, "candidate_over_main_latency": 4.412486},
+    {"loss": "R/2", "K": 128, "R": 128, "shard_bytes": 256, "main_us": 10.5250, "prechange_us": 24.0150, "candidate_us": 23.9200, "prechange_over_candidate": 1.003972, "candidate_over_main_latency": 2.272684},
+    {"loss": "R/2", "K": 128, "R": 128, "shard_bytes": 1024, "main_us": 35.4600, "prechange_us": 43.1755, "candidate_us": 43.2300, "prechange_over_candidate": 0.998739, "candidate_over_main_latency": 1.219120}
+  ],
+  "aggregates": {
+    "full_loss_prechange_over_candidate_median": 1.317109,
+    "full_loss_main_over_candidate_median": 1.600942,
+    "forced_algorithm4_neighbor_prechange_over_candidate_min": 0.992,
+    "forced_algorithm4_neighbor_prechange_over_candidate_median": 0.999,
+    "forced_algorithm4_neighbor_prechange_over_candidate_max": 1.004,
+    "production_auto_neighbor_prechange_over_candidate_median": 0.9997,
+    "production_auto_neighbor_candidate_over_main_latency_min": 1.155027,
+    "production_auto_neighbor_candidate_over_main_latency_max": 4.569449,
+    "encode_prechange_over_candidate_min": 0.964,
+    "encode_prechange_over_candidate_median": 1.000,
+    "encode_prechange_over_candidate_max": 1.008
+  },
+  "neighbor_scope": {
+    "loss_patterns": ["R-1", "R/2"],
+    "forced_specialized_algorithm4": true,
+    "warning": "The neighbor cells attribute arithmetic-path stability only; they are not production AUTO comparisons against exact main."
+  },
+  "correctness": {
+    "all_processes_round_trip": true,
+    "all_parity_digests_match": true,
+    "all_recovered_original_digests_match": true,
+    "binary_hashes_unchanged_after_campaign": true
+  },
+  "conclusion": "Seeding an empty Algorithm 4 block-zero accumulator from the first live later block removes a zero derivative and one weighted reduction pass. The candidate materially improves every measured balanced full-loss cell and does not show a material same-path neighbor regression. Production AUTO remains 1.16x to 4.57x slower than exact main for the measured balanced R-1 and R/2 loss cells, making nonempty-block-zero high-loss decode the next concrete optimization target."
+}

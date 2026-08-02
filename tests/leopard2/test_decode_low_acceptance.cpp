@@ -1012,6 +1012,37 @@ int main()
             }
         };
 
+        // With P=32 and N=128, these patterns leave input blocks zero and one
+        // empty, seed the Algorithm 4 reduction from block two, and retain one
+        // input in block three.  Force both workspace traversals so the
+        // empty-first-block shortcut is checked beyond the common N=2P case.
+        const CaseSpec later_seed_cases[] = {
+            {
+                17, 80, LEO2_FIELD_GF8, 65,
+                std::vector<unsigned>{
+                    0, 1, 2, 3, 4, 5, 6, 7, 8,
+                    9, 10, 11, 12, 13, 14, 15, 16
+                },
+                std::vector<unsigned>{
+                    32, 33, 34, 35, 36, 37, 38, 39,
+                    40, 41, 42, 43, 44, 45, 46, 47, 64
+                },
+                "GF8 block-two seed with block-three input"
+            },
+            {
+                17, 80, LEO2_FIELD_GF16, 66,
+                std::vector<unsigned>{
+                    0, 1, 2, 3, 4, 5, 6, 7, 8,
+                    9, 10, 11, 12, 13, 14, 15, 16
+                },
+                std::vector<unsigned>{
+                    32, 33, 34, 35, 36, 37, 38, 39,
+                    40, 41, 42, 43, 44, 45, 46, 47, 64
+                },
+                "GF16 block-two seed with block-three input"
+            }
+        };
+
         leo2_context_options options;
         memset(&options, 0, sizeof(options));
         options.struct_size = sizeof(options);
@@ -1038,6 +1069,28 @@ int main()
                  ++flag_i)
                 run_profile_variant(
                     context, cases[case_i], oracle, flags[flag_i], &counts);
+        }
+
+        const uint32_t workspace_flags[] = {
+            LEO2_CODEC_FORCE_MATERIALIZED_DECODE,
+            LEO2_CODEC_FORCE_TILED_DECODE
+        };
+        for (size_t case_i = 0;
+             case_i < sizeof(later_seed_cases) / sizeof(later_seed_cases[0]);
+             ++case_i)
+        {
+            const BinaryField& field =
+                later_seed_cases[case_i].field == LEO2_FIELD_GF8
+                    ? gf8 : gf16;
+            const DirectOracle oracle(field, later_seed_cases[case_i]);
+            for (size_t flag_i = 0;
+                 flag_i < sizeof(workspace_flags) /
+                     sizeof(workspace_flags[0]);
+                 ++flag_i)
+            {
+                run_profile_variant(context, later_seed_cases[case_i], oracle,
+                    workspace_flags[flag_i], &counts);
+            }
         }
 
         test_concurrent_and_batch_plan(context, gf8, &counts);

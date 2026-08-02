@@ -453,7 +453,8 @@ void run_case(
     bool exhaustive,
     unsigned random_pattern_count,
     uint64_t seed,
-    Counts* counts)
+    Counts* counts,
+    bool include_full_original_loss = false)
 {
     leo2_codec* translated_high = create_codec(context, k, r,
         LEO2_PROFILE_LEGACY_HIGH_V1, field,
@@ -496,7 +497,11 @@ void run_case(
         all_recovery_present, bytes, false, counts);
 
     // Keep surplus parity present so deterministic virtual erasures, fixed
-    // shortening, and puncturing all participate in the translated plan.
+    // shortening, and puncturing all participate in the translated plan.  For
+    // the focused balanced full-loss cases below this is also the neighboring
+    // control: surviving originals make translated Algorithm 4's block zero
+    // nonempty, so an empty-first-block specialization must retain the ordinary
+    // accumulation path here.
     std::vector<uint8_t> surplus_original_present(k, 1);
     const unsigned surplus_losses = std::min<unsigned>(5, std::min(k, r));
     for (unsigned i = 0; i < surplus_losses; ++i)
@@ -506,10 +511,16 @@ void run_case(
         all_recovery_present, bytes, true, counts);
     tested_immutability = true;
 
-    // This is the paper's balanced full-loss corner and the production
-    // selector's existing generic-special-case boundary.
-    if (k == 128 && r == 128)
+    // With every original absent, translation places no live input in block
+    // zero and all selected recovery input in block one.  K=12,R=12 has
+    // P=T=16, so its four shortened coordinates also leave the final transform
+    // with only 12 requested outputs.  The two forced codecs exercise both the
+    // materialized-pruned and tiled-pruned kernels, while native Algorithm 5 is
+    // an independent recovery oracle.  Tail-only and prefix-plus-tail payloads
+    // are selected by the caller below.
+    if (include_full_original_loss)
     {
+        require(k <= r, "full original loss is not correctable");
         std::vector<uint8_t> none_original_present(k, 0);
         run_pattern(translated_high, translated_high_tiled, ordinary_high,
             ordinary_low, originals, high_recovery, none_original_present,
@@ -1205,6 +1216,21 @@ void run_backend_suite(leo2_context* context, Counts* counts)
     run_case(context, 4, 3, LEO2_FIELD_GF8, 193, true, 0,
         UINT64_C(0x040300c1), counts);
 
+    // Focused empty-first-block regression cells.  The one-byte case executes
+    // only the padded tail pass; 65 bytes executes one direct 64-byte pass plus
+    // a padded tail pass.  No random patterns are needed because run_case also
+    // executes the explicit nonempty-block-zero neighbor and full-loss corner.
+    run_case(context, 12, 12, LEO2_FIELD_GF8, 1, false, 0,
+        UINT64_C(0x0c0c0001), counts, true);
+    run_case(context, 12, 12, LEO2_FIELD_GF8, 65, false, 0,
+        UINT64_C(0x0c0c0041), counts, true);
+
+    // The symmetric GF16 seed path uses an even two-byte tail.  K=R=17 gives
+    // P=T=32, leaving 15 shortened/unrequested lanes while full original loss
+    // supplies a sparse live second block to both workspace implementations.
+    run_case(context, 17, 17, LEO2_FIELD_GF16, 66, false, 0,
+        UINT64_C(0x11110042), counts, true);
+
     const unsigned gf8_cases[][2] = {
             {5, 8}, {8, 5}, {9, 16}, {16, 9}, {17, 32}, {31, 17},
             {33, 64}, {63, 33}, {65, 128}, {127, 65}, {128, 127},
@@ -1220,7 +1246,8 @@ void run_backend_suite(leo2_context* context, Counts* counts)
                 (sizeof(gf8_bytes) / sizeof(gf8_bytes[0]))];
         run_case(context, gf8_cases[i][0], gf8_cases[i][1],
             LEO2_FIELD_GF8, bytes,
-            false, 8, UINT64_C(0x8f000000) + i, counts);
+            false, 8, UINT64_C(0x8f000000) + i, counts,
+            gf8_cases[i][0] == 128 && gf8_cases[i][1] == 128);
     }
 
     const unsigned gf16_cases[][2] = {

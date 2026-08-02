@@ -4461,24 +4461,120 @@ static void ReedSolomonDecodeLowPrunedPlannedImpl(
     LEO_DEBUG_ASSERT(p >= 2 && p <= n && n <= kOrder);
     LEO_DEBUG_ASSERT(input_plan_count == 0 || input_plans != NULL);
 
-    for (unsigned i = 0; i < n; ++i)
-    {
-        if (coordinate_data[i])
-            mul_mem(
-                ops, work[i], coordinate_data[i], locator_logs[i], buffer_bytes);
-        else
-            memset(work[i], 0, buffer_bytes);
-    }
-
     const unsigned block_count = n / p;
-    unsigned input_plan_index = 0;
-    for (unsigned block = 0; block < block_count; ++block)
+    unsigned seed_block = 0;
+    if (block_input_counts[0] == 0)
     {
-        const unsigned input_count = block_input_counts[block];
-        LEO_DEBUG_ASSERT(input_count <= p);
-        if (input_count != 0)
+        seed_block = 1;
+        while (seed_block < block_count &&
+               block_input_counts[seed_block] == 0)
+            ++seed_block;
+    }
+    const bool seed_from_later = seed_block > 0 && seed_block < block_count;
+    unsigned input_plan_index = 0;
+    if (!seed_from_later)
+    {
+        // Preserve the ordinary block-zero-live path without seed-specific
+        // branches in its byte and transform loops.
+        for (unsigned i = 0; i < n; ++i)
         {
+            if (coordinate_data[i])
+                mul_mem(ops, work[i], coordinate_data[i], locator_logs[i],
+                    buffer_bytes);
+            else
+                memset(work[i], 0, buffer_bytes);
+        }
+
+        for (unsigned block = 0; block < block_count; ++block)
+        {
+            const unsigned input_count = block_input_counts[block];
+            LEO_DEBUG_ASSERT(input_count <= p);
+            if (input_count != 0)
+            {
+                const unsigned offset = block * p;
+                const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+                if (input_plan_index < input_plan_count && input_plans &&
+                    input_plans[input_plan_index].block == block)
+                {
+                    pruned = &input_plans[input_plan_index].plan;
+                    ++input_plan_index;
+                }
+                if (pruned)
+                {
+                    LEO_DEBUG_ASSERT(pruned->size == p &&
+                        pruned->shift == offset && pruned->inverse);
+                    const bool executed =
+                        leopard2_internal::ExecutePrunedTransformPlan(
+                            ops, buffer_bytes, *pruned, work + offset);
+                    LEO_DEBUG_ASSERT(executed);
+                    (void)executed;
+                }
+                else
+                    IFFT_DIT_Decoder(
+                        ops, buffer_bytes, input_count, work + offset, p,
+                        FFTSkewStorage + offset);
+            }
+        }
+
+        AddFormalDerivative(ops, buffer_bytes, p, work);
+
+        // The transformed nonzero block is dead after its weighted
+        // contribution.
+        for (unsigned block = 1; block < block_count; ++block)
+        {
+            if (block_input_counts[block] == 0)
+                continue;
             const unsigned offset = block * p;
+            for (unsigned i = 0; i < p; ++i)
+                muladd_mem(ops, work[i], work[offset + i],
+                    block_factors[block - 1], buffer_bytes);
+        }
+    }
+    else
+    {
+        const unsigned seed_offset = seed_block * p;
+
+        // Block zero is empty.  Seed its accumulator directly from the first
+        // live later block.  Folding that block's scalar into the input
+        // multiplication is exact because scalar multiplication commutes with
+        // the inverse LCH transform.  Its ordinary materialized slot is dead.
+        for (unsigned i = 0; i < p; ++i)
+        {
+            const unsigned coordinate = seed_offset + i;
+            if (coordinate_data[coordinate])
+                mul_mem(ops, work[i], coordinate_data[coordinate],
+                    AddMod(locator_logs[coordinate],
+                        block_factors[seed_block - 1]),
+                    buffer_bytes);
+            else
+                memset(work[i], 0, buffer_bytes);
+        }
+        for (unsigned block = 1; block < block_count; ++block)
+        {
+            if (block == seed_block || block_input_counts[block] == 0)
+                continue;
+            const unsigned offset = block * p;
+            for (unsigned i = 0; i < p; ++i)
+            {
+                const unsigned coordinate = offset + i;
+                if (coordinate_data[coordinate])
+                    mul_mem(ops, work[coordinate],
+                        coordinate_data[coordinate], locator_logs[coordinate],
+                        buffer_bytes);
+                else
+                    memset(work[coordinate], 0, buffer_bytes);
+            }
+        }
+
+        for (unsigned block = 1; block < block_count; ++block)
+        {
+            const unsigned input_count = block_input_counts[block];
+            LEO_DEBUG_ASSERT(input_count <= p);
+            if (input_count == 0)
+                continue;
+            const unsigned offset = block * p;
+            void** const block_work =
+                block == seed_block ? work : work + offset;
             const leopard2_internal::PrunedTransformPlan* pruned = NULL;
             if (input_plan_index < input_plan_count && input_plans &&
                 input_plans[input_plan_index].block == block)
@@ -4492,30 +4588,28 @@ static void ReedSolomonDecodeLowPrunedPlannedImpl(
                     pruned->shift == offset && pruned->inverse);
                 const bool executed =
                     leopard2_internal::ExecutePrunedTransformPlan(
-                        ops, buffer_bytes, *pruned, work + offset);
+                        ops, buffer_bytes, *pruned, block_work);
                 LEO_DEBUG_ASSERT(executed);
                 (void)executed;
             }
             else
-                IFFT_DIT_Decoder(
-                    ops, buffer_bytes, input_count, work + offset, p,
+                IFFT_DIT_Decoder(ops, buffer_bytes, input_count, block_work, p,
                     FFTSkewStorage + offset);
+        }
+
+        // Algorithm 4 applies the derivative only to block zero.  That term is
+        // zero here, so the weighted later-block seed receives no derivative.
+        for (unsigned block = 1; block < block_count; ++block)
+        {
+            if (block == seed_block || block_input_counts[block] == 0)
+                continue;
+            const unsigned offset = block * p;
+            for (unsigned i = 0; i < p; ++i)
+                muladd_mem(ops, work[i], work[offset + i],
+                    block_factors[block - 1], buffer_bytes);
         }
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
-
-    AddFormalDerivative(ops, buffer_bytes, p, work);
-
-    // The transformed nonzero block is dead after its weighted contribution.
-    for (unsigned block = 1; block < block_count; ++block)
-    {
-        if (block_input_counts[block] == 0)
-            continue;
-        const unsigned offset = block * p;
-        for (unsigned i = 0; i < p; ++i)
-            muladd_mem(ops, work[i], work[offset + i],
-                block_factors[block - 1], buffer_bytes);
-    }
 
     if (output_plan && output_plan->size != 0)
     {
@@ -4669,85 +4763,152 @@ static void ReedSolomonDecodeLowTiledPrunedPlannedImpl(
 
     const unsigned first_input_count = block_input_counts[0];
     LEO_DEBUG_ASSERT(first_input_count <= p);
-    for (unsigned i = 0; i < p; ++i)
+    unsigned seed_block = 0;
+    if (first_input_count == 0)
     {
-        if (coordinate_data[i])
-            mul_mem(
-                ops, accumulator[i], coordinate_data[i], locator_logs[i],
-                buffer_bytes);
-        else
-            memset(accumulator[i], 0, buffer_bytes);
+        seed_block = 1;
+        while (seed_block < block_count &&
+               block_input_counts[seed_block] == 0)
+            ++seed_block;
     }
+    const bool seed_from_later = seed_block > 0 && seed_block < block_count;
+
     unsigned input_plan_index = 0;
-    if (first_input_count != 0)
+    if (!seed_from_later)
     {
-        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
-        if (input_plan_index < input_plan_count && input_plans &&
-            input_plans[input_plan_index].block == 0)
-        {
-            pruned = &input_plans[input_plan_index].plan;
-            ++input_plan_index;
-        }
-        if (pruned)
-        {
-            LEO_DEBUG_ASSERT(pruned->size == p &&
-                pruned->shift == 0 && pruned->inverse);
-            const bool executed =
-                leopard2_internal::ExecutePrunedTransformPlan(
-                    ops, buffer_bytes, *pruned, accumulator);
-            LEO_DEBUG_ASSERT(executed);
-            (void)executed;
-        }
-        else
-            IFFT_DIT_Decoder(
-                ops, buffer_bytes, first_input_count, accumulator, p,
-                FFTSkewStorage);
-    }
-
-    AddFormalDerivative(ops, buffer_bytes, p, accumulator);
-
-    // Reuse the tile as an immutable multiply-add source for one memory pass.
-    for (unsigned block = 1; block < block_count; ++block)
-    {
-        const unsigned input_count = block_input_counts[block];
-        LEO_DEBUG_ASSERT(input_count <= p);
-        if (input_count == 0)
-            continue;
-        const unsigned offset = block * p;
         for (unsigned i = 0; i < p; ++i)
         {
-            const unsigned coordinate = offset + i;
-            if (coordinate_data[coordinate])
+            if (coordinate_data[i])
                 mul_mem(
-                    ops, tile[i], coordinate_data[coordinate],
-                    locator_logs[coordinate], buffer_bytes);
+                    ops, accumulator[i], coordinate_data[i], locator_logs[i],
+                    buffer_bytes);
             else
-                memset(tile[i], 0, buffer_bytes);
+                memset(accumulator[i], 0, buffer_bytes);
         }
-        const leopard2_internal::PrunedTransformPlan* pruned = NULL;
-        if (input_plan_index < input_plan_count && input_plans &&
-            input_plans[input_plan_index].block == block)
+        if (first_input_count != 0)
         {
-            pruned = &input_plans[input_plan_index].plan;
-            ++input_plan_index;
+            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+            if (input_plan_index < input_plan_count && input_plans &&
+                input_plans[input_plan_index].block == 0)
+            {
+                pruned = &input_plans[input_plan_index].plan;
+                ++input_plan_index;
+            }
+            if (pruned)
+            {
+                LEO_DEBUG_ASSERT(pruned->size == p &&
+                    pruned->shift == 0 && pruned->inverse);
+                const bool executed =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, accumulator);
+                LEO_DEBUG_ASSERT(executed);
+                (void)executed;
+            }
+            else
+                IFFT_DIT_Decoder(
+                    ops, buffer_bytes, first_input_count, accumulator, p,
+                    FFTSkewStorage);
         }
-        if (pruned)
+
+        AddFormalDerivative(ops, buffer_bytes, p, accumulator);
+
+        // Preserve the ordinary block-zero-live reduction without
+        // seed-specific branches in its byte loop.
+        for (unsigned block = 1; block < block_count; ++block)
         {
-            LEO_DEBUG_ASSERT(pruned->size == p &&
-                pruned->shift == offset && pruned->inverse);
-            const bool executed =
-                leopard2_internal::ExecutePrunedTransformPlan(
-                    ops, buffer_bytes, *pruned, tile);
-            LEO_DEBUG_ASSERT(executed);
-            (void)executed;
+            const unsigned input_count = block_input_counts[block];
+            LEO_DEBUG_ASSERT(input_count <= p);
+            if (input_count == 0)
+                continue;
+            const unsigned offset = block * p;
+            for (unsigned i = 0; i < p; ++i)
+            {
+                const unsigned coordinate = offset + i;
+                if (coordinate_data[coordinate])
+                    mul_mem(ops, tile[i], coordinate_data[coordinate],
+                        locator_logs[coordinate], buffer_bytes);
+                else
+                    memset(tile[i], 0, buffer_bytes);
+            }
+            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+            if (input_plan_index < input_plan_count && input_plans &&
+                input_plans[input_plan_index].block == block)
+            {
+                pruned = &input_plans[input_plan_index].plan;
+                ++input_plan_index;
+            }
+            if (pruned)
+            {
+                LEO_DEBUG_ASSERT(pruned->size == p &&
+                    pruned->shift == offset && pruned->inverse);
+                const bool executed =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, tile);
+                LEO_DEBUG_ASSERT(executed);
+                (void)executed;
+            }
+            else
+                IFFT_DIT_Decoder(ops, buffer_bytes, input_count, tile, p,
+                    FFTSkewStorage + offset);
+            for (unsigned i = 0; i < p; ++i)
+                muladd_mem(ops, accumulator[i], tile[i],
+                    block_factors[block - 1], buffer_bytes);
         }
-        else
-            IFFT_DIT_Decoder(
-                ops, buffer_bytes, input_count, tile, p,
-                FFTSkewStorage + offset);
-        for (unsigned i = 0; i < p; ++i)
-            muladd_mem(ops, accumulator[i], tile[i],
-                block_factors[block - 1], buffer_bytes);
+    }
+    else
+    {
+        // Block zero's derivative term is zero.  Transform the first later
+        // live block directly in the accumulator with its scalar folded into
+        // the input multiplication; use the ordinary tile for later blocks.
+        for (unsigned block = 1; block < block_count; ++block)
+        {
+            const unsigned input_count = block_input_counts[block];
+            LEO_DEBUG_ASSERT(input_count <= p);
+            if (input_count == 0)
+                continue;
+            const unsigned offset = block * p;
+            const bool seed_accumulator = block == seed_block;
+            void** const block_work = seed_accumulator ? accumulator : tile;
+            for (unsigned i = 0; i < p; ++i)
+            {
+                const unsigned coordinate = offset + i;
+                if (coordinate_data[coordinate])
+                {
+                    ffe_t multiplier_log = locator_logs[coordinate];
+                    if (seed_accumulator)
+                        multiplier_log = AddMod(
+                            multiplier_log, block_factors[block - 1]);
+                    mul_mem(ops, block_work[i], coordinate_data[coordinate],
+                        multiplier_log, buffer_bytes);
+                }
+                else
+                    memset(block_work[i], 0, buffer_bytes);
+            }
+            const leopard2_internal::PrunedTransformPlan* pruned = NULL;
+            if (input_plan_index < input_plan_count && input_plans &&
+                input_plans[input_plan_index].block == block)
+            {
+                pruned = &input_plans[input_plan_index].plan;
+                ++input_plan_index;
+            }
+            if (pruned)
+            {
+                LEO_DEBUG_ASSERT(pruned->size == p &&
+                    pruned->shift == offset && pruned->inverse);
+                const bool executed =
+                    leopard2_internal::ExecutePrunedTransformPlan(
+                        ops, buffer_bytes, *pruned, block_work);
+                LEO_DEBUG_ASSERT(executed);
+                (void)executed;
+            }
+            else
+                IFFT_DIT_Decoder(ops, buffer_bytes, input_count, block_work, p,
+                    FFTSkewStorage + offset);
+            if (!seed_accumulator)
+                for (unsigned i = 0; i < p; ++i)
+                    muladd_mem(ops, accumulator[i], tile[i],
+                        block_factors[block - 1], buffer_bytes);
+        }
     }
     LEO_DEBUG_ASSERT(input_plan_index == input_plan_count);
 
