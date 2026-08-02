@@ -1,0 +1,236 @@
+{
+  "schema": "leopard2-gf8-dense-full-parity-holdout-checkpoint/v1",
+  "evidence_class": "isolated_same_text_stage1_nonpromotion",
+  "production_calibration_changed": false,
+  "production_recommendation": {
+    "promote": false,
+    "reason": "Passing selected cells are almost entirely K<R explicit legacy-high cases that AUTO routes to LOW and exact Leopard main does not support. The sole selected K=R cell (K16/R16/B256) is 1.9% slower than exact main at the point estimate, K32/R32/B64 would regress the promoted balanced path, and the default-layout exact-parent integration gate has not run. Retain the validator and terminal as experimental infrastructure for exact T16/T32 kernels rather than paying production text and selector cost now."
+  },
+  "source": {
+    "candidate_commit": "b019f5a766d268f4fae9e9ac0f0247fb46941bd8",
+    "candidate_tree": "21bd984324b8e5d462893cbedf6870a7d5c06659",
+    "runner_commit": "d9d55801e7f88ee53ab3e507b1e7837ccec8a22b",
+    "runner_tree": "c492c84ca4e8b62c729dc27f97a493e3fc5a6df3",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "build": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "lock_holder_pid": 2583770,
+    "parallel_jobs": 2,
+    "coordinator_virtual_memory_limit_bytes": 4294967296,
+    "candidate_max_rss_kib": 309832,
+    "candidate_elapsed_seconds": 7.08,
+    "control_max_rss_kib": 308500,
+    "control_elapsed_seconds": 7.12,
+    "target": "bench_leopard2",
+    "configuration": "Release GCC 13.3.0"
+  },
+  "campaign": {
+    "artifact_directory": "/tmp/leopard2-dense-holdout-b019f5a-20260802-v4",
+    "cpu": 7,
+    "reserved_sibling": 23,
+    "canonical_lock_mode": "inherited_umbrella",
+    "rounds_per_cell": 9,
+    "iterations": 15,
+    "warmup": 64,
+    "reuse": 8192,
+    "cell_count": 24,
+    "selected_cell_count": 17,
+    "adjacent_cell_count": 7,
+    "process_count": 936,
+    "benchmark_address_space_limit_bytes": 201326592,
+    "runner_address_space_limit_bytes": 268435456,
+    "all_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "runner_summary_status": "rejected",
+    "runner_summary_status_explanation": "The generic all-cells gate rejects forced-candidate K32/R32/B64 even though the proposed production interval explicitly excludes K32; K40/R64/B256 independently fails the selected target gate.",
+    "credible_forced_candidate_neighbor_regressions": [
+      "adjacent-k32-r32-b64-q1"
+    ]
+  },
+  "gates": {
+    "selected_interval_lower95_minimum": 1.05,
+    "forced_candidate_neighbor_floor": 0.9803921568627451,
+    "exact_main": "reported only at legal K=R cells and informational for this same-source stage",
+    "remaining_required_gate": "calibrated default production versus exact parent/current-main tree; not satisfied by same-text mode1/mode2 evidence"
+  },
+  "provenance": {
+    "binary_sha256": {
+      "candidate": "59f8286ccb67d66f0b538420b8d030a783794ad0214a330cd14bcc1b3375196b",
+      "control": "25c1a2d0d5548ef14e2c780b1b834b7e03a3c8507eb263c38463d70a6f85e054",
+      "main": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    },
+    "raw_sha256": "4f7ff6e906e319b2948894ffd38855b31c329080dfa0a3494a9b54cef566834d",
+    "summary_sha256": "0914fcdd478374274ae74e6eac78c85ded9c6ead9e80371a0050f98f8d524858",
+    "frozen_sha256_manifest": "28db8f12e9599b5e07db169e6b809babbe07c1cbdb336c128759326df452f2de",
+    "pre_post_frozen_manifest_identical": true,
+    "candidate_control_executable_sections_sha256": "2f58a7dd171bb29798464df1f180f1b2939c49f3d2d478d2b3c69261846f5e4b",
+    "candidate_control_normalized_full_file_sha256": "4110a874b650562cc76f1d77545ff2037401c337157390dba800a5c4f2fe5a26",
+    "candidate_control_full_file_difference_count": 21,
+    "candidate_mode": 1,
+    "control_mode": 2,
+    "balanced_auxiliary_mode_candidate": 1,
+    "balanced_auxiliary_mode_control": 1,
+    "runner_sha256": "3624087339cca716253bc4b3b84e6b1d6dd7e9dd714ce05f4eda9abd770a19eb",
+    "runner_dependency_sha256": {
+      "run_k5r5_b64_terminal_abba.py": "dcd028b24ee9466f64846168db6668c8bc61e3b975ab185a74f21a4a49173279",
+      "run_t8_two_block_abba.py": "a3e44a6d4d02f7978c5eb685ac790d8521b64bfdd2b98db4c3af3c88995ba309",
+      "run_abba.py": "8de0757db5036591a375db3428215de4ae4eb263675139a81b2ba89349556e41",
+      "git_capture.py": "9b4e6d2c72894d64b9df651101864a24e6ab28f836a2a293200642073ac564ac",
+      "balanced_evidence_common.py": "e11c29f7478c6e3426763c13329404224411d120a0f05ef97fc85505b6c2c589",
+      "leopard2_build_provenance.py": "4e3beb25fdc3fe16b936040cb323b380f17abca06de42daeda8bbd7cdf9919c1"
+    }
+  },
+  "discarded_attempts": [
+    {
+      "artifact": "/tmp/leopard2-dense-holdout-b019f5a-20260802-v1",
+      "retained": false,
+      "timing_started": false,
+      "reason": "sealed runner omitted git_capture.py and failed import",
+      "failure_log_sha256": "45c6378f14d8f065ea9f632431e02df2b1130d13ae6ae26f90eaa5e658b51d8c"
+    },
+    {
+      "artifact": "/tmp/leopard2-dense-holdout-b019f5a-20260802-v2",
+      "retained": false,
+      "timing_started": false,
+      "reason": "sealed top-level runner mode was 0444 rather than executable",
+      "failure_sha256": "091317b8b16766c578d3428bfad2f5e96280fbeb140171c98e5eff65e4482d5d"
+    },
+    {
+      "artifact": "/tmp/leopard2-dense-holdout-b019f5a-20260802-v3",
+      "retained": false,
+      "timing_started": true,
+      "reason": "strict isolation rejected final cell K39/R128/B64 round 6; no partial cells retained",
+      "failure_sha256": "28be9917ce203b8b8a91c6e243623f34c2f1701d536a76f562d13cab4fc90e1a"
+    }
+  ],
+  "intervals": [
+    {
+      "R": 16,
+      "bytes": 64,
+      "minimum_K": 1,
+      "maximum_K": 15,
+      "stage1_status": "target_gate_passed_dispatch_exclusion_required",
+      "minimum_target_lower95": 1.2482007884879092,
+      "targets": [
+        [1, 1.3007802841730005, 1.2863049109034068, 1.3154185553912205],
+        [8, 1.297185370730022, 1.2787107724458107, 1.3159268869045944],
+        [15, 1.2644039447223612, 1.2482007884879092, 1.2808174375263615]
+      ],
+      "adjacent": {
+        "K": 16,
+        "control_over_candidate": [1.2694267316040722, 1.2595716782607667, 1.2793588921720602],
+        "main_over_candidate": [0.8924448896835205, 0.8778039265871138, 0.9073300505943797],
+        "assessment": "excluded; candidate is materially slower than exact main"
+      }
+    },
+    {
+      "R": 16,
+      "bytes": 256,
+      "minimum_K": 1,
+      "maximum_K": 16,
+      "stage1_status": "target_gate_passed_but_no_main_win",
+      "minimum_target_lower95": 1.1184287829576147,
+      "targets": [
+        [1, 1.1534399296342916, 1.1433482746233166, 1.1636206576802475],
+        [8, 1.1470175379144674, 1.124549425648666, 1.1699345553660034],
+        [16, 1.1264352924557686, 1.1184287829576147, 1.134499118249176]
+      ],
+      "exact_main_at_K16": [0.9809204555888549, 0.9693132530577823, 0.9926666504943457]
+    },
+    {
+      "R": 32,
+      "bytes": 64,
+      "minimum_K": 1,
+      "maximum_K": 31,
+      "stage1_status": "target_gate_passed_dispatch_exclusion_required",
+      "minimum_target_lower95": 1.1597510226894614,
+      "targets": [
+        [1, 1.2044227730088328, 1.1907499988237966, 1.2182525446778913],
+        [16, 1.184569222973835, 1.174724460854432, 1.1944964889862075],
+        [31, 1.1704179393325544, 1.1597510226894614, 1.1811829659220452]
+      ],
+      "adjacent": {
+        "K": 32,
+        "control_over_candidate": [0.9193052511427782, 0.9054208048299884, 0.9334026126529925],
+        "main_over_candidate": [1.0383321046569718, 1.0267218065546886, 1.0500736934566601],
+        "assessment": "forced candidate regresses the promoted balanced path; K32 must remain excluded"
+      }
+    },
+    {
+      "R": 32,
+      "bytes": 256,
+      "minimum_K": 1,
+      "maximum_K": 1,
+      "stage1_status": "target_gate_passed",
+      "minimum_target_lower95": 1.0760251321831975,
+      "targets": [
+        [1, 1.0827611740564604, 1.0760251321831975, 1.089539384331521]
+      ],
+      "adjacent_K2": [1.0895241267977775, 1.0820892747153108, 1.0970100624893142]
+    },
+    {
+      "R": 64,
+      "bytes": 64,
+      "minimum_K": 1,
+      "maximum_K": 63,
+      "stage1_status": "target_gate_passed_dispatch_exclusion_required",
+      "minimum_target_lower95": 1.1161430850940977,
+      "targets": [
+        [1, 1.1497211596948749, 1.1349649739103498, 1.16466919723158],
+        [32, 1.133896784467371, 1.1166109352904905, 1.1514502296101536],
+        [63, 1.1281790153220215, 1.1161430850940977, 1.1403447350172513]
+      ],
+      "adjacent": {
+        "K": 64,
+        "control_over_candidate": [0.9852820085625174, 0.9715690702401842, 0.9991884942951089],
+        "main_over_candidate": [1.0662724496539053, 1.0545316018862974, 1.0781440166015317],
+        "assessment": "point regression versus promoted current is under 2 percent, but K64 remains excluded"
+      }
+    },
+    {
+      "R": 64,
+      "bytes": 256,
+      "minimum_K": 40,
+      "maximum_K": 40,
+      "stage1_status": "rejected_target_lower95_below_1_05",
+      "minimum_target_lower95": 1.042741509668235,
+      "targets": [
+        [40, 1.0472850548031918, 1.042741509668235, 1.051848397560284]
+      ],
+      "adjacent_K39": [1.0459752099378445, 1.0416932728781696, 1.0502747481335355],
+      "adjacent_K41": [1.045130370040867, 1.0424123112241348, 1.0478555161143894]
+    },
+    {
+      "R": 128,
+      "bytes": 64,
+      "minimum_K": 1,
+      "maximum_K": 38,
+      "stage1_status": "target_gate_passed",
+      "minimum_target_lower95": 1.0933954532881143,
+      "targets": [
+        [1, 1.1100880537480504, 1.1024361600978883, 1.1177930583887192],
+        [19, 1.0986820458099915, 1.093571416792573, 1.103816558524947],
+        [38, 1.1003347851532075, 1.0933954532881143, 1.1073181581075415]
+      ],
+      "adjacent_K39": [1.1004845098093237, 1.0912628626647127, 1.1097840838943347]
+    },
+    {
+      "R": 128,
+      "bytes": 256,
+      "minimum_K": 0,
+      "maximum_K": 0,
+      "stage1_status": "no_interval_proposed",
+      "minimum_target_lower95": null,
+      "targets": []
+    }
+  ],
+  "target_tuple_columns": ["K", "center", "lower95", "upper95"],
+  "ratio_meaning": "baseline encode time divided by candidate encode time; values above one favor the candidate",
+  "limitations": [
+    "This qualifies arithmetic and validation cost within the c377-derived text only.",
+    "It does not prove that adding the branch or body has no default-production text-layout regression versus exact parent 068659e or current mainline.",
+    "K<R cells cannot be compared with Leopard main and are not selected by the current AUTO policy, which uses the LOW profile.",
+    "No production calibration table was changed."
+  ]
+}
