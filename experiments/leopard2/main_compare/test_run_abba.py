@@ -404,7 +404,7 @@ def candidate_result(
         "skip_legacy": True,
         "retain_samples": True,
     })
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
         parameters["measure_one_shot_decode"] = True
     flags = runner.candidate_mode_flags(
         runner.candidate_mode_for_campaign(campaign))
@@ -430,13 +430,14 @@ def candidate_result(
         plan["median_us"] / CAMPAIGN["reuse"]
     result = {
         "schema": ("leopard2-benchmark-v9"
-                   if raw_schema == runner.RAW_SCHEMA
+                   if raw_schema in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA)
                    else "leopard2-benchmark-v2"),
         "build": ({
             "compiler": "fixture",
             "one_shot_equal_rounded_direct_enabled": True,
             "cauchy_log_reuse_enabled": True,
-        } if raw_schema == runner.RAW_SCHEMA else {"compiler": "fixture"}),
+        } if raw_schema in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA)
+        else {"compiler": "fixture"}),
         "parameters": parameters,
         "resolved": {
             "profile": "legacy_high_v1", "field": "gf8", "backend": "avx2",
@@ -466,7 +467,7 @@ def candidate_result(
             "decode_including_setup": None,
         },
     }
-    if raw_schema == runner.RAW_SCHEMA:
+    if raw_schema in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
         result["memory"] = {
             "one_shot_decode_scratch_bytes_per_stripe": 128,
             "one_shot_decode_scratch_bytes_batch": 128,
@@ -584,11 +585,13 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
             "LEO2_BUILD_BENCHMARKS": "ON",
             "LEO2_BUILD_TESTS": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
@@ -682,7 +685,7 @@ def complete_build_fixture(
         raise ValueError("multi-config fixture requires the current schema")
     baseline = role == "baseline"
     specification = copy.deepcopy(SPECIFICATION)
-    if raw_schema != runner.RAW_SCHEMA:
+    if raw_schema not in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     build_dir = specification[f"{role}_build_dir"]
     source_root = specification[f"{role}_source_root"]
@@ -701,7 +704,7 @@ def complete_build_fixture(
             "CMAKE_CXX_FLAGS_RELEASE": "-O3 -DNDEBUG",
             "LEO_MAIN_HAS_MARCH_NATIVE": "1",
         }
-        if raw_schema == runner.RAW_SCHEMA:
+        if raw_schema in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
             cache.update({
                 "LEO_MAIN_PURE_AVX2": "ON",
                 "LEO_MAIN_HAS_MARCH_X86_64": "1",
@@ -953,6 +956,7 @@ def complete_build_fixture(
     if raw_schema in (
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
+            runner.RAW_SCHEMA_V10,
             runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
@@ -1069,6 +1073,7 @@ def complete_runtime_fixture(
     elif raw_schema in (
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
+            runner.RAW_SCHEMA_V10,
             runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
@@ -1293,7 +1298,7 @@ def cmake_fixture_identity(
                 SPECIFICATION["candidate_source_root"] + "/" +
                 runner.EVIDENCE_HELPER_RELATIVE_PATH, "file", "6")
         specification = copy.deepcopy(SPECIFICATION)
-        if raw_schema != runner.RAW_SCHEMA:
+        if raw_schema not in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
             specification.pop("baseline_pure_avx2", None)
         specification.update({
             "baseline_executable": baseline_executable["path"],
@@ -1353,7 +1358,7 @@ def cmake_fixture_identity(
         "candidate_build": build,
     }
     specification = copy.deepcopy(SPECIFICATION)
-    if raw_schema != runner.RAW_SCHEMA:
+    if raw_schema not in (runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     specification["candidate_archive"] = archive_path
     return identity, specification
@@ -1485,7 +1490,8 @@ def write_complete_evidence_bundle(
         stderr_path.write_bytes(b"")
         if manifest_schema in (
                 runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
-                runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
+                runner.MANIFEST_SCHEMA):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1522,12 +1528,13 @@ def write_complete_evidence_bundle(
     if manifest_schema in (
         runner.MANIFEST_SCHEMA_V5, runner.MANIFEST_SCHEMA_V6,
         runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
-        runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
+        runner.MANIFEST_SCHEMA,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
             runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA_V9,
-            runner.MANIFEST_SCHEMA):
+            runner.MANIFEST_SCHEMA_V10, runner.MANIFEST_SCHEMA):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1609,6 +1616,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V7: runner.FAILURE_SCHEMA_V7,
         runner.RAW_SCHEMA_V8: runner.FAILURE_SCHEMA_V8,
         runner.RAW_SCHEMA_V9: runner.FAILURE_SCHEMA_V9,
+        runner.RAW_SCHEMA_V10: runner.FAILURE_SCHEMA_V10,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1631,6 +1639,8 @@ def synthetic_failure(raw_schema: str) -> dict:
     }
     if raw_schema == runner.RAW_SCHEMA_V9:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V9
+    elif raw_schema == runner.RAW_SCHEMA_V10:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V10
     elif raw_schema == runner.RAW_SCHEMA:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
     if raw_schema in runner.SUPERVISION_SCHEMAS:
@@ -2172,6 +2182,63 @@ class MainCompareRunnerTests(unittest.TestCase):
         with self.assertRaises(runner.EvidenceError):
             runner.validate_failure(
                 resign(current_failure), Path("/unused"), check_files=False)
+
+    def test_v10_configuration_contract_remains_historical(self) -> None:
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V10)
+        build = historical["identities_initial"]["candidate_build"]
+        compile_identity = build["validated_compile_commands"]
+        configuration = compile_identity["effective_build_configuration"]
+        self.assertEqual(
+            compile_identity["schema"], runner.COMPILE_COMMANDS_SCHEMA_V6)
+        self.assertEqual(
+            configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V4)
+        self.assertEqual(
+            configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V4)
+        self.assertNotIn(
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+            configuration["entries"])
+        self.assertNotIn(
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
+            configuration["entries"])
+        runner.validate_raw(
+            historical, None, check_files=False,
+            check_current_inputs=False)
+
+        current = synthetic_raw()
+        current_configuration = current["identities_initial"][
+            "candidate_build"]["validated_compile_commands"][
+                "effective_build_configuration"]
+        self.assertEqual(
+            current_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+        self.assertEqual(
+            current_configuration["entries"][
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"], "OFF")
+        self.assertEqual(
+            current_configuration["entries"][
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"], "OFF")
+
+        upgraded = copy.deepcopy(historical)
+        upgraded["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(upgraded)
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.RAW_SCHEMA_V10
+        self.assert_rejected(downgraded)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), historical, runner.MANIFEST_SCHEMA_V10)
+            manifest, raw, _, _ = runner.verified_campaign_bundle(
+                manifest_path, no_current_input_check=True)
+            self.assertEqual(
+                (manifest["schema"], raw["schema"]),
+                (runner.MANIFEST_SCHEMA_V10, runner.RAW_SCHEMA_V10))
+
+        historical_failure = synthetic_failure(runner.RAW_SCHEMA_V10)
+        runner.validate_failure(
+            historical_failure, Path("/unused"), check_files=False)
 
     def test_v8_exact_shapes_and_timestamps_fail_closed(self) -> None:
         mutations = []
@@ -3776,9 +3843,11 @@ class MainCompareRunnerTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=OFF",
                 "-DLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=OFF",
                 "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=OFF",
+                "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=OFF",
                 "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON",
                 "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=ON",
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=OFF",
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON",
                 "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=ON",
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=ON",

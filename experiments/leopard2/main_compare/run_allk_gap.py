@@ -50,6 +50,7 @@ from leopard2_build_provenance import (
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
     CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
     LEGACY_REPLAY_RECIPE_SCHEMA,
@@ -102,10 +103,12 @@ MAX_SUPERVISOR_CONTROL_BYTES = 64 * 1024
 BOUNDED_SUPERVISOR_MODE = "--internal-bounded-process-supervisor"
 RUN_CONTRACT_SCHEMA_V4 = "leopard2-all-k-gap-contract/v4"
 RUN_CONTRACT_SCHEMA_V5 = "leopard2-all-k-gap-contract/v5"
-RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v6"
+RUN_CONTRACT_SCHEMA_V6 = "leopard2-all-k-gap-contract/v6"
+RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v7"
 MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-all-k-gap-manifest/v5"
-MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v6"
+MANIFEST_SCHEMA_V6 = "leopard2-all-k-gap-manifest/v6"
+MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v7"
 ALL_K_EVIDENCE_CONTRACTS = {
     RUN_CONTRACT_SCHEMA_V4: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
@@ -128,10 +131,18 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
     },
+    RUN_CONTRACT_SCHEMA_V6: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
 }
 MANIFEST_TO_CONTRACT_SCHEMA = {
     MANIFEST_SCHEMA_V4: RUN_CONTRACT_SCHEMA_V4,
     MANIFEST_SCHEMA_V5: RUN_CONTRACT_SCHEMA_V5,
+    MANIFEST_SCHEMA_V6: RUN_CONTRACT_SCHEMA_V6,
     MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
 }
 RUN_CONTRACT_KEYS = frozenset((
@@ -166,7 +177,7 @@ ALL_K_BUILD_CACHE_KEYS_V3 = frozenset((
     *ALL_K_BUILD_CACHE_KEYS_V2,
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
 ))
-ALL_K_BUILD_CACHE_KEYS = frozenset((
+ALL_K_BUILD_CACHE_KEYS_V4 = frozenset((
     *ALL_K_BUILD_CACHE_KEYS_V3,
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
@@ -174,6 +185,11 @@ ALL_K_BUILD_CACHE_KEYS = frozenset((
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+))
+ALL_K_BUILD_CACHE_KEYS = frozenset((
+    *ALL_K_BUILD_CACHE_KEYS_V4,
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
 ))
 
 
@@ -1491,6 +1507,7 @@ def validate_run_contract_evidence(
     expected_cache_keys = {
         RUN_CONTRACT_SCHEMA_V4: ALL_K_BUILD_CACHE_KEYS_V2,
         RUN_CONTRACT_SCHEMA_V5: ALL_K_BUILD_CACHE_KEYS_V3,
+        RUN_CONTRACT_SCHEMA_V6: ALL_K_BUILD_CACHE_KEYS_V4,
         RUN_CONTRACT_SCHEMA: ALL_K_BUILD_CACHE_KEYS,
     }[contract_schema]
     require(
@@ -1522,10 +1539,22 @@ def validate_run_contract_evidence(
             cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING") == "ON" and
             cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING") == "ON" and
             cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") == "OFF" and
+            cache.get(
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") == "OFF" and
             cache.get(
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") == "ON",
             "current all-K run contract does not bind the production "
             "selector tuple")
+    elif contract_schema == RUN_CONTRACT_SCHEMA_V6:
+        require(
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "ON" and
+            cache.get("LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") ==
+                "ON" and
+            cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED" not in cache and
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED" not in cache,
+            "v6 all-K run contract selector tuple differs")
     elif contract_schema == RUN_CONTRACT_SCHEMA_V5:
         require(
             cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "OFF" and

@@ -2289,6 +2289,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
@@ -2296,6 +2297,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             "LEOPARD_ENABLE_GF16": "ON",
@@ -2335,6 +2337,27 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             self.assertIn(
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL=ON",
                 configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL=OFF",
+                configure)
+            self.assertIn(
+                "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED:BOOL=OFF",
+                configure)
+            v5_only = {
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+            }
+            v4_cache = dict(cache)
+            v4_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4
+            for selector in v5_only:
+                v4_cache.pop(selector)
+            v4_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v4-build", v4_cache)
+            self.assertFalse(any(
+                any(argument.startswith(f"-D{selector}:")
+                    for selector in v5_only)
+                for argument in v4_configure))
             current_only = {
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
@@ -2343,7 +2366,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
             }
-            v3_cache = dict(cache)
+            v3_cache = dict(v4_cache)
             v3_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3
             v3_cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
@@ -3317,8 +3340,10 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                         provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
                     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                         "a" * 64,
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
                     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                 },
                 "c_compiler": identity,
@@ -3404,6 +3429,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_BUILD_FUZZERS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
@@ -3411,6 +3437,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEOPARD_ENABLE_GF8": "ON",
             "LEOPARD_ENABLE_GF16": "ON",
@@ -3418,11 +3445,13 @@ class ExactCommandValidationTests(unittest.TestCase):
         validated = provenance._validate_candidate_required_cache(cache)
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
         }
         for selector, expected in selectors.items():
@@ -3455,6 +3484,19 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            },
+        }
+        v4 = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
@@ -3483,6 +3525,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "invocation_schema"],
             provenance.REPLAY_INVOCATION_SCHEMA)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v4, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v3, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -3518,7 +3566,9 @@ class ExactCommandValidationTests(unittest.TestCase):
         for selector in (
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
-                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE"):
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"):
             with self.subTest(current_missing=selector):
                 missing_selector = copy.deepcopy(current)
                 del missing_selector["validated_cache"][selector]
@@ -3527,6 +3577,17 @@ class ExactCommandValidationTests(unittest.TestCase):
                         "current reproducible-build closure configuration"):
                     provenance._reproducible_replay_contract(
                         missing_selector)
+
+        for selector in (
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"):
+            with self.subTest(v4_extra=selector):
+                v4_with_selector = copy.deepcopy(v4)
+                v4_with_selector["validated_cache"][selector] = "OFF"
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "v4 reproducible-build closure configuration"):
+                    provenance._reproducible_replay_contract(v4_with_selector)
 
         for selector in (
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
