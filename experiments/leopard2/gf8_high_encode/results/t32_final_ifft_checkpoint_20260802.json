@@ -1,0 +1,224 @@
+{
+  "schema": "leopard2-gf8-t32-final-ifft-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high pure-AVX2 encode for T=32 and exact 64-byte public shards",
+  "candidate_source": {
+    "implementation_commit": "e4a57b1d43e2146d62d55035821b1f7a98152d7b",
+    "tree": "702b257687ee7d54a3d1d7f93277ab0f84fd8b9a",
+    "tracked_dirty": false,
+    "benchmark_sha256": "6737262ea4b206690678c01a742c6e8e56f99cfdec2ead968f0c26aa9db69d42"
+  },
+  "comparators": {
+    "same_source_compile_time_disabled": {
+      "definition": "LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE=1",
+      "benchmark_sha256": "b88bd5c7c8a57915ebb4cfd09e74e39ee9dcd1691f7fea1d4d16d614be691a64",
+      "selector_word": 2
+    },
+    "candidate_selector_word": 1,
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+      "prior_qualification_checkpoint": "experiments/leopard2/gf8_high_encode/results/k8r8_b64_terminal_checkpoint_20260802.json",
+      "prior_qualification_checkpoint_sha256": "b40e6aaba926469b5f0de1af8edfe9df96af4ca5f3672996f61e1010665bab45"
+    }
+  },
+  "implementation": [
+    "Append an optional pure-AVX2 GF8 inverse-radix-two range callback to the immutable backend operation table; scalar, SSSE3, AVX-512, GFNI, and GF8-disabled builds publish null.",
+    "For the final inverse layer of each T=32 message block, broadcast the fixed nibble tables once and process all sixteen shard pairs in one exact-64-byte callback, including the XOR-accumulating form.",
+    "Thread an exact-public-64-byte eligibility bit separately from internal pass bytes so ragged inputs and larger tiled calls cannot inherit the policy.",
+    "Keep the callback high-rate-only, pure-AVX2-only, and exact-B64-only; low profile, sparse scheduling semantics, all other byte counts, and every other backend retain the mature transform.",
+    "Null the callback in trace instrumentation and validate it with startup known-answer tests before runtime publication."
+  ],
+  "static_attribution": {
+    "callback_text_bytes": 410,
+    "calls_or_vector_spills": false,
+    "evex_instructions": false,
+    "maximum_observed_live_ymm_register": 10,
+    "k64_final_layer_leaf_calls_before_after": [32, 2],
+    "k127_final_layer_leaf_calls_before_after": [64, 4],
+    "leaf_call_and_table_setup_reduction_percent": 93.75,
+    "table_broadcasts_saved": {
+      "K64": 60,
+      "K127": 120
+    },
+    "shard_row_traffic_reduced": false,
+    "interpretation": "This candidate removes repeated dispatch, table preparation, and vzeroupper overhead. It intentionally does not claim to remove a shard-data pass."
+  },
+  "evidence_runner": {
+    "commit": "c30b7933d14e3acf79435f6dbc16b5cdd61e3721",
+    "tree": "3a39a169c9fd2f1a0a7cea74eb355d484f7d74a5",
+    "path": "experiments/leopard2/gf8_high_encode/run_t32_final_ifft_abba.py",
+    "sha256": "06e9f8985c59c9f522260d4c23ea33269b29c900d056a19f4a399a0233d76146",
+    "dependency_files": 7,
+    "dependency_identities_equal_before_after": true,
+    "self_test": "experiments/leopard2/gf8_high_encode/test_run_t32_final_ifft_abba.py",
+    "hardening": [
+      "predeclared full SHA-256 for candidate, control, and exact main",
+      "candidate/control executable-section identity",
+      "selector words 1 and 2 at the same initialized-data object",
+      "full-file equality after normalizing only the selector object and GNU build-id section",
+      "read-only mirrored Python dependency closure revalidated after execution",
+      "incremental partial-round retention and captured failure streams",
+      "strict lowercase hexadecimal workload digests"
+    ]
+  },
+  "authoritative_campaign": {
+    "raw_directory": "/tmp/leopard2-t32-e4a57b1-authoritative-v1/campaign-r3-i15-w64-v1",
+    "raw_sha256": "2fa5d499a9b604cd3c09f9604cdc0b74c3371688f5c7da1ddb7de542031a4ae2",
+    "summary_sha256": "da78e6bda2d75dd899a765f05040b5a67ee8fede946cf441bbf3ed6bf81e629b",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds_per_cell": 3,
+    "iterations_per_process": 15,
+    "warmups_per_process": 64,
+    "reuse": 8192,
+    "cells": 72,
+    "selected_b64_cells": 24,
+    "unselected_b256_b1024_cells": 48,
+    "rounds": 216,
+    "processes": 1296,
+    "all_measured_rounds_accepted": true,
+    "all_reserved_sibling_nonidle_jiffies_zero": true,
+    "minimum_benchmark_cpu_nonidle_jiffies_per_round": 101,
+    "all_workload_digests_matched": true,
+    "pre_sample_benchmark_and_sibling_nonidle_jiffies": [0, 0],
+    "candidate_control_executable_sections_sha256": "46b75c1a5c7733b02d2461b760cb623e0b0408c1f7fc1d4ec1268d6af4c9a9e5",
+    "candidate_control_executable_bytes": 930050,
+    "candidate_control_full_file_bytes": 1150904,
+    "candidate_control_full_file_difference_bytes": 21,
+    "allowed_full_file_differences": "20 GNU build-id descriptor bytes plus one selector byte",
+    "normalized_full_file_sha256": "e3df517e45728639358f91ba1d9d26d44f1014adf60e741c4620c7661a1c67e8",
+    "performance_statistic": "geometric mean of one balanced log contrast per independent mirrored-ABBA round with a two-sided Student-t 95 percent confidence interval"
+  },
+  "primary_results": [
+    {
+      "K": 64,
+      "R": 32,
+      "bytes": 64,
+      "batch": 1,
+      "same_source_control_over_candidate": 1.0962699033957592,
+      "same_source_control_ci95": [1.0567079815890303, 1.1373129776914552],
+      "exact_main_over_candidate": 1.0377255579521991,
+      "exact_main_ci95": [1.0097665777301952, 1.0664586820132786]
+    },
+    {
+      "K": 127,
+      "R": 28,
+      "bytes": 64,
+      "batch": 1,
+      "same_source_control_over_candidate": 1.1465273228911017,
+      "same_source_control_ci95": [1.109926080273231, 1.1843355386443746],
+      "exact_main_over_candidate": 1.081550847546075,
+      "exact_main_ci95": [1.0670959161543339, 1.0962015861172614]
+    }
+  ],
+  "selected_region_summary": {
+    "cells": 24,
+    "K": [63, 64, 65, 96, 100, 126, 127, 128],
+    "R": [28, 31, 32],
+    "bytes": 64,
+    "same_source_control_over_candidate_geomean": 1.1371729203883285,
+    "same_source_control_over_candidate_minimum": 1.0962699033957592,
+    "same_source_cells_with_ci95_lower_above_one": 24,
+    "exact_main_over_candidate_geomean": 1.0801726969164482,
+    "exact_main_over_candidate_minimum": 1.027782491095794,
+    "exact_main_over_candidate_maximum": 1.146477139319188,
+    "exact_main_cells_with_observed_gain": 24,
+    "exact_main_cells_with_ci95_lower_above_one": 21,
+    "interpretation": "Every selected cell improved over both comparators in the observed statistic. Every same-source gain and both primary exact-main gains are statistically credible at 95 percent."
+  },
+  "unselected_neighbor_summary": {
+    "cells": 48,
+    "bytes": [256, 1024],
+    "same_source_control_over_candidate_geomean": 0.9995919850444456,
+    "minimum_observed_control_over_candidate": 0.9916381496012964,
+    "maximum_observed_control_over_candidate": 1.0061374334585738,
+    "observed_regressions_over_two_percent": 0,
+    "credible_regressions_over_two_percent": 0,
+    "credible_subthreshold_regressions": [
+      {
+        "K": 63,
+        "R": 28,
+        "bytes": 256,
+        "control_over_candidate": 0.994961,
+        "ci95": [0.991294, 0.998641],
+        "observed_slowdown_percent": 0.5065,
+        "interpretation": "A reproducible roughly half-percent same-text layout cost is retained and remains below the two-percent promotion threshold."
+      }
+    ]
+  },
+  "correctness_and_build_gates": {
+    "integrated_release": {
+      "compiler": "GCC 13.3.0",
+      "tests_passed": 9,
+      "tests": [
+        "leopard2_high_direct_production",
+        "leopard2_k8r8_b64_terminal",
+        "leopard2_k8r8_b64_terminal_production",
+        "leopard2_t4_packed_terminal_family",
+        "leopard2_t4_packed_terminal_family_production",
+        "leopard2_t32_final_ifft_range",
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_public_api_contract"
+      ]
+    },
+    "strict_warning_builds": [
+      "GCC 13.3.0 -Wall -Wextra -Wpedantic -Werror",
+      "Clang 18.1.3 -Wall -Wextra -Wpedantic -Werror"
+    ],
+    "strict_warning_focused_tests_per_compiler": 5,
+    "sanitizers": [
+      "Clang 18.1.3 AddressSanitizer",
+      "Clang 18.1.3 UndefinedBehaviorSanitizer",
+      "LeakSanitizer through ASan detect_leaks=1"
+    ],
+    "sanitizer_focused_tests_passed_separately": 5,
+    "feature_reduced_builds": [
+      "GF8-only field mask 1 with T32 direct-oracle test",
+      "GF16-only field mask 2 with no GF8 dependency"
+    ],
+    "independent_oracles": [
+      "direct systematic GF8 generator",
+      "legacy-high parity output",
+      "same-binary mature transform with the range disabled",
+      "exact Leopard main workload/parity/recovery digests"
+    ],
+    "contract_cases": [
+      "all 24 selected K/R shapes",
+      "ragged and larger tiled public byte counts",
+      "ordinary and one-item batch execution",
+      "unaligned source and destination buffers with guards",
+      "sparse outputs and low-profile exclusion",
+      "scalar and non-AVX2 backend exclusion",
+      "source/output/metadata overlap rejection",
+      "undersized scratch rejection and failure atomicity",
+      "concurrent immutable backend/context behavior"
+    ],
+    "independent_reviews": 2,
+    "review_result": "CLEAN"
+  },
+  "resource_policy": {
+    "allowed_logical_cpus": 30,
+    "build_parallelism": 1,
+    "build_memory_max_mib": 512,
+    "test_memory_max_mib": 512,
+    "benchmark_address_space_max_mib": 256,
+    "campaign_controller_memory_max_mib": 512,
+    "memory_swap_max_mib": 0,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_less_than_available_parallelism": "Prior sessions exhausted memory during parallel compiler and sanitizer workloads. Builds and correctness gates were therefore serialized under resident-memory caps. Authoritative cache-sensitive timing intentionally used one physical core and reserved its SMT sibling."
+  },
+  "reproduce": {
+    "candidate_build": "cmake -S <clean-e4a57b1-worktree> -B <candidate-build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF && cmake --build <candidate-build> -j1 --target bench_leopard2",
+    "control_build": "cmake -S <clean-e4a57b1-worktree> -B <control-build> -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE=1 && cmake --build <control-build> -j1 --target bench_leopard2",
+    "runner_self_test": "python3 experiments/leopard2/gf8_high_encode/test_run_t32_final_ifft_abba.py",
+    "campaign": "taskset -c 14 python3 <frozen-runner>/experiments/leopard2/gf8_high_encode/run_t32_final_ifft_abba.py --candidate <frozen-candidate> --control <frozen-control> --main <frozen-exact-main> --source-commit e4a57b1d43e2146d62d55035821b1f7a98152d7b --source-tree 702b257687ee7d54a3d1d7f93277ab0f84fd8b9a --output <new-output> --cpu 14 --sibling 30 --rounds 3 --iterations 15 --warmup 64"
+  },
+  "disposition": "Promoted for the exact GF8 legacy-high pure-AVX2 T=32/B64 region. Both original gaps now credibly beat exact Leopard main, all 24 selected shapes beat same-source control, and no unselected neighbor violates the two-percent regression rule.",
+  "next_candidates": [
+    "If a residual prevalidated-versus-public gap remains, evaluate a narrow exact-B64/T32 packed public terminal or four-pointer-at-a-time packed-layout verifier.",
+    "Otherwise evaluate an exact-B64 no-spill radix-eight source-stage kernel that removes one 32-row in-place pass per full message block.",
+    "A prefix-aware fused final-three-layer forward T32 kernel is secondary; kill either arithmetic candidate on vector spills, more than about 2 KiB new text, less than five-percent target gain, or more than two-percent neighboring regression."
+  ]
+}
