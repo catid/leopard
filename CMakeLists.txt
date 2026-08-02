@@ -76,6 +76,9 @@ option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    "Enable the default-off exact AVX2 K=R=T=16, 64-byte encoder experiment"
+    OFF)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -337,6 +340,8 @@ target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+target_compile_definitions(leopard PUBLIC
+    LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -510,7 +515,8 @@ if(LEO2_HAVE_SSSE3_BACKEND)
 endif()
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
-        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -632,13 +638,16 @@ if(LEO2_BUILD_BENCHMARKS)
     target_link_libraries(bench_leopard leopard)
 
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
+    target_compile_definitions(bench_leopard2 PRIVATE
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
     target_link_libraries(bench_leopard2 leopard)
     leopard2_enable_benchmark_source_attestation(bench_leopard2)
 
     add_executable(bench_leopard2_prevalidated_batch
         bench/leopard2/benchmark.cpp)
     target_compile_definitions(bench_leopard2_prevalidated_batch PRIVATE
-        LEO2_BENCHMARK_PREVALIDATED_BATCH=1)
+        LEO2_BENCHMARK_PREVALIDATED_BATCH=1
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
     target_link_libraries(bench_leopard2_prevalidated_batch leopard)
     leopard2_enable_benchmark_source_attestation(
         bench_leopard2_prevalidated_batch)
@@ -704,6 +713,8 @@ if(LEO2_BUILD_BENCHMARKS)
 
     if(LEO2_BUILD_ALLK_DIAGNOSTIC)
         add_executable(bench_leopard2_allk bench/leopard2/benchmark.cpp)
+        target_compile_definitions(bench_leopard2_allk PRIVATE
+            LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
         target_link_libraries(bench_leopard2_allk leopard)
         leopard2_enable_benchmark_source_attestation(bench_leopard2_allk)
     endif()
@@ -795,6 +806,8 @@ if(LEO2_BUILD_TESTS)
         LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
         LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+    target_compile_definitions(leopard_test_hooks PUBLIC
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard_test_hooks PRIVATE LeopardFF8.cpp LeopardFF8.h)
     else()
@@ -854,7 +867,8 @@ if(LEO2_BUILD_TESTS)
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1
-            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+            LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
+            LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=$<BOOL:${LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED}>)
         if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
@@ -1436,20 +1450,23 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
-        add_executable(leopard2_t16_b64_three_pass_test
-            tests/leopard2/direct_oracle.cpp
-            tests/leopard2/test_t16_b64_three_pass.cpp)
-        target_include_directories(leopard2_t16_b64_three_pass_test PRIVATE
-            tests/leopard2)
-        target_compile_definitions(leopard2_t16_b64_three_pass_test PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
-        target_link_libraries(leopard2_t16_b64_three_pass_test
-            leopard_test_hooks)
-        add_test(NAME leopard2_t16_b64_three_pass
-            COMMAND leopard2_t16_b64_three_pass_test)
-        set_tests_properties(leopard2_t16_b64_three_pass PROPERTIES
-            ENVIRONMENT
-                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        if(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+            add_executable(leopard2_t16_b64_three_pass_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t16_b64_three_pass.cpp)
+            target_include_directories(leopard2_t16_b64_three_pass_test PRIVATE
+                tests/leopard2)
+            target_compile_definitions(leopard2_t16_b64_three_pass_test PRIVATE
+                LEO2_ENABLE_TEST_HOOKS=1
+                LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+            target_link_libraries(leopard2_t16_b64_three_pass_test
+                leopard_test_hooks)
+            add_test(NAME leopard2_t16_b64_three_pass
+                COMMAND leopard2_t16_b64_three_pass_test)
+            set_tests_properties(leopard2_t16_b64_three_pass PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
 
         # Exercise the fixed non-hook scratch geometry and ordinary archive;
         # the hook test above intentionally derives its larger diagnostic

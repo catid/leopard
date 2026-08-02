@@ -511,8 +511,8 @@ void ExerciseIrregularLayouts(
     RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
         scratch.data(), scratch.size()), LEO2_SUCCESS,
         "encode detached T16 input");
-    RequireRouteCounts(1, 0,
-        "detached T16 layout did not use only the arithmetic callback");
+    RequireRouteCounts(0, 0,
+        "detached T16 layout entered the packed generated terminal");
     CheckParity(field, generator, kSide, kSide, original, recovery,
         kShardBytes, "detached T16 parity differs from direct generator");
 

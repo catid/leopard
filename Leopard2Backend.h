@@ -32,6 +32,10 @@
 #define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+#define LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED 0
+#endif
+
 #include "leopard2.h"
 
 #include <stddef.h>
@@ -46,8 +50,6 @@ struct InitializeArgs
 {
     FF8MultiplyLog ff8_multiply_log;
     FF16MultiplyLog ff16_multiply_log;
-    // Canonical legacy GF8 transform skews, initialized before backend KATs.
-    const uint8_t* ff8_fft_skew;
 };
 
 typedef void (*FixedMultiply)(
@@ -317,6 +319,12 @@ typedef FFTButterfly4Out IFFTButterfly4Out;
 static const uint32_t kFF8HighEncodeShortenedInput = 0x80000000U;
 static const uint32_t kFF8HighEncodeK5R5Partial = 0x40000000U;
 static const uint32_t kFF8HighEncodeK9Tail = 0x20000000U;
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+// Default-off generated exact K=R=T=16/B=64 experiment.  It deliberately
+// reuses FF8HighEncodeOneBlock so enabling the experiment does not grow Ops.
+// The public terminal supplies canonical skews and no other private flags.
+static const uint32_t kFF8HighEncodeT16B64Generated = 0x10000000U;
+#endif
 static const uint32_t kFF8HighEncodeK9OutputCountShift = 24U;
 static const uint32_t kFF8HighEncodeK9OutputCountMask = 0x0f000000U;
 static const uint32_t kFF8HighEncodeSupportedSides =
@@ -329,18 +337,6 @@ typedef void (*FF8HighEncodeOneBlock)(
     const uint8_t* inverse_skew,
     const uint8_t* forward_skew,
     uint64_t byte_count);
-
-/*
-    Exact dense K=R=T=16 legacy-high GF8 encode for one 64-byte stripe.
-    This deliberately remains separate from FF8HighEncodeOneBlock: the latter
-    accepts arbitrary byte counts, caller-provided skews, and a shortened final
-    input, while this callback is a generated kernel for one immutable wire
-    transform.  data[0..16) are readable, work[0..16) are pairwise-disjoint
-    writable outputs, and every input range is disjoint from every output.
-*/
-typedef void (*FF8HighEncodeT16B64)(
-    const void* const* data,
-    void* const* work);
 
 /*
     Complete dense encode for exactly two T=8 message blocks and a shard whose
@@ -562,8 +558,6 @@ struct Ops
     // Optional pure-AVX2 active-parent locator construction.  Scalar and
     // other SIMD backends retain the established field implementation.
     FF8WalshLocator ff8_walsh_locator;
-    // Optional exact pure-AVX2 K=R=T=16, 64-byte legacy-high transform.
-    FF8HighEncodeT16B64 ff8_high_encode_t16_b64;
 };
 
 struct X86Features

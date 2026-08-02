@@ -5491,6 +5491,26 @@ static uint8_t ClassifyTerminalT8Shape(const leo2_codec* codec)
     {
         return kTerminalT8K8R8;
     }
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    if (codec && codec->original_count == 16 &&
+        codec->recovery_count == 16 && codec->padded_side == 16 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context && codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->context->ops->ff8_high_encode_one_block &&
+        (codec->context->ops->ff8_high_encode_one_block_sides & 8U) != 0)
+    {
+        // Reuse the established one-block terminal classification and public
+        // call site.  Bit 8 proves the pure-AVX2 wrapper is present; do not
+        // test bit 16 because that would promise the generic arbitrary-byte,
+        // arbitrary-skew side-16 contract that this fixed private flag does
+        // not implement.  The out-of-line helper distinguishes T=8 from T=16.
+        return kTerminalT8K8R8;
+    }
+#endif
 #else
     static_cast<void>(codec);
 #endif
@@ -13615,9 +13635,17 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K8R8T8B64TerminalEligible(
         return false;
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    LEO_DEBUG_ASSERT(
+        (codec->original_count == 8 && codec->recovery_count == 8 &&
+         codec->padded_side == 8) ||
+        (codec->original_count == 16 && codec->recovery_count == 16 &&
+         codec->padded_side == 16));
+#else
     LEO_DEBUG_ASSERT(codec->original_count == 8);
     LEO_DEBUG_ASSERT(codec->recovery_count == 8);
     LEO_DEBUG_ASSERT(codec->padded_side == 8);
+#endif
     LEO_DEBUG_ASSERT(codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1);
     LEO_DEBUG_ASSERT(codec->field == LEO2_FIELD_GF8);
     LEO_DEBUG_ASSERT(codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1);
@@ -13647,6 +13675,125 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K8R8T8B64TerminalEligible(
 #define LEO2_K8R8_B64_TERMINAL_NOINLINE
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+#if defined(_MSC_VER)
+#define LEO2_T16_B64_TERMINAL_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_T16_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, noipa, section(".leo2_t16_b64_terminal"), \
+        aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_T16_B64_TERMINAL_NOINLINE \
+    __attribute__((noinline, section(".leo2_t16_b64_terminal"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_T16_B64_TERMINAL_NOINLINE __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_T16_B64_TERMINAL_NOINLINE
+#endif
+
+template<size_t ProtectedCount>
+static LEO2_T16_B64_TERMINAL_NOINLINE bool
+TryEncodeGF8K16R16T16B64PackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(codec && codec->original_count == 16 &&
+        codec->recovery_count == 16 && codec->padded_side == 16);
+    static_assert(ProtectedCount <= 1,
+        "T16 packed terminal supports at most one protected descriptor");
+
+    // Mode 2 must retain the mature public validator and transform for
+    // same-text attribution.  Returning false asks the existing call site to
+    // continue without changing its branch graph.
+    if (!leopard::ff8::HighT16B64ThreePassEnabledForDiagnostics())
+        return false;
+
+    ScratchLayout layout = { 0, 0, 0,
+        ((32U * sizeof(AddressRange) + 48U * sizeof(void*) +
+            kScratchAlignment - 1U) & ~(kScratchAlignment - 1U)) +
+            32U * 64U };
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, 64, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, 16, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 16, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[2 + i] = protected_ranges[i];
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    // Null or non-packed rows remain valid inputs to the generic path.
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], 16U * 64U, input_range) ||
+        !MakeRange(recovery[0], 16U * 64U, output_range))
+        return false;
+
+    uintptr_t pointer_mismatch = 0;
+    for (size_t i = 0; i < 16; ++i)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
+            (input_range.begin + i * 64U);
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
+            (output_range.begin + i * 64U);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
+#endif
+    leopard::ff8::ReedSolomonEncodeOneBlockT16B64(
+        *codec->context->ops, original, recovery);
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_T16_B64_TERMINAL_NOINLINE
+#endif
+
 /*
     A dense K=8/R=8 legacy-high codeword is exactly one complete T=8 block.
     For two packed 512-byte slabs, aggregate range proofs preserve the public
@@ -13668,6 +13815,13 @@ TryEncodeGF8K8R8T8B64PackedTerminal(
     LEO_DEBUG_ASSERT(IsGF8AVX2K8R8T8B64TerminalEligible(codec, 64));
     static_assert(ProtectedCount <= 1,
         "K8/R8 packed terminal supports at most one protected descriptor");
+
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    if (codec->padded_side == 16)
+        return TryEncodeGF8K16R16T16B64PackedTerminal<ProtectedCount>(
+            codec, protected_ranges, original, recovery, scratch,
+            scratch_bytes, result_out);
+#endif
 
     /* Exact production geometry: K+R range records, K+2T pointers, no
        staging rows, and 2T 64-byte work rows.  Keep the expression portable
@@ -13763,7 +13917,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     if (!codec || shard_bytes != 64)
         return false;
     const uint32_t side = codec->padded_side;
-    if (side < 16 || side > 128 ||
+    if (side < 32 || side > 128 ||
         ((codec->original_count ^ side) |
          (codec->recovery_count ^ side)) != 0)
         return false;
@@ -13773,15 +13927,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
         codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
         !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
         !codec->context->ops ||
-        codec->context->ops->kind != LEO2_BACKEND_AVX2)
-        return false;
-    if (side == 16)
-    {
-        if (!codec->context->ops->ff8_high_encode_t16_b64 ||
-            !leopard::ff8::HighT16B64ThreePassEnabledForDiagnostics())
-            return false;
-    }
-    else if (!codec->context->ops->ff8_ifft_butterfly2_range)
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops->ff8_ifft_butterfly2_range)
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
@@ -13811,9 +13958,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     A balanced K=R=T code is one complete T-point inverse transform followed
     by one complete forward transform.  The exact-64-byte AVX2 transform
     layers are already independently qualified; this terminal changes only
-    the public-call boundary around that arithmetic.  T=16 is admitted so its
-    separately gated three-pass kernel can be measured without paying the
-    general public validator overhead.
+    the public-call boundary around that arithmetic.  T=16 remains excluded
+    because its direct screen did not recover the exact-main gap.
 
     All 2T public pointer entries are compared with their expected
     packed-slab coordinate before any output byte is written.  A mismatch is
@@ -13821,9 +13967,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     layouts retain the general validator and executor.  The aggregate ranges
     then provide the same scratch, metadata, and input/output disjointness
     proof as the mature path without rebuilding output masks, sparse plans, or
-    transform pointer geometry.  T=16 enters this wrapper only when the
-    separately selectable generated three-pass experiment is enabled; its
-    default-off control retains the mature validator and transform together.
+    transform pointer geometry.
 */
 template<size_t FixedSide, size_t ProtectedCount>
 static LEO2_BALANCED_B64_TERMINAL_NOINLINE bool
@@ -13839,8 +13983,7 @@ TryEncodeGF8BalancedB64PackedTerminal(
     LEO_DEBUG_ASSERT(
         IsGF8AVX2BalancedB64PackedTerminalEligible(codec, 64));
 
-    static_assert(FixedSide == 16 || FixedSide == 32 || FixedSide == 64 ||
-            FixedSide == 128,
+    static_assert(FixedSide == 32 || FixedSide == 64 || FixedSide == 128,
         "balanced 64-byte terminal side is not qualified");
     static_assert(ProtectedCount <= 1,
         "balanced terminal protects at most one batch descriptor");
@@ -15168,11 +15311,7 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
         bool handled;
-        if (codec->padded_side == 16)
-            handled = TryEncodeGF8BalancedB64PackedTerminal<16, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
-        else if (codec->padded_side == 32)
+        if (codec->padded_side == 32)
             handled = TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
                 codec, NULL, original, recovery, scratch, scratch_bytes,
                 terminal_result);
@@ -15343,12 +15482,7 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
         {
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             bool handled;
-            if (codec->padded_side == 16)
-                handled = TryEncodeGF8BalancedB64PackedTerminal<16, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
-            else if (codec->padded_side == 32)
+            if (codec->padded_side == 32)
                 handled = TryEncodeGF8BalancedB64PackedTerminal<32, 1>(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,

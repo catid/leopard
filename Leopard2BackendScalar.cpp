@@ -1412,8 +1412,6 @@ static const Ops ScalarOps = {
     , NULL
     // ff8_walsh_locator
     , NULL
-    // ff8_high_encode_t16_b64
-    , NULL
 };
 
 const Ops* InitializeScalar(const InitializeArgs& args)

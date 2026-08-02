@@ -6202,8 +6202,8 @@ static void AVX2FF8FFTButterfly8Out(
 #undef LEO2_R8_STORE
 #endif
 
-#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
-    !defined(LEO2_GFNI_VARIANT)
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
 
 /*
     Generated exact K=R=T=16, B=64 legacy-high transform.
@@ -7378,6 +7378,60 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         data, work, shortened, inverse_skew, forward_skew, byte_count);
 }
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+#if defined(_MSC_VER)
+#define LEO2_AVX2_T16_DISPATCH_ENTRY __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_AVX2_T16_DISPATCH_ENTRY \
+    __attribute__((noinline, noipa, section(".text.leo2_t16_dispatch"), \
+        aligned(64)))
+#elif defined(__clang__) && defined(__ELF__)
+#define LEO2_AVX2_T16_DISPATCH_ENTRY \
+    __attribute__((noinline, section(".text.leo2_t16_dispatch"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_AVX2_T16_DISPATCH_ENTRY __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_AVX2_T16_DISPATCH_ENTRY
+#endif
+
+static LEO2_AVX2_T16_DISPATCH_ENTRY void
+AVX2FF8HighEncodeOneBlockT8T16Dispatch(
+    const void* const* data,
+    void* const* work,
+    uint32_t side_and_flags,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    if ((side_and_flags & kFF8HighEncodeT16B64Generated) == 0)
+    {
+        AVX2FF8HighEncodeOneBlockT8Vector(
+            data, work, side_and_flags,
+            inverse_skew, forward_skew, byte_count);
+        return;
+    }
+
+    static const uint8_t kInverseSkew[16] = {
+        255, 219, 153, 7, 17, 111, 102, 28,
+        85, 183, 51, 224, 34, 131, 187, 222
+    };
+    static const uint8_t kForwardSkew[16] = {
+        0, 255, 255, 85, 255, 17, 85, 34,
+        255, 153, 17, 102, 85, 51, 34, 187
+    };
+    const bool valid =
+        side_and_flags == (16U | kFF8HighEncodeT16B64Generated) &&
+        byte_count == 64U && inverse_skew && forward_skew &&
+        std::memcmp(inverse_skew, kInverseSkew, 16) == 0 &&
+        std::memcmp(forward_skew, kForwardSkew, 16) == 0;
+    LEO_DEBUG_ASSERT(valid);
+    if (valid)
+        AVX2FF8HighEncodeT16B64(data, work);
+}
+
+#undef LEO2_AVX2_T16_DISPATCH_ENTRY
+#endif
+
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 static LEO_FORCE_INLINE void AVX2FF8T8InverseValues(
     __m256i& value0,
@@ -7821,7 +7875,11 @@ static const Ops AVX2Ops = {
 #elif defined(LEO_HAS_FF8) && \
       !defined(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR) && \
       !defined(LEO2_GFNI_VARIANT)
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    , AVX2FF8HighEncodeOneBlockT8T16Dispatch
+#else
     , AVX2FF8HighEncodeOneBlockT8Vector
+#endif
 #else
     , NULL
 #endif
@@ -7920,12 +7978,6 @@ static const Ops AVX2Ops = {
 #if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
     !defined(LEO2_GFNI_VARIANT)
     , AVX2FF8WalshLocator
-#else
-    , NULL
-#endif
-#if defined(LEO_HAS_FF8) && !defined(LEO2_AVX512_VARIANT) && \
-    !defined(LEO2_GFNI_VARIANT)
-    , AVX2FF8HighEncodeT16B64
 #else
     , NULL
 #endif

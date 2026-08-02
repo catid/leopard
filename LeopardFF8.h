@@ -28,6 +28,10 @@
 
 #pragma once
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+#define LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED 0
+#endif
+
 #include "LeopardCommon.h"
 #include "Leopard2Plan.h"
 
@@ -78,10 +82,9 @@ ffe_t MultiplyElements(ffe_t a, ffe_t b);
 ffe_t InverseElement(ffe_t value);
 ffe_t ElementLog(ffe_t value); // value must be nonzero
 ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log);
-// Canonical legacy transform skew storage.  Backend startup KATs use this to
-// anchor generated fixed-size kernels to the initialized wire transform.
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
 const ffe_t* CanonicalFFTSkewStorage();
-
+#endif
 // Fixed-multiplier execution helpers.  multiplier_log is produced by
 // ElementLog(), source and destination must not overlap, and byte_count may be
 // any positive GF8 shard length.  Complete tiles use the active SIMD backend;
@@ -186,6 +189,15 @@ void ReedSolomonEncodeOneBlockT8(
     const void* const* data,
     void* const* work,
     uint64_t byte_count);
+
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+// Execute the exact generated T=16/B=64 shape through the existing one-block
+// backend slot after the public terminal has established dense packed buffers.
+void ReedSolomonEncodeOneBlockT16B64(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work);
+#endif
 
 /*
     Execute the AVX2 T=8 callback with exactly five live systematic inputs and
@@ -409,10 +421,21 @@ void PrepareHighDecode(
     unsigned t,
     ffe_t* output_factors); // n elements; t..n-1 are initialized
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
 // Same-text attribution selector for the default-off exact T=16/B=64 AVX2
 // encoder candidate.  This is internal experiment control, not public API.
 bool SetHighT16B64ThreePassEnabledForDiagnostics(bool enabled);
 bool HighT16B64ThreePassEnabledForDiagnostics();
+#else
+static inline bool SetHighT16B64ThreePassEnabledForDiagnostics(bool)
+{
+    return false;
+}
+static inline bool HighT16B64ThreePassEnabledForDiagnostics()
+{
+    return false;
+}
+#endif
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 // Internal test-only access to the exact production LCH kernels and constants.
@@ -445,7 +468,9 @@ struct TestOnlyHighEncodeCounts
     uint64_t t4_packed_calls;
     uint64_t t8_packed_calls;
     uint64_t balanced_b64_packed_calls;
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
     uint64_t t16_b64_three_pass_calls;
+#endif
     uint64_t final_ifft2_range_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;

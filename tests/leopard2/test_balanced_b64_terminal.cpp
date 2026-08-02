@@ -241,10 +241,7 @@ void CheckVariableParity(
     }
 }
 
-void ExerciseSelectedBalancedSide(
-    leo2_context* context,
-    unsigned side,
-    uint64_t expected_terminal_calls)
+void ExerciseSelectedBalancedSide(leo2_context* context, unsigned side)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context, side, side,
@@ -276,8 +273,8 @@ void ExerciseSelectedBalancedSide(
     RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
         scratch.data(), scratch.size()), LEO2_SUCCESS,
         "execute selected balanced terminal");
-    RequireTerminalCalls(expected_terminal_calls,
-        "selected balanced ordinary terminal route mismatch");
+    RequireTerminalCalls(1,
+        "selected balanced shape missed the packed terminal");
     CheckVariableParity(field, generator, side, side, original, recovery,
         kShardBytes, "selected balanced parity differs from direct oracle");
 
@@ -289,8 +286,8 @@ void ExerciseSelectedBalancedSide(
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
         "execute selected balanced one-item batch terminal");
-    RequireTerminalCalls(expected_terminal_calls,
-        "selected balanced batch terminal route mismatch");
+    RequireTerminalCalls(1,
+        "selected balanced batch missed the packed terminal");
     CheckVariableParity(field, generator, side, side, original, recovery,
         kShardBytes, "selected balanced batch parity differs from oracle");
     leo2_codec_destroy(codec);
@@ -675,17 +672,13 @@ int main()
         RequireResult(context_result, LEO2_SUCCESS,
             "create AVX2 K32/R32 terminal context");
         ExerciseAVX2Terminal(context);
-        // T16 is a default-off candidate: its control must retain the mature
-        // validator and transform rather than entering the packed wrapper.
-        ExerciseSelectedBalancedSide(context, 16, 0);
-        ExerciseSelectedBalancedSide(context, 64, 1);
-        ExerciseSelectedBalancedSide(context, 128, 1);
+        ExerciseSelectedBalancedSide(context, 64);
+        ExerciseSelectedBalancedSide(context, 128);
 
         // The selector is deliberately exact.  Exercise both immediate count
-        // neighbors at each promoted side and unrelated earlier tiny terminals
-        // as layout controls.
-        ExerciseExcludedShape(context, 15, 16);
-        ExerciseExcludedShape(context, 16, 15);
+        // neighbors at each promoted side, the measured-but-rejected T=16
+        // shape, and unrelated earlier tiny terminals as layout controls.
+        ExerciseExcludedShape(context, 16, 16);
         ExerciseExcludedShape(context, 31, 32);
         ExerciseExcludedShape(context, 32, 31);
         ExerciseExcludedShape(context, 63, 64);

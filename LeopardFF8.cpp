@@ -63,10 +63,11 @@ namespace leopard { namespace ff8 {
 
 static volatile uint32_t g_high_final_ifft2_range_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE;
-// Default fail-closed until the fixed kernel passes correctness, assembly,
-// and frozen-binary timing qualification.  Values 1 and 2 give candidate and
-// control identical text and differ only in this initialized data word.
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+// Macro-enabled attribution keeps candidate and control text identical.  The
+// production option defaults off until the exact-parent neighbor gate passes.
 static volatile uint32_t g_high_t16_b64_three_pass_mode = 2U;
+#endif
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
@@ -89,7 +90,9 @@ static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighT4PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8PackedCalls(0);
 static std::atomic<uint64_t> TestHighBalancedB64PackedCalls(0);
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
 static std::atomic<uint64_t> TestHighT16B64ThreePassCalls(0);
+#endif
 static std::atomic<uint64_t> TestHighFinalIFFT2RangeCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
@@ -880,10 +883,12 @@ static void FFTInitialize()
     }
 }
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
 const ffe_t* CanonicalFFTSkewStorage()
 {
     return FFTSkewStorage;
 }
+#endif
 
 /*
     Decimation in time IFFT:
@@ -2860,31 +2865,6 @@ void ReedSolomonEncode(
 #endif
         return;
     }
-    // Check the exact public shape before reading the same-text experiment
-    // mode so every neighboring K/R/byte/profile route executes identical
-    // candidate and control instructions.  The dedicated callback has no
-    // general shortened/skew/tail contract and must never be widened here.
-    const bool exact_t16_b64_three_pass_shape =
-        exact_public_64_byte_shard && buffer_bytes == 64U &&
-        original_count == 16U && recovery_count == 16U &&
-        requested_output_count == 16U && m == 16U && dense_schedule &&
-        ops.kind == LEO2_BACKEND_AVX2 &&
-        ops.ff8_high_encode_t16_b64 != NULL;
-    if (exact_t16_b64_three_pass_shape &&
-        g_high_t16_b64_three_pass_mode == 1U)
-    {
-#if defined(LEO2_ENABLE_TEST_HOOKS)
-        TestHighIFFTButterfly4OutCalls.fetch_add(
-            4, std::memory_order_relaxed);
-        TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
-        TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
-        TestHighT16B64ThreePassCalls.fetch_add(
-            1, std::memory_order_relaxed);
-#endif
-        ops.ff8_high_encode_t16_b64(data, work);
-        return;
-    }
-
     bool use_one_block_callback =
         (ops.kind == LEO2_BACKEND_AVX512 && buffer_bytes > 1024) ||
         (ops.kind == LEO2_BACKEND_AVX2 &&
@@ -3069,6 +3049,26 @@ void ReedSolomonEncodeOneBlockT8(
     ops.ff8_high_encode_one_block(
         data, work, 8U, FFTSkewStorage + 8, FFTSkewStorage, byte_count);
 }
+
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+void ReedSolomonEncodeOneBlockT16B64(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work)
+{
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(ops.ff8_high_encode_one_block != NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    TestHighIFFTButterfly4OutCalls.fetch_add(4, std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighT16B64ThreePassCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    ops.ff8_high_encode_one_block(
+        data, work, 16U | backend::kFF8HighEncodeT16B64Generated,
+        FFTSkewStorage + 16, FFTSkewStorage, 64);
+}
+#endif
 
 void ReedSolomonEncodeK5R5T8(
     const backend::Ops& ops,
@@ -4009,6 +4009,7 @@ bool PreparePrunedTransformPlan(
         FFTSkewStorage, plan);
 }
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
 bool SetHighT16B64ThreePassEnabledForDiagnostics(bool enabled)
 {
     g_high_t16_b64_three_pass_mode = enabled ? 1U : 2U;
@@ -4019,6 +4020,7 @@ bool HighT16B64ThreePassEnabledForDiagnostics()
 {
     return g_high_t16_b64_three_pass_mode == 1U;
 }
+#endif
 
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -4085,7 +4087,9 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT4PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8PackedCalls.store(0, std::memory_order_relaxed);
     TestHighBalancedB64PackedCalls.store(0, std::memory_order_relaxed);
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
     TestHighT16B64ThreePassCalls.store(0, std::memory_order_relaxed);
+#endif
     TestHighFinalIFFT2RangeCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
@@ -4119,8 +4123,10 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT8PackedCalls.load(std::memory_order_relaxed);
     result.balanced_b64_packed_calls =
         TestHighBalancedB64PackedCalls.load(std::memory_order_relaxed);
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
     result.t16_b64_three_pass_calls =
         TestHighT16B64ThreePassCalls.load(std::memory_order_relaxed);
+#endif
     result.final_ifft2_range_calls =
         TestHighFinalIFFT2RangeCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =
