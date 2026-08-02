@@ -569,6 +569,7 @@ struct leo2_codec
     leo2_shard_layout shard_layout;
     uint32_t flags;
     bool high_t4_batch_binding_enabled;
+    bool r1_small_reduction_mode_enabled;
     /* Immutable hot-path classification stored in existing alignment
        padding beside the other setup-resolved dispatch state. */
     uint8_t terminal_r1_t8_shape;
@@ -1132,6 +1133,12 @@ static bool IsHighT8TwoBlockByteCount(
         original_count, recovery_count, shard_bytes);
 }
 #endif
+/*
+    Production remains mode zero.  This word is read only while constructing
+    a codec; encode and decode execution consult the immutable snapshot below
+    and therefore never observe a later benchmark-mode change.
+*/
+static std::atomic<unsigned> g_r1_small_reduction_mode(0U);
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
 static const uint32_t kDirectRecoveryTag = 0x80000000u;
@@ -5296,15 +5303,20 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
 {
     /* Reject the overwhelmingly common non-K2 case from the codec's first
        cache line before touching backend state. */
-    if (!codec || codec->original_count != 2 || shard_bytes < 2048 ||
+    if (!codec || codec->original_count != 2 ||
         codec->recovery_count != 1 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 || codec->padded_side != 1 ||
         !codec->context || !codec->context->ops ||
         !codec->context->ops->xor_memory_dense)
         return false;
-    return codec->context->backend == LEO2_BACKEND_AVX2 ||
-        codec->context->backend == LEO2_BACKEND_GFNI;
+    if (shard_bytes >= 2048)
+    {
+        return codec->context->backend == LEO2_BACKEND_AVX2 ||
+            codec->context->backend == LEO2_BACKEND_GFNI;
+    }
+    return codec->r1_small_reduction_mode_enabled &&
+        (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024);
 }
 
 static LEO_FORCE_INLINE bool IsK1R1OrdinaryTerminalByteCount(
@@ -6244,6 +6256,16 @@ static bool UseCoarseR1Xor(
     const leo2_codec* codec,
     size_t shard_bytes)
 {
+    if (codec->r1_small_reduction_mode_enabled)
+    {
+        if (codec->original_count == 3 &&
+            (shard_bytes == 64 || shard_bytes == 256 ||
+             shard_bytes == 1024))
+            return true;
+        if (codec->original_count >= 8 &&
+            (shard_bytes == 64 || shard_bytes == 256))
+            return true;
+    }
     if (shard_bytes < 1024)
         return false;
     /* K=3,5,6 need only one exact-arity AVX2 traversal.  At 4 KiB and above
@@ -6390,6 +6412,11 @@ SelectCoarseR1XorReduction(
 {
     if (UseGroup4R1Xor(codec, ops, shard_bytes, decoding))
         return ops.xor_memory_sources_group4;
+    if (codec->r1_small_reduction_mode_enabled &&
+        codec->original_count == 3 &&
+        (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024) &&
+        ops.xor_memory_sources_fused_final)
+        return ops.xor_memory_sources_fused_final;
     if (IsFusedFinalR1XorEligible(codec, ops, shard_bytes) &&
         UseFusedFinalR1Xor(codec->original_count, shard_bytes))
         return ops.xor_memory_sources_fused_final;
@@ -6403,7 +6430,11 @@ static LEO_FORCE_INLINE bool UseDenseR1Xor(
     const bool eligible =
         (codec->original_count == 2 && shard_bytes >=
             (codec->field == LEO2_FIELD_GF8 ? 2048U : 4096U)) ||
-        (codec->original_count == 4 && shard_bytes >= 2048);
+        (codec->original_count == 4 &&
+            (shard_bytes >= 2048 ||
+             (codec->r1_small_reduction_mode_enabled &&
+              (shard_bytes == 64 || shard_bytes == 256 ||
+               shard_bytes == 1024))));
 #if defined(__GNUC__) || defined(__clang__)
     if (__builtin_expect(!eligible, 1))
 #else
@@ -10859,6 +10890,16 @@ LEO2_EXPORT leo2_result leo2_codec_create(
     codec->flags = options ? options->flags : 0;
     codec->high_t4_batch_binding_enabled =
         context->high_t4_batch_binding_enabled;
+    codec->r1_small_reduction_mode_enabled =
+        g_r1_small_reduction_mode.load(std::memory_order_acquire) == 1U &&
+        profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        field == LEO2_FIELD_GF8 && recovery_count == 1 && padded == 1 &&
+        shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        context->backend == LEO2_BACKEND_AVX2 && context->ops &&
+        context->ops->kind == LEO2_BACKEND_AVX2 &&
+        context->ops->xor_memory_dense &&
+        context->ops->xor_memory_sources &&
+        context->ops->xor_memory_sources_fused_final;
     codec->direct_one_loss_pair_minimum_bytes = 0;
     codec->direct_generator_numerator_log = 0;
     codec->direct_generator_numerator_valid = false;
@@ -11497,6 +11538,77 @@ bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled)
     (void)enabled;
     return false;
 #endif
+}
+
+bool SetR1SmallReductionModeForDiagnostics(unsigned mode)
+{
+    if (mode > 1U)
+        return false;
+    g_r1_small_reduction_mode.store(mode, std::memory_order_release);
+    return true;
+}
+
+bool GetCodecR1ReductionPathInfo(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    CodecR1ReductionPathInfo* info_out)
+{
+    if (!codec || !info_out || shard_bytes == 0)
+        return false;
+    size_t rounded_bytes = 0;
+    if (!RoundShardBytes(shard_bytes, rounded_bytes) ||
+        (codec->field == LEO2_FIELD_GF16 && (shard_bytes & 1U) != 0))
+        return false;
+
+    CodecR1ReductionPathInfo info = {};
+    info.small_reduction_mode_enabled =
+        codec->r1_small_reduction_mode_enabled;
+    info.encode_path = kR1ReductionNotApplicable;
+    info.decode_path = kR1ReductionNotApplicable;
+    if (codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->recovery_count != 1 || codec->padded_side != 1 ||
+        !codec->context || !codec->context->ops)
+    {
+        *info_out = info;
+        return true;
+    }
+
+    if (codec->original_count == 1)
+    {
+        info.encode_path = kR1ReductionK1Copy;
+        info.decode_path = kR1ReductionK1Copy;
+        *info_out = info;
+        return true;
+    }
+    if (IsGF8AVX2K2R1TerminalEligible(codec, shard_bytes))
+    {
+        info.encode_path = kR1ReductionK2Terminal;
+        info.decode_path = kR1ReductionK2Terminal;
+        *info_out = info;
+        return true;
+    }
+
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    const auto select_path = [&](bool decoding) {
+        if (UseCoarseR1Xor(codec, static_cast<size_t>(shard_bytes)))
+        {
+            const leopard::backend::XorMemorySources reduction =
+                SelectCoarseR1XorReduction(
+                    codec, ops, static_cast<size_t>(shard_bytes), decoding);
+            if (reduction == ops.xor_memory_sources_fused_final)
+                return kR1ReductionFusedFinal;
+            if (reduction == ops.xor_memory_sources_group4)
+                return kR1ReductionGroup4;
+            return kR1ReductionCoarse;
+        }
+        if (UseDenseR1Xor(codec, static_cast<size_t>(shard_bytes)))
+            return kR1ReductionDense;
+        return kR1ReductionPairwise;
+    };
+    info.encode_path = select_path(false);
+    info.decode_path = select_path(true);
+    *info_out = info;
+    return true;
 }
 
 bool GetCodecEncodePathInfo(

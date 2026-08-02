@@ -243,6 +243,40 @@ bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled);
 bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled);
 
 /*
+    Same-executable R=1 small-reduction attribution.  Mode zero preserves the
+    production policy and mode one enables only the bounded GF8/AVX2 candidate
+    cells.  A codec snapshots the process-local mode during construction, so
+    changing it cannot alter an existing immutable codec.  Values above one
+    are rejected.  This is an internal benchmark control, not public ABI.
+*/
+bool SetR1SmallReductionModeForDiagnostics(unsigned mode);
+
+enum R1ReductionPath
+{
+    kR1ReductionNotApplicable = 0,
+    kR1ReductionK1Copy,
+    kR1ReductionK2Terminal,
+    kR1ReductionPairwise,
+    kR1ReductionDense,
+    kR1ReductionCoarse,
+    kR1ReductionFusedFinal,
+    kR1ReductionGroup4
+};
+
+struct CodecR1ReductionPathInfo
+{
+    bool small_reduction_mode_enabled;
+    R1ReductionPath encode_path;
+    R1ReductionPath decode_path;
+};
+
+/* Reports the exact immutable-codec route for this byte count. */
+bool GetCodecR1ReductionPathInfo(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    CodecR1ReductionPathInfo* info_out);
+
+/*
     Pattern-dependent structural accounting for an immutable decode plan.
     Empty high-output entries select the mature full transform and are not
     counted as compiled pruned schedules.

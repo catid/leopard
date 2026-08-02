@@ -116,6 +116,7 @@ struct Options
     bool report_direct_executor;
     bool attest_source;
     bool measure_one_shot_decode;
+    int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
@@ -161,6 +162,7 @@ struct Options
         , report_direct_executor(false)
         , attest_source(false)
         , measure_one_shot_decode(false)
+        , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
@@ -435,6 +437,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --report-decode-path  Emit internal selected-path metadata using schema v3\n"
         << "  --measure-one-shot-decode\n"
         << "                         Time the public one-shot decode wrapper using schema v8\n"
+        << "  --r1-small-reduction-mode 0|1\n"
+        << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
         << "  --k8r3r4-t4-terminal-mode 0|1\n"
         << "                         Attribution-only: disable or enable the terminal\n"
         << "  --disable-k16r8-b256-terminal\n"
@@ -502,6 +506,16 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--report-decode-path") options.report_decode_path = true;
         else if (argument == "--measure-one-shot-decode")
             options.measure_one_shot_decode = true;
+        else if (argument == "--r1-small-reduction-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.r1_small_reduction_mode = 0;
+            else if (mode == "1")
+                options.r1_small_reduction_mode = 1;
+            else
+                Fail("--r1-small-reduction-mode must be exactly 0 or 1");
+        }
         else if (argument == "--k8r3r4-t4-terminal-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -759,6 +773,24 @@ static const char* BackendName(leo2_backend backend)
     case LEO2_BACKEND_NEON: return "neon";
     case LEO2_BACKEND_AVX512: return "avx512";
     case LEO2_BACKEND_GFNI: return "avx2-gfni";
+    }
+    return "unknown";
+}
+
+static const char* R1ReductionPathName(
+    leopard2_internal::R1ReductionPath path)
+{
+    using namespace leopard2_internal;
+    switch (path)
+    {
+    case kR1ReductionNotApplicable: return "not_applicable";
+    case kR1ReductionK1Copy: return "k1_copy";
+    case kR1ReductionK2Terminal: return "k2_terminal";
+    case kR1ReductionPairwise: return "pairwise";
+    case kR1ReductionDense: return "dense";
+    case kR1ReductionCoarse: return "coarse";
+    case kR1ReductionFusedFinal: return "fused_final";
+    case kR1ReductionGroup4: return "group4";
     }
     return "unknown";
 }
@@ -1145,6 +1177,10 @@ static std::string LegacyUnavailableReason(
 
 static int Run(const Options& options)
 {
+    if (options.r1_small_reduction_mode >= 0 &&
+        !leopard2_internal::SetR1SmallReductionModeForDiagnostics(
+            static_cast<unsigned>(options.r1_small_reduction_mode)))
+        Fail("cannot set the R=1 small-reduction attribution mode");
     if (options.k8r3r4_t4_terminal_mode >= 0 &&
         !leopard2_internal::
             SetK8R3R4T4TerminalEnabledForDiagnostics(
@@ -1195,6 +1231,11 @@ static int Run(const Options& options)
         context, options.k, options.r, options.profile, options.field,
         &codec_options, &codec),
         "codec create");
+    leopard2_internal::CodecR1ReductionPathInfo r1_reduction_path_info = {};
+    if (options.r1_small_reduction_mode >= 0 &&
+        !leopard2_internal::GetCodecR1ReductionPathInfo(
+            codec, options.bytes, &r1_reduction_path_info))
+        Fail("R=1 reduction-path introspection failed");
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if (options.force_translated_low || options.force_native_high)
     {
@@ -1369,12 +1410,14 @@ static int Run(const Options& options)
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
         options.attest_source || options.measure_one_shot_decode ||
+        options.r1_small_reduction_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.r1_small_reduction_mode >= 0 ? 12 :
         options.k8r3r4_t4_terminal_mode == 0 ? 11 :
         options.disable_k9r6r8_b256_terminal ? 10 :
         options.measure_one_shot_decode ? 9 :
@@ -1665,6 +1708,21 @@ static int Run(const Options& options)
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k9r5_b256_terminal ? "true" : "false");
+    if (options.r1_small_reduction_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"r1_small_reduction_diagnostic_mode\": "
+             << options.r1_small_reduction_mode << ",\n"
+             << "    \"r1_small_reduction_codec_enabled\": "
+             << (r1_reduction_path_info.small_reduction_mode_enabled
+                    ? "true" : "false") << ",\n"
+             << "    \"r1_encode_reduction_path\": \""
+             << R1ReductionPathName(r1_reduction_path_info.encode_path)
+             << "\",\n"
+             << "    \"r1_decode_reduction_path\": \""
+             << R1ReductionPathName(r1_reduction_path_info.decode_path)
+             << "\"";
+    }
     if (options.disable_k9r6r8_b256_terminal)
     {
         json << ",\n"
