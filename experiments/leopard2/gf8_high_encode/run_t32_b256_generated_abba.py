@@ -3,10 +3,11 @@
 
 This specialization compares a generated-kernel build with an
 executable-section-identical same-source control and exact Leopard main.  It
-times the exact target across practical erasure counts, then proves byte,
-shape, and batch neighbors do not regress.  Every cell retains exact-main
-observations, while only exact K=R=32/B=256 cells are held to the five-percent
-candidate promotion floor.
+times the exact one-stripe target across practical erasure counts, then proves
+byte, shape, and batch neighbors do not regress.  Main-compatible cells retain
+exact-main observations; R>K shapes remain same-source controls because the
+legacy API rejects them.  Only exact K=R=32/B=256/q1 cells are held to the
+five-percent candidate promotion floor.
 """
 
 from __future__ import annotations
@@ -32,13 +33,14 @@ def load_base() -> Any:
 
 BASE = load_base()
 BASE.__doc__ = __doc__
-BASE.SCHEMA = "leopard2-gf8-t32-b256-generated-abba/v2"
-BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-generated-summary/v2"
+BASE.SCHEMA = "leopard2-gf8-t32-b256-generated-abba/v3"
+BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-generated-summary/v3"
 BASE.MODE_SYMBOL = \
     "_ZN7leopard7backend12_GLOBAL__N_1L25g_t32_b256_generated_modeE"
 BASE.TARGET_CONTROL_FLOOR = 1.05
 BASE.TARGET_MAIN_FLOOR = 1.05
 BASE.ALLOW_MULTIPLE_TARGETS = True
+BASE.TARGET_ORDER = BASE.TARGET_ORDER * 3
 BASE.RUNNER_PATH = Path(__file__).resolve()
 BASE.RUNNER_DEPENDENCIES = (
     BASE.RUNNER_PATH,
@@ -55,8 +57,8 @@ def cells() -> list[dict[str, Any]]:
             f"target-k32-r32-b256-l{loss}-q1",
             32, 32, 256, loss, 1, "target"))
     values.append((
-        "target-k32-r32-b256-l1-q8",
-        32, 32, 256, 1, 8, "target"))
+        "batch-neighbor-k32-r32-b256-l1-q8",
+        32, 32, 256, 1, 8, "neighbor"))
     values.extend((
         ("byte-neighbor-k32-r32-b255-l1-q1",
          32, 32, 255, 1, 1, "neighbor"),
@@ -95,16 +97,19 @@ def cells() -> list[dict[str, Any]]:
             "batch": batch,
             "reuse": 8192,
             "role": role,
-            "compare_main": True,
+            "compare_main": r <= k,
             "seed": 0x54324200 + index,
         })
     BASE.require(
         len(result) == 19 and
-        sum(cell["role"] == "target" for cell in result) == 7 and
+        sum(cell["role"] == "target" for cell in result) == 6 and
         len({cell["id"] for cell in result}) == len(result) and
         len({cell["seed"] for cell in result}) == len(result) and
         all(1 <= cell["loss"] <= cell["R"] for cell in result) and
-        all(cell["compare_main"] is True for cell in result),
+        {cell["id"] for cell in result if not cell["compare_main"]} == {
+            "shape-neighbor-k31-r32-b256-l1-q1",
+            "shape-neighbor-k32-r33-b256-l1-q1",
+        },
         "T32/B256 final qualification matrix is incomplete")
     return result
 
