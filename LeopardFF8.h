@@ -404,6 +404,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t small_transform_calls;
     uint64_t t2_packed_calls;
     uint64_t t4_packed_calls;
+    uint64_t t8_packed_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;
     uint64_t k9r5_tail_calls;
@@ -448,6 +449,7 @@ void TestOnlyResetHighEncodeCounts();
 TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
 void TestOnlyRecordT2PackedCall();
 void TestOnlyRecordT4PackedCall();
+void TestOnlyRecordT8PackedCall();
 void TestOnlyResetSparseEncodeCounts();
 TestOnlySparseEncodeCounts TestOnlyGetSparseEncodeCounts();
 void TestOnlyResetHighDecodeCounts();
