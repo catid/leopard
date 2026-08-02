@@ -1,0 +1,104 @@
+{
+  "schema": "leopard2-gf8-k5r4-b64-terminal-checkpoint-v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high AVX2 K=5 R=4 64-byte ordinary encode execution",
+  "candidate": {
+    "commit": "6823618558806bb9f5c6aa53364b5c33447caa82",
+    "tree": "3d632d7e90de7fb6dd0d18edf8494bb3ba8bd927",
+    "benchmark_sha256": "6fd5c9ef7c58be667e804616793cfaafe26c285cf2bea562f1959b425561cbe5",
+    "source_attestation": "clean"
+  },
+  "comparators": {
+    "same_source_disabled_route": {
+      "benchmark_sha256": "6661e5c1965c9e8c697ddb35eb46ecd92862b662818e34971b564f0db05b01bc",
+      "difference": "LEO2_DIAGNOSTIC_DISABLE_K5R4_B64_TERMINAL=1 changes one nonzero initialized data word"
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "implementation": [
+    "Recognize the exact AVX2 GF8 legacy-high K=5 R=4 T=4 64-byte packed public layout.",
+    "Preserve the full public scratch, descriptor, protected batch metadata, address overflow, and overlap contract before the first output write.",
+    "Fall back unchanged for sparse, null, detached, unordered, aliased, forced-diagnostic, non-AVX2, and nonmatching calls.",
+    "Reuse the qualified prevalidated ReedSolomonEncodeT4Batch arithmetic instead of rebuilding generic geometry and 8 work pointers.",
+    "Isolate the terminal body from mature hot text and retain an initialized-data-only same-source attribution switch."
+  ],
+  "authoritative_target": {
+    "cpu": 14,
+    "rounds": 7,
+    "samples_per_process": 15,
+    "reuse": 10000,
+    "same_source_control_over_candidate_time_ratio": 2.534637727,
+    "same_source_ci95": [2.510730940, 2.535762483],
+    "candidate_time_change_percent": -60.5466,
+    "exact_main_over_candidate_time_ratio": 1.679821551,
+    "exact_main_ci95": [1.660169634, 1.718753580],
+    "candidate_time_change_versus_main_percent": -40.4699,
+    "parity_digest": "c7e9e8bf323e0a85",
+    "raw_directory": "/tmp/leopard2-k5r4-auth-6823618/results"
+  },
+  "binary_provenance": {
+    "candidate_and_control_text_sha256": "519c4363e2ecf9a9e2d423fc47fb3248735a152e2aad20abc4cf51886b2f4bd5",
+    "text_sections_identical": true,
+    "hashes_unchanged_after_timing": true,
+    "all_raw_results_sha256": "4b3fe00cdfe0965fb8c55949ee3a675c99a7e14e225d1747ebd6f2b95f0a7b09",
+    "benchmark_text_bytes_before": 1018452,
+    "benchmark_text_bytes_after": 1020108,
+    "benchmark_text_growth_bytes": 1656
+  },
+  "boundary_screen": {
+    "shape": "K=4..8, R=3..4, bytes in 1,17,31,32,33,64,65,128,256,1024",
+    "same_source_cells": 100,
+    "exact_main_cells": 40,
+    "exact_main_limit": "The old API requires shard bytes divisible by 64, so exact-main cells cover 64,128,256,1024 only.",
+    "parity_digest_mismatches": 0,
+    "screen_main_over_candidate_median": 0.690806,
+    "screen_main_over_candidate_minimum": 0.419091,
+    "screen_main_over_candidate_maximum": 1.689098,
+    "interpretation": "Only the exact K5/R4/64 terminal is promoted here; the remaining tiny T=4 deficits stay open for shared-terminal expansion."
+  },
+  "neighbor_abba": [
+    {"K": 5, "R": 4, "bytes": 33, "control_over_candidate": 0.998532, "ci95": [0.993288, 1.005500]},
+    {"K": 5, "R": 4, "bytes": 128, "control_over_candidate": 1.003007, "ci95": [0.995049, 1.010974]},
+    {"K": 5, "R": 4, "bytes": 1024, "control_over_candidate": 0.999438, "ci95": [0.989643, 1.005228]},
+    {"K": 7, "R": 4, "bytes": 64, "control_over_candidate": 0.998431, "ci95": [0.991252, 1.016679]},
+    {"K": 8, "R": 3, "bytes": 17, "control_over_candidate": 0.998310, "ci95": [0.994649, 1.003325]},
+    {"K": 6, "R": 4, "bytes": 1, "control_over_candidate": 1.001546, "ci95": [0.992678, 1.002351]}
+  ],
+  "correctness": {
+    "release": [
+      "leopard2_k5r4_b64_terminal_test",
+      "leopard2_public_api_contract_test",
+      "leopard2_high_direct_production_test",
+      "leopard2_auto_encode_backend_test",
+      "leopard2_legacy_golden_test",
+      "leopard2_batch_aliasing_test"
+    ],
+    "asan_ubsan": [
+      "leopard2_k5r4_b64_terminal_test",
+      "leopard2_public_api_contract_test",
+      "leopard2_high_direct_production_test"
+    ],
+    "asan_peak_rss_kib": {
+      "terminal": 39936,
+      "public_api": 51456,
+      "high_direct": 111992
+    },
+    "strict_compilers": ["GCC 13.3.0", "Clang 18.1.3"],
+    "field_disabled_builds": ["GF8-only", "GF16-only"],
+    "new_contract_cases": [
+      "packed public and one-item batch route selection",
+      "independent direct-generator parity",
+      "unaligned packed slabs",
+      "forced-transform and scalar fallback",
+      "sparse output and detached input fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output and output/output alias rejection",
+      "output/batch-metadata overlap rejection"
+    ]
+  },
+  "resource_note": "Builds and timings were serialized under /tmp/leopard-gf8-authoritative.lock. Builds used one compiler job and a 512 MiB resident-memory cgroup; benchmark processes used a 256 MiB address-space limit. The first sanitizer attempt hit a compiler virtual-address limit, not host OOM, and was resumed safely under the resident-memory cgroup.",
+  "disposition": "Promote this exact terminal. It clears the prior approximately 49 percent ordinary-call deficit, beats exact Leopard main by 40.47 percent in execution time, preserves the independent parity oracle and public failure contract, and has no credible neighboring regression. Generalize only through the separately tracked shared-terminal refactor."
+}
