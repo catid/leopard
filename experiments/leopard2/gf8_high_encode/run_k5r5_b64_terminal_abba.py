@@ -40,6 +40,7 @@ CONTROL_BUILD_MARKER: str | None = None
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 T95_DF2 = 4.302652729911275
 T95_DF3 = 3.182446305284263
+T95_DF8 = 2.306004135204166
 TARGET_CONTROL_FLOOR = 1.05
 TARGET_MAIN_FLOOR = 1.0
 NEIGHBOR_FLOOR = 1.0 / 1.02
@@ -219,16 +220,26 @@ def benchmark_command(
     iterations: int,
     warmup: int,
 ) -> list[str]:
+    logical_bytes = int(cell["bytes"])
+    # The legacy API requires a 64-byte physical shard quantum.  Its
+    # source-attested benchmark has an explicit zero-padded adapter so exact
+    # main can still be compared with Leopard2 arbitrary-byte neighbors while
+    # hashing only the common logical prefix.
+    physical_bytes = logical_bytes if implementation != "main" else \
+        (logical_bytes + 63) & ~63
     common = [
         "/usr/bin/prlimit", "--as=201326592",
         "/usr/bin/taskset", "-c", str(cpu), str(executable),
         "--k", str(cell["K"]), "--r", str(cell["R"]),
-        "--bytes", str(cell["bytes"]), "--loss", str(cell.get("loss", 1)),
+        "--bytes", str(physical_bytes),
+        "--loss", str(cell.get("loss", 1)),
         "--batch", str(cell["batch"]), "--reuse", str(cell["reuse"]),
         "--iterations", str(iterations), "--warmup", str(warmup),
         "--threads", "1", "--seed", str(cell["seed"]), "--json", "-",
     ]
     if implementation == "main":
+        if physical_bytes != logical_bytes:
+            common[-2:-2] = ["--logical-bytes", str(logical_bytes)]
         return common
     command = common[:-2] + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
@@ -262,13 +273,19 @@ def validate_result(
     warmup: int,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not an object")
+    logical_bytes = int(cell["bytes"])
+    physical_bytes = logical_bytes if implementation != "main" else \
+        (logical_bytes + 63) & ~63
     expected_parameters = {
         "K": cell["K"], "R": cell["R"],
-        "shard_bytes": cell["bytes"], "loss_count": cell.get("loss", 1),
+        "shard_bytes": physical_bytes,
+        "loss_count": cell.get("loss", 1),
         "batch": cell["batch"], "reuse": cell["reuse"],
         "iterations": iterations, "warmup": warmup,
         "thread_count": 1, "seed": cell["seed"],
     }
+    if implementation == "main":
+        expected_parameters["logical_shard_bytes"] = logical_bytes
     parameters = result.get("parameters")
     require(isinstance(parameters, dict) and
             all(parameters.get(name) == value
@@ -290,9 +307,16 @@ def validate_result(
                     "recovered_originals")),
             "benchmark workload digests are incomplete")
     if implementation == "main":
-        require(result.get("schema") == "leopard-main-benchmark-v1" and
+        padded_application = physical_bytes != logical_bytes
+        require(result.get("schema") == (
+                    "leopard-main-benchmark-v2" if padded_application else
+                    "leopard-main-benchmark-v1") and
                 isinstance(correctness, dict) and
-                correctness.get("round_trip") is True,
+                correctness.get("round_trip") is True and
+                correctness.get("logical_prefix_fingerprinted") is True and
+                resolved.get("padded_application_bytes") is
+                    padded_application and
+                resolved.get("padding_policy") == "zero suffix per shard",
                 "exact-main identity or round trip failed")
         build = result.get("build")
         require(isinstance(build, dict) and
@@ -380,10 +404,14 @@ def run_one(
 
 
 def confidence_interval(values: Sequence[float]) -> dict[str, Any]:
-    require(len(values) in (3, 4),
-            "three or four independent round contrasts are required")
+    require(len(values) in (3, 4, 9),
+            "three, four, or nine independent round contrasts are required")
     center = statistics.mean(values)
-    critical = T95_DF2 if len(values) == 3 else T95_DF3
+    critical = {
+        3: T95_DF2,
+        4: T95_DF3,
+        9: T95_DF8,
+    }[len(values)]
     half_width = critical * statistics.stdev(values) / math.sqrt(len(values))
     return {
         "speedup": math.exp(center),
@@ -445,6 +473,19 @@ def acquire_global_lock() -> int:
     return descriptor
 
 
+def select_round_orders(
+    orders: Sequence[Sequence[str]],
+    requested_rounds: int | None,
+) -> tuple[tuple[str, ...], ...]:
+    """Repeat a balanced order cycle to a supported independent-round count."""
+    require(len(orders) > 0, "round-order cycle is empty")
+    round_count = len(orders) if requested_rounds is None else requested_rounds
+    require(round_count in (3, 4, 9),
+            "--rounds must select 3, 4, or 9 independent contrasts")
+    return tuple(tuple(orders[index % len(orders)])
+                 for index in range(round_count))
+
+
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
@@ -457,6 +498,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=15)
     parser.add_argument("--warmup", type=int, default=64)
+    parser.add_argument("--rounds", type=int)
     return parser.parse_args()
 
 
@@ -480,6 +522,7 @@ def main() -> int:
             "reserved_sibling": options.sibling,
             "iterations": options.iterations,
             "warmup": options.warmup,
+            "requested_rounds": options.rounds,
             "runner": T8_SUPPORT.file_identity(RUNNER_PATH),
             "runner_dependencies": [
                 support_file_identity(path)
@@ -564,9 +607,10 @@ def main() -> int:
             all_cells = cells()
             for cell_index, cell in enumerate(all_cells):
                 cell_raw = {"cell": dict(cell), "rounds": []}
-                orders = TARGET_ORDER if cell.get(
+                order_cycle = TARGET_ORDER if cell.get(
                     "compare_main", cell["role"] == "target") \
                     else NEIGHBOR_ORDER
+                orders = select_round_orders(order_cycle, options.rounds)
                 for round_index, order in enumerate(orders):
                     before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
                     before_sibling = MAIN_SUPPORT.cpu_stat_snapshot(options.sibling)

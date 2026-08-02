@@ -102,12 +102,19 @@ Static/assembly kill gates:
 
 Predeclared timing cells:
 
-- Primary: exact K32/R32/B256, candidate versus packed-validator mature control
-  and exact main, direct and q1 batch, nine-round mirrored ABBA on a pinned
-  physical core with its SMT sibling idle and frozen executable hashes.
-- Byte controls: B255, B257, B64, B1024.
+- Primary: exact K32/R32/B256/q1 at losses 1,2,4,8,16,32, candidate versus
+  packed-validator mature control and exact main, nine-round mirrored ABBA on
+  a pinned physical core with its SMT sibling idle and frozen executable
+  hashes.
+- Batch control: B256/q8 is a neighbor, because the generated route is
+  deliberately inert for the prevalidated multi-item batch entry point.
+- Byte controls: B255, B257, B64, B1024.  Exact main receives B255/B257 via
+  its source-attested zero-padding adapter (`--bytes 256/320` plus
+  `--logical-bytes 255/257`), and validation requires the v2 schema and common
+  logical-prefix digests.
 - Shape controls at B256: K31/R32, K32/R31, K31/R31, K33/R32, K32/R33, plus
-  existing K16/R8.
+  existing K16/R8.  The two R>K shapes are same-source-only because Leopard1's
+  public API rejects R>K; every other shape also retains exact-main evidence.
 - Side controls: K16/R16/B256 and K64/R64/B256.
 
 Promotion requires lower-95% speedup at least 1.05x against both packed mature
