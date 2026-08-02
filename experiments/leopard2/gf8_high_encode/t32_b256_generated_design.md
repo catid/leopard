@@ -55,7 +55,7 @@ For an inverse radix-8 group at base b, constants are selected in order
 
 The fused outer inverse radix-4 uses indices 8,24,16 and therefore constants
 `17,34,85`.  The outer forward radix-4 uses the same indices in the forward
-slice and therefore `255,34,255`.
+slice and therefore `255,85,255`.
 
 For a forward radix-8 group the same seven index values are supplied, but the
 implementation executes them in distance order 4,2,1.  The four tuples are:
@@ -67,8 +67,13 @@ implementation executes them in distance order 4,2,1.  The four tuples are:
 
 The candidate reads immutable nibble tables through `GetAVX2FF8Tables()` from
 a separate AVX2 object.  It neither extends `Ops` nor changes the mature AVX2
-translation unit.  Its exact-shape route is inserted inside the existing
-K16/R8/B256 packed classifier/call site and is preprocessed away when OFF.
+translation unit.  Its exact-shape route follows the shared aggregate packed
+validator and transform-backend selection, before the mature scratch pointer
+schedule is materialized.  The public routing branch is preprocessed away when
+the experiment is OFF.  ON builds use a volatile selector in the isolated
+object so candidate and same-source control retain identical executable text;
+the control changes only the selector's initialized data word and falls
+through to the mature transform.
 
 ## Required qualification before timing
 
