@@ -1,0 +1,66 @@
+{
+  "schema": "leopard2-k2-r1-fast-validator-negative/v1",
+  "date_utc": "2026-08-02",
+  "status": "rejected_before_broad_qualification",
+  "scope": "GF8 legacy-high pure-AVX2 K=2,R=1 ordinary one-shot encode at 64, 256, and 1024 bytes",
+  "source": {
+    "parent_commit": "14f565e850f46096ebf803f62a6c198f34f95ad2",
+    "candidate_worktree": "/home/catid/leopard-worktrees/r1-fast-valid-14f565e",
+    "final_inline_diff_sha256": "d63196408f5453cf4ef1029c17dfcfbb333db5add027b0263db9ee591076e2bf",
+    "control_executable_sha256": "43c9bffe7bdb2aa91d34d1f873517e7f0a4402cae45ff8ef6b8741572597d670"
+  },
+  "hypothesis": "A straight-line integer-range success proof could preserve the full overlap contract while avoiding the mature K2/R1 validator's general range construction on valid public calls.",
+  "execution": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "rounds_per_cell": 3,
+    "order_per_round": [
+      "control",
+      "candidate",
+      "candidate",
+      "control"
+    ],
+    "process_medians_per_implementation_per_cell": 6,
+    "iterations_per_process": 9,
+    "warmups_per_process": 3,
+    "reuse": 256,
+    "child_address_space_limit_bytes": 274877906944,
+    "ratio_orientation": "control time divided by candidate time; above one favors the candidate",
+    "all_processes_succeeded": true,
+    "workload_digests_match_control_and_candidate_per_byte_count": true,
+    "frozen_binary_hashes_stable": true
+  },
+  "candidates": [
+    {
+      "name": "separate public-entry success helper",
+      "candidate_executable_sha256": "2fd66db10bcd0bc96d995bcd455b84ba110f28631187e528e23fb48085e3e9af",
+      "raw_artifact_directory": "/tmp/leo2-r1-fast-early-abba-14f565e",
+      "raw_file_manifest_sha256": "c27f3471529e85c2ac529b453f7f2b2e0170ef2cf6b4091b202d959c9f559059",
+      "results": [
+        {"bytes": 64, "control_median_us": 0.008164, "candidate_median_us": 0.009961, "speedup": 0.8195964261},
+        {"bytes": 256, "control_median_us": 0.009258, "candidate_median_us": 0.010937, "speedup": 0.8464844107},
+        {"bytes": 1024, "control_median_us": 0.013984, "candidate_median_us": 0.016523, "speedup": 0.8463354112}
+      ],
+      "decision": "reject; the extra helper and duplicated routing made every target 15 to 18 percent slower"
+    },
+    {
+      "name": "success proof in existing isolated K2 terminal",
+      "candidate_executable_sha256": "52a62893d2bae55d406bff1ef0fb680215d63c58784929c46761316f98057144",
+      "raw_artifact_directory": "/tmp/leo2-r1-fast-inline-early-abba-14f565e",
+      "raw_file_manifest_sha256": "3fc13cb154fa74df5240bf69b1d92c707b2ba32e5ec04d76d73ae3da5b94fa91",
+      "results": [
+        {"bytes": 64, "control_median_us": 0.008125, "candidate_median_us": 0.008242, "speedup": 0.9858044164},
+        {"bytes": 256, "control_median_us": 0.009219, "candidate_median_us": 0.009453, "speedup": 0.9752459537},
+        {"bytes": 1024, "control_median_us": 0.014023, "candidate_median_us": 0.014570, "speedup": 0.9624571036}
+      ],
+      "decision": "reject; even without an added public helper the proof is 1.4 to 3.8 percent slower and cannot meet the five-percent promotion gate"
+    }
+  ],
+  "correctness_and_review": {
+    "independent_static_review": "The fast predicate's true result proves the same successful CheckScratch and ValidateK2R1EncodeBuffers conditions for the exact native-GF8 cells, uses overflow-checked integer half-open ranges, preserves allowed read-only aliases, and falls back for every ambiguous or invalid input.",
+    "qualification_boundary": "The candidates were killed by the target timing screen. Broad invalid-input differential, sanitizer, exact-main, and neighboring-cell campaigns were intentionally not run because no candidate approached the same-source promotion threshold."
+  },
+  "conclusion": "Retain the mature K2/R1 validator. The tiny-call gap to Leopard1 is not closed by duplicating its success proof; further work would need a different API-level amortization strategy rather than more validation branches."
+}
