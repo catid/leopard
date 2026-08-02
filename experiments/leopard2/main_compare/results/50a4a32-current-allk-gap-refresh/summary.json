@@ -1,0 +1,120 @@
+{
+  "schema": "leopard2-current-allk-gf8-gap-refresh-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "status": "completed_diagnostic_not_promotion_evidence",
+  "scope": "Exact Leopard main versus current Leopard2 pure-AVX2 GF8 discovery sweep over every K=1 through 255",
+  "source_identity": {
+    "leopard2_commit": "50a4a32cb88ebefede62258b9dbb5980b71da97a",
+    "leopard2_tree": "4e74d7cf57fe8b4733d3e13560da1e6ef58104cf",
+    "leopard2_tracked_dirty": false,
+    "leopard2_executable_sha256": "8a1e43602336f0b4f41f608292c45051ef9f9bca1306a1438486c9c7faa35971",
+    "leopard2_archive_sha256": "7a3c5f77f8c1ff6bebf8b864b6946f719675278fb92f34b8b1870e006d8d9003",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "reproducible_rebuild_matched": true,
+    "leopard2_evex_instruction_count": 0,
+    "exact_main_evex_instruction_count": 0
+  },
+  "matrix": {
+    "field": "GF8",
+    "profile": "legacy_high_v1",
+    "backend": "AVX2",
+    "K": [1, 255],
+    "redundancy_bands": ["R=1", "middle legal R", "maximum legal GF8 R"],
+    "shard_bytes": [4096, 65536],
+    "loss_bands": ["one missing original", "maximum original loss"],
+    "cells": 2522,
+    "valid_cells": 2522,
+    "failed_cells": 0,
+    "workload_digest_mismatches": 0
+  },
+  "execution": {
+    "runner": "experiments/leopard2/main_compare/run_allk_gap.py",
+    "runner_sha256": "58ab871642a2f3a4d3d88746e625a37e1ccea01706d9e44e5441688243e447ef",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "requested_workers": 30,
+    "workers_visible_and_used_by_service": 28,
+    "used_cpus": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29],
+    "order": ["exact_main", "leopard2", "leopard2", "exact_main"],
+    "wall_time_seconds": 195.093,
+    "cpu_time_seconds": 2914.309,
+    "reproducible_build_jobs": 1,
+    "service_memory_max_mib": 2048,
+    "service_swap_max_mib": 0,
+    "reason_for_single_build_job": "Two previous user-session OOMs require serialized compilation; benchmark discovery then saturated every CPU visible to the service."
+  },
+  "artifacts": {
+    "session_directory": "/tmp/leopard2-allk-gap-50a4a32-v4",
+    "manifest_sha256": "053c4f7cb7caf24e885e0ff1d20760d2a77aa04143417bda36b3b36c0eb60e95",
+    "cells_jsonl_sha256": "e5a9091ec1218a8ea1f2c5cbfd80f9712cb819b80b63a680e4324db4bf802d13",
+    "gap_cells_jsonl_sha256": "9911e4095b223c92166ebd47d477494f656259b45315de1c6ff0a71f74384f3d",
+    "raw_summary_sha256": "2fccbb9a815086f2e54e6dd0ce73b0a214e9b867c747675d003457f98c95ad49",
+    "session_bytes": 162015933
+  },
+  "aggregate_main_over_leopard2": {
+    "ratio_orientation": "exact_main_time / leopard2_time; above one favors Leopard2",
+    "encode": {
+      "median": 1.163882530,
+      "p10": 0.750530801,
+      "cells_below_1_0": 648,
+      "cells_below_1_05": 808
+    },
+    "decode_first_use": {
+      "median": 2.527987153,
+      "p10": 0.994358902,
+      "cells_below_1_0": 257,
+      "cells_below_1_05": 336
+    },
+    "decode_at_reuse": {
+      "median": 2.600560516,
+      "p10": 1.041493360,
+      "cells_below_1_0": 209,
+      "cells_below_1_05": 265
+    }
+  },
+  "per_size": {
+    "4096": {
+      "cells": 1261,
+      "encode_geomean": 1.192644758,
+      "encode_median": 1.171415165,
+      "encode_cells_below_1_0": 269,
+      "decode_first_geomean": 3.182942658,
+      "decode_reuse_geomean": 3.517240742
+    },
+    "65536": {
+      "cells": 1261,
+      "encode_geomean": 1.156974576,
+      "encode_median": 1.149150197,
+      "encode_cells_below_1_0": 379,
+      "decode_first_geomean": 4.668606928,
+      "decode_reuse_geomean": 4.689043499
+    }
+  },
+  "largest_saturated_outliers_selected_for_isolation": [
+    {"K": 128, "R": 1, "bytes": 65536, "losses": 1, "encode_ratio": 0.121673822},
+    {"K": 219, "R": 1, "bytes": 65536, "losses": 1, "encode_ratio": 0.148796399, "decode_reuse_ratio": 0.111669524},
+    {"K": 169, "R": 64, "bytes": 65536, "losses": 1, "encode_ratio": 0.162213952},
+    {"K": 147, "R": 64, "bytes": 4096, "losses": 1, "encode_ratio": 0.226367589},
+    {"K": 134, "R": 64, "bytes": 4096, "losses": 64, "decode_reuse_ratio": 0.291902473},
+    {"K": 101, "R": 101, "bytes": 65536, "losses": 101, "decode_reuse_ratio": 0.285501937}
+  ],
+  "failed_bootstrap_attempts": [
+    {
+      "output": "/tmp/leopard2-allk-gap-50a4a32-v2",
+      "failure": "The systemd service inherited LimitNOFILE too small for the fail-closed procfs provenance snapshot and stopped before timing."
+    },
+    {
+      "output": "/tmp/leopard2-allk-gap-50a4a32-v3",
+      "failure": "The 512-MiB service cap killed the reproducibility/provenance phase at the cap before timing. The successful retry used 2 GiB and no swap."
+    }
+  ],
+  "interpretation": {
+    "broad_result": "Leopard2 has a clear aggregate advantage at both tested sizes, especially for decode, but the saturated map still reports numerous individual losing cells.",
+    "validity_boundary": "Concurrent heterogeneous cells share cores, SMT resources, caches, and memory bandwidth. Large individual outliers are discovery signals only and may be co-scheduling artifacts; no code or dispatcher promotion may use these ratios without isolated ABBA confirmation.",
+    "next_steps": [
+      "Complete isolated CPU14/30 ABBA on the six representative outliers above.",
+      "Refresh the structurally untouched R=1 64/256/1024-byte matrix against current source.",
+      "Create implementation beads only for deficits whose isolated confidence interval establishes a meaningful current gap."
+    ]
+  }
+}
