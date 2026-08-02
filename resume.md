@@ -41,12 +41,17 @@ sampled 64-byte losses (K/R 24/20, 40/12, and 95/95); because that candidate
 was frozen before the final commit, retain it as directional only.
 
 Bead `leopard-79h.38.2.5` remains open until a final clean-source exact-main
-ABBA is complete.  The next bounded candidate is stack ownership for the
-synchronous ephemeral one-shot plan (the plan object's internal vectors may
-still allocate).  Benchmark the three residual 64-byte shapes plus neighboring
-controls before promotion.  Builds and tests must stay `-j1`, memory-capped,
-and serialized through `/tmp/leopard-gf8-authoritative.lock`; prior compilation
-parallelism repeatedly OOMed the session.
+ABBA is complete.  Stack ownership for the synchronous ephemeral one-shot plan
+was implemented in `395fc3f`, passed focused Release and ASan+UBSan 6/6, then
+failed its isolated same-source gate: the three-target aggregate was 0.9881x
+(95% CI 0.9860--0.9901), with K/R 24/20 and 40/12 regressing.  Commit `529bfb0`
+reverts it; report 26 and
+`decoder_dispatch/results/stack_owned_transient_plan_negative_20260802.json`
+retain the negative result.  The next step is the final clean-source exact-main
+ABBA for the promoted transient-plan/Walsh code.  Builds and tests must stay
+`-j1`, memory-capped, and serialized through
+`/tmp/leopard-gf8-authoritative.lock`; prior compilation parallelism repeatedly
+OOMed the session.
 
 ## 2026-08-02 GF8/AVX2 R=1 small-reduction closure
 

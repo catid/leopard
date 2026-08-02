@@ -115,6 +115,7 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 23 | Writable-partitioned batch preflight | **landed** | 1.01-1.06x batch; model gap recorded |
 | 24 | GF16 affine table packing | **landed** | 8 MiB -> 2 MiB, perf neutral, requirement 2 done |
 | 25 | Affinity-aware GF16 L3 tiling | **landed** | avoids 20.7-26.1% large-cache regressions; retains up to 1.11x |
+| 26 | Stack-owned transient one-shot plan | rejected and reverted | target aggregate 0.988x; two regressions |
 
 ## Method notes worth keeping
 

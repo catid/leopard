@@ -1,0 +1,218 @@
+{
+  "accepted_processes": 84,
+  "binary_identity": {
+    "candidate_sha256": "e8f61bb14942adb6a88be2020259796ddcf82785e0abd2c3ea065ee9d1b4d428",
+    "control_sha256": "b1af83bf64b3eea63c78e34fab8415ec24536229e0649aae150a4d450ce25547"
+  },
+  "cpu": 14,
+  "elapsed_seconds": 2.578779060859233,
+  "iterations": 41,
+  "method": "three isolated ABBA/BAAB rounds; log contrasts; t CI df=2",
+  "rejected_attempts": 0,
+  "reserved_sibling": 30,
+  "reuse": 64,
+  "rounds": 3,
+  "rows": [
+    {
+      "K": 24,
+      "R": 20,
+      "id": "target-24",
+      "loss": 20,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 0.9708680938441235,
+        "ci95_upper": 0.9906981864830193,
+        "geometric_mean": 0.9807330217167152,
+        "round_ratios": [
+          0.980015588156298,
+          0.9850438997038178,
+          0.9771558263000449
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9515347230293401,
+        "ci95_upper": 1.0386164185351139,
+        "geometric_mean": 0.994122520690752,
+        "round_ratios": [
+          0.9887634264510012,
+          1.0138960649124025,
+          0.980017668830187
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 40,
+      "R": 12,
+      "id": "target-40",
+      "loss": 12,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 0.9648721459639922,
+        "ci95_upper": 0.977373604396428,
+        "geometric_mean": 0.9711027582509193,
+        "round_ratios": [
+          0.9739505105665257,
+          0.9701980894065322,
+          0.9691661972972727
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.948484292577791,
+        "ci95_upper": 1.0143405465676296,
+        "geometric_mean": 0.980859865497701,
+        "round_ratios": [
+          0.9725303193659356,
+          0.9962596804865211,
+          0.9739691245420469
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 95,
+      "R": 95,
+      "id": "target-95",
+      "loss": 95,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 1.006748328061805,
+        "ci95_upper": 1.018970513475968,
+        "geometric_mean": 1.0128409849459143,
+        "round_ratios": [
+          1.0118923488110922,
+          1.0109985425626886,
+          1.0156380408766614
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9941689412957452,
+        "ci95_upper": 1.0240885875620451,
+        "geometric_mean": 1.009017872433196,
+        "round_ratios": [
+          1.0119820367556018,
+          1.0129949184295768,
+          1.002112561650126
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 12,
+      "R": 10,
+      "id": "control-n32",
+      "loss": 10,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 0.9795499691793105,
+        "ci95_upper": 0.9933860086809841,
+        "geometric_mean": 0.9864437308770412,
+        "round_ratios": [
+          0.9833098859048915,
+          0.9886206990204032,
+          0.9874084663252001
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9607463492804716,
+        "ci95_upper": 1.0040852249457055,
+        "geometric_mean": 0.9821767734135479,
+        "round_ratios": [
+          0.977313427295653,
+          0.9769958222066102,
+          0.9922986645691715
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 48,
+      "R": 40,
+      "id": "control-n128",
+      "loss": 40,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 0.9728177319242324,
+        "ci95_upper": 1.000493084408653,
+        "geometric_mean": 0.986558367852762,
+        "round_ratios": [
+          0.9924469048488047,
+          0.9858980910718105,
+          0.9813615683243347
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9962770492463877,
+        "ci95_upper": 1.0006859896025853,
+        "geometric_mean": 0.9984790858818551,
+        "round_ratios": [
+          0.9985893113590577,
+          0.9975421466102,
+          0.9993065883436715
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 106,
+      "R": 53,
+      "id": "control-n256",
+      "loss": 53,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 1.0188244274562788,
+        "ci95_upper": 1.0217376169062096,
+        "geometric_mean": 1.0202799824337492,
+        "round_ratios": [
+          1.020285201511701,
+          1.0208638805818164,
+          1.0196912021886955
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9984107640828468,
+        "ci95_upper": 1.0156110489822505,
+        "geometric_mean": 1.0069741821046607,
+        "round_ratios": [
+          1.0035160825000984,
+          1.010440040450627,
+          1.0069783256550506
+        ]
+      },
+      "shard_bytes": 64
+    },
+    {
+      "K": 24,
+      "R": 20,
+      "id": "bypass-control",
+      "loss": 1,
+      "one_shot_control_over_candidate": {
+        "ci95_lower": 0.9947964092325734,
+        "ci95_upper": 1.0412352408724859,
+        "geometric_mean": 1.0177509905602462,
+        "round_ratios": [
+          1.0285957931146068,
+          1.0126460222805065,
+          1.0120971370457843
+        ]
+      },
+      "reused_execution_control_over_candidate": {
+        "ci95_lower": 0.9094708295891191,
+        "ci95_upper": 1.0524415384217747,
+        "geometric_mean": 0.9783480357431604,
+        "round_ratios": [
+          0.9706998690429746,
+          0.9545106781416028,
+          1.0106816249787156
+        ]
+      },
+      "shard_bytes": 64
+    }
+  ],
+  "schema": "leopard2-stack-plan-same-source-abba/v1",
+  "target_aggregate_control_over_candidate": {
+    "ci95_lower": 0.9860124710105032,
+    "ci95_upper": 0.9901228747294685,
+    "geometric_mean": 0.9880655354357959,
+    "round_ratios": [
+      0.9884803986774636,
+      0.988603575363494,
+      0.987113324899194
+    ]
+  },
+  "warmup": 16
+}
