@@ -1,0 +1,225 @@
+{
+  "schema": "leopard2-raw-transient-one-shot-gf8-avx2-evidence/v1",
+  "date_utc": "2026-08-02",
+  "bead": "leopard-79h.38.19",
+  "implementation": {
+    "base_commit": "25b8c2a44c960e07d1a73e5566bae2b37c1fc66a",
+    "production_diff_sha256": "0067644edef21891163b611664d1dce5df5e4a37215703c1ebadca4385d24a34",
+    "summary": "Execute eligible public one-shot legacy-high GF8 decodes through a scratch-resident, non-owning translated-low pattern view, avoiding transient heap plan construction while preserving the reusable-plan path.",
+    "eligibility": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "layout": "native",
+      "backend": "explicit AVX2, or AUTO only when it resolves to the pure AVX2 backend",
+      "shard_bytes": "1 through 256 inclusive",
+      "recovery_count": "greater than 1",
+      "parent_count": "at most 256",
+      "missing_original_count": "greater than the existing direct-repair threshold",
+      "ordinary_flags": 0,
+      "one_shot_setup_mode": 3,
+      "test_hook_decode_mode": "AUTO"
+    },
+    "execution": [
+      "Build permanent, dynamic, unavailable, and deterministic virtual erasure metadata in caller scratch only after complete validation.",
+      "Use translated-low Algorithm 4 with existing mature GF8 AVX2 kernels, null pruned schedules, aligned-prefix locator reveal, and padded-tail staging/gather.",
+      "Fail closed to the existing owning plan path when layout, metadata capacity, work rows, backend, or pattern eligibility is unsuitable."
+    ],
+    "safety": [
+      "All pointer arrays, presence arrays, scratch ranges, shard ranges, input/output overlap, and output/output overlap are validated before scratch metadata or output bytes are written.",
+      "The view owns no memory and is never exposed as a leo2_decode_plan; reusable immutable plans are unchanged.",
+      "Public eligible one-shot execution performs zero heap allocations; allocation-counting tests also cover failure and reusable-plan execution.",
+      "No-loss, direct repair, unsupported backend, byte 257, forced-hook mode, and other ineligible cases retain their prior dispatch."
+    ],
+    "code_size": {
+      "candidate_benchmark_text_bytes": 1091276,
+      "control_benchmark_text_bytes": 1087452,
+      "text_delta_bytes": 3824,
+      "candidate_benchmark_data_bytes": 4236,
+      "control_benchmark_data_bytes": 4236,
+      "candidate_benchmark_bss_bytes": 658344,
+      "control_benchmark_bss_bytes": 658344
+    }
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "numa_nodes": 1,
+    "process_affinity": "0-13,16-29",
+    "measurement_cpu": 8,
+    "idle_smt_sibling": 24
+  },
+  "frozen_artifacts": {
+    "candidate_benchmark_sha256": "84a0e7c85043b43007e88efe85bb5207a7ce79fa763bf839ded5dab7111365e7",
+    "control_benchmark_sha256": "e55e8ccc1ee57a53d480f5799abea7b0b38171bc115410246077fe72d303b164",
+    "candidate_archive_sha256": "75acfa223094da00a96c604100814faeac08091f27bfcf38edc5d16e24c8fcb8",
+    "control_archive_sha256": "786c25f6a2cac94a5a7d7af375585b7c43dbb484ad11d9a944fd876fb4e5f3e5",
+    "mixed_candidate_benchmark_sha256": "72ce896d6ee3b419c085cb4cb6244ed4cb3dcda54d7c0e09a3fd94e21b4436bb",
+    "mixed_control_benchmark_sha256": "20c5d7b0b02acb43831e9cae0aa0ddbbaaea200d10faae16f8314ee6a8fe5af8",
+    "main_pure_avx2_sha256": "b498341537b478fd9e0cc76eb73c8bdb9e66da20d32045dae4e04a814bae1e78",
+    "main_native_znver4_sha256": "1901c892a65ec9b9a416502cea978d7448672b0403053c43ff6d13c7cb7f6d5e",
+    "main_source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_avx2_identity": "AVX2 translation unit compiled with -mavx2 -mno-avx512f; zero EVEX-prefixed instructions found",
+    "main_pure_avx2_identity": "GCC 13.3, -march=x86-64 -mtune=generic -mavx2 -mno-avx512f; zero EVEX-prefixed instructions found",
+    "main_native_context_identity": "GCC 13.3 -march=native on this Zen 5 host; AVX-512 instructions are present and this is reported separately from the controlled pure-AVX2 comparison"
+  },
+  "measurement_protocol": {
+    "orientation": "control or Leopard1 main decode-including-setup time divided by candidate public one-shot decode-including-setup time",
+    "affinity": "The entire measurement chain was pinned to CPU 8; /proc/self/status Cpus_allowed_list was recorded.",
+    "isolation": "CPU 24 sibling jiffies were audited before and after every outer round; contaminated rounds were rejected and retried.",
+    "order": "ABBA",
+    "clean_outer_rounds_per_cell": 3,
+    "samples_per_invocation": 51,
+    "reuse": 512,
+    "warmup": 1000,
+    "seed": 1,
+    "binary_provenance": "Every frozen executable was SHA-256 checked before and after each run.",
+    "correctness": "Original-data, transmitted-parity, and recovered-original digests matched in every accepted comparison."
+  },
+  "same_source_full_present": {
+    "description": "Base control versus candidate, all parity shards available, public one-shot decode.",
+    "all_digests_matched": true,
+    "median_speedup_range": [1.07525, 1.33831],
+    "weakest_accepted_round": 1.05035,
+    "cells": [
+      {"K": 32, "R": 32, "bytes": 64, "loss": 16, "median": 1.33831, "range": [1.31520, 1.33889]},
+      {"K": 32, "R": 32, "bytes": 64, "loss": 31, "median": 1.27262, "range": [1.27183, 1.27406]},
+      {"K": 32, "R": 32, "bytes": 64, "loss": 32, "median": 1.28121, "range": [1.27443, 1.29360]},
+      {"K": 32, "R": 32, "bytes": 256, "loss": 16, "median": 1.17975, "range": [1.14801, 1.20809]},
+      {"K": 32, "R": 32, "bytes": 256, "loss": 31, "median": 1.12588, "range": [1.10226, 1.13583]},
+      {"K": 32, "R": 32, "bytes": 256, "loss": 32, "median": 1.21329, "range": [1.20592, 1.22426]},
+      {"K": 95, "R": 95, "bytes": 64, "loss": 47, "median": 1.15408, "range": [1.14917, 1.16251]},
+      {"K": 95, "R": 95, "bytes": 64, "loss": 94, "median": 1.13921, "range": [1.13440, 1.14646]},
+      {"K": 95, "R": 95, "bytes": 64, "loss": 95, "median": 1.13636, "range": [1.12518, 1.14102]},
+      {"K": 95, "R": 95, "bytes": 256, "loss": 47, "median": 1.07704, "range": [1.07219, 1.10161]},
+      {"K": 95, "R": 95, "bytes": 256, "loss": 94, "median": 1.08561, "range": [1.07908, 1.09917]},
+      {"K": 95, "R": 95, "bytes": 256, "loss": 95, "median": 1.11315, "range": [1.09175, 1.11936]},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 64, "median": 1.16567, "range": [1.15453, 1.16573]},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 127, "median": 1.13937, "range": [1.13450, 1.14587]},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 128, "median": 1.13540, "range": [1.13428, 1.14613]},
+      {"K": 128, "R": 128, "bytes": 256, "loss": 64, "median": 1.08546, "range": [1.07970, 1.12036]},
+      {"K": 128, "R": 128, "bytes": 256, "loss": 127, "median": 1.07525, "range": [1.05035, 1.07963]},
+      {"K": 128, "R": 128, "bytes": 256, "loss": 128, "median": 1.09060, "range": [1.08758, 1.09723]}
+    ],
+    "raw": {
+      "path": "/tmp/leopard2-raw-transient-artifacts-25b8c2a/results/strict_cells",
+      "json_files": 97,
+      "content_manifest_sha256": "e993ac6598e689432cef8ff966896dcf3fd630735ce9ab92801efff1d5b06132"
+    }
+  },
+  "same_source_mixed_availability": {
+    "description": "Base control versus candidate with missing originals plus missing recovery shards.",
+    "all_digests_matched": true,
+    "median_speedup_range": [1.02814, 1.28136],
+    "weakest_accepted_round": 1.01105,
+    "cells": [
+      {"K": 32, "R": 32, "bytes": 64, "original_loss": 16, "recovery_loss": 16, "median": 1.28136, "range": [1.27941, 1.29326]},
+      {"K": 32, "R": 32, "bytes": 64, "original_loss": 31, "recovery_loss": 1, "median": 1.24660, "range": [1.24318, 1.25829]},
+      {"K": 32, "R": 32, "bytes": 256, "original_loss": 16, "recovery_loss": 16, "median": 1.11873, "range": [1.10377, 1.16926]},
+      {"K": 32, "R": 32, "bytes": 256, "original_loss": 31, "recovery_loss": 1, "median": 1.09838, "range": [1.08911, 1.10690]},
+      {"K": 95, "R": 95, "bytes": 64, "original_loss": 47, "recovery_loss": 48, "median": 1.13104, "range": [1.12899, 1.13328]},
+      {"K": 95, "R": 95, "bytes": 64, "original_loss": 94, "recovery_loss": 1, "median": 1.14838, "range": [1.14724, 1.15298]},
+      {"K": 95, "R": 95, "bytes": 256, "original_loss": 47, "recovery_loss": 48, "median": 1.04215, "range": [1.03352, 1.05724]},
+      {"K": 95, "R": 95, "bytes": 256, "original_loss": 94, "recovery_loss": 1, "median": 1.02814, "range": [1.01105, 1.07234]},
+      {"K": 128, "R": 128, "bytes": 64, "original_loss": 64, "recovery_loss": 64, "median": 1.14207, "range": [1.14089, 1.14735]},
+      {"K": 128, "R": 128, "bytes": 64, "original_loss": 127, "recovery_loss": 1, "median": 1.13667, "range": [1.13487, 1.13883]},
+      {"K": 128, "R": 128, "bytes": 256, "original_loss": 64, "recovery_loss": 64, "median": 1.05205, "range": [1.04189, 1.06171]},
+      {"K": 128, "R": 128, "bytes": 256, "original_loss": 127, "recovery_loss": 1, "median": 1.06588, "range": [1.02519, 1.08431]}
+    ],
+    "raw": {
+      "path": "/tmp/leopard2-raw-transient-artifacts-25b8c2a/results/mixed_strict",
+      "json_files": 149,
+      "content_manifest_sha256": "cd3f1312723f1b1136fe6f6b29ae72587e3494de993a3ebd2ec403eef55462ef"
+    }
+  },
+  "leopard1_main_controlled_pure_avx2": {
+    "description": "Exact Leopard main codec at commit 6e5725e versus candidate public one-shot Leopard2, with both hot arithmetic paths constrained to pure AVX2 and maximum original loss.",
+    "all_digests_matched": true,
+    "median_speedup_range": [1.16371, 2.32619],
+    "weakest_accepted_round": 1.11917,
+    "cells": [
+      {"K": 9, "R": 9, "bytes": 64, "loss": 9, "median": 2.23325, "range": [2.18032, 2.23674]},
+      {"K": 9, "R": 9, "bytes": 256, "loss": 9, "median": 2.32619, "range": [2.31828, 2.33115]},
+      {"K": 16, "R": 16, "bytes": 64, "loss": 16, "median": 2.24847, "range": [2.17208, 2.26042]},
+      {"K": 16, "R": 16, "bytes": 256, "loss": 16, "median": 2.19075, "range": [2.16519, 2.20150]},
+      {"K": 17, "R": 17, "bytes": 64, "loss": 17, "median": 1.91734, "range": [1.91396, 1.91754]},
+      {"K": 17, "R": 17, "bytes": 256, "loss": 17, "median": 2.09018, "range": [2.07646, 2.10979]},
+      {"K": 31, "R": 17, "bytes": 64, "loss": 17, "median": 1.20732, "range": [1.19515, 1.21189]},
+      {"K": 31, "R": 17, "bytes": 256, "loss": 17, "median": 1.16371, "range": [1.11917, 1.18169]},
+      {"K": 32, "R": 32, "bytes": 64, "loss": 32, "median": 1.46468, "range": [1.45025, 1.47167]},
+      {"K": 32, "R": 32, "bytes": 256, "loss": 32, "median": 1.69213, "range": [1.68023, 1.69580]},
+      {"K": 95, "R": 95, "bytes": 64, "loss": 95, "median": 1.44956, "range": [1.44214, 1.45736]},
+      {"K": 95, "R": 95, "bytes": 256, "loss": 95, "median": 1.92792, "range": [1.92494, 1.93859]},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 128, "median": 1.29325, "range": [1.28567, 1.30620]},
+      {"K": 128, "R": 128, "bytes": 256, "loss": 128, "median": 1.70932, "range": [1.70510, 1.71138]}
+    ],
+    "raw": {
+      "path": "/tmp/leopard2-raw-transient-artifacts-25b8c2a/results/exact_main_pure",
+      "json_files": 170,
+      "content_manifest_sha256": "6a59c7ab85632710efee1f5c3259fa9880698efcd1c2b269c29021373476baa3"
+    }
+  },
+  "leopard1_main_native_context": {
+    "description": "Context-only comparison against Leopard main compiled with -march=native on this host; the main binary contains AVX-512, while candidate Leopard2 remains in its explicit pure-AVX2 backend.",
+    "all_digests_matched": true,
+    "median_speedup_range": [1.08914189, 2.10002494],
+    "weakest_accepted_round": 1.04181216,
+    "cells": [
+      {"K": 16, "R": 16, "bytes": 64, "loss": 16, "median": 2.10002494, "range": [2.09687986, 2.11529650]},
+      {"K": 16, "R": 16, "bytes": 256, "loss": 16, "median": 2.06033995, "range": [2.03374254, 2.06622622]},
+      {"K": 31, "R": 17, "bytes": 64, "loss": 17, "median": 1.14725147, "range": [1.12865428, 1.15554584]},
+      {"K": 31, "R": 17, "bytes": 256, "loss": 17, "median": 1.08914189, "range": [1.04181216, 1.08923646]},
+      {"K": 32, "R": 32, "bytes": 64, "loss": 32, "median": 1.38389301, "range": [1.36988106, 1.39111971]},
+      {"K": 32, "R": 32, "bytes": 256, "loss": 32, "median": 1.58457426, "range": [1.57099808, 1.59735359]},
+      {"K": 128, "R": 128, "bytes": 64, "loss": 128, "median": 1.26478281, "range": [1.26006744, 1.26658524]},
+      {"K": 128, "R": 128, "bytes": 256, "loss": 128, "median": 1.62440758, "range": [1.61707817, 1.62887860]}
+    ],
+    "raw": {
+      "path": "/tmp/leopard2-raw-transient-artifacts-25b8c2a/results/exact_main_native_context",
+      "json_files": 102,
+      "content_manifest_sha256": "4a783aebe5c0a078dea54b6b0f0c8918d149006a0b9ff0ae3ce37edca75bad7d"
+    }
+  },
+  "validation": {
+    "release": {
+      "result": "passed",
+      "tests": [
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks",
+        "leopard2_api",
+        "leopard2_public_contract",
+        "leopard2_random",
+        "leopard2_dense_plan_policy",
+        "leopard2_high_pruned_legacy",
+        "leopard2_high_low_duality"
+      ]
+    },
+    "clang18_asan_ubsan_lsan": {
+      "result": "passed",
+      "options": "ASAN detect_leaks/halt/strict_string_checks; UBSAN halt with stack traces",
+      "tests": [
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks",
+        "leopard2_api",
+        "leopard2_random",
+        "leopard2_high_low_duality"
+      ]
+    },
+    "focused_cases": [
+      "Power-of-two translated parent boundaries P=16 and P=32, immediately below and above the boundary, maximum loss, mixed availability, and byte tails 1,63,64,65,255,256.",
+      "Explicit AVX2 and AUTO when AUTO resolves to AVX2.",
+      "Public one-shot zero-allocation recovery and reusable-plan zero-allocation execution.",
+      "Byte 257 and forced test-hook mode heap fallback.",
+      "Failure atomicity for undersized or misaligned scratch, pointer/presence mismatch, null output, every input/output or output/output alias class, late invalid presence, insufficient data, scratch/metadata overlap, and overflowing address ranges."
+    ]
+  },
+  "promotion": {
+    "decision": "promote",
+    "basis": "Correctness and failure-atomicity gates pass; all measured target cells are non-regressive; controlled pure-AVX2 Leopard1 comparisons improve 1.16x to 2.33x at the median; same-source full-availability comparisons improve 1.08x to 1.34x at the median.",
+    "limits": [
+      "The optimized route is deliberately narrow: legacy-high GF8, native layout, AVX2, N<=256, bytes<=256, R>1, and losses above direct-repair crossover.",
+      "Mixed-availability B=256 cells at K=95 and K=128 remain positive but can improve by less than the general 5 percent promotion guideline; deterministic eligibility avoids all observed regressions and future tuning may narrow these cells further.",
+      "This change removes transient owning-plan setup; it does not reduce reusable-plan execution cost or alter the wire profile."
+    ]
+  }
+}
