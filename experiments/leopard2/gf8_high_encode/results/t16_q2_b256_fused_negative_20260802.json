@@ -1,0 +1,197 @@
+{
+  "schema": "leopard2-gf8-t16-q2-b256-fused-negative/v1",
+  "created_utc": "2026-08-02T21:50:29Z",
+  "status": "rejected",
+  "scope": {
+    "operation": "encode",
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "K": 32,
+    "R": 16,
+    "T": 16,
+    "message_blocks": 2,
+    "shard_bytes": 256,
+    "batch": 1,
+    "public_paths": [
+      "leo2_encode",
+      "one-item leo2_encode_batch"
+    ]
+  },
+  "source": {
+    "base_commit": "14f565e7b257d8e73db0f7b71277937926832869",
+    "base_tree": "34cd2e1d7cca0351c48819632bd1fd6e42463a9b",
+    "pointer_abi_implementation_commit": "b90007a62b3bc3d52248b725a12295d391913e6f",
+    "same_binary_control_commit": "07e52341ad372368c7839cc58ab621974bd20598",
+    "pointer_abi_tree": "6722b3e1c0693c69b19cbe62fb14632254247a14",
+    "base_abi_commit": "600526b8da5674b3f8e68aea1b9f17c8d0fca346",
+    "base_abi_tree": "896b97673f7a048c029a045eabdc9bfc74bf0ed6",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "hypothesis": "A generated spill-free T=16 two-block inverse/accumulate/forward AVX2 kernel can remove enough generic staging and indirect butterfly work for exact K=32,R=16,B=256 to beat both the same-source mature transform and exact Leopard main by a credible five percent.",
+  "implementation": {
+    "wire_change": false,
+    "public_abi_change": false,
+    "cmake_option": "LEO2_EXPERIMENT_HIGH_T16_Q2_B256_FUSED",
+    "option_default": "OFF",
+    "kernel": "Two T=16 inverse transforms, fused outer inverse/accumulation/first-forward layer, then the remaining forward layer.",
+    "pointer_abi": "The first candidate accepted 32 source pointers and 32 work pointers. Public routing populated 16 recovery and 16 temporary work pointers on every call.",
+    "base_abi": "The final candidate accepted packed input, recovery, and temporary slab bases. This removed 32 per-call work-pointer stores and repeated kernel pointer-array loads while retaining the complete public validator and ordinary scratch contract."
+  },
+  "validation": {
+    "build_type": "Release",
+    "compiler": "GCC 13.3.0",
+    "build_jobs": 2,
+    "parent_virtual_memory_limit_bytes": 4294967296,
+    "child_address_space_limit_bytes": 268435456,
+    "focused_test": "ctest -R '^leopard2_t16_q2_b256_fused$' -j1 --output-on-failure",
+    "pointer_abi_result": "1/1 passed",
+    "base_abi_result": "1/1 passed",
+    "coverage": [
+      "independent direct systematic generator oracle",
+      "byte-identical parity with old leo_encode",
+      "same-binary mature-transform parity",
+      "ordinary and one-item-batch routing",
+      "unaligned packed slabs",
+      "sparse and non-packed fallback",
+      "adjacent K, R, and byte-count exclusions",
+      "scalar-backend exclusion",
+      "scratch, overlap, metadata-overlap, and failure-atomicity contracts"
+    ],
+    "workload_digests": {
+      "original_data": "a5d9e83c39decba9",
+      "transmitted_parity": "66905aaf44e62b11",
+      "recovered_originals": "cd9e650aeb5c368f",
+      "matched_across_candidate_control_and_exact_main": true
+    }
+  },
+  "codegen": {
+    "pointer_abi": {
+      "text_bytes": 4633,
+      "object_bytes": 6168,
+      "object_sha256": "04a094e5e1d875bffec0cd38d446368615853fab44361f7854aee99f40ad8745",
+      "stack_vector_spill_matches": 0,
+      "evex_zmm_or_kmask_matches": 0
+    },
+    "memory_clobber_relaxation": {
+      "status": "rejected_before_timing",
+      "text_bytes": 5196,
+      "object_bytes": 6736,
+      "object_sha256": "9dd992a164dc50efe7aac38dd8ce2dbcad7f82cb1cb42704e01e84e89f134717",
+      "stack_vector_spill_matches": 4,
+      "evex_zmm_or_kmask_matches": 0,
+      "reason": "Removing the memory clobber from the read-write vector compiler barrier restored stack spills and grew text."
+    },
+    "base_abi": {
+      "text_bytes": 5311,
+      "object_bytes": 6848,
+      "object_sha256": "30985836b7a564d7260b8ce4b9718308d8109c5ae9db033494b26e1d372a1f65",
+      "stack_vector_spill_matches": 0,
+      "evex_zmm_or_kmask_matches": 0
+    }
+  },
+  "measurement": {
+    "metric": "metrics.encode_execution.median_us_per_batch_call",
+    "ratio": "reference time divided by candidate time; values above one favor the candidate",
+    "protocol": {
+      "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+      "timed_cpu": 13,
+      "reserved_smt_sibling": 29,
+      "reuse": 32768,
+      "iterations_per_process": 9,
+      "warmup_per_process": 2,
+      "outer_abba_rounds": 3,
+      "order": [
+        "reference",
+        "candidate",
+        "candidate",
+        "reference"
+      ],
+      "all_retained_rounds_zero_sibling_nonidle": true,
+      "candidate_control_same_executable_text": true,
+      "confidence_interval": "Two-sided Student-t interval over three independent round log contrasts."
+    },
+    "pointer_abi": {
+      "same_source_control_over_candidate": 1.1510747175841958,
+      "same_source_ci95": [
+        1.1420759884114742,
+        1.1601443502060271
+      ],
+      "exact_main_over_candidate": 1.00759999309495,
+      "exact_main_ci95": [
+        0.9487800487804682,
+        1.0700665000174947
+      ],
+      "same_source_round_geometric_speedups": [
+        1.1540523888959886,
+        1.1521559811303332,
+        1.1470272676533557
+      ],
+      "exact_main_round_geometric_speedups": [
+        1.0335867095508027,
+        0.9849542456287831,
+        1.0048505966401446
+      ]
+    },
+    "base_abi": {
+      "same_source_control_over_candidate": 1.1919887049366937,
+      "same_source_ci95": [
+        1.1813179660039201,
+        1.2027558316944629
+      ],
+      "exact_main_over_candidate": 1.0399373354736712,
+      "exact_main_ci95": [
+        1.0005695565406287,
+        1.080854054216035
+      ],
+      "same_source_round_geometric_speedups": [
+        1.19650152231374,
+        1.191581020285159,
+        1.1878991944043766
+      ],
+      "exact_main_round_geometric_speedups": [
+        1.0585248902629056,
+        1.0332830606294319,
+        1.0282557029175996
+      ]
+    },
+    "baseline_note": "The exact-main adapter uses main's canonical -march=native Release build. The Leopard2 candidate translation unit was explicitly limited to AVX2 with AVX-512 disabled."
+  },
+  "frozen_artifacts": {
+    "pointer_abi": {
+      "root": "/tmp/leopard2-t16q2-public-frozen-07e5234a",
+      "candidate_executable_sha256": "b1138858e6ab2fbf856c017f9ee0f4da92dbce2d83ba13489cd163c22c35456e",
+      "control_executable_sha256": "b1138858e6ab2fbf856c017f9ee0f4da92dbce2d83ba13489cd163c22c35456e",
+      "production_archive_sha256": "80f6a9da1accadfe652e37c761915eefb8a355494c4d2efa056bfec41c4abc90",
+      "public_core_object_sha256": "ce7e4c6b91812fb8d3a829155912f62a948aa86e0bdb647c468f4f85ffb31e22",
+      "same_source_selected_results_digest": "2c0c7d4de5be8994755ec232131970a89b7109cbbc650a5a6b4c9cc8ae6b0127",
+      "exact_main_selected_results_digest": "a5ee5f1092b711476b2aa4a6f532e90c6381a82f605f274bba104409415750f8"
+    },
+    "base_abi": {
+      "root": "/tmp/leopard2-t16q2-baseabi-frozen-600526b",
+      "candidate_executable_sha256": "a55dad0d4d9dc56bd59b31e2816be9e225e06fa21d55154f73979c64a6fc03aa",
+      "control_executable_sha256": "a55dad0d4d9dc56bd59b31e2816be9e225e06fa21d55154f73979c64a6fc03aa",
+      "production_archive_sha256": "cc621d5437fea6b84cae4392c3defa0c3b5e5869b13f8e40d9a8cb0fea6ff3e6",
+      "public_core_object_sha256": "8014ba7caeb6bdc08b45b649bb1645569bce81ccb22b180c74cc9506722b5c06",
+      "analysis_sha256": "b62d76c889ef181c5b951fe9c903cc53b0b69a45f0b03965476765a645d1c902",
+      "same_source_results_digest": "ad24cb7efe94665413c761bd65e3e48a5b0ccd6bcdfcaa1acbf4bd55b424d60a",
+      "exact_main_results_digest": "cce2e8ea1dab8e32048d2098ccecc2ea7b30b11d90602104c0184209ca0c70b9"
+    },
+    "exact_main_executable_sha256": "e805048ebb2d6cd8a7aa27fb76b22da657f856e1a1728499cd7ed3ff0f4d6eb9"
+  },
+  "promotion_gate": {
+    "required_same_source_lower_ci95": 1.05,
+    "required_exact_main_lower_ci95": 1.05,
+    "pointer_abi_same_source_passed": true,
+    "pointer_abi_exact_main_passed": false,
+    "base_abi_same_source_passed": true,
+    "base_abi_exact_main_passed": false
+  },
+  "decision": {
+    "result": "reject",
+    "reason": "The base ABI made complete public Leopard2 encoding about 19.2 percent faster than its mature same-source path, but only 4.0 percent faster than exact Leopard main at the point estimate. Its exact-main lower 95 percent bound was 1.0006, below the mandatory 1.05 gate.",
+    "production_change": "None. The default-off kernel, selector, benchmark control, route tests, and packed-base ABI were removed after this result was recorded.",
+    "kill_criterion_satisfied": true,
+    "recommendation": "Do not promote another fixed K=32,R=16,B=256 AVX2 terminal unless it removes additional public validation overhead or replaces existing hot text and can establish an exact-main lower 95 percent bound of at least 1.05."
+  }
+}
