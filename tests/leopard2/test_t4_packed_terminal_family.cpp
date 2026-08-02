@@ -316,6 +316,18 @@ void ExerciseCell(
     bool expect_terminal)
 {
     leo2_codec* codec = CreateCodec(context, cell);
+    if (cell.original_count == 8 && cell.shard_bytes == 512)
+    {
+        RequireCell(leopard2_internal::HighT4BatchMaximumBytes(
+                cell.original_count, cell.recovery_count) == 0,
+            cell, "K8 unexpectedly entered the reusable T=4 binding policy");
+        leopard2_internal::CodecEncodePathInfo path = {};
+        RequireCell(leopard2_internal::GetCodecEncodePathInfo(
+                codec, cell.shard_bytes, cell.recovery_count, &path),
+            cell, "query K8 encode-path metadata");
+        RequireCell(!path.high_t4_batch_binding_selected, cell,
+            "K8 ordinary terminal leaked into reusable T=4 binding");
+    }
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes);
     RequireCell(reinterpret_cast<uintptr_t>(scratch.data()) %
