@@ -245,6 +245,7 @@ require_expected_members()
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
+            avx2_t32_b256) expected_member=Leopard2BackendAVX2T32B256.cpp.o ;;
             gfni) expected_member=Leopard2BackendGFNI.cpp.o ;;
             avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
             '') continue ;;
@@ -318,7 +319,8 @@ scan_archive()
             Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
-            Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj)
+            Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj|\
+            Leopard2BackendAVX2T32B256.cpp.o|Leopard2BackendAVX2T32B256.cpp.obj)
                 object_class=avx2 ;;
             Leopard2BackendGFNI.cpp.o|Leopard2BackendGFNI.cpp.obj)
                 object_class=gfni ;;
@@ -436,7 +438,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512|GFNI)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX2T32B256|AVX512|GFNI)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -490,6 +492,44 @@ scan_build_metadata()
                 return 1
             fi
         done
+        t32_source=Leopard2BackendAVX2T32B256.cpp
+        t32_stem=${t32_source%.cpp}
+        t32_source_pattern="(^|[/[:space:]\"])$t32_stem[.]cpp([[:space:]\",]|$)"
+        if grep -Eq "$t32_source_pattern" "$compile_commands"; then
+            t32_lines="$scratch_root/t32-b256-lines"
+            grep -E "$t32_source_pattern" "$compile_commands" |
+                grep -F ' -c ' > "$t32_lines" || true
+            if [ ! -s "$t32_lines" ]; then
+                echo "portable ISA check: $t32_source has no compile command" >&2
+                return 1
+            fi
+            t32_object_pattern='(^|[/[:space:]"])CMakeFiles/leopard2_backend_avx2_t32_b256[.]dir/Leopard2BackendAVX2T32B256[.]cpp[.](o|obj)([[:space:]",]|$)'
+            while IFS= read -r t32_line
+            do
+                if ! printf '%s\n' "$t32_line" |
+                    grep -Eq "$t32_object_pattern"
+                then
+                    echo "portable ISA check: invalid $t32_source object mapping" >&2
+                    return 1
+                fi
+                for required_flag in -mavx2 -mno-avx512f
+                do
+                    required_flag_pattern="(^|[[:space:]\"=,:])$required_flag([[:space:]\",]|$)"
+                    if ! printf '%s\n' "$t32_line" |
+                        grep -Eq -- "$required_flag_pattern"
+                    then
+                        echo "portable ISA check: $t32_source lacks $required_flag" >&2
+                        return 1
+                    fi
+                done
+                t32_command="$scratch_root/t32-b256-command"
+                printf '%s\n' "$t32_line" | sed 's/-mavx2//g' > "$t32_command"
+                if grep -Ein -- "$forbidden_metadata" "$t32_command"; then
+                    echo "portable ISA check: $t32_source has an unrelated ISA/LTO flag" >&2
+                    return 1
+                fi
+            done < "$t32_lines"
+        fi
         if grep -q 'Leopard2BackendGFNI[.]cpp' "$compile_commands"; then
             gfni_lines="$scratch_root/gfni-lines"
             grep 'Leopard2BackendGFNI[.]cpp' "$compile_commands" > "$gfni_lines"
@@ -703,6 +743,26 @@ expect_missing_avx2_xor_member_rejected()
     fi
 }
 
+expect_missing_avx2_t32_b256_member_rejected()
+{
+    fixture_archive=$(write_classified_archive missing_expected_avx2_t32_b256 \
+        'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0')
+    fixture_log="$scratch_root/missing-avx2-t32-b256-member.log"
+    if scan_archive "$fixture_archive" "$ar_bin" \
+        'avx2,avx2_t32_b256' > "$fixture_log" 2>&1
+    then
+        echo "portable ISA checker self-test: missing AVX2 T32/B256 member was accepted" >&2
+        return 1
+    fi
+    if ! grep -q 'expected exactly one avx2_t32_b256 member, found 0' \
+        "$fixture_log"
+    then
+        cat "$fixture_log" >&2
+        echo "portable ISA checker self-test: missing AVX2 T32/B256 rejection reason missing" >&2
+        return 1
+    fi
+}
+
 expect_missing_gfni_member_rejected()
 {
     fixture_archive=$(write_classified_archive missing_expected_gfni \
@@ -880,6 +940,9 @@ run_negative_controls()
         'Leopard2BackendAVX2.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_accepted good_avx2_xor \
         'Leopard2BackendAVX2Xor.cpp.o' 'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_accepted good_avx2_t32_b256 \
+        'Leopard2BackendAVX2T32B256.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     # GCC can vectorize the in-range tail pointer-map construction as packed
     # 64-bit additions.  VPADDQ is baseline AVX2, and the classified-object
     # scan below still rejects EVEX encodings and AVX-512 operands.
@@ -936,6 +999,17 @@ run_negative_controls()
     expect_classified_archive_rejected avx2_xor_leaks_fma \
         'Leopard2BackendAVX2Xor.cpp.o' \
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t32_b256_leaks_fma \
+        'Leopard2BackendAVX2T32B256.cpp.o' \
+        'vfmadd132ps %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t32_b256_leaks_evex \
+        'Leopard2BackendAVX2T32B256.cpp.o' \
+        'vpternlogd $0, %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected avx2_t32_b256_leaks_zmm \
+        'Leopard2BackendAVX2T32B256.cpp.o' \
+        'vpxord %zmm0, %zmm0, %zmm0'
+    expect_classified_archive_rejected avx2_t32_b256_leaks_probe \
+        'Leopard2BackendAVX2T32B256.cpp.o' 'xgetbv'
     expect_classified_archive_rejected avx2_leaks_f16c \
         'Leopard2BackendAVX2.cpp.o' 'vcvtph2ps %xmm0, %ymm0'
     expect_classified_archive_rejected avx2_leaks_evex \
@@ -996,6 +1070,12 @@ run_negative_controls()
         'NotLeopard2BackendSSSE3.cpp.o' 'pshufb %xmm0, %xmm0'
     expect_classified_archive_rejected lookalike_avx2_member \
         'NotLeopard2BackendAVX2.cpp.o' 'vpaddd %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t32_b256_prefix \
+        'NotLeopard2BackendAVX2T32B256.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
+    expect_classified_archive_rejected lookalike_avx2_t32_b256_suffix \
+        'Leopard2BackendAVX2T32B256Extra.cpp.o' \
+        'vpxor %ymm0, %ymm0, %ymm0'
     expect_classified_archive_rejected lookalike_gfni_member \
         'NotLeopard2BackendGFNI.cpp.o' \
         'vgf2p8affineqb $0, %ymm0, %ymm0, %ymm0'
@@ -1007,6 +1087,7 @@ run_negative_controls()
         'vfmadd132ps %ymm0, %ymm0, %ymm0'
     expect_missing_expected_member_rejected
     expect_missing_avx2_xor_member_rejected
+    expect_missing_avx2_t32_b256_member_rejected
     expect_missing_gfni_member_rejected
     expect_listing_failure_rejected
 
@@ -1034,6 +1115,42 @@ run_negative_controls()
         'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o -c /src/Leopard2BackendAVX2XorXcpp' \
         /src/Leopard2BackendAVX2XorXcpp \
         CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2XorXcpp.o
+
+    t32_source=/src/Leopard2BackendAVX2T32B256.cpp
+    t32_output=CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256.cpp.o
+    expect_fixture_metadata_accepted exact_avx2_t32_b256_source \
+        "c++ -mavx2 -mno-avx512f -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_missing_avx2 \
+        "c++ -mno-avx512f -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_missing_no_avx512f \
+        "c++ -mavx2 -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_avx2_flag_lookalike \
+        "c++ -mavx2extra -mno-avx512f -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_no_avx512f_flag_lookalike \
+        "c++ -mavx2 -mno-avx512fextra -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_unrelated_fma \
+        "c++ -mavx2 -mno-avx512f -mfma -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_explicit_avx512 \
+        "c++ -mavx2 -mno-avx512f -mavx512f -o $t32_output -c $t32_source" \
+        "$t32_source" "$t32_output"
+    expect_fixture_metadata_rejected avx2_t32_b256_wrong_target \
+        "c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T32B256.cpp.o -c $t32_source" \
+        "$t32_source" \
+        CMakeFiles/leopard2_backend_avx2.dir/Leopard2BackendAVX2T32B256.cpp.o
+    expect_fixture_metadata_rejected avx2_t32_b256_lookalike_prefix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2_t32_b256.dir/NotLeopard2BackendAVX2T32B256.cpp.o -c /src/NotLeopard2BackendAVX2T32B256.cpp' \
+        /src/NotLeopard2BackendAVX2T32B256.cpp \
+        CMakeFiles/leopard2_backend_avx2_t32_b256.dir/NotLeopard2BackendAVX2T32B256.cpp.o
+    expect_fixture_metadata_rejected avx2_t32_b256_lookalike_suffix \
+        'c++ -mavx2 -mno-avx512f -o CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256Extra.cpp.o -c /src/Leopard2BackendAVX2T32B256Extra.cpp' \
+        /src/Leopard2BackendAVX2T32B256Extra.cpp \
+        CMakeFiles/leopard2_backend_avx2_t32_b256.dir/Leopard2BackendAVX2T32B256Extra.cpp.o
 
     gfni_source=/src/Leopard2BackendGFNI.cpp
     gfni_output=CMakeFiles/leopard2_backend_gfni.dir/Leopard2BackendGFNI.cpp.o
