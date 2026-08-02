@@ -1,0 +1,157 @@
+{
+  "schema": "leopard2-gf8-t16-b64-generated-rejection/v1",
+  "created_utc": "2026-08-02T20:01:19.268138Z",
+  "completed_utc": "2026-08-02T20:01:29.176354Z",
+  "status": "rejected",
+  "promotion": "do_not_promote",
+  "production_option": {
+    "name": "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "default": "OFF",
+    "required_disposition": "Keep disabled by default. This branch does not qualify the generated terminal for production."
+  },
+  "candidate_source": {
+    "commit": "a792dcc90df9fd61e536aed44c0e4e9143346672",
+    "tree": "abd3f35d0c27e9fb1ab63d9371f9e329b9d957c2",
+    "branch": "agent/t16-generated-b64-068659e",
+    "tracked_dirty": false
+  },
+  "exact_parent_source": {
+    "commit": "068659e1dbcc8a2c75fef1348f1f916a8557599f",
+    "tree": "e042f3d15f9e13e886d28ad1c18f161109950e13"
+  },
+  "frozen_binaries": {
+    "candidate": {
+      "path_at_measurement": "/tmp/leopard2-t16-candidate-frozen-a792dcc/bench_leopard2",
+      "sha256": "96587c652a92da19ea03c17185a879f62df8b4075da5548c3d76e32323ab21fc"
+    },
+    "parent": {
+      "path_at_measurement": "/tmp/leopard2-t16-parent-frozen-068659e/bench_leopard2",
+      "sha256": "ac706cf84743d486c783aee51ee6f21a48121ecf0d30cc908a2e2aae64b0b5a4"
+    }
+  },
+  "build": {
+    "type": "Release",
+    "compiler": "GCC 13.3.0",
+    "openmp": false,
+    "cuda": false,
+    "parallel_jobs": 2,
+    "address_space_limit_bytes": 4294967296
+  },
+  "focused_correctness": {
+    "command": "ctest --test-dir build --output-on-failure -j1 -R '^leopard2_(t16_b64_three_pass|balanced_b64_terminal|balanced_b64_terminal_production|context_backends|api)$'",
+    "passed": 5,
+    "failed": 0,
+    "tests": [
+      "leopard2_balanced_b64_terminal",
+      "leopard2_t16_b64_three_pass",
+      "leopard2_balanced_b64_terminal_production",
+      "leopard2_context_backends",
+      "leopard2_api"
+    ]
+  },
+  "object_audits": {
+    "candidate_avx2_object_sha256": "0d6d61f59d6497266bea23cc758af616687ab36fcfd69975e4cb2ea7a0b92b96",
+    "exact_parent_avx2_object_sha256": "222d014e7f84e08cf4dc15b9ce8f79516b739a6acb6ebc58e758e880154e01a6",
+    "default_off_release_objects_match_exact_parent": true,
+    "mature_t8_function": {
+      "size_bytes": 194,
+      "candidate_sha256": "816be267d6a3c6b256ebc8a2c843fab7a62bd0c057a42d861fee8601a89a588b",
+      "parent_sha256": "816be267d6a3c6b256ebc8a2c843fab7a62bd0c057a42d861fee8601a89a588b",
+      "byte_identical": true
+    },
+    "ops_size_bytes": {
+      "candidate": 400,
+      "parent": 400
+    },
+    "generated_t16_kernel": {
+      "size_bytes": 6214,
+      "shard_passes": 3,
+      "calls": 0,
+      "spills_observed": 0,
+      "evex_instructions": 0
+    }
+  },
+  "authoritative_neighbor_campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t16_b64_parent_neighbors_abba.py",
+    "output_path_at_measurement": "/tmp/leopard2-t16-parent-neighbors-a792dcc-v1",
+    "raw_sha256": "97077fba56381aea1ff5ffcd3496721712c6323c5d6106f86a82ddcb30700356",
+    "summary_sha256": "7cdd6e54168bdbca79113c3bbf19ddb26d2fb6d9247200f0adf6f15ed73e5c31",
+    "cpu": 3,
+    "reserved_smt_sibling": 19,
+    "iterations_per_invocation": 15,
+    "warmup": 64,
+    "abba_rounds": 3,
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "ratio_definition": "candidate throughput divided by exact-parent throughput; values below one are regressions",
+    "regression_floor": 0.9803921568627451,
+    "cells": [
+      {
+        "id": "byte-k16-r16-b63-q1",
+        "candidate_over_parent": 0.9291629874067494,
+        "ci95": [0.8787199478915041, 0.9825017165460236]
+      },
+      {
+        "id": "byte-k16-r16-b65-q1",
+        "candidate_over_parent": 0.958689755569801,
+        "ci95": [0.9208266904587221, 0.9981096952963318]
+      },
+      {
+        "id": "byte-k16-r16-b128-q1",
+        "candidate_over_parent": 1.004216029513112,
+        "ci95": [0.9831249034937168, 1.0257596266225846]
+      },
+      {
+        "id": "shape-k15-r16-b64-q1",
+        "candidate_over_parent": 1.033236345518194,
+        "ci95": [1.0104165021496494, 1.0565715657142718]
+      },
+      {
+        "id": "shape-k16-r15-b64-q1",
+        "candidate_over_parent": 0.9945698030391986,
+        "ci95": [0.9891011040968146, 1.000068738191004]
+      },
+      {
+        "id": "transform-t8-k8-r8-b64-q1",
+        "candidate_over_parent": 0.982431123442297,
+        "ci95": [0.9522838654099811, 1.0135327787923452]
+      },
+      {
+        "id": "transform-t32-k32-r32-b64-q1",
+        "candidate_over_parent": 0.9259780578585234,
+        "ci95": [0.8768278335330578, 0.9778833778354462]
+      }
+    ],
+    "credible_regressions_over_2_percent": [
+      "transform-t32-k32-r32-b64-q1"
+    ]
+  },
+  "layout_attribution": {
+    "encode_internal": {
+      "candidate_size_bytes": 7318,
+      "parent_size_bytes": 7318,
+      "candidate_file_offset": 148128,
+      "parent_file_offset": 145312,
+      "candidate_sha256": "a47b08a24cffec45b84ebad5503a8d0d77d6f6c787fb17fb8971b09f9ac16394",
+      "parent_sha256": "6f612591cf3935182899b47ae23d8dba202fde6039a102ddb51c9b8959be405c"
+    },
+    "ff8_ifft_encoder": {
+      "candidate_size_bytes": 2694,
+      "parent_size_bytes": 2694,
+      "candidate_file_offset": 461600,
+      "parent_file_offset": 457616,
+      "candidate_alignment_mod_64": 32,
+      "parent_alignment_mod_64": 16,
+      "candidate_sha256": "a89d905a48f115aaa449284da33731b72a38ba98a1c9067554bc7ab95a0b5bde",
+      "parent_sha256": "b504595495ea254d45fb65cb6f0915df02e1874d3da44d5fd049e4dcc446a7e0"
+    },
+    "finding": "The mature T8 AVX2 function is byte-identical and Ops did not grow, but macro-enabled public routing/helper text still perturbed linked hot-code placement and relocations. The unchanged-size FF8 IFFT encoder moved by 3984 bytes and changed alignment from 16 to 32 modulo 64. The credible T32 regression therefore rejects this integration even though neighbor cells never execute the generated T16 arithmetic.",
+    "next_design_constraint": "Any further fixed-T16 attempt must add no branches or text to shared leopard2/FF8 hot objects, or must improve neighboring transforms enough to offset its layout cost. A separate extension translation unit/API or a generally beneficial primitive is more plausible than another fixed terminal branch."
+  },
+  "decision": {
+    "reason": "The balanced T32/B64 neighbor has a 95 percent confidence interval wholly below the 1/1.02 regression floor. B63 and B65 point estimates are also materially slower.",
+    "candidate_stopped": true,
+    "further_timing_from_this_branch": false,
+    "recommendation": "Do not promote or merge the experimental implementation. Retain this checkpoint as negative evidence."
+  }
+}
