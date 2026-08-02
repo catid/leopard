@@ -1,0 +1,176 @@
+{
+  "schema": "leopard2-gf8-t4-packed-terminal-family-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high AVX2 ordinary one-item encode for the packed T=4 terminal family",
+  "candidate_source": {
+    "implementation_commit": "76d0cdddb240baff13809ff586ade6c3c0fa692a",
+    "tree": "78b82a06e1cc6c0b35b3ffb6dec87173f1aaf6a5",
+    "tracked_dirty": false,
+    "benchmark_sha256": "546a480bae259804c0d83bd6fc75e461551aaa868a9333810b9873e70d5657d9"
+  },
+  "comparators": {
+    "same_source_compile_time_disabled": {
+      "definition": "LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING=1",
+      "benchmark_sha256": "922d5c78caf59440bad29b2d569248c8d1a111ae508be672b89be967261af456",
+      "selector_word": 2
+    },
+    "candidate_selector_word": 1,
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "implementation": [
+    "Classify immutable GF8 legacy-high AVX2 K=4..7, R=3/4 codecs once at codec creation.",
+    "Use the packed ordinary/public and one-item-batch terminal at 64, 128, and 256 bytes, plus K=4 at 1024 bytes.",
+    "Preserve the earlier exact K=5, R=4, 64-byte terminal.",
+    "Complete scratch, metadata, address-overflow, pointer-layout, and overlap validation before the first output write.",
+    "Fall back unchanged for sparse, null, detached, aliased, forced-transform, scalar, and nonmatching calls.",
+    "Reuse the mature qualified T=4 transform and flatten its private fixed-shape AVX2 dispatch."
+  ],
+  "authoritative_campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t4_packed_terminal_family_abba.py",
+    "runner_sha256": "94ecd9ca6effa519ad686f30f235fa67f5a2a7cbe710f774bf9d74fe6ede7205",
+    "raw_directory": "/tmp/leopard2-t4-76d0cdd-authoritative-v2/campaign-r9-i15-v5",
+    "raw_sha256": "6b85f10f4c245207aa999fd1f1d0aef675bd564752bdf26e6f4db49d393c55cc",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds": 9,
+    "iterations_per_process": 15,
+    "warmups_per_process": 6,
+    "reuse": 8192,
+    "cells": 38,
+    "processes": 2052,
+    "all_rounds_accepted": true,
+    "all_workload_digests_matched": true,
+    "candidate_control_executable_sections_sha256": "3875a8eda92ee5da70b29bd30aba9a38beaf68931d502ec4572db8764323c21f",
+    "candidate_text_and_leo2_code_bytes": 923450,
+    "pre_family_6823618_text_and_leo2_code_bytes": 914339,
+    "text_and_leo2_code_growth_bytes": 9111,
+    "performance_statistic": "geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence interval"
+  },
+  "selected_region_summary": {
+    "cells": 26,
+    "new_cells": 25,
+    "preexisting_reference_cells": 1,
+    "same_source_control_over_candidate_speedup_range": [1.2839223516779352, 2.5883277704502476],
+    "minimum_same_source_ci95_lower": 1.279059611682973,
+    "exact_main_over_candidate_speedup_range": [1.0644555304756897, 1.7082301365715558],
+    "minimum_exact_main_ci95_lower": 1.0483255424739089,
+    "all_selected_cells_faster_than_exact_main": true
+  },
+  "representative_selected_cells": [
+    {
+      "K": 4,
+      "R": 3,
+      "bytes": 64,
+      "control_over_candidate": 2.481678419134941,
+      "control_ci95": [2.461673818905383, 2.5018455851875054],
+      "main_over_candidate": 1.0659082972204763,
+      "main_ci95": [1.0483255424739089, 1.083785953933992]
+    },
+    {
+      "K": 4,
+      "R": 4,
+      "bytes": 64,
+      "control_over_candidate": 2.5373105142966326,
+      "control_ci95": [2.517900273580568, 2.5568703866119344],
+      "main_over_candidate": 1.115876015748471,
+      "main_ci95": [1.0917263237114248, 1.140559914585168]
+    },
+    {
+      "K": 5,
+      "R": 4,
+      "bytes": 64,
+      "role": "preexisting_exact_terminal",
+      "control_over_candidate": 2.5883277704502476,
+      "control_ci95": [2.559999258892892, 2.61696976044486],
+      "main_over_candidate": 1.7082301365715558,
+      "main_ci95": [1.6858326972957491, 1.7309251411318167]
+    },
+    {
+      "K": 7,
+      "R": 4,
+      "bytes": 256,
+      "control_over_candidate": 1.5642113612161697,
+      "control_ci95": [1.5563615534138195, 1.572100761028743],
+      "main_over_candidate": 1.2093000208136937,
+      "main_ci95": [1.196902992445327, 1.221825452497397]
+    },
+    {
+      "K": 4,
+      "R": 4,
+      "bytes": 1024,
+      "control_over_candidate": 1.2839223516779352,
+      "control_ci95": [1.279059611682973, 1.2888035788802508],
+      "main_over_candidate": 1.1333459155786045,
+      "main_ci95": [1.1284343075946641, 1.1382789017613693]
+    }
+  ],
+  "unselected_neighbors": {
+    "cells": 12,
+    "candidate_control_speedup_range": [0.9935034111444065, 1.0014552963298033],
+    "maximum_observed_same_source_slowdown_percent": 0.653907050818292,
+    "regressions_over_two_percent": 0,
+    "statistically_credible_subthreshold_cells": [
+      {
+        "K": 8,
+        "R": 3,
+        "bytes": 256,
+        "control_over_candidate": 0.9935034111444065,
+        "ci95": [0.9885845213705021, 0.9984467757872623],
+        "interpretation": "A 0.65 percent same-text difference is below the two-percent neighbor policy but is retained rather than rounded away."
+      }
+    ],
+    "exact_main_over_candidate_speedup_range": [0.47304358220942433, 0.977851809166883],
+    "all_twelve_remain_slower_than_exact_main": true,
+    "follow_up_bead": "leopard-79h.38.5.10.47.7",
+    "regions": [
+      "K=8, R=3/4, bytes=64/256",
+      "K=4..7, R=3/4, bytes=512"
+    ]
+  },
+  "correctness_and_build_gates": {
+    "focused_release": [
+      "leopard2_high_direct_production",
+      "leopard2_t4_packed_terminal_family",
+      "leopard2_t4_packed_terminal_family_production",
+      "leopard2_backend_ops"
+    ],
+    "strict_compilers": ["GCC 13.3.0", "Clang 18.1.3"],
+    "sanitizers": ["Clang AddressSanitizer", "Clang UndefinedBehaviorSanitizer"],
+    "field_builds": ["GF8-only", "GF16-only"],
+    "release_suite_passed": 124,
+    "release_suite_exceptions": [
+      "leopard2_provenance_fault_injection remains the existing resource quarantine tracked by leopard-79h.38.5.10.40.36.12",
+      "leopard2_visual_studio_projects fails identically on clean prior HEAD 42579ee and is tracked by leopard-t1h"
+    ],
+    "independent_oracles": [
+      "direct systematic GF8 generator",
+      "legacy Leopard parity",
+      "committed legacy golden vectors"
+    ],
+    "contract_cases": [
+      "public and one-item batch execution",
+      "unaligned packed slabs and arbitrary-byte fallback",
+      "sparse, null, and detached fallback",
+      "undersized and misaligned scratch failure atomicity",
+      "input/output, output/output, scratch, and metadata overlap rejection",
+      "source immutability and guard bytes",
+      "forced-transform and scalar fallback"
+    ]
+  },
+  "resource_policy": {
+    "build_parallelism": 1,
+    "build_memory_max_mib": 512,
+    "benchmark_address_space_max_mib": 256,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_less_than_host_parallelism": "Compiler and test phases were serialized after prior session OOMs; cache-sensitive authoritative timing exclusively pinned one physical core and reserved its SMT sibling."
+  },
+  "reproduce": {
+    "candidate_build": "cmake -S <clean-76d0cdd-worktree> -B <candidate-build> -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF && cmake --build <candidate-build> -j1 --target bench_leopard2",
+    "control_build": "cmake -S <clean-76d0cdd-worktree> -B <control-build> -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING=1 && cmake --build <control-build> -j1 --target bench_leopard2",
+    "campaign": "taskset -c 14 python3 experiments/leopard2/gf8_high_encode/run_t4_packed_terminal_family_abba.py --candidate <candidate> --control <control> --main <exact-main> --source-commit 76d0cdddb240baff13809ff586ade6c3c0fa692a --source-tree 78b82a06e1cc6c0b35b3ffb6dec87173f1aaf6a5 --output <new-output> --cpu 14 --sibling 30 --rounds 9 --iterations 15 --warmup 6"
+  },
+  "disposition": "Promoted. Every selected cell is credibly faster than its same-source disabled control and exact Leopard main, parity is identical, and no unselected neighbor regressed by the two-percent policy threshold. The twelve slower unselected neighbors are split to leopard-79h.38.5.10.47.7."
+}
