@@ -450,6 +450,7 @@ int main()
             "production terminal mode did not start enabled");
         ExercisePublicRoute(context, 64, 16, false, 1);
         ExercisePublicRoute(context, 64, 31, false, 1);
+        ExercisePublicRoute(context, 64, 32, false, 0);
         ExercisePublicRoute(context, 63, 16, false, 0);
         ExercisePublicRoute(context, 65, 31, false, 0);
         ExercisePublicRoute(context, 64, 16, true, 0);
@@ -466,7 +467,7 @@ int main()
             "enabled terminal did not restore mode word one");
         leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=6\n",
+            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=7\n",
             patterns.size());
         return 0;
     }
