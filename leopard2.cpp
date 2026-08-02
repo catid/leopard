@@ -12258,8 +12258,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
     uint8_t terminal_shape,
     uint64_t shard_bytes)
 {
-    /* The 512-byte promotion is exact; its 511/513-byte neighbors retain the
-       mature tail-capable path. */
+    /* Every listed byte count is exact.  Ragged neighbors retain the mature
+       tail-capable path. */
     if (shard_bytes == 64 || shard_bytes == 128 || shard_bytes == 256)
     {
         /* K=5/R=4/B=64 has its fixed specialized terminal above. */
@@ -12272,9 +12272,13 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
         return terminal_shape >= kTerminalT4K4R3 &&
             terminal_shape <= kTerminalT4K8R4;
     }
+    /* Restrict B=1024 to the disjoint K=4 and K=8 families.  Keep K=5..7 on
+       the mature path until they are measured independently. */
     return shard_bytes == 1024 &&
-        (terminal_shape == kTerminalT4K4R3 ||
-         terminal_shape == kTerminalT4K4R4);
+        ((terminal_shape >= kTerminalT4K4R3 &&
+          terminal_shape <= kTerminalT4K4R4) ||
+         (terminal_shape >= kTerminalT4K8R3 &&
+          terminal_shape <= kTerminalT4K8R4));
 }
 
 static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(

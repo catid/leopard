@@ -316,7 +316,8 @@ void ExerciseCell(
     bool expect_terminal)
 {
     leo2_codec* codec = CreateCodec(context, cell);
-    if (cell.original_count == 8 && cell.shard_bytes == 512)
+    if (cell.original_count == 8 &&
+        (cell.shard_bytes == 512 || cell.shard_bytes == 1024))
     {
         RequireCell(leopard2_internal::HighT4BatchMaximumBytes(
                 cell.original_count, cell.recovery_count) == 0,
@@ -424,7 +425,7 @@ void ExercisePromotedMatrix(leo2_context* context)
             }
         }
     }
-    static const size_t k8_bytes[] = { 64, 128, 256, 512 };
+    static const size_t k8_bytes[] = { 64, 128, 256, 512, 1024 };
     for (unsigned r = 3; r <= 4; ++r)
     {
         for (size_t i = 0;
@@ -439,8 +440,6 @@ void ExerciseNonPromotedCells(leo2_context* context)
 {
     static const Cell cells[] = {
         { 4, 3, 63 },
-        { 5, 3, 1024 },
-        { 7, 4, 1024 },
         { 8, 3, 63 },
         { 8, 4, 63 },
         { 8, 3, 65 },
@@ -453,8 +452,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
         { 8, 4, 255 },
         { 8, 3, 257 },
         { 8, 4, 257 },
-        { 8, 3, 1024 },
-        { 8, 4, 1024 },
+        { 8, 3, 2048 },
+        { 8, 4, 2048 },
         { 8, 8, 64 },
         { 9, 4, 64 }
     };
@@ -467,6 +466,16 @@ void ExerciseNonPromotedCells(leo2_context* context)
             ExerciseCell(context, Cell{ k, r, 511 }, false);
             ExerciseCell(context, Cell{ k, r, 513 }, false);
         }
+    }
+    for (unsigned r = 3; r <= 4; ++r)
+    {
+        ExerciseCell(context, Cell{ 8, r, 1023 }, false);
+        ExerciseCell(context, Cell{ 8, r, 1025 }, false);
+    }
+    for (unsigned k = 5; k <= 7; ++k)
+    {
+        for (unsigned r = 3; r <= 4; ++r)
+            ExerciseCell(context, Cell{ k, r, 1024 }, false);
     }
 }
 
@@ -634,7 +643,8 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
 void ExerciseValidationAtomicity(leo2_context* context, const Cell& cell)
 {
     RequireCell(cell.recovery_count == 4 &&
-            (cell.shard_bytes == 64 || cell.shard_bytes == 512),
+            (cell.shard_bytes == 64 || cell.shard_bytes == 512 ||
+             cell.shard_bytes == 1024),
         cell, "invalid validation-atomicity fixture");
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
@@ -790,7 +800,8 @@ void ExerciseScalarFallbacks()
         { 4, 4, 1024 },
         { 8, 3, 128 },
         { 8, 4, 256 },
-        { 8, 4, 512 }
+        { 8, 4, 512 },
+        { 8, 4, 1024 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
@@ -831,16 +842,19 @@ int main()
         ExerciseForcedTransform(context, Cell{ 7, 4, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 512 });
+        ExerciseForcedTransform(context, Cell{ 8, 3, 1024 });
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 512 });
         ExerciseFallbackLayouts(context, Cell{ 8, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 512 });
+        ExerciseFallbackLayouts(context, Cell{ 8, 4, 1024 });
         ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 7, 4, 512 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 512 });
+        ExerciseValidationAtomicity(context, Cell{ 8, 4, 1024 });
 
         leo2_context_destroy(context);
         std::printf("T=4 packed terminal family checks passed\n");
