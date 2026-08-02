@@ -1320,6 +1320,21 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        add_executable(leopard2_k5r4_b64_terminal_test
+            tests/leopard2/direct_oracle.cpp
+            tests/leopard2/test_k5r4_b64_terminal.cpp)
+        target_include_directories(leopard2_k5r4_b64_terminal_test PRIVATE
+            tests/leopard2)
+        target_compile_definitions(leopard2_k5r4_b64_terminal_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(leopard2_k5r4_b64_terminal_test
+            leopard_test_hooks)
+        add_test(NAME leopard2_k5r4_b64_terminal
+            COMMAND leopard2_k5r4_b64_terminal_test)
+        set_tests_properties(leopard2_k5r4_b64_terminal PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
         add_executable(leopard2_t2_packed_terminal_test
             tests/leopard2/direct_oracle.cpp
             tests/leopard2/test_t2_packed_terminal.cpp)
