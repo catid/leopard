@@ -1,0 +1,234 @@
+{
+  "schema": "leopard2-gf8-t4-b512-k8-terminal-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "scope": "GF8 legacy-high AVX2 ordinary and one-item-batch encode for K=4..7/R=3..4/B=512 and K=8/R=3..4/B=64,128,256",
+  "implementation": {
+    "b512_commit": "b0df2124a0b11ee23288433aedc16e4f3f8aa06e",
+    "k8_commit": "30d0ee30f72e85625c186db87e00f2045e563807",
+    "tree": "b0002656b92ab0a025a50045f2d02e4341d0aa86",
+    "runner_commits": [
+      "2864218745a9117f39bb044054a4c9bc9ec88541",
+      "5fe134d5a35233a6c3e55fe078ff5f5db790ea69"
+    ],
+    "benchmark_source_tracked_dirty": false,
+    "changes": [
+      "Promote exact 512-byte packed T=4 execution for K=4..7 and R=3/4 without adding a new kernel body.",
+      "Instantiate the qualified register-resident AVX2 T=4 circuit for the two complete K=8 message blocks and R=3/4.",
+      "Select K=8 only at exact 64, 128, and 256-byte calls; retain K=8/B=512, ragged byte counts, scalar, forced-transform, sparse, detached, aliased, and overlapping calls on validated fallbacks.",
+      "Keep K=8 excluded from the general sub-2-KiB high_encode_small path and reusable multi-item binding.",
+      "Extend the startup backend KAT and direct-RS plus exact Leopard1 parity tests."
+    ]
+  },
+  "comparators": {
+    "same_source_compile_time_disabled": {
+      "definition": "LEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING=1",
+      "benchmark_sha256": "5990cdf02e192fa21759e039e96c08255dcbb362e530d073c6c8d24349c80cf9",
+      "selector_word": 2
+    },
+    "candidate": {
+      "benchmark_sha256": "c28333b52978d7cc2ca8a4e09375bc8bbf04c434f759747250811363a9bfcee6",
+      "selector_word": 1
+    },
+    "exact_leopard_main": {
+      "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "authoritative_campaign": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_t4_b512_k8_terminal_abba.py",
+    "frozen_runner_sha256": "d62335d2e538f76874b5553c28230aaed39e7a9b37c6a0504ae35ea70d620a70",
+    "raw_directory": "/tmp/leopard2-t4-30d0ee3-authoritative-v2/campaign-r9-i15-w6-v1",
+    "raw_sha256": "70051ddd1038a2f8b630e0ade6cc8a5ff4c66500ccbfdaf84741aa278e59faf5",
+    "summary_sha256": "e2de995f46bbd7be9d56af9b6954ed60ce95a6919cbe0838d92e461603a5b18e",
+    "cpu": 14,
+    "reserved_smt_sibling": 30,
+    "rounds": 9,
+    "iterations_per_process": 15,
+    "warmups_per_process": 6,
+    "reuse": 8192,
+    "cells": 42,
+    "selected_cells": 40,
+    "unselected_controls": 2,
+    "processes": 2268,
+    "all_rounds_accepted": true,
+    "all_workload_digests_matched": true,
+    "all_leopard2_builds_attested_clean": true,
+    "binary_identities_unchanged": true,
+    "runner_dependencies_unchanged": true,
+    "maximum_reserved_sibling_nonidle_jiffies": 0,
+    "minimum_benchmark_cpu_nonidle_jiffies": 25,
+    "candidate_control_executable_sections_sha256": "9120a3f24d40021c54f349678e49b2537635cb38516df5182d892f20253a84fd",
+    "candidate_control_normalized_full_file_sha256": "fa975361eac023d938d5fd23bf95af983fc16c74df69916f3d1c69562a7e6b62",
+    "candidate_control_actual_difference_bytes": 21,
+    "performance_statistic": "geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence intervals"
+  },
+  "selected_region_summary": {
+    "cells": 40,
+    "same_source_control_over_candidate_geomean": 1.884459779,
+    "same_source_control_over_candidate_range": [1.291514398, 3.047127236],
+    "minimum_same_source_ci95_lower": 1.279773510,
+    "exact_main_over_candidate_geomean": 1.268658247,
+    "exact_main_over_candidate_range": [1.063082406, 1.723029674],
+    "minimum_exact_main_ci95_lower": 1.043882735,
+    "selected_cells_slower_than_control": 0,
+    "selected_cells_slower_than_exact_main": 0
+  },
+  "new_region_summary": {
+    "b512_k4_through_k7": {
+      "cells": 8,
+      "same_source_geomean": 1.411493209,
+      "same_source_range": [1.340878344, 1.548334013],
+      "minimum_same_source_ci95_lower": 1.336306085,
+      "exact_main_geomean": 1.236376285,
+      "exact_main_range": [1.086187717, 1.366110594],
+      "minimum_exact_main_ci95_lower": 1.073851826
+    },
+    "k8_b64_b128_b256": {
+      "cells": 6,
+      "same_source_geomean": 2.339666717,
+      "same_source_range": [1.827542546, 3.047127236],
+      "minimum_same_source_ci95_lower": 1.804264131,
+      "exact_main_geomean": 1.257989869,
+      "exact_main_range": [1.134918579, 1.408212498],
+      "minimum_exact_main_ci95_lower": 1.126198648
+    }
+  },
+  "representative_new_cells": [
+    {
+      "K": 4,
+      "R": 4,
+      "bytes": 512,
+      "control_over_candidate": 1.527614704,
+      "control_ci95": [1.508117405, 1.547364068],
+      "main_over_candidate": 1.086187717,
+      "main_ci95": [1.073851826, 1.098665317]
+    },
+    {
+      "K": 5,
+      "R": 3,
+      "bytes": 512,
+      "control_over_candidate": 1.407747917,
+      "control_ci95": [1.402290520, 1.413226554],
+      "main_over_candidate": 1.366110594,
+      "main_ci95": [1.360005012, 1.372243586]
+    },
+    {
+      "K": 7,
+      "R": 4,
+      "bytes": 512,
+      "control_over_candidate": 1.340878344,
+      "control_ci95": [1.336306085, 1.345466247],
+      "main_over_candidate": 1.198111320,
+      "main_ci95": [1.194150275, 1.202085504]
+    },
+    {
+      "K": 8,
+      "R": 3,
+      "bytes": 64,
+      "control_over_candidate": 3.047127236,
+      "control_ci95": [2.997388177, 3.097691671],
+      "main_over_candidate": 1.408212498,
+      "main_ci95": [1.379171322, 1.437865193]
+    },
+    {
+      "K": 8,
+      "R": 4,
+      "bytes": 256,
+      "control_over_candidate": 1.827542546,
+      "control_ci95": [1.804264131, 1.851121296],
+      "main_over_candidate": 1.134918579,
+      "main_ci95": [1.126198648, 1.143706026]
+    }
+  ],
+  "unselected_controls": {
+    "cells": [
+      {
+        "K": 8,
+        "R": 3,
+        "bytes": 512,
+        "control_over_candidate": 1.001056549,
+        "control_ci95": [0.994940368, 1.007210328],
+        "main_over_candidate": 0.747107620,
+        "main_ci95": [0.740770529, 0.753498924]
+      },
+      {
+        "K": 8,
+        "R": 4,
+        "bytes": 512,
+        "control_over_candidate": 1.003686106,
+        "control_ci95": [0.995130039, 1.012315738],
+        "main_over_candidate": 0.752977566,
+        "main_ci95": [0.747501716, 0.758493530]
+      }
+    ],
+    "interpretation": "The exact K=8/B=512 controls prove the dispatcher remains inert there. Their roughly 25 percent deficit to exact main is retained as a follow-up rather than silently widening an unmeasured production selector."
+  },
+  "static_evidence": {
+    "candidate_file_bytes": 1155288,
+    "candidate_executable_section_bytes": 936387,
+    "prior_t32_executable_section_bytes": 930050,
+    "executable_growth_bytes": 6337,
+    "executable_growth_percent": 0.68136,
+    "text_growth_bytes": 5376,
+    "packed_terminal_growth_bytes": 961,
+    "k8_r4_backend_body_bytes": 2537,
+    "k8_r3_backend_body_bytes": 2562,
+    "k8_backend_bodies_total_bytes": 5099,
+    "backend_bodies_are_leaf_and_call_free": true,
+    "avx512_evex_or_zmm_opmask_in_new_bodies": false,
+    "inner_loop_vector_stack_stores": 0,
+    "b512_adds_new_kernel_body": false
+  },
+  "correctness_and_build_gates": {
+    "evidence_scope": "Session-observed command results; unlike the authoritative campaign above, these console results were not retained as separately hash-bound log artifacts.",
+    "release_full_build": "passed",
+    "focused_release_tests": {
+      "passed": 10,
+      "failed": 0,
+      "names": [
+        "leopard2_high_direct_production",
+        "leopard2_k8r8_b64_terminal",
+        "leopard2_k8r8_b64_terminal_production",
+        "leopard2_t4_packed_terminal_family",
+        "leopard2_t4_packed_terminal_family_production",
+        "leopard2_t32_final_ifft_range",
+        "leopard2_backend_ops",
+        "leopard2_context_backends",
+        "leopard2_public_api_contract",
+        "leopard2_batch_aliasing"
+      ]
+    },
+    "strict_gcc_13": "3 focused tests passed with -Wall -Wextra -Wpedantic -Werror",
+    "strict_clang_18": "3 focused tests passed with -Wall -Wextra -Wpedantic -Werror",
+    "clang_asan_ubsan": "T4 hooked/production, backend ops, K8/R8 collision, and high-direct production passed in separate capped scopes",
+    "sanitizer_resource_retry": "The high-direct test first exceeded a 256-MiB scope, then passed at 512 MiB with a 16-MiB ASan quarantine; this was a resource-limit retry, not a sanitizer report.",
+    "independent_reviews": 3,
+    "independent_review_result": "clean after removing redundant K8 hot-predicate comparisons and one duplicated test block",
+    "oracles": [
+      "direct systematic GF8 generator",
+      "exact Leopard1 legacy-high parity",
+      "same-source compile-time-disabled transform",
+      "exact Leopard main benchmark round trip and digests"
+    ]
+  },
+  "rejected_evidence": {
+    "path": "/tmp/leopard2-t4-30d0ee3-authoritative-v1/campaign-r9-i15-w6-v1",
+    "failure_sha256": "ebf84b60e773e7a34e7eb3433cb2aa6cdf3d668c4f6a8d3af5f36dff7d584c22",
+    "reason": "Build directories were mistakenly placed inside the detached source worktree, so benchmark attestation reported source_tracked_dirty=true. The runner rejected the first process before retaining any timing conclusion.",
+    "workaround": "Rebuild candidate and control from a fresh detached worktree with external build directories, verify source_tracked_dirty=false in both, freeze new binaries, and restart in a new output directory."
+  },
+  "resource_policy": {
+    "host_logical_cpus_allowed": 30,
+    "build_parallelism": 1,
+    "build_memory_max_mib": 512,
+    "benchmark_address_space_max_mib": 256,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_less_than_host_parallelism": "Prior session OOMs required serialized capped compiler/sanitizer work; authoritative cache-sensitive timing pinned CPU14 and reserved sibling CPU30."
+  },
+  "reproduce": {
+    "candidate_build": "cmake -S <clean-30d0ee3-worktree> -B <external-candidate-build> -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF && cmake --build <external-candidate-build> -j1 --target bench_leopard2",
+    "control_build": "cmake -S <clean-30d0ee3-worktree> -B <external-control-build> -DCMAKE_BUILD_TYPE=Release -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_ENABLE_CUDA=OFF -DCMAKE_CXX_FLAGS=-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T4_BATCH_BINDING=1 && cmake --build <external-control-build> -j1 --target bench_leopard2",
+    "campaign": "taskset -c 14 experiments/leopard2/gf8_high_encode/run_t4_b512_k8_terminal_abba.py --candidate <frozen-candidate> --control <frozen-control> --main <frozen-exact-main> --source-commit 30d0ee30f72e85625c186db87e00f2045e563807 --source-tree b0002656b92ab0a025a50045f2d02e4341d0aa86 --output <new-output> --cpu 14 --sibling 30 --rounds 9 --iterations 15 --warmup 6"
+  },
+  "disposition": "Promoted. Every one of the 40 selected cells is credibly faster than the same-source disabled control and exact Leopard main, parity is bit-identical, and the two K8/B512 unselected controls show no same-source regression."
+}
