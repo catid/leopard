@@ -84,6 +84,7 @@ static std::atomic<uint64_t> TestHighSmallTransformCalls(0);
 static std::atomic<uint64_t> TestHighT2PackedCalls(0);
 static std::atomic<uint64_t> TestHighT4PackedCalls(0);
 static std::atomic<uint64_t> TestHighT8PackedCalls(0);
+static std::atomic<uint64_t> TestHighBalancedB64PackedCalls(0);
 static std::atomic<uint64_t> TestHighFinalIFFT2RangeCalls(0);
 static std::atomic<uint64_t> TestHighTailColumnCalls(0);
 static std::atomic<uint64_t> TestHighHalfTailColumnCalls(0);
@@ -4037,6 +4038,7 @@ void TestOnlyResetHighEncodeCounts()
     TestHighT2PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT4PackedCalls.store(0, std::memory_order_relaxed);
     TestHighT8PackedCalls.store(0, std::memory_order_relaxed);
+    TestHighBalancedB64PackedCalls.store(0, std::memory_order_relaxed);
     TestHighFinalIFFT2RangeCalls.store(0, std::memory_order_relaxed);
     TestHighTailColumnCalls.store(0, std::memory_order_relaxed);
     TestHighHalfTailColumnCalls.store(0, std::memory_order_relaxed);
@@ -4068,6 +4070,8 @@ TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts()
         TestHighT4PackedCalls.load(std::memory_order_relaxed);
     result.t8_packed_calls =
         TestHighT8PackedCalls.load(std::memory_order_relaxed);
+    result.balanced_b64_packed_calls =
+        TestHighBalancedB64PackedCalls.load(std::memory_order_relaxed);
     result.final_ifft2_range_calls =
         TestHighFinalIFFT2RangeCalls.load(std::memory_order_relaxed);
     result.tail_column_calls =
@@ -4094,6 +4098,11 @@ void TestOnlyRecordT4PackedCall()
 void TestOnlyRecordT8PackedCall()
 {
     TestHighT8PackedCalls.fetch_add(1, std::memory_order_relaxed);
+}
+
+void TestOnlyRecordBalancedB64PackedCall()
+{
+    TestHighBalancedB64PackedCalls.fetch_add(1, std::memory_order_relaxed);
 }
 
 

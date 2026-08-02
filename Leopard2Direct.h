@@ -238,6 +238,13 @@ bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled);
 bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled);
 
 /*
+    Process-local benchmark control for the exact balanced 64-byte packed
+    terminals.  Change it only while no encode call is executing.  This
+    remains outside the public API and changes no codec or wire identity.
+*/
+bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
+
+/*
     Process-local benchmark control for the exact K=9/R=5/256-byte packed
     terminal.  Change it only while no encode call is executing.  This remains
     outside the public API and changes no codec or wire identity.
