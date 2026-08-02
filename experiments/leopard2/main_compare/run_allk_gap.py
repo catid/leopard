@@ -1574,6 +1574,9 @@ def validate_manifest(
     require(canonical_equal(
         document.get("cells"), [dataclasses.asdict(cell) for cell in cells]),
             "existing all-K manifest cell matrix mismatch")
+    require(canonical_equal(
+        contract.get("matrix"), describe_cell_matrix(cells)),
+        "all-K run contract matrix description does not match its cells")
     completion = document.get("completion")
     require(completion is None or isinstance(completion, dict),
             "all-K manifest completion must be null or an object")
@@ -1604,6 +1607,34 @@ class Cell:
     iterations: int
     reuse: int
     warmup: int
+
+
+def describe_cell_matrix(cells: Sequence[Cell]) -> dict[str, Any]:
+    """Return the exact compact matrix description bound into the contract.
+
+    Keep this derived from the cell list rather than from the default campaign
+    constants.  Focused campaign wrappers deliberately replace ``make_cells``;
+    a hard-coded description would then sign a matrix different from the one
+    actually executed.
+    """
+    require(bool(cells), "all-K cell matrix is empty")
+    gf8 = [cell for cell in cells if cell.family == "gf8-all-k"]
+    gf16 = [cell for cell in cells if cell.family == "gf16-representative"]
+    require(len(gf8) + len(gf16) == len(cells),
+            "all-K cell matrix contains an unknown family")
+    require(bool(gf8), "all-K cell matrix has no GF8 cells")
+    gf8_k = sorted({cell.k for cell in gf8})
+    require(gf8_k == list(range(gf8_k[0], gf8_k[-1] + 1)),
+            "all-K GF8 K range is not contiguous")
+    return {
+        "gf8_K": [gf8_k[0], gf8_k[-1]],
+        "gf8_shard_bytes": sorted({cell.shard_bytes for cell in gf8}),
+        "gf16_K": sorted({cell.k for cell in gf16}),
+        "gf16_shard_bytes":
+            sorted({cell.shard_bytes for cell in gf16}),
+        "gf8_only": not gf16,
+        "cell_count": len(cells),
+    }
 
 
 def ceil_pow2(value: int) -> int:
@@ -3884,13 +3915,7 @@ def _run_with_snapshot_owner_held(
         "workers": workers, "order": list(ORDER),
         "timeout_seconds": options.timeout,
         "with_current_legacy": options.with_current_legacy,
-        "matrix": {
-            "gf8_K": [1, 255], "gf8_shard_bytes": [4096, 65536],
-            "gf16_K": [] if options.gf8_only else list(GF16_K),
-            "gf16_shard_bytes": [] if options.gf8_only else [512, 4096],
-            "gf8_only": options.gf8_only,
-            "cell_count": len(cells),
-        },
+        "matrix": describe_cell_matrix(cells),
         "measurement_note": "all CPUs saturated; diagnostic crossover map, not isolated promotion evidence",
     }
     validate_run_contract_evidence(contract)

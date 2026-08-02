@@ -392,7 +392,14 @@ class AllKIdentityTests(unittest.TestCase):
             "order": list(runner.ORDER),
             "timeout_seconds": 30.0,
             "with_current_legacy": False,
-            "matrix": {"cell_count": 1},
+            "matrix": {
+                "gf8_K": [1, 1],
+                "gf8_shard_bytes": [64],
+                "gf16_K": [],
+                "gf16_shard_bytes": [],
+                "gf8_only": True,
+                "cell_count": 1,
+            },
             "measurement_note": "fixture",
         }
 
@@ -1252,6 +1259,20 @@ class AllKIdentityTests(unittest.TestCase):
                 self.current_source, self.current_snapshot,
                 attestation_identity),
             "cell matrix")
+
+        mislabeled_matrix = copy.deepcopy(manifest)
+        mislabeled_matrix["run_contract"]["matrix"][
+            "gf8_shard_bytes"] = [4096, 65536]
+        mislabeled_matrix["run_contract_sha256"] = runner.canonical_digest(
+            mislabeled_matrix["run_contract"])
+        expect_rejected(
+            self,
+            lambda: runner.validate_manifest(
+                mislabeled_matrix, mislabeled_matrix["run_contract"],
+                mislabeled_matrix["run_contract_sha256"], [cell],
+                self.current_source, self.current_snapshot,
+                attestation_identity),
+            "matrix description")
         self.assertGreater(validated_proof.call_count, 0)
 
     def test_all_k_outer_schema_binds_exact_replay_generation(self) -> None:
