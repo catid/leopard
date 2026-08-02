@@ -1,0 +1,113 @@
+{
+  "schema": "leopard2-r1-small-shard-gap-refresh-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "status": "completed_diagnostic_not_promotion_evidence",
+  "scope": "Exact Leopard main versus current Leopard2 pure-AVX2 GF8 legacy-high R=1 for every K=1 through 255 at 64, 256, and 1024 shard bytes",
+  "source_identity": {
+    "leopard2_commit": "e6a643c5640053dd2e6ce92a606d9bcbfbdf4698",
+    "leopard2_executable_sha256": "cf710e36161b44aa10b87e29ba6a05055b703cff54ab753ae0ec463182df135b",
+    "leopard2_archive_sha256": "7a3c5f77f8c1ff6bebf8b864b6946f719675278fb92f34b8b1870e006d8d9003",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "tracked_runner_sha256": "ada28d8e345fdee750a11a6d17dd4854c7761a4ca2e6d35c51eb5b9334ffadd1",
+    "focused_wrapper_sha256": "d7ef89093978800fa795ea9ed7994d2e0809c7669b0a884f10d10c7c7335344c",
+    "pure_avx2_zero_evex": true,
+    "reproducible_build_matched": true
+  },
+  "matrix": {
+    "field": "GF8",
+    "profile": "legacy_high_v1",
+    "backend": "AVX2",
+    "K": [1, 255],
+    "R": 1,
+    "shard_bytes": [64, 256, 1024],
+    "losses": 1,
+    "cells": 765,
+    "valid_cells": 765,
+    "failed_cells": 0,
+    "workload_digest_mismatches": 0
+  },
+  "execution": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "workers": 28,
+    "all_allowed_cpus_used": true,
+    "elapsed_seconds": 71.885,
+    "child_address_space_limit_mib": 256,
+    "service_memory_max_mib": 2048,
+    "service_memory_peak_mib": 814,
+    "service_swap_max_mib": 0,
+    "order": ["exact_main", "leopard2", "leopard2", "exact_main"],
+    "validity_boundary": "This saturated run locates broad regimes but is not isolated promotion evidence."
+  },
+  "artifacts": {
+    "session_directory": "/tmp/leopard2-r1-small-gap-e6a643c-v4",
+    "manifest_sha256": "055552ff230b7eca2adad0ec7ec3d18a17da68067d2304c909a287ed7884b560",
+    "cells_jsonl_sha256": "664082cb048d75d3c2b6343654ce98af8f6886d05597a6fb35c5ac26c3598b34",
+    "gap_cells_jsonl_sha256": "db6a5d9862c88dfac52b013806deed07d814ed178a46c8f999f993ae9b6255ec",
+    "raw_summary_sha256": "3aa61dd1221e9211f6b43ae955532f51da220ea22c9f7769273e02db4c348d04",
+    "analysis_path": "/tmp/leopard2-r1-small-gap-e6a643c-v4-analysis.json",
+    "analysis_sha256": "23a1cee1f6be6114c95dc0a01704256b69ab6a466312fb5634a8064c2431edcd"
+  },
+  "exact_main_over_leopard2": {
+    "ratio_orientation": "exact-main time / Leopard2 time; above one favors Leopard2",
+    "64": {
+      "encode_geomean": 0.630863844,
+      "encode_median": 0.635936010,
+      "encode_cells_below_one": 255,
+      "decode_first_geomean": 0.383440926,
+      "decode_first_median": 0.396124798,
+      "decode_first_cells_below_one": 255,
+      "decode_reuse_geomean": 0.542299152,
+      "decode_reuse_median": 0.530985491,
+      "decode_reuse_cells_below_one": 254
+    },
+    "256": {
+      "encode_geomean": 0.794567521,
+      "encode_median": 0.806610069,
+      "encode_cells_below_one": 229,
+      "decode_first_geomean": 0.500455348,
+      "decode_first_median": 0.516063204,
+      "decode_first_cells_below_one": 255,
+      "decode_reuse_geomean": 0.677557313,
+      "decode_reuse_median": 0.672351968,
+      "decode_reuse_cells_below_one": 248
+    },
+    "1024": {
+      "encode_geomean": 1.034430443,
+      "encode_median": 1.025506541,
+      "encode_cells_below_one": 104,
+      "decode_first_geomean": 0.810523103,
+      "decode_first_median": 0.830564354,
+      "decode_first_cells_below_one": 233,
+      "decode_reuse_geomean": 0.954224483,
+      "decode_reuse_median": 0.956614982,
+      "decode_reuse_cells_below_one": 163
+    }
+  },
+  "attribution": {
+    "current_tree_legacy_over_leopard2_encode_median": {
+      "64": 1.070484326,
+      "256": 1.028312314,
+      "1024": 1.094607450
+    },
+    "exact_main_over_current_tree_legacy_encode_median": {
+      "64": 0.558212453,
+      "256": 0.765314188,
+      "1024": 0.940988184
+    },
+    "interpretation": "A substantial part of the exact-main gap is the baseline-versus-current-tree build/code-generation leg, but K=2 through 7 remain a stable implementation-specific encode cluster across all three sizes. Plan/API/direct-path overhead also remains visible in decode."
+  },
+  "stable_encode_clusters": {
+    "both_exact_main_and_current_tree_legacy_below_leopard2_at_all_three_sizes": [2, 3, 4, 5, 6, 7, 9, 13, 14],
+    "both_ratios_below_0_95_at_all_three_sizes": [2, 3, 4, 5, 6, 7, 14],
+    "highest_priority_contiguous_cluster": [2, 7]
+  },
+  "next_step": {
+    "bead": "leopard-79h.38.5.10.23.1",
+    "strategy": "Use one setup-time mode captured immutably by codecs to compare existing K2 terminal, K4 dense, K3 fused-final, and K>=8 coarse AVX2 reductions from the same binary inode, then isolate surviving exact-main cells."
+  },
+  "discarded_attempts": [
+    "v1 and v3 failed before timing.",
+    "v2 completed but was rejected because its signed contract described the stock 4096/65536-byte matrix instead of its actual 64/256/1024-byte cells. Commit e6a643c makes this mismatch fail closed."
+  ]
+}
