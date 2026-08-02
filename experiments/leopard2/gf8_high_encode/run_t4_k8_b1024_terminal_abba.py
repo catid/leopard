@@ -8,8 +8,8 @@ required to stay enabled in both binaries.  The first 42 cells and seeds are
 preserved from the authoritative B=512 campaign, B=1024 supplies the two new
 targets, and B=2048 supplies two inert same-path controls.
 
-The candidate and control SHA-256 placeholders below deliberately fail closed.
-Replace them only after immutable binaries have been frozen and hashed.
+The candidate and control SHA-256 values pin the immutable binaries qualified
+by this runner.
 """
 
 from __future__ import annotations
@@ -69,8 +69,10 @@ BASE.RUNNER_DEPENDENCIES = (
     Path(BASE.MAIN_SUPPORT.link_common.__file__).resolve(),
 )
 BASE.EXPECTED_BINARY_SHA256 = {
-    "candidate": "0" * 64,
-    "control": "0" * 64,
+    "candidate":
+        "2fcc1db88da5e4264dc51d7d44769269407b8a42e54a79eaf76cf54ceb352449",
+    "control":
+        "84c82c26049add774aa0629efe0efd5588617ee3c4aeb6fdea60561b4ce1e7ef",
     "main":
         "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
 }
