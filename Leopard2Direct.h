@@ -214,6 +214,14 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     bool enabled);
 
 /*
+    Process-local benchmark control for the exact-byte K=8/R=3..4 packed
+    T=4 terminals.  Change it only while no encode call is executing and
+    invoke it before constructing the codec under test.  This remains outside
+    the public API and changes no codec or wire identity.
+*/
+bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled);
+
+/*
     Process-local benchmark control for the exact K=16/R=8/256-byte packed
     terminal.  Invoke before context creation.  This remains outside the
     public API and changes no codec or wire identity.

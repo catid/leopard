@@ -11455,6 +11455,17 @@ bool SetContextHighT4BatchBindingEnabledForDiagnostics(
     return true;
 }
 
+bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    g_k8r3r4_t4_terminal_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)

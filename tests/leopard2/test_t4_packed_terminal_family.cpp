@@ -479,6 +479,25 @@ void ExerciseNonPromotedCells(leo2_context* context)
     }
 }
 
+void ExerciseK8DiagnosticControl(leo2_context* context)
+{
+    Require(leopard2_internal::
+            SetK8R3R4T4TerminalEnabledForDiagnostics(false),
+        "disable K8/R=3..4 T=4 packed terminal");
+    ExerciseCell(context, Cell{ 8, 3, 1024 }, false);
+    ExerciseCell(context, Cell{ 8, 4, 1024 }, false);
+
+    /* The process-local selector is deliberately confined to K=8. */
+    ExerciseCell(context, Cell{ 4, 3, 1024 }, true);
+    ExerciseCell(context, Cell{ 7, 4, 512 }, true);
+
+    Require(leopard2_internal::
+            SetK8R3R4T4TerminalEnabledForDiagnostics(true),
+        "re-enable K8/R=3..4 T=4 packed terminal");
+    ExerciseCell(context, Cell{ 8, 3, 1024 }, true);
+    ExerciseCell(context, Cell{ 8, 4, 1024 }, true);
+}
+
 void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
 {
     leo2_codec* codec = CreateCodec(context, cell);
@@ -838,6 +857,7 @@ int main()
 
         ExercisePromotedMatrix(context);
         ExerciseNonPromotedCells(context);
+        ExerciseK8DiagnosticControl(context);
         ExerciseForcedTransform(context, Cell{ 7, 4, 256 });
         ExerciseForcedTransform(context, Cell{ 7, 4, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
