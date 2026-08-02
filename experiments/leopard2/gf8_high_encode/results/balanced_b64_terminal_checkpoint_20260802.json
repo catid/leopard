@@ -1,0 +1,198 @@
+{
+  "schema": "leopard2-gf8-balanced-b64-terminal-checkpoint/v1",
+  "date_utc": "2026-08-02",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K_equals_R_equals_T": [32, 64, 128],
+    "shard_bytes": 64,
+    "batch_sizes": [1],
+    "dense_packed_native_layout_only": true,
+    "public_entry_points": ["leo2_encode", "leo2_encode_batch"],
+    "excluded_size": 16
+  },
+  "source": {
+    "implementation_commit": "543e82712bf47d6e58fbff260526ea576de57e6e",
+    "implementation_tree": "ebec4cf1066ed0d6e347b5ef37769b2b76d6bfc7",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_binaries": {
+    "candidate": {
+      "sha256": "05ee990ecd1c424ca5e30d52be7672c32aec809aaf9f4bc355320f490c4b05b5",
+      "file_bytes": 1154680,
+      "text_bytes": 1034620,
+      "data_bytes": 3828,
+      "bss_bytes": 658328
+    },
+    "same_source_control": {
+      "sha256": "189a21e637ebe37f6ecd8336c33d0a7a7a56315fe697324d70a267d21e4b5a0c",
+      "file_bytes": 1154680,
+      "text_bytes": 1034620,
+      "data_bytes": 3828,
+      "bss_bytes": 658328
+    },
+    "exact_main_pure_avx2": {
+      "sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+      "file_bytes": 1175624,
+      "text_bytes": 112402,
+      "data_bytes": 1680,
+      "bss_bytes": 526016
+    },
+    "exact_main_native_context_not_retimed": {
+      "sha256": "e805048ebb2d6cd8a7aa27fb76b22da657f856e1a1728499cd7ed3ff0f4d6eb9",
+      "file_bytes": 1165832,
+      "text_bytes": 110949,
+      "data_bytes": 1680,
+      "bss_bytes": 526080
+    }
+  },
+  "provenance": {
+    "candidate_control_executable_sections_sha256": "6e20f36865416b941181557ddc77875118793149dbbf41deed1f0631b1bfb8c3",
+    "candidate_control_executable_sections_identical": true,
+    "selector_symbol": "_ZN12_GLOBAL__N_1L28g_balanced_b64_terminal_modeE",
+    "candidate_selector_value": 1,
+    "control_selector_value": 2,
+    "binary_hashes_unchanged_before_and_after_campaign": true,
+    "source_attestation_clean": true,
+    "pure_avx2_main_profile": "-march=x86-64 -mtune=generic -mavx2 -mno-avx512f"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "cpu": 7,
+    "reserved_smt_sibling": 23,
+    "created_utc": "2026-08-02T17:17:02.457767Z",
+    "completed_utc": "2026-08-02T17:18:32.522177Z",
+    "target_rounds": 9,
+    "neighbor_rounds": 3,
+    "iterations_per_process": 15,
+    "warmups_per_process": 64,
+    "target_cells": 3,
+    "neighbor_cells": 19,
+    "processes": 390,
+    "all_workload_digests_matched": true,
+    "all_rounds_zero_reserved_sibling_nonidle_jiffies": true,
+    "credible_neighbor_regressions": [],
+    "raw_external_path": "/tmp/leo2-balanced-b64-543e827-pure-abba-r5/raw.json",
+    "raw_sha256": "46b5ea6fb2b9be44299c994abc643914ac895308d9532845882a25d6842f37aa",
+    "summary_external_path": "/tmp/leo2-balanced-b64-543e827-pure-abba-r5/summary.json",
+    "summary_sha256": "0640c48b1da64fcd33dd13401b20394cab08389c0ec71dbe3ce37a006273d036"
+  },
+  "promotion_policy": {
+    "target_same_source_ci95_lower_minimum": 1.05,
+    "target_exact_main_ci95_lower_minimum": 1.05,
+    "neighbor_credible_regression_limit_percent": 2.0,
+    "statistics": "mean log contrast per independent ABBA round; two-sided Student-t 95 percent CI with df=8 for targets and df=2 for neighbors"
+  },
+  "target_columns": [
+    "K",
+    "R",
+    "same_source_speedup",
+    "same_source_ci95_low",
+    "same_source_ci95_high",
+    "exact_main_speedup",
+    "exact_main_ci95_low",
+    "exact_main_ci95_high"
+  ],
+  "targets": [
+    [32, 32, 1.2370914953735004, 1.224420809414262, 1.2498933015174365, 1.1433107463599088, 1.1196365223165157, 1.1674855515051914],
+    [64, 64, 1.1766771352367926, 1.1683372983091778, 1.1850765036713446, 1.0803678253384645, 1.066430565123919, 1.094487232641288],
+    [128, 128, 1.0797030965682628, 1.0719470345712074, 1.08751527747396, 1.061180610828012, 1.0527037226364049, 1.0697257590930545]
+  ],
+  "neighbors": {
+    "count": 19,
+    "same_source_speedup_range": [0.9939373403424212, 1.0278358528839617],
+    "ci95_upper_minimum": 0.9995933351280056,
+    "credible_regressions": [],
+    "ids": [
+      "byte-k32-r32-b63-q1",
+      "byte-k32-r32-b65-q1",
+      "byte-k32-r32-b256-q1",
+      "byte-k64-r64-b63-q1",
+      "byte-k64-r64-b65-q1",
+      "byte-k64-r64-b256-q1",
+      "byte-k128-r128-b63-q1",
+      "byte-k128-r128-b65-q1",
+      "byte-k128-r128-b256-q1",
+      "shape-k31-r32-b64-q1",
+      "shape-k32-r31-b64-q1",
+      "shape-k63-r64-b64-q1",
+      "shape-k64-r63-b64-q1",
+      "shape-k127-r128-b64-q1",
+      "shape-k128-r127-b64-q1",
+      "rejected-k16-r16-b64-q1",
+      "terminal-k8-r8-b64-q1",
+      "terminal-k5-r5-b64-q1",
+      "terminal-k16-r8-b256-q1"
+    ]
+  },
+  "validation": {
+    "final_strict_release": {
+      "source_commit": "543e82712bf47d6e58fbff260526ea576de57e6e",
+      "cxx_flags": "-Wall -Wextra -Wpedantic -Werror",
+      "tests": [
+        ["leopard2_balanced_b64_terminal", "passed", 20.04],
+        ["leopard2_balanced_b64_terminal_production", "passed", 6.60]
+      ],
+      "result": "2/2 passed"
+    },
+    "gcc_asan_ubsan": {
+      "source_relation": "same terminal implementation and validators before the final eligibility-check ordering-only change",
+      "cxx_flags": "-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+      "result": "2/2 passed",
+      "total_seconds": 37.20,
+      "maximum_resident_kib": 49152,
+      "note": "The first memory-capped launch was an infrastructure rejection because AddressSanitizer reserves a multi-terabyte virtual shadow; the uncapped sequential rerun used 48 MiB RSS."
+    },
+    "coverage": [
+      "independent direct GF8 generator-matrix parity oracle",
+      "ordinary and one-item batch at T=32,64,128",
+      "T=16 and byte/K/R/profile/forced-transform/backend exclusions",
+      "unaligned packed buffers and sparse/detached fallback",
+      "exact scratch geometry and guard bytes",
+      "undersized or misaligned scratch atomicity",
+      "input/output/scratch and batch-metadata overlap atomicity",
+      "null arrays and null source handling",
+      "AUTO/scalar/SSSE3 backend routing and parity determinism"
+    ]
+  },
+  "fail_closed_attempts": [
+    {
+      "path": "/tmp/leo2-balanced-b64-543e827-pure-abba",
+      "cpu_pair": [11, 27],
+      "reason": "CPU pair was not quiet during the presample",
+      "failure_sha256": "88f9f668c8142dcb6940080c974453f5d60e5c12052d15fc06f892aea53f171f"
+    },
+    {
+      "path": "/tmp/leo2-balanced-b64-543e827-pure-abba-r2",
+      "cpu_pair": [10, 26],
+      "reason": "contaminated target-k128-r128-b64-q1 round 8",
+      "failure_sha256": "97535b8218c25ca44f070d33698edfc8bfd72c9294ae6e9c7699cd157bee66a6"
+    },
+    {
+      "path": "/tmp/leo2-balanced-b64-543e827-pure-abba-r3",
+      "cpu_pair": [9, 25],
+      "reason": "CPU pair was not quiet during the presample",
+      "failure_sha256": "2a0c2eccd7a8abf13f1e2d2c5fd9a96d2f1ae101fb5d94112c902cd4e81ac38b"
+    },
+    {
+      "path": "/tmp/leo2-balanced-b64-543e827-pure-abba-r4",
+      "cpu_pair": [8, 24],
+      "reason": "CPU pair was not quiet during the presample",
+      "failure_sha256": "2a33c116160f4bd119567057c84632318fca74bf5bd120393995baf77d7b83a1"
+    }
+  ],
+  "implementation_notes": {
+    "strategy": "validate exact dense packed public geometry, then call the mature GF8 transform encoder directly with recovery rows as work",
+    "hot_path_allocations": 0,
+    "public_scratch_contract_preserved": true,
+    "candidate_control_nonmatching_shape_execution_identical": true,
+    "t16_status": "excluded because its earlier screen did not recover the exact-main gap",
+    "native_main_context": "frozen and hashed but not retimed after the pure-AVX2 promotion gate; no native-context claim is made"
+  },
+  "reproduction": {
+    "runner": "experiments/leopard2/gf8_high_encode/run_balanced_b64_terminal_abba.py",
+    "command": "taskset -c 7 experiments/leopard2/gf8_high_encode/run_balanced_b64_terminal_abba.py --candidate /tmp/leo2-balanced-b64-543e827-clean-frozen/candidate --control /tmp/leo2-balanced-b64-543e827-clean-frozen/control --main /tmp/leo2-balanced-b64-543e827-clean-frozen/main-pure-avx2 --source-commit 543e82712bf47d6e58fbff260526ea576de57e6e --source-tree ebec4cf1066ed0d6e347b5ef37769b2b76d6bfc7 --output /tmp/leo2-balanced-b64-543e827-pure-abba-r5 --cpu 7 --sibling 23 --iterations 15 --warmup 64"
+  }
+}
