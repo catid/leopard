@@ -1,0 +1,150 @@
+{
+  "schema": "leopard2-raw-generic-balanced-b64-negative/v1",
+  "date_utc": "2026-08-02",
+  "bead": "leopard-79h.38.21",
+  "status": "rejected",
+  "hypothesis": "A minimal caller-scratch-owned native generic N-point pattern can remove enough one-shot setup cost to beat the caller-scratch-owned translated Algorithm 4 decoder by at least 5 percent for exact 64-byte balanced GF8 AVX2 half-loss calls.",
+  "source_identity": {
+    "parent_commit": "29e21d4cf5f1bb334b92d71fd65db5f9a9c5518a",
+    "parent_subject": "leopard2: avoid transient decode-plan allocation",
+    "parent_production_diff_sha256": "0067644edef21891163b611664d1dce5df5e4a37215703c1ebadca4385d24a34",
+    "rejected_candidate_diff_sha256": "a1857b0076dd7fa95edd4dffe677fb167af6e28c1aac0feaf517e80d44a65b2d",
+    "build_type": "Release",
+    "backend_variant": "avx2",
+    "compiler": "GNU C++ 13.3.0",
+    "raw_translated_binary_sha256": "5c8612a84efa2e2476a26d65e7a201fa09c42bc39754ff8d590d929168bcb3e2",
+    "raw_generic_binary_sha256": "649991a1f8f892ebb8208a849b1b0b829aaed55624d4c97595bbc65d58ee5480",
+    "regular_control_binary_sha256": "e2a33a5538b569d728bf486c8b121931fa21c1ca5d0c7bfb7b66d01162177810",
+    "raw_timing_documents_combined_sha256": "c0ba5215673644a23f5d8abbeae5c7b4029782fbcddbb6c38445daad52de8ac6"
+  },
+  "host": {
+    "model": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "allowed_logical_cpus": 28,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic x86_64"
+  },
+  "resource_policy": {
+    "canonical_campaign_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "build_lock_pid": 2491811,
+    "build_jobs": 2,
+    "build_virtual_memory_limit_bytes": 4294967296,
+    "timing_virtual_memory_limit_bytes": 2147483648,
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "cpu_pair_lease": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-13-29.lock",
+    "cpu_pair_lease_payload_sha256": "42a6ceb432977fc02963c2ae86e19b6a077107e58fb641b5e8322d562f083b6c",
+    "lower_parallelism_reason": "Builds were intentionally capped at two jobs and 4 GiB after two prior host OOM incidents. Authoritative cache-sensitive timings were pinned to one physical core with its SMT sibling reserved."
+  },
+  "candidate": {
+    "scope": "Compile-time diagnostic selector only for legacy-high native-layout GF8 AVX2, flags zero, exact 64-byte shards, balanced K=R in {32,95,128}, and floor(R/2) missing originals.",
+    "setup": "The caller scratch range arena held only the native N-byte erasure mask, N-byte locator, requested native coordinates, generic input prefix, and N-point output dependency bitmap. Buffer validation completed before this arena was overwritten.",
+    "execution": "The mature generic ReedSolomonDecodePlanned N-point transform ran with direct inverse-locator reveal and scatter into requested caller outputs. Reusable plans, wire format, and public ABI were unchanged.",
+    "compiler_note": "GCC emitted a may-be-uninitialized diagnostic because it did not correlate the successful ternary metadata bind with the selected pattern branch. Correctness tests passed; the experiment was rejected on performance before diagnostic cleanup."
+  },
+  "correctness": {
+    "build_roles": [
+      "raw_translated",
+      "raw_generic",
+      "regular_control"
+    ],
+    "tests_passed_for_all_build_roles": [
+      "leopard2_decode_high_acceptance",
+      "leopard2_high_low_duality"
+    ],
+    "additional_tests_passed": [
+      "raw_translated:leopard2_one_shot_no_loss",
+      "raw_generic:leopard2_one_shot_no_loss",
+      "raw_generic:leopard2_benchmark_json_regression"
+    ],
+    "independent_oracle": "tests/leopard2/direct_oracle.cpp direct systematic RS generator and interpolation",
+    "benchmark_invocations": 24,
+    "all_round_trips_passed": true,
+    "all_workload_digests_equal_across_four_roles": true,
+    "binary_hashes_verified_before_and_after_timing": true,
+    "route_metadata_verified": true,
+    "ordinary_v9_v12_schema_keys_verified": true,
+    "setup_mode_v15_v16_route_visibility_verified": true
+  },
+  "measurement": {
+    "metric": "metrics.one_shot_decode_including_setup.median_us_per_batch_call",
+    "scope": "Complete public leo2_decode call, including pattern or plan setup and destruction where applicable.",
+    "iterations_per_invocation": 21,
+    "warmup": 5,
+    "reuse": 256,
+    "invocations_per_role_per_cell": 2,
+    "retained_samples_per_role_per_cell": 42,
+    "seed": 1,
+    "order": [
+      "regular_translated",
+      "regular_generic",
+      "raw_translated",
+      "raw_generic",
+      "raw_generic",
+      "raw_translated",
+      "regular_generic",
+      "regular_translated"
+    ],
+    "roles": {
+      "regular_translated": "Raw route compile-time disabled; ordinary scratch-owning one-shot plan selected translated Algorithm 4.",
+      "regular_generic": "Same disabled binary with force-generic; ordinary scratch-owning one-shot plan selected generic N-point decode.",
+      "raw_translated": "Allocation-free caller-scratch pattern selected translated Algorithm 4.",
+      "raw_generic": "Allocation-free caller-scratch pattern selected generic N-point decode."
+    },
+    "ratio_definition": "raw_translated_time / raw_generic_time; at least 1.05 was required for promotion",
+    "rows": [
+      {
+        "K": 32,
+        "R": 32,
+        "loss": 16,
+        "shard_bytes": 64,
+        "regular_translated_us": [1.386969, 1.392398],
+        "regular_generic_us": [1.535137, 1.546074],
+        "raw_translated_us": [1.105793, 1.098254],
+        "raw_generic_us": [1.244469, 1.270328],
+        "raw_generic_speedup": 0.8764313779601297,
+        "raw_generic_slowdown_fraction": 0.14099064130665084,
+        "passes_five_percent_gate": false
+      },
+      {
+        "K": 95,
+        "R": 95,
+        "loss": 47,
+        "shard_bytes": 64,
+        "regular_translated_us": [4.396145, 4.394422],
+        "regular_generic_us": [5.395141, 5.411937],
+        "raw_translated_us": [3.979184, 3.960473],
+        "raw_generic_us": [4.802828, 4.832906],
+        "raw_generic_speedup": 0.8239805083868028,
+        "raw_generic_slowdown_fraction": 0.2136209410557659,
+        "passes_five_percent_gate": false
+      },
+      {
+        "K": 128,
+        "R": 128,
+        "loss": 64,
+        "shard_bytes": 64,
+        "regular_translated_us": [4.998922, 5.003531],
+        "regular_generic_us": [5.973387, 5.955574],
+        "raw_translated_us": [4.478602, 4.480637],
+        "raw_generic_us": [5.314121, 5.331117],
+        "raw_generic_speedup": 0.8416194170576553,
+        "raw_generic_slowdown_fraction": 0.18818551441701703,
+        "passes_five_percent_gate": false
+      }
+    ]
+  },
+  "decision": {
+    "result": "reject",
+    "reason": "Removing heap ownership and reducing generic setup metadata did not rescue generic execution. The complete raw generic public call was 14.1 to 21.4 percent slower than the complete raw translated Algorithm 4 call in every target cell.",
+    "neighbor_sweep": "Not run: the explicit early kill criterion fired in all three target cells before neighbor qualification.",
+    "production_change": "None. The rejected selector, metadata view, private introspection, tests, and benchmark schema additions were removed; only this negative result remains."
+  },
+  "reproduction": {
+    "configure_common": "cmake -S . -B BUILD -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_BUILD_FUZZERS=OFF -DLEO2_ENABLE_CUDA=OFF",
+    "candidate_define": "-DCMAKE_CXX_FLAGS=-DLEO2_EXPERIMENT_RAW_GENERIC_BALANCED_B64=1",
+    "regular_control_define": "-DCMAKE_CXX_FLAGS=-DLEO2_EXPERIMENT_RAW_TRANSIENT_DISABLED=1",
+    "benchmark_template": "taskset -c 13 FROZEN_BINARY --k K --r K --profile high --field gf8 --backend avx2 --bytes 64 --loss LOSS --batch 1 --reuse 256 --iterations 21 --warmup 5 --threads 1 --seed 1 --skip-legacy --retain-samples --measure-one-shot-decode --one-shot-plan-setup-mode 3 --json RESULT.json"
+  }
+}
