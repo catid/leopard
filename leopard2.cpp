@@ -1187,10 +1187,10 @@ static std::atomic<unsigned> g_low_p32_b64_terminal_mode(1U);
 // timing, so production and measured execution retain states one/two and pay
 // no thread-local accounting cost.
 static thread_local bool g_low_p32_b64_terminal_route_selected = false;
-// The larger generated terminal is still an experiment.  State two keeps it
-// disabled in production while preserving an identical-text benchmark
-// control; states three/four have the same one-call probe semantics as P32.
-static std::atomic<unsigned> g_low_p128_b64_terminal_mode(2U);
+// The qualified target cells start enabled in production.  State two retains
+// the mature-path same-executable benchmark control; states three/four have
+// the same one-call route-probe semantics as P32.
+static std::atomic<unsigned> g_low_p128_b64_terminal_mode(1U);
 static thread_local bool g_low_p128_b64_terminal_route_selected = false;
 #endif
 static const uint32_t kGF8Order = 256;

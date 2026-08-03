@@ -1,0 +1,122 @@
+{
+  "schema": "leopard2-alg4-p128-terminal-checkpoint/v1",
+  "status": "accepted_and_promoted_for_exact_cells",
+  "date_utc": "2026-08-03",
+  "candidate": {
+    "source_commit": "5ff9a3f5b0e14dd6b1594946518444fcebbf120d",
+    "source_tree": "0ed105d3c02026b3d49fc13b334673711d8a3a7d",
+    "benchmark_sha256": "daf36898adff87e2efa6c1e9d702d0a437859a713be62ecee4a48fa4ab4be719",
+    "archive_sha256": "11eac25675469655c6937ecbc1ca51746981825ad375a9ffabb33ee180d7421e",
+    "correctness_test_sha256": "06919f5127c21cc97a94cbda3b58d439a1c5c2fe953e7dd08506e9722977b34f"
+  },
+  "exact_main": {
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "source_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "benchmark_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084",
+    "archive_sha256": "6d52f31270fb01f44a6cb23464e8681a33545d70996bc46338746d8c73264b3b"
+  },
+  "method": {
+    "runner": "experiments/leopard2/alg4_p32/run_terminal_abba.py --terminal p128",
+    "runner_sha256": "0afe440656b6e52bfacaa8f61838dfa6b719897fa4fc636d00a6ed03d5967c8c",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "cpu": 13,
+    "reserved_smt_sibling": 29,
+    "rounds_per_cell": 9,
+    "samples_per_process": 21,
+    "warmups_per_process": 5,
+    "reuse": 256,
+    "candidate_control_same_frozen_binary": true,
+    "maximum_round_attempts": 5,
+    "rejected_contaminated_attempts": 0,
+    "raw_bundle": "/tmp/leopard2-p128-5ff9a3f-abba-v1",
+    "raw_json_sha256": "6826142abf4c6dc6fbd8bd55d04e63ef6b5d28bb1d7ea51486b27f2b5796bd7c",
+    "summary_json_sha256": "f95eeaacb5cf5794fc06182c112904241f9d27c249e506d45ff1de772237476f"
+  },
+  "acceptance": {
+    "target_same_source_lower_ci_floor": 1.05,
+    "target_exact_main_lower_ci_floor": 1.05,
+    "neighbor_maximum_credible_regression": 0.02,
+    "target_control_failure": false,
+    "target_exact_main_failure": false,
+    "credible_neighbor_regressions": []
+  },
+  "targets": [
+    {
+      "K": 95,
+      "R": 95,
+      "shard_bytes": 64,
+      "losses": 47,
+      "same_source_speedup": 1.2232450099596215,
+      "same_source_ci95": [1.2180551255807048, 1.2284570073770213],
+      "exact_main_speedup": 1.265377067424373,
+      "exact_main_ci95": [1.2607836171405187, 1.2699872531616572]
+    },
+    {
+      "K": 95,
+      "R": 95,
+      "shard_bytes": 64,
+      "losses": 94,
+      "same_source_speedup": 1.2039172312854212,
+      "same_source_ci95": [1.1955747412539115, 1.2123179336038958],
+      "exact_main_speedup": 1.1985173509523057,
+      "exact_main_ci95": [1.1904746812554432, 1.2066143557281679]
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 64,
+      "losses": 64,
+      "same_source_speedup": 1.275253029166417,
+      "same_source_ci95": [1.2646339993791873, 1.285961226091077],
+      "exact_main_speedup": 1.2552248429899238,
+      "exact_main_ci95": [1.2468887755575808, 1.2636166411511007]
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "shard_bytes": 64,
+      "losses": 127,
+      "same_source_speedup": 1.2553655422344885,
+      "same_source_ci95": [1.2488503776848991, 1.2619146959391174],
+      "exact_main_speedup": 1.1619155132980765,
+      "exact_main_ci95": [1.1557524446044478, 1.1681114466556737]
+    }
+  ],
+  "selector_neighbors": {
+    "count": 14,
+    "loss_neighbors": [
+      "K95/L46", "K95/L48", "K95/L93", "K95/L95",
+      "K128/L63", "K128/L65", "K128/L126", "K128/L128"
+    ],
+    "byte_neighbors": [63, 65],
+    "shape_neighbors": ["K94/R95", "K95/R94", "K127/R128", "K128/R127"],
+    "credible_regressions": []
+  },
+  "correctness": {
+    "p32_payloads": 2,
+    "p32_patterns": 67,
+    "p128_payloads": 2,
+    "p128_patterns": 136,
+    "p95_payloads": 1,
+    "p95_patterns": 103,
+    "parity_selections_per_pattern": 2,
+    "public_routes": 89,
+    "independent_direct_parity_for_K95_and_K128": true,
+    "mature_algorithm4_differential": true,
+    "generic_decoder_differential": true,
+    "unaligned_guarded_buffers": true,
+    "scratch_and_work_redzones": true,
+    "allowed_input_aliases": true
+  },
+  "promotion_scope": {
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "parent_N": 256,
+    "padded_side_P": 128,
+    "shard_bytes": 64,
+    "cells": ["K95/R95/L47", "K95/R95/L94", "K128/R128/L64", "K128/R128/L127"],
+    "reusable_plans": false,
+    "all_other_cells": "mature Algorithm 4 path"
+  }
+}

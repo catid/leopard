@@ -310,9 +310,9 @@ bool FinishLowP32B64TerminalRouteProbeForDiagnostics();
 
 /*
     Same-executable attribution for the bounded GF8/AVX2 Algorithm 4
-    P=128/N=256/B=64 terminal.  This experiment is production-disabled until
-    its exact target cells pass the acceptance campaign.  Its diagnostic
-    state and route probe are independent of the qualified P32 terminal.
+    P=128/N=256/B=64 terminal.  Its exact target cells are production-enabled
+    after qualification; the diagnostic state and route probe remain
+    independent of the P32 terminal.
 */
 bool SetLowP128B64TerminalEnabledForDiagnostics(bool enabled);
 

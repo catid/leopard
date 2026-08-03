@@ -836,8 +836,8 @@ int main()
             "create public-route AVX2 context");
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
             "production terminal mode did not start enabled");
-        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 2,
-            "experimental P128 terminal did not start disabled");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
+            "qualified P128 terminal did not start enabled");
         unsigned route_count = 0;
         for (unsigned loss_count = 9; loss_count < kOriginalCount;
              ++loss_count)
@@ -1025,6 +1025,14 @@ int main()
             "finish disabled P128 terminal route probe");
         Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 2,
             "finished disabled P128 terminal did not retain mode two");
+        Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
+                true),
+            "restore qualified P128 terminal after disabled control");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
+            "restored P128 terminal did not normalize to mode one");
+        Require(leopard2_internal::
+                FinishLowP128B64TerminalRouteProbeForDiagnostics(),
+            "finish restored P128 terminal route probe");
         leo2_context_destroy(context);
         std::printf(
             "PASS low_p32_p128_b64_terminal p32_payloads=2 "
