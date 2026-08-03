@@ -51,6 +51,14 @@ static inline uint8_t AddLogs(uint8_t first, uint8_t second)
     return static_cast<uint8_t>(sum + (sum >> 8));
 }
 
+static inline const void* OffsetInput(
+    const void* pointer, uint64_t byte_offset)
+{
+    return pointer
+        ? static_cast<const uint8_t*>(pointer) + byte_offset
+        : NULL;
+}
+
 static inline void XorRow64(
     void* destination_pointer, const void* source_pointer)
 {
@@ -115,7 +123,8 @@ static void FinalFFTReveal(
     const uint8_t* forward_skew,
     uint32_t requested_mask,
     const uint8_t* locator_logs,
-    void* const* restored)
+    void* const* restored,
+    uint64_t output_offset)
 {
     ops.ff8_fft_butterfly4_range(
         work, 8,
@@ -164,7 +173,8 @@ static void FinalFFTReveal(
                 static_cast<uint8_t>(255U - locator_logs[row]);
             x0 = ApplyWeight(tables, x0, reveal_log);
             x1 = ApplyWeight(tables, x1, reveal_log);
-            uint8_t* output = static_cast<uint8_t*>(restored[row]);
+            uint8_t* output =
+                static_cast<uint8_t*>(restored[row]) + output_offset;
             _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), x0);
             _mm256_storeu_si256(
                 reinterpret_cast<__m256i*>(output + 32), x1);
@@ -175,7 +185,8 @@ static void FinalFFTReveal(
                 static_cast<uint8_t>(255U - locator_logs[row + 1]);
             y0 = ApplyWeight(tables, y0, reveal_log);
             y1 = ApplyWeight(tables, y1, reveal_log);
-            uint8_t* output = static_cast<uint8_t*>(restored[row + 1]);
+            uint8_t* output =
+                static_cast<uint8_t*>(restored[row + 1]) + output_offset;
             _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), y0);
             _mm256_storeu_si256(
                 reinterpret_cast<__m256i*>(output + 32), y1);
@@ -198,6 +209,7 @@ static void FinalFFTReveal(
 
 bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
     const Ops& ops,
+    uint64_t buffer_bytes,
     const void* const* coordinate_data,
     const uint32_t* requested_coordinates,
     uint32_t requested_count,
@@ -218,7 +230,9 @@ bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
     if (ops.kind != LEO2_BACKEND_AVX2 || !ops.ff8_weighted_ifft_butterfly4 ||
         !ops.ff8_ifft_butterfly4_range || !ops.ff8_fft_butterfly4_range ||
         !ops.ff8_ifft_butterfly2_range || !coordinate_data ||
-        !requested_coordinates || requested_count == 0 ||
+        buffer_bytes < 64 || buffer_bytes > 256 ||
+        (buffer_bytes & 63U) != 0 || !requested_coordinates ||
+        requested_count == 0 ||
         requested_count > 32 || !locator_logs || !inverse_skew0 ||
         !inverse_skew1 || !forward_skew || !restored || !work || !tables)
         return false;
@@ -233,57 +247,63 @@ bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
         requested_mask |= UINT32_C(1) << coordinate;
     }
 
-    for (unsigned block = 0; block < 2; ++block)
+    for (uint64_t byte_offset = 0;
+         byte_offset < buffer_bytes; byte_offset += 64)
     {
-        const unsigned base = block * 32;
-        const uint8_t* inverse_skew =
-            block == 0 ? inverse_skew0 : inverse_skew1;
-        for (unsigned row = 0; row < 32; row += 4)
+        for (unsigned block = 0; block < 2; ++block)
         {
-            const unsigned coordinate = base + row;
-            uint8_t live_mask = 0;
-            uint16_t weights[4];
-            for (unsigned lane = 0; lane < 4; ++lane)
+            const unsigned base = block * 32;
+            const uint8_t* inverse_skew =
+                block == 0 ? inverse_skew0 : inverse_skew1;
+            for (unsigned row = 0; row < 32; row += 4)
             {
-                const unsigned index = coordinate + lane;
-                if (coordinate_data[index])
-                    live_mask = static_cast<uint8_t>(
-                        live_mask | (1U << lane));
-                weights[lane] = block == 0
-                    ? locator_logs[index]
-                    : AddLogs(locator_logs[index], block_factor);
+                const unsigned coordinate = base + row;
+                uint8_t live_mask = 0;
+                uint16_t weights[4];
+                const void* inputs[4];
+                for (unsigned lane = 0; lane < 4; ++lane)
+                {
+                    const unsigned index = coordinate + lane;
+                    if (coordinate_data[index])
+                        live_mask = static_cast<uint8_t>(
+                            live_mask | (1U << lane));
+                    inputs[lane] = OffsetInput(
+                        coordinate_data[index], byte_offset);
+                    weights[lane] = block == 0
+                        ? locator_logs[index]
+                        : AddLogs(locator_logs[index], block_factor);
+                }
+                ops.ff8_weighted_ifft_butterfly4(
+                    inputs[0], inputs[1], inputs[2], inputs[3],
+                    work[coordinate], work[coordinate + 1],
+                    work[coordinate + 2], work[coordinate + 3],
+                    weights[0], weights[1], weights[2], weights[3], live_mask,
+                    inverse_skew[row + 1], inverse_skew[row + 3],
+                    inverse_skew[row + 2], 64);
             }
-            ops.ff8_weighted_ifft_butterfly4(
-                coordinate_data[coordinate],
-                coordinate_data[coordinate + 1],
-                coordinate_data[coordinate + 2],
-                coordinate_data[coordinate + 3],
-                work[coordinate], work[coordinate + 1],
-                work[coordinate + 2], work[coordinate + 3],
-                weights[0], weights[1], weights[2], weights[3], live_mask,
-                inverse_skew[row + 1], inverse_skew[row + 3],
-                inverse_skew[row + 2], 64);
         }
+
+        FinishInverse(ops, work, inverse_skew0, NULL);
+
+        // In the normalized LCH basis, Algorithm 4's block-zero contribution
+        // is A + A'.  The fixed triangular XOR circuit below is the exact
+        // AddFormalDerivative(P=32) schedule used by the mature decoder.
+        for (unsigned i = 1; i < 32; ++i)
+        {
+            const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+            for (unsigned lane = 0; lane < width; ++lane)
+                XorRow64(work[i - width + lane], work[i + lane]);
+        }
+
+        // The block factor was folded into block one's locator weights.
+        // Complete its inverse transform and accumulate its last layer
+        // directly into A.  Each byte tile is algebraically independent, so
+        // reuse the same 64 work rows before scattering this tile.
+        FinishInverse(ops, work + 32, inverse_skew1, work);
+        FinalFFTReveal(
+            ops, tables, work, forward_skew,
+            requested_mask, locator_logs, restored, byte_offset);
     }
-
-    FinishInverse(ops, work, inverse_skew0, NULL);
-
-    // In the normalized LCH basis, Algorithm 4's block-zero contribution is
-    // A + A'.  The fixed triangular XOR circuit below is the exact
-    // AddFormalDerivative(P=32) schedule used by the mature decoder.
-    for (unsigned i = 1; i < 32; ++i)
-    {
-        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
-        for (unsigned lane = 0; lane < width; ++lane)
-            XorRow64(work[i - width + lane], work[i + lane]);
-    }
-
-    // The block factor was folded into block one's locator weights.  Complete
-    // its inverse transform and accumulate its last layer directly into A.
-    FinishInverse(ops, work + 32, inverse_skew1, work);
-    FinalFFTReveal(
-        ops, tables, work, forward_skew,
-        requested_mask, locator_logs, restored);
     return true;
 }
 
