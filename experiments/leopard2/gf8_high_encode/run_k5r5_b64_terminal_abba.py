@@ -37,6 +37,9 @@ CANDIDATE_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_SCHEMA = "leopard2-benchmark-v5"
 CONTROL_EXTRA_ARGUMENTS: tuple[str, ...] = ()
 CONTROL_BUILD_MARKER: str | None = None
+REQUIRE_EXPECTED_IDENTITIES = False
+REQUIRE_BUILD_CLOSURE = False
+REQUIRE_FULL_ELF_IDENTITY = False
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 T95_DF2 = 4.302652729911275
 T95_DF3 = 3.182446305284263
@@ -182,6 +185,247 @@ def mode_word_identity(executable: Path) -> dict[str, Any]:
     }
 
 
+def elf_sections(executable: Path) -> list[dict[str, Any]]:
+    """Return the complete ELF64 section map used by full-file normalization."""
+    sections = run_tool(("/usr/bin/readelf", "-SW", str(executable)))
+    pattern = re.compile(
+        r"^\s*\[\s*(\d+)\]\s+(\S+)\s+(\S+)\s+"
+        r"([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+"
+        r"\S+\s+(\S*)\s+")
+    result = []
+    for line in sections.splitlines():
+        match = pattern.match(line)
+        if match:
+            result.append({
+                "index": int(match.group(1)),
+                "name": match.group(2),
+                "type": match.group(3),
+                "address": int(match.group(4), 16),
+                "offset": int(match.group(5), 16),
+                "size": int(match.group(6), 16),
+                "flags": match.group(7),
+            })
+    require(any(row["name"] == ".text" for row in result) and
+            any(row["name"] == ".note.gnu.build-id" for row in result),
+            "ELF section map is incomplete")
+    return result
+
+
+def normalized_elf_identity(
+    executable: Path,
+    mode_word: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Hash the full ELF after masking only build-id and selector bytes."""
+    payload = bytearray(executable.read_bytes())
+    sections = elf_sections(executable)
+    build_id = next(
+        row for row in sections if row["name"] == ".note.gnu.build-id")
+    ranges = [
+        (int(build_id["offset"]), int(build_id["size"]), "gnu_build_id"),
+        (int(mode_word["file_offset"]), 4, "diagnostic_selector"),
+    ]
+    for offset, size, label in ranges:
+        require(0 <= offset <= len(payload) and
+                0 < size <= len(payload) - offset,
+                f"normalized ELF range is outside the file: {label}")
+        payload[offset:offset + size] = b"\0" * size
+    section_records = []
+    for row in sections:
+        offset = int(row["offset"])
+        size = int(row["size"])
+        if row["type"] == "NOBITS" or size == 0:
+            digest = None
+        else:
+            require(offset + size <= len(payload),
+                    f"ELF section is outside the file: {row['name']}")
+            digest = hashlib.sha256(payload[offset:offset + size]).hexdigest()
+        section_records.append({
+            "index": row["index"], "name": row["name"],
+            "type": row["type"], "offset": offset, "size": size,
+            "flags": row["flags"], "normalized_sha256": digest,
+        })
+    return {
+        "size": len(payload),
+        "normalized_sha256": hashlib.sha256(payload).hexdigest(),
+        "normalized_ranges": [
+            {"offset": offset, "size": size, "reason": label}
+            for offset, size, label in ranges
+        ],
+        "sections": section_records,
+    }
+
+
+def normalized_elf_pair(
+    candidate: Path,
+    control: Path,
+    mode_words: Mapping[str, Mapping[str, Any]],
+) -> dict[str, Any]:
+    candidate_identity = normalized_elf_identity(
+        candidate, mode_words["candidate"])
+    control_identity = normalized_elf_identity(
+        control, mode_words["control"])
+    require(candidate_identity == control_identity,
+            "candidate/control full ELF differs outside normalized fields")
+    candidate_bytes = candidate.read_bytes()
+    control_bytes = control.read_bytes()
+    require(len(candidate_bytes) == len(control_bytes),
+            "candidate/control ELF sizes differ")
+    differing = [index for index, pair in enumerate(
+        zip(candidate_bytes, control_bytes)) if pair[0] != pair[1]]
+    allowed = set()
+    for row in candidate_identity["normalized_ranges"]:
+        allowed.update(range(row["offset"], row["offset"] + row["size"]))
+    require(differing and set(differing) <= allowed,
+            "candidate/control ELF has an unclassified byte difference")
+    return {
+        "normalized": candidate_identity,
+        "differing_byte_count": len(differing),
+        "differing_byte_offsets": differing,
+    }
+
+
+def freeze_executable(
+    source: Path,
+    expected_sha256: str | None,
+    destination: Path,
+) -> dict[str, Any]:
+    source_identity = T8_SUPPORT.file_identity(source)
+    if expected_sha256 is not None:
+        require(source_identity["sha256"] == expected_sha256,
+                f"input binary SHA-256 changed: {source}")
+    descriptor = os.open(
+        destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o555)
+    try:
+        with source.open("rb") as input_file, \
+                os.fdopen(descriptor, "wb") as output_file:
+            descriptor = -1
+            for block in iter(lambda: input_file.read(1024 * 1024), b""):
+                output_file.write(block)
+            output_file.flush()
+            os.fsync(output_file.fileno())
+        destination.chmod(0o555)
+    except BaseException:
+        if descriptor >= 0:
+            os.close(descriptor)
+        try:
+            destination.unlink()
+        except OSError:
+            pass
+        raise
+    frozen_identity = T8_SUPPORT.file_identity(destination)
+    require(frozen_identity["sha256"] == source_identity["sha256"] and
+            frozen_identity["mode"] == 0o555,
+            f"frozen binary identity is invalid: {destination}")
+    return {"input": source_identity, "frozen": frozen_identity}
+
+
+def normalized_compile_commands_identity(
+    candidate: Path,
+    control: Path,
+) -> dict[str, Any]:
+    def normalize(path: Path, diagnostic_value: str) -> tuple[list[Any], str]:
+        value = json.loads(path.read_text(encoding="utf-8"))
+        require(isinstance(value, list) and value,
+                "compile_commands is not a nonempty array")
+        directories = {
+            row.get("directory") for row in value if isinstance(row, dict)
+        }
+        require(len(directories) == 1 and
+                all(isinstance(row, dict) for row in value),
+                "compile_commands has ambiguous build roots")
+        build_root = next(iter(directories))
+        require(isinstance(build_root, str) and build_root,
+                "compile_commands build root is invalid")
+        normalized = []
+        t32_rows = []
+        for row in value:
+            current = dict(row)
+            for key, item in tuple(current.items()):
+                if isinstance(item, str):
+                    item = item.replace(build_root, "${BUILD}")
+                    item = re.sub(
+                        r"LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED="
+                        + re.escape(diagnostic_value) + r"\b",
+                        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=${MODE}",
+                        item)
+                    item = re.sub(
+                        r"LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\\\""
+                        r"[0-9a-f]{64}\\\"",
+                        "LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\\\"${CONFIG}\\\"",
+                        item)
+                    current[key] = item
+            normalized.append(current)
+            if Path(str(row.get("file", ""))).name == \
+                    "Leopard2BackendAVX2T32B256.cpp":
+                t32_rows.append(str(row.get("command", "")))
+        require(len(t32_rows) == 1 and
+                f"LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED={diagnostic_value}" in
+                    t32_rows[0] and
+                "-mavx2" in t32_rows[0] and "-mno-avx512f" in t32_rows[0],
+                "T32 compile-command contract changed")
+        canonical = json.dumps(
+            normalized, sort_keys=True, separators=(",", ":"))
+        return normalized, hashlib.sha256(canonical.encode()).hexdigest()
+
+    candidate_value, candidate_hash = normalize(candidate, "0")
+    control_value, control_hash = normalize(control, "1")
+    require(candidate_value == control_value and candidate_hash == control_hash,
+            "candidate/control normalized compile commands differ")
+    return {
+        "normalized_sha256": candidate_hash,
+        "entry_count": len(candidate_value),
+    }
+
+
+def build_closure_identity(options: argparse.Namespace) -> dict[str, Any]:
+    values = {
+        "candidate_archive": (
+            options.candidate_archive, options.candidate_archive_sha256),
+        "control_archive": (
+            options.control_archive, options.control_archive_sha256),
+        "candidate_compile_commands": (
+            options.candidate_compile_commands,
+            options.candidate_compile_commands_sha256),
+        "control_compile_commands": (
+            options.control_compile_commands,
+            options.control_compile_commands_sha256),
+    }
+    identities = {}
+    for name, (path, expected) in values.items():
+        require(path is not None and expected is not None,
+                f"build-closure input is required: {name}")
+        identity = T8_SUPPORT.regular_file_identity(path)
+        require(identity["sha256"] == expected,
+                f"build-closure SHA-256 changed: {name}")
+        identities[name] = identity
+    candidate_archive = Path(str(identities["candidate_archive"]["path"]))
+    control_archive = Path(str(identities["control_archive"]["path"]))
+    candidate_payload = candidate_archive.read_bytes()
+    control_payload = control_archive.read_bytes()
+    require(len(candidate_payload) == len(control_payload),
+            "candidate/control archive sizes differ")
+    differences = [index for index, pair in enumerate(
+        zip(candidate_payload, control_payload)) if pair[0] != pair[1]]
+    require(len(differences) == 1 and
+            candidate_payload[differences[0]] == 1 and
+            control_payload[differences[0]] == 2,
+            "candidate/control archives differ beyond the selector byte")
+    candidate_members = run_tool(("/usr/bin/ar", "t", str(candidate_archive))).splitlines()
+    control_members = run_tool(("/usr/bin/ar", "t", str(control_archive))).splitlines()
+    require(candidate_members == control_members and
+            candidate_members.count("Leopard2BackendAVX2T32B256.cpp.o") == 1,
+            "candidate/control archive member closure changed")
+    compile_identity = normalized_compile_commands_identity(
+        Path(str(identities["candidate_compile_commands"]["path"])),
+        Path(str(identities["control_compile_commands"]["path"])))
+    return {
+        "inputs": identities,
+        "archive_members": candidate_members,
+        "archive_selector_byte_offset": differences[0],
+        "normalized_compile_commands": compile_identity,
+    }
+
+
 def cells() -> list[dict[str, Any]]:
     values = [
         ("target-k5-r5-b64-q1", 5, 5, 64, 1, "target"),
@@ -245,22 +489,55 @@ def benchmark_command(
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--attest-source",
     ]
+    if cell.get("measure_one_shot") is True:
+        command.append("--measure-one-shot-encode")
     if implementation == "control":
         command.extend(CONTROL_EXTRA_ARGUMENTS)
     return command + ["--json", "-"]
 
 
-def positive_encode_metric(result: Mapping[str, Any]) -> float:
+def positive_encode_metric(
+    result: Mapping[str, Any],
+    metric_name: str,
+    iterations: int,
+) -> dict[str, Any]:
     metrics = result.get("metrics")
     require(isinstance(metrics, dict), "benchmark metrics are absent")
-    encode = metrics.get("encode_execution")
-    require(isinstance(encode, dict), "encode metric is absent")
+    encode = metrics.get(metric_name)
+    require(isinstance(encode, dict), f"{metric_name} metric is absent")
     median = encode.get("median_us_per_batch_call")
+    mad = encode.get("mad_us_per_batch_call")
+    minimum = encode.get("minimum_us_per_batch_call")
+    maximum = encode.get("maximum_us_per_batch_call")
+    samples = encode.get("samples_us_per_batch_call")
     require(isinstance(median, (int, float)) and
             not isinstance(median, bool) and
             math.isfinite(float(median)) and float(median) > 0,
-            "encode median is not finite and positive")
-    return float(median)
+            f"{metric_name} median is not finite and positive")
+    require(isinstance(samples, list) and len(samples) == iterations and
+            all(isinstance(value, (int, float)) and
+                not isinstance(value, bool) and
+                math.isfinite(float(value)) and float(value) > 0
+                for value in samples),
+            f"{metric_name} raw samples are incomplete")
+    numeric = [float(value) for value in samples]
+    recomputed_median = statistics.median(numeric)
+    recomputed_mad = statistics.median(
+        abs(value - recomputed_median) for value in numeric)
+    reported = (mad, minimum, maximum)
+    require(all(isinstance(value, (int, float)) and
+                not isinstance(value, bool) and math.isfinite(float(value))
+                for value in reported) and
+            math.isclose(float(median), recomputed_median,
+                         rel_tol=0.0, abs_tol=2e-6) and
+            math.isclose(float(mad), recomputed_mad,
+                         rel_tol=0.0, abs_tol=2e-6) and
+            math.isclose(float(minimum), min(numeric),
+                         rel_tol=0.0, abs_tol=2e-6) and
+            math.isclose(float(maximum), max(numeric),
+                         rel_tol=0.0, abs_tol=2e-6),
+            f"{metric_name} summary disagrees with retained raw samples")
+    return {"median_us": recomputed_median, "samples_us": numeric}
 
 
 def validate_result(
@@ -286,6 +563,8 @@ def validate_result(
     }
     if implementation == "main":
         expected_parameters["logical_shard_bytes"] = logical_bytes
+    elif cell.get("measure_one_shot") is True:
+        expected_parameters["measure_one_shot_encode"] = True
     parameters = result.get("parameters")
     require(isinstance(parameters, dict) and
             all(parameters.get(name) == value
@@ -344,11 +623,45 @@ def validate_result(
                 require(CONTROL_BUILD_MARKER not in build or
                         build[CONTROL_BUILD_MARKER] is False,
                         "candidate unexpectedly reports a disabled terminal")
+    encode_metric = positive_encode_metric(
+        result, "encode_execution", iterations)
+    one_shot_metric = None
+    if cell.get("measure_one_shot") is True:
+        one_shot_metric = encode_metric if implementation == "main" else \
+            positive_encode_metric(result, "one_shot_encode", iterations)
     return {
-        "encode_us": positive_encode_metric(result),
+        "encode_us": encode_metric["median_us"],
+        "encode_samples_us": encode_metric["samples_us"],
+        "one_shot_encode_us": None if one_shot_metric is None else
+            one_shot_metric["median_us"],
+        "one_shot_encode_samples_us": None if one_shot_metric is None else
+            one_shot_metric["samples_us"],
         "digests": dict(digests),
         "schema": result["schema"],
     }
+
+
+def retain_failure_streams(
+    failure_output: Path,
+    implementation: str,
+    started_ns: int,
+    stdout: bytes | str | None,
+    stderr: bytes | str | None,
+) -> dict[str, str]:
+    """Retain child output for every rejected invocation, including timeouts."""
+    def as_bytes(value: bytes | str | None) -> bytes:
+        if value is None:
+            return b""
+        if isinstance(value, bytes):
+            return value
+        return value.encode("utf-8", errors="replace")
+
+    prefix = failure_output / f"failure-{implementation}-{started_ns}"
+    stdout_path = prefix.with_suffix(".stdout")
+    stderr_path = prefix.with_suffix(".stderr")
+    T8_SUPPORT.write_bytes_exclusive(stdout_path, as_bytes(stdout))
+    T8_SUPPORT.write_bytes_exclusive(stderr_path, as_bytes(stderr))
+    return {"stdout": str(stdout_path), "stderr": str(stderr_path)}
 
 
 def run_one(
@@ -368,29 +681,40 @@ def run_one(
     command = benchmark_command(
         implementation, executable, cell, cpu, iterations, warmup)
     started_ns = time.monotonic_ns()
-    completed = subprocess.run(
-        command, env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE, timeout=60.0, check=False)
+    try:
+        completed = subprocess.run(
+            command, env=CHILD_ENVIRONMENT, stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE, timeout=60.0, check=False)
+    except subprocess.TimeoutExpired as error:
+        retained = retain_failure_streams(
+            failure_output, implementation, started_ns,
+            error.stdout, error.stderr)
+        raise EvidenceError(
+            f"{implementation} timed out; retained output: {retained}") \
+            from error
     elapsed_ns = time.monotonic_ns() - started_ns
     if completed.returncode != 0:
-        prefix = failure_output / f"failure-{implementation}-{started_ns}"
-        T8_SUPPORT.write_bytes_exclusive(
-            prefix.with_suffix(".stdout"), completed.stdout)
-        T8_SUPPORT.write_bytes_exclusive(
-            prefix.with_suffix(".stderr"), completed.stderr)
+        retained = retain_failure_streams(
+            failure_output, implementation, started_ns,
+            completed.stdout, completed.stderr)
         raise EvidenceError(
             f"{implementation} failed: " +
-            completed.stderr.decode("utf-8", errors="replace")[-1000:])
-    require(sha256(executable) == identity["sha256"],
-            f"{implementation} binary changed after execution")
+            completed.stderr.decode("utf-8", errors="replace")[-1000:] +
+            f"; retained output: {retained}")
     try:
+        require(sha256(executable) == identity["sha256"],
+                f"{implementation} binary changed after execution")
         result = json.loads(completed.stdout.decode("utf-8"))
         normalized = validate_result(
             implementation, result, cell, source_commit, source_tree,
             iterations, warmup)
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+    except Exception as error:
+        retained = retain_failure_streams(
+            failure_output, implementation, started_ns,
+            completed.stdout, completed.stderr)
         raise EvidenceError(
-            f"{implementation} output is not one JSON object: {error}") \
+            f"{implementation} output was rejected: {error}; "
+            f"retained output: {retained}") \
             from error
     return {
         "implementation": implementation,
@@ -431,7 +755,12 @@ def analyze(
     labels = ("control", "main") if cell.get(
         "compare_main", cell["role"] == "target") \
         else ("control",)
-    contrasts: dict[str, list[float]] = {label: [] for label in labels}
+    metric_names = ["encode_us"]
+    if cell.get("measure_one_shot") is True:
+        metric_names.append("one_shot_encode_us")
+    contrasts: dict[str, dict[str, list[float]]] = {
+        metric: {label: [] for label in labels} for metric in metric_names
+    }
     for round_value in rounds:
         require(round_value["isolation"]["accepted"] is True,
                 "contaminated round cannot be analyzed")
@@ -439,27 +768,42 @@ def analyze(
         require(all(item["normalized"]["digests"] == reference
                     for item in invocations),
                 "candidate/control/main workload digests differ")
-        candidate = [
-            item["normalized"]["encode_us"] for item in invocations
-            if item["implementation"] == "candidate"]
-        require(len(candidate) == 2, "round lacks two candidate observations")
-        candidate_log = statistics.mean(math.log(value) for value in candidate)
-        for label in labels:
-            baseline = [
-                item["normalized"]["encode_us"] for item in invocations
-                if item["implementation"] == label]
-            require(len(baseline) == 2,
-                    f"round lacks two {label} observations")
-            contrasts[label].append(
-                statistics.mean(math.log(value) for value in baseline) -
-                candidate_log)
+        for metric in metric_names:
+            candidate = [
+                item["normalized"][metric] for item in invocations
+                if item["implementation"] == "candidate"]
+            require(len(candidate) == 2 and
+                    all(isinstance(value, (int, float)) and value > 0
+                        for value in candidate),
+                    f"round lacks two positive candidate {metric} observations")
+            candidate_log = statistics.mean(
+                math.log(value) for value in candidate)
+            for label in labels:
+                baseline = [
+                    item["normalized"][metric] for item in invocations
+                    if item["implementation"] == label]
+                require(len(baseline) == 2 and
+                        all(isinstance(value, (int, float)) and value > 0
+                            for value in baseline),
+                        f"round lacks two positive {label} {metric} observations")
+                contrasts[metric][label].append(
+                    statistics.mean(math.log(value) for value in baseline) -
+                    candidate_log)
     output = {
         "cell": dict(cell),
         "digests": reference,
-        "control_over_candidate": confidence_interval(contrasts["control"]),
+        "control_over_candidate": confidence_interval(
+            contrasts["encode_us"]["control"]),
     }
-    if "main" in contrasts:
-        output["main_over_candidate"] = confidence_interval(contrasts["main"])
+    if "main" in labels:
+        output["main_over_candidate"] = confidence_interval(
+            contrasts["encode_us"]["main"])
+    if "one_shot_encode_us" in contrasts:
+        output["one_shot_control_over_candidate"] = confidence_interval(
+            contrasts["one_shot_encode_us"]["control"])
+        if "main" in labels:
+            output["one_shot_main_over_candidate"] = confidence_interval(
+                contrasts["one_shot_encode_us"]["main"])
     return output
 
 
@@ -489,8 +833,19 @@ def select_round_orders(
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--candidate", required=True, type=Path)
+    parser.add_argument("--candidate-sha256")
     parser.add_argument("--control", required=True, type=Path)
+    parser.add_argument("--control-sha256")
     parser.add_argument("--main", required=True, type=Path)
+    parser.add_argument("--main-sha256")
+    parser.add_argument("--candidate-archive", type=Path)
+    parser.add_argument("--candidate-archive-sha256")
+    parser.add_argument("--control-archive", type=Path)
+    parser.add_argument("--control-archive-sha256")
+    parser.add_argument("--candidate-compile-commands", type=Path)
+    parser.add_argument("--candidate-compile-commands-sha256")
+    parser.add_argument("--control-compile-commands", type=Path)
+    parser.add_argument("--control-compile-commands-sha256")
     parser.add_argument("--source-commit", required=True)
     parser.add_argument("--source-tree", required=True)
     parser.add_argument("--output", required=True, type=Path)
@@ -507,6 +862,18 @@ def main() -> int:
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient benchmark repetitions")
     require(not options.output.exists(), "output path already exists")
+    expected_hashes = {
+        "candidate": options.candidate_sha256,
+        "control": options.control_sha256,
+        "main": options.main_sha256,
+    }
+    if REQUIRE_EXPECTED_IDENTITIES:
+        require(all(value is not None for value in expected_hashes.values()),
+                "caller-supplied candidate/control/main SHA-256 is required")
+    require(all(value is None or
+                re.fullmatch(r"[0-9a-f]{64}", value) is not None
+                for value in expected_hashes.values()),
+            "an expected executable SHA-256 is malformed")
     raw: dict[str, Any] = {
         "schema": SCHEMA,
         "created_utc": MAIN_SUPPORT.utc_now(),
@@ -531,12 +898,39 @@ def main() -> int:
             "cells": [],
         })
         lock_descriptor = acquire_global_lock()
-        identities = {
-            "candidate": T8_SUPPORT.file_identity(options.candidate),
-            "control": T8_SUPPORT.file_identity(options.control),
-            "main": T8_SUPPORT.file_identity(options.main),
+        frozen_directory = options.output / "frozen"
+        frozen_directory.mkdir()
+        source_paths = {
+            "candidate": options.candidate,
+            "control": options.control,
+            "main": options.main,
         }
+        freeze_records = {
+            name: freeze_executable(
+                source_paths[name], expected_hashes[name],
+                frozen_directory / name)
+            for name in ("candidate", "control", "main")
+        }
+        raw["frozen_executables"] = freeze_records
+        input_identities = {
+            name: record["input"] for name, record in freeze_records.items()}
+        identities = {
+            name: record["frozen"] for name, record in freeze_records.items()}
+        raw["input_identities"] = input_identities
         raw["identities"] = identities
+        closure_requested = REQUIRE_BUILD_CLOSURE or any(
+            value is not None for value in (
+                options.candidate_archive,
+                options.candidate_archive_sha256,
+                options.control_archive,
+                options.control_archive_sha256,
+                options.candidate_compile_commands,
+                options.candidate_compile_commands_sha256,
+                options.control_compile_commands,
+                options.control_compile_commands_sha256))
+        build_closure = build_closure_identity(options) \
+            if closure_requested else None
+        raw["build_closure"] = build_closure
         if ALLOW_IDENTICAL_CANDIDATE_CONTROL:
             require(
                 identities["candidate"]["sha256"] ==
@@ -573,6 +967,10 @@ def main() -> int:
             require(mode_words["candidate"]["value"] == 1 and
                     mode_words["control"]["value"] == 2,
                     "candidate/control selectors are not enabled/disabled")
+            if REQUIRE_FULL_ELF_IDENTITY:
+                raw["normalized_candidate_control_elf"] = normalized_elf_pair(
+                    Path(str(identities["candidate"]["path"])),
+                    Path(str(identities["control"]["path"])), mode_words)
         require(set(os.sched_getaffinity(0)) == {options.cpu},
                 "runner must be singleton-pinned to the benchmark CPU")
         sibling_text = Path(
@@ -647,6 +1045,26 @@ def main() -> int:
         require(post_identities == identities,
                 "a benchmark binary identity changed during the campaign")
         raw["identities_after"] = post_identities
+        post_input_identities = {
+            name: T8_SUPPORT.file_identity(source_paths[name])
+            for name in source_paths
+        }
+        require(post_input_identities == input_identities,
+                "an input executable identity changed during the campaign")
+        raw["input_identities_after"] = post_input_identities
+        post_runner = T8_SUPPORT.file_identity(RUNNER_PATH)
+        post_runner_dependencies = [
+            support_file_identity(path) for path in RUNNER_DEPENDENCIES]
+        require(post_runner == raw["runner"] and
+                post_runner_dependencies == raw["runner_dependencies"],
+                "runner or imported support changed during the campaign")
+        raw["runner_after"] = post_runner
+        raw["runner_dependencies_after"] = post_runner_dependencies
+        post_build_closure = build_closure_identity(options) \
+            if closure_requested else None
+        require(post_build_closure == build_closure,
+                "build closure changed during the campaign")
+        raw["build_closure_after"] = post_build_closure
         analyses = [
             analyze(item["cell"], item["rounds"]) for item in raw["cells"]]
         targets = [item for item in analyses
@@ -655,17 +1073,39 @@ def main() -> int:
         if not ALLOW_MULTIPLE_TARGETS:
             require(len(targets) == 1,
                     "campaign unexpectedly has multiple target cells")
-        target_control_failure = any(
+        target_batch_control_failure = any(
             target["control_over_candidate"]["ci95"][0] <
                 TARGET_CONTROL_FLOOR
             for target in targets)
-        target_main_failure = any(
+        target_batch_main_failure = any(
             target["main_over_candidate"]["ci95"][0] < TARGET_MAIN_FLOOR
             for target in targets)
+        one_shot_targets = [
+            target for target in targets
+            if target["cell"].get("measure_one_shot") is True]
+        target_one_shot_control_failure = any(
+            target["one_shot_control_over_candidate"]["ci95"][0] <
+                TARGET_CONTROL_FLOOR
+            for target in one_shot_targets)
+        target_one_shot_main_failure = any(
+            target["one_shot_main_over_candidate"]["ci95"][0] <
+                TARGET_MAIN_FLOOR
+            for target in one_shot_targets)
+        target_control_failure = (
+            target_batch_control_failure or target_one_shot_control_failure)
+        target_main_failure = (
+            target_batch_main_failure or target_one_shot_main_failure)
         credible_neighbor_regressions = [
             item["cell"]["id"] for item in analyses
             if item["cell"]["role"] == "neighbor" and
             item["control_over_candidate"]["ci95"][1] < NEIGHBOR_FLOOR
+        ]
+        credible_neighbor_one_shot_regressions = [
+            item["cell"]["id"] for item in analyses
+            if item["cell"]["role"] == "neighbor" and
+            item["cell"].get("measure_one_shot") is True and
+            item["one_shot_control_over_candidate"]["ci95"][1] <
+                NEIGHBOR_FLOOR
         ]
         raw["completed_utc"] = MAIN_SUPPORT.utc_now()
         T8_SUPPORT.write_exclusive(options.output / "raw.json", raw)
@@ -673,7 +1113,8 @@ def main() -> int:
             "schema": SUMMARY_SCHEMA,
             "status": "accepted" if not (
                 target_control_failure or target_main_failure or
-                credible_neighbor_regressions) else "rejected",
+                credible_neighbor_regressions or
+                credible_neighbor_one_shot_regressions) else "rejected",
             "source_commit": options.source_commit,
             "source_tree": options.source_tree,
             "main_commit": MAIN_COMMIT,
@@ -690,7 +1131,17 @@ def main() -> int:
                 for round_value in cell_value["rounds"]),
             "target_control_failure": target_control_failure,
             "target_main_failure": target_main_failure,
+            "target_control_failure_by_metric": {
+                "encode_execution": target_batch_control_failure,
+                "one_shot_encode": target_one_shot_control_failure,
+            },
+            "target_main_failure_by_metric": {
+                "encode_execution": target_batch_main_failure,
+                "one_shot_encode": target_one_shot_main_failure,
+            },
             "credible_neighbor_regressions": credible_neighbor_regressions,
+            "credible_neighbor_one_shot_regressions":
+                credible_neighbor_one_shot_regressions,
             "cells": analyses,
             "binary_sha256": {
                 name: identity["sha256"] for name, identity in identities.items()},
@@ -705,16 +1156,27 @@ def main() -> int:
             "cells": summary["cell_count"],
             "processes": summary["process_count"],
             "credible_neighbor_regressions": credible_neighbor_regressions,
+            "credible_neighbor_one_shot_regressions":
+                credible_neighbor_one_shot_regressions,
         }
         if len(targets) == 1:
             result_line["target_control"] = \
                 targets[0]["control_over_candidate"]
             result_line["target_main"] = targets[0]["main_over_candidate"]
+            if targets[0]["cell"].get("measure_one_shot") is True:
+                result_line["target_one_shot_control"] = \
+                    targets[0]["one_shot_control_over_candidate"]
+                result_line["target_one_shot_main"] = \
+                    targets[0]["one_shot_main_over_candidate"]
         else:
             result_line["targets"] = {
                 target["cell"]["id"]: {
                     "control": target["control_over_candidate"],
                     "main": target["main_over_candidate"],
+                    "one_shot_control": target.get(
+                        "one_shot_control_over_candidate"),
+                    "one_shot_main": target.get(
+                        "one_shot_main_over_candidate"),
                 }
                 for target in targets
             }

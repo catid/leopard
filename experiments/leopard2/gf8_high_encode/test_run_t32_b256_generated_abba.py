@@ -15,6 +15,14 @@ def require(condition: bool, message: str) -> None:
         raise RuntimeError(message)
 
 
+def require_rejected(callback: Any, message: str) -> None:
+    try:
+        callback()
+    except BASE.EvidenceError:
+        return
+    raise RuntimeError(message)
+
+
 def load_runner() -> Any:
     path = Path(__file__).resolve().with_name(
         "run_t32_b256_generated_abba.py")
@@ -39,16 +47,29 @@ def synthetic_round(order: tuple[str, ...]) -> dict[str, Any]:
         "recovered_originals": "1" * 16,
     }
     times = {"candidate": 1.0, "control": 1.25, "main": 1.5}
+    one_shot_times = {"candidate": 1.0, "control": 1.2, "main": 1.4}
     return {
         "order": list(order),
         "invocations": [{
             "implementation": label,
             "normalized": {
                 "encode_us": times[label],
+                "one_shot_encode_us": one_shot_times[label],
                 "digests": dict(digests),
             },
         } for label in order],
         "isolation": {"accepted": True},
+}
+
+
+def metric(value: float) -> dict[str, Any]:
+    samples = [value] * 15
+    return {
+        "median_us_per_batch_call": value,
+        "mad_us_per_batch_call": 0.0,
+        "minimum_us_per_batch_call": value,
+        "maximum_us_per_batch_call": value,
+        "samples_us_per_batch_call": samples,
     }
 
 
@@ -70,6 +91,8 @@ def benchmark_result(
             "warmup": 64,
             "thread_count": 1,
             "seed": cell["seed"],
+            **({"measure_one_shot_encode": True}
+               if cell.get("measure_one_shot") is True else {}),
         },
         "resolved": {
             "profile": "legacy_high_v1",
@@ -90,7 +113,9 @@ def benchmark_result(
             "source_tracked_dirty": False,
         },
         "metrics": {
-            "encode_execution": {"median_us_per_batch_call": 1.0},
+            "encode_execution": metric(1.0),
+            **({"one_shot_encode": metric(1.1)}
+               if cell.get("measure_one_shot") is True else {}),
         },
     }
 
@@ -133,7 +158,7 @@ def main_benchmark_result(cell: dict[str, Any]) -> dict[str, Any]:
         },
         "build": {"main_source_commit": BASE.MAIN_COMMIT},
         "metrics": {
-            "encode_execution": {"median_us_per_batch_call": 1.0},
+            "encode_execution": metric(1.0),
         },
     }
 
@@ -154,6 +179,9 @@ def main() -> int:
     require(any(cell["bytes"] == 256 and cell["batch"] == 8
                 for cell in neighbors),
             "inert prevalidated-batch control changed")
+    require(all(cell["measure_one_shot"] is (cell["batch"] == 1)
+                for cell in cells),
+            "public one-shot measurement classification changed")
     require({cell["bytes"] for cell in neighbors} >= {64, 255, 256, 257, 1024},
             "byte-neighbor coverage changed")
     require({(cell["K"], cell["R"]) for cell in neighbors} >= {
@@ -176,14 +204,37 @@ def main() -> int:
         "candidate", Path("/frozen/candidate"), loss32, 13, 15, 64)
     require(command[command.index("--loss") + 1] == "32" and
             command[command.index("--bytes") + 1] == "256" and
-            command[command.index("--backend") + 1] == "avx2",
+            command[command.index("--backend") + 1] == "avx2" and
+            "--measure-one-shot-encode" in command,
             "loss-aware candidate command changed")
+    batch_neighbor = next(cell for cell in neighbors if cell["batch"] == 8)
+    require("--measure-one-shot-encode" not in BASE.benchmark_command(
+                "candidate", Path("/frozen/candidate"), batch_neighbor,
+                13, 15, 64),
+            "batch-only neighbor unexpectedly measures the one-shot API")
 
     source_commit = "a" * 40
     source_tree = "b" * 40
     BASE.validate_result(
         "candidate", benchmark_result(loss32, source_commit, source_tree),
         loss32, source_commit, source_tree, 15, 64)
+    missing_one_shot = benchmark_result(
+        loss32, source_commit, source_tree)
+    del missing_one_shot["metrics"]["one_shot_encode"]
+    require_rejected(
+        lambda: BASE.validate_result(
+            "candidate", missing_one_shot, loss32,
+            source_commit, source_tree, 15, 64),
+        "missing public one-shot metric was accepted")
+    inconsistent_samples = benchmark_result(
+        loss32, source_commit, source_tree)
+    inconsistent_samples["metrics"]["encode_execution"] \
+        ["median_us_per_batch_call"] = 2.0
+    require_rejected(
+        lambda: BASE.validate_result(
+            "candidate", inconsistent_samples, loss32,
+            source_commit, source_tree, 15, 64),
+        "inconsistent raw encode samples were accepted")
 
     for logical_bytes, physical_bytes in ((255, 256), (257, 320)):
         byte_neighbor = next(
@@ -214,7 +265,18 @@ def main() -> int:
             math.isclose(
                 analysis["main_over_candidate"]["speedup"], 1.5),
             "exact-main neighbor contrast changed")
+    target_analysis = BASE.analyze(loss32, rounds)
+    require(math.isclose(
+                target_analysis["one_shot_control_over_candidate"]
+                    ["speedup"], 1.2) and
+            math.isclose(
+                target_analysis["one_shot_main_over_candidate"]
+                    ["speedup"], 1.4),
+            "public one-shot contrasts changed")
     require(BASE.ALLOW_MULTIPLE_TARGETS is True and
+            BASE.REQUIRE_EXPECTED_IDENTITIES is True and
+            BASE.REQUIRE_BUILD_CLOSURE is True and
+            BASE.REQUIRE_FULL_ELF_IDENTITY is True and
             BASE.TARGET_CONTROL_FLOOR == 1.05 and
             BASE.TARGET_MAIN_FLOOR == 1.05 and
             math.isclose(BASE.NEIGHBOR_FLOOR, 1.0 / 1.02),

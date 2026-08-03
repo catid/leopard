@@ -33,13 +33,16 @@ def load_base() -> Any:
 
 BASE = load_base()
 BASE.__doc__ = __doc__
-BASE.SCHEMA = "leopard2-gf8-t32-b256-generated-abba/v3"
-BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-generated-summary/v3"
+BASE.SCHEMA = "leopard2-gf8-t32-b256-generated-abba/v4"
+BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-generated-summary/v4"
 BASE.MODE_SYMBOL = \
     "_ZN7leopard7backend12_GLOBAL__N_1L25g_t32_b256_generated_modeE"
 BASE.TARGET_CONTROL_FLOOR = 1.05
 BASE.TARGET_MAIN_FLOOR = 1.05
 BASE.ALLOW_MULTIPLE_TARGETS = True
+BASE.REQUIRE_EXPECTED_IDENTITIES = True
+BASE.REQUIRE_BUILD_CLOSURE = True
+BASE.REQUIRE_FULL_ELF_IDENTITY = True
 BASE.TARGET_ORDER = BASE.TARGET_ORDER * 3
 BASE.RUNNER_PATH = Path(__file__).resolve()
 BASE.RUNNER_DEPENDENCIES = (
@@ -95,6 +98,7 @@ def cells() -> list[dict[str, Any]]:
             "bytes": shard_bytes,
             "loss": loss,
             "batch": batch,
+            "measure_one_shot": batch == 1,
             "reuse": 8192,
             "role": role,
             "compare_main": r <= k,
@@ -106,6 +110,8 @@ def cells() -> list[dict[str, Any]]:
         len({cell["id"] for cell in result}) == len(result) and
         len({cell["seed"] for cell in result}) == len(result) and
         all(1 <= cell["loss"] <= cell["R"] for cell in result) and
+        all(cell["measure_one_shot"] == (cell["batch"] == 1)
+            for cell in result) and
         {cell["id"] for cell in result if not cell["compare_main"]} == {
             "shape-neighbor-k31-r32-b256-l1-q1",
             "shape-neighbor-k32-r33-b256-l1-q1",
