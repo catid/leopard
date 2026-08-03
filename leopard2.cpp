@@ -1187,6 +1187,11 @@ static std::atomic<unsigned> g_low_p32_b64_terminal_mode(1U);
 // timing, so production and measured execution retain states one/two and pay
 // no thread-local accounting cost.
 static thread_local bool g_low_p32_b64_terminal_route_selected = false;
+// The larger generated terminal is still an experiment.  State two keeps it
+// disabled in production while preserving an identical-text benchmark
+// control; states three/four have the same one-call probe semantics as P32.
+static std::atomic<unsigned> g_low_p128_b64_terminal_mode(2U);
+static thread_local bool g_low_p128_b64_terminal_route_selected = false;
 #endif
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
@@ -1219,6 +1224,7 @@ static std::atomic<uint64_t> g_test_direct_pair_calls(0);
 static std::atomic<uint64_t> g_test_direct_four_tiny_calls(0);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
 static std::atomic<uint64_t> g_test_low_p32_b64_terminal_calls(0);
+static std::atomic<uint64_t> g_test_low_p128_b64_terminal_calls(0);
 #endif
 
 static bool TestConsumeThreadStartFault()
@@ -8271,10 +8277,10 @@ static void ExecuteRawTranslatedLowDecode(
             original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-        const unsigned exact_terminal_mode =
+        const unsigned p32_terminal_mode =
             g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
-        const bool exact_terminal =
-            (exact_terminal_mode == 1U || exact_terminal_mode == 3U) &&
+        const bool p32_terminal =
+            (p32_terminal_mode == 1U || p32_terminal_mode == 3U) &&
             geometry.aligned_prefix_bytes == 64 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
@@ -8287,11 +8293,48 @@ static void ExecuteRawTranslatedLowDecode(
                 pattern.missing_originals, pattern.missing_original_count,
                 pattern.locator, codec->translated_low_factors8[0],
                 restored, work);
-        if (exact_terminal_mode == 3U || exact_terminal_mode == 4U)
-            g_low_p32_b64_terminal_route_selected = exact_terminal;
+        if (p32_terminal_mode == 3U || p32_terminal_mode == 4U)
+            g_low_p32_b64_terminal_route_selected = p32_terminal;
+
+        const bool p128_target = !p32_terminal &&
+            geometry.aligned_prefix_bytes == 64 &&
+            geometry.tail_bytes == 0 && n == 256 && p == 128 &&
+            ops.kind == LEO2_BACKEND_AVX2 &&
+            codec->translated_low_factors8.size() == 1 && (
+            (codec->original_count == 95 &&
+                codec->recovery_count == 95 &&
+                (pattern.missing_original_count == 47 ||
+                 pattern.missing_original_count == 94)) ||
+            (codec->original_count == 128 &&
+                codec->recovery_count == 128 &&
+                (pattern.missing_original_count == 64 ||
+                 pattern.missing_original_count == 127)));
+        bool p128_terminal = false;
+        if (p128_target)
+        {
+            const unsigned p128_terminal_mode =
+                g_low_p128_b64_terminal_mode.load(
+                    std::memory_order_acquire);
+            p128_terminal =
+                (p128_terminal_mode == 1U ||
+                 p128_terminal_mode == 3U) &&
+                leopard::ff8::
+                    ReedSolomonDecodeLowP128B64TerminalExperimental(
+                        ops,
+                        const_cast<const void* const*>(coordinate_data),
+                        pattern.missing_originals,
+                        pattern.missing_original_count, pattern.locator,
+                        codec->translated_low_factors8[0], restored, work);
+            if (p128_terminal_mode == 3U || p128_terminal_mode == 4U)
+                g_low_p128_b64_terminal_route_selected = p128_terminal;
+        }
+        const bool exact_terminal = p32_terminal || p128_terminal;
 #ifdef LEO2_ENABLE_TEST_HOOKS
-        if (exact_terminal)
+        if (p32_terminal)
             g_test_low_p32_b64_terminal_calls.fetch_add(
+                1, std::memory_order_relaxed);
+        if (p128_terminal)
+            g_test_low_p128_b64_terminal_calls.fetch_add(
                 1, std::memory_order_relaxed);
 #endif
 #else
@@ -11528,6 +11571,17 @@ LEO2_EXPORT uint64_t leo2_test_low_p32_b64_terminal_calls(void)
     return g_test_low_p32_b64_terminal_calls.load(
         std::memory_order_acquire);
 }
+
+LEO2_EXPORT void leo2_test_reset_low_p128_b64_terminal_calls(void)
+{
+    g_test_low_p128_b64_terminal_calls.store(0, std::memory_order_release);
+}
+
+LEO2_EXPORT uint64_t leo2_test_low_p128_b64_terminal_calls(void)
+{
+    return g_test_low_p128_b64_terminal_calls.load(
+        std::memory_order_acquire);
+}
 #endif
 #endif
 
@@ -12403,6 +12457,54 @@ bool FinishLowP32B64TerminalRouteProbeForDiagnostics()
     if (mode != 3U && mode != 4U)
         return false;
     g_low_p32_b64_terminal_mode.store(
+        mode == 3U ? 1U : 2U, std::memory_order_release);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool SetLowP128B64TerminalEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    g_low_p128_b64_terminal_route_selected = false;
+    g_low_p128_b64_terminal_mode.store(
+        enabled ? 3U : 4U, std::memory_order_release);
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned LowP128B64TerminalModeForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    const unsigned mode =
+        g_low_p128_b64_terminal_mode.load(std::memory_order_acquire);
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+#else
+    return 0;
+#endif
+}
+
+bool LowP128B64TerminalRouteSelectedForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    return g_low_p128_b64_terminal_route_selected;
+#else
+    return false;
+#endif
+}
+
+bool FinishLowP128B64TerminalRouteProbeForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    const unsigned mode =
+        g_low_p128_b64_terminal_mode.load(std::memory_order_acquire);
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_low_p128_b64_terminal_mode.store(
         mode == 3U ? 1U : 2U, std::memory_order_release);
     return true;
 #else

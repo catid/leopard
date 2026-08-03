@@ -320,32 +320,52 @@ void ExercisePublicRoute(
     unsigned missing_count,
     bool reusable_plan,
     bool select_high_parity,
-    uint64_t expected_terminal_calls)
+    uint64_t expected_p32_terminal_calls,
+    uint64_t expected_p128_terminal_calls = 0,
+    unsigned missing_stride = 1,
+    unsigned missing_offset = 0,
+    bool unaligned = false)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
         original_count, recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_FIELD_GF8, NULL, &codec), "create public-route codec");
 
-    std::vector<uint8_t> message(original_count * shard_bytes);
-    std::vector<uint8_t> parity(recovery_count * shard_bytes);
+    Require(missing_stride != 0,
+        "public-route missing stride must be nonzero");
+    const size_t row_stride = shard_bytes + (unaligned ? 7 : 0);
+    const size_t message_base = unaligned ? 1 : 0;
+    const size_t parity_base = unaligned ? 3 : 0;
+    const size_t restored_base = unaligned ? 5 : 0;
+    std::vector<uint8_t> message(
+        message_base + original_count * row_stride + 8, 0xcc);
+    std::vector<uint8_t> parity(
+        parity_base + recovery_count * row_stride + 8, 0xdd);
     uint64_t state = UINT64_C(0x5055424c49435032) ^ shard_bytes ^
         (static_cast<uint64_t>(missing_count) << 32) ^
         (static_cast<uint64_t>(original_count) << 16) ^ recovery_count ^
         (select_high_parity ? UINT64_C(0x8000000000000000) : 0);
-    for (size_t i = 0; i < message.size(); ++i)
+    for (unsigned row = 0; row < original_count; ++row)
     {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        message[i] = static_cast<uint8_t>(state >> 24);
+        uint8_t* output = &message[
+            message_base + static_cast<size_t>(row) * row_stride];
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
+        {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            output[offset] = static_cast<uint8_t>(state >> 24);
+        }
     }
+    const std::vector<uint8_t> original_message = message;
     std::vector<const void*> original(original_count);
     std::vector<void*> recovery_output(recovery_count);
     for (unsigned i = 0; i < original_count; ++i)
-        original[i] = &message[static_cast<size_t>(i) * shard_bytes];
+        original[i] = &message[
+            message_base + static_cast<size_t>(i) * row_stride];
     for (unsigned i = 0; i < recovery_count; ++i)
-        recovery_output[i] = &parity[static_cast<size_t>(i) * shard_bytes];
+        recovery_output[i] = &parity[
+            parity_base + static_cast<size_t>(i) * row_stride];
 
     size_t encode_scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
@@ -355,6 +375,9 @@ void ExercisePublicRoute(
     RequireResult(leo2_encode(codec, shard_bytes, &original[0],
         &recovery_output[0], encode_scratch.bytes(), encode_scratch_bytes),
         "encode public-route parity");
+    Require(message == original_message,
+        "public-route encoder modified systematic input or its guards");
+    const std::vector<uint8_t> encoded_parity = parity;
 
     std::vector<uint8_t> original_present(original_count, 1);
     std::vector<uint8_t> recovery_present(recovery_count, 1);
@@ -362,16 +385,21 @@ void ExercisePublicRoute(
     std::vector<const void*> decode_recovery(recovery_count);
     std::vector<void*> restored(original_count, static_cast<void*>(NULL));
     std::vector<uint8_t> restored_storage(
-        static_cast<size_t>(original_count) * shard_bytes, 0xa5);
+        restored_base + static_cast<size_t>(original_count) * row_stride + 8,
+        0xa5);
     for (unsigned i = 0; i < recovery_count; ++i)
         decode_recovery[i] = recovery_output[i];
     for (unsigned i = 0; i < missing_count; ++i)
     {
-        const unsigned coordinate = i;
+        const unsigned coordinate = static_cast<unsigned>(
+            (missing_offset + static_cast<uint64_t>(i) * missing_stride) %
+            original_count);
+        Require(original_present[coordinate] != 0,
+            "public-route missing stride generated a duplicate coordinate");
         original_present[coordinate] = 0;
         decode_original[coordinate] = NULL;
-        restored[coordinate] = &restored_storage[
-            static_cast<size_t>(coordinate) * shard_bytes];
+        restored[coordinate] = &restored_storage[restored_base +
+            static_cast<size_t>(coordinate) * row_stride];
     }
     if (select_high_parity)
     {
@@ -403,6 +431,7 @@ void ExercisePublicRoute(
     }
     AlignedBuffer decode_scratch(decode_scratch_bytes);
     leo2_test_reset_low_p32_b64_terminal_calls();
+    leo2_test_reset_low_p128_b64_terminal_calls();
     if (reusable_plan)
     {
         RequireResult(leo2_decode_plan_execute(plan, shard_bytes,
@@ -419,19 +448,198 @@ void ExercisePublicRoute(
             "execute one-shot public route");
     }
     Require(leo2_test_low_p32_b64_terminal_calls() ==
-            expected_terminal_calls,
-        "public-route terminal call count differs from exact predicate");
+            expected_p32_terminal_calls,
+        "public-route P32 terminal call count differs from exact predicate");
+    Require(leo2_test_low_p128_b64_terminal_calls() ==
+            expected_p128_terminal_calls,
+        "public-route P128 terminal call count differs from exact predicate");
+    std::vector<uint8_t> expected_restored(restored_storage.size(), 0xa5);
     for (unsigned i = 0; i < original_count; ++i)
     {
         if (original_present[i])
             continue;
         Require(std::memcmp(restored[i],
-                &message[static_cast<size_t>(i) * shard_bytes],
+                original[i],
                 shard_bytes) == 0,
             "public-route terminal recovered incorrect bytes");
+        std::memcpy(&expected_restored[restored_base +
+                static_cast<size_t>(i) * row_stride],
+            original[i], shard_bytes);
     }
+    Require(restored_storage == expected_restored,
+        "public-route terminal wrote outside requested output ranges");
+    Require(message == original_message,
+        "public-route decode modified systematic input or its guards");
+    Require(parity == encoded_parity,
+        "public-route decode modified recovery input or its guards");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
+}
+
+void EncodeIndependentParityForCount(
+    const leopard2_test::BinaryField& field,
+    const leopard2_test::Matrix& generator,
+    const std::vector<std::vector<uint8_t> >& message,
+    std::vector<std::vector<uint8_t> >& parity,
+    unsigned count)
+{
+    parity.assign(count, std::vector<uint8_t>(kShardBytes));
+    for (unsigned output = 0; output < count; ++output)
+    {
+        const std::vector<leopard2_test::Element>& row =
+            generator[count + output];
+        for (size_t offset = 0; offset < kShardBytes; ++offset)
+        {
+            leopard2_test::Element value = 0;
+            for (unsigned source = 0; source < count; ++source)
+            {
+                value = field.add(value, field.multiply(
+                    row[source], message[source][offset]));
+            }
+            parity[output][offset] = static_cast<uint8_t>(value);
+        }
+    }
+}
+
+std::vector<std::vector<unsigned> > BuildP128Patterns(unsigned count)
+{
+    Require(count == 95 || count == 128,
+        "P128 pattern count is outside the qualified shapes");
+    std::vector<std::vector<unsigned> > patterns;
+    std::vector<unsigned> missing;
+    const unsigned half_loss = count == 95 ? 47 : 64;
+    const unsigned stride = count == 95 ? 37 : 29;
+    for (unsigned sample = 0; sample < 8; ++sample)
+    {
+        missing.clear();
+        for (unsigned i = 0; i < half_loss; ++i)
+            missing.push_back((sample + i * stride) % count);
+        std::sort(missing.begin(), missing.end());
+        patterns.push_back(missing);
+    }
+    // Every possible single-survivor position stresses the L=K-1 locator,
+    // weighted live-mask lane, requested-mask boundary, and shortened tail.
+    for (unsigned survivor = 0; survivor < count; ++survivor)
+    {
+        missing.clear();
+        for (unsigned i = 0; i < count; ++i)
+            if (i != survivor)
+                missing.push_back(i);
+        patterns.push_back(missing);
+    }
+    return patterns;
+}
+
+void ExerciseP128Pattern(
+    const leopard::backend::Ops& avx2,
+    const std::vector<std::vector<uint8_t> >& message,
+    const std::vector<std::vector<uint8_t> >& parity,
+    const std::vector<unsigned>& missing,
+    bool select_high_parity,
+    unsigned count)
+{
+    static const unsigned kPadded = 128;
+    static const unsigned kParent = 256;
+    uint8_t erased[kParent] = {};
+    uint8_t requested[kParent] = {};
+    const void* coordinates[kParent] = {};
+    uint32_t requested_coordinates[kPadded] = {};
+    void* restored[kPadded] = {};
+    uint8_t locator[kParent] = {};
+    uint8_t factor = 0;
+
+    for (unsigned i = 0; i < count; ++i)
+        coordinates[i] = &message[i][0];
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        const unsigned coordinate = missing[i];
+        coordinates[coordinate] = NULL;
+        erased[coordinate] = 1;
+        requested[coordinate] = 1;
+        requested_coordinates[i] = coordinate;
+    }
+    for (unsigned i = 0; i < count; ++i)
+    {
+        const unsigned coordinate = kPadded + i;
+        const bool selected = select_high_parity
+            ? i >= count - missing.size()
+            : i < missing.size();
+        if (selected)
+            coordinates[coordinate] = &parity[i][0];
+        else
+            erased[coordinate] = 1;
+    }
+    for (unsigned coordinate = kPadded + count;
+         coordinate < kParent; ++coordinate)
+        erased[coordinate] = 1;
+    leopard::ff8::PrepareDecodeKnownCount(
+        kParent, erased, kPadded, locator);
+    leopard::ff8::PrepareLowDecode(kParent, kPadded, &factor);
+
+    AlignedBuffer candidate_work_storage(kParent * kShardBytes);
+    AlignedBuffer mature_work_storage(kParent * kShardBytes);
+    AlignedBuffer generic_work_storage(kParent * kShardBytes);
+    AlignedBuffer restored_storage(kPadded * kShardBytes);
+    void* candidate_work[kParent];
+    void* mature_work[kParent];
+    void* generic_work[kParent];
+    for (unsigned i = 0; i < kParent; ++i)
+    {
+        candidate_work[i] = candidate_work_storage.bytes() +
+            static_cast<size_t>(i) * kShardBytes;
+        mature_work[i] = mature_work_storage.bytes() +
+            static_cast<size_t>(i) * kShardBytes;
+        generic_work[i] = generic_work_storage.bytes() +
+            static_cast<size_t>(i) * kShardBytes;
+    }
+    std::memset(restored_storage.bytes(), 0xa5, kPadded * kShardBytes);
+    for (unsigned coordinate = 0; coordinate < kPadded; ++coordinate)
+        restored[coordinate] = restored_storage.bytes() +
+            static_cast<size_t>(coordinate) * kShardBytes;
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        const unsigned coordinate = missing[i];
+        Require(coordinate < count,
+            "P128 pattern requested a shortened coordinate");
+    }
+
+    Require(leopard::ff8::ReedSolomonDecodeLowP128B64TerminalExperimental(
+            avx2, coordinates, requested_coordinates,
+            static_cast<unsigned>(missing.size()), locator, factor,
+            restored, candidate_work),
+        "P128/B64 AVX2 terminal rejected a valid pattern");
+    leopard::ff8::ReedSolomonDecodeLowPrepared(
+        avx2, kShardBytes, kParent, kPadded,
+        coordinates, requested, locator, &factor, mature_work);
+    leopard::ff8::ReedSolomonDecodePrepared(
+        avx2, kShardBytes, kParent, coordinates,
+        requested, locator, generic_work);
+
+    for (unsigned coordinate = 0; coordinate < kPadded; ++coordinate)
+    {
+        if (requested[coordinate])
+        {
+            Require(coordinate < count,
+                "P128 terminal requested a shortened coordinate");
+            Require(std::memcmp(restored[coordinate],
+                    &message[coordinate][0], kShardBytes) == 0,
+                "P128/B64 terminal differs from direct systematic data");
+            Require(std::memcmp(restored[coordinate],
+                    mature_work[coordinate], kShardBytes) == 0,
+                "P128/B64 terminal differs from mature Algorithm 4");
+            Require(std::memcmp(restored[coordinate],
+                    generic_work[coordinate], kShardBytes) == 0,
+                "P128/B64 terminal differs from generic decode");
+        }
+        else
+        {
+            const uint8_t* untouched = restored_storage.bytes() +
+                static_cast<size_t>(coordinate) * kShardBytes;
+            for (size_t offset = 0; offset < kShardBytes; ++offset)
+                Require(untouched[offset] == 0xa5,
+                    "P128/B64 terminal modified an unrequested output");
+        }
+    }
 }
 
 } // namespace
@@ -475,6 +683,76 @@ int main()
                     *avx2, message, parity, patterns[i], true);
             }
         }
+
+        const leopard2_test::ProfileLayout layout128 =
+            leopard2_test::make_profile_layout(
+                leopard2_test::kLegacyHigh, 128, 128);
+        const leopard2_test::Matrix generator128 =
+            leopard2_test::direct_systematic_generator(field, layout128);
+        const std::vector<std::vector<unsigned> > patterns128 =
+            BuildP128Patterns(128);
+        for (unsigned payload = 0; payload < 2; ++payload)
+        {
+            std::vector<std::vector<uint8_t> > message128(
+                128, std::vector<uint8_t>(kShardBytes));
+            std::vector<std::vector<uint8_t> > parity128;
+            uint64_t state = UINT64_C(0x6c6f775031323836) + payload;
+            for (unsigned row = 0; row < 128; ++row)
+            {
+                for (size_t offset = 0; offset < kShardBytes; ++offset)
+                {
+                    state ^= state << 13;
+                    state ^= state >> 7;
+                    state ^= state << 17;
+                    message128[row][offset] = static_cast<uint8_t>(
+                        (state >> 24) ^ row ^ offset);
+                }
+            }
+            EncodeIndependentParityForCount(
+                field, generator128, message128, parity128, 128);
+            for (size_t i = 0; i < patterns128.size(); ++i)
+            {
+                ExerciseP128Pattern(
+                    *avx2, message128, parity128, patterns128[i], false, 128);
+                ExerciseP128Pattern(
+                    *avx2, message128, parity128, patterns128[i], true, 128);
+            }
+        }
+
+        // Shortened/punctured K=R=95 receives independently generated
+        // legacy-high parity, then feeds the exact translated P=128 layout to
+        // the candidate, mature Algorithm 4, and generic decoder.
+        const leopard2_test::ProfileLayout layout95 =
+            leopard2_test::make_profile_layout(
+                leopard2_test::kLegacyHigh, 95, 95);
+        const leopard2_test::Matrix generator95 =
+            leopard2_test::direct_systematic_generator(field, layout95);
+        const std::vector<std::vector<unsigned> > patterns95 =
+            BuildP128Patterns(95);
+        std::vector<std::vector<uint8_t> > message95(
+            95, std::vector<uint8_t>(kShardBytes));
+        std::vector<std::vector<uint8_t> > parity95;
+        uint64_t state95 = UINT64_C(0x6c6f775039353634);
+        for (unsigned row = 0; row < 95; ++row)
+        {
+            for (size_t offset = 0; offset < kShardBytes; ++offset)
+            {
+                state95 ^= state95 << 13;
+                state95 ^= state95 >> 7;
+                state95 ^= state95 << 17;
+                message95[row][offset] = static_cast<uint8_t>(
+                    (state95 >> 24) ^ row ^ offset);
+            }
+        }
+        EncodeIndependentParityForCount(
+            field, generator95, message95, parity95, 95);
+        for (size_t i = 0; i < patterns95.size(); ++i)
+        {
+            ExerciseP128Pattern(
+                *avx2, message95, parity95, patterns95[i], false, 95);
+            ExerciseP128Pattern(
+                *avx2, message95, parity95, patterns95[i], true, 95);
+        }
         leo2_context_options options = {};
         options.struct_size = sizeof(options);
         options.backend = LEO2_BACKEND_AVX2;
@@ -484,6 +762,8 @@ int main()
             "create public-route AVX2 context");
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
             "production terminal mode did not start enabled");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 2,
+            "experimental P128 terminal did not start disabled");
         unsigned route_count = 0;
         for (unsigned loss_count = 9; loss_count < kOriginalCount;
              ++loss_count)
@@ -553,11 +833,124 @@ int main()
         Require(leopard2_internal::
                 FinishLowP32B64TerminalRouteProbeForDiagnostics(),
             "finish final enabled terminal route probe");
+
+        Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
+                true),
+            "arm enabled P128 terminal route probe");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
+            "armed enabled P128 terminal did not normalize to mode one");
+        const unsigned p128_shapes[][2] = {
+            { 95, 47 }, { 95, 94 }, { 128, 64 }, { 128, 127 }
+        };
+        for (size_t shape = 0;
+             shape < sizeof(p128_shapes) / sizeof(p128_shapes[0]); ++shape)
+        {
+            for (unsigned high = 0; high < 2; ++high)
+            {
+                ExercisePublicRoute(context,
+                    p128_shapes[shape][0], p128_shapes[shape][0], 64,
+                    p128_shapes[shape][1], false, high != 0, 0, 1);
+                ++route_count;
+            }
+        }
+        // Non-contiguous K=95 patterns exercise shortening/puncturing and
+        // deliberately unaligned live inputs/outputs through both parity
+        // selection ends.  Stride 37 is coprime to 95.
+        ExercisePublicRoute(context, 95, 95, 64, 47,
+            false, false, 0, 1, 37, 11, true);
+        ExercisePublicRoute(context, 95, 95, 64, 94,
+            false, true, 0, 1, 37, 7, true);
+        // K=128 uses an odd stride to cover both requested-mask words while
+        // retaining unique coordinates; all AVX loads/stores must tolerate
+        // the distinct source/parity/output misalignments above.
+        ExercisePublicRoute(context, 128, 128, 64, 64,
+            false, false, 0, 1, 29, 9, true);
+        ExercisePublicRoute(context, 128, 128, 64, 127,
+            false, true, 0, 1, 29, 5, true);
+        route_count += 4;
+        Require(leopard2_internal::
+                LowP128B64TerminalRouteSelectedForDiagnostics(),
+            "enabled P128 route probe did not observe the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP128B64TerminalRouteProbeForDiagnostics(),
+            "finish enabled P128 terminal route probe");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
+            "finished enabled P128 terminal did not retain mode one");
+
+        Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
+                true),
+            "arm off-target P128 route probe");
+        ExercisePublicRoute(context, 128, 128, 64, 65,
+            false, false, 0, 0);
+        ++route_count;
+        Require(!leopard2_internal::
+                LowP128B64TerminalRouteSelectedForDiagnostics(),
+            "off-target P128 route probe observed the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP128B64TerminalRouteProbeForDiagnostics(),
+            "finish off-target P128 route probe");
+
+        // Every public selector edge remains on the mature path.
+        ExercisePublicRoute(context, 95, 95, 64, 46,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 95, 95, 64, 48,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 95, 95, 64, 93,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 95, 95, 64, 95,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 64, 63,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 64, 65,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 64, 126,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 64, 128,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 63, 127,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 65, 127,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 64, 127,
+            true, false, 0, 0);
+        ExercisePublicRoute(context, 127, 128, 64, 127,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 127, 64, 126,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 94, 95, 64, 47,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 95, 94, 64, 47,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 127, 128, 64, 64,
+            false, false, 0, 0);
+        ExercisePublicRoute(context, 128, 127, 64, 64,
+            false, false, 0, 0);
+        route_count += 17;
+
+        Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
+                false),
+            "disable P128 terminal for same-executable control");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 2,
+            "disabled P128 terminal did not normalize to mode two");
+        ExercisePublicRoute(context, 128, 128, 64, 127,
+            false, false, 0, 0);
+        ++route_count;
+        Require(!leopard2_internal::
+                LowP128B64TerminalRouteSelectedForDiagnostics(),
+            "disabled P128 route probe observed the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP128B64TerminalRouteProbeForDiagnostics(),
+            "finish disabled P128 terminal route probe");
+        Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 2,
+            "finished disabled P128 terminal did not retain mode two");
         leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu "
+            "PASS low_p32_p128_b64_terminal p32_payloads=2 "
+            "p32_patterns=%zu p128_payloads=2 p128_patterns=%zu "
+            "p95_payloads=1 p95_patterns=%zu "
             "parity_selections=2 routes=%u\n",
-            patterns.size(), route_count);
+            patterns.size(), patterns128.size(), patterns95.size(),
+            route_count);
         return 0;
     }
     catch (const std::exception& exception)
