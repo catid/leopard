@@ -104,6 +104,7 @@ void require_empty_translated(
 {
     require(info.translated_permanent_erased_bytes == 0 &&
             info.translated_locator_bytes == 0 &&
+            info.translated_full_loss_locator_bytes == 0 &&
             info.translated_factor_bytes == 0,
         label + " retained translated metadata");
 }
@@ -124,6 +125,8 @@ void test_translated_codec_metadata(
     require(info.translated_locator_bytes ==
             shape.parent * shape.element_bytes,
         label + " did not retain its reachable translated locator");
+    require(info.translated_full_loss_locator_bytes == 0,
+        label + " unexpectedly retained an AVX2 full-loss locator");
     require(info.translated_factor_bytes == shape.element_bytes,
         label + " did not retain its one reachable Algorithm-4 factor");
 #if LEO2_EXPECT_HOOK_NATIVE_METADATA
@@ -160,6 +163,8 @@ void test_translated_codec_metadata(
                   << info.translated_permanent_erased_bytes
                   << ",\"translated_locator_bytes\":"
                   << info.translated_locator_bytes
+                  << ",\"translated_full_loss_locator_bytes\":"
+                  << info.translated_full_loss_locator_bytes
                   << ",\"translated_factor_bytes\":"
                   << info.translated_factor_bytes << "}\n";
     }

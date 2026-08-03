@@ -267,7 +267,7 @@ def cpu_delta(before: Mapping[str, int], after: Mapping[str, int]) -> dict[str, 
             for name in ("total", "idle", "nonidle")}
 
 
-def cells(terminal: str) -> list[dict[str, Any]]:
+def cells(terminal: str, timing: str) -> list[dict[str, Any]]:
     if terminal == "p32":
         return [
         {"id": "target-loss9", "K": 32, "R": 32, "bytes": 64,
@@ -313,7 +313,9 @@ def cells(terminal: str) -> list[dict[str, Any]]:
         {"id": "loss-k128-l126", "K": 128, "R": 128, "bytes": 64,
          "loss": 126, "role": "neighbor", "seed": 0xB1287E01},
         {"id": "target-k128-l128", "K": 128, "R": 128, "bytes": 64,
-         "loss": 128, "role": "target", "seed": 0xB1288001},
+         "loss": 128,
+         "role": "target" if timing == "one-shot" else "neighbor",
+         "route_candidate": True, "seed": 0xB1288001},
         {"id": "byte-neighbor-63", "K": 128, "R": 128, "bytes": 63,
          "loss": 127, "role": "neighbor", "seed": 0xB1287F3F},
         {"id": "byte-neighbor-65", "K": 128, "R": 128, "bytes": 65,
@@ -393,8 +395,8 @@ def validate_result(
         metric = metrics.get("decode_including_setup")
     else:
         build = result.get("build")
-        expected_selected = implementation == "candidate" and \
-            cell["role"] == "target"
+        expected_selected = implementation == "candidate" and bool(
+            cell.get("route_candidate", cell["role"] == "target"))
         require(result.get("schema") == BENCHMARK_SCHEMAS[terminal] and
                 resolved.get("backend") == "avx2" and
                 result.get("correctness", {}).get("leopard2_round_trip") is True,
@@ -685,7 +687,7 @@ def main() -> int:
         expected_pass = (
             b"PASS low_p32_p128_b64_terminal p32_payloads=2 "
             b"p32_patterns=68 p128_payloads=2 p128_patterns=137 "
-            b"p95_payloads=1 p95_patterns=104 parity_selections=2 routes=107\n")
+            b"p95_payloads=1 p95_patterns=104 parity_selections=2 routes=110\n")
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
@@ -695,11 +697,11 @@ def main() -> int:
                 "p32_payloads": 2, "p32_patterns": 68,
                 "p128_payloads": 2, "p128_patterns": 137,
                 "p95_payloads": 1, "p95_patterns": 104,
-                "parity_selections": 2, "public_routes": 107,
+                "parity_selections": 2, "public_routes": 110,
             },
         }
 
-        campaign_cells = cells(options.terminal)
+        campaign_cells = cells(options.terminal, options.timing)
         for cell_index, cell in enumerate(campaign_cells):
             cell_rounds = []
             rejected_attempts = []

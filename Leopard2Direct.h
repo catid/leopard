@@ -175,6 +175,7 @@ struct CodecDecodeMetadataInfo
     size_t native_factor_bytes;
     size_t translated_permanent_erased_bytes;
     size_t translated_locator_bytes;
+    size_t translated_full_loss_locator_bytes;
     size_t translated_factor_bytes;
 };
 

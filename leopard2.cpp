@@ -634,6 +634,10 @@ struct leo2_codec
     std::vector<uint8_t> translated_low_permanent_erased;
     std::vector<uint8_t> translated_low_permanent_locator8;
     std::vector<uint16_t> translated_low_permanent_locator16;
+    // Exact full-original-loss locator for the narrowly qualified GF8/AVX2
+    // B64 terminals.  K=R makes this erasure pattern code-dependent: every
+    // original is absent and every transmitted parity coordinate is required.
+    std::vector<uint8_t> translated_low_full_loss_locator8;
     std::vector<uint8_t> translated_low_factors8;
     std::vector<uint16_t> translated_low_factors16;
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -8270,7 +8274,8 @@ enum LowB64TerminalKind
 static uint8_t ClassifyLowB64Terminal(
     const leo2_codec* codec,
     bool translated_low,
-    uint32_t missing_original_count)
+    uint32_t missing_original_count,
+    bool reusable_plan)
 {
     if (!codec || !translated_low || codec->flags != 0 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -8296,7 +8301,7 @@ static uint8_t ClassifyLowB64Terminal(
          (codec->original_count == 128 && codec->recovery_count == 128 &&
           (missing_original_count == 64 ||
            missing_original_count == 127 ||
-           missing_original_count == 128))))
+           (missing_original_count == 128 && !reusable_plan)))))
         return kLowB64TerminalP128;
     return kLowB64TerminalNone;
 }
@@ -8351,6 +8356,67 @@ static bool TryExecuteLowB64Terminal(
 #endif
     return executed;
 }
+
+static bool TryExecuteOneShotFullLossLowB64Terminal(
+    const leo2_codec* codec,
+    const DecodeScratchGeometry& geometry,
+    RawTranslatedLowDecodePattern& pattern,
+    const void* const* recovery,
+    void* const* restored,
+    uint8_t* scratch)
+{
+    if (!codec || !recovery || !restored || !scratch ||
+        codec->original_count != codec->recovery_count ||
+        pattern.missing_original_count != codec->original_count ||
+        geometry.aligned_prefix_bytes != 64 || geometry.tail_bytes != 0 ||
+        geometry.execution_tile_count != 1 ||
+        geometry.work_slot_count < codec->parent_count ||
+        codec->translated_low_full_loss_locator8.size() !=
+            codec->parent_count)
+        return false;
+
+    const uint8_t terminal_kind = ClassifyLowB64Terminal(
+        codec, true, pattern.missing_original_count, false);
+    if (terminal_kind == kLowB64TerminalNone)
+        return false;
+    const unsigned mode = terminal_kind == kLowB64TerminalP32
+        ? g_low_p32_b64_terminal_mode.load(std::memory_order_acquire)
+        : g_low_p128_b64_terminal_mode.load(std::memory_order_acquire);
+    if (mode != 1U && mode != 3U)
+    {
+        if (mode == 4U)
+        {
+            if (terminal_kind == kLowB64TerminalP32)
+                g_low_p32_b64_terminal_route_selected = false;
+            else
+                g_low_p128_b64_terminal_route_selected = false;
+        }
+        return false;
+    }
+
+    void** const coordinate_data = reinterpret_cast<void**>(
+        scratch + geometry.layout.pointer_offset);
+    void** const work = coordinate_data + codec->parent_count;
+    uint8_t* const work_storage = scratch + geometry.work_data_offset;
+    std::fill(coordinate_data, coordinate_data + codec->parent_count,
+        static_cast<void*>(NULL));
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        pattern.missing_originals[i] = i;
+        LEO_DEBUG_ASSERT(recovery[i] != NULL);
+        coordinate_data[codec->padded_side + i] =
+            const_cast<void*>(recovery[i]);
+    }
+    for (size_t i = 0; i < geometry.work_slot_count; ++i)
+    {
+        work[i] = work_storage + i * geometry.work_slot_bytes;
+    }
+    return TryExecuteLowB64Terminal(
+        codec, terminal_kind, 64,
+        const_cast<const void* const*>(coordinate_data),
+        pattern.missing_originals, pattern.missing_original_count,
+        codec->translated_low_full_loss_locator8.data(), restored, work);
+}
 #endif
 
 static void ExecuteRawTranslatedLowDecode(
@@ -8386,7 +8452,7 @@ static void ExecuteRawTranslatedLowDecode(
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
         const uint8_t terminal_kind = ClassifyLowB64Terminal(
-            codec, true, pattern.missing_original_count);
+            codec, true, pattern.missing_original_count, false);
         const bool exact_terminal = geometry.tail_bytes == 0 &&
             TryExecuteLowB64Terminal(
                 codec, terminal_kind, geometry.aligned_prefix_bytes,
@@ -8567,6 +8633,12 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
         restored, scratch_range, reinterpret_cast<AddressRange*>(scratch));
     if (result != LEO2_SUCCESS)
         return result;
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    if (TryExecuteOneShotFullLossLowB64Terminal(
+            codec, geometry, pattern, recovery, restored,
+            static_cast<uint8_t*>(scratch)))
+        return LEO2_SUCCESS;
+#endif
     if (!PrepareRawTranslatedLowPattern(
             codec, original_present, recovery_present, pattern))
         return LEO2_INTERNAL_ERROR;
@@ -11927,6 +11999,39 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                         TranslateHalfParentCoordinate(codec, i)];
             }
         }
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL && defined(LEO_HAS_FF8)
+        /*
+            In the exact balanced terminal shapes, losing every original
+            leaves exactly one valid received set: all K parity shards.  Its
+            translated locator therefore depends only on the immutable codec
+            identity.  Cache it once so public one-shot decode retains normal
+            buffer validation but does not rebuild N locator evaluations on
+            every 64-byte call.
+        */
+        const bool prepare_low_b64_full_loss_locator =
+            field == LEO2_FIELD_GF8 && codec->flags == 0 &&
+            profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+            codec->context && codec->context->ops &&
+            codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+            !codec->translated_low_permanent_erased.empty() &&
+            ((parent == 64 && padded == 32 && original_count == 32 &&
+              recovery_count == 32) ||
+             (parent == 256 && padded == 128 &&
+              ((original_count == 95 && recovery_count == 95) ||
+               (original_count == 128 && recovery_count == 128))));
+        if (prepare_low_b64_full_loss_locator)
+        {
+            std::vector<uint8_t> full_loss_erased =
+                codec->translated_low_permanent_erased;
+            for (uint32_t i = 0; i < original_count; ++i)
+                full_loss_erased[i] = 1;
+            codec->translated_low_full_loss_locator8.resize(parent);
+            PrepareGF8LocatorKnownCount(codec, full_loss_erased.data(),
+                parent - codec->parent_dimension,
+                codec->translated_low_full_loss_locator8.data());
+        }
+#endif
         const uint32_t permanent_erasure_count =
             profile == LEO2_PROFILE_LEGACY_HIGH_V1
                 ? padded - recovery_count
@@ -12436,6 +12541,8 @@ bool GetCodecDecodeMetadataInfo(
     info.translated_locator_bytes =
         codec->translated_low_permanent_locator8.size() +
         codec->translated_low_permanent_locator16.size() * sizeof(uint16_t);
+    info.translated_full_loss_locator_bytes =
+        codec->translated_low_full_loss_locator8.size();
     info.translated_factor_bytes = codec->translated_low_factors8.size() +
         codec->translated_low_factors16.size() * sizeof(uint16_t);
     *info_out = info;
@@ -16820,7 +16927,8 @@ static leo2_result DecodePlanCreateInternal(
 #endif
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL && defined(LEO_HAS_FF8)
             plan->low_b64_terminal_kind = ClassifyLowB64Terminal(
-                codec, plan->translated_low, missing_original_count);
+                codec, plan->translated_low, missing_original_count,
+                setup_hint == NULL);
 #endif
             if (!plan->translated_low)
             {

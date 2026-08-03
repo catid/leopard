@@ -351,6 +351,17 @@ void ExercisePublicRoute(
     RequireResult(leo2_codec_create(context,
         original_count, recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_FIELD_GF8, NULL, &codec), "create public-route codec");
+    leopard2_internal::CodecDecodeMetadataInfo metadata;
+    Require(leopard2_internal::GetCodecDecodeMetadataInfo(codec, &metadata),
+        "query public-route codec metadata");
+    const bool expects_full_loss_locator =
+        (original_count == 32 && recovery_count == 32) ||
+        (original_count == 95 && recovery_count == 95) ||
+        (original_count == 128 && recovery_count == 128);
+    Require(metadata.translated_full_loss_locator_bytes ==
+            (expects_full_loss_locator
+                ? leo2_codec_parent_count(codec) : 0),
+        "public-route full-loss locator cache differs from exact predicate");
 
     Require(missing_stride != 0,
         "public-route missing stride must be nonzero");
@@ -946,6 +957,8 @@ int main()
         ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 1);
         ExercisePublicRoute(context, 32, 32, 64, 32, false, true, 1);
+        ExercisePublicRoute(context, 32, 32, 64, 32,
+            false, false, 1, 0, 1, 0, true);
         ExercisePublicRoute(context, 32, 32, 64, 32, true, false, 1);
         ExercisePublicRoute(context, 32, 32, 64, 32,
             true, false, 2, 0, 1, 0, false, 0, 0, false, true);
@@ -956,7 +969,7 @@ int main()
         ExercisePublicRoute(context, 32, 32, 65, 16, true, false, 0);
         ExercisePublicRoute(context, 31, 32, 64, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 31, 64, 16, false, false, 0);
-        route_count += 12;
+        route_count += 13;
         ExercisePublicRoute(context, 32, 32, 64, 16,
             true, false, 2, 0, 1, 0, false, 0, 0, false, true);
         ++route_count;
@@ -1015,7 +1028,7 @@ int main()
             "armed enabled P128 terminal did not normalize to mode one");
         const unsigned p128_shapes[][2] = {
             { 95, 47 }, { 95, 94 }, { 95, 95 },
-            { 128, 64 }, { 128, 127 }, { 128, 128 }
+            { 128, 64 }, { 128, 127 }
         };
         for (size_t shape = 0;
              shape < sizeof(p128_shapes) / sizeof(p128_shapes[0]); ++shape)
@@ -1038,8 +1051,23 @@ int main()
         ExercisePublicRoute(context, 95, 95, 64, 95,
             true, false, 0, 2, 1, 0, false, 0, 0, false, true);
         ++route_count;
+        ExercisePublicRoute(context, 95, 95, 64, 95,
+            false, false, 0, 1, 1, 0, true);
+        ++route_count;
         ExercisePublicRoute(context, 128, 128, 64, 128,
-            true, false, 0, 2, 1, 0, false, 0, 0, false, true);
+            false, false, 0, 1);
+        ++route_count;
+        ExercisePublicRoute(context, 128, 128, 64, 128,
+            false, true, 0, 1);
+        ++route_count;
+        ExercisePublicRoute(context, 128, 128, 64, 128,
+            false, false, 0, 1, 1, 0, true);
+        ++route_count;
+        ExercisePublicRoute(context, 128, 128, 64, 128,
+            true, false, 0, 0);
+        ++route_count;
+        ExercisePublicRoute(context, 128, 128, 64, 128,
+            true, false, 0, 0, 1, 0, false, 0, 0, false, true);
         ++route_count;
         // Non-contiguous K=95 patterns exercise shortening/puncturing and
         // deliberately unaligned live inputs/outputs through both parity
