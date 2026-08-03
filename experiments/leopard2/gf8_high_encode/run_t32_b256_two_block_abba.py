@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""Qualify the packed K=64,T=R=32,B=256 two-block AVX2 encoder."""
+"""Qualify the packed K=64,T=R=32,B=256 two-block AVX2 encoder.
+
+The batch execution metric uses Leopard2's reusable prevalidated binding, so
+its setup is reported separately and its byte-heavy execution is comparable to
+the validation-free Leopard1 call.  The one-item target also records ordinary
+one-shot encode, retaining the public validation-inclusive comparison.
+"""
 
 from __future__ import annotations
 
@@ -9,7 +15,7 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 def load_base() -> Any:
@@ -28,8 +34,8 @@ def load_base() -> Any:
 PARENT = load_base()
 BASE = PARENT.BASE
 BASE.__doc__ = __doc__
-BASE.SCHEMA = "leopard2-gf8-t32-b256-two-block-abba/v1"
-BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-two-block-summary/v1"
+BASE.SCHEMA = "leopard2-gf8-t32-b256-two-block-abba/v2"
+BASE.SUMMARY_SCHEMA = "leopard2-gf8-t32-b256-two-block-summary/v2"
 BASE.MODE_SYMBOL = \
     "_ZN7leopard7backend12_GLOBAL__N_1L25g_t32_b256_two_block_modeE"
 BASE.TARGET_CONTROL_FLOOR = 1.05
@@ -151,9 +157,35 @@ def normalized_compile_commands_identity(
     }
 
 
+PARENT_VALIDATE_RESULT = BASE.validate_result
+
+
+def validate_result(
+    implementation: str,
+    result: object,
+    cell: Mapping[str, Any],
+    source_commit: str,
+    source_tree: str,
+    iterations: int,
+    warmup: int,
+) -> dict[str, Any]:
+    if implementation != "main":
+        BASE.require(
+            isinstance(result, dict) and
+            isinstance(result.get("build"), dict) and
+            result["build"].get("prevalidated_batch_experiment") is True and
+            isinstance(result.get("metrics"), dict) and
+            isinstance(result["metrics"].get("encode_binding_setup"), dict),
+            "T32 qualification requires the prevalidated-binding benchmark")
+    return PARENT_VALIDATE_RESULT(
+        implementation, result, cell, source_commit, source_tree,
+        iterations, warmup)
+
+
 BASE.cells = cells
 BASE.normalized_compile_commands_identity = \
     normalized_compile_commands_identity
+BASE.validate_result = validate_result
 
 
 if __name__ == "__main__":
