@@ -146,6 +146,10 @@ LEO2_EXPORT uint64_t leo2_test_direct_four_tiny_calls(void);
 LEO2_EXPORT void leo2_test_reset_low_p32_b64_terminal_calls(void);
 
 LEO2_EXPORT uint64_t leo2_test_low_p32_b64_terminal_calls(void);
+
+LEO2_EXPORT void leo2_test_reset_low_p128_b64_terminal_calls(void);
+
+LEO2_EXPORT uint64_t leo2_test_low_p128_b64_terminal_calls(void);
 #endif
 
 #ifdef __cplusplus
@@ -303,6 +307,20 @@ unsigned LowP32B64TerminalModeForDiagnostics();
 bool LowP32B64TerminalRouteSelectedForDiagnostics();
 
 bool FinishLowP32B64TerminalRouteProbeForDiagnostics();
+
+/*
+    Same-executable attribution for the bounded GF8/AVX2 Algorithm 4
+    P=128/N=256/B=64 terminal.  This experiment is production-disabled until
+    its exact target cells pass the acceptance campaign.  Its diagnostic
+    state and route probe are independent of the qualified P32 terminal.
+*/
+bool SetLowP128B64TerminalEnabledForDiagnostics(bool enabled);
+
+unsigned LowP128B64TerminalModeForDiagnostics();
+
+bool LowP128B64TerminalRouteSelectedForDiagnostics();
+
+bool FinishLowP128B64TerminalRouteProbeForDiagnostics();
 
 /*
     Construct the ephemeral transform plan for the current diagnostic mode
