@@ -194,6 +194,26 @@ void CheckGuards(
         Require(buffer.bytes()[i] == kGuardValue, message);
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+void CheckRegionGuards(
+    const AlignedBuffer& buffer,
+    size_t region_offset,
+    size_t region_bytes,
+    size_t payload_offset,
+    size_t payload_bytes,
+    const char* message)
+{
+    Require(payload_offset >= region_offset &&
+        payload_offset + payload_bytes <= region_offset + region_bytes,
+        "invalid guarded-region geometry");
+    for (size_t i = region_offset; i < payload_offset; ++i)
+        Require(buffer.bytes()[i] == kGuardValue, message);
+    for (size_t i = payload_offset + payload_bytes;
+         i < region_offset + region_bytes; ++i)
+        Require(buffer.bytes()[i] == kGuardValue, message);
+}
+#endif
+
 void ExerciseProduction(leo2_context* context)
 {
     leo2_codec* codec = NULL;
@@ -555,6 +575,205 @@ void ExerciseProductionT32TwoBlockFamily(
 
     leo2_codec_destroy(codec);
 }
+
+void ExerciseProductionT32TwoBlockBatch(leo2_context* context)
+{
+    static const size_t kBatchCount = 8;
+    static const unsigned original_count = 64;
+    static const unsigned recovery_count = 32;
+    const size_t alignment = leo2_scratch_alignment();
+    const size_t input_bytes = original_count * kShardBytes;
+    const size_t output_bytes = recovery_count * kShardBytes;
+    const size_t input_offset_in_region = kGuardBytes + 1U;
+    const size_t output_offset_in_region = kGuardBytes + 3U;
+    const size_t input_region_bytes =
+        (input_offset_in_region + input_bytes + kGuardBytes + 8U +
+            alignment - 1U) & ~(alignment - 1U);
+    const size_t output_region_bytes =
+        (output_offset_in_region + output_bytes + kGuardBytes + 8U +
+            alignment - 1U) & ~(alignment - 1U);
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create T32 two-block batch codec");
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, kShardBytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query T32 two-block batch scratch");
+    const size_t scratch_region_bytes =
+        (alignment + scratch_bytes + alignment + alignment - 1U) &
+            ~(alignment - 1U);
+
+    AlignedBuffer input(kBatchCount * input_region_bytes);
+    AlignedBuffer output(kBatchCount * output_region_bytes);
+    AlignedBuffer scratch(kBatchCount * scratch_region_bytes);
+    std::memset(input.bytes(), kGuardValue, input.size());
+    std::memset(output.bytes(), kGuardValue, output.size());
+    std::memset(scratch.bytes(), kGuardValue, scratch.size());
+
+    std::vector<std::vector<const void*> > original(
+        kBatchCount, std::vector<const void*>(original_count));
+    std::vector<std::vector<void*> > recovery(
+        kBatchCount, std::vector<void*>(recovery_count));
+    std::vector<leo2_encode_batch_item> items(kBatchCount);
+    for (size_t item_i = 0; item_i < kBatchCount; ++item_i)
+    {
+        uint8_t* const input_base = input.bytes() +
+            item_i * input_region_bytes + input_offset_in_region;
+        uint8_t* const output_base = output.bytes() +
+            item_i * output_region_bytes + output_offset_in_region;
+        uint64_t state = UINT64_C(0x5433324241544348) ^ item_i;
+        for (size_t byte_i = 0; byte_i < input_bytes; ++byte_i)
+        {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            input_base[byte_i] = static_cast<uint8_t>(state >> 24);
+        }
+        for (unsigned i = 0; i < original_count; ++i)
+            original[item_i][i] =
+                input_base + static_cast<size_t>(i) * kShardBytes;
+        for (unsigned i = 0; i < recovery_count; ++i)
+            recovery[item_i][i] =
+                output_base + static_cast<size_t>(i) * kShardBytes;
+        items[item_i].shard_bytes = kShardBytes;
+        items[item_i].original = &original[item_i][0];
+        items[item_i].recovery = &recovery[item_i][0];
+        items[item_i].scratch = scratch.bytes() +
+            item_i * scratch_region_bytes + alignment;
+        items[item_i].scratch_bytes = scratch_bytes;
+    }
+
+    const std::vector<uint8_t> input_before(
+        input.bytes(), input.bytes() + input.size());
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+
+    RequireResult(leo2_encode_batch(codec, &items[0], items.size()),
+        LEO2_SUCCESS, "execute public T32 two-block multi-item batch");
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "T32 two-block multi-item batch modified source or guards");
+    for (size_t item_i = 0; item_i < kBatchCount; ++item_i)
+    {
+        CheckRegionGuards(output, item_i * output_region_bytes,
+            output_region_bytes,
+            item_i * output_region_bytes + output_offset_in_region,
+            output_bytes,
+            "T32 two-block multi-item batch modified output guard");
+        CheckRegionGuards(scratch, item_i * scratch_region_bytes,
+            scratch_region_bytes,
+            item_i * scratch_region_bytes + alignment,
+            scratch_bytes,
+            "T32 two-block multi-item batch modified scratch guard");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            original[item_i], recovery[item_i]);
+    }
+
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &items[0], items.size(), &binding), LEO2_SUCCESS,
+        "create packed T32 two-block batch binding");
+    std::memset(output.bytes(), kGuardValue, output.size());
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "execute packed T32 two-block batch binding");
+    for (size_t item_i = 0; item_i < kBatchCount; ++item_i)
+    {
+        CheckRegionGuards(output, item_i * output_region_bytes,
+            output_region_bytes,
+            item_i * output_region_bytes + output_offset_in_region,
+            output_bytes,
+            "T32 two-block batch binding modified output guard");
+        CheckRegionGuards(scratch, item_i * scratch_region_bytes,
+            scratch_region_bytes,
+            item_i * scratch_region_bytes + alignment,
+            scratch_bytes,
+            "T32 two-block batch binding modified scratch guard");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            original[item_i], recovery[item_i]);
+    }
+    leo2_encode_batch_binding_destroy(binding);
+
+    /* One valid aliased-input stripe must fall back without disabling the
+       packed terminal for its seven ordinary neighbors. */
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const void* const saved_original = original.back()[1];
+    original.back()[1] = original.back()[0];
+    RequireResult(leo2_encode_batch(codec, &items[0], items.size()),
+        LEO2_SUCCESS, "execute mixed packed/fallback T32 batch");
+    for (size_t item_i = 0; item_i < kBatchCount; ++item_i)
+    {
+        CheckRegionGuards(output, item_i * output_region_bytes,
+            output_region_bytes,
+            item_i * output_region_bytes + output_offset_in_region,
+            output_bytes,
+            "mixed T32 public batch modified output guard");
+        CheckRegionGuards(scratch, item_i * scratch_region_bytes,
+            scratch_region_bytes,
+            item_i * scratch_region_bytes + alignment,
+            scratch_bytes,
+            "mixed T32 public batch modified scratch guard");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            original[item_i], recovery[item_i]);
+    }
+
+    binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &items[0], items.size(), &binding), LEO2_SUCCESS,
+        "create mixed packed/fallback T32 batch binding");
+    std::memset(output.bytes(), kGuardValue, output.size());
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, "execute mixed packed/fallback T32 batch binding");
+    for (size_t item_i = 0; item_i < kBatchCount; ++item_i)
+    {
+        CheckRegionGuards(output, item_i * output_region_bytes,
+            output_region_bytes,
+            item_i * output_region_bytes + output_offset_in_region,
+            output_bytes,
+            "mixed T32 batch binding modified output guard");
+        CheckRegionGuards(scratch, item_i * scratch_region_bytes,
+            scratch_region_bytes,
+            item_i * scratch_region_bytes + alignment,
+            scratch_bytes,
+            "mixed T32 batch binding modified scratch guard");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            original[item_i], recovery[item_i]);
+    }
+    leo2_encode_batch_binding_destroy(binding);
+    original.back()[1] = saved_original;
+
+    /* Every failing check must complete before an earlier worker can enter
+       the terminal and write parity. */
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const std::vector<uint8_t> output_before(
+        output.bytes(), output.bytes() + output.size());
+    --items.back().scratch_bytes;
+    RequireResult(leo2_encode_batch(codec, &items[0], items.size()),
+        LEO2_SCRATCH_TOO_SMALL,
+        "reject late undersized scratch in T32 multi-item batch");
+    ++items.back().scratch_bytes;
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "failed T32 multi-item preflight modified an earlier output");
+
+    void* const* const saved_recovery = items.back().recovery;
+    items.back().recovery = &recovery.front()[0];
+    RequireResult(leo2_encode_batch(codec, &items[0], items.size()),
+        LEO2_OVERLAP,
+        "reject cross-item T32 multi-item output overlap");
+    items.back().recovery = saved_recovery;
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "overlapping T32 multi-item batch modified output");
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "T32 two-block batch or binding modified source or guards");
+
+    leo2_codec_destroy(codec);
+}
 #endif
 
 } // namespace
@@ -584,6 +803,7 @@ int main()
         ExerciseProductionT32TwoBlockFamily(context, 64);
         ExerciseProductionT32TwoBlockFamily(context, 96);
         ExerciseProductionT32TwoBlockFamily(context, 128);
+        ExerciseProductionT32TwoBlockBatch(context);
 #endif
         leo2_context_destroy(context);
         std::printf("production balanced 64-byte terminal checks passed\n");

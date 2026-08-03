@@ -669,6 +669,12 @@ struct leo2_encode_batch_binding
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     const leopard::backend::Ops* high_t8_two_block_ops;
 #endif
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    bool high_t32_b256_two_block_packed;
+    size_t high_t32_b256_two_block_work_data_offset;
+#endif
 };
 
 struct leo2_decode_batch_binding
@@ -10755,6 +10761,50 @@ static leo2_result PreflightEncodeBatchTask(void* context)
         batch->item_bytes);
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+static bool IsT32B256TwoBlockPackedBatchCodec(
+    const leo2_codec* codec)
+{
+    return codec &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->original_count == 64U && codec->recovery_count == 32U &&
+        codec->padded_side == 32U;
+}
+
+static bool IsT32B256TwoBlockPackedBatchItem(
+    const leo2_encode_batch_item& item)
+{
+    AddressRange input_range;
+    AddressRange output_range;
+    if (item.shard_bytes != 256U || !item.original || !item.recovery ||
+        !item.original[0] || !item.recovery[0] ||
+        !MakeRange(item.original[0], 64U * 256U, input_range) ||
+        !MakeRange(item.recovery[0], 32U * 256U, output_range))
+        return false;
+
+    uintptr_t expected = input_range.begin;
+    uintptr_t pointer_mismatch = 0;
+    for (uint32_t i = 0; i < 64U; ++i)
+    {
+        pointer_mismatch |=
+            reinterpret_cast<uintptr_t>(item.original[i]) ^ expected;
+        expected += 256U;
+    }
+    expected = output_range.begin;
+    for (uint32_t i = 0; i < 32U; ++i)
+    {
+        pointer_mismatch |=
+            reinterpret_cast<uintptr_t>(item.recovery[i]) ^ expected;
+        expected += 256U;
+    }
+    return pointer_mismatch == 0;
+}
+#endif
+
 static leo2_result PreflightK1R1EncodeBatchTask(void* context)
 {
     const EncodeBatchTaskContext* batch =
@@ -10790,6 +10840,45 @@ static leo2_result RunScalableEncodeBatchItem(void* context, size_t index)
     return RunEncodeBatchItem(&scalable->batch, index);
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+/*
+    Multi-item batch preflight has already proved every metadata/data/scratch
+    range addressable and all writable ranges disjoint before any worker may
+    write output.  Recognize the same packed slabs accepted by the one-shot
+    terminal without repeating that validation or compiling a sparse schedule
+    for every stripe.  Arbitrary pointer layouts and every selector neighbor
+    retain EncodeInternal's mature prevalidated path.
+*/
+static bool TryExecuteGF8AVX2T32B256TwoBlockPrevalidated(
+    const leo2_codec* codec,
+    const leo2_encode_batch_item& item)
+{
+    if (!IsT32B256TwoBlockPackedBatchCodec(codec) || !item.scratch)
+        return false;
+
+    if (!IsT32B256TwoBlockPackedBatchItem(item))
+        return false;
+    EncodeScratchGeometry geometry;
+    if (EncodeLayout(codec, item.shard_bytes, geometry) != LEO2_SUCCESS ||
+        geometry.execution_tile_count != 1U ||
+        geometry.aligned_prefix_bytes != 256U ||
+        geometry.work_count < 64U || geometry.work_slot_bytes != 256U)
+        return false;
+    const leopard::backend::Ops& transform_ops =
+        SelectTransformEncodeOps(codec, 256U, 32U, 32U);
+    if (transform_ops.kind != LEO2_BACKEND_AVX2)
+        return false;
+
+    uint8_t* const work_storage =
+        static_cast<uint8_t*>(item.scratch) + geometry.work_data_offset;
+    return leopard::backend::TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
+        item.original[0], item.recovery[0],
+        work_storage + 32U * 256U);
+}
+#endif
+
 static leo2_result RunEncodeBatchItem(void* context, size_t index)
 {
     const EncodeBatchTaskContext* batch = static_cast<const EncodeBatchTaskContext*>(context);
@@ -10797,6 +10886,13 @@ static leo2_result RunEncodeBatchItem(void* context, size_t index)
 #ifdef LEO_HAS_FF8
     if (TryExecuteGF8AVX2T2Prevalidated(
             batch->codec, item.shard_bytes, item.original, item.recovery))
+        return LEO2_SUCCESS;
+#endif
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    if (TryExecuteGF8AVX2T32B256TwoBlockPrevalidated(
+            batch->codec, item))
         return LEO2_SUCCESS;
 #endif
     return EncodeInternal(
@@ -15825,6 +15921,12 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     binding->high_t8_two_block_ops = NULL;
 #endif
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    binding->high_t32_b256_two_block_packed = false;
+    binding->high_t32_b256_two_block_work_data_offset = 0;
+#endif
 
     leo2_result result = LEO2_SUCCESS;
     try
@@ -15953,6 +16055,46 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
         delete binding;
         return result;
     }
+
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    /*
+        Binding setup has frozen and validated every pointer.  Remember the
+        exact packed shape once so repeated execution performs byte-heavy
+        arithmetic only; ordinary batches retain the read-only preflight on
+        every call.  A configured worker pool keeps the scheduler path so
+        independent stripes remain parallel.
+    */
+    if (!codec->context->pool &&
+        IsT32B256TwoBlockPackedBatchCodec(codec))
+    {
+        EncodeScratchGeometry geometry;
+        bool all_packed =
+            EncodeLayout(codec, 256U, geometry) == LEO2_SUCCESS &&
+            geometry.execution_tile_count == 1U &&
+            geometry.aligned_prefix_bytes == 256U &&
+            geometry.work_count >= 64U &&
+            geometry.work_slot_bytes == 256U;
+        for (size_t item_index = 0;
+             all_packed && item_index < binding->items.size(); ++item_index)
+        {
+            all_packed = IsT32B256TwoBlockPackedBatchItem(
+                binding->items[item_index]);
+        }
+        if (all_packed)
+        {
+            const leopard::backend::Ops& transform_ops =
+                SelectTransformEncodeOps(codec, 256U, 32U, 32U);
+            if (transform_ops.kind == LEO2_BACKEND_AVX2)
+            {
+                binding->high_t32_b256_two_block_packed = true;
+                binding->high_t32_b256_two_block_work_data_offset =
+                    geometry.work_data_offset;
+            }
+        }
+    }
+#endif
 
 #ifdef LEO_HAS_FF8
     if (g_k1_prevalidated_binding_mode == 1U &&
@@ -16159,6 +16301,60 @@ ExecuteEncodeBatchBindingGeneral(
             }
         }
     }
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    if (binding->high_t32_b256_two_block_packed)
+    {
+        LEO_DEBUG_ASSERT(!binding->items.empty());
+        const leo2_encode_batch_item& first = binding->items[0];
+        uint8_t* const first_work =
+            static_cast<uint8_t*>(first.scratch) +
+                binding->high_t32_b256_two_block_work_data_offset;
+        if (leopard::backend::
+                TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
+                    first.original[0], first.recovery[0],
+                    first_work + 32U * 256U))
+        {
+            for (size_t item_index = 1;
+                 item_index < binding->items.size(); ++item_index)
+            {
+                const leo2_encode_batch_item& item =
+                    binding->items[item_index];
+                uint8_t* const work =
+                    static_cast<uint8_t*>(item.scratch) +
+                        binding->high_t32_b256_two_block_work_data_offset;
+                if (!leopard::backend::
+                        TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
+                            item.original[0], item.recovery[0],
+                            work + 32U * 256U))
+                    return LEO2_INTERNAL_ERROR;
+            }
+            return LEO2_SUCCESS;
+        }
+
+        /* The selector-disabled qualification build must retain the exact
+           mature arithmetic without rebuilding packed geometry per item. */
+        size_t item_bytes = 0;
+        if (!CheckedMultiply(binding->items.size(),
+                sizeof(binding->items[0]), item_bytes))
+            return LEO2_INTERNAL_ERROR;
+        for (size_t item_index = 0;
+             item_index < binding->items.size(); ++item_index)
+        {
+            const leo2_encode_batch_item& item =
+                binding->items[item_index];
+            const leo2_result result = EncodeInternal(
+                binding->codec, item.shard_bytes,
+                item.original, item.recovery,
+                item.scratch, item.scratch_bytes,
+                binding->items.data(), item_bytes, true);
+            if (result != LEO2_SUCCESS)
+                return result;
+        }
+        return LEO2_SUCCESS;
+    }
+#endif
 #ifdef LEO_HAS_FF8
     if (binding->high_t4_batch_ops)
     {
