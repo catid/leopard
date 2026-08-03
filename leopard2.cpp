@@ -5864,14 +5864,16 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         public tail is zero-padded to one complete 64-byte pass and follows
         this pass-local rule.
     */
+    if (!codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+
     if (buffer_bytes < kScratchAlignment || buffer_bytes > 512U ||
         (buffer_bytes & (kScratchAlignment - 1U)) != 0 ||
         codec->flags != 0 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 ||
         codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
-        !codec->context || !codec->context->ops ||
-        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
         plan->missing_original_count != codec->recovery_count ||
         PlanUsesTranslatedLowDecode(plan))
         return false;
