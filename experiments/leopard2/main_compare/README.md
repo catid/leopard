@@ -61,10 +61,10 @@ the separate, default-off exact-main profile with
 using the explicit compiler ceiling
 `-march=x86-64 -mtune=generic -mavx2 -mno-avx512f`.  This option is for
 controlled comparison builds; the default continues to reproduce main's
-historical `-march=native` policy.  Current version-10 ABBA evidence requires
+historical `-march=native` policy.  Current version-12 ABBA evidence requires
 this pure-AVX2 profile and the matching `--baseline-pure-avx2` runner selector;
 the native build above is useful for historical reproduction but is not a
-version-10 baseline.  A suitable baseline build is:
+version-12 baseline.  A suitable baseline build is:
 
     cmake -S experiments/leopard2/main_compare \
         -B /tmp/leopard-main-pure-avx2 -G "Unix Makefiles" \
@@ -133,7 +133,7 @@ actually selected instead of inferring a potentially stale route from K/R.
 ## Counterbalanced comparison
 
 `run_abba.py` supplies the other half of the comparison. Its current evidence
-contract is raw/manifest/failure version 10. It accepts only fresh Release
+contract is raw/manifest/failure version 12. It accepts only fresh Release
 artifacts with the expected compile, object, archive, link, source,
 runtime-library, field/profile, and requested decoder-path identities. Each cell
 runs three independent
@@ -153,7 +153,7 @@ Both implementations must report the same deterministic loss set and all three
 workload digests. A strict child environment prevents ambient OpenMP, loader,
 allocator, or profiling settings from silently changing one executable.
 
-Version 10 is an effective-AVX2 comparison, not merely a request for the AUTO
+Version 12 is an effective-AVX2 comparison, not merely a request for the AUTO
 backend. Leopard main must use the pure-AVX2 build above. Leopard2 must use
 `LEO2_BACKEND_VARIANT=auto`, and the benchmark must resolve that AUTO request to
 `avx2`. The AVX-512F/BW/VL and preferred-vector-width probes are forced false,
@@ -163,11 +163,11 @@ VEX-encoded GFNI translation unit may remain in the archive with
 AUTO may not select it. The runner attests the CMake cache, complete compile
 graph, per-TU
 ISA flags, archive members, linked executable, and reported runtime backend,
-so a native, AVX-512, or AUTO-GFNI candidate cannot be relabeled as version-10
+so a native, AVX-512, or AUTO-GFNI candidate cannot be relabeled as version-12
 AVX2 evidence.
 
 Build Leopard2 separately with production test hooks disabled and the complete
-version-10 selector set fixed explicitly:
+version-12 selector set fixed explicitly:
 
     cmake -S . -B /tmp/leopard2-production -G "Unix Makefiles" \
         -DCMAKE_BUILD_TYPE=Release \
@@ -182,6 +182,12 @@ version-10 selector set fixed explicitly:
         -DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=ON \
         -DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=ON \
         -DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=ON \
+        -DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=OFF \
+        -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=OFF \
+        -DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON \
+        -DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=ON \
+        -DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=OFF \
+        -DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=ON \
         -DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=ON \
         -DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=ON \
         -DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=ON \
@@ -193,6 +199,24 @@ version-10 selector set fixed explicitly:
         -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
     cmake --build /tmp/leopard2-production -j "$(nproc)" \
         --target bench_leopard2
+
+The version-12 compile-command record uses schema v8 and fixes exactly 26
+candidate compile actions: 17 production-library sources and nine
+non-library actions.  The candidate build-configuration record and generated
+configuration file both use schema v6.  Four of the 17 library sources are
+separate GF8/AVX2 objects added after the version-11 closure:
+`Leopard2BackendAVX2T32B256.cpp`, `Leopard2BackendAVX2T16B64.cpp`,
+`Leopard2LowP32B64AVX2.cpp`, and `Leopard2BackendAVX2T2K4.cpp`.  Each has the
+exact isolated `-mavx2 -mno-avx512f -falign-functions=64` profile.  The first
+three are selected respectively by
+`LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=ON`,
+`LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON`, and
+`LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=ON`; the T=2/K=4 object is present
+whenever the GF8 AVX2 backend is present.  The T=32 two-block disable selector
+must be `OFF`, while the older T=32 generated selector and its disable selector
+remain `OFF`.  Changing one of these selectors, merging one of these objects
+into another translation unit, or omitting an action changes the version-12
+build identity.
 
 Choose a physical core from the allowed CPU set and reserve both of its SMT
 threads. The reservation must be canonical JSON without a trailing newline;
@@ -216,9 +240,18 @@ durably fsync both the report and its directory entry.  The
 `--preset representative` matrix covers exact-wire GF8 and GF16 high-rate, balanced, XOR,
 field-inflation, and larger-parent cases. Custom cells use
 `ID:K:R:BYTES:LOSSES:SEED` and must remain within the exact-main API's
-`R <= K` and 64-byte-size restrictions.
+`R <= K` restriction.  Version 12 accepts any positive logical shard byte
+count.  Leopard2 processes exactly that logical count.  Because exact Leopard
+main requires 64-byte shards, its adapter rounds the physical count up to the
+next multiple of 64, fills the suffix with zeroes, and fingerprints and checks
+only the application-visible logical prefix.  A non-multiple-of-64 cell is
+therefore labeled **application-equivalent**: the codeword and recovered data
+match over the requested logical bytes, but exact main deliberately processes
+additional zero-padded physical bytes.  It is not a same-physical-byte-work
+comparison.  Historical version-11 cells retain their original requirement
+that shard bytes be multiples of 64.
 
-Version 10 binds one explicit `--candidate-mode`: `auto`, `generic`,
+Version 12 binds one explicit `--candidate-mode`: `auto`, `generic`,
 `materialized`, or `tiled` (the default is `auto`). The two forced workspace
 modes also force the specialized decoder. The runner verifies the exact child
 arguments and all four emitted force booleans, so evidence for one path cannot
@@ -280,13 +313,16 @@ the original script's `__file__`, `sys.argv`, and `sys.path[0]`. Python starts
 with `-I -S`, so ambient `PYTHONPATH`, `PYTHONHOME`, user-site, and
 `sitecustomize` code cannot run before that bootstrap. The exec boundary does
 not inherit the supervisor's environment. It constructs the exact environment
-recorded by the main-comparison runner (`LANG=C`, `LC_ALL=C`,
-`OMP_DYNAMIC=FALSE`, `OMP_NUM_THREADS=1`, `OMP_PLACES=cores`,
-`OMP_PROC_BIND=TRUE`, `PATH=/usr/bin:/bin`, and `TZ=UTC`) and adds only the
-report-bound execution nonce. Consequently ambient Python hooks and dynamic
-loader variables such as `LD_PRELOAD`, `LD_LIBRARY_PATH`, and `LD_AUDIT` cannot
-inject unrecorded code. The v8 report binds this strict base environment. The
-child also verifies each live snapshot identity and seal set immediately before
+recorded by the main-comparison runner and adds only the report-bound execution
+nonce.  The current version-12 child environment is exactly `LANG=C`, `LC_ALL=C`,
+`OMP_DYNAMIC=FALSE`, `OMP_NUM_THREADS=1`, `OMP_THREAD_LIMIT=1`,
+`OMP_PROC_BIND=TRUE`, `PATH=/usr/bin:/bin`, and `TZ=UTC`; it deliberately does
+not set `OMP_PLACES`.  Retained version-11 evidence continues to replay with
+its historical `OMP_PLACES=cores` entry and without `OMP_THREAD_LIMIT`.
+Consequently ambient Python hooks and dynamic loader variables such as
+`LD_PRELOAD`, `LD_LIBRARY_PATH`, and `LD_AUDIT` cannot inject unrecorded code.
+The v8 report binds this strict base environment. The child also verifies each
+live snapshot identity and seal set immediately before
 `execve`. The supervisor requests Linux `F_SEAL_EXEC` and tests it when the
 kernel supports that seal; an atomic `EINVAL` fallback retains all mandatory
 write/grow/shrink/seal protections, with executable mode rechecked at the
@@ -366,7 +402,7 @@ After both files verify, create a canonical joint binding. It authenticates the
 accepted supervisor report hash and schema, the exact command identity, the
 main manifest and raw-bundle hashes, the runner source identity, CPU pair, all
 numeric campaign parameters, build/source paths, reservation, and output path.
-Versions 5 through 10 additionally carry a fresh 256-bit nonce from the gated supervisor
+Versions 5 through 12 additionally carry a fresh 256-bit nonce from the gated supervisor
 into the runner and binds the same runner PID, enclosing monotonic intervals,
 launch and reserved CPU sets, campaign hash, and held reservation payload. A
 compatible campaign from a different supervisor execution cannot be rebound.
@@ -388,9 +424,9 @@ Verify while the exact build inputs still exist:
         --manifest /tmp/leopard2-vs-main/manifest.json \
         --affinity-binding /tmp/leopard2-vs-main/affinity-binding.json
 
-The current version-10 verifier recomputes the pair-lock identity, every per-field CPU
+The current version-12 verifier recomputes the pair-lock identity, every per-field CPU
 counter delta, the zero-non-idle-sibling decision, workload identities, and all
-statistics. Versions 3 through 10 also bind the canonical CMake target `leopard`, archive
+statistics. Versions 3 through 12 also bind the canonical CMake target `leopard`, archive
 `libleopard.a`, and `leopard.dir` dependency closure. It retains the exact,
 bounded UTF-8 archive link-recipe content, binds its byte length and SHA-256 to
 the recipe-file identity, and parses those bytes to require the declared
@@ -399,7 +435,7 @@ version-2 bundles replay with their original `libleopard`/`liblibleopard.a`
 identity, record shape, and isolation semantics. Version-3 bundles replay as
 AUTO-only evidence without retroactively acquiring the decoder-mode field;
 version-4 bundles retain their original hardened archive closure. Current
-version 10 requires exact source, compiler, CMake, compile/object, archive,
+version 12 requires exact source, compiler, CMake, compile/object, archive,
 member, executable-link, output, tool, and runtime-dependency record shapes in
 offline verification. The executable link is consumed by a fail-closed grammar:
 only the canonical compiler, value-free build flags, one benchmark object, one
@@ -431,13 +467,14 @@ and last-option overrides fail closed.
 Response files, linker forwarding, scripts, search/library
 controls, specs, alternate tool roots/loaders, plugins, and undeclared inputs
 are rejected. The producer-known translation-unit sets are exact: all five
-baseline and all twenty-two current candidate CMake entries are fixed, while
-the required current candidate artifact closure has its thirteen production
-library members plus the benchmark command;
+baseline and all 26 current candidate CMake actions are fixed.  Those candidate
+actions comprise 17 production-library sources and nine non-library actions;
+the required linked artifact closure has all 17 archive members plus the
+benchmark object;
 a coherent source/object/member/link truncation is rejected. Each source retains
 the bounded raw Git commit object, whose Git SHA-1 and named tree are recomputed
 offline. Version 5 retains the bounded raw `ldd` output for historical replay.
-Version 10 strictly parses every complete `ldd` line and retains a bounded,
+Version 12 strictly parses every complete `ldd` line and retains a bounded,
 versioned canonical transcript that replaces only each terminal ASLR load
 address with the literal `<ASLR_LOAD_ADDRESS>` token. SONAMEs, resolved paths,
 line kinds, and line order remain intact, so immediate snapshots of unchanged
@@ -468,7 +505,7 @@ unchanged is rejected.
 
 Bundle digests are unkeyed integrity checks, not an independent authenticity
 anchor. They detect edits relative to the retained evidence, and the semantic
-recipe binding prevents relabeling old recipe bytes under versions 3 through 10. They
+recipe binding prevents relabeling old recipe bytes under versions 3 through 12. They
 cannot prevent a hostile writer from replacing every evidence byte and
 recomputing every internally consistent digest. Preserve evidence in an
 immutable or independently authenticated store, or add an external digital
@@ -487,7 +524,7 @@ discarding samples.
 The reported ratio is baseline time divided by Leopard2 time, so values above
 one favor Leopard2. Encode excludes codec construction for both implementations.
 Legacy decode inherently rebuilds its erasure setup on every call. Leopard2
-version 10 passes `--measure-one-shot-decode` to the candidate and defines
+version 12 passes `--measure-one-shot-decode` to the candidate and defines
 `decode_first_use` as the median directly timed public `leo2_decode` one-shot
 call, including its plan setup with the codec already created. It is not the
 sum of separately measured plan and execution medians. The separate
@@ -497,9 +534,15 @@ both metrics. Confidence intervals use one clustered mean log contrast per ABBA
 round (three observations, Student-t with two degrees of freedom), not six
 falsely independent adjacent pairs.
 
-Retained version-9 manifest/raw/failure bundles remain replayable by `verify`
-and `verify-failure`. They keep their original candidate build closure and
-statistics contract: `decode_first_use` is the derived sum of separately timed
-plan-create and one execution medians. Verification never upgrades a version-9
-bundle to version-10 pure-AVX2, effective-AVX2, or directly timed one-shot
-semantics. New `run` campaigns always emit version 10.
+Retained version-11 manifest/raw/failure bundles remain replayable by `verify`
+and `verify-failure`.  They keep compile-command schema v7, build-configuration
+record/file schema v5, their 13-library-source/22-compile-action candidate
+closure, 64-byte-multiple cell policy, and historical child environment.  They
+are not retroactively assigned the four new isolated AVX2 objects, arbitrary
+logical tails, build-configuration v6, or compile-command v8 semantics.
+
+Retained version-9 bundles also keep their original statistics contract:
+`decode_first_use` is the derived sum of separately timed plan-create and one
+execution medians. Verification never upgrades a version-9 bundle to
+version-12 pure-AVX2, effective-AVX2, or directly timed one-shot semantics.
+New `run` campaigns always emit version 12.

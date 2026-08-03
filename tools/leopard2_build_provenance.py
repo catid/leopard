@@ -172,6 +172,8 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": frozenset(("BOOL",)),
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
         frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
+        frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT":
@@ -181,7 +183,10 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
         frozenset(("BOOL",)),
     "LEO2_FLAG_FALIGN_FUNCTIONS_64": frozenset(("INTERNAL",)),
@@ -206,6 +211,22 @@ CORE_LIBRARY_SOURCES = {
     "LeopardCommon.cpp",
 }
 
+UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5 = frozenset((
+    "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX2Xor.cpp",
+))
+UNCONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
+    *UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5,
+    "Leopard2BackendAVX2T2K4.cpp",
+))
+CONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
+    "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2BackendAVX2T32B256.cpp",
+))
+PRODUCTION_AVX2_LIBRARY_SOURCES = (
+    UNCONDITIONAL_AVX2_LIBRARY_SOURCES |
+    CONDITIONAL_AVX2_LIBRARY_SOURCES)
+
 GIT_ENVIRONMENT = {
     "GIT_CONFIG_GLOBAL": "/dev/null",
     "GIT_CONFIG_NOSYSTEM": "1",
@@ -226,8 +247,10 @@ BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3 = \
     "leopard2-benchmark-build-configuration/v3"
 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4 = \
     "leopard2-benchmark-build-configuration/v4"
-BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5 = \
     "leopard2-benchmark-build-configuration/v5"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v6"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
     "leopard2-reproducible-build-proof/v2"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA = \
@@ -286,6 +309,11 @@ def _owner_exception_precedence(
     if earlier is None:
         return later
     if later is None:
+        return earlier
+    if earlier is later:
+        # Nested owner cleanup can catch and re-present the already-selected
+        # terminal exception.  Adding that exception's notes back onto itself
+        # would extend the same list while iterating it and grow without bound.
         return earlier
     earlier_terminal = isinstance(earlier, _OWNER_TERMINAL_EXCEPTIONS)
     later_terminal = isinstance(later, _OWNER_TERMINAL_EXCEPTIONS)
@@ -4513,11 +4541,24 @@ def _validate_compile_flags(
     library_sources = set() if library_sources is None else library_sources
 
     name = source.name
+    if name.startswith("Leopard2BackendAVX2"):
+        require(name in PRODUCTION_AVX2_LIBRARY_SOURCES,
+                "compile source is not an allowlisted production AVX2 "
+                f"translation unit: {name}")
+    p32_source_name = "Leopard2LowP32B64AVX2.cpp"
+    enhanced_backend = (
+        name.startswith((
+            "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
+            "Leopard2BackendGFNI")) or
+        name == p32_source_name)
     if name.startswith("Leopard2BackendGFNI"):
         profile = "avx2-gfni-no-avx512"
         expected_target_flags = (
             "-mavx2", "-mgfni", "-mno-avx512f")
     elif name.startswith("Leopard2BackendAVX2"):
+        profile = "avx2-no-avx512"
+        expected_target_flags = ("-mavx2", "-mno-avx512f")
+    elif name == p32_source_name:
         profile = "avx2-no-avx512"
         expected_target_flags = ("-mavx2", "-mno-avx512f")
     elif name == "Leopard2BackendSSSE3.cpp":
@@ -4530,16 +4571,14 @@ def _validate_compile_flags(
     expected_options = Counter({
         "-Wall": 1,
         "-Wextra": 1,
-        "-fopenmp": (
-            1 if name.startswith((
-                "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
-                "Leopard2BackendGFNI")) else 2),
+        "-fopenmp": 1 if enhanced_backend else 2,
         "-O3": 2,
         "-std=gnu++11": 1,
     })
     expected_options.update(expected_target_flags)
-    if (name.startswith(("Leopard2BackendAVX2",
-                         "Leopard2BackendGFNI")) and
+    if ((name.startswith(("Leopard2BackendAVX2",
+                          "Leopard2BackendGFNI")) or
+         name == p32_source_name) and
             _cmake_true(cache.get("LEO2_FLAG_FALIGN_FUNCTIONS_64"))):
         expected_options["-falign-functions=64"] = 1
     if source_root is not None:
@@ -4561,8 +4600,10 @@ def _validate_compile_flags(
     expected_definitions: set[str] = {"-DNDEBUG"}
     if source_root is not None:
         current_configuration = (
-            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
-            BENCHMARK_BUILD_CONFIGURATION_SCHEMA)
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            })
         if current_configuration:
             expected_definitions.update((
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -4574,9 +4615,41 @@ def _validate_compile_flags(
                 expected_definitions.add(
                     "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         available_names = {path.name for path in library_sources}
-        enhanced_backend = name.startswith((
-            "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
-            "Leopard2BackendGFNI"))
+        t16_source_name = "Leopard2BackendAVX2T16B64.cpp"
+        t16_available = (
+            name == t16_source_name or t16_source_name in available_names)
+        if "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED" in cache:
+            t16_generated = _cmake_true(
+                cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"))
+        else:
+            # Reduced historical replay caches predate retention of this
+            # default-on selector.  Archive/source membership is the only
+            # authenticated signal available in that schema.
+            t16_generated = t16_available
+        t32_source_name = "Leopard2BackendAVX2T32B256.cpp"
+        t32_available = (
+            name == t32_source_name or t32_source_name in available_names)
+        t32_generated = _cmake_true(
+            cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"))
+        if "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK" in cache:
+            t32_two_block = _cmake_true(
+                cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK"))
+        else:
+            # Current replay records predate retention of this default-on
+            # selector.  With the generated selector forced off, presence of
+            # the isolated object in the audited archive proves that the
+            # two-block selector supplied it.
+            t32_two_block = t32_available and not t32_generated
+        p32_available = (
+            name == p32_source_name or p32_source_name in available_names)
+        if "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL" in cache:
+            low_p32_terminal = _cmake_true(
+                cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"))
+        else:
+            # The selector is default-on but is not retained by the current
+            # replay schema.  Archive membership is the authenticated signal
+            # that it was active for the production core compilation.
+            low_p32_terminal = p32_available
         if source in library_sources and not enhanced_backend:
             expected_definitions.update((
                 "-DLEO2_DISABLE_AVX2_CODEGEN=1",
@@ -4598,6 +4671,18 @@ def _validate_compile_flags(
             ):
                 if backend_name in available_names:
                     expected_definitions.add(definition)
+            if name == "leopard2.cpp" and t16_generated:
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1")
+            if name == "leopard2.cpp" and t32_generated:
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1")
+            if name == "leopard2.cpp" and t32_two_block:
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1")
+            if low_p32_terminal:
+                expected_definitions.add(
+                    "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")
             if cache.get("LEO2_BACKEND_VARIANT") == "avx2":
                 expected_definitions.add("-DLEO2_BACKEND_FORCE_AVX2=1")
             if (name == "leopard2.cpp" and
@@ -4611,6 +4696,44 @@ def _validate_compile_flags(
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
                 "-DLEO2_HAVE_GFNI_BACKEND=1",
             ))
+        elif name == "Leopard2BackendAVX2T2K4.cpp":
+            expected_definitions.add("-DLEO2_HAVE_AVX2_BACKEND=1")
+        elif name == t16_source_name:
+            require(t16_generated,
+                    "T16/B64 source contradicts its disabled selector")
+            expected_definitions.update((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            ))
+        elif name == t32_source_name:
+            require(t32_generated or t32_two_block,
+                    "T32/B256 source contradicts its disabled selectors")
+            expected_definitions.add("-DLEO2_HAVE_AVX2_BACKEND=1")
+            if t32_generated:
+                expected_definitions.update((
+                    "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1",
+                    "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=" +
+                    ("1" if _cmake_true(cache.get(
+                        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"))
+                     else "0"),
+                ))
+            if t32_two_block:
+                expected_definitions.update((
+                    "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+                    "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=" +
+                    ("1" if _cmake_true(cache.get(
+                        "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK"))
+                     else "0"),
+                ))
+        elif name == p32_source_name:
+            require(low_p32_terminal,
+                    "low P32/B64 source contradicts its disabled selector")
+            expected_definitions.update((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            ))
+            if not _cmake_true(cache.get("LEOPARD_ENABLE_GF16")):
+                expected_definitions.add("-DNO_LEO_HAS_FF16=1")
         elif name.startswith("Leopard2BackendAVX2"):
             expected_definitions.add(
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
@@ -4747,21 +4870,34 @@ def _tracked_files(
 
 def _expected_library_sources(
     source: Path, cache: Mapping[str, str], tracked: set[Path],
+    *,
+    expected_configuration_schema: str =
+        BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
 ) -> set[Path]:
+    require(expected_configuration_schema in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            },
+            "candidate source-closure configuration schema is unsupported")
     names = set(CORE_LIBRARY_SOURCES)
     names.add("LeopardFF8.cpp")
     if _cmake_true(cache.get("LEOPARD_ENABLE_GF16")):
         names.add("LeopardFF16.cpp")
     names.add("Leopard2BackendSSSE3.cpp")
-    avx2_sources = {
-        path.name for path in tracked
-        if path.parent == source and
-        path.name.startswith("Leopard2BackendAVX2") and
-        path.suffix == ".cpp"
-    }
-    require(avx2_sources,
-            "candidate source contains no production AVX2 translation unit")
-    names.update(avx2_sources)
+    names.update(
+        UNCONDITIONAL_AVX2_LIBRARY_SOURCES
+        if expected_configuration_schema ==
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA
+        else UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5)
+    if _cmake_true(cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED")):
+        names.add("Leopard2BackendAVX2T16B64.cpp")
+    if (_cmake_true(
+            cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED")) or
+            _cmake_true(
+                cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK"))):
+        names.add("Leopard2BackendAVX2T32B256.cpp")
+    if _cmake_true(cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL")):
+        names.add("Leopard2LowP32B64AVX2.cpp")
     # The GFNI member joins the archive whenever its compiler probe passes.
     # It contains no AVX-512 encoding, so a pure-AVX2 candidate retains it.
     if _cmake_true(cache.get("LEO2_FLAG_MGFNI")):
@@ -4805,15 +4941,18 @@ def _require_compile_driver(
 
 def _validate_candidate_required_cache(
     cache: Mapping[str, Any],
+    *,
+    expected_configuration_schema: str =
+        BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
 ) -> dict[str, str]:
     """Require every production-evidence cache value that cannot vary."""
-    required_exact = {
+    required_exact_v5 = {
         "CMAKE_BUILD_TYPE": "Release",
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "CMAKE_GENERATOR": "Unix Makefiles",
         "ENABLE_OPENMP": "ON",
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-            BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
         "LEO2_BUILD_BENCHMARKS": "ON",
         "LEO2_BUILD_FUZZERS": "OFF",
         "LEO2_ENABLE_CUDA": "OFF",
@@ -4831,6 +4970,22 @@ def _validate_candidate_required_cache(
         "LEOPARD_ENABLE_GF8": "ON",
         "LEOPARD_ENABLE_GF16": "ON",
     }
+    require(expected_configuration_schema in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            },
+            "candidate CMake cache configuration schema is unsupported")
+    required_exact = dict(required_exact_v5)
+    if (expected_configuration_schema ==
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA):
+        required_exact.update({
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+        })
     require(isinstance(cache, Mapping),
             "candidate CMake cache is malformed")
     for name, expected in required_exact.items():
@@ -4885,13 +5040,50 @@ def _reproducible_replay_contract(
                     "OFF" and
                 cache.get(
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") ==
-                    "OFF",
+                    "OFF" and
+                cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED") ==
+                    "ON" and
+                cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK") ==
+                    "ON" and
+                cache.get(
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK") ==
+                    "OFF" and
+                cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL") ==
+                    "ON",
                 "current reproducible-build closure configuration contract "
                 "differs")
             return {
                 "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
                 "configuration_schema":
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
+                "invocation_schema": REPLAY_INVOCATION_SCHEMA,
+            }
+        if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5:
+            require(
+                cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") ==
+                    "ON" and
+                cache.get(
+                    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") ==
+                    "ON" and
+                cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and
+                cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") ==
+                    "OFF" and
+                cache.get(
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") ==
+                    "OFF" and
+                all(name not in cache for name in (
+                    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL")),
+                "v5 reproducible-build closure configuration contract "
+                "differs")
+            return {
+                "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+                "configuration_schema":
+                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
                 "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
                 "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
                 "invocation_schema": REPLAY_INVOCATION_SCHEMA,
@@ -4978,6 +5170,8 @@ def candidate_build_provenance(
     inherited_descriptors: Sequence[int] = (),
     tracked_source_manifest: Mapping[str, Any] | None = None,
     logical_source_root: Path | str | None = None,
+    _expected_configuration_schema: str =
+        BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
     sealed_artifacts: Mapping[
         Path | str, _ReplayArtifactSink] | None = None,
 ) -> dict[str, Any]:
@@ -5043,7 +5237,9 @@ def candidate_build_provenance(
     cache_identity, cache_bytes = file_snapshot(
         cache_path, "candidate CMake cache", maximum_bytes=MAX_METADATA_BYTES)
     cache = parse_cmake_cache(cache_bytes)
-    required_exact = _validate_candidate_required_cache(cache)
+    required_exact = _validate_candidate_required_cache(
+        cache,
+        expected_configuration_schema=_expected_configuration_schema)
     benchmark_git_value = cache.get("LEO2_BENCHMARK_GIT_EXECUTABLE")
     locator_git_value = cache.get("LEO2_LOCATOR_GIT_EXECUTABLE")
     require(isinstance(benchmark_git_value, str) and benchmark_git_value and
@@ -5211,7 +5407,8 @@ def candidate_build_provenance(
         for relative in manifest_by_path
     }
     expected_library_sources = _expected_library_sources(
-        source, cache, tracked)
+        source, cache, tracked,
+        expected_configuration_schema=_expected_configuration_schema)
     closure_records: list[dict[str, Any]] = []
     archive_sources: set[Path] = set()
     for role, objects in (("archive", archive_objects),
@@ -5765,11 +5962,13 @@ def _reproducible_configure_argv(
     if configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = \
             cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
     if configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR":
@@ -5785,13 +5984,27 @@ def _reproducible_configure_argv(
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
                 cache.get("LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT"),
         })
-    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+    if configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
                 cache.get(
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"),
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
                 cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"),
+        })
+    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+        cmake_values.update({
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
+                cache.get(
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK"),
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED":
+                cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"),
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK":
+                cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK"),
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL":
+                cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"),
         })
     require(all(value is not None for value in cmake_values.values()),
             "candidate build lacks a CMake value needed for clean rebuild")
@@ -8776,6 +8989,33 @@ def _validate_legacy_replay_recipe_transport(
             f"{label} retained replay recipe path set differs")
 
 
+def _capture_replayed_candidate_provenance(
+    build_root: Path,
+    source_root: Path,
+    target: str,
+    *,
+    replay_contract: Mapping[str, str],
+    inherited_descriptors: Sequence[int],
+    tracked_source_manifest: Mapping[str, Any],
+    logical_source_root: Path,
+    sealed_artifacts: Mapping[Path | str, _ReplayArtifactSink],
+) -> dict[str, Any]:
+    """Capture a rebuilt candidate under its authenticated schema."""
+    configuration_schema = replay_contract.get("configuration_schema")
+    require(configuration_schema in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            },
+            "replayed candidate capture configuration schema is unsupported")
+    return candidate_build_provenance(
+        build_root, source_root, build_root / target, target,
+        inherited_descriptors=inherited_descriptors,
+        tracked_source_manifest=tracked_source_manifest,
+        logical_source_root=logical_source_root,
+        _expected_configuration_schema=configuration_schema,
+        sealed_artifacts=sealed_artifacts)
+
+
 def verify_reproducible_candidate_build(
     candidate: Mapping[str, Any], *, jobs: int | None = None,
     inherited_descriptors: Sequence[int] = (),
@@ -8786,6 +9026,13 @@ def verify_reproducible_candidate_build(
         replay_contract["closure_schema"] ==
             PRODUCTION_BUILD_CLOSURE_SCHEMA,
         "clean replay generation requires a current production-build closure")
+    replay_configuration_schema = replay_contract["configuration_schema"]
+    require(replay_configuration_schema in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            },
+            "clean replay generation supports only v5 and current "
+            "configuration contracts")
     source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
     target = str(candidate.get("executable_target", ""))
     require(re.fullmatch(r"[A-Za-z0-9_.+][A-Za-z0-9_.+-]*", target)
@@ -9271,8 +9518,9 @@ def verify_reproducible_candidate_build(
                 os.fsync(descriptor)
             _verify_canonical_replay_output_topology(
                 output_topology, require_outputs=True)
-            rebuilt = candidate_build_provenance(
-                temporary, private_source, temporary / target, target,
+            rebuilt = _capture_replayed_candidate_provenance(
+                temporary, private_source, target,
+                replay_contract=replay_contract,
                 inherited_descriptors=inherited_descriptors,
                 tracked_source_manifest=source_tree.manifest,
                 logical_source_root=source,

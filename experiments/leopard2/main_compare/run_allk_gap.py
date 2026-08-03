@@ -51,6 +51,7 @@ from leopard2_build_provenance import (
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V2,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
     CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
     LEGACY_REPLAY_RECIPE_SCHEMA,
@@ -71,10 +72,15 @@ MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 PURE_AVX2_MAIN_SHA256 = (
     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
 ORDER = ("main", "leopard2", "leopard2", "main")
-CHILD_ENV = {
+CHILD_ENV_V7 = {
     "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
     "OMP_NUM_THREADS": "1", "OMP_PROC_BIND": "TRUE",
     "OMP_PLACES": "cores", "PATH": "/usr/bin:/bin", "TZ": "UTC",
+}
+CHILD_ENV = {
+    "LANG": "C", "LC_ALL": "C", "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1", "OMP_THREAD_LIMIT": "1",
+    "OMP_PROC_BIND": "TRUE", "PATH": "/usr/bin:/bin", "TZ": "UTC",
 }
 LINUX_F_ADD_SEALS = getattr(fcntl, "F_ADD_SEALS", 1033)
 LINUX_F_GET_SEALS = getattr(fcntl, "F_GET_SEALS", 1034)
@@ -104,11 +110,13 @@ BOUNDED_SUPERVISOR_MODE = "--internal-bounded-process-supervisor"
 RUN_CONTRACT_SCHEMA_V4 = "leopard2-all-k-gap-contract/v4"
 RUN_CONTRACT_SCHEMA_V5 = "leopard2-all-k-gap-contract/v5"
 RUN_CONTRACT_SCHEMA_V6 = "leopard2-all-k-gap-contract/v6"
-RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v7"
+RUN_CONTRACT_SCHEMA_V7 = "leopard2-all-k-gap-contract/v7"
+RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v8"
 MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-all-k-gap-manifest/v5"
 MANIFEST_SCHEMA_V6 = "leopard2-all-k-gap-manifest/v6"
-MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v7"
+MANIFEST_SCHEMA_V7 = "leopard2-all-k-gap-manifest/v7"
+MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v8"
 ALL_K_EVIDENCE_CONTRACTS = {
     RUN_CONTRACT_SCHEMA_V4: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
@@ -117,9 +125,9 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": LEGACY_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA_V1,
     },
-    RUN_CONTRACT_SCHEMA: {
+    RUN_CONTRACT_SCHEMA_V7: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
-        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
         "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
@@ -138,14 +146,22 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
     },
+    RUN_CONTRACT_SCHEMA: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
 }
 MANIFEST_TO_CONTRACT_SCHEMA = {
     MANIFEST_SCHEMA_V4: RUN_CONTRACT_SCHEMA_V4,
     MANIFEST_SCHEMA_V5: RUN_CONTRACT_SCHEMA_V5,
     MANIFEST_SCHEMA_V6: RUN_CONTRACT_SCHEMA_V6,
+    MANIFEST_SCHEMA_V7: RUN_CONTRACT_SCHEMA_V7,
     MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
 }
-RUN_CONTRACT_KEYS = frozenset((
+RUN_CONTRACT_KEYS_V7 = frozenset((
     "schema", "main_commit", "current_commit", "expected_main_sha256",
     "current_source_initial", "current_build_initial",
     "current_reproducible_build", "main_executable_initial",
@@ -155,6 +171,14 @@ RUN_CONTRACT_KEYS = frozenset((
     "workers", "order", "timeout_seconds", "with_current_legacy", "matrix",
     "measurement_note",
 ))
+RUN_CONTRACT_KEYS = frozenset((*RUN_CONTRACT_KEYS_V7, "child_environment"))
+ALL_K_CHILD_ENVIRONMENTS = {
+    RUN_CONTRACT_SCHEMA_V4: CHILD_ENV_V7,
+    RUN_CONTRACT_SCHEMA_V5: CHILD_ENV_V7,
+    RUN_CONTRACT_SCHEMA_V6: CHILD_ENV_V7,
+    RUN_CONTRACT_SCHEMA_V7: CHILD_ENV_V7,
+    RUN_CONTRACT_SCHEMA: CHILD_ENV,
+}
 ALL_K_BUILD_CACHE_KEYS_V2 = frozenset((
     "CMAKE_BUILD_TYPE", "CMAKE_EXPORT_COMPILE_COMMANDS", "CMAKE_GENERATOR",
     "ENABLE_OPENMP", "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA",
@@ -186,16 +210,31 @@ ALL_K_BUILD_CACHE_KEYS_V4 = frozenset((
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
 ))
-ALL_K_BUILD_CACHE_KEYS = frozenset((
+ALL_K_BUILD_CACHE_KEYS_V5 = frozenset((
     *ALL_K_BUILD_CACHE_KEYS_V4,
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+))
+ALL_K_BUILD_CACHE_KEYS = frozenset((
+    *ALL_K_BUILD_CACHE_KEYS_V5,
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
 ))
 
 
 def require(condition: bool, message: str) -> None:
     if not condition:
         raise RuntimeError(message)
+
+
+def child_environment_for_contract_schema(
+        contract_schema: str) -> dict[str, str]:
+    environment = ALL_K_CHILD_ENVIRONMENTS.get(contract_schema)
+    require(environment is not None,
+            "child environment uses an unsupported all-K contract schema")
+    return dict(environment)
 
 
 def inherited_pass_fds(
@@ -1486,12 +1525,28 @@ def validate_run_contract_evidence(
     """Bind each all-K outer schema to one exact replay-evidence generation."""
     require(isinstance(contract, Mapping),
             "all-K run contract is not an object")
-    require(set(contract) == RUN_CONTRACT_KEYS,
-            "all-K run contract fields differ")
     contract_schema = contract.get("schema")
     expected = ALL_K_EVIDENCE_CONTRACTS.get(contract_schema)
     require(expected is not None,
             "all-K run contract schema is unsupported")
+    expected_contract_keys = (
+        RUN_CONTRACT_KEYS if contract_schema == RUN_CONTRACT_SCHEMA
+        else RUN_CONTRACT_KEYS_V7)
+    require(set(contract) == expected_contract_keys,
+            "all-K run contract schema tuple or fields differ")
+    if contract_schema == RUN_CONTRACT_SCHEMA:
+        require(canonical_equal(
+            contract.get("child_environment"),
+            child_environment_for_contract_schema(contract_schema)),
+            "current all-K child environment differs")
+    else:
+        # Versions through v7 predate the explicit field.  Their schema is the
+        # immutable commitment to the old OMP_PLACES=cores environment; adding
+        # an environment field would create an unsigned historical variant.
+        require("child_environment" not in contract and canonical_equal(
+            child_environment_for_contract_schema(contract_schema),
+            CHILD_ENV_V7),
+            "historical all-K child environment differs")
     build = contract.get("current_build_initial")
     proof = contract.get("current_reproducible_build")
     require(isinstance(build, Mapping) and isinstance(proof, Mapping),
@@ -1508,6 +1563,7 @@ def validate_run_contract_evidence(
         RUN_CONTRACT_SCHEMA_V4: ALL_K_BUILD_CACHE_KEYS_V2,
         RUN_CONTRACT_SCHEMA_V5: ALL_K_BUILD_CACHE_KEYS_V3,
         RUN_CONTRACT_SCHEMA_V6: ALL_K_BUILD_CACHE_KEYS_V4,
+        RUN_CONTRACT_SCHEMA_V7: ALL_K_BUILD_CACHE_KEYS_V5,
         RUN_CONTRACT_SCHEMA: ALL_K_BUILD_CACHE_KEYS,
     }[contract_schema]
     require(
@@ -1539,13 +1595,36 @@ def validate_run_contract_evidence(
             cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING") == "ON" and
             cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING") == "ON" and
             cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED") == "ON" and
             cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") == "OFF" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK") == "ON" and
             cache.get(
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") == "OFF" and
+            cache.get(
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK") == "OFF" and
+            cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL") == "ON" and
             cache.get(
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") == "ON",
             "current all-K run contract does not bind the production "
             "selector tuple")
+    elif contract_schema == RUN_CONTRACT_SCHEMA_V7:
+        require(
+            cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR") == "OFF" and
+            cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and
+            cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING") == "ON" and
+            cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") == "OFF" and
+            cache.get(
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") == "OFF" and
+            cache.get(
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT") == "ON" and
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED" not in cache and
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK" not in cache and
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK" not in cache and
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL" not in cache,
+            "v7 all-K run contract selector tuple differs")
     elif contract_schema == RUN_CONTRACT_SCHEMA_V6:
         require(
             cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") == "ON" and
@@ -3945,6 +4024,7 @@ def _run_with_snapshot_owner_held(
         "timeout_seconds": options.timeout,
         "with_current_legacy": options.with_current_legacy,
         "matrix": describe_cell_matrix(cells),
+        "child_environment": dict(CHILD_ENV),
         "measurement_note": "all CPUs saturated; diagnostic crossover map, not isolated promotion evidence",
     }
     validate_run_contract_evidence(contract)

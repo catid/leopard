@@ -699,6 +699,10 @@ void AVX2FF8HighEncodeT2PackedTail(
     void* const* recovery,
     uint32_t original_count,
     uint64_t byte_count);
+void AVX2FF8HighEncodeT2K4Packed(
+    const void* const* data,
+    void* const* recovery,
+    uint64_t byte_count);
 #if defined(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
 /*
     Generated exact legacy-high K=R=T=16, B=64 transform.  This concrete

@@ -585,9 +585,36 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
             /arch:AVX2)
     endif()
     # Both ordinary and test-hook archives compile this routing source.  A
-    # source-local definition avoids perturbing unrelated baseline TUs.
+    # source-local definition avoids perturbing unrelated baseline TUs.  The
+    # routing code additionally requires LEO2_HAVE_AVX2_BACKEND so auxiliary
+    # scalar/SSSE3-only targets that share this source cannot call the object.
     set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+endif()
+
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
+    # Keep the exact K=4/R=2 circuit out of the mature AVX2 translation unit.
+    # An in-TU prototype changed existing T=2 code generation and made tiny
+    # neighboring cells sensitive to unrelated text placement.
+    add_library(leopard2_backend_avx2_t2_k4 OBJECT
+        Leopard2BackendAVX2T2K4.cpp)
+    target_include_directories(leopard2_backend_avx2_t2_k4 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_backend_avx2_t2_k4 PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_backend_avx2_t2_k4 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_avx2_t2_k4 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_backend_avx2_t2_k4 PRIVATE
+            /arch:AVX2)
+    endif()
 endif()
 
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
@@ -673,6 +700,10 @@ if(LEO2_HAVE_AVX2_BACKEND)
             $<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>)
         target_compile_definitions(leopard PRIVATE
             LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
+    endif()
+    if(LEOPARD_ENABLE_GF8)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t2_k4>)
     endif()
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
 endif()
@@ -1045,6 +1076,10 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(leopard_test_hooks PRIVATE
                 LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
         endif()
+        if(LEOPARD_ENABLE_GF8)
+            target_sources(leopard_test_hooks PRIVATE
+                $<TARGET_OBJECTS:leopard2_backend_avx2_t2_k4>)
+        endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)
     endif()
@@ -1318,12 +1353,19 @@ if(LEO2_BUILD_TESTS)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2)
                 if(LEOPARD_ENABLE_GF8)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t2_k4)
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
                    (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
                     LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK))
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t32_b256)
+                endif()
+                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
+                        avx2_t16_b64)
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
                    LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
@@ -1713,6 +1755,23 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_t2_packed_terminal PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
+            # The hook test above intentionally obtains diagnostic geometry
+            # from EncodeLayout.  This separate ordinary-archive gate covers
+            # the fixed production scratch calculation and public ABI.
+            add_executable(leopard2_t2_k4_production_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t2_k4_production.cpp)
+            target_include_directories(
+                leopard2_t2_k4_production_test PRIVATE tests/leopard2)
+            target_link_libraries(leopard2_t2_k4_production_test leopard)
+            add_test(NAME leopard2_t2_k4_production
+                COMMAND leopard2_t2_k4_production_test)
+            set_tests_properties(leopard2_t2_k4_production PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
 
         if(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING AND
            NOT LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR)
@@ -2907,12 +2966,21 @@ if(LEO2_BUILD_FUZZERS)
             Leopard2BackendAVX2.cpp)
         if(LEOPARD_ENABLE_GF8)
             target_sources(leopard2_backend_avx2_fuzz PRIVATE
-                Leopard2BackendAVX2Xor.cpp)
+                Leopard2BackendAVX2Xor.cpp
+                Leopard2BackendAVX2T2K4.cpp)
+            if(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+                target_sources(leopard2_backend_avx2_fuzz PRIVATE
+                    Leopard2BackendAVX2T16B64.cpp)
+                target_compile_definitions(
+                    leopard2_backend_avx2_fuzz PRIVATE
+                    LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+            endif()
         endif()
         target_include_directories(leopard2_backend_avx2_fuzz PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR})
         target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
-            LEO2_ENABLE_TEST_HOOKS=1)
+            LEO2_ENABLE_TEST_HOOKS=1
+            LEO2_HAVE_AVX2_BACKEND=1)
         if(NOT LEOPARD_ENABLE_GF8)
             target_compile_definitions(leopard2_backend_avx2_fuzz PRIVATE
                 NO_LEO_HAS_FF8=1)

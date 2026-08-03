@@ -200,7 +200,7 @@ void ExercisePackedCell(
     AlignedBuffer output(kRecoveryCount * bytes + 8);
     FillInput(input.bytes() + 1, k, bytes,
         UINT64_C(0x54325041434b4544) ^ (static_cast<uint64_t>(k) << 32) ^ bytes);
-    const void* original[3] = { NULL, NULL, NULL };
+    const void* original[4] = { NULL, NULL, NULL, NULL };
     void* recovery[kRecoveryCount] = { NULL, NULL };
     SetPackedPointers(
         input.bytes() + 1, output.bytes() + 3, k, bytes,
@@ -226,6 +226,32 @@ void ExercisePackedCell(
         "packed batch T=2 terminal selection mismatch");
     CheckParity(k, bytes, original, recovery);
 
+    if (k == 4 && (bytes == 64 || bytes == 65))
+    {
+        /* Exhaust every byte value in every source coordinate.  B=64 proves
+           the AVX2 table maps, while B=65 places the value in the scalar tail
+           and proves that it uses the identical legacy representation. */
+        const size_t offset = bytes == 64 ? 0U : 64U;
+        for (unsigned source = 0; source < k; ++source)
+        {
+            for (unsigned value = 0; value < 256; ++value)
+            {
+                std::memset(input.bytes() + 1, 0,
+                    static_cast<size_t>(k) * bytes);
+                input.bytes()[1 + static_cast<size_t>(source) * bytes +
+                    offset] = static_cast<uint8_t>(value);
+                ResetOutput(output.bytes() + 3, bytes);
+                leopard::ff8::TestOnlyResetHighEncodeCounts();
+                RequireResult(leo2_encode(codec, bytes, original, recovery,
+                    scratch.data(), scratch_bytes), LEO2_SUCCESS,
+                    "execute exhaustive K4/R2 source value");
+                Require(PackedCalls() == 1,
+                    "K4/R2 source value missed the packed terminal");
+                CheckParity(k, bytes, original, recovery);
+            }
+        }
+    }
+
     if (expect_terminal)
     {
         AlignedBuffer second_output(kRecoveryCount * bytes + 16);
@@ -233,8 +259,8 @@ void ExercisePackedCell(
             scratch_bytes + leo2_scratch_alignment());
         std::vector<uint8_t> detached_source(bytes);
         std::memcpy(&detached_source[0], original[k - 1], bytes);
-        const void* second_original[3] = {
-            original[0], original[1], original[2]
+        const void* second_original[4] = {
+            original[0], original[1], original[2], original[3]
         };
         second_original[k - 1] = &detached_source[0];
         void* second_recovery[kRecoveryCount] = {
@@ -256,6 +282,29 @@ void ExercisePackedCell(
             "prevalidated two-item T=2 routing mismatch");
         CheckParity(k, bytes, original, recovery);
         CheckParity(k, bytes, original, second_recovery);
+
+        if (k == 4 && bytes == 64)
+        {
+            /* Multi-item preflight must reject cross-stripe writable aliasing
+               before the prevalidated executor can write either stripe. */
+            void* const independent_output = second_recovery[0];
+            second_recovery[0] = recovery[0];
+            ResetOutput(output.bytes() + 3, bytes);
+            std::memset(independent_output, 0xa5, bytes);
+            const std::vector<uint8_t> first_before(
+                output.bytes() + 3,
+                output.bytes() + 3 + kRecoveryCount * bytes);
+            leopard::ff8::TestOnlyResetHighEncodeCounts();
+            RequireResult(leo2_encode_batch(codec, items, 2),
+                LEO2_OVERLAP,
+                "reject cross-item K4/R2 writable alias");
+            Require(PackedCalls() == 0,
+                "cross-item alias reached the K4/R2 executor");
+            Require(std::memcmp(output.bytes() + 3, &first_before[0],
+                    first_before.size()) == 0,
+                "cross-item alias rejection modified first output");
+            second_recovery[0] = independent_output;
+        }
 
         leo2_encode_batch_binding* two_item_binding = NULL;
         RequireResult(leo2_encode_batch_binding_create(
@@ -338,9 +387,8 @@ void ExercisePackedCell(
     leo2_codec_destroy(codec);
 }
 
-void ExerciseFallbackAndErrors(leo2_context* context)
+void ExerciseFallbackAndErrors(leo2_context* context, unsigned k)
 {
-    const unsigned k = 2;
     const size_t bytes = 64;
     leo2_codec* codec = CreateCodec(context, k);
     size_t scratch_bytes = 0;
@@ -350,7 +398,7 @@ void ExerciseFallbackAndErrors(leo2_context* context)
     AlignedBuffer input(k * bytes);
     AlignedBuffer output(kRecoveryCount * bytes);
     FillInput(input.bytes(), k, bytes, UINT64_C(0x5432434f4e545241));
-    const void* original[3] = { NULL, NULL, NULL };
+    const void* original[4] = { NULL, NULL, NULL, NULL };
     void* recovery[kRecoveryCount] = { NULL, NULL };
     SetPackedPointers(
         input.bytes(), output.bytes(), k, bytes, original, recovery);
@@ -454,7 +502,8 @@ void ExerciseFallbackAndErrors(leo2_context* context)
 
 void ExerciseNonAVX2Fallback(
     leo2_backend backend,
-    const char* backend_name)
+    const char* backend_name,
+    unsigned k)
 {
     leo2_context_options options = {};
     options.struct_size = sizeof(options);
@@ -466,30 +515,31 @@ void ExerciseNonAVX2Fallback(
         return;
     RequireResult(context_result, LEO2_SUCCESS,
         "create non-AVX2 T=2 context");
-    leo2_codec* codec = CreateCodec(context, 2);
+    leo2_codec* codec = CreateCodec(context, k);
     const size_t bytes = 64;
     size_t scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(codec, bytes, &scratch_bytes),
         LEO2_SUCCESS, "query scalar T=2 scratch");
     AlignedBuffer scratch(scratch_bytes);
-    AlignedBuffer input(2 * bytes);
+    AlignedBuffer input(k * bytes);
     AlignedBuffer output(kRecoveryCount * bytes);
-    FillInput(input.bytes(), 2, bytes, UINT64_C(0x5343414c41525432));
-    const void* original[2];
+    FillInput(input.bytes(), k, bytes,
+        UINT64_C(0x5343414c41525432) ^ k);
+    const void* original[4] = { NULL, NULL, NULL, NULL };
     void* recovery[kRecoveryCount];
     SetPackedPointers(
-        input.bytes(), output.bytes(), 2, bytes, original, recovery);
+        input.bytes(), output.bytes(), k, bytes, original, recovery);
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, bytes, original, recovery,
         scratch.data(), scratch.size()), LEO2_SUCCESS,
         "execute non-AVX2 T=2 fallback");
     Require(PackedCalls() == 0,
         "non-AVX2 context entered the AVX2 T=2 terminal");
-    CheckParity(2, bytes, original, recovery);
+    CheckParity(k, bytes, original, recovery);
     leo2_codec_destroy(codec);
     leo2_context_destroy(context);
-    std::printf("%s T=2 fallback matched the generator oracle\n",
-        backend_name);
+    std::printf("%s K=%u T=2 fallback matched the generator oracle\n",
+        backend_name, k);
 }
 
 } // namespace
@@ -514,9 +564,9 @@ int main()
         static const size_t sizes[] = {
             1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
             127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
-            1984, 2016, 2048
+            1984, 2016, 2048, 2049, 4096
         };
-        for (unsigned k = 2; k <= 3; ++k)
+        for (unsigned k = 2; k <= 4; ++k)
         {
             for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
             {
@@ -525,10 +575,16 @@ int main()
                 ExercisePackedCell(context, k, bytes, selected);
             }
         }
-        ExerciseFallbackAndErrors(context);
+        ExerciseFallbackAndErrors(context, 2);
+        ExerciseFallbackAndErrors(context, 4);
         leo2_context_destroy(context);
-        ExerciseNonAVX2Fallback(LEO2_BACKEND_SCALAR, "scalar");
-        ExerciseNonAVX2Fallback(LEO2_BACKEND_SSSE3, "SSSE3");
+        for (unsigned k = 2; k <= 4; k += 2)
+        {
+            ExerciseNonAVX2Fallback(LEO2_BACKEND_SCALAR, "scalar", k);
+            ExerciseNonAVX2Fallback(LEO2_BACKEND_SSSE3, "SSSE3", k);
+        }
+        ExerciseNonAVX2Fallback(LEO2_BACKEND_AVX512, "AVX-512", 4);
+        ExerciseNonAVX2Fallback(LEO2_BACKEND_GFNI, "GFNI", 4);
         std::printf("T=2 packed AVX2 terminal checks passed\n");
         return 0;
     }

@@ -1712,6 +1712,71 @@ static bool TestFF8HighEncodeSmall(const Ops& ops)
     return true;
 }
 
+static bool TestFF8HighEncodeT2K4(
+    const Ops& ops,
+    FF8MultiplyLog reference)
+{
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(LEO2_GFNI_VARIANT)
+    if (ops.kind != LEO2_BACKEND_AVX2)
+        return true;
+    if (!reference)
+        return false;
+
+    static const uint64_t kBytes = 65;
+    static const uint8_t kMultiply2Log = 85;
+    static const uint8_t kMultiply4Log = 17;
+    uint8_t input[4][68];
+    uint8_t input_before[4][68];
+    uint8_t actual[2][68];
+    uint8_t expected[2][68];
+    const void* input_pointers[4];
+    void* actual_pointers[2];
+
+    for (unsigned source = 0; source < 4; ++source)
+    {
+        for (size_t byte = 0; byte < sizeof(input[source]); ++byte)
+        {
+            input[source][byte] = input_before[source][byte] =
+                static_cast<uint8_t>(
+                    0x31U + source * 47U + byte * 29U);
+        }
+        input_pointers[source] = input[source] + 1;
+    }
+    for (unsigned parity = 0; parity < 2; ++parity)
+    {
+        std::memset(actual[parity], 0xa5U + parity * 17U,
+            sizeof(actual[parity]));
+        std::memcpy(expected[parity], actual[parity],
+            sizeof(expected[parity]));
+        actual_pointers[parity] = actual[parity] + 1;
+    }
+
+    for (size_t byte = 0; byte < static_cast<size_t>(kBytes); ++byte)
+    {
+        const uint8_t a = input[0][byte + 1];
+        const uint8_t b = input[1][byte + 1];
+        const uint8_t c = input[2][byte + 1];
+        const uint8_t d = input[3][byte + 1];
+        const uint8_t common = static_cast<uint8_t>(
+            reference(static_cast<uint8_t>(a ^ b), kMultiply2Log) ^
+            reference(static_cast<uint8_t>(c ^ d), kMultiply4Log));
+        expected[0][byte + 1] =
+            static_cast<uint8_t>(a ^ c ^ common);
+        expected[1][byte + 1] =
+            static_cast<uint8_t>(b ^ d ^ common);
+    }
+
+    AVX2FF8HighEncodeT2K4Packed(
+        input_pointers, actual_pointers, kBytes);
+    return std::memcmp(input, input_before, sizeof(input)) == 0 &&
+        std::memcmp(actual, expected, sizeof(actual)) == 0;
+#else
+    static_cast<void>(ops);
+    static_cast<void>(reference);
+    return true;
+#endif
+}
+
 static bool TestFF8HighEncodeT4Batch(const Ops& ops)
 {
     if (!ops.ff8_high_encode_t4_batch)
@@ -3080,6 +3145,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8HighEncodeOneBlock(ops) ||
         !TestFF8HighEncodeTwoBlocksT8(ops) ||
         !TestFF8HighEncodeSmall(ops) ||
+        !TestFF8HighEncodeT2K4(ops, args.ff8_multiply_log) ||
         !TestFF8HighEncodeT4Batch(ops) ||
         !TestFF8WalshLocator(ops))
         return false;

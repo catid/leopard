@@ -53,16 +53,56 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v8"
+REPORT_SCHEMA_V8 = "leopard2-affinity-supervisor/v8"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v9"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
-BINDING_SCHEMA = "leopard2-affinity-main-binding/v2"
+BINDING_SCHEMA_V2 = "leopard2-affinity-main-binding/v2"
+BINDING_SCHEMA = "leopard2-affinity-main-binding/v3"
+BINDING_TO_REPORT_SCHEMA = {
+    BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
+    BINDING_SCHEMA: REPORT_SCHEMA,
+}
+REPORT_TO_BINDING_SCHEMA = {
+    report_schema: binding_schema
+    for binding_schema, report_schema in BINDING_TO_REPORT_SCHEMA.items()
+}
 MAIN_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v6"
+MAIN_MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
+MAIN_MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
+MAIN_MANIFEST_SCHEMA_V8 = "leopard2-main-compare-manifest/v8"
+MAIN_MANIFEST_SCHEMA_V9 = "leopard2-main-compare-manifest/v9"
+MAIN_MANIFEST_SCHEMA_V10 = "leopard2-main-compare-manifest/v10"
+MAIN_MANIFEST_SCHEMA_V11 = "leopard2-main-compare-manifest/v11"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v12"
 MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v6"
+MAIN_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
+MAIN_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
+MAIN_RAW_SCHEMA_V8 = "leopard2-main-compare-raw/v8"
+MAIN_RAW_SCHEMA_V9 = "leopard2-main-compare-raw/v9"
+MAIN_RAW_SCHEMA_V10 = "leopard2-main-compare-raw/v10"
+MAIN_RAW_SCHEMA_V11 = "leopard2-main-compare-raw/v11"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v12"
 MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
+    MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
+    MAIN_MANIFEST_SCHEMA_V7: MAIN_RAW_SCHEMA_V7,
+    MAIN_MANIFEST_SCHEMA_V8: MAIN_RAW_SCHEMA_V8,
+    MAIN_MANIFEST_SCHEMA_V9: MAIN_RAW_SCHEMA_V9,
+    MAIN_MANIFEST_SCHEMA_V10: MAIN_RAW_SCHEMA_V10,
+    MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
     MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
+}
+REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
+    REPORT_SCHEMA_V8: frozenset((
+        MAIN_MANIFEST_SCHEMA_V5,
+        MAIN_MANIFEST_SCHEMA_V6,
+        MAIN_MANIFEST_SCHEMA_V7,
+        MAIN_MANIFEST_SCHEMA_V8,
+        MAIN_MANIFEST_SCHEMA_V9,
+        MAIN_MANIFEST_SCHEMA_V10,
+        MAIN_MANIFEST_SCHEMA_V11,
+    )),
+    REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
 }
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
 DEFAULT_POLL_MS = 25
@@ -157,7 +197,7 @@ EXECUTION_NONCE_ENV = "LEO2_AFFINITY_EXECUTION_NONCE"
 # run_abba.py records and gives every timed child.  Starting from this allowlist
 # (rather than deleting a few known variables from os.environ) also excludes
 # dynamic-loader injection and future interpreter-specific startup hooks.
-STRICT_BENCHMARK_ENVIRONMENT = {
+STRICT_BENCHMARK_ENVIRONMENT_V8 = {
     "LANG": "C",
     "LC_ALL": "C",
     "OMP_DYNAMIC": "FALSE",
@@ -166,6 +206,20 @@ STRICT_BENCHMARK_ENVIRONMENT = {
     "OMP_PROC_BIND": "TRUE",
     "PATH": "/usr/bin:/bin",
     "TZ": "UTC",
+}
+STRICT_BENCHMARK_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_PROC_BIND": "TRUE",
+    "OMP_THREAD_LIMIT": "1",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
+REPORT_SCHEMA_ENVIRONMENTS = {
+    REPORT_SCHEMA_V8: STRICT_BENCHMARK_ENVIRONMENT_V8,
+    REPORT_SCHEMA: STRICT_BENCHMARK_ENVIRONMENT,
 }
 PID_NAMESPACE_KEYS = {"device", "inode"}
 GLOBAL_LOCK_KEYS = {
@@ -1631,12 +1685,12 @@ def validate_child_process(value, label="child process"):
     return value
 
 
-def validate_execution(value):
+def validate_execution(value, expected_environment):
     require_exact_keys(value, EXECUTION_KEYS, "supervised execution")
     require(isinstance(value["nonce"], str) and
             HEX256.fullmatch(value["nonce"]) is not None,
             "supervised execution nonce is invalid")
-    require(value["environment"] == STRICT_BENCHMARK_ENVIRONMENT,
+    require(value["environment"] == expected_environment,
             "supervised execution environment is not the strict benchmark "
             "environment")
     ready = value["child_ready_monotonic_ns"]
@@ -1680,11 +1734,14 @@ def uncontained_mutation_records(records, subreaper_pid):
 
 def validate_report(report, require_accepted=False):
     require_exact_keys(report, REPORT_KEYS, "affinity report")
-    require(report["schema"] == REPORT_SCHEMA, "affinity report has wrong schema")
+    require(isinstance(report["schema"], str) and
+            report["schema"] in REPORT_SCHEMA_ENVIRONMENTS,
+            "affinity report has wrong schema")
     require(report["state"] in REPORT_STATES, "affinity report state is unknown")
     exact_int(report["uid"], "report UID", 0, 2**31 - 1)
     validate_global_lock(report["global_lock"], report["uid"])
-    execution = validate_execution(report["execution"])
+    execution = validate_execution(
+        report["execution"], REPORT_SCHEMA_ENVIRONMENTS[report["schema"]])
     reserved = validate_cpu_list(report["reserved_cpus"], "report reserved CPUs")
     launch = validate_cpu_list(report["launch_cpus"], "report launch CPUs")
     require(set(reserved).issubset(launch) and set(launch).difference(reserved),
@@ -3502,6 +3559,10 @@ def validate_main_manifest_binding(report, manifest_path):
     require(manifest.get("schema") in MAIN_MANIFEST_TO_RAW_SCHEMA and
             manifest.get("valid") is True,
             "main-comparison manifest is not valid complete-schema evidence")
+    require(manifest["schema"] in
+            REPORT_TO_MAIN_MANIFEST_SCHEMAS[report["schema"]],
+            "main-comparison manifest schema is incompatible with the "
+            "supervisor report contract")
     raw_info = manifest.get("raw")
     require(isinstance(raw_info, dict) and
             set(raw_info) == {"path", "payload_digest", "sha256", "size"},
@@ -3532,9 +3593,9 @@ def validate_main_manifest_binding(report, manifest_path):
     require(isinstance(specification, dict) and isinstance(identities, dict) and
             isinstance(campaign, dict) and isinstance(reservation, dict),
             "main-comparison binding inputs are incomplete")
+    expected_environment = REPORT_SCHEMA_ENVIRONMENTS[report["schema"]]
     require(campaign.get("child_environment") ==
-            report["execution"]["environment"] ==
-            STRICT_BENCHMARK_ENVIRONMENT,
+            report["execution"]["environment"] == expected_environment,
             "main-comparison and supervisor environments differ from the "
             "strict benchmark contract")
     runner_identity = identities.get("runner")
@@ -3661,11 +3722,11 @@ def binding_payload(report_path, manifest_path):
     inputs = validate_main_manifest_binding(report, manifest_path)
     manifest_path = Path(manifest_path).resolve(strict=True)
     return {
-        "schema": BINDING_SCHEMA,
+        "schema": REPORT_TO_BINDING_SCHEMA[report["schema"]],
         "created_utc": utc_now(),
         "report": {
             "path": str(report_path), "size": len(report_bytes),
-            "sha256": sha256_bytes(report_bytes), "schema": REPORT_SCHEMA,
+            "sha256": sha256_bytes(report_bytes), "schema": report["schema"],
             "command_sha256": report["command_sha256"],
         },
         "manifest": {
@@ -3681,8 +3742,10 @@ def validate_binding(value, binding_path=None, expected_manifest_path=None,
                      expected_manifest_sha256=None):
     value = verify_signed_json(value, "affinity/main binding")
     require(set(value) == {"schema", "created_utc", "report", "manifest", "digest"} and
-            value["schema"] == BINDING_SCHEMA,
+            isinstance(value["schema"], str) and
+            value["schema"] in BINDING_TO_REPORT_SCHEMA,
             "affinity/main binding has an unknown schema or fields")
+    expected_report_schema = BINDING_TO_REPORT_SCHEMA[value["schema"]]
     validate_utc(value["created_utc"], "binding creation time")
     report_ref = require_exact_keys(
         value["report"], {"path", "size", "sha256", "schema", "command_sha256"},
@@ -3690,7 +3753,7 @@ def validate_binding(value, binding_path=None, expected_manifest_path=None,
     manifest_ref = require_exact_keys(
         value["manifest"], {"path", "size", "sha256", "schema", "payload_digest"},
         "binding manifest reference")
-    require(report_ref["schema"] == REPORT_SCHEMA and
+    require(report_ref["schema"] == expected_report_schema and
             isinstance(report_ref["command_sha256"], str) and
             HEX256.fullmatch(report_ref["command_sha256"]) is not None,
             "binding report schema/command identity is invalid")
@@ -3715,6 +3778,8 @@ def validate_binding(value, binding_path=None, expected_manifest_path=None,
                 manifest_ref["sha256"] == expected_manifest_sha256,
                 "affinity binding refers to another manifest snapshot")
     report, report_bytes, _seal, _seal_bytes = accepted_report_snapshot(report_path)
+    require(report["schema"] == expected_report_schema,
+            "binding report schema differs from accepted report")
     inputs = validate_main_manifest_binding(report, manifest_path)
     manifest_bytes = inputs["manifest_bytes"]
     require(len(report_bytes) == report_ref["size"] and
@@ -3750,8 +3815,13 @@ def validate_binding_structure_only(value):
     # Used before installation so validation does not require output_path itself.
     verify_signed_json(value, "affinity/main binding")
     require(set(value) == {"schema", "created_utc", "report", "manifest", "digest"} and
-            value["schema"] == BINDING_SCHEMA,
+            isinstance(value["schema"], str) and
+            value["schema"] in BINDING_TO_REPORT_SCHEMA,
             "affinity/main binding has invalid fields")
+    require(isinstance(value["report"], dict) and
+            value["report"].get("schema") ==
+            BINDING_TO_REPORT_SCHEMA[value["schema"]],
+            "affinity/main binding report schema is incompatible")
     validate_utc(value["created_utc"], "binding creation time")
     return value
 
@@ -5086,7 +5156,12 @@ def test_descriptor_pinned_exec_and_child_signal_defaults():
         check(strict_environment == {
                   **STRICT_BENCHMARK_ENVIRONMENT,
                   EXECUTION_NONCE_ENV: "ef" * 32,
-              }, "strict supervised environment changed")
+              } and
+              STRICT_BENCHMARK_ENVIRONMENT.get("OMP_THREAD_LIMIT") == "1" and
+              "OMP_PLACES" not in STRICT_BENCHMARK_ENVIRONMENT and
+              STRICT_BENCHMARK_ENVIRONMENT_V8.get("OMP_PLACES") == "cores" and
+              "OMP_THREAD_LIMIT" not in STRICT_BENCHMARK_ENVIRONMENT_V8,
+              "strict supervised environment changed")
         for variable in (
                 "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
                 "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT"):
@@ -5355,7 +5430,7 @@ def test_binding():
         evidence = root / "evidence"
         evidence.mkdir()
         backend = FakeBackend()
-        # Authoritative v8 evidence is accepted only when the surrounding work
+        # Authoritative evidence is accepted only when the surrounding work
         # was already outside the reserved pair and no mask needed mutation.
         backend.add(1, 1, 1, 1, {0, 2}, ppid=0)
         report_path = root / "report.json"
@@ -5388,6 +5463,29 @@ def test_binding():
         ]
         check(transaction.run(command) == 0 and transaction.report["accepted"] is True,
               "binding fixture transaction was not accepted")
+        check(transaction.report["schema"] == REPORT_SCHEMA and
+              transaction.report["execution"]["environment"] ==
+              STRICT_BENCHMARK_ENVIRONMENT,
+              "new report did not use the current schema/environment contract")
+        historical_report = json.loads(json.dumps(transaction.report))
+        historical_report["schema"] = REPORT_SCHEMA_V8
+        historical_report["execution"]["environment"] = dict(
+            STRICT_BENCHMARK_ENVIRONMENT_V8)
+        validate_report(historical_report)
+        mismatched_historical_report = json.loads(json.dumps(historical_report))
+        mismatched_historical_report["execution"]["environment"] = dict(
+            STRICT_BENCHMARK_ENVIRONMENT)
+        expect_exception(
+            IsolationError,
+            lambda: validate_report(mismatched_historical_report),
+            "historical report with current environment")
+        mismatched_current_report = json.loads(json.dumps(transaction.report))
+        mismatched_current_report["execution"]["environment"] = dict(
+            STRICT_BENCHMARK_ENVIRONMENT_V8)
+        expect_exception(
+            IsolationError,
+            lambda: validate_report(mismatched_current_report),
+            "current report with historical environment")
         injected_environment = json.loads(json.dumps(transaction.report))
         injected_environment["execution"]["environment"]["PYTHONPATH"] = \
             str(root)
@@ -5477,6 +5575,9 @@ def test_binding():
         binding_path = evidence / "affinity-binding.json"
         create_binding(report_path, manifest_path, binding_path)
         binding = load_json(binding_path, "test binding")
+        check(binding["schema"] == BINDING_SCHEMA and
+              binding["report"]["schema"] == REPORT_SCHEMA,
+              "new binding did not use the current schema pair")
         validate_binding(
             binding, binding_path, manifest_path,
             sha256_bytes(manifest_path.read_bytes()))
@@ -5486,13 +5587,18 @@ def test_binding():
                 binding, binding_path, manifest_path, "f" * 64),
             "binding against another manifest snapshot")
 
-        def install_bundle(raw_value):
+        def install_bundle(
+                raw_value, manifest_schema=MAIN_MANIFEST_SCHEMA):
             raw_value = json.loads(json.dumps(raw_value))
+            check(MAIN_MANIFEST_TO_RAW_SCHEMA.get(manifest_schema) ==
+                  raw_value["schema"],
+                  "test bundle requested mismatched manifest/raw schemas")
             raw_value.pop("digest", None)
             raw_value["digest"] = sha256_value(raw_value)
             atomic_json(raw_path, raw_value)
             raw_bytes_value = raw_path.read_bytes()
             manifest_value = json.loads(json.dumps(manifest_payload))
+            manifest_value["schema"] = manifest_schema
             manifest_value["supervision"] = raw_value["supervision"]
             manifest_value["raw"] = {
                 "path": "raw.json", "size": len(raw_bytes_value),
@@ -5502,6 +5608,103 @@ def test_binding():
             manifest_value.pop("digest", None)
             manifest_value["digest"] = sha256_value(manifest_value)
             atomic_json(manifest_path, manifest_value)
+
+        current_seal = load_json(
+            acceptance_path(report_path), "test acceptance seal")
+
+        def install_accepted_report(report_value):
+            atomic_json(report_path, report_value)
+            report_bytes_value = report_path.read_bytes()
+            seal_value = {
+                "schema": ACCEPTANCE_SCHEMA,
+                "committed_utc": current_seal["committed_utc"],
+                "report_path": str(report_path.resolve(strict=True)),
+                "report_size": len(report_bytes_value),
+                "report_sha256": sha256_bytes(report_bytes_value),
+            }
+            seal_value["digest"] = sha256_value(seal_value)
+            atomic_json(acceptance_path(report_path), seal_value)
+
+        check(MAIN_MANIFEST_TO_RAW_SCHEMA == {
+                  MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
+                  MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
+                  MAIN_MANIFEST_SCHEMA_V7: MAIN_RAW_SCHEMA_V7,
+                  MAIN_MANIFEST_SCHEMA_V8: MAIN_RAW_SCHEMA_V8,
+                  MAIN_MANIFEST_SCHEMA_V9: MAIN_RAW_SCHEMA_V9,
+                  MAIN_MANIFEST_SCHEMA_V10: MAIN_RAW_SCHEMA_V10,
+                  MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
+                  MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
+              }, "main-comparison manifest/raw replay matrix changed")
+
+        historical_raw = json.loads(json.dumps(raw_payload))
+        historical_raw["schema"] = MAIN_RAW_SCHEMA_V11
+        historical_raw["campaign"]["child_environment"] = dict(
+            STRICT_BENCHMARK_ENVIRONMENT_V8)
+        historical_raw["supervision"]["campaign_sha256"] = sha256_bytes(
+            canonical_bytes(historical_raw["campaign"]))
+
+        current_raw_with_historical_environment = json.loads(json.dumps(
+            raw_payload))
+        current_raw_with_historical_environment["campaign"][
+            "child_environment"] = dict(STRICT_BENCHMARK_ENVIRONMENT_V8)
+        current_raw_with_historical_environment["supervision"][
+            "campaign_sha256"] = sha256_bytes(canonical_bytes(
+                current_raw_with_historical_environment["campaign"]))
+        install_bundle(current_raw_with_historical_environment)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current binding with historical campaign environment")
+
+        install_bundle(historical_raw, MAIN_MANIFEST_SCHEMA_V11)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current report with historical manifest schema")
+
+        install_accepted_report(historical_report)
+        install_bundle(raw_payload)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                historical_report, manifest_path),
+            "historical report with current manifest schema")
+
+        historical_raw_with_current_environment = json.loads(json.dumps(
+            historical_raw))
+        historical_raw_with_current_environment["campaign"][
+            "child_environment"] = dict(STRICT_BENCHMARK_ENVIRONMENT)
+        historical_raw_with_current_environment["supervision"][
+            "campaign_sha256"] = sha256_bytes(canonical_bytes(
+                historical_raw_with_current_environment["campaign"]))
+        install_bundle(
+            historical_raw_with_current_environment,
+            MAIN_MANIFEST_SCHEMA_V11)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                historical_report, manifest_path),
+            "historical binding with current campaign environment")
+
+        install_bundle(historical_raw, MAIN_MANIFEST_SCHEMA_V11)
+        historical_binding_path = evidence / "affinity-binding-v2.json"
+        create_binding(report_path, manifest_path, historical_binding_path)
+        historical_binding = load_json(
+            historical_binding_path, "historical test binding")
+        check(historical_binding["schema"] == BINDING_SCHEMA_V2 and
+              historical_binding["report"]["schema"] == REPORT_SCHEMA_V8,
+              "historical binding replay changed its schema pair")
+        validate_binding(
+            historical_binding, historical_binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+
+        install_accepted_report(transaction.report)
+        atomic_json(acceptance_path(report_path), current_seal)
+        install_bundle(raw_payload)
+        validate_binding(binding, binding_path, manifest_path,
+                         sha256_bytes(manifest_path.read_bytes()))
 
         mutations = []
         changed_nonce = json.loads(json.dumps(raw_payload))

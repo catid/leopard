@@ -39,13 +39,15 @@ LEGACY_SCHEMA = "leopard2-backend-butterfly-abba/v6"
 PRE_XOR_SCHEMA = "leopard2-backend-butterfly-abba/v7"
 POST_XOR_SCHEMA = "leopard2-backend-butterfly-abba/v8"
 PRE_GFNI_SCHEMA = "leopard2-backend-butterfly-abba/v9"
-SCHEMA = "leopard2-backend-butterfly-abba/v10"
+PRE_T16_SCHEMA = "leopard2-backend-butterfly-abba/v10"
+SCHEMA = "leopard2-backend-butterfly-abba/v11"
 RAW_SCHEMA = "leopard2-backend-butterfly-raw/v1"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 MATRIX_SCHEMA_V1 = "leopard2-backend-matrix/v1"
 MATRIX_SCHEMA_V2 = "leopard2-backend-matrix/v2"
-MATRIX_SCHEMA = "leopard2-backend-matrix/v3"
+MATRIX_SCHEMA_V3 = "leopard2-backend-matrix/v3"
+MATRIX_SCHEMA = "leopard2-backend-matrix/v4"
 SUPPORTED_BACKENDS = ("ssse3", "avx2")
 SEQUENCES = (("A1", "baseline"), ("B1", "candidate"),
              ("B2", "candidate"), ("A2", "baseline"))
@@ -77,8 +79,9 @@ def load_matrix_contract(schema):
     """Load an exact, versioned backend-matrix producer contract.
 
     Historical matrix v1 constants remain frozen below.  Matrix v2 is retained
-    by its producer for butterfly-v9 replay, while current butterfly-v10
-    evidence consumes matrix v3 and its GFNI qualification closure.
+    by its producer for butterfly-v9 replay, matrix v3 remains bound to
+    butterfly-v10, and current butterfly-v11 evidence consumes matrix v4's
+    generated-object source closure.
     """
     path = Path(__file__).resolve().parents[3] / \
         "tools/leopard2_backend_matrix.py"
@@ -96,7 +99,7 @@ def load_matrix_contract(schema):
         "avx512_backend_failure_tests", "backend_failure_ctest_regex",
         "portable_ctest_regex", "cuda_ctest_regex",
     }
-    if schema == MATRIX_SCHEMA:
+    if schema in (MATRIX_SCHEMA_V3, MATRIX_SCHEMA):
         expected_keys.add("gfni_backend_failure_tests")
     if not isinstance(contract, dict) or set(contract) != expected_keys or \
             contract.get("schema") != schema:
@@ -109,6 +112,7 @@ def load_matrix_contract(schema):
 
 
 PRE_GFNI_MATRIX_CONTRACT = load_matrix_contract(MATRIX_SCHEMA_V2)
+PRE_T16_MATRIX_CONTRACT = load_matrix_contract(MATRIX_SCHEMA_V3)
 CURRENT_MATRIX_CONTRACT = load_matrix_contract(MATRIX_SCHEMA)
 
 
@@ -194,9 +198,20 @@ PRE_GFNI_BUILD_TRANSLATION_UNITS = (
     "Leopard2BackendAVX512.cpp",
     *PRE_XOR_BUILD_TRANSLATION_UNITS[6:],
 )
+PRE_T16_BUILD_TRANSLATION_UNITS = (
+    *PRE_XOR_BUILD_TRANSLATION_UNITS[:6],
+    "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX512.cpp",
+    "Leopard2BackendGFNI.cpp",
+    *PRE_XOR_BUILD_TRANSLATION_UNITS[6:],
+)
 BUILD_TRANSLATION_UNITS = (
     *PRE_XOR_BUILD_TRANSLATION_UNITS[:6],
     "Leopard2BackendAVX2Xor.cpp",
+    "Leopard2BackendAVX2T32B256.cpp",
+    "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2LowP32B64AVX2.cpp",
+    "Leopard2BackendAVX2T2K4.cpp",
     "Leopard2BackendAVX512.cpp",
     "Leopard2BackendGFNI.cpp",
     *PRE_XOR_BUILD_TRANSLATION_UNITS[6:],
@@ -224,8 +239,17 @@ PRE_GFNI_ARCHIVE_TRANSLATION_UNITS = (
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp",
 )
-CURRENT_ARCHIVE_TRANSLATION_UNITS = (
+PRE_T16_ARCHIVE_TRANSLATION_UNITS = (
     *PRE_GFNI_ARCHIVE_TRANSLATION_UNITS,
+    "Leopard2BackendGFNI.cpp",
+)
+CURRENT_ARCHIVE_TRANSLATION_UNITS = (
+    *PRE_GFNI_ARCHIVE_TRANSLATION_UNITS[:-1],
+    "Leopard2BackendAVX2T32B256.cpp",
+    "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2LowP32B64AVX2.cpp",
+    "Leopard2BackendAVX2T2K4.cpp",
+    PRE_GFNI_ARCHIVE_TRANSLATION_UNITS[-1],
     "Leopard2BackendGFNI.cpp",
 )
 
@@ -488,6 +512,30 @@ PRE_GFNI_MATRIX_PORTABLE_CTEST_REGEX = \
 PRE_GFNI_MATRIX_CUDA_CTEST_REGEX = \
     PRE_GFNI_MATRIX_CONTRACT["cuda_ctest_regex"]
 
+PRE_T16_MATRIX_COMPARE_TESTS = tuple(
+    PRE_T16_MATRIX_CONTRACT["compare_tests"])
+PRE_T16_MATRIX_RUN_TESTS = tuple(PRE_T16_MATRIX_CONTRACT["run_tests"])
+PRE_T16_MATRIX_TEST_SPECS = {
+    name: (specification[0], list(specification[1]))
+    for name, specification in PRE_T16_MATRIX_CONTRACT["test_specs"].items()
+}
+PRE_T16_MATRIX_BUILD_TARGETS = tuple(
+    PRE_T16_MATRIX_CONTRACT["build_targets"])
+PRE_T16_MATRIX_BUILD_CACHE_KEYS = tuple(
+    PRE_T16_MATRIX_CONTRACT["build_cache_keys"])
+PRE_T16_MATRIX_BASE_BACKEND_FAILURE_TESTS = tuple(
+    PRE_T16_MATRIX_CONTRACT["base_backend_failure_tests"])
+PRE_T16_MATRIX_AVX512_BACKEND_FAILURE_TESTS = tuple(
+    PRE_T16_MATRIX_CONTRACT["avx512_backend_failure_tests"])
+PRE_T16_MATRIX_GFNI_BACKEND_FAILURE_TESTS = tuple(
+    PRE_T16_MATRIX_CONTRACT["gfni_backend_failure_tests"])
+PRE_T16_MATRIX_BACKEND_FAILURE_CTEST_REGEX = \
+    PRE_T16_MATRIX_CONTRACT["backend_failure_ctest_regex"]
+PRE_T16_MATRIX_PORTABLE_CTEST_REGEX = \
+    PRE_T16_MATRIX_CONTRACT["portable_ctest_regex"]
+PRE_T16_MATRIX_CUDA_CTEST_REGEX = \
+    PRE_T16_MATRIX_CONTRACT["cuda_ctest_regex"]
+
 MATRIX_COMPARE_TESTS = tuple(CURRENT_MATRIX_CONTRACT["compare_tests"])
 MATRIX_RUN_ONLY_TESTS = tuple(CURRENT_MATRIX_CONTRACT["run_only_tests"])
 MATRIX_RUN_TESTS = tuple(CURRENT_MATRIX_CONTRACT["run_tests"])
@@ -564,6 +612,8 @@ PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = {
 
 PRE_GFNI_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     PRE_GFNI_MATRIX_CONTRACT["expected_compile_source_counts"])
+PRE_T16_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+    PRE_T16_MATRIX_CONTRACT["expected_compile_source_counts"])
 MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     CURRENT_MATRIX_CONTRACT["expected_compile_source_counts"])
 
@@ -586,13 +636,22 @@ PRE_DUAL_FIELD_CONFIGURATION_KEYS = (
     "LEO2_ENABLE_CUDA",
 )
 
-CONFIGURATION_KEYS = PRE_DUAL_FIELD_CONFIGURATION_KEYS + (
+PRE_T16_CONFIGURATION_KEYS = PRE_DUAL_FIELD_CONFIGURATION_KEYS + (
     "LEOPARD_ENABLE_GF8",
     "LEOPARD_ENABLE_GF16",
 )
+CURRENT_PRODUCTION_OBJECT_OPTIONS = (
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+)
+CONFIGURATION_KEYS = PRE_T16_CONFIGURATION_KEYS + \
+    CURRENT_PRODUCTION_OBJECT_OPTIONS
 
 PRE_GFNI_MATRIX_SOURCE_FILES = tuple(
     PRE_GFNI_MATRIX_CONTRACT["source_files"])
+PRE_T16_MATRIX_SOURCE_FILES = tuple(PRE_T16_MATRIX_CONTRACT["source_files"])
 MATRIX_SOURCE_FILES = tuple(CURRENT_MATRIX_CONTRACT["source_files"])
 
 TOOL_CACHE_KEYS = (
@@ -617,6 +676,7 @@ PRE_XOR_CONFIGURED_TRANSLATION_UNITS = PRE_XOR_BUILD_TRANSLATION_UNITS + (
 # target dependency graph.  Unrelated configured benchmarks cannot affect the
 # linked executable and no longer make its evidence schema drift accidentally.
 PRE_GFNI_CONFIGURED_TRANSLATION_UNITS = PRE_GFNI_BUILD_TRANSLATION_UNITS
+PRE_T16_CONFIGURED_TRANSLATION_UNITS = PRE_T16_BUILD_TRANSLATION_UNITS
 CONFIGURED_TRANSLATION_UNITS = BUILD_TRANSLATION_UNITS
 
 HISTORICAL_CMAKE_IDENTITY = {
@@ -634,13 +694,15 @@ SCHEMA_TO_CMAKE_IDENTITY = {
     PRE_XOR_SCHEMA: CANONICAL_CMAKE_IDENTITY,
     POST_XOR_SCHEMA: CANONICAL_CMAKE_IDENTITY,
     PRE_GFNI_SCHEMA: CANONICAL_CMAKE_IDENTITY,
+    PRE_T16_SCHEMA: CANONICAL_CMAKE_IDENTITY,
     SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 
 HARDENED_SCHEMAS = frozenset(
-    (PRE_XOR_SCHEMA, POST_XOR_SCHEMA, PRE_GFNI_SCHEMA, SCHEMA))
+    (PRE_XOR_SCHEMA, POST_XOR_SCHEMA, PRE_GFNI_SCHEMA, PRE_T16_SCHEMA,
+     SCHEMA))
 POST_XOR_SCHEMAS = frozenset(
-    (POST_XOR_SCHEMA, PRE_GFNI_SCHEMA, SCHEMA))
+    (POST_XOR_SCHEMA, PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, SCHEMA))
 
 
 def is_post_xor_schema(schema):
@@ -649,14 +711,18 @@ def is_post_xor_schema(schema):
 
 def configuration_keys_for_schema(schema):
     cmake_identity_for_schema(schema)
-    return (CONFIGURATION_KEYS
-            if schema in (PRE_GFNI_SCHEMA, SCHEMA) else
+    if schema == SCHEMA:
+        return CONFIGURATION_KEYS
+    return (PRE_T16_CONFIGURATION_KEYS
+            if schema in (PRE_GFNI_SCHEMA, PRE_T16_SCHEMA) else
             PRE_DUAL_FIELD_CONFIGURATION_KEYS)
 
 
 def build_translation_units_for_schema(schema):
     if schema == SCHEMA:
         return BUILD_TRANSLATION_UNITS
+    if schema == PRE_T16_SCHEMA:
+        return PRE_T16_BUILD_TRANSLATION_UNITS
     return (PRE_GFNI_BUILD_TRANSLATION_UNITS
             if is_post_xor_schema(schema) else
             PRE_XOR_BUILD_TRANSLATION_UNITS)
@@ -665,6 +731,8 @@ def build_translation_units_for_schema(schema):
 def configured_translation_units_for_schema(schema):
     if schema == SCHEMA:
         return CONFIGURED_TRANSLATION_UNITS
+    if schema == PRE_T16_SCHEMA:
+        return PRE_T16_CONFIGURED_TRANSLATION_UNITS
     return (PRE_GFNI_CONFIGURED_TRANSLATION_UNITS
             if is_post_xor_schema(schema) else
             PRE_XOR_CONFIGURED_TRANSLATION_UNITS)
@@ -673,6 +741,8 @@ def configured_translation_units_for_schema(schema):
 def archive_translation_units_for_schema(schema):
     if schema == SCHEMA:
         return CURRENT_ARCHIVE_TRANSLATION_UNITS
+    if schema == PRE_T16_SCHEMA:
+        return PRE_T16_ARCHIVE_TRANSLATION_UNITS
     if is_post_xor_schema(schema):
         return PRE_GFNI_ARCHIVE_TRANSLATION_UNITS
     if schema == PRE_XOR_SCHEMA:
@@ -685,9 +755,20 @@ PRE_XOR_RELEVANT_NON_LIBRARY_TARGETS = (
     "leopard2_backend_avx2",
     "bench_leopard2",
 )
+PRE_T16_RELEVANT_NON_LIBRARY_TARGETS = (
+    "leopard2_backend_ssse3",
+    "leopard2_backend_avx2",
+    "leopard2_backend_avx512",
+    "leopard2_backend_gfni",
+    "bench_leopard2",
+)
 RELEVANT_NON_LIBRARY_TARGETS = (
     "leopard2_backend_ssse3",
     "leopard2_backend_avx2",
+    "leopard2_backend_avx2_t32_b256",
+    "leopard2_backend_avx2_t16_b64",
+    "leopard2_low_p32_b64_avx2",
+    "leopard2_backend_avx2_t2_k4",
     "leopard2_backend_avx512",
     "leopard2_backend_gfni",
     "bench_leopard2",
@@ -711,6 +792,8 @@ def cmake_identity_for_schema(schema):
 def relevant_targets_for_schema(schema):
     if schema == SCHEMA:
         non_library = RELEVANT_NON_LIBRARY_TARGETS
+    elif schema == PRE_T16_SCHEMA:
+        non_library = PRE_T16_RELEVANT_NON_LIBRARY_TARGETS
     elif is_post_xor_schema(schema):
         non_library = PRE_GFNI_RELEVANT_NON_LIBRARY_TARGETS
     else:
@@ -2438,7 +2521,7 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
     require(relevant_units == set(build_translation_units),
             "evidence target translation-unit closure mismatch")
     expected_benchmark_dependencies = [cmake_identity["target"]]
-    if schema == SCHEMA:
+    if schema in (PRE_T16_SCHEMA, SCHEMA):
         expected_benchmark_dependencies.append(
             "leopard2_benchmark_source_attestation_refresh")
         expected_benchmark_dependencies.sort()
@@ -2447,6 +2530,19 @@ def file_api_targets(source_root, build_root, schema=SCHEMA):
             expected_benchmark_dependencies,
             "benchmark target dependency identity")
     if schema == SCHEMA:
+        expected_library_dependencies = [
+            "leopard2_backend_avx2", "leopard2_backend_avx2_t16_b64",
+            "leopard2_backend_avx2_t2_k4",
+            "leopard2_backend_avx2_t32_b256", "leopard2_backend_avx512",
+            "leopard2_backend_gfni", "leopard2_backend_ssse3",
+            "leopard2_low_p32_b64_avx2"]
+        expected_object_targets = (
+            "leopard2_backend_ssse3", "leopard2_backend_avx2",
+            "leopard2_backend_avx2_t16_b64",
+            "leopard2_backend_avx2_t2_k4",
+            "leopard2_backend_avx2_t32_b256", "leopard2_backend_avx512",
+            "leopard2_backend_gfni", "leopard2_low_p32_b64_avx2")
+    elif schema == PRE_T16_SCHEMA:
         expected_library_dependencies = [
             "leopard2_backend_avx2", "leopard2_backend_avx512",
             "leopard2_backend_gfni", "leopard2_backend_ssse3"]
@@ -2643,12 +2739,16 @@ def normalized_configuration(
             "evidence build must not contain tests/fuzzers or test hooks")
     require(configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", ""),
             "butterfly evidence must not include optional CUDA")
-    if schema in (PRE_GFNI_SCHEMA, SCHEMA):
+    if schema in (PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, SCHEMA):
         require(configuration["LEOPARD_ENABLE_GF8"] in
                     ("ON", "1", "TRUE") and
                 configuration["LEOPARD_ENABLE_GF16"] in
                     ("ON", "1", "TRUE"),
                 "current butterfly evidence requires GF8 and GF16")
+    if schema == SCHEMA:
+        require(all(configuration[key] in ("ON", "1", "TRUE")
+                    for key in CURRENT_PRODUCTION_OBJECT_OPTIONS),
+                "current butterfly evidence requires promoted object closure")
     return configuration
 
 
@@ -2939,13 +3039,29 @@ def build_record(source_root, source_identity, compile_commands, cmake_cache,
     require(Path(values.get("CMAKE_HOME_DIRECTORY", "")).resolve() == source_root,
             "CMake cache/source-root mismatch")
     tool_paths, tools = cache_tools(cmake_cache)
-    all_by_file = {}
+    compile_entries_by_file = {}
     for entry in document:
         relative, normalized = normalized_compile_entry(
             entry, source_root, build_root, tool_paths)
-        require(relative not in all_by_file,
+        compile_entries_by_file.setdefault(relative, []).append(normalized)
+    all_by_file = {}
+    for relative, entries in compile_entries_by_file.items():
+        if len(entries) == 1:
+            all_by_file[relative] = entries[0]
+            continue
+        # Current builds configure several benchmark variants from the same
+        # source file.  Bind the retained command to the exact bench_leopard2
+        # target directory; historical manifests keep their original global
+        # uniqueness contract.
+        require(schema == SCHEMA and
+                relative == "bench/leopard2/benchmark.cpp",
                 "duplicate compile command for " + relative)
-        all_by_file[relative] = normalized
+        selected = [value for value in entries
+                    if value[0]["output"].startswith(
+                        "@build/CMakeFiles/bench_leopard2.dir/")]
+        require(len(selected) == 1,
+                "benchmark compile target identity")
+        all_by_file[relative] = selected[0]
     if is_post_xor_schema(schema):
         # compile_commands.json is global to the configured build tree, while
         # the current evidence contract deliberately scopes the executable
@@ -3059,7 +3175,10 @@ def validate_build_record(record, repo, schema):
             configuration["LEO2_BUILD_TESTS"] in ("OFF", "0", "FALSE", "") and
             configuration["LEO2_BUILD_FUZZERS"] in ("OFF", "0", "FALSE", "") and
             configuration["LEO2_ENABLE_CUDA"] in ("OFF", "0", "FALSE", "") and
-            (schema not in (PRE_GFNI_SCHEMA, SCHEMA) or
+            (schema != SCHEMA or
+             all(configuration[key] in ("ON", "1", "TRUE")
+                 for key in CURRENT_PRODUCTION_OBJECT_OPTIONS)) and
+            (schema not in (PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, SCHEMA) or
              (configuration["LEOPARD_ENABLE_GF8"] in ("ON", "1", "TRUE") and
               configuration["LEOPARD_ENABLE_GF16"] in
                   ("ON", "1", "TRUE"))),
@@ -3187,6 +3306,17 @@ def validate_build_record(record, repo, schema):
             "target graph identity")
     targets = target_graph["targets"]
     if schema == SCHEMA:
+        expected_library_dependencies = [
+            "leopard2_backend_avx2", "leopard2_backend_avx2_t16_b64",
+            "leopard2_backend_avx2_t2_k4",
+            "leopard2_backend_avx2_t32_b256", "leopard2_backend_avx512",
+            "leopard2_backend_gfni", "leopard2_backend_ssse3",
+            "leopard2_low_p32_b64_avx2"]
+        expected_benchmark_dependencies = [
+            library_target,
+            "leopard2_benchmark_source_attestation_refresh"]
+        expected_benchmark_dependencies.sort()
+    elif schema == PRE_T16_SCHEMA:
         expected_library_dependencies = [
             "leopard2_backend_avx2", "leopard2_backend_avx512",
             "leopard2_backend_gfni", "leopard2_backend_ssse3"]
@@ -3471,53 +3601,67 @@ def validate_matrix_command(command, label, extra_keys=()):
 def validate_matrix_document(
         document, repo, candidate_commit, evidence_schema=SCHEMA):
     current = evidence_schema == SCHEMA
+    pre_t16 = evidence_schema == PRE_T16_SCHEMA
     pre_gfni = evidence_schema == PRE_GFNI_SCHEMA
     post_xor = evidence_schema == POST_XOR_SCHEMA
-    modern = current or pre_gfni or post_xor
+    modern = current or pre_t16 or pre_gfni or post_xor
+    matrix_v3 = pre_t16
     matrix_v2 = pre_gfni or post_xor
     expected_matrix_schema = (
         MATRIX_SCHEMA if current else
+        MATRIX_SCHEMA_V3 if matrix_v3 else
         MATRIX_SCHEMA_V2 if matrix_v2 else MATRIX_SCHEMA_V1)
     expected_source_files = (
         MATRIX_SOURCE_FILES if current else
+        PRE_T16_MATRIX_SOURCE_FILES if matrix_v3 else
         PRE_GFNI_MATRIX_SOURCE_FILES if matrix_v2 else
         PRE_XOR_MATRIX_SOURCE_FILES)
     expected_compile_source_counts = (
         MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS
         if current else
+        PRE_T16_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS
+        if matrix_v3 else
         PRE_GFNI_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS
         if matrix_v2 else
         PRE_XOR_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS)
     matrix_compare_tests = (
         MATRIX_COMPARE_TESTS if current else
+        PRE_T16_MATRIX_COMPARE_TESTS if matrix_v3 else
         PRE_GFNI_MATRIX_COMPARE_TESTS if matrix_v2 else
         PRE_XOR_MATRIX_COMPARE_TESTS)
     matrix_run_tests = (
         MATRIX_RUN_TESTS if current else
+        PRE_T16_MATRIX_RUN_TESTS if matrix_v3 else
         PRE_GFNI_MATRIX_RUN_TESTS if matrix_v2 else
         PRE_XOR_MATRIX_RUN_TESTS)
     matrix_test_specs = (
         MATRIX_TEST_SPECS if current else
+        PRE_T16_MATRIX_TEST_SPECS if matrix_v3 else
         PRE_GFNI_MATRIX_TEST_SPECS if matrix_v2 else
         PRE_XOR_MATRIX_TEST_SPECS)
     matrix_build_targets = (
         MATRIX_BUILD_TARGETS if current else
+        PRE_T16_MATRIX_BUILD_TARGETS if matrix_v3 else
         PRE_GFNI_MATRIX_BUILD_TARGETS if matrix_v2 else
         PRE_XOR_MATRIX_BUILD_TARGETS)
     matrix_build_cache_keys = (
         MATRIX_BUILD_CACHE_KEYS if current else
+        PRE_T16_MATRIX_BUILD_CACHE_KEYS if matrix_v3 else
         PRE_GFNI_MATRIX_BUILD_CACHE_KEYS if matrix_v2 else
         PRE_XOR_MATRIX_BUILD_CACHE_KEYS)
     backend_failure_ctest_regex = (
         MATRIX_BACKEND_FAILURE_CTEST_REGEX if current else
+        PRE_T16_MATRIX_BACKEND_FAILURE_CTEST_REGEX if matrix_v3 else
         PRE_GFNI_MATRIX_BACKEND_FAILURE_CTEST_REGEX if matrix_v2 else
         "^leopard2_backend_failure_")
     portable_ctest_regex = (
         MATRIX_PORTABLE_CTEST_REGEX if current else
+        PRE_T16_MATRIX_PORTABLE_CTEST_REGEX if matrix_v3 else
         PRE_GFNI_MATRIX_PORTABLE_CTEST_REGEX if matrix_v2 else
         "^leopard2_portable_isa$")
     cuda_ctest_regex = (
         MATRIX_CUDA_CTEST_REGEX if current else
+        PRE_T16_MATRIX_CUDA_CTEST_REGEX if matrix_v3 else
         PRE_GFNI_MATRIX_CUDA_CTEST_REGEX if matrix_v2 else
         "^leopard2_cuda_optional$")
     require(set(document) == {
@@ -3637,6 +3781,9 @@ def validate_matrix_document(
                 cache.get("LEO2_BUILD_BENCHMARKS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_BUILD_FUZZERS") in ("OFF", "0", "FALSE", "") and
                 cache.get("LEO2_ENABLE_CUDA") in ("OFF", "0", "FALSE", "") and
+                (not current or all(
+                    cache.get(option) in ("ON", "1", "TRUE")
+                    for option in CURRENT_PRODUCTION_OBJECT_OPTIONS)) and
                 (not modern or
                  (cache.get("LEOPARD_ENABLE_GF8") in ("ON", "1", "TRUE") and
                   cache.get("LEOPARD_ENABLE_GF16") in
@@ -3676,15 +3823,18 @@ def validate_matrix_document(
             counts[command["file"]] = counts.get(command["file"], 0) + 1
         require(counts == expected_compile_source_counts,
                 "matrix compile source multiset")
-        if current:
-            matrix_backend_failure_tests = \
-                MATRIX_BASE_BACKEND_FAILURE_TESTS
+        if current or matrix_v3:
+            matrix_backend_failure_tests = (
+                MATRIX_BASE_BACKEND_FAILURE_TESTS if current else
+                PRE_T16_MATRIX_BASE_BACKEND_FAILURE_TESTS)
             if "Leopard2BackendAVX512.cpp" in counts:
-                matrix_backend_failure_tests += \
-                    MATRIX_AVX512_BACKEND_FAILURE_TESTS
+                matrix_backend_failure_tests += (
+                    MATRIX_AVX512_BACKEND_FAILURE_TESTS if current else
+                    PRE_T16_MATRIX_AVX512_BACKEND_FAILURE_TESTS)
             if "Leopard2BackendGFNI.cpp" in counts:
-                matrix_backend_failure_tests += \
-                    MATRIX_GFNI_BACKEND_FAILURE_TESTS
+                matrix_backend_failure_tests += (
+                    MATRIX_GFNI_BACKEND_FAILURE_TESTS if current else
+                    PRE_T16_MATRIX_GFNI_BACKEND_FAILURE_TESTS)
         elif matrix_v2:
             matrix_backend_failure_tests = \
                 PRE_GFNI_MATRIX_BASE_BACKEND_FAILURE_TESTS
@@ -3702,7 +3852,7 @@ def validate_matrix_document(
         configure = commands[0]
         validate_matrix_command(configure, "configure")
         configure_argv = configure["argv"]
-        explicit_fields = current or pre_gfni
+        explicit_fields = current or pre_t16 or pre_gfni
         require(len(configure_argv) == (18 if explicit_fields else 16) and
                 Path(configure_argv[0]).name == tools["cmake"]["basename"],
                 "matrix configure tool/shape: " + variant)
@@ -4820,9 +4970,71 @@ def post_xor_matrix_fixture(document):
     return value
 
 
-def pre_gfni_matrix_fixture(document):
-    """Downgrade a synthetic matrix v3 document to frozen matrix v2."""
+def pre_t16_matrix_fixture(document):
+    """Downgrade a synthetic matrix v4 document to frozen matrix v3."""
     value = copy.deepcopy(document)
+    value["schema"] = MATRIX_SCHEMA_V3
+    current_files = value["source_fingerprint"]["files"]
+    files = {
+        relative: current_files[relative]
+        for relative in PRE_T16_MATRIX_SOURCE_FILES
+    }
+    value["source_fingerprint"]["files"] = files
+    value["source_fingerprint"]["digest"] = \
+        sha256_bytes(canonical_bytes(files))
+    fingerprint = value["source_fingerprint"]
+    removed = (
+        set(MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS) -
+        set(PRE_T16_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS))
+    for variant in value["variants"]:
+        variant["schema"] = MATRIX_SCHEMA_V3
+        variant["source_fingerprint"] = fingerprint["digest"]
+        identity = variant["build_identity"]
+        for option in CURRENT_PRODUCTION_OBJECT_OPTIONS:
+            identity["cache"].pop(option, None)
+        commands = [
+            command for command in identity["compile_commands"]
+            if command["file"] not in removed
+        ]
+        direct_seen = 0
+        retained = []
+        for command in commands:
+            if command["file"] == "tests/leopard2/direct_oracle.cpp":
+                direct_seen += 1
+                if direct_seen > 14:
+                    continue
+            retained.append(command)
+        identity["compile_commands"] = retained
+        observed = {}
+        for command in retained:
+            observed[command["file"]] = observed.get(command["file"], 0) + 1
+        require(observed == PRE_T16_MATRIX_EXPECTED_COMPILE_SOURCE_COUNTS,
+                "current matrix fixture cannot reconstruct v3 compile closure")
+        rehash_matrix_build_identity(identity)
+        configuration_input = {
+            "c_compiler": value["c_compiler"],
+            "compiler": value["compiler"],
+            "generator": value["generator"],
+            "jobs_per_variant": value["jobs_per_variant"],
+            "machine": value["machine"],
+            "source": fingerprint,
+            "variant": variant["variant"],
+            "environment": variant["build_environment"],
+        }
+        variant["configuration_id"] = sha256_bytes(
+            canonical_bytes(configuration_input))
+        variant["fresh_build"]["identity_sha256"] = sha256_bytes(
+            canonical_bytes({
+                "configuration_id": variant["configuration_id"],
+                "configure_argv": variant["commands"][0]["argv"],
+                "environment": variant["build_environment"],
+            }))
+    return value
+
+
+def pre_gfni_matrix_fixture(document):
+    """Downgrade a synthetic matrix document to frozen matrix v2."""
+    value = pre_t16_matrix_fixture(document)
     value["schema"] = MATRIX_SCHEMA_V2
     current_files = value["source_fingerprint"]["files"]
     require(set(PRE_GFNI_MATRIX_SOURCE_FILES) <= set(current_files),
@@ -5038,6 +5250,18 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
                 "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"):
             output = root / "CMakeFiles/leopard2_backend_avx2.dir" / \
                 (relative + ".o")
+        elif relative == "Leopard2BackendAVX2T16B64.cpp":
+            output = root / "CMakeFiles/leopard2_backend_avx2_t16_b64.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2BackendAVX2T32B256.cpp":
+            output = root / "CMakeFiles/leopard2_backend_avx2_t32_b256.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2BackendAVX2T2K4.cpp":
+            output = root / "CMakeFiles/leopard2_backend_avx2_t2_k4.dir" / \
+                (relative + ".o")
+        elif relative == "Leopard2LowP32B64AVX2.cpp":
+            output = root / "CMakeFiles/leopard2_low_p32_b64_avx2.dir" / \
+                (relative + ".o")
         elif relative == "Leopard2BackendAVX512.cpp":
             output = root / "CMakeFiles/leopard2_backend_avx512.dir" / \
                 (relative + ".o")
@@ -5101,11 +5325,14 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
         "LEO2_BUILD_TESTS:BOOL=OFF",
         "LEO2_ENABLE_CUDA:BOOL=OFF",
     ])
-    if schema in (PRE_GFNI_SCHEMA, SCHEMA):
+    if schema in (PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, SCHEMA):
         cache_lines.extend([
             "LEOPARD_ENABLE_GF8:BOOL=ON",
             "LEOPARD_ENABLE_GF16:BOOL=ON",
         ])
+    if schema == SCHEMA:
+        cache_lines.extend(
+            key + ":BOOL=ON" for key in CURRENT_PRODUCTION_OBJECT_OPTIONS)
     cache.write_text("\n".join(cache_lines) + "\n", encoding="utf-8")
     library = root / cmake_identity["archive"]
     archive_order = archive_translation_units_for_schema(schema)
@@ -5140,6 +5367,9 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
     core = set(build_translation_units) - {
         "Leopard2BackendSSSE3.cpp", "Leopard2BackendAVX2.cpp",
         "Leopard2BackendAVX2Xor.cpp", "Leopard2BackendAVX512.cpp",
+        "Leopard2BackendAVX2T16B64.cpp",
+        "Leopard2BackendAVX2T32B256.cpp",
+        "Leopard2BackendAVX2T2K4.cpp", "Leopard2LowP32B64AVX2.cpp",
         "Leopard2BackendGFNI.cpp",
         "bench/leopard2/benchmark.cpp"}
     def target(target_type, artifact, dependencies, compiled):
@@ -5149,6 +5379,13 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
                             for value in sorted(compiled)],
                 "link": None}
     if schema == SCHEMA:
+        library_dependencies = [
+            "leopard2_backend_avx2", "leopard2_backend_avx2_t16_b64",
+            "leopard2_backend_avx2_t2_k4",
+            "leopard2_backend_avx2_t32_b256", "leopard2_backend_avx512",
+            "leopard2_backend_gfni", "leopard2_backend_ssse3",
+            "leopard2_low_p32_b64_avx2"]
+    elif schema == PRE_T16_SCHEMA:
         library_dependencies = [
             "leopard2_backend_avx2", "leopard2_backend_avx512",
             "leopard2_backend_gfni", "leopard2_backend_ssse3"]
@@ -5160,7 +5397,7 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
         library_dependencies = [
             "leopard2_backend_avx2", "leopard2_backend_ssse3"]
     benchmark_dependencies = [cmake_identity["target"]]
-    if schema == SCHEMA:
+    if schema in (PRE_T16_SCHEMA, SCHEMA):
         benchmark_dependencies.append(
             "leopard2_benchmark_source_attestation_refresh")
         benchmark_dependencies.sort()
@@ -5190,6 +5427,27 @@ def write_self_test_build_files(root, source_root, binary, schema=SCHEMA):
             "@build/" + outputs["Leopard2BackendAVX2Xor.cpp"].name,
         ]
     if schema == SCHEMA:
+        targets["leopard2_backend_avx2_t16_b64"] = target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2T16B64.cpp"], [],
+            {"Leopard2BackendAVX2T16B64.cpp"})
+        targets["leopard2_backend_avx2_t16_b64"]["artifacts"] = [
+            "@build/" + outputs["Leopard2BackendAVX2T16B64.cpp"].name]
+        targets["leopard2_backend_avx2_t32_b256"] = target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2T32B256.cpp"], [],
+            {"Leopard2BackendAVX2T32B256.cpp"})
+        targets["leopard2_backend_avx2_t32_b256"]["artifacts"] = [
+            "@build/" + outputs["Leopard2BackendAVX2T32B256.cpp"].name]
+        targets["leopard2_backend_avx2_t2_k4"] = target(
+            "OBJECT_LIBRARY", outputs["Leopard2BackendAVX2T2K4.cpp"], [],
+            {"Leopard2BackendAVX2T2K4.cpp"})
+        targets["leopard2_backend_avx2_t2_k4"]["artifacts"] = [
+            "@build/" + outputs["Leopard2BackendAVX2T2K4.cpp"].name]
+        targets["leopard2_low_p32_b64_avx2"] = target(
+            "OBJECT_LIBRARY", outputs["Leopard2LowP32B64AVX2.cpp"], [],
+            {"Leopard2LowP32B64AVX2.cpp"})
+        targets["leopard2_low_p32_b64_avx2"]["artifacts"] = [
+            "@build/" + outputs["Leopard2LowP32B64AVX2.cpp"].name]
+    if schema in (PRE_T16_SCHEMA, SCHEMA):
         targets["leopard2_backend_gfni"] = target(
             "OBJECT_LIBRARY", outputs["Leopard2BackendGFNI.cpp"], [],
             {"Leopard2BackendGFNI.cpp"})
@@ -5516,10 +5774,15 @@ def self_test(repo):
         command_output([
             str(cmake), "-S", str(repo), "-B", str(file_api_build),
             "-G", "Unix Makefiles", "-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O1 -DNDEBUG",
             "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON", "-DLEO2_BUILD_TESTS=OFF",
             "-DLEO2_BUILD_BENCHMARKS=ON", "-DLEO2_BUILD_FUZZERS=OFF",
             "-DLEO2_ENABLE_CUDA=OFF", "-DLEOPARD_ENABLE_GF8=ON",
             "-DLEOPARD_ENABLE_GF16=ON",
+            "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=ON",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=ON",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=ON",
+            "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=ON",
         ], repo, "current CMake File API integration configure")
         file_api_artifacts, file_api_graph = file_api_targets(
             repo, file_api_build, SCHEMA)
@@ -5546,7 +5809,7 @@ def self_test(repo):
         # closure or make every current campaign fail after a successful build.
         real_build = fresh_rebuild(
             repo, file_api_build / "CMakeCache.txt",
-            root / "real-build-record", 2)
+            root / "real-build-record", 1)
         compile_document = read_json(
             real_build["compile_commands"],
             "current real compile_commands integration")
@@ -5711,6 +5974,9 @@ def self_test(repo):
                     "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
                 if field_key in MATRIX_BUILD_CACHE_KEYS:
                     build_cache[field_key] = "ON"
+            for option in CURRENT_PRODUCTION_OBJECT_OPTIONS:
+                if option in MATRIX_BUILD_CACHE_KEYS:
+                    build_cache[option] = "ON"
             tools = {
                 "cmake": matrix_tool_identity(matrix_cmake),
                 "ctest": matrix_tool_identity(matrix_ctest),
@@ -5852,7 +6118,12 @@ def self_test(repo):
                         PRE_GFNI_SCHEMA) and
                 "Leopard2BackendGFNI.cpp" not in
                     archive_translation_units_for_schema(PRE_GFNI_SCHEMA),
-                "v9/v2 and v10/v3 translation-unit closures were conflated")
+                "historical and current translation-unit closures were conflated")
+        pre_t16_matrix = root / "matrix-v3-pre-t16.json"
+        pre_t16_document = pre_t16_matrix_fixture(matrix_document)
+        validate_matrix_document(
+            pre_t16_document, repo, commit, PRE_T16_SCHEMA)
+        atomic_json(pre_t16_matrix, pre_t16_document)
         pre_gfni_matrix = root / "matrix-v2-pre-gfni.json"
         pre_gfni_document = pre_gfni_matrix_fixture(matrix_document)
         validate_matrix_document(
@@ -7173,7 +7444,7 @@ def self_test(repo):
             use_context(jerasure.PairLease(cpu, sibling, root=cross_runtime))
 
         mutation_count = len(mutations) + len(failed_mutations) + 26
-    print("butterfly ABBA v10 self-test passed: canonical and historical replay + {} adversarial mutations".format(
+    print("butterfly ABBA v11 self-test passed: canonical and historical replay + {} adversarial mutations".format(
         mutation_count))
 
 

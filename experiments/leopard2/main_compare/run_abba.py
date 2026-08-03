@@ -65,7 +65,8 @@ RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
 RAW_SCHEMA_V8 = "leopard2-main-compare-raw/v8"
 RAW_SCHEMA_V9 = "leopard2-main-compare-raw/v9"
 RAW_SCHEMA_V10 = "leopard2-main-compare-raw/v10"
-RAW_SCHEMA = "leopard2-main-compare-raw/v11"
+RAW_SCHEMA_V11 = "leopard2-main-compare-raw/v11"
+RAW_SCHEMA = "leopard2-main-compare-raw/v12"
 HARDENED_HISTORICAL_BUILD_SCHEMA = \
     "leopard2-main-compare-build/hardened-historical-v1"
 MANIFEST_SCHEMA_V1 = "leopard2-main-compare-manifest/v1"
@@ -78,7 +79,8 @@ MANIFEST_SCHEMA_V7 = "leopard2-main-compare-manifest/v7"
 MANIFEST_SCHEMA_V8 = "leopard2-main-compare-manifest/v8"
 MANIFEST_SCHEMA_V9 = "leopard2-main-compare-manifest/v9"
 MANIFEST_SCHEMA_V10 = "leopard2-main-compare-manifest/v10"
-MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v11"
+MANIFEST_SCHEMA_V11 = "leopard2-main-compare-manifest/v11"
+MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v12"
 FAILURE_SCHEMA_V2 = "leopard2-main-compare-failure/v2"
 FAILURE_SCHEMA_V3 = "leopard2-main-compare-failure/v3"
 FAILURE_SCHEMA_V4 = "leopard2-main-compare-failure/v4"
@@ -88,13 +90,16 @@ FAILURE_SCHEMA_V7 = "leopard2-main-compare-failure/v7"
 FAILURE_SCHEMA_V8 = "leopard2-main-compare-failure/v8"
 FAILURE_SCHEMA_V9 = "leopard2-main-compare-failure/v9"
 FAILURE_SCHEMA_V10 = "leopard2-main-compare-failure/v10"
-FAILURE_SCHEMA = "leopard2-main-compare-failure/v11"
+FAILURE_SCHEMA_V11 = "leopard2-main-compare-failure/v11"
+FAILURE_SCHEMA = "leopard2-main-compare-failure/v12"
 FAILURE_EVIDENCE_CONTRACT_V9 = \
     "leopard2-main-compare-failure-evidence-contract/v9"
 FAILURE_EVIDENCE_CONTRACT_V10 = \
     "leopard2-main-compare-failure-evidence-contract/v10"
-FAILURE_EVIDENCE_CONTRACT = \
+FAILURE_EVIDENCE_CONTRACT_V11 = \
     "leopard2-main-compare-failure-evidence-contract/v11"
+FAILURE_EVIDENCE_CONTRACT = \
+    "leopard2-main-compare-failure-evidence-contract/v12"
 RESERVATION_SCHEMA = "leopard2-cpu-reservation/v1"
 PAIR_LEASE_SCHEMA = "leopard2-cpu-pair-lease/v1"
 ISOLATION_SCHEMA = "leopard2-main-compare-isolation/v1"
@@ -150,6 +155,7 @@ RAW_TO_CMAKE_IDENTITY = {
     RAW_SCHEMA_V8: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V9: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA_V10: CANONICAL_CMAKE_IDENTITY,
+    RAW_SCHEMA_V11: CANONICAL_CMAKE_IDENTITY,
     RAW_SCHEMA: CANONICAL_CMAKE_IDENTITY,
 }
 # This internal build-only schema lets another evidence family authenticate an
@@ -169,6 +175,7 @@ HARDENED_BUILD_SCHEMAS = frozenset((
     RAW_SCHEMA_V8,
     RAW_SCHEMA_V9,
     RAW_SCHEMA_V10,
+    RAW_SCHEMA_V11,
     RAW_SCHEMA,
     HARDENED_HISTORICAL_BUILD_SCHEMA,
 ))
@@ -183,6 +190,7 @@ MANIFEST_TO_RAW_SCHEMA = {
     MANIFEST_SCHEMA_V8: RAW_SCHEMA_V8,
     MANIFEST_SCHEMA_V9: RAW_SCHEMA_V9,
     MANIFEST_SCHEMA_V10: RAW_SCHEMA_V10,
+    MANIFEST_SCHEMA_V11: RAW_SCHEMA_V11,
     MANIFEST_SCHEMA: RAW_SCHEMA,
 }
 FAILURE_TO_RAW_SCHEMA = {
@@ -195,31 +203,34 @@ FAILURE_TO_RAW_SCHEMA = {
     FAILURE_SCHEMA_V8: RAW_SCHEMA_V8,
     FAILURE_SCHEMA_V9: RAW_SCHEMA_V9,
     FAILURE_SCHEMA_V10: RAW_SCHEMA_V10,
+    FAILURE_SCHEMA_V11: RAW_SCHEMA_V11,
     FAILURE_SCHEMA: RAW_SCHEMA,
 }
 CANDIDATE_MODE_SCHEMAS = frozenset((
     RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7,
-    RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 WORKSPACE_SELECTOR_SCHEMAS = frozenset((
     RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5, RAW_SCHEMA_V6,
-    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10,
+    RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 ISOLATION_SCHEMAS = frozenset((
     RAW_SCHEMA_V2, RAW_SCHEMA_V3, RAW_SCHEMA_V4, RAW_SCHEMA_V5,
     RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-    RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 COMPLETE_EVIDENCE_SCHEMAS = frozenset((
     RAW_SCHEMA_V5, RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8,
-    RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 SUPERVISION_SCHEMAS = COMPLETE_EVIDENCE_SCHEMAS
 BUILD_CLOSURE_V7_SCHEMAS = frozenset((
-    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10,
+    RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 SEALED_EXECUTABLE_SCHEMAS = frozenset((
-    RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA,
+    RAW_SCHEMA_V8, RAW_SCHEMA_V9, RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA,
 ))
 INPUT_SPECIFICATION_KEYS_V9 = frozenset((
     "runner", "taskset", "ldd", "baseline_executable",
@@ -280,7 +291,7 @@ FNV_PRIME = 1099511628211
 MASK64 = (1 << 64) - 1
 HEX64 = re.compile(r"^[0-9a-f]{16}$")
 HEX256 = re.compile(r"^[0-9a-f]{64}$")
-CHILD_ENVIRONMENT = {
+CHILD_ENVIRONMENT_V11 = {
     "LANG": "C",
     "LC_ALL": "C",
     "OMP_DYNAMIC": "FALSE",
@@ -290,6 +301,25 @@ CHILD_ENVIRONMENT = {
     "PATH": "/usr/bin:/bin",
     "TZ": "UTC",
 }
+CHILD_ENVIRONMENT = {
+    "LANG": "C",
+    "LC_ALL": "C",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": "1",
+    "OMP_THREAD_LIMIT": "1",
+    "OMP_PROC_BIND": "TRUE",
+    "PATH": "/usr/bin:/bin",
+    "TZ": "UTC",
+}
+
+
+def child_environment_for_raw_schema(raw_schema: str) -> dict[str, str]:
+    require(raw_schema in RAW_TO_CMAKE_IDENTITY,
+            "child environment uses an unsupported evidence schema")
+    return (CHILD_ENVIRONMENT if raw_schema == RAW_SCHEMA
+            else CHILD_ENVIRONMENT_V11)
+
+
 MAX_COMMAND_STDOUT_BYTES = 128 * 1024 * 1024
 MAX_COMMAND_STDERR_BYTES = 8 * 1024 * 1024
 MAX_COMMAND_TIMEOUT_SECONDS = 3600.0
@@ -316,9 +346,17 @@ CANDIDATE_LIBRARY_SOURCES_V9 = (
     "Leopard2BackendAVX2Xor.cpp",
     "Leopard2BackendAVX512.cpp", "Leopard2BackendGFNI.cpp",
 )
-CANDIDATE_LIBRARY_SOURCES = tuple(
+CANDIDATE_LIBRARY_SOURCES_V11 = tuple(
     source for source in CANDIDATE_LIBRARY_SOURCES_V9
     if source != "Leopard2BackendAVX512.cpp"
+)
+CANDIDATE_LIBRARY_SOURCES = (
+    *CANDIDATE_LIBRARY_SOURCES_V11[:-1],
+    "Leopard2BackendAVX2T32B256.cpp",
+    "Leopard2BackendAVX2T16B64.cpp",
+    "Leopard2LowP32B64AVX2.cpp",
+    "Leopard2BackendAVX2T2K4.cpp",
+    CANDIDATE_LIBRARY_SOURCES_V11[-1],
 )
 CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9 = {
     "tests/benchmark.cpp": "bench_leopard.dir",
@@ -362,7 +400,8 @@ COMPILE_COMMANDS_SCHEMA_V3 = "leopard2-main-compare-compile-commands/v3"
 COMPILE_COMMANDS_SCHEMA_V4 = "leopard2-main-compare-compile-commands/v4"
 COMPILE_COMMANDS_SCHEMA_V5 = "leopard2-main-compare-compile-commands/v5"
 COMPILE_COMMANDS_SCHEMA_V6 = "leopard2-main-compare-compile-commands/v6"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v7"
+COMPILE_COMMANDS_SCHEMA_V7 = "leopard2-main-compare-compile-commands/v7"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v8"
 BASELINE_COMPILE_PROFILE = \
     "gnu-compatible-cxx11-native-x86_64-release/v1"
 BASELINE_PURE_AVX2_COMPILE_PROFILE = \
@@ -371,24 +410,30 @@ CANDIDATE_COMPILE_PROFILE_V1 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v1"
 CANDIDATE_COMPILE_PROFILE_V2 = \
     "gnu-compatible-cxx11-runtime-dispatch-x86_64-release/v2"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V3 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v3"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v4"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V2 = \
     "leopard2-main-compare-build-configuration/v2"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V3 = \
     "leopard2-main-compare-build-configuration/v3"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V4 = \
     "leopard2-main-compare-build-configuration/v4"
-BUILD_CONFIGURATION_RECORD_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA_V5 = \
     "leopard2-main-compare-build-configuration/v5"
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v6"
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
 BUILD_CONFIGURATION_FILE_SCHEMA_V3 = \
     "leopard2-benchmark-build-configuration/v3"
 BUILD_CONFIGURATION_FILE_SCHEMA_V4 = \
     "leopard2-benchmark-build-configuration/v4"
-BUILD_CONFIGURATION_FILE_SCHEMA = \
+BUILD_CONFIGURATION_FILE_SCHEMA_V5 = \
     "leopard2-benchmark-build-configuration/v5"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v6"
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -435,11 +480,19 @@ BUILD_CONFIGURATION_VARIABLES_V4 = (
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
     BUILD_CONFIGURATION_VARIABLES_V2[-1],
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V5 = (
     *BUILD_CONFIGURATION_VARIABLES_V4[:-4],
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
     *BUILD_CONFIGURATION_VARIABLES_V4[-4:],
+)
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V5[:16],
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+    *BUILD_CONFIGURATION_VARIABLES_V5[16:],
 )
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
@@ -486,14 +539,19 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": frozenset(("BOOL",)),
     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
         frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
+        frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": frozenset(("BOOL",)),
     "LEO2_FLAG_FALIGN_FUNCTIONS_64": frozenset(("INTERNAL",)),
@@ -555,7 +613,7 @@ def statistics_policy(raw_schema: str = RAW_SCHEMA) -> dict[str, Any]:
             "derived median execution plus median plan-create divided by reuse; "
             "separate timing loops; excludes codec setup"),
     }
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         policy["decode_first_use_semantics"] = (
             "median public leo2_decode one-shot call including plan setup with codec "
             "already created; excludes codec setup")
@@ -600,13 +658,13 @@ def validate_input_specification(
             "input specification uses an unsupported evidence schema")
     expected_keys = (
         INPUT_SPECIFICATION_KEYS
-        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA) else
+        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA) else
         INPUT_SPECIFICATION_KEYS_V9)
     require(isinstance(value, dict) and set(value) == expected_keys and
             all(isinstance(value.get(name), str) and value[name]
                 for name in INPUT_SPECIFICATION_KEYS_V9),
             "input specification is incomplete or has unexpected fields")
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         require(value.get("baseline_pure_avx2") is True,
                 "current evidence requires the pure-AVX2 baseline selector")
     require(re.fullmatch(
@@ -3018,6 +3076,8 @@ def compile_commands_schema_for_raw_schema(raw_schema: str) -> str:
         return COMPILE_COMMANDS_SCHEMA_V5
     if raw_schema == RAW_SCHEMA_V10:
         return COMPILE_COMMANDS_SCHEMA_V6
+    if raw_schema == RAW_SCHEMA_V11:
+        return COMPILE_COMMANDS_SCHEMA_V7
     return COMPILE_COMMANDS_SCHEMA
 
 
@@ -3044,6 +3104,12 @@ def build_configuration_contract_for_raw_schema(
             BUILD_CONFIGURATION_FILE_SCHEMA_V4,
             BUILD_CONFIGURATION_VARIABLES_V4,
         )
+    if raw_schema == RAW_SCHEMA_V11:
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V5,
+            BUILD_CONFIGURATION_FILE_SCHEMA_V5,
+            BUILD_CONFIGURATION_VARIABLES_V5,
+        )
     return (
         BUILD_CONFIGURATION_RECORD_SCHEMA,
         BUILD_CONFIGURATION_FILE_SCHEMA,
@@ -3058,6 +3124,7 @@ def build_configuration_material(
     require(isinstance(entries, Mapping) and
             tuple(variables) in (
                 BUILD_CONFIGURATION_VARIABLES,
+                BUILD_CONFIGURATION_VARIABLES_V5,
                 BUILD_CONFIGURATION_VARIABLES_V4,
                 BUILD_CONFIGURATION_VARIABLES_V3,
                 BUILD_CONFIGURATION_VARIABLES_V2) and
@@ -3235,10 +3302,16 @@ def validate_canonical_build_configuration_entries(
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
-        } if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA) else {}),
+        } if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA) else {}),
         **({
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+        } if raw_schema in (RAW_SCHEMA_V11, RAW_SCHEMA) else {}),
+        **({
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
         } if raw_schema == RAW_SCHEMA else {}),
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
     }
@@ -3671,9 +3744,11 @@ def candidate_library_sources_for_raw_schema(
 ) -> tuple[str, ...]:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "candidate source closure uses an unsupported evidence schema")
-    return (CANDIDATE_LIBRARY_SOURCES
-            if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA) else
-            CANDIDATE_LIBRARY_SOURCES_V9)
+    if raw_schema == RAW_SCHEMA:
+        return CANDIDATE_LIBRARY_SOURCES
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11):
+        return CANDIDATE_LIBRARY_SOURCES_V11
+    return CANDIDATE_LIBRARY_SOURCES_V9
 
 
 def candidate_library_target(source: str) -> str:
@@ -3681,6 +3756,12 @@ def candidate_library_target(source: str) -> str:
         "Leopard2BackendSSSE3.cpp": "leopard2_backend_ssse3.dir",
         "Leopard2BackendAVX2.cpp": "leopard2_backend_avx2.dir",
         "Leopard2BackendAVX2Xor.cpp": "leopard2_backend_avx2.dir",
+        "Leopard2BackendAVX2T32B256.cpp":
+            "leopard2_backend_avx2_t32_b256.dir",
+        "Leopard2BackendAVX2T16B64.cpp":
+            "leopard2_backend_avx2_t16_b64.dir",
+        "Leopard2LowP32B64AVX2.cpp": "leopard2_low_p32_b64_avx2.dir",
+        "Leopard2BackendAVX2T2K4.cpp": "leopard2_backend_avx2_t2_k4.dir",
         "Leopard2BackendAVX512.cpp": "leopard2_backend_avx512.dir",
         "Leopard2BackendGFNI.cpp": "leopard2_backend_gfni.dir",
     }
@@ -3695,7 +3776,7 @@ def candidate_compile_actions_for_raw_schema(
         for source in candidate_library_sources_for_raw_schema(raw_schema))
     non_library = (
         CANDIDATE_NON_LIBRARY_COMPILE_ACTIONS
-        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA) else
+        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA) else
         tuple(CANDIDATE_NON_LIBRARY_COMPILE_TARGETS_V9.items()))
     return library + non_library
 
@@ -3707,7 +3788,12 @@ def candidate_expected_compile_command_count(raw_schema: str) -> int:
 def candidate_isa_policy(raw_schema: str) -> str:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "candidate ISA policy uses an unsupported evidence schema")
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema == RAW_SCHEMA:
+        return (
+            "portable core with ISA flags only on SSSE3, AVX2, isolated "
+            "generated AVX2, and GFNI translation units; AVX-512 probes "
+            "disabled; AUTO resolved AVX2")
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11):
         return (
             "portable core with ISA flags only on SSSE3, AVX2, and GFNI "
             "translation units; AVX-512 probes disabled; AUTO resolved AVX2")
@@ -3735,7 +3821,7 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
         })
     if raw_schema == RAW_SCHEMA_V9:
         result["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         result.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
@@ -3755,10 +3841,17 @@ def candidate_required_cache(raw_schema: str) -> dict[str, str | None]:
             "LEO2_FLAG_MAVX512VL": "FALSE",
             "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256": "FALSE",
         })
-    if raw_schema == RAW_SCHEMA:
+    if raw_schema in (RAW_SCHEMA_V11, RAW_SCHEMA):
         result.update({
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+        })
+    if raw_schema == RAW_SCHEMA:
+        result.update({
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
         })
     return result
 
@@ -3772,7 +3865,9 @@ def compile_profile_for_implementation(
             "compile profile uses an unsupported evidence schema")
     if implementation == "baseline":
         return BASELINE_COMPILE_PROFILE
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11):
+        return CANDIDATE_COMPILE_PROFILE_V3
+    if raw_schema == RAW_SCHEMA:
         return CANDIDATE_COMPILE_PROFILE
     return (CANDIDATE_COMPILE_PROFILE_V2
             if raw_schema in BUILD_CLOSURE_V7_SCHEMAS else
@@ -3914,6 +4009,14 @@ def expected_compile_argv(
             "-mprefer-vector-width=256", "-falign-functions=64"],
         "Leopard2BackendGFNI.cpp": [
             "-mavx2", "-mgfni", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX2T32B256.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX2T16B64.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2LowP32B64AVX2.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
+        "Leopard2BackendAVX2T2K4.cpp": [
+            "-mavx2", "-mno-avx512f", "-falign-functions=64"],
     }
     if relative == "bench/leopard2/locator_benchmark.cpp":
         candidate_commit = specification.get("candidate_commit")
@@ -4022,6 +4125,32 @@ def expected_compile_argv(
             "-DLEO2_HAVE_AVX2_BACKEND=1", "-DLEO2_HAVE_GFNI_BACKEND=1"]
         includes = [f"-I{candidate_root}"]
         propagated_openmp = []
+    elif relative == "Leopard2BackendAVX2T32B256.cpp":
+        definitions = [
+            "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+        ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative == "Leopard2BackendAVX2T16B64.cpp":
+        definitions = [
+            "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+        ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative == "Leopard2LowP32B64AVX2.cpp":
+        definitions = [
+            "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+        ]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
+    elif relative == "Leopard2BackendAVX2T2K4.cpp":
+        definitions = ["-DLEO2_HAVE_AVX2_BACKEND=1"]
+        includes = [f"-I{candidate_root}"]
+        propagated_openmp = []
     elif relative in isolated_flags:
         definitions = []
         includes = [f"-I{candidate_root}"]
@@ -4032,7 +4161,8 @@ def expected_compile_argv(
             "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             *(["-DLEO2_HAVE_AVX512_BACKEND=1"]
-              if raw_schema not in (RAW_SCHEMA_V10, RAW_SCHEMA) else []),
+              if raw_schema not in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA)
+              else []),
             "-DLEO2_HAVE_GFNI_BACKEND=1",
             "-DLEO2_HAVE_SSSE3_BACKEND=1",
         ]
@@ -4043,7 +4173,7 @@ def expected_compile_argv(
         includes = [f"-I{candidate_root}"]
         propagated_openmp = ["-fopenmp"]
     source_definitions: list[str] = []
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         global_definitions = [
             "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
             "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
@@ -4055,6 +4185,8 @@ def expected_compile_argv(
                 "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+                *(["-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"]
+                  if raw_schema == RAW_SCHEMA else []),
             ])
         elif relative in {
                 "Leopard2BackendAVX2.cpp",
@@ -4073,6 +4205,12 @@ def expected_compile_argv(
             # Release compile command even though the token set is identical.
             source_definitions.append(
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
+        if raw_schema == RAW_SCHEMA and relative == "leopard2.cpp":
+            source_definitions.extend([
+                "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+            ])
+        source_definitions.sort()
     isa = isolated_flags.get(relative, [])
     configuration_definition = (
         [f'-DCMAKE_INTDIR="{selected_configuration}"']
@@ -4438,12 +4576,15 @@ def validate_archive_link_recipe_content(
     ordinary_prefix = f"CMakeFiles/{expected_target_directory}/"
     ordinary = [token for token in objects if
                 "/leopard2_backend_" not in f"/{token}" and
-                "/leopard_backend_" not in f"/{token}"]
+                "/leopard_backend_" not in f"/{token}" and
+                "/leopard2_low_p32_b64_avx2.dir/" not in f"/{token}"]
     require(ordinary and all(ordinary_prefix in token for token in ordinary),
             f"{label} ordinary objects use the wrong CMake target directory")
     require(all(
                 ordinary_prefix in token or
-                re.search(r"(?:^|/)CMakeFiles/leopard2?_backend_[^/]+\.dir/", token)
+                re.search(
+                    r"(?:^|/)CMakeFiles/(?:leopard2?_backend_[^/]+|"
+                    r"leopard2_low_p32_b64_avx2)\.dir/", token)
                 is not None
                 for token in objects),
             f"{label} contains an object from an undeclared CMake target")
@@ -4881,7 +5022,7 @@ def build_provenance(
     archive_records = [record for record in records if record not in benchmark_records]
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA):
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         semantics["generated_attestation_header"] = (
             capture_candidate_benchmark_attestation(
                 specification, benchmark_records[0]["object"])
@@ -5187,7 +5328,7 @@ def runtime_closure(
             output, f"ldd output for {executable_argument}")
     elif retained_output_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA):
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         result["canonical_ldd_output"] = canonical_ldd_output(
             output, f"ldd output for {executable_argument}")
     else:
@@ -5496,7 +5637,7 @@ def validate_complete_runtime_closure(
         "raw_ldd_output" if raw_schema == RAW_SCHEMA_V5 else
         "canonical_ldd_output" if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA) else None)
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA) else None)
     require(output_key is not None,
             f"{label} runtime closure uses an unsupported evidence schema")
     require(isinstance(value, dict) and set(value) == {
@@ -5957,7 +6098,7 @@ def validate_complete_build_identity(
                 "schema", "implementation", "profile", "required_entries"}
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA):
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         expected_compile_keys.add("generated_attestation_header")
     if raw_schema in BUILD_CLOSURE_V7_SCHEMAS:
         expected_compile_keys.add("effective_build_configuration")
@@ -6053,7 +6194,7 @@ def validate_complete_build_identity(
             f"{implementation} benchmark object is not unique")
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA):
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         if implementation == "candidate":
             attestation = validate_complete_benchmark_attestation(
                 compile_record.get("generated_attestation_header"), build_dir,
@@ -6107,6 +6248,10 @@ def validate_complete_build_identity(
             "Leopard2BackendAVX2.cpp",
             "Leopard2BackendAVX2Xor.cpp",
             "Leopard2BackendAVX512.cpp",
+            "Leopard2BackendAVX2T32B256.cpp",
+            "Leopard2BackendAVX2T16B64.cpp",
+            "Leopard2LowP32B64AVX2.cpp",
+            "Leopard2BackendAVX2T2K4.cpp",
             "Leopard2BackendGFNI.cpp",
         ) if source in library_sources)
         archive_source_order = (
@@ -6231,7 +6376,7 @@ def validate_complete_input_snapshot(
         require_detached=False, raw_schema=raw_schema)
     if raw_schema in (
             RAW_SCHEMA_V6, RAW_SCHEMA_V7, RAW_SCHEMA_V8, RAW_SCHEMA_V9,
-            RAW_SCHEMA_V10, RAW_SCHEMA):
+            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         attestation = snapshot["candidate_build"][
             "validated_compile_commands"]["generated_attestation_header"]
         require(attestation["source_commit"] ==
@@ -7469,7 +7614,17 @@ def ceil_power_of_two(value: int) -> int:
     return 1 << (value - 1).bit_length()
 
 
-def validate_cell(cell: Cell) -> None:
+def baseline_physical_shard_bytes(cell: Cell, raw_schema: str) -> int:
+    require(raw_schema in RAW_TO_CMAKE_IDENTITY,
+            "baseline byte geometry uses an unsupported evidence schema")
+    if raw_schema != RAW_SCHEMA:
+        return cell.shard_bytes
+    return (cell.shard_bytes + 63) & ~63
+
+
+def validate_cell(cell: Cell, raw_schema: str = RAW_SCHEMA) -> None:
+    require(raw_schema in RAW_TO_CMAKE_IDENTITY,
+            "cell uses an unsupported evidence schema")
     require(type(cell.identifier) is str and
             all(type(value) is int for value in (
                 cell.k, cell.r, cell.shard_bytes, cell.losses, cell.seed)),
@@ -7478,9 +7633,12 @@ def validate_cell(cell: Cell) -> None:
             f"invalid cell identifier {cell.identifier!r}")
     require(cell.k > 0 and cell.r > 0 and cell.r <= cell.k,
             f"cell {cell.identifier} is outside exact-main R <= K")
+    physical_bytes = baseline_physical_shard_bytes(cell, raw_schema)
     require(0 < cell.shard_bytes <= MAX_SHARD_BYTES and
-            cell.shard_bytes % 64 == 0,
-            f"cell {cell.identifier} shard bytes are not a positive multiple of 64")
+            physical_bytes <= MAX_SHARD_BYTES and
+            (raw_schema == RAW_SCHEMA or cell.shard_bytes % 64 == 0),
+            f"cell {cell.identifier} shard bytes violate the schema's "
+            "positive byte-size policy")
     require(0 <= cell.losses <= cell.r,
             f"cell {cell.identifier} has invalid loss count")
     parent = ceil_power_of_two(cell.k + ceil_power_of_two(cell.r))
@@ -7595,11 +7753,21 @@ def validate_digest_object(value: object) -> dict[str, str]:
     return result
 
 
-def expected_parameters(cell: Cell, campaign: Mapping[str, Any]) -> dict[str, Any]:
-    return {
+def expected_parameters(
+    implementation: str,
+    cell: Cell,
+    campaign: Mapping[str, Any],
+    raw_schema: str,
+) -> dict[str, Any]:
+    require(implementation in {"baseline", "candidate"} and
+            raw_schema in RAW_TO_CMAKE_IDENTITY,
+            "expected benchmark parameters use an unsupported identity")
+    parameters = {
         "K": cell.k,
         "R": cell.r,
-        "shard_bytes": cell.shard_bytes,
+        "shard_bytes": (
+            baseline_physical_shard_bytes(cell, raw_schema)
+            if implementation == "baseline" else cell.shard_bytes),
         "loss_count": cell.losses,
         "missing_original_indices": expected_losses(cell),
         "batch": 1,
@@ -7609,6 +7777,9 @@ def expected_parameters(cell: Cell, campaign: Mapping[str, Any]) -> dict[str, An
         "thread_count": 1,
         "seed": cell.seed,
     }
+    if implementation == "baseline" and raw_schema == RAW_SCHEMA:
+        parameters["logical_shard_bytes"] = cell.shard_bytes
+    return parameters
 
 
 def validate_result(
@@ -7621,16 +7792,21 @@ def validate_result(
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "unsupported result-container schema")
     require(isinstance(value, dict), "benchmark output is not a JSON object")
+    baseline_padded = (
+        implementation == "baseline" and raw_schema == RAW_SCHEMA and
+        baseline_physical_shard_bytes(cell, raw_schema) != cell.shard_bytes)
     expected_schema = (
-        "leopard-main-benchmark-v1" if implementation == "baseline"
+        ("leopard-main-benchmark-v2" if baseline_padded
+         else "leopard-main-benchmark-v1") if implementation == "baseline"
         else ("leopard2-benchmark-v9"
-              if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA)
+              if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA)
               else "leopard2-benchmark-v2"))
     require(value.get("schema") == expected_schema,
             f"{implementation} returned wrong schema")
     parameters = value.get("parameters")
     require(isinstance(parameters, dict), "parameters is not an object")
-    for name, expected in expected_parameters(cell, campaign).items():
+    for name, expected in expected_parameters(
+            implementation, cell, campaign, raw_schema).items():
         require(exact_json_equal(parameters.get(name), expected),
                 f"{implementation} parameter {name} differs: "
                 f"{parameters.get(name)!r} != {expected!r}")
@@ -7649,6 +7825,14 @@ def validate_result(
         require(type(resolved.get("thread_count")) is int and
                 resolved["thread_count"] == 1,
                 "baseline resolved more than one thread")
+        if raw_schema == RAW_SCHEMA:
+            require(resolved.get("padded_application_bytes") is
+                        baseline_padded and
+                    resolved.get("padding_policy") ==
+                        "zero suffix per shard" and
+                    value.get("correctness", {}).get(
+                        "logical_prefix_fingerprinted") is True,
+                    "baseline logical-byte padding identity differs")
         require(value.get("build", {}).get("main_source_commit") == MAIN_COMMIT,
                 "baseline did not attest the exact main commit")
         require(value.get("correctness", {}).get("round_trip") is True,
@@ -7668,7 +7852,7 @@ def validate_result(
         for name, expected in required_candidate.items():
             require(exact_json_equal(parameters.get(name), expected),
                     f"candidate option {name} is not comparison-safe")
-        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
             require(parameters.get("measure_one_shot_decode") is True,
                     "candidate did not measure the public one-shot decoder")
         else:
@@ -7687,7 +7871,7 @@ def validate_result(
         require(type(resolved.get("thread_count")) is int and
                 resolved["thread_count"] == 1,
                 "candidate resolved more than one thread")
-        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
             require(resolved.get("backend") == "avx2",
                     "current candidate AUTO did not resolve pure AVX2")
             build = value.get("build")
@@ -7722,7 +7906,8 @@ def validate_result(
         return {
             "digests": digests,
             "backend": ("exact_main_pure_avx2"
-                        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA)
+                        if raw_schema in (
+                            RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA)
                         else "exact_main_native"),
             "encode": encode,
             "decode": decode,
@@ -7731,7 +7916,7 @@ def validate_result(
     plan_setup = validate_summary(metrics.get("decode_plan_setup"), iterations, setup=True)
     decode = validate_summary(metrics.get("decode_execution"), iterations)
     one_shot_decode: list[float] | None = None
-    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+    if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
         one_shot_decode = validate_summary(
             metrics.get("one_shot_decode_including_setup"), iterations)
         memory = value.get("memory")
@@ -8111,7 +8296,9 @@ def validate_raw(
     require(type(campaign.get("batch")) is int and campaign["batch"] == 1 and
             type(campaign.get("threads")) is int and campaign["threads"] == 1,
             "campaign is not a one-stripe, one-thread comparison")
-    require(exact_json_equal(campaign.get("child_environment"), CHILD_ENVIRONMENT),
+    expected_child_environment = child_environment_for_raw_schema(raw_schema)
+    require(exact_json_equal(
+                campaign.get("child_environment"), expected_child_environment),
             "campaign child environment is not the strict comparison environment")
     cpu = campaign.get("benchmark_cpu")
     sibling = campaign.get("reserved_sibling")
@@ -8162,7 +8349,7 @@ def validate_raw(
     require(len({cell.identifier for cell in cells}) == len(cells),
             "campaign cell identifiers are not unique")
     for cell in cells:
-        validate_cell(cell)
+        validate_cell(cell, raw_schema)
     input_spec = raw.get("input_specification")
     initial = raw.get("identities_initial")
     final = raw.get("identities_final")
@@ -8265,7 +8452,8 @@ def validate_raw(
             require("execution_protocol" not in invocation and
                     "executable_snapshot" not in invocation,
                     "historical invocation contains unversioned sealed execution")
-        require(exact_json_equal(invocation.get("environment"), CHILD_ENVIRONMENT),
+        require(exact_json_equal(
+                    invocation.get("environment"), expected_child_environment),
                 "benchmark invocation inherited or retained an unsafe environment")
         if raw_schema in SEALED_EXECUTABLE_SCHEMAS:
             for stream_name, limit in (
@@ -8340,14 +8528,20 @@ def benchmark_arguments(
 ) -> list[str]:
     require(raw_schema in RAW_TO_CMAKE_IDENTITY,
             "unsupported benchmark-command schema")
+    benchmark_bytes = (
+        baseline_physical_shard_bytes(cell, raw_schema)
+        if implementation == "baseline" else cell.shard_bytes)
     arguments = [
         str(executable), "--k", str(cell.k), "--r", str(cell.r),
-        "--bytes", str(cell.shard_bytes), "--loss", str(cell.losses),
+        "--bytes", str(benchmark_bytes), "--loss", str(cell.losses),
         "--batch", "1", "--reuse", str(campaign["reuse"]),
         "--iterations", str(campaign["iterations"]),
         "--warmup", str(campaign["warmup"]), "--threads", "1",
         "--seed", str(cell.seed),
     ]
+    if implementation == "baseline" and raw_schema == RAW_SCHEMA and \
+            benchmark_bytes != cell.shard_bytes:
+        arguments.extend(("--logical-bytes", str(cell.shard_bytes)))
     if implementation == "candidate":
         arguments.extend((
             "--profile", "high", "--field", "auto", "--backend", "auto",
@@ -8355,7 +8549,7 @@ def benchmark_arguments(
         ))
         arguments.extend(candidate_mode_arguments(
             candidate_mode_for_campaign(campaign)))
-        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA):
+        if raw_schema in (RAW_SCHEMA_V10, RAW_SCHEMA_V11, RAW_SCHEMA):
             arguments.append("--measure-one-shot-decode")
     arguments.extend(("--json", "-"))
     return arguments
@@ -8545,14 +8739,15 @@ def validate_failure(
     if failure_schema in (
             FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
-            FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V11, FAILURE_SCHEMA):
         expected_fields.add("supervision")
     if failure_schema in (
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
-            FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V11, FAILURE_SCHEMA):
         expected_fields.add("executable_snapshots")
     if failure_schema in (
-            FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
+            FAILURE_SCHEMA):
         expected_fields.add("evidence_contract")
     require(set(failure) == expected_fields,
         "failed campaign has unexpected or missing fields")
@@ -8561,10 +8756,12 @@ def validate_failure(
             failure.get("status") == "failed" and failure.get("valid") is False,
             "failed campaign status is invalid")
     if failure_schema in (
-            FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
+            FAILURE_SCHEMA):
         expected_contract = {
             FAILURE_SCHEMA_V9: FAILURE_EVIDENCE_CONTRACT_V9,
             FAILURE_SCHEMA_V10: FAILURE_EVIDENCE_CONTRACT_V10,
+            FAILURE_SCHEMA_V11: FAILURE_EVIDENCE_CONTRACT_V11,
             FAILURE_SCHEMA: FAILURE_EVIDENCE_CONTRACT,
         }[failure_schema]
         require(
@@ -8575,7 +8772,7 @@ def validate_failure(
             "failed campaign diagnostic fields are invalid")
     if failure_schema in (
             FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
-            FAILURE_SCHEMA):
+            FAILURE_SCHEMA_V11, FAILURE_SCHEMA):
         validate_utc_timestamp(
             failure.get("created_utc"), "sealed failed campaign creation time")
     campaign = failure.get("campaign")
@@ -8603,7 +8800,8 @@ def validate_failure(
             1 <= campaign["warmup"] <= MAX_CAMPAIGN_COUNT,
             "failed campaign scalar counts are invalid")
     require(exact_json_equal(
-                campaign.get("child_environment"), CHILD_ENVIRONMENT) and
+                campaign.get("child_environment"),
+                child_environment_for_raw_schema(raw_schema)) and
             exact_json_equal(
                 campaign.get("statistics"), statistics_policy(raw_schema)),
             "failed campaign comparison policy is invalid")
@@ -8651,7 +8849,8 @@ def validate_failure(
         require(failure_schema in (
                     FAILURE_SCHEMA_V5, FAILURE_SCHEMA_V6, FAILURE_SCHEMA_V7,
                     FAILURE_SCHEMA_V8, FAILURE_SCHEMA_V9,
-                    FAILURE_SCHEMA_V10, FAILURE_SCHEMA) and
+                    FAILURE_SCHEMA_V10, FAILURE_SCHEMA_V11,
+                    FAILURE_SCHEMA) and
                 reservation is not None and
                 isolation is not None and isinstance(campaign, dict),
                 "failed supervision handshake has no complete-schema context")
@@ -8667,7 +8866,7 @@ def validate_failure(
             "failed campaign cells are missing")
     cells = [Cell(**item) for item in cells_value]
     for cell in cells:
-        validate_cell(cell)
+        validate_cell(cell, raw_schema)
     expected_sequence = [
         (cell.identifier, round_index, slot, implementation)
         for cell in cells for round_index in range(ROUNDS)
@@ -8730,7 +8929,8 @@ def validate_failure(
         ]
         require(exact_json_equal(invocation.get("command"), expected_command) and
                 exact_json_equal(
-                    invocation.get("environment"), CHILD_ENVIRONMENT) and
+                    invocation.get("environment"),
+                    child_environment_for_raw_schema(raw_schema)) and
                 type(invocation.get("pinned_cpu")) is int and
                 invocation["pinned_cpu"] == cpu and
                 exact_json_equal(invocation.get("identity_before"), initial) and
@@ -9072,7 +9272,7 @@ def verified_campaign_bundle(
                 "manifest is not valid main-comparison evidence")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
-                MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA):
             require(set(manifest) == MANIFEST_V8_KEYS,
                     "sealed manifest has unexpected or missing fields")
             validate_utc_timestamp(
@@ -9080,7 +9280,8 @@ def verified_campaign_bundle(
                 "sealed manifest creation time")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V7, MANIFEST_SCHEMA_V8,
-                MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10, MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
+                MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA):
             directory.enable_owner_only()
             _, strict_manifest_bytes = directory.snapshot(
                 manifest_path.name, MAX_IDENTITY_FILE_BYTES)
@@ -9099,7 +9300,7 @@ def verified_campaign_bundle(
         require(isinstance(raw_info, dict), "manifest has no raw bundle identity")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
-                MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA):
             require(set(raw_info) == MANIFEST_RAW_IDENTITY_KEYS,
                     "sealed manifest raw identity has unexpected or missing fields")
         raw_relative = raw_info.get("path")
@@ -9133,7 +9334,7 @@ def verified_campaign_bundle(
             MANIFEST_SCHEMA_V2, MANIFEST_SCHEMA_V3, MANIFEST_SCHEMA_V4,
             MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
             MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
-            MANIFEST_SCHEMA
+            MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA
         ):
             names.append("isolation")
         else:
@@ -9142,14 +9343,14 @@ def verified_campaign_bundle(
         if manifest_schema in (
                 MANIFEST_SCHEMA_V5, MANIFEST_SCHEMA_V6, MANIFEST_SCHEMA_V7,
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
-                MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA):
             names.append("supervision")
         else:
             require("supervision" not in manifest,
                     "historical manifest contains unversioned supervision data")
         if manifest_schema in (
                 MANIFEST_SCHEMA_V8, MANIFEST_SCHEMA_V9, MANIFEST_SCHEMA_V10,
-                MANIFEST_SCHEMA):
+                MANIFEST_SCHEMA_V11, MANIFEST_SCHEMA):
             names.append("executable_snapshots")
         else:
             require("executable_snapshots" not in manifest,
@@ -9216,7 +9417,8 @@ def verify_failed_campaign(options: argparse.Namespace) -> int:
                 "failed campaign schema is invalid")
         if failure_schema in (
                 FAILURE_SCHEMA_V7, FAILURE_SCHEMA_V8,
-                FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10, FAILURE_SCHEMA):
+                FAILURE_SCHEMA_V9, FAILURE_SCHEMA_V10,
+                FAILURE_SCHEMA_V11, FAILURE_SCHEMA):
             directory.enable_owner_only()
             _, strict_failure_bytes = directory.snapshot(
                 failure_path.name, MAX_IDENTITY_FILE_BYTES)

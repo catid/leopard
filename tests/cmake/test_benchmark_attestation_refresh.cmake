@@ -63,7 +63,7 @@ function(leo2_read_effective_configuration
     endif()
     file(READ "${configuration_file}" configuration)
     string(REGEX MATCH
-        "^schema=leopard2-benchmark-build-configuration/v5\nsha256=([0-9a-f]+)\n"
+        "^schema=leopard2-benchmark-build-configuration/v6\nsha256=([0-9a-f]+)\n"
         header "${configuration}")
     set(declared_digest "${CMAKE_MATCH_1}")
     string(LENGTH "${declared_digest}" declared_digest_length)
@@ -85,6 +85,14 @@ function(leo2_read_effective_configuration
         REGEX "^CMAKE_BUILD_TYPE=")
     file(STRINGS "${configuration_file}" direct_source_plan_lines
         REGEX "^LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=")
+    file(STRINGS "${configuration_file}" high_t16_generated_lines
+        REGEX "^LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=")
+    file(STRINGS "${configuration_file}" high_t32_two_block_lines
+        REGEX "^LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=")
+    file(STRINGS "${configuration_file}" high_t32_disable_two_block_lines
+        REGEX "^LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=")
+    file(STRINGS "${configuration_file}" low_p32_terminal_lines
+        REGEX "^LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=")
     file(STRINGS "${configuration_file}" one_shot_equal_rounded_lines
         REGEX "^LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=")
     file(STRINGS "${configuration_file}" cauchy_log_reuse_lines
@@ -109,6 +117,11 @@ function(leo2_read_effective_configuration
         REGEX "^LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=")
     list(LENGTH build_type_lines build_type_line_count)
     list(LENGTH direct_source_plan_lines direct_source_plan_line_count)
+    list(LENGTH high_t16_generated_lines high_t16_generated_line_count)
+    list(LENGTH high_t32_two_block_lines high_t32_two_block_line_count)
+    list(LENGTH high_t32_disable_two_block_lines
+        high_t32_disable_two_block_line_count)
+    list(LENGTH low_p32_terminal_lines low_p32_terminal_line_count)
     list(LENGTH one_shot_equal_rounded_lines
         one_shot_equal_rounded_line_count)
     list(LENGTH cauchy_log_reuse_lines cauchy_log_reuse_line_count)
@@ -128,6 +141,10 @@ function(leo2_read_effective_configuration
     list(LENGTH small_direct_mode_lines small_direct_mode_line_count)
     if(NOT build_type_line_count EQUAL 1 OR
        NOT direct_source_plan_line_count EQUAL 1 OR
+       NOT high_t16_generated_line_count EQUAL 1 OR
+       NOT high_t32_two_block_line_count EQUAL 1 OR
+       NOT high_t32_disable_two_block_line_count EQUAL 1 OR
+       NOT low_p32_terminal_line_count EQUAL 1 OR
        NOT one_shot_equal_rounded_line_count EQUAL 1 OR
        NOT cauchy_log_reuse_line_count EQUAL 1 OR
        NOT high_direct_encode_line_count EQUAL 1 OR
@@ -173,7 +190,7 @@ function(leo2_read_effective_configuration
     string(REGEX REPLACE "^[^=]+=" "" cached_schema "${cached_schema}")
     if(NOT cached_digest STREQUAL declared_digest OR
        NOT cached_schema STREQUAL
-           "leopard2-benchmark-build-configuration/v5")
+           "leopard2-benchmark-build-configuration/v6")
         message(FATAL_ERROR
             "Effective build configuration differs from its cache binding")
     endif()
@@ -311,11 +328,46 @@ if(NOT initial_build_type STREQUAL "Release" OR
    NOT initial_configuration_material MATCHES
        "CMAKE_CXX_FLAGS=[^\n]*LEO2_EFFECTIVE_ONE=1" OR
    NOT initial_configuration_material MATCHES
+       "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=\nLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=\nLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=\nLEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=" OR
+   NOT initial_configuration_material MATCHES
        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN=\nLEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR=\nLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=\nLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=\nLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=\nLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=\nLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=\nLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=\nLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=\nLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=\nLEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n$")
     message(FATAL_ERROR
         "Initial sidecar omitted the effective non-cache CXX flag:\n"
         "${initial_configuration_material}")
 endif()
+
+# These selectors change distinct production translation units or routing.
+# Each one must independently perturb the effective-configuration digest; an
+# omitted selector could otherwise let two different benchmark binaries share
+# one attested build identity.
+foreach(selector
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+        LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK
+        LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK
+        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+    leo2_run(${configure_command} "-D${selector}=ON")
+    leo2_read_effective_configuration(
+        "${fixture_build}" selector_configuration selector_build_type
+        selector_material)
+    if(selector_configuration STREQUAL initial_configuration OR
+       NOT selector_build_type STREQUAL "Release" OR
+       NOT selector_material MATCHES "${selector}=ON\n")
+        message(FATAL_ERROR
+            "${selector} did not change the attested effective "
+            "configuration")
+    endif()
+    leo2_run(${configure_command} "-D${selector}=")
+    leo2_read_effective_configuration(
+        "${fixture_build}" restored_configuration restored_build_type
+        restored_material)
+    if(NOT restored_configuration STREQUAL initial_configuration OR
+       NOT restored_build_type STREQUAL initial_build_type OR
+       NOT restored_material STREQUAL initial_configuration_material)
+        message(FATAL_ERROR
+            "Clearing ${selector} did not restore the original effective "
+            "configuration")
+    endif()
+endforeach()
 
 set(attestation_header
     "${fixture_build}/generated/leopard2-benchmark-attestation/leopard2_benchmark_source_attestation.h")

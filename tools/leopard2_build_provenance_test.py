@@ -702,42 +702,46 @@ class StableFileSnapshotTests(unittest.TestCase):
 
     def test_interrupted_inotify_initialization_closes_descriptor(self) -> None:
         captured: list[int] = []
-        armed = False
 
         class InitFunction:
             argtypes = None
             restype = None
 
             def __call__(self, unused_flags) -> int:
-                nonlocal armed
                 descriptor = os.open("/dev/null", os.O_RDONLY)
                 captured.append(descriptor)
-                armed = True
                 return descriptor
 
         class Library:
             inotify_init1 = InitFunction()
 
-        init_code = provenance._InotifyMutationGuard.__init__.__code__
+        real_cdll = provenance.ctypes.CDLL
+        served_inotify_library = False
 
-        def interrupt_after_init(frame, event: str, argument):
-            del argument
-            if armed and event == "line" and frame.f_code is init_code:
-                raise KeyboardInterrupt(
-                    "injected post-inotify-init interruption")
-            return interrupt_after_init
+        def load_library(*args, **kwargs):
+            nonlocal served_inotify_library
+            if not served_inotify_library:
+                served_inotify_library = True
+                return Library()
+            # Constructor cleanup obtains libc again for its one-shot close;
+            # do not let the inotify-only fixture replace that independent
+            # primitive with an object that has no close symbol.
+            return real_cdll(*args, **kwargs)
 
-        previous_trace = sys.gettrace()
-        try:
-            with mock.patch.object(
-                    provenance.ctypes, "CDLL", return_value=Library()):
-                sys.settrace(interrupt_after_init)
-                with self.assertRaisesRegex(
-                        KeyboardInterrupt, "post-inotify-init"):
-                    provenance._InotifyMutationGuard(
-                        "interrupted inotify")
-        finally:
-            sys.settrace(previous_trace)
+        # Raising from fdopen is the first operation after inotify_init1 has
+        # returned its owned descriptor.  This deterministic boundary tests
+        # the same constructor cleanup without a line tracer that can re-enter
+        # the exception handler on newer CPython versions.
+        with mock.patch.object(
+                provenance.ctypes, "CDLL", side_effect=load_library), \
+                mock.patch.object(
+                    provenance.os, "fdopen",
+                    side_effect=KeyboardInterrupt(
+                        "injected post-inotify-init interruption")):
+            with self.assertRaisesRegex(
+                    KeyboardInterrupt, "post-inotify-init"):
+                provenance._InotifyMutationGuard(
+                    "interrupted inotify")
         self.assertEqual(len(captured), 1)
         with self.assertRaises(OSError):
             os.fstat(captured[0])
@@ -1002,8 +1006,11 @@ class StableFileSnapshotTests(unittest.TestCase):
                 return descriptor
 
             def interrupt_after_return(frame, event: str, argument):
+                nonlocal armed
                 del argument
                 if armed and event == "line" and frame.f_code is property_code:
+                    armed = False
+                    sys.settrace(None)
                     raise KeyboardInterrupt(
                         "injected post-memfd-create interruption")
                 return interrupt_after_return
@@ -2290,6 +2297,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
@@ -2297,7 +2305,10 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
             "LEOPARD_ENABLE_GF16": "ON",
@@ -2343,11 +2354,32 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             self.assertIn(
                 "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED:BOOL=OFF",
                 configure)
+            v6_only = {
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+            }
+            for selector in v6_only:
+                self.assertTrue(any(
+                    argument.startswith(f"-D{selector}:BOOL=")
+                    for argument in configure))
+            v5_cache = dict(cache)
+            v5_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5
+            for selector in v6_only:
+                v5_cache.pop(selector)
+            v5_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v5-build", v5_cache)
+            self.assertFalse(any(
+                any(argument.startswith(f"-D{selector}:")
+                    for selector in v6_only)
+                for argument in v5_configure))
             v5_only = {
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
             }
-            v4_cache = dict(cache)
+            v4_cache = dict(v5_cache)
             v4_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4
             for selector in v5_only:
@@ -3341,9 +3373,13 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
                         "a" * 64,
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
                     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
                     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+                    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                 },
                 "c_compiler": identity,
@@ -3430,6 +3466,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_ENABLE_CUDA": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
@@ -3437,7 +3474,10 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEOPARD_ENABLE_GF8": "ON",
             "LEOPARD_ENABLE_GF16": "ON",
@@ -3446,12 +3486,16 @@ class ExactCommandValidationTests(unittest.TestCase):
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
         }
         for selector, expected in selectors.items():
@@ -3476,6 +3520,134 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.parse_cmake_cache(
                     f"{selector}:STRING={expected}\n".encode("ascii"))
 
+    def test_v5_replay_capture_uses_its_frozen_cache_contract(self) -> None:
+        cache = {
+            "CMAKE_BUILD_TYPE": "Release",
+            "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+            "CMAKE_GENERATOR": "Unix Makefiles",
+            "ENABLE_OPENMP": "ON",
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "a" * 64,
+            "LEO2_BUILD_BENCHMARKS": "ON",
+            "LEO2_BUILD_FUZZERS": "OFF",
+            "LEO2_ENABLE_CUDA": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+            "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
+            "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+            "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            "LEOPARD_ENABLE_GF8": "ON",
+            "LEOPARD_ENABLE_GF16": "ON",
+        }
+        validated = provenance._validate_candidate_required_cache(
+            cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
+        self.assertEqual(
+            validated["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
+        for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"):
+            self.assertNotIn(selector, validated)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "EFFECTIVE_CONFIGURATION_SCHEMA"):
+            provenance._validate_candidate_required_cache(cache)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "configuration schema is unsupported"):
+            provenance._validate_candidate_required_cache(
+                cache,
+                expected_configuration_schema=
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4)
+
+    def test_active_replay_generation_rejects_pre_v5_contracts(self) -> None:
+        digest = "a" * 64
+        for schema, selectors in (
+                (
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
+                    {"LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF"},
+                ),
+                (
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
+                    {
+                        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT":
+                            "ON",
+                        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                    },
+                )):
+            with self.subTest(schema=schema):
+                candidate = {
+                    "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+                    "source_root": "/does/not/need/to/exist",
+                    "validated_cache": {
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                            schema,
+                        "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256":
+                            digest,
+                        **selectors,
+                    },
+                }
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "supports only v5 and current"):
+                    provenance.verify_reproducible_candidate_build(
+                        candidate, jobs=1)
+
+    def test_verify_replay_capture_forwards_v5_configuration_schema(
+            self) -> None:
+        candidate = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": "a" * 64,
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            },
+        }
+        replay_contract = provenance._reproducible_replay_contract(
+            candidate)
+        rebuilt = {"captured": True}
+        build = Path("/tmp/replayed-build")
+        source = Path("/tmp/replayed-source")
+        manifest = {"manifest": True}
+        sealed = {}
+        with mock.patch.object(
+                provenance, "candidate_build_provenance",
+                return_value=rebuilt) as capture:
+            self.assertIs(
+                provenance._capture_replayed_candidate_provenance(
+                    build, source, "bench_leopard2",
+                    replay_contract=replay_contract,
+                    inherited_descriptors=(17,),
+                    tracked_source_manifest=manifest,
+                    logical_source_root=SOURCE_ROOT,
+                    sealed_artifacts=sealed),
+                rebuilt)
+        capture.assert_called_once_with(
+            build, source, build / "bench_leopard2", "bench_leopard2",
+            inherited_descriptors=(17,),
+            tracked_source_manifest=manifest,
+            logical_source_root=SOURCE_ROOT,
+            _expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            sealed_artifacts=sealed)
+
     def test_replay_contract_cannot_downgrade_current_closures(self) -> None:
         digest = "a" * 64
         current = {
@@ -3483,6 +3655,23 @@ class ExactCommandValidationTests(unittest.TestCase):
             "validated_cache": {
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+                "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
+                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+                "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            },
+        }
+        v5 = {
+            "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
+            "validated_cache": {
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256": digest,
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
@@ -3527,6 +3716,12 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance.REPLAY_INVOCATION_SCHEMA)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
+                v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
                 v4, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "configuration_schema"],
@@ -3567,8 +3762,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
-                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED"):
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK"):
             with self.subTest(current_missing=selector):
                 missing_selector = copy.deepcopy(current)
                 del missing_selector["validated_cache"][selector]
@@ -3577,6 +3776,14 @@ class ExactCommandValidationTests(unittest.TestCase):
                         "current reproducible-build closure configuration"):
                     provenance._reproducible_replay_contract(
                         missing_selector)
+
+        v5_with_v6_selector = copy.deepcopy(v5)
+        v5_with_v6_selector["validated_cache"][
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"] = "ON"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "v5 reproducible-build closure configuration"):
+            provenance._reproducible_replay_contract(v5_with_v6_selector)
 
         for selector in (
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
@@ -3788,6 +3995,14 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ("-mssse3", "-mno-avx"), "ssse3-no-avx"),
             "Leopard2BackendAVX2.cpp": (
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2BackendAVX2T2K4.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2BackendAVX2T16B64.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2BackendAVX2T32B256.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2LowP32B64AVX2.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendGFNI.cpp": (
                 ("-mavx2", "-mgfni", "-mno-avx512f"),
                 "avx2-gfni-no-avx512"),
@@ -3799,7 +4014,8 @@ class ExactCommandValidationTests(unittest.TestCase):
         ) -> list[str]:
             enhanced = source_name.startswith((
                 "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
-                "Leopard2BackendGFNI"))
+                "Leopard2BackendGFNI")) or \
+                source_name == "Leopard2LowP32B64AVX2.cpp"
             return [
                 str(tool_path("c++")),
                 "-Wall", "-Wextra",
@@ -3925,6 +4141,366 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.BuildProvenanceError, "response-file"):
             provenance._validate_compile_flags(
                 response, Path("leopard2.cpp"))
+
+    def test_isolated_avx2_member_definitions_are_exact(self) -> None:
+        cache = {
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+            "LEO2_FLAG_FALIGN_FUNCTIONS_64": "1",
+            "LEOPARD_ENABLE_GF16": "ON",
+        }
+        common_definitions = {
+            "-DNDEBUG",
+            "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+            "-DLEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        }
+        member_definitions = {
+            "Leopard2BackendAVX2T2K4.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+            },
+            "Leopard2BackendAVX2T16B64.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            },
+            "Leopard2BackendAVX2T32B256.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+                "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0",
+            },
+            "Leopard2LowP32B64AVX2.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            },
+        }
+        member_sources = {
+            name: (SOURCE_ROOT / name).resolve(strict=True)
+            for name in member_definitions
+        }
+        library_sources = set(member_sources.values())
+
+        def compile_argv(
+            source: Path, definitions: set[str], *,
+            target_flags: tuple[str, ...] = (
+                "-mavx2", "-mno-avx512f", "-falign-functions=64"),
+        ) -> list[str]:
+            enhanced = source.name.startswith((
+                "Leopard2BackendSSSE3", "Leopard2BackendAVX2",
+                "Leopard2BackendGFNI")) or \
+                source.name == "Leopard2LowP32B64AVX2.cpp"
+            return [
+                str(tool_path("c++")),
+                *sorted(definitions),
+                f"-I{SOURCE_ROOT}",
+                "-Wall", "-Wextra",
+                *(("-fopenmp",) if enhanced else
+                  ("-fopenmp", "-fopenmp")),
+                "-O3", "-O3", "-std=gnu++11",
+                *target_flags,
+                "-o", f"{source.name}.o", "-c", str(source),
+            ]
+
+        canonical_tokens: dict[str, list[str]] = {}
+        for name, specific_definitions in member_definitions.items():
+            source = member_sources[name]
+            definitions = common_definitions | specific_definitions
+            tokens = compile_argv(source, definitions)
+            canonical_tokens[name] = tokens
+            with self.subTest(member=name):
+                self.assertEqual(
+                    provenance._validate_compile_flags(
+                        tokens, source, source_root=SOURCE_ROOT,
+                        cache=cache, library_sources=library_sources),
+                    "avx2-no-avx512")
+            for definition in specific_definitions:
+                missing = [token for token in tokens if token != definition]
+                with self.subTest(member=name, missing=definition), \
+                        self.assertRaisesRegex(
+                            provenance.BuildProvenanceError,
+                            "non-canonical compile definitions"):
+                    provenance._validate_compile_flags(
+                        missing, source, source_root=SOURCE_ROOT,
+                        cache=cache, library_sources=library_sources)
+            mature_selector = list(tokens)
+            mature_selector.insert(
+                1, "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
+            with self.subTest(member=name, mature_selector=True), \
+                    self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "non-canonical compile definitions"):
+                provenance._validate_compile_flags(
+                    mature_selector, source, source_root=SOURCE_ROOT,
+                    cache=cache, library_sources=library_sources)
+            missing_alignment = [
+                token for token in tokens
+                if token != "-falign-functions=64"
+            ]
+            with self.subTest(member=name, missing_alignment=True), \
+                    self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "non-canonical or indirect compile option"):
+                provenance._validate_compile_flags(
+                    missing_alignment, source, source_root=SOURCE_ROOT,
+                    cache=cache, library_sources=library_sources)
+
+        # The retained replay cache predates the T32 two-block selector.  Its
+        # archive member proves the default-on path while generated T32 is
+        # retained as explicitly off.
+        replay_cache = {
+            key: value for key, value in cache.items()
+            if key not in {
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+            }
+        }
+        t32_name = "Leopard2BackendAVX2T32B256.cpp"
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                canonical_tokens[t32_name], member_sources[t32_name],
+                source_root=SOURCE_ROOT, cache=replay_cache,
+                library_sources=library_sources),
+            "avx2-no-avx512")
+        p32_name = "Leopard2LowP32B64AVX2.cpp"
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                canonical_tokens[p32_name], member_sources[p32_name],
+                source_root=SOURCE_ROOT, cache=replay_cache,
+                library_sources=library_sources),
+            "avx2-no-avx512")
+
+        generated_cache = dict(cache)
+        generated_cache.update({
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "OFF",
+        })
+        generated_definitions = common_definitions | {
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1",
+            "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=1",
+        }
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(
+                    member_sources[t32_name], generated_definitions),
+                member_sources[t32_name], source_root=SOURCE_ROOT,
+                cache=generated_cache, library_sources=library_sources),
+            "avx2-no-avx512")
+
+        gf16_off_cache = dict(cache)
+        gf16_off_cache["LEOPARD_ENABLE_GF16"] = "OFF"
+        gf16_off_definitions = common_definitions | {
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            "-DNO_LEO_HAS_FF16=1",
+        }
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(
+                    member_sources[p32_name], gf16_off_definitions),
+                member_sources[p32_name], source_root=SOURCE_ROOT,
+                cache=gf16_off_cache, library_sources=library_sources),
+            "avx2-no-avx512")
+        unexpected_field_disable = compile_argv(
+            member_sources[p32_name], gf16_off_definitions)
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "non-canonical compile definitions"):
+            provenance._validate_compile_flags(
+                unexpected_field_disable, member_sources[p32_name],
+                source_root=SOURCE_ROOT, cache=cache,
+                library_sources=library_sources)
+
+        disabled_object_caches = {
+            "Leopard2BackendAVX2T16B64.cpp": {
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "OFF",
+            },
+            "Leopard2BackendAVX2T32B256.cpp": {
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "OFF",
+            },
+            "Leopard2LowP32B64AVX2.cpp": {
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "OFF",
+            },
+        }
+        for name, overrides in disabled_object_caches.items():
+            disabled_cache = dict(cache)
+            disabled_cache.update(overrides)
+            with self.subTest(disabled_object=name), \
+                    self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "contradicts its disabled selector"):
+                provenance._validate_compile_flags(
+                    canonical_tokens[name], member_sources[name],
+                    source_root=SOURCE_ROOT, cache=disabled_cache,
+                    library_sources=library_sources)
+
+        lookalike = SOURCE_ROOT / "Leopard2BackendAVX2Lookalike.cpp"
+        lookalike_tokens = compile_argv(
+            lookalike, common_definitions | {
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1"})
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "not an allowlisted production AVX2"):
+            provenance._validate_compile_flags(
+                lookalike_tokens, lookalike, source_root=SOURCE_ROOT,
+                cache=cache, library_sources=library_sources | {lookalike})
+
+        mature_definitions = {
+            "Leopard2BackendAVX2.cpp": common_definitions | {
+                "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            },
+            "Leopard2BackendAVX2Xor.cpp": common_definitions | {
+                "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            },
+        }
+        for name, definitions in mature_definitions.items():
+            source = (SOURCE_ROOT / name).resolve(strict=True)
+            with self.subTest(mature=name):
+                self.assertEqual(
+                    provenance._validate_compile_flags(
+                        compile_argv(source, definitions), source,
+                        source_root=SOURCE_ROOT, cache=cache,
+                        library_sources=library_sources | {source}),
+                    "avx2-no-avx512")
+            low_p32_selector = compile_argv(
+                source, definitions | {
+                    "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"})
+            with self.subTest(mature=name, low_p32_selector=True), \
+                    self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "non-canonical compile definitions"):
+                provenance._validate_compile_flags(
+                    low_p32_selector, source, source_root=SOURCE_ROOT,
+                    cache=cache,
+                    library_sources=library_sources | {source})
+
+        router = (SOURCE_ROOT / "leopard2.cpp").resolve(strict=True)
+        mature = (SOURCE_ROOT / "Leopard2BackendAVX2.cpp").resolve(
+            strict=True)
+        routed_library_sources = library_sources | {router, mature}
+        router_definitions = common_definitions | {
+            "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+            "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+            "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+        }
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(router, router_definitions, target_flags=()),
+                router, source_root=SOURCE_ROOT, cache=replay_cache,
+                library_sources=routed_library_sources),
+            "portable-core")
+        missing_low_p32 = compile_argv(
+            router,
+            router_definitions - {
+                "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"},
+            target_flags=())
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "non-canonical compile definitions"):
+            provenance._validate_compile_flags(
+                missing_low_p32, router, source_root=SOURCE_ROOT,
+                cache=replay_cache,
+                library_sources=routed_library_sources)
+
+        ff8 = (SOURCE_ROOT / "LeopardFF8.cpp").resolve(strict=True)
+        ff8_library_sources = routed_library_sources | {ff8}
+        ff8_definitions = common_definitions | {
+            "-DLEO2_DISABLE_AVX2_CODEGEN=1",
+            "-DLEO2_DISABLE_SSSE3_CODEGEN=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+            "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+            "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            "-DLEO2_HAVE_AVX2_BACKEND=1",
+        }
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(ff8, ff8_definitions, target_flags=()),
+                ff8, source_root=SOURCE_ROOT, cache=replay_cache,
+                library_sources=ff8_library_sources),
+            "portable-core")
+
+    def test_low_p32_source_discovery_tracks_the_selector(self) -> None:
+        p32_name = "Leopard2LowP32B64AVX2.cpp"
+        t16_name = "Leopard2BackendAVX2T16B64.cpp"
+        t32_name = "Leopard2BackendAVX2T32B256.cpp"
+        tracked_names = set(provenance.CORE_LIBRARY_SOURCES) | {
+            "LeopardFF8.cpp",
+            "Leopard2BackendSSSE3.cpp",
+            "Leopard2BackendAVX2.cpp",
+            "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX2T2K4.cpp",
+            t16_name,
+            t32_name,
+            p32_name,
+        }
+        tracked = {
+            (SOURCE_ROOT / name).resolve(strict=True)
+            for name in tracked_names
+        }
+        lookalike = (
+            SOURCE_ROOT / "Leopard2BackendAVX2Lookalike.cpp").resolve(
+                strict=False)
+        tracked.add(lookalike)
+        cache = {
+            "LEOPARD_ENABLE_GF16": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+        }
+        expected = provenance._expected_library_sources(
+            SOURCE_ROOT, cache, tracked)
+        t2_path = (
+            SOURCE_ROOT / "Leopard2BackendAVX2T2K4.cpp").resolve(
+                strict=True)
+        self.assertIn(t2_path, expected)
+        self.assertIn((SOURCE_ROOT / p32_name).resolve(strict=True), expected)
+        self.assertIn((SOURCE_ROOT / t16_name).resolve(strict=True), expected)
+        self.assertIn((SOURCE_ROOT / t32_name).resolve(strict=True), expected)
+        self.assertNotIn(lookalike, expected)
+
+        historical_expected = provenance._expected_library_sources(
+            SOURCE_ROOT, cache, tracked,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
+        self.assertNotIn(t2_path, historical_expected)
+        self.assertIn(
+            (SOURCE_ROOT / t16_name).resolve(strict=True),
+            historical_expected)
+        self.assertIn(
+            (SOURCE_ROOT / t32_name).resolve(strict=True),
+            historical_expected)
+
+        disabled_cache = dict(cache)
+        disabled_cache["LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"] = "OFF"
+        disabled_cache["LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK"] = "OFF"
+        disabled_cache["LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"] = "OFF"
+        expected_without_p32 = provenance._expected_library_sources(
+            SOURCE_ROOT, disabled_cache, tracked)
+        self.assertNotIn(
+            (SOURCE_ROOT / p32_name).resolve(strict=True),
+            expected_without_p32)
+        self.assertNotIn(
+            (SOURCE_ROOT / t16_name).resolve(strict=True),
+            expected_without_p32)
+        self.assertNotIn(
+            (SOURCE_ROOT / t32_name).resolve(strict=True),
+            expected_without_p32)
 
     def test_archive_and_executable_recipe_shapes_are_exact(self) -> None:
         archiver = tool_path("ar")
@@ -4259,6 +4835,34 @@ class OwnerExceptionPrecedenceTests(unittest.TestCase):
 
         return Owner()
 
+    @staticmethod
+    def _descriptor_cleanup_failure(cleanup: BaseException):
+        def fail(
+                descriptor: int, context: str,
+                consumed: list[bool]) -> None:
+            del descriptor, context
+            # Model the current guarded-close contract: ownership has been
+            # consumed even when the close operation reports a failure.
+            consumed[0] = True
+            raise cleanup
+
+        return fail
+
+    @classmethod
+    def _patch_descriptor_cleanup_failure(cls, cleanup: BaseException):
+        return mock.patch.object(
+            provenance, "_close_descriptor_with_ofd_guard",
+            side_effect=cls._descriptor_cleanup_failure(cleanup))
+
+    def test_owner_precedence_is_idempotent_for_same_exception(self) -> None:
+        failure = KeyboardInterrupt("same owner failure")
+        failure.add_note("retained cleanup detail")
+        notes_before = tuple(failure.__notes__)
+        selected = provenance._owner_exception_precedence(
+            failure, failure, "same owner exception")
+        self.assertIs(selected, failure)
+        self.assertEqual(tuple(failure.__notes__), notes_before)
+
     def test_every_simple_owner_retains_earlier_terminal(self) -> None:
         for name, owner_exit in self._SIMPLE_OWNER_EXITS:
             with self.subTest(owner=name, primary="KeyboardInterrupt"):
@@ -4346,8 +4950,8 @@ class OwnerExceptionPrecedenceTests(unittest.TestCase):
                 provenance.os, "open", return_value=91), \
                 mock.patch.object(
                     provenance.os, "fstat", side_effect=primary), \
-                mock.patch.object(
-                    provenance.os, "close", side_effect=cleanup):
+                OwnerExceptionPrecedenceTests.\
+                    _patch_descriptor_cleanup_failure(cleanup):
             owner.open("/injected/descriptor", os.O_RDONLY)
 
     @staticmethod
@@ -4360,8 +4964,8 @@ class OwnerExceptionPrecedenceTests(unittest.TestCase):
                 provenance.ctypes, "CDLL", return_value=library), \
                 mock.patch.object(
                     provenance.os, "fdopen", side_effect=primary), \
-                mock.patch.object(
-                    provenance.os, "close", side_effect=cleanup):
+                OwnerExceptionPrecedenceTests.\
+                    _patch_descriptor_cleanup_failure(cleanup):
             provenance._InotifyMutationGuard("injected inotify")
 
     @staticmethod
@@ -4372,8 +4976,8 @@ class OwnerExceptionPrecedenceTests(unittest.TestCase):
                 provenance, "_linux_memfd_create", return_value=91), \
                 mock.patch.object(
                     provenance.os, "fdopen", side_effect=primary), \
-                mock.patch.object(
-                    provenance.os, "close", side_effect=cleanup):
+                OwnerExceptionPrecedenceTests.\
+                    _patch_descriptor_cleanup_failure(cleanup):
             provenance._ReplayArtifactSink(
                 "/injected/artifact", "injected artifact")
 
@@ -5001,9 +5605,19 @@ class BoundedDescendantContainmentTests(unittest.TestCase):
 
         containment.pidfds[identity] = 92
         containment.procfds[identity] = 93
+
+        def consume_fake_descriptor(
+                descriptor: int, context: str,
+                consumed: list[bool]) -> None:
+            self.assertIn(descriptor, (92, 93))
+            self.assertEqual(context, "retained mapping descriptor")
+            consumed[0] = True
+
         with mock.patch.object(
                 provenance, "_linux_pidfd_signal") as pidfd_signal, \
-                mock.patch.object(provenance.os, "close"):
+                mock.patch.object(
+                    provenance, "_close_descriptor_with_ofd_guard",
+                    side_effect=consume_fake_descriptor):
             containment._signal_retained({identity}, provenance.signal.SIGKILL)
             containment._close_pidfds()
         pidfd_signal.assert_called_once_with(92, provenance.signal.SIGKILL)

@@ -101,7 +101,12 @@ class ProductionBuildFixture:
         sources.update({
             "LeopardFF8.cpp", "LeopardFF16.cpp",
             "Leopard2BackendSSSE3.cpp",
-            "Leopard2BackendAVX2.cpp", "bench/leopard2/benchmark.cpp",
+            "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp",
+            "Leopard2BackendAVX2T2K4.cpp",
+            "Leopard2BackendAVX2T16B64.cpp",
+            "Leopard2BackendAVX2T32B256.cpp",
+            "Leopard2LowP32B64AVX2.cpp",
+            "bench/leopard2/benchmark.cpp",
             c_test_source,
         })
         self.library_source_names = (
@@ -133,6 +138,26 @@ class ProductionBuildFixture:
                 output = Path("CMakeFiles/leopard2_backend_ssse3.dir") / \
                     (Path(relative).name + ".o")
                 flags = ["-mssse3", "-mno-avx"]
+            elif relative == "Leopard2BackendAVX2T2K4.cpp":
+                output = Path(
+                    "CMakeFiles/leopard2_backend_avx2_t2_k4.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
+            elif relative == "Leopard2BackendAVX2T16B64.cpp":
+                output = Path(
+                    "CMakeFiles/leopard2_backend_avx2_t16_b64.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
+            elif relative == "Leopard2BackendAVX2T32B256.cpp":
+                output = Path(
+                    "CMakeFiles/leopard2_backend_avx2_t32_b256.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
+            elif relative == "Leopard2LowP32B64AVX2.cpp":
+                output = Path(
+                    "CMakeFiles/leopard2_low_p32_b64_avx2.dir") / \
+                    (Path(relative).name + ".o")
+                flags = ["-mavx2", "-mno-avx512f"]
             elif relative.startswith("Leopard2BackendAVX2"):
                 output = Path("CMakeFiles/leopard2_backend_avx2.dir") / \
                     (Path(relative).name + ".o")
@@ -188,7 +213,8 @@ class ProductionBuildFixture:
         source_name = Path(relative).name
         enhanced_backend = source_name.startswith(
             ("Leopard2BackendSSSE3", "Leopard2BackendAVX2",
-             "Leopard2BackendGFNI"))
+             "Leopard2BackendGFNI")) or \
+            source_name == "Leopard2LowP32B64AVX2.cpp"
         definitions = [
             "-DNDEBUG",
             "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
@@ -208,6 +234,30 @@ class ProductionBuildFixture:
                 "-DLEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
                 "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+                "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            ))
+            if source_name == "leopard2.cpp":
+                definitions.extend((
+                    "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+                    "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+                ))
+        elif source_name == "Leopard2BackendAVX2T2K4.cpp":
+            definitions.append("-DLEO2_HAVE_AVX2_BACKEND=1")
+        elif source_name == "Leopard2BackendAVX2T16B64.cpp":
+            definitions.extend((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            ))
+        elif source_name == "Leopard2BackendAVX2T32B256.cpp":
+            definitions.extend((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+                "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK=0",
+            ))
+        elif source_name == "Leopard2LowP32B64AVX2.cpp":
+            definitions.extend((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             ))
         elif source_name.startswith("Leopard2BackendAVX2"):
             definitions.append(
@@ -232,7 +282,8 @@ class ProductionBuildFixture:
             "-O3", "-O3", "-std=gnu++11", *flags,
         ]
         if source_name.startswith(
-                ("Leopard2BackendAVX2", "Leopard2BackendGFNI")):
+                ("Leopard2BackendAVX2", "Leopard2BackendGFNI")) or \
+                source_name == "Leopard2LowP32B64AVX2.cpp":
             options.append("-falign-functions=64")
         arguments = [
             compiler, *definitions, *options, "-o", output.as_posix(),
@@ -269,14 +320,18 @@ class ProductionBuildFixture:
             "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN:BOOL": "OFF",
             "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED:BOOL": "OFF",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK:BOOL": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR:BOOL": "OFF",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL": "ON",
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL": "ON",
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING:BOOL": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING:BOOL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT:BOOL": "ON",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL:BOOL": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING": "0",
             "LEOPARD_ENABLE_GF8:BOOL": "ON",
             "LEOPARD_ENABLE_GF16:BOOL": "ON",
@@ -334,6 +389,8 @@ class AllKIdentityTests(unittest.TestCase):
                 runner.ALL_K_BUILD_CACHE_KEYS_V3,
             runner.RUN_CONTRACT_SCHEMA_V6:
                 runner.ALL_K_BUILD_CACHE_KEYS_V4,
+            runner.RUN_CONTRACT_SCHEMA_V7:
+                runner.ALL_K_BUILD_CACHE_KEYS_V5,
             runner.RUN_CONTRACT_SCHEMA:
                 runner.ALL_K_BUILD_CACHE_KEYS,
         }[schema]
@@ -350,6 +407,7 @@ class AllKIdentityTests(unittest.TestCase):
         if schema == runner.RUN_CONTRACT_SCHEMA_V5:
             cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = "OFF"
         elif schema in (runner.RUN_CONTRACT_SCHEMA_V6,
+                        runner.RUN_CONTRACT_SCHEMA_V7,
                         runner.RUN_CONTRACT_SCHEMA):
             cache.update({
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -360,13 +418,24 @@ class AllKIdentityTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             })
-            if schema == runner.RUN_CONTRACT_SCHEMA:
+            if schema == runner.RUN_CONTRACT_SCHEMA_V7:
                 cache.update({
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
                         "OFF",
                     "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
                 })
-        return {
+            elif schema == runner.RUN_CONTRACT_SCHEMA:
+                cache.update({
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
+                        "OFF",
+                    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
+                        "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+                    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+                })
+        contract = {
             "schema": schema,
             "main_commit": "a" * 40,
             "current_commit": "b" * 40,
@@ -413,6 +482,9 @@ class AllKIdentityTests(unittest.TestCase):
             },
             "measurement_note": "fixture",
         }
+        if schema == runner.RUN_CONTRACT_SCHEMA:
+            contract["child_environment"] = copy.deepcopy(runner.CHILD_ENV)
+        return contract
 
     @staticmethod
     def bind_raw_output(record):
@@ -1292,11 +1364,14 @@ class AllKIdentityTests(unittest.TestCase):
         validated_proof = proof_validator.start()
         self.addCleanup(proof_validator.stop)
         current = self.run_contract()
+        v7 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V7)
         v6 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V6)
         v5 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V5)
         v4 = self.run_contract(runner.RUN_CONTRACT_SCHEMA_V4)
         self.assertIs(
             runner.validate_run_contract_evidence(current), current)
+        self.assertIs(
+            runner.validate_run_contract_evidence(v7), v7)
         self.assertIs(
             runner.validate_run_contract_evidence(v6), v6)
         self.assertIs(
@@ -1306,27 +1381,59 @@ class AllKIdentityTests(unittest.TestCase):
 
         # Each body remains coherent under its own generation.  Relabeling only
         # the outer contract cannot upgrade or downgrade its nested closure.
-        for body, schema in (
-                (v4, runner.RUN_CONTRACT_SCHEMA_V5),
-                (v4, runner.RUN_CONTRACT_SCHEMA_V6),
-                (v4, runner.RUN_CONTRACT_SCHEMA),
-                (v5, runner.RUN_CONTRACT_SCHEMA_V4),
-                (v5, runner.RUN_CONTRACT_SCHEMA_V6),
-                (v5, runner.RUN_CONTRACT_SCHEMA),
-                (v6, runner.RUN_CONTRACT_SCHEMA_V4),
-                (v6, runner.RUN_CONTRACT_SCHEMA_V5),
-                (v6, runner.RUN_CONTRACT_SCHEMA),
-                (current, runner.RUN_CONTRACT_SCHEMA_V4),
-                (current, runner.RUN_CONTRACT_SCHEMA_V5),
-                (current, runner.RUN_CONTRACT_SCHEMA_V6)):
-            with self.subTest(body=body["schema"], label=schema):
-                relabeled = copy.deepcopy(body)
-                relabeled["schema"] = schema
+        bodies = (v4, v5, v6, v7, current)
+        schemas = tuple(body["schema"] for body in bodies)
+        for body in bodies:
+            for schema in schemas:
+                if schema == body["schema"]:
+                    continue
+                with self.subTest(body=body["schema"], label=schema):
+                    relabeled = copy.deepcopy(body)
+                    relabeled["schema"] = schema
+                    expect_rejected(
+                        self,
+                        lambda relabeled=relabeled:
+                            runner.validate_run_contract_evidence(relabeled),
+                        "schema tuple")
+
+        self.assertEqual(
+            runner.child_environment_for_contract_schema(
+                runner.RUN_CONTRACT_SCHEMA_V7),
+            runner.CHILD_ENV_V7)
+        self.assertEqual(
+            runner.child_environment_for_contract_schema(
+                runner.RUN_CONTRACT_SCHEMA),
+            runner.CHILD_ENV)
+        self.assertEqual(current["child_environment"], runner.CHILD_ENV)
+        self.assertNotIn("OMP_PLACES", current["child_environment"])
+        self.assertEqual(
+            current["child_environment"]["OMP_THREAD_LIMIT"], "1")
+        self.assertEqual(runner.CHILD_ENV_V7["OMP_PLACES"], "cores")
+        self.assertNotIn("OMP_THREAD_LIMIT", runner.CHILD_ENV_V7)
+        self.assertEqual(
+            v7["current_build_initial"]["validated_cache"][
+                "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            runner.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
+        for label, environment in (
+                ("old-environment", runner.CHILD_ENV_V7),
+                ("thread-limit", {
+                    **runner.CHILD_ENV, "OMP_THREAD_LIMIT": "2"}),
+                ("places", {**runner.CHILD_ENV, "OMP_PLACES": "cores"})):
+            with self.subTest(environment=label):
+                changed = copy.deepcopy(current)
+                changed["child_environment"] = copy.deepcopy(environment)
                 expect_rejected(
                     self,
-                    lambda relabeled=relabeled:
-                        runner.validate_run_contract_evidence(relabeled),
-                    "schema tuple")
+                    lambda changed=changed:
+                        runner.validate_run_contract_evidence(changed),
+                    "child environment")
+        extended_v7 = copy.deepcopy(v7)
+        extended_v7["child_environment"] = copy.deepcopy(
+            runner.CHILD_ENV_V7)
+        expect_rejected(
+            self,
+            lambda: runner.validate_run_contract_evidence(extended_v7),
+            "schema tuple")
 
         extended = copy.deepcopy(v4)
         extended["current_build_initial"]["validated_cache"][
@@ -1362,6 +1469,21 @@ class AllKIdentityTests(unittest.TestCase):
                         runner.validate_run_contract_evidence(extended_v6),
                     "schema tuple")
 
+        for selector in (
+                "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"):
+            with self.subTest(v7_extra=selector):
+                extended_v7 = copy.deepcopy(v7)
+                extended_v7["current_build_initial"]["validated_cache"][
+                    selector] = "OFF"
+                expect_rejected(
+                    self,
+                    lambda extended_v7=extended_v7:
+                        runner.validate_run_contract_evidence(extended_v7),
+                    "schema tuple")
+
         for label, variable, value in (
             ("direct-source", "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("high-direct", "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
@@ -1380,6 +1502,14 @@ class AllKIdentityTests(unittest.TestCase):
             ("T32-B256", "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED", "ON"),
             ("T32-B256-disable",
              "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED", "ON"),
+            ("T16-B64-generated",
+             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED", "OFF"),
+            ("T32-B256-two-block",
+             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK", "OFF"),
+            ("T32-B256-two-block-disable",
+             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK", "ON"),
+            ("low-P32-B64-terminal",
+             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL", "OFF"),
         ):
             with self.subTest(selector=label):
                 changed = copy.deepcopy(current)
@@ -1449,6 +1579,20 @@ class AllKIdentityTests(unittest.TestCase):
         }
         runner.validate_manifest(
             v5_manifest, v5, v5_digest, [cell],
+            self.current_source, self.current_snapshot,
+            attestation_identity)
+
+        v7_digest = runner.canonical_digest(v7)
+        v7_manifest = {
+            "schema": runner.MANIFEST_SCHEMA_V7,
+            "run_contract": v7,
+            "run_contract_sha256": v7_digest,
+            "cells": [runner.dataclasses.asdict(cell)],
+            "current_source_attestation_preflights": [preflight],
+            "completion": None,
+        }
+        runner.validate_manifest(
+            v7_manifest, v7, v7_digest, [cell],
             self.current_source, self.current_snapshot,
             attestation_identity)
 
@@ -3864,18 +4008,23 @@ class ProductionBuildClosureTests(unittest.TestCase):
         entry = next(item for item in self.fixture.entries
                      if item["file"].endswith("Leopard2Plan.cpp"))
         wrong = str((self.fixture.source / "leopard2.cpp").resolve())
-        general_one_loss = \
-            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1"
+        leopard2_only_definitions = (
+            "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
+            "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+            "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+        )
         entry["file"] = wrong
         entry["arguments"][entry["arguments"].index("-c") + 1] = wrong
-        entry["arguments"].insert(
-            entry["arguments"].index("-o"), general_one_loss)
+        for definition in leopard2_only_definitions:
+            entry["arguments"].insert(
+                entry["arguments"].index("-o"), definition)
         self.fixture._write_commands()
         expect_rejected(self, self.provenance, "source closure differs")
         entry["file"] = str(
             (self.fixture.source / "Leopard2Plan.cpp").resolve())
         entry["arguments"][entry["arguments"].index("-c") + 1] = entry["file"]
-        entry["arguments"].remove(general_one_loss)
+        for definition in leopard2_only_definitions:
+            entry["arguments"].remove(definition)
         self.fixture._write_commands()
         extra = self.fixture.build / "unexpected.o"
         extra.write_bytes(b"unexpected\n")

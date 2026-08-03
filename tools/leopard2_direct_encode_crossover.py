@@ -84,14 +84,20 @@ CONTROLLED_BUILD_SCHEMA = "leopard2-direct-controlled-build/v7"
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration-attestation/v2"
 )
-BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3 = (
     "leopard2-benchmark-build-configuration-attestation/v3"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v4"
 )
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration/v2"
 )
-BUILD_CONFIGURATION_FILE_SCHEMA = (
+BUILD_CONFIGURATION_FILE_SCHEMA_V3 = (
     "leopard2-benchmark-build-configuration/v3"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = (
+    "leopard2-benchmark-build-configuration/v6"
 )
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
@@ -118,25 +124,56 @@ BUILD_CONFIGURATION_VARIABLES_V2 = (
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
 )
-BUILD_CONFIGURATION_VARIABLES = (
+BUILD_CONFIGURATION_VARIABLES_V3 = (
     *BUILD_CONFIGURATION_VARIABLES_V2[:-1],
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
     BUILD_CONFIGURATION_VARIABLES_V2[-1],
 )
-BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
-    "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
-    "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V2[:16],
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+    *BUILD_CONFIGURATION_VARIABLES_V2[16:-1],
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
-    "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
+    BUILD_CONFIGURATION_VARIABLES_V2[-1],
+)
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
+    *BUILD_CONFIGURATION_VARIABLES[16:],
 )
 BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2 = {
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
 }
-BUILD_CONFIGURATION_CANONICAL_SELECTORS = {
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V3 = {
     **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2,
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+}
+BUILD_CONFIGURATION_CANONICAL_SELECTORS = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2,
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
+    "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
 }
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
@@ -151,7 +188,21 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
         frozenset(("INTERNAL",)),
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
+        frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": frozenset(("BOOL",)),
+    "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
+        frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": frozenset(("BOOL",)),
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
 }
 BENCHMARK_ENVIRONMENT = {
@@ -2975,6 +3026,16 @@ def build_configuration_contract(attestation_schema):
                 if variable in BUILD_CONFIGURATION_VARIABLES_V2
             ),
         )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V3,
+            BUILD_CONFIGURATION_VARIABLES_V3,
+            tuple(
+                variable
+                for variable in BUILD_CONFIGURATION_EXPERIMENT_SELECTORS
+                if variable in BUILD_CONFIGURATION_VARIABLES_V3
+            ),
+        )
     raise CrossoverError(
         "benchmark effective-configuration attestation schema is invalid"
     )
@@ -2988,6 +3049,7 @@ def build_configuration_digest(
         )
     if tuple(variables) not in (
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V3,
             BUILD_CONFIGURATION_VARIABLES_V2):
         raise CrossoverError(
             "effective CMake configuration contract is invalid"
@@ -3051,6 +3113,9 @@ def read_build_configuration_attestation(path):
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
         variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V3:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3
+        variables = BUILD_CONFIGURATION_VARIABLES_V3
     elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V2:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2
         variables = BUILD_CONFIGURATION_VARIABLES_V2
@@ -3123,12 +3188,14 @@ def validate_build_configuration_attestation(
         file_schema, variables, selectors = \
             build_configuration_contract(value.get("schema"))
         del file_schema
-        canonical_selectors = (
-            BUILD_CONFIGURATION_CANONICAL_SELECTORS
-            if value.get("schema") ==
-                BUILD_CONFIGURATION_ATTESTATION_SCHEMA
-            else BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2
-        )
+        if (value.get("schema") ==
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS
+        elif (value.get("schema") ==
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V3
+        else:
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2
         valid = (
             re.fullmatch(r"[0-9a-f]{64}", value["sha256"]) is not None and
             value["sha256"] == build_configuration_digest(
@@ -3226,10 +3293,7 @@ def cmake_build_metadata(executable):
         "LEO2_BENCHMARK_GIT_EXECUTABLE",
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION",
         "LEO2_BUILD_FUZZERS", "LEO2_BUILD_TESTS", "LEO2_ENABLE_CUDA",
-        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN",
-        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
-        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
-        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+        *BUILD_CONFIGURATION_EXPERIMENT_SELECTORS,
     )
     entries = parse_selected_cmake_cache(
         cache_bytes, prefixes, str(cache)
@@ -9534,14 +9598,23 @@ def self_test():
         "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
         "LEO2_BUILD_BENCHMARKS": "ON",
         "LEO2_BUILD_TESTS": "ON",
-        "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-        "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
-        "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+        **BUILD_CONFIGURATION_CANONICAL_SELECTORS,
     }
     self_test_digest = build_configuration_digest(
         self_test_effective_entries
     )
+    for selector in (
+            "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
+            "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"):
+        changed_entries = dict(self_test_effective_entries)
+        changed_entries[selector] = (
+            "OFF" if changed_entries[selector] == "ON" else "ON")
+        check(
+            build_configuration_digest(changed_entries) != self_test_digest,
+            "{} changes the effective-configuration digest".format(selector)
+        )
     with tempfile.TemporaryDirectory(
             prefix="leo2-build-config-self-test-") as configuration_dir:
         configuration_path = Path(configuration_dir) / "configuration.txt"
@@ -9642,6 +9715,39 @@ def self_test():
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V2,
             ) == historical_digest,
             "historical v2 attestation requires an explicit old contract")
+        historical_v3_entries = {
+            variable: self_test_effective_entries[variable]
+            for variable in BUILD_CONFIGURATION_VARIABLES_V3
+        }
+        historical_v3_digest = build_configuration_digest(
+            historical_v3_entries, BUILD_CONFIGURATION_VARIABLES_V3)
+        historical_v3_material = "".join(
+            "{}={}\n".format(variable, historical_v3_entries[variable])
+            for variable in BUILD_CONFIGURATION_VARIABLES_V3)
+        configuration_path.write_text(
+            "schema={}\nsha256={}\n{}".format(
+                BUILD_CONFIGURATION_FILE_SCHEMA_V3,
+                historical_v3_digest,
+                historical_v3_material),
+            encoding="utf-8")
+        historical_v3_attestation = (
+            read_build_configuration_attestation(configuration_path))
+        check(
+            validate_build_configuration_attestation(
+                historical_v3_attestation,
+                configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3,
+            ) == historical_v3_digest,
+            "historical v3 attestation retains its General=OFF contract")
+        try:
+            validate_build_configuration_attestation(
+                historical_v3_attestation, configuration_path)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: current evidence accepted a historical "
+                "v3 effective-configuration attestation")
         current_enabled = {
             "entries": dict(self_test_effective_entries),
             "path": str(configuration_path.resolve()),
@@ -10017,10 +10123,7 @@ def self_test():
                 "LEO2_BENCHMARK_GIT_EXECUTABLE": "/usr/bin/git",
                 "LEO2_BUILD_BENCHMARKS": "ON",
                 "LEO2_BUILD_TESTS": "ON",
-                "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
-                "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
-                "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "OFF",
-                "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
+                **BUILD_CONFIGURATION_CANONICAL_SELECTORS,
                 "CMAKE_HOME_DIRECTORY": "/self-test/source",
                 "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                     BUILD_CONFIGURATION_FILE_SCHEMA,
