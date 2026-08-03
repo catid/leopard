@@ -1,0 +1,783 @@
+/*
+    Copyright (c) 2017 Christopher A. Taylor.  All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the conditions in the Leopard-RS
+    BSD license are met.  See the repository LICENSE file.
+*/
+
+/*
+    Production regression for the pass-local GF8/AVX2 native Algorithm 5
+    T=32 schedule policy.  Reusable AUTO plans retain their exact schedules,
+    but qualified tiny maximum-loss passes execute the mature regular kernels.
+    A forced-tiled codec is the same-executable pruned-schedule control.
+*/
+
+#include "Leopard2Direct.h"
+#include "Leopard2Dispatch.h"
+#include "LeopardFF8.h"
+#include "leopard.h"
+#include "leopard2.h"
+
+#ifndef LEO2_ENABLE_TEST_HOOKS
+#error "The T=32 tiny schedule-policy test requires Leopard2 test hooks"
+#endif
+
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <new>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#if defined(_MSC_VER)
+#include <malloc.h>
+#endif
+
+namespace {
+
+static const uint8_t kGuardByte = 0xd7;
+static const uint8_t kUntouchedByte = 0xa5;
+static const size_t kGuardPrefix = 65;
+static const size_t kGuardSuffix = 67;
+
+void require(bool condition, const std::string& message)
+{
+    if (!condition)
+        throw std::runtime_error(message);
+}
+
+void require_result(leo2_result result, const std::string& operation)
+{
+    if (result != LEO2_SUCCESS)
+    {
+        throw std::runtime_error(operation + ": " +
+            leo2_result_string(result));
+    }
+}
+
+uint32_t mix(uint32_t value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    return value ^ (value >> 16);
+}
+
+uint32_t ceil_pow2(uint32_t value)
+{
+    uint32_t result = 1;
+    while (result < value)
+        result <<= 1;
+    return result;
+}
+
+class AlignedBytes
+{
+public:
+    explicit AlignedBytes(size_t bytes)
+        : data_(NULL)
+        , bytes_(bytes)
+    {
+        if (bytes_ == 0)
+            return;
+#if defined(_MSC_VER)
+        data_ = _aligned_malloc(bytes_, leo2_scratch_alignment());
+#else
+        if (posix_memalign(&data_, leo2_scratch_alignment(), bytes_) != 0)
+            data_ = NULL;
+#endif
+        if (!data_)
+            throw std::bad_alloc();
+        memset(data_, 0, bytes_);
+        require((reinterpret_cast<uintptr_t>(data_) &
+                    (leo2_scratch_alignment() - 1U)) == 0,
+            "scratch allocation is not aligned");
+    }
+
+    ~AlignedBytes()
+    {
+#if defined(_MSC_VER)
+        _aligned_free(data_);
+#else
+        free(data_);
+#endif
+    }
+
+    void* data() { return data_; }
+    size_t size() const { return bytes_; }
+
+private:
+    AlignedBytes(const AlignedBytes&);
+    AlignedBytes& operator=(const AlignedBytes&);
+
+    void* data_;
+    size_t bytes_;
+};
+
+class GuardedShards
+{
+public:
+    typedef std::vector<std::vector<uint8_t> > Snapshot;
+
+    GuardedShards(uint32_t count, size_t bytes, uint8_t payload)
+        : storage_(count)
+        , bytes_(bytes)
+    {
+        for (uint32_t i = 0; i < count; ++i)
+        {
+            storage_[i].assign(
+                kGuardPrefix + bytes_ + kGuardSuffix, kGuardByte);
+            memset(data(i), payload, bytes_);
+            require((reinterpret_cast<uintptr_t>(data(i)) & 63U) != 0,
+                "test shard unexpectedly has 64-byte alignment");
+        }
+    }
+
+    uint32_t count() const
+    {
+        return static_cast<uint32_t>(storage_.size());
+    }
+
+    uint8_t* data(uint32_t index)
+    {
+        return &storage_[index][kGuardPrefix];
+    }
+
+    const uint8_t* data(uint32_t index) const
+    {
+        return &storage_[index][kGuardPrefix];
+    }
+
+    void fill_originals(uint32_t seed)
+    {
+        for (uint32_t shard = 0; shard < count(); ++shard)
+        {
+            for (size_t byte = 0; byte < bytes_; ++byte)
+            {
+                data(shard)[byte] = static_cast<uint8_t>(mix(
+                    seed ^ shard * 0x9e3779b9u ^
+                    static_cast<uint32_t>(byte * 257U)));
+            }
+        }
+    }
+
+    std::vector<const void*> const_pointers() const
+    {
+        std::vector<const void*> result(count());
+        for (uint32_t i = 0; i < count(); ++i)
+            result[i] = data(i);
+        return result;
+    }
+
+    std::vector<void*> mutable_pointers()
+    {
+        std::vector<void*> result(count());
+        for (uint32_t i = 0; i < count(); ++i)
+            result[i] = data(i);
+        return result;
+    }
+
+    Snapshot snapshot() const
+    {
+        Snapshot result(count());
+        for (uint32_t i = 0; i < count(); ++i)
+            result[i].assign(data(i), data(i) + bytes_);
+        return result;
+    }
+
+    void require_matches(
+        const Snapshot& expected,
+        const std::string& operation) const
+    {
+        require(expected.size() == storage_.size(),
+            operation + " snapshot count changed");
+        for (uint32_t i = 0; i < count(); ++i)
+        {
+            require(expected[i].size() == bytes_ &&
+                    memcmp(data(i), expected[i].data(), bytes_) == 0,
+                operation + " payload changed");
+        }
+    }
+
+    void require_payload(uint32_t index, uint8_t expected,
+        const std::string& operation) const
+    {
+        for (size_t byte = 0; byte < bytes_; ++byte)
+        {
+            if (data(index)[byte] != expected)
+                throw std::runtime_error(operation + " payload changed");
+        }
+    }
+
+    void require_guards(const std::string& operation) const
+    {
+        for (uint32_t shard = 0; shard < count(); ++shard)
+        {
+            for (size_t i = 0; i < kGuardPrefix; ++i)
+            {
+                if (storage_[shard][i] != kGuardByte)
+                    throw std::runtime_error(operation + " prefix guard changed");
+            }
+            const size_t suffix = kGuardPrefix + bytes_;
+            for (size_t i = suffix; i < storage_[shard].size(); ++i)
+            {
+                if (storage_[shard][i] != kGuardByte)
+                    throw std::runtime_error(operation + " suffix guard changed");
+            }
+        }
+    }
+
+private:
+    std::vector<std::vector<uint8_t> > storage_;
+    size_t bytes_;
+};
+
+class CodecOwner
+{
+public:
+    CodecOwner() : codec_(NULL) {}
+    ~CodecOwner() { leo2_codec_destroy(codec_); }
+    leo2_codec** output() { return &codec_; }
+    leo2_codec* get() const { return codec_; }
+
+private:
+    CodecOwner(const CodecOwner&);
+    CodecOwner& operator=(const CodecOwner&);
+    leo2_codec* codec_;
+};
+
+class PlanOwner
+{
+public:
+    PlanOwner() : plan_(NULL) {}
+    ~PlanOwner() { leo2_decode_plan_destroy(plan_); }
+    leo2_decode_plan** output() { return &plan_; }
+    leo2_decode_plan* get() const { return plan_; }
+
+private:
+    PlanOwner(const PlanOwner&);
+    PlanOwner& operator=(const PlanOwner&);
+    leo2_decode_plan* plan_;
+};
+
+enum RouteExpectation
+{
+    RouteRegularOnly,
+    RoutePrunedOnly,
+    RouteMixed
+};
+
+struct ByteCase
+{
+    size_t bytes;
+    RouteExpectation automatic_route;
+};
+
+struct ExecutionObservation
+{
+    leopard::ff8::TestOnlyHighDecodeCounts counts;
+    size_t scratch_bytes;
+};
+
+std::vector<uint32_t> clustered_missing(uint32_t losses)
+{
+    std::vector<uint32_t> result(losses);
+    for (uint32_t i = 0; i < losses; ++i)
+        result[i] = i + 1U;
+    return result;
+}
+
+std::vector<uint32_t> striped_missing(uint32_t k, uint32_t losses)
+{
+    require(losses > 1 && losses < k,
+        "striped pattern requires one retained original");
+    std::vector<uint32_t> result(losses);
+    for (uint32_t i = 0; i < losses; ++i)
+    {
+        result[i] = 1U + static_cast<uint32_t>(
+            (static_cast<uint64_t>(i) * (k - 2U)) / (losses - 1U));
+        if (i != 0)
+            require(result[i - 1] < result[i], "striped indices repeated");
+    }
+    return result;
+}
+
+std::vector<uint32_t> random_missing(
+    uint32_t k,
+    uint32_t losses,
+    uint32_t seed)
+{
+    std::vector<uint32_t> candidates(k - 1U);
+    for (uint32_t i = 0; i + 1U < k; ++i)
+        candidates[i] = i + 1U;
+    uint32_t state = seed;
+    for (size_t remaining = candidates.size(); remaining > 1; --remaining)
+    {
+        state = mix(state + static_cast<uint32_t>(remaining));
+        const size_t other = state % remaining;
+        std::swap(candidates[remaining - 1U], candidates[other]);
+    }
+    candidates.resize(losses);
+    std::sort(candidates.begin(), candidates.end());
+    return candidates;
+}
+
+size_t partial_output_block_count(
+    uint32_t k,
+    uint32_t r,
+    const std::vector<uint32_t>& missing)
+{
+    const uint32_t t = ceil_pow2(r);
+    const uint32_t parent = ceil_pow2(k + t);
+    std::vector<uint32_t> requested(parent / t, 0);
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        require(missing[i] < k,
+            "missing index exceeds the systematic coordinate count");
+        if (i != 0)
+            require(missing[i - 1] < missing[i],
+                "missing pattern is not strictly increasing");
+        ++requested[(t + missing[i]) / t];
+    }
+
+    size_t blocks = 0;
+    for (size_t block = 1; block < requested.size(); ++block)
+    {
+        if (requested[block] == 0)
+            continue;
+        require(requested[block] < t,
+            "test pattern contains a mature full output block");
+        ++blocks;
+    }
+    return blocks;
+}
+
+const char* route_name(RouteExpectation route)
+{
+    switch (route)
+    {
+    case RouteRegularOnly: return "regular";
+    case RoutePrunedOnly: return "pruned";
+    case RouteMixed: return "mixed";
+    }
+    return "unknown";
+}
+
+void create_codec(
+    leo2_context* context,
+    uint32_t k,
+    uint32_t r,
+    uint32_t flags,
+    bool force_native_high,
+    CodecOwner& owner,
+    const std::string& label)
+{
+    leo2_codec_options options = {};
+    options.struct_size = sizeof(options);
+    options.flags = flags;
+    options.shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
+    require_result(leo2_codec_create(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options,
+        owner.output()), label + " codec create");
+    require(leo2_codec_padded_side(owner.get()) == 32,
+        label + " did not create T=32");
+    require(leo2_codec_parent_count(owner.get()) ==
+            ceil_pow2(k + ceil_pow2(r)),
+        label + " parent count changed");
+    if (force_native_high)
+    {
+        require_result(leo2_test_codec_set_decode_mode(owner.get(),
+            LEO2_TEST_DECODE_FORCE_NATIVE_HIGH),
+            label + " force native Algorithm 5");
+    }
+}
+
+void create_plan(
+    leo2_codec* codec,
+    const std::vector<uint8_t>& original_present,
+    const std::vector<uint8_t>& recovery_present,
+    size_t output_blocks,
+    PlanOwner& owner,
+    const std::string& label)
+{
+    require_result(leo2_decode_plan_create(codec, original_present.data(),
+        recovery_present.data(), owner.output()), label + " plan create");
+    require(!leo2_test_decode_plan_uses_translated_low(owner.get()),
+        label + " unexpectedly selected translated Algorithm 4");
+
+    leopard2_internal::DecodePlanPrunedScheduleInfo info;
+    require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+            owner.get(), &info),
+        label + " schedule introspection failed");
+    require(info.low_input_plan_count == 0 &&
+            info.low_output_plan_count == 0,
+        label + " compiled low-profile schedules");
+    require(info.high_input_plan_count != 0,
+        label + " did not retain an exact input schedule");
+    require(info.high_output_plan_count == output_blocks,
+        label + " did not retain every partial output-block schedule");
+}
+
+void require_route_counts(
+    const leopard::ff8::TestOnlyHighDecodeCounts& counts,
+    RouteExpectation route,
+    size_t expected_output_blocks,
+    size_t expected_passes,
+    const std::string& label)
+{
+    require(counts.output_blocks ==
+            expected_output_blocks * expected_passes,
+        label + " output-block/pass accounting changed");
+    require(counts.compatibility_copy_fallbacks == 0,
+        label + " entered the whole-block copy fallback");
+    require(counts.syndrome_pruned_fallback_blocks == 0,
+        label + " rejected a compiled inverse schedule");
+    require(counts.pruned_output_blocks + counts.mature_output_blocks ==
+            counts.output_blocks,
+        label + " output route counters are inconsistent");
+
+    if (route == RouteRegularOnly)
+    {
+        require(counts.pruned_output_blocks == 0 &&
+                counts.mature_output_blocks == counts.output_blocks,
+            label + " did not use only mature regular schedules");
+        require(counts.syndrome_pruned_accumulated_blocks == 0,
+            label + " consumed an exact inverse schedule while bypassed");
+    }
+    else if (route == RoutePrunedOnly)
+    {
+        require(counts.pruned_output_blocks == counts.output_blocks &&
+                counts.mature_output_blocks == 0,
+            label + " did not use only retained exact schedules");
+    }
+    else
+    {
+        require(counts.pruned_output_blocks != 0 &&
+                counts.mature_output_blocks != 0,
+            label + " did not expose both pass-local schedule routes");
+    }
+}
+
+ExecutionObservation execute_decode(
+    uint32_t k,
+    size_t bytes,
+    const std::string& label,
+    leo2_decode_plan* plan,
+    leopard2_internal::DecodePath expected_path,
+    leopard2_internal::DecodePathRule expected_rule,
+    size_t expected_work_slots,
+    RouteExpectation expected_route,
+    size_t output_blocks,
+    const std::vector<uint32_t>& missing,
+    const GuardedShards& originals,
+    const GuardedShards::Snapshot& original_snapshot,
+    const GuardedShards& recovery,
+    const GuardedShards::Snapshot& recovery_snapshot)
+{
+    leopard2_internal::DecodePathInfo path;
+    require_result(leopard2_internal::GetDecodePlanPathInfo(
+        plan, bytes, false, &path), label + " path query");
+    require(path.path == expected_path && path.rule == expected_rule,
+        label + " selected an unexpected decode path");
+    require(path.required_work_slots == expected_work_slots,
+        label + " changed its work-slot geometry");
+
+    std::vector<const void*> original = originals.const_pointers();
+    const std::vector<const void*> parity = recovery.const_pointers();
+    std::vector<uint8_t> is_missing(k, 0);
+    for (size_t i = 0; i < missing.size(); ++i)
+    {
+        is_missing[missing[i]] = 1;
+        original[missing[i]] = NULL;
+    }
+
+    GuardedShards restored(k, bytes, kUntouchedByte);
+    std::vector<void*> output(k, NULL);
+    for (size_t i = 0; i < missing.size(); ++i)
+        output[missing[i]] = restored.data(missing[i]);
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, bytes, &scratch_bytes), label + " scratch query");
+    require(scratch_bytes != 0, label + " unexpectedly needs no scratch");
+    AlignedBytes scratch(scratch_bytes);
+
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    require_result(leo2_decode_plan_execute(plan, bytes,
+        original.data(), parity.data(), output.data(),
+        scratch.data(), scratch.size()), label + " decode");
+
+    ExecutionObservation observation;
+    observation.counts = leopard::ff8::TestOnlyGetHighDecodeCounts();
+    observation.scratch_bytes = scratch_bytes;
+    const size_t aligned_bytes = bytes & ~static_cast<size_t>(63U);
+    const size_t expected_passes =
+        (aligned_bytes != 0 ? 1U : 0U) +
+        (aligned_bytes != bytes ? 1U : 0U);
+    require_route_counts(observation.counts, expected_route,
+        output_blocks, expected_passes, label);
+
+    for (uint32_t shard = 0; shard < k; ++shard)
+    {
+        if (is_missing[shard])
+        {
+            require(memcmp(restored.data(shard), originals.data(shard),
+                    bytes) == 0,
+                label + " restored original mismatch");
+        }
+        else
+            restored.require_payload(
+                shard, kUntouchedByte, label + " unrequested output");
+    }
+    restored.require_guards(label + " restored");
+    originals.require_matches(original_snapshot, label + " original input");
+    recovery.require_matches(recovery_snapshot, label + " parity input");
+    originals.require_guards(label + " original input");
+    recovery.require_guards(label + " parity input");
+    return observation;
+}
+
+void run_campaign(
+    leo2_context* context,
+    const char* name,
+    uint32_t k,
+    uint32_t r,
+    const std::vector<uint32_t>& missing,
+    const std::vector<ByteCase>& byte_cases,
+    bool forced_tiled_control,
+    bool force_native_high,
+    bool automatic_tiled,
+    uint32_t seed)
+{
+    require(!byte_cases.empty(), std::string(name) + " has no byte cases");
+    const size_t maximum_bytes = std::max_element(
+        byte_cases.begin(), byte_cases.end(),
+        [](const ByteCase& left, const ByteCase& right) {
+            return left.bytes < right.bytes;
+        })->bytes;
+    const uint32_t t = ceil_pow2(r);
+    require(t == 32, std::string(name) + " escaped T=32");
+    const uint32_t parent = ceil_pow2(k + t);
+    const size_t output_blocks =
+        partial_output_block_count(k, r, missing);
+
+    CodecOwner automatic_codec;
+    create_codec(context, k, r, 0, force_native_high,
+        automatic_codec, std::string(name) + " AUTO");
+    CodecOwner forced_codec;
+    if (forced_tiled_control)
+    {
+        create_codec(context, k, r, LEO2_CODEC_FORCE_TILED_DECODE,
+            force_native_high, forced_codec,
+            std::string(name) + " forced-tiled");
+    }
+
+    GuardedShards originals(k, maximum_bytes, kUntouchedByte);
+    originals.fill_originals(seed);
+    GuardedShards recovery(r, maximum_bytes, kUntouchedByte);
+    const GuardedShards::Snapshot original_snapshot = originals.snapshot();
+
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(automatic_codec.get(),
+        maximum_bytes, &encode_scratch_bytes),
+        std::string(name) + " encode scratch query");
+    require(encode_scratch_bytes != 0,
+        std::string(name) + " unexpectedly needs no encode scratch");
+    AlignedBytes encode_scratch(encode_scratch_bytes);
+    std::vector<const void*> original_input = originals.const_pointers();
+    std::vector<void*> recovery_output = recovery.mutable_pointers();
+    require_result(leo2_encode(automatic_codec.get(), maximum_bytes,
+        original_input.data(), recovery_output.data(),
+        encode_scratch.data(), encode_scratch.size()),
+        std::string(name) + " encode");
+    const GuardedShards::Snapshot recovery_snapshot = recovery.snapshot();
+    originals.require_matches(
+        original_snapshot, std::string(name) + " encode input");
+    originals.require_guards(std::string(name) + " encode input");
+    recovery.require_guards(std::string(name) + " encode output");
+
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < missing.size(); ++i)
+        original_present[missing[i]] = 0;
+
+    PlanOwner automatic_plan;
+    create_plan(automatic_codec.get(), original_present, recovery_present,
+        output_blocks, automatic_plan, std::string(name) + " AUTO");
+    PlanOwner forced_plan;
+    if (forced_tiled_control)
+    {
+        create_plan(forced_codec.get(), original_present, recovery_present,
+            output_blocks, forced_plan,
+            std::string(name) + " forced-tiled");
+    }
+
+    const leopard2_internal::DecodePath automatic_path = automatic_tiled
+        ? leopard2_internal::kDecodePathTiled
+        : leopard2_internal::kDecodePathMaterialized;
+    const leopard2_internal::DecodePathRule automatic_rule = automatic_tiled
+        ? leopard2_internal::kDecodeRuleWorkspaceTiled
+        : leopard2_internal::kDecodeRuleWorkspaceMaterialized;
+    const size_t automatic_work_slots = automatic_tiled
+        ? static_cast<size_t>(2U * t + missing.size())
+        : parent;
+    for (size_t i = 0; i < byte_cases.size(); ++i)
+    {
+        const ByteCase& bytes = byte_cases[i];
+        const std::string automatic_label =
+            std::string(name) + " AUTO B=" + std::to_string(bytes.bytes);
+        const ExecutionObservation automatic = execute_decode(
+            k, bytes.bytes, automatic_label, automatic_plan.get(),
+            automatic_path, automatic_rule, automatic_work_slots,
+            bytes.automatic_route, output_blocks, missing,
+            originals, original_snapshot, recovery, recovery_snapshot);
+
+        if (forced_tiled_control)
+        {
+            const std::string forced_label =
+                std::string(name) + " forced-tiled B=" +
+                std::to_string(bytes.bytes);
+            const ExecutionObservation forced = execute_decode(
+                k, bytes.bytes, forced_label, forced_plan.get(),
+                leopard2_internal::kDecodePathTiled,
+                leopard2_internal::kDecodeRuleForcedTiled,
+                static_cast<size_t>(2U * t + missing.size()),
+                RoutePrunedOnly, output_blocks, missing,
+                originals, original_snapshot, recovery, recovery_snapshot);
+            require(automatic.scratch_bytes == forced.scratch_bytes,
+                std::string(name) +
+                    " AUTO and forced-tiled exact scratch sizes differ");
+        }
+
+        std::cout << "CASE " << name
+                  << " K=" << k << " R=" << r
+                  << " B=" << bytes.bytes
+                  << " L=" << missing.size()
+                  << " auto=" << route_name(bytes.automatic_route)
+                  << (forced_tiled_control ? " control=pruned" : "")
+                  << " scratch=" << automatic.scratch_bytes << std::endl;
+    }
+}
+
+std::vector<ByteCase> one_byte_case(
+    size_t bytes,
+    RouteExpectation route)
+{
+    std::vector<ByteCase> result(1);
+    result[0].bytes = bytes;
+    result[0].automatic_route = route;
+    return result;
+}
+
+} // namespace
+
+int main()
+{
+    try
+    {
+        require(leo_init() == Leopard_Success, "Leopard initialization");
+        leo2_context_options options = {};
+        options.struct_size = sizeof(options);
+        options.backend = LEO2_BACKEND_AVX2;
+        options.thread_count = 1;
+        leo2_context* avx2_context = NULL;
+        const leo2_result context_result =
+            leo2_context_create(&options, &avx2_context);
+        if (context_result == LEO2_UNSUPPORTED)
+        {
+            std::cout << "SKIP high_t32_tiny_schedule_policy: "
+                         "AVX2 unavailable" << std::endl;
+            return 0;
+        }
+        require_result(context_result, "AVX2 context create");
+        require(leo2_context_backend(avx2_context) == LEO2_BACKEND_AVX2,
+            "explicit AVX2 context reported another backend");
+
+        std::vector<ByteCase> byte_matrix;
+        const size_t regular_sizes[] = {
+            1, 63, 64, 65, 511, 512, 513, 575
+        };
+        for (size_t i = 0;
+             i < sizeof(regular_sizes) / sizeof(regular_sizes[0]); ++i)
+        {
+            ByteCase entry = { regular_sizes[i], RouteRegularOnly };
+            byte_matrix.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            byte_matrix.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            byte_matrix.push_back(entry);
+        }
+        run_campaign(avx2_context, "reused-striped-byte-matrix",
+            192, 32, striped_missing(192, 32), byte_matrix,
+            true, false, true, 0x54a32000U);
+
+        run_campaign(avx2_context, "lower-k-clustered",
+            33, 32, clustered_missing(32),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a32101U);
+        run_campaign(avx2_context, "upper-k-random",
+            224, 32, random_missing(224, 32, 0xb16483d2U),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a32202U);
+
+        std::vector<ByteCase> route_pair;
+        {
+            const ByteCase entry = { 64, RouteRegularOnly };
+            route_pair.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            route_pair.push_back(entry);
+        }
+        run_campaign(avx2_context, "clustered-pattern",
+            192, 32, clustered_missing(32), route_pair,
+            false, false, true, 0x54a32303U);
+        run_campaign(avx2_context, "random-pattern",
+            192, 32, random_missing(192, 32, 0x73c4e18bU), route_pair,
+            false, false, true, 0x54a32404U);
+
+        run_campaign(avx2_context, "k32-neighbor",
+            32, 32, striped_missing(32, 31),
+            one_byte_case(64, RoutePrunedOnly),
+            false, true, false, 0x54a32505U);
+        run_campaign(avx2_context, "r31-neighbor",
+            192, 31, striped_missing(192, 31),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a32606U);
+        run_campaign(avx2_context, "l31-neighbor",
+            192, 32, striped_missing(192, 31),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a32707U);
+
+        leo2_context_options scalar_options = {};
+        scalar_options.struct_size = sizeof(scalar_options);
+        scalar_options.backend = LEO2_BACKEND_SCALAR;
+        scalar_options.thread_count = 1;
+        leo2_context* scalar_context = NULL;
+        require_result(leo2_context_create(&scalar_options, &scalar_context),
+            "scalar context create");
+        run_campaign(scalar_context, "scalar-backend-neighbor",
+            192, 32, striped_missing(192, 32),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a32808U);
+        leo2_context_destroy(scalar_context);
+        leo2_context_destroy(avx2_context);
+
+        std::cout << "PASS high_t32_tiny_schedule_policy" << std::endl;
+        return 0;
+    }
+    catch (const std::exception& error)
+    {
+        std::cerr << "FAIL high_t32_tiny_schedule_policy: "
+                  << error.what() << std::endl;
+        return 1;
+    }
+}

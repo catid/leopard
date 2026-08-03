@@ -2141,6 +2141,22 @@ if(LEO2_BUILD_TESTS)
     set_tests_properties(leopard2_high_pruned_stage PROPERTIES
         ENVIRONMENT "OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+    if(LEOPARD_ENABLE_GF8 AND LEO2_HAVE_AVX2_BACKEND)
+        add_executable(leopard2_high_t32_tiny_schedule_policy_test
+            tests/leopard2/test_high_t32_tiny_schedule_policy.cpp)
+        target_compile_definitions(
+            leopard2_high_t32_tiny_schedule_policy_test PRIVATE
+            LEO2_ENABLE_TEST_HOOKS=1)
+        target_link_libraries(
+            leopard2_high_t32_tiny_schedule_policy_test leopard_test_hooks)
+        add_test(NAME leopard2_high_t32_tiny_schedule_policy
+            COMMAND leopard2_high_t32_tiny_schedule_policy_test)
+        set_tests_properties(
+            leopard2_high_t32_tiny_schedule_policy PROPERTIES
+            ENVIRONMENT
+                "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+    endif()
+
     add_executable(leopard2_decode_low_acceptance_test
         tests/leopard2/direct_oracle.cpp
         tests/leopard2/test_decode_low_acceptance.cpp)

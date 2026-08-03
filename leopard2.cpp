@@ -5830,6 +5830,54 @@ static void GatherShardFromKernel(
         memcpy(destination, source, bytes);
 }
 
+static bool BypassTinyGF8AVX2HighPrunedSchedules(
+    const leo2_decode_plan* plan,
+    size_t buffer_bytes)
+{
+#ifdef LEO_HAS_FF8
+    if (!plan || !plan->codec)
+        return false;
+    const leo2_codec* codec = plan->codec;
+
+    /*
+        Exact-mask schedules save field butterflies, but their immutable
+        operation interpreter has a higher fixed cost than the mature T=32
+        kernels when one pass contains at most sixteen paired 64-byte kernel
+        iterations per row (32 YMM vectors).
+        Pinned every-K and multi-seed screens covered K=33..224, R=L=32
+        and every complete 64-byte pass size through 512 bytes.  The regular
+        schedule won by 1.49x geometric mean at 64 bytes and 1.14x at 512
+        bytes; the weakest uncontaminated multi-seed cell still won by 1.03x.
+
+        Keep the byte-aware choice at execution rather than discarding the
+        plan's exact schedules: the same immutable plan may later execute a
+        larger shard, where pruning remains useful.  Reusable forced codecs
+        retain the pruned path as both an explicit caller contract and a
+        same-executable attribution control.  One-shot mode 3 already makes
+        the same choice while compiling its transient metadata.  A ragged
+        public tail is zero-padded to one complete 64-byte pass and follows
+        this pass-local rule.
+    */
+    return buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
+        (buffer_bytes & (kScratchAlignment - 1U)) == 0 &&
+        codec->flags == 0 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context && codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->padded_side == 32 && codec->recovery_count == 32 &&
+        codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
+        codec->original_count > 32 && codec->original_count <= 224 &&
+        plan->missing_original_count == codec->recovery_count &&
+        !PlanUsesTranslatedLowDecode(plan);
+#else
+    (void)plan;
+    (void)buffer_bytes;
+    return false;
+#endif
+}
+
 static void ExecuteTransformDecodePass(
     const leo2_decode_plan* plan,
     size_t buffer_bytes,
@@ -5851,16 +5899,21 @@ static void ExecuteTransformDecodePass(
         execution_requested_coordinates.data();
     const unsigned requested_count =
         static_cast<unsigned>(execution_requested_coordinates.size());
+    const bool bypass_high_pruned_schedules =
+        !use_generic && use_tiled &&
+        BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
     const leopard2_internal::PrunedTransformBlock* const high_input_plans =
-        plan->high_pruned_input_blocks.empty()
+        bypass_high_pruned_schedules ||
+            plan->high_pruned_input_blocks.empty()
             ? NULL : plan->high_pruned_input_blocks.data();
-    const unsigned high_input_plan_count = static_cast<unsigned>(
-        plan->high_pruned_input_blocks.size());
+    const unsigned high_input_plan_count = bypass_high_pruned_schedules
+        ? 0U : static_cast<unsigned>(plan->high_pruned_input_blocks.size());
     const leopard2_internal::PrunedTransformPlan* const high_output_plans =
-        plan->high_pruned_output_plans.empty()
+        bypass_high_pruned_schedules ||
+            plan->high_pruned_output_plans.empty()
             ? NULL : plan->high_pruned_output_plans.data();
-    const unsigned high_output_plan_count = static_cast<unsigned>(
-        plan->high_pruned_output_plans.size());
+    const unsigned high_output_plan_count = bypass_high_pruned_schedules
+        ? 0U : static_cast<unsigned>(plan->high_pruned_output_plans.size());
     const leopard2_internal::PrunedTransformBlock* const low_input_plans =
         plan->low_pruned_input_blocks.empty()
             ? NULL : plan->low_pruned_input_blocks.data();
