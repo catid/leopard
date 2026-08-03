@@ -1,0 +1,169 @@
+{
+  "schema": "leopard2-gf8-t16-b64-generated-checkpoint/v1",
+  "status": "accepted",
+  "date_utc": "2026-08-03",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 16,
+    "R": 16,
+    "T": 16,
+    "shard_bytes": 64,
+    "layout": "native packed input and output slabs only",
+    "fallback": "all other counts, byte sizes, backends, fields, and valid layouts retain the mature encoder"
+  },
+  "candidate": {
+    "source_commit": "3d652680d83e1b5fb5adce38944a3404e483e260",
+    "source_tree": "f1a679c6584932a8cd615c4a8967741b72a1fc6e",
+    "binary_sha256": "471fef3b04149bb4a8c1c7edd5627bbd6852a7bd1c645dde9cc4e6790411ed89",
+    "archive_sha256": "ffba555f070fac04cb94e89089e384212f954ecf8686199b8f5a9218814a81cf",
+    "object_sha256": "09fbee6069a3bd2b8e3e846275d6cadf844945402508e71d2270b1dc346fde0f",
+    "generated_encode_text_bytes": 6204,
+    "evex_prefixed_instructions": 0,
+    "generated_encode_stack_references": 0
+  },
+  "baselines": {
+    "predecessor": {
+      "source_commit": "294c07ff20adbdc07369b1375879578f82be0c7b",
+      "binary_sha256": "25d5d40991c9e3b77a8141d9d663db658e49ed28f927ef1985dc0ab3f4de996a"
+    },
+    "leopard_main": {
+      "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+      "binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910"
+    }
+  },
+  "corrected_attribution": {
+    "status": "confirmed_after_removing_inherited_OMP_PLACES",
+    "invalid_prior_condition": "An older campaign inherited OMP_PLACES=cores and is not used for any performance conclusion.",
+    "source_commit_before_fix": "77e505f1265a65e3231d984ef6268f8273d5f86d",
+    "summary_sha256": "d74031d1e7e5cc3234eb5b36e8f329d8ee4554ddc0d78e476ab5aba1f67a9698",
+    "raw_summary_local_path": "/tmp/leopard2-t16-attribution-20260803-v1/campaign-v1/summary.json",
+    "K16_R16_B64_main_time_over_pre_fix_leopard2_time": {
+      "ratio": 0.6629275231115977,
+      "ci95": [0.6475789112847429, 0.6786399205418846]
+    },
+    "conclusion": "The exact T16/64-byte cell was a real Leopard2 regression, while larger-K T16 behavior was mixed rather than uniformly slower."
+  },
+  "implementation": {
+    "description": "The generated kernel executes the same legacy T16 radix-four inverse and forward butterflies, but keeps each outer column in registers across its adjacent inverse and forward groups.",
+    "structural_win": "Removes one complete 16-shard memory round without changing field representation, butterfly order, coordinate order, or parity bytes.",
+    "layout_isolation": "The kernel is linked as a trailing AVX2-only object. An earlier in-TU prototype was rejected because code placement regressed neighboring transforms.",
+    "runtime_selection": "The public terminal proves exact K=R=T=16, B=64, GF8, AVX2, legacy-high, native packed and non-overlapping geometry before writing output."
+  },
+  "authoritative_method": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "compiler": "GCC 13.3.0",
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "pair_lock": "/run/user/1000/leopard2-cpu-leases/leopard2-cpu-pair-1000-13-29.lock",
+    "OMP_DYNAMIC": "FALSE",
+    "OMP_NUM_THREADS": 1,
+    "OMP_THREAD_LIMIT": 1,
+    "OMP_PROC_BIND": "TRUE",
+    "OMP_PLACES": "absent",
+    "iterations_per_invocation": 21,
+    "invocations_per_role_per_round": 2,
+    "reuse": 8192,
+    "warmup": 32,
+    "default_paired_rounds": 9,
+    "T8_control_paired_rounds": 25,
+    "T32_followup_paired_rounds": 49,
+    "accepted_sibling_nonidle_delta": 0,
+    "rejected_round_attempts": 0,
+    "interval": "two-sided Student-t 95% interval over paired per-round log ratios",
+    "primary_summary_sha256": "68fcc1c97eb993f626372b744491037b5aae807c3f28db72cd0a7c283e59e0ba",
+    "T32_followup_summary_sha256": "0da262ef26893bc3ee8472d18d1da842f8abaa6769b8a997ba380177836f327d",
+    "raw_primary_local_path": "/tmp/leopard2-t16-final-3d65268-v1/campaign-v1/summary.json",
+    "raw_T32_followup_local_path": "/tmp/leopard2-t16-final-3d65268-v1/t32-followup-v1/summary.json"
+  },
+  "target_speedups": {
+    "ratio_semantics": "numerator encode time divided by generated-candidate encode time; values above one favor the candidate",
+    "leopard_main_over_candidate": {
+      "ratio": 1.6346222938712942,
+      "ci95": [1.6186392311327777, 1.6507631794832403]
+    },
+    "same_binary_mature_transform_over_candidate": {
+      "ratio": 2.3397456178377465,
+      "ci95": [2.3140327892917356, 2.365744159514054]
+    },
+    "predecessor_over_candidate": {
+      "ratio": 2.4890882644100762,
+      "ci95": [2.4497901456066957, 2.5290167809413]
+    }
+  },
+  "neighbor_guard": {
+    "ratio_semantics": "predecessor time divided by candidate time; a lower confidence bound below 0.98 would permit a regression greater than two percent",
+    "cells": [
+      {
+        "name": "K16_R16_B63",
+        "ratio": 1.0745037334495329,
+        "ci95": [1.0598093217183564, 1.0894018853551923]
+      },
+      {
+        "name": "K16_R16_B65",
+        "ratio": 1.0379361809997683,
+        "ci95": [1.0244431932372604, 1.0516068855160807]
+      },
+      {
+        "name": "K16_R16_B128",
+        "ratio": 1.0499067503963329,
+        "ci95": [1.0388293183110204, 1.0611023053526902]
+      },
+      {
+        "name": "K15_R16_B64",
+        "ratio": 1.0631804113546819,
+        "ci95": [1.0403871284605712, 1.0864730600433883]
+      },
+      {
+        "name": "K16_R15_B64",
+        "ratio": 1.05538320428673,
+        "ci95": [1.0482894656874246, 1.062524945970071]
+      },
+      {
+        "name": "T8_K8_R8_B64",
+        "ratio": 1.0121965663564736,
+        "ci95": [0.9989851522210036, 1.0255826992683645],
+        "rounds": 25
+      },
+      {
+        "name": "T32_K32_R32_B64",
+        "ratio": 0.997318387962929,
+        "ci95": [0.9916433507177058, 1.0030259026585495],
+        "rounds": 49,
+        "leopard_main_over_candidate": 1.1310756992773763,
+        "leopard_main_over_candidate_ci95": [1.1229619440608094, 1.1392480789416037]
+      }
+    ],
+    "credible_regressions_greater_than_two_percent": []
+  },
+  "correctness_and_build_gates": {
+    "GCC_release_direct_oracle_and_test_hook": "passed",
+    "GCC_release_production_API_layout_and_guard_tests": "passed",
+    "Clang_18_release_focused_tests": "passed",
+    "Clang_18_ASan_UBSan_focused_tests": "2/2 passed in 151.66 seconds; 32.2 MiB physical-memory peak and no swap",
+    "feature_disabled_build": "passed; T16 generated route excluded",
+    "GF16_only_build": "passed without the GF8-only helper warning",
+    "all_systematic_basis_rows": "passed at byte offsets 0 and 63 against the independent direct generator oracle",
+    "unaligned_and_guarded_production_buffers": "passed",
+    "public_one_shot_and_batch_parity": "matched direct oracle",
+    "benchmark_round_trips": "all passed",
+    "benchmark_workload_digests": "matched across candidate, predecessor, and exact main"
+  },
+  "promotion_rule": {
+    "minimum_target_lower_ci95": 1.05,
+    "maximum_neighbor_regression": 0.02,
+    "target_pass": true,
+    "neighbor_pass": true,
+    "correctness_pass": true,
+    "ISA_pass": true
+  },
+  "reproduction": {
+    "configure": "cmake -S . -B build/t16-avx2 -G Ninja -DCMAKE_BUILD_TYPE=Release -DLEO2_BACKEND_VARIANT=avx2 -DLEO2_BUILD_TESTS=ON -DLEO2_BUILD_BENCHMARKS=ON -DLEO2_FLAG_MAVX512F=FALSE -DLEO2_FLAG_MGFNI=FALSE",
+    "build": "cmake --build build/t16-avx2 --target bench_leopard2 leopard2_balanced_b64_terminal_test leopard2_balanced_b64_terminal_production_test -- -j1",
+    "tests": "env OMP_DYNAMIC=FALSE OMP_NUM_THREADS=1 OMP_THREAD_LIMIT=1 OMP_PROC_BIND=TRUE ctest --test-dir build/t16-avx2 -j1 --output-on-failure -R 'leopard2_balanced_b64_terminal(_production)?$'",
+    "candidate_target": "env -u OMP_PLACES OMP_DYNAMIC=FALSE OMP_NUM_THREADS=1 OMP_THREAD_LIMIT=1 OMP_PROC_BIND=TRUE taskset -c 13 build/t16-avx2/bench_leopard2 --k 16 --r 16 --bytes 64 --loss 1 --batch 1 --reuse 8192 --iterations 21 --warmup 32 --threads 1 --profile high --field gf8 --backend avx2 --skip-legacy --retain-samples --attest-source --balanced-b64-terminal-mode 1 --json candidate.json",
+    "same_binary_control": "Repeat candidate_target with --balanced-b64-terminal-mode 0 and the same seed, then pair invocation order and reserve SMT sibling 29."
+  }
+}
