@@ -1380,7 +1380,7 @@ static bool LowP32B64TerminalRouteExpected(const Options& options)
 {
     return options.low_p32_b64_terminal_mode == 1 &&
         options.k == 32 && options.r == 32 && options.bytes == 64 &&
-        options.losses >= 9 && options.losses < 32;
+        options.losses >= 9 && options.losses <= 32;
 }
 
 static bool LowP128B64TerminalRouteExpected(const Options& options)
@@ -1388,9 +1388,11 @@ static bool LowP128B64TerminalRouteExpected(const Options& options)
     if (options.low_p128_b64_terminal_mode != 1 || options.bytes != 64)
         return false;
     return (options.k == 95 && options.r == 95 &&
-               (options.losses == 47 || options.losses == 94)) ||
+               (options.losses == 47 || options.losses == 94 ||
+                options.losses == 95)) ||
            (options.k == 128 && options.r == 128 &&
-               (options.losses == 64 || options.losses == 127));
+               (options.losses == 64 || options.losses == 127 ||
+                options.losses == 128));
 }
 
 static int Run(const Options& options)
@@ -2129,8 +2131,8 @@ static int Run(const Options& options)
              << (low_p32_b64_terminal_route_selected ? "true" : "false")
              << ",\n"
              << "    \"low_p32_b64_terminal_selector_contract\": "
-                "\"K=R=P=32,N=64,GF8,AVX2,B=64,L=9..31,"
-                "public-one-shot-only\"";
+                "\"K=R=P=32,N=64,GF8,AVX2,B=64,L=9..32,"
+                "one-shot-and-reusable-plan\"";
     }
     if (options.low_p128_b64_terminal_mode >= 0)
     {
@@ -2152,8 +2154,8 @@ static int Run(const Options& options)
              << ",\n"
              << "    \"low_p128_b64_terminal_selector_contract\": "
                 "\"P=128,N=256,GF8,AVX2,B=64;"
-                "K=R=95,L=47|94;K=R=128,L=64|127;"
-                "public-one-shot-only\"";
+                "K=R=95,L=47|94|95;K=R=128,L=64|127|128;"
+                "one-shot-and-reusable-plan\"";
     }
     if (options.one_shot_plan_setup_mode >= 0)
     {

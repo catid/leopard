@@ -28,16 +28,16 @@ import time
 from typing import Any, Mapping, Sequence
 
 
-P32_SCHEMA = "leopard2-alg4-p32-terminal-abba/v1"
-P32_SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v1"
-P128_SCHEMA = "leopard2-alg4-p128-terminal-abba/v1"
-P128_SUMMARY_SCHEMA = "leopard2-alg4-p128-terminal-summary/v1"
-P32_REUSABLE_SCHEMA = "leopard2-alg4-p32-reusable-terminal-abba/v1"
+P32_SCHEMA = "leopard2-alg4-p32-terminal-abba/v2"
+P32_SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v2"
+P128_SCHEMA = "leopard2-alg4-p128-terminal-abba/v2"
+P128_SUMMARY_SCHEMA = "leopard2-alg4-p128-terminal-summary/v2"
+P32_REUSABLE_SCHEMA = "leopard2-alg4-p32-reusable-terminal-abba/v2"
 P32_REUSABLE_SUMMARY_SCHEMA = \
-    "leopard2-alg4-p32-reusable-terminal-summary/v1"
-P128_REUSABLE_SCHEMA = "leopard2-alg4-p128-reusable-terminal-abba/v1"
+    "leopard2-alg4-p32-reusable-terminal-summary/v2"
+P128_REUSABLE_SCHEMA = "leopard2-alg4-p128-reusable-terminal-abba/v2"
 P128_REUSABLE_SUMMARY_SCHEMA = \
-    "leopard2-alg4-p128-reusable-terminal-summary/v1"
+    "leopard2-alg4-p128-reusable-terminal-summary/v2"
 BENCHMARK_SCHEMAS = {
     "p32": "leopard2-benchmark-v18",
     "p128": "leopard2-benchmark-v20",
@@ -282,8 +282,8 @@ def cells(terminal: str) -> list[dict[str, Any]]:
          "loss": 16, "role": "neighbor", "seed": 0xA4324101},
         {"id": "loss-neighbor-8", "K": 32, "R": 32, "bytes": 64,
          "loss": 8, "role": "neighbor", "seed": 0xA4320801},
-        {"id": "loss-neighbor-32", "K": 32, "R": 32, "bytes": 64,
-         "loss": 32, "role": "neighbor", "seed": 0xA4322001},
+        {"id": "target-full-loss32", "K": 32, "R": 32, "bytes": 64,
+         "loss": 32, "role": "target", "seed": 0xA4322001},
         {"id": "shape-neighbor-k31", "K": 31, "R": 32, "bytes": 64,
          "loss": 16, "role": "neighbor", "seed": 0xA4311001},
         {"id": "shape-neighbor-r31", "K": 32, "R": 31, "bytes": 64,
@@ -304,16 +304,16 @@ def cells(terminal: str) -> list[dict[str, Any]]:
          "loss": 48, "role": "neighbor", "seed": 0xB0953001},
         {"id": "loss-k95-l93", "K": 95, "R": 95, "bytes": 64,
          "loss": 93, "role": "neighbor", "seed": 0xB0955D01},
-        {"id": "loss-k95-l95", "K": 95, "R": 95, "bytes": 64,
-         "loss": 95, "role": "neighbor", "seed": 0xB0955F01},
+        {"id": "target-k95-l95", "K": 95, "R": 95, "bytes": 64,
+         "loss": 95, "role": "target", "seed": 0xB0955F01},
         {"id": "loss-k128-l63", "K": 128, "R": 128, "bytes": 64,
          "loss": 63, "role": "neighbor", "seed": 0xB1283F01},
         {"id": "loss-k128-l65", "K": 128, "R": 128, "bytes": 64,
          "loss": 65, "role": "neighbor", "seed": 0xB1284101},
         {"id": "loss-k128-l126", "K": 128, "R": 128, "bytes": 64,
          "loss": 126, "role": "neighbor", "seed": 0xB1287E01},
-        {"id": "loss-k128-l128", "K": 128, "R": 128, "bytes": 64,
-         "loss": 128, "role": "neighbor", "seed": 0xB1288001},
+        {"id": "target-k128-l128", "K": 128, "R": 128, "bytes": 64,
+         "loss": 128, "role": "target", "seed": 0xB1288001},
         {"id": "byte-neighbor-63", "K": 128, "R": 128, "bytes": 63,
          "loss": 127, "role": "neighbor", "seed": 0xB1287F3F},
         {"id": "byte-neighbor-65", "K": 128, "R": 128, "bytes": 65,
@@ -684,18 +684,18 @@ def main() -> int:
         write_bytes_exclusive(correctness_stderr, completed.stderr)
         expected_pass = (
             b"PASS low_p32_p128_b64_terminal p32_payloads=2 "
-            b"p32_patterns=67 p128_payloads=2 p128_patterns=136 "
-            b"p95_payloads=1 p95_patterns=103 parity_selections=2 routes=98\n")
+            b"p32_patterns=68 p128_payloads=2 p128_patterns=137 "
+            b"p95_payloads=1 p95_patterns=104 parity_selections=2 routes=107\n")
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
             "stdout": file_identity(correctness_stdout, allow_empty=True),
             "stderr": file_identity(correctness_stderr, allow_empty=True),
             "coverage": {
-                "p32_payloads": 2, "p32_patterns": 67,
-                "p128_payloads": 2, "p128_patterns": 136,
-                "p95_payloads": 1, "p95_patterns": 103,
-                "parity_selections": 2, "public_routes": 98,
+                "p32_payloads": 2, "p32_patterns": 68,
+                "p128_payloads": 2, "p128_patterns": 137,
+                "p95_payloads": 1, "p95_patterns": 104,
+                "parity_selections": 2, "public_routes": 107,
             },
         }
 

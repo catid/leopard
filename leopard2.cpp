@@ -8286,15 +8286,17 @@ static uint8_t ClassifyLowB64Terminal(
 #endif
     if (codec->parent_count == 64 && codec->padded_side == 32 &&
         codec->original_count == 32 && codec->recovery_count == 32 &&
-        missing_original_count >= 9 && missing_original_count < 32)
+        missing_original_count >= 9 && missing_original_count <= 32)
         return kLowB64TerminalP32;
     if (codec->parent_count == 256 && codec->padded_side == 128 &&
         ((codec->original_count == 95 && codec->recovery_count == 95 &&
           (missing_original_count == 47 ||
-           missing_original_count == 94)) ||
+           missing_original_count == 94 ||
+           missing_original_count == 95)) ||
          (codec->original_count == 128 && codec->recovery_count == 128 &&
           (missing_original_count == 64 ||
-           missing_original_count == 127))))
+           missing_original_count == 127 ||
+           missing_original_count == 128))))
         return kLowB64TerminalP128;
     return kLowB64TerminalNone;
 }

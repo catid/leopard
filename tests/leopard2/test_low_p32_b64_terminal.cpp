@@ -212,6 +212,13 @@ std::vector<std::vector<unsigned> > BuildPatterns()
         std::sort(missing.begin(), missing.end());
         patterns.push_back(missing);
     }
+    // The exact kernel accepts requested_count == P.  Keep this boundary in
+    // the direct-oracle suite independently of whether production dispatch is
+    // enabled for full original loss.
+    missing.clear();
+    for (unsigned i = 0; i < kOriginalCount; ++i)
+        missing.push_back(i);
+    patterns.push_back(missing);
     return patterns;
 }
 
@@ -661,6 +668,13 @@ std::vector<std::vector<unsigned> > BuildP128Patterns(unsigned count)
                 missing.push_back(i);
         patterns.push_back(missing);
     }
+    // Exercise the terminal's inclusive requested-count boundary.  This also
+    // leaves no live systematic input, so all recovery data comes from the
+    // independently generated parity coordinates.
+    missing.clear();
+    for (unsigned i = 0; i < count; ++i)
+        missing.push_back(i);
+    patterns.push_back(missing);
     return patterns;
 }
 
@@ -925,12 +939,16 @@ int main()
                 false, true, 1);
             ++route_count;
         }
-        // Explicit route-off neighbors prove every selector boundary: direct
-        // repair below L=9, all-loss at L=32, ragged byte tails, and adjacent
-        // public K/R shapes.  The exact reusable plan now shares the promoted
-        // terminal with the one-shot route.
+        // Explicit route checks prove every selector boundary: direct repair
+        // below L=9, the inclusive all-loss terminal, ragged byte tails, and
+        // adjacent public K/R shapes.  Reusable plans and batch bindings share
+        // the same immutable full-loss terminal selection.
         ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 1);
+        ExercisePublicRoute(context, 32, 32, 64, 32, false, true, 1);
+        ExercisePublicRoute(context, 32, 32, 64, 32, true, false, 1);
+        ExercisePublicRoute(context, 32, 32, 64, 32,
+            true, false, 2, 0, 1, 0, false, 0, 0, false, true);
         ExercisePublicRoute(context, 32, 32, 63, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 65, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 64, 16, true, false, 1);
@@ -938,7 +956,7 @@ int main()
         ExercisePublicRoute(context, 32, 32, 65, 16, true, false, 0);
         ExercisePublicRoute(context, 31, 32, 64, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 31, 64, 16, false, false, 0);
-        route_count += 9;
+        route_count += 12;
         ExercisePublicRoute(context, 32, 32, 64, 16,
             true, false, 2, 0, 1, 0, false, 0, 0, false, true);
         ++route_count;
@@ -996,7 +1014,8 @@ int main()
         Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
             "armed enabled P128 terminal did not normalize to mode one");
         const unsigned p128_shapes[][2] = {
-            { 95, 47 }, { 95, 94 }, { 128, 64 }, { 128, 127 }
+            { 95, 47 }, { 95, 94 }, { 95, 95 },
+            { 128, 64 }, { 128, 127 }, { 128, 128 }
         };
         for (size_t shape = 0;
              shape < sizeof(p128_shapes) / sizeof(p128_shapes[0]); ++shape)
@@ -1014,6 +1033,12 @@ int main()
             ++route_count;
         }
         ExercisePublicRoute(context, 128, 128, 64, 127,
+            true, false, 0, 2, 1, 0, false, 0, 0, false, true);
+        ++route_count;
+        ExercisePublicRoute(context, 95, 95, 64, 95,
+            true, false, 0, 2, 1, 0, false, 0, 0, false, true);
+        ++route_count;
+        ExercisePublicRoute(context, 128, 128, 64, 128,
             true, false, 0, 2, 1, 0, false, 0, 0, false, true);
         ++route_count;
         // Non-contiguous K=95 patterns exercise shortening/puncturing and
@@ -1068,15 +1093,11 @@ int main()
             false, false, 0, 0);
         ExercisePublicRoute(context, 95, 95, 64, 93,
             false, false, 0, 0);
-        ExercisePublicRoute(context, 95, 95, 64, 95,
-            false, false, 0, 0);
         ExercisePublicRoute(context, 128, 128, 64, 63,
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 128, 64, 65,
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 128, 64, 126,
-            false, false, 0, 0);
-        ExercisePublicRoute(context, 128, 128, 64, 128,
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 128, 63, 127,
             false, false, 0, 0);
@@ -1098,7 +1119,7 @@ int main()
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 127, 64, 64,
             false, false, 0, 0);
-        route_count += 18;
+        route_count += 16;
 
         Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
                 false),
