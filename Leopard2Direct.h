@@ -177,6 +177,8 @@ struct CodecDecodeMetadataInfo
     size_t translated_locator_bytes;
     size_t translated_full_loss_locator_bytes;
     size_t translated_factor_bytes;
+    size_t codec_direct_repair_generator_bytes;
+    size_t codec_k8r4_terminal_cache_bytes;
 };
 
 bool GetCodecDecodeMetadataInfo(

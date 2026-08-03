@@ -474,10 +474,14 @@ struct leo2_context
     size_t gf16_live_set_target_bytes;
     size_t gf16_tile_threshold_bytes;
     leo2_thread_pool* pool;
-    // Lazily populated once per context for the measured GF8/AVX2 K=65
-    // multi-loss repair family, then read immutably by every codec/plan.
+    // Lazily populated once per context for fixed GF8/AVX2 repair identities,
+    // then read immutably by every matching codec and one-shot call.
     std::once_flag direct_repair_rows8_once;
     std::vector<uint8_t> direct_repair_generator_rows8;
+    std::once_flag direct_k8r4_terminal_once;
+    std::vector<uint8_t> direct_k8r4_pattern_index8;
+    std::vector<uint8_t> direct_k8r4_surviving_originals8;
+    std::vector<uint8_t> direct_k8r4_repair_logs8;
 };
 
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -2657,6 +2661,34 @@ static bool IsEqualRoundedMultiLossDirectRepairCodec(
         codec->context->backend == LEO2_BACKEND_AVX2;
 }
 
+static bool IsLegacyHighK8R4OneShotDirectRepairCodec(
+    const leo2_codec* codec)
+{
+    /*
+        The bounded one-shot executor is also useful for the maximum-loss
+        K=8/R=4 legacy-high case even though that parent is not the
+        equal-rounded P=T construction.  Keep this eligibility exact: the
+        promotion covers only the native, unforced GF8/AVX2 wire identity.
+        Loss count and byte length are checked after presence validation.
+    */
+    return codec && codec->context && codec->flags == 0 &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->original_count == 8 && codec->recovery_count == 4 &&
+        codec->parent_count == 16 && codec->padded_side == 4 &&
+        codec->parent_dimension == 12;
+}
+
+static bool HasLegacyHighK8R4TerminalCache(const leo2_codec* codec)
+{
+    return IsLegacyHighK8R4OneShotDirectRepairCodec(codec) &&
+        codec->context->direct_k8r4_pattern_index8.size() == (1U << 8) &&
+        codec->context->direct_k8r4_surviving_originals8.size() == 70U * 4U &&
+        codec->context->direct_k8r4_repair_logs8.size() == 70U * 8U * 4U;
+}
+
 static bool IsGeneralDirectOneLossCodec(
     const leo2_codec* codec)
 {
@@ -3630,6 +3662,96 @@ static bool PrepareDirectRepairCauchyInverse(
     }
     return true;
 }
+
+#ifdef LEO_HAS_FF8
+static bool PrepareLegacyHighK8R4TerminalCache(
+    leo2_codec* codec,
+    const std::vector<DirectField8::Element>& barycentric_weights,
+    const std::vector<DirectField8::Element>& generator_rows)
+{
+    static const size_t kPatternMapSize = 1U << 8;
+    static const size_t kExpectedPatterns = 70;
+    if (!IsLegacyHighK8R4OneShotDirectRepairCodec(codec) ||
+        !codec->context ||
+        barycentric_weights.size() != 8U ||
+        generator_rows.size() != 8U * 4U)
+        return false;
+
+    std::vector<uint8_t> pattern_index(kPatternMapSize, UINT8_MAX);
+    std::vector<uint8_t> surviving_originals;
+    surviving_originals.reserve(kExpectedPatterns * 4U);
+    std::vector<uint8_t> repair_logs;
+    repair_logs.reserve(kExpectedPatterns * 8U * 4U);
+    const uint32_t selected_parities[4] = { 0, 1, 2, 3 };
+    for (uint32_t mask = 0; mask < kPatternMapSize; ++mask)
+    {
+        uint32_t bits = mask;
+        uint32_t losses = 0;
+        uint32_t missing_originals[4] = {};
+        for (uint32_t original = 0; original < 8; ++original)
+        {
+            if ((bits & (1U << original)) == 0)
+                continue;
+            if (losses < 4)
+                missing_originals[losses] = original;
+            ++losses;
+        }
+        if (losses != 4)
+            continue;
+
+        DirectField8::Element inverse
+            [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
+        if (!PrepareDirectRepairCauchyInverse<DirectField8>(codec,
+                missing_originals, 4, barycentric_weights,
+                generator_rows,
+                selected_parities, inverse))
+            return false;
+        const size_t index = repair_logs.size() / (8U * 4U);
+        if (index >= UINT8_MAX)
+            return false;
+        pattern_index[mask] = static_cast<uint8_t>(index);
+        for (uint32_t source = 0; source < 8; ++source)
+        {
+            if ((mask & (1U << source)) == 0)
+                surviving_originals.push_back(static_cast<uint8_t>(source));
+        }
+        if (surviving_originals.size() != (index + 1U) * 4U)
+            return false;
+        for (uint32_t source_slot = 0; source_slot < 8; ++source_slot)
+        {
+            const bool parity_source = source_slot < 4;
+            const uint32_t original_source = parity_source ? 0 :
+                surviving_originals[index * 4U + source_slot - 4U];
+            for (uint32_t output = 0; output < 4; ++output)
+            {
+                DirectField8::Element coefficient = parity_source
+                    ? inverse[output][source_slot] : 0;
+                if (!parity_source)
+                {
+                    for (uint32_t equation = 0; equation < 4; ++equation)
+                    {
+                        coefficient ^= DirectField8::Multiply(
+                            inverse[output][equation],
+                            generator_rows[
+                                equation * 8U + original_source]);
+                    }
+                }
+                if (coefficient == 0)
+                    return false;
+                repair_logs.push_back(DirectField8::Log(coefficient));
+            }
+        }
+    }
+    if (surviving_originals.size() != kExpectedPatterns * 4U ||
+        repair_logs.size() != kExpectedPatterns * 8U * 4U)
+        return false;
+    codec->context->direct_k8r4_pattern_index8.swap(pattern_index);
+    codec->context->direct_k8r4_surviving_originals8.swap(
+        surviving_originals);
+    codec->context->direct_k8r4_repair_logs8.swap(repair_logs);
+    return true;
+}
+#endif
 
 template<class Field>
 static bool PrepareDirectOneLossTerms(
@@ -7492,7 +7614,28 @@ static leo2_result ValidateDecodeBuffers(
 
 #ifdef LEO_HAS_FF8
 static const uint64_t kOneShotEqualRoundedMaximumBytes = 514;
+static const uint64_t kOneShotK8R4MaximumBytes = 2048;
 static const size_t kOneShotEqualRoundedTileBytes = 256;
+
+static bool ShouldUseK8R4FourSourceTiny(uint64_t shard_bytes)
+{
+    /*
+        The four-source XMM kernel has an exact-byte scalar tail, while the
+        source-major group-four kernel rounds to a 32-byte tile.  Their
+        crossover therefore repeats at eight-byte boundaries.  A pinned
+        all-length screen followed by nine mirrored rounds at every boundary
+        retained only intervals whose whole-call lower confidence bound met
+        the five-percent gate.
+    */
+    return (shard_bytes >= 1 && shard_bytes <= 3) ||
+        (shard_bytes >= 8 && shard_bytes <= 13) ||
+        (shard_bytes >= 16 && shard_bytes <= 20) ||
+        (shard_bytes >= 24 && shard_bytes <= 28) ||
+        (shard_bytes >= 32 && shard_bytes <= 36) ||
+        (shard_bytes >= 40 && shard_bytes <= 44) ||
+        (shard_bytes >= 48 && shard_bytes <= 51) ||
+        (shard_bytes >= 56 && shard_bytes <= 59);
+}
 
 /*
     A reusable direct plan is intentionally output-major and heap-owned.  That
@@ -7502,9 +7645,11 @@ static const size_t kOneShotEqualRoundedTileBytes = 256;
     stack storage and fuse coefficient preparation with source-major execution.
 
     This path is deliberately narrower than direct-plan eligibility: pure AVX2,
-    equal-rounded legacy-high GF8, one through eight losses, and bounded
-    256-byte tiles.  It never changes reusable plans, scratch queries, the wire
-    profile, or other backends.
+    measured equal-rounded legacy-high GF8 cells, plus the exact K=8/R=4
+    maximum-loss identity.  The latter uses a context-owned table for all 70
+    missing-original patterns and a source-major reconstruction through bounded
+    256-byte tiles up to its measured 2-KiB crossover.  It never changes
+    reusable plans, scratch queries, the wire profile, or other backends.
 */
 static leo2_result TryOneShotEqualRoundedDirectRepair(
     const leo2_codec* codec,
@@ -7520,10 +7665,15 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
     bool& handled)
 {
     handled = false;
+    const bool equal_rounded =
+        IsEqualRoundedMultiLossDirectRepairCodec(codec);
+    const bool legacy_high_k8_r4 =
+        IsLegacyHighK8R4OneShotDirectRepairCodec(codec);
+    const uint64_t maximum_bytes = legacy_high_k8_r4
+        ? kOneShotK8R4MaximumBytes : kOneShotEqualRoundedMaximumBytes;
     if (g_one_shot_equal_rounded_direct_mode != 1U ||
-        !codec || shard_bytes == 0 ||
-        shard_bytes > kOneShotEqualRoundedMaximumBytes ||
-        !IsEqualRoundedMultiLossDirectRepairCodec(codec) ||
+        !codec || shard_bytes == 0 || shard_bytes > maximum_bytes ||
+        (!equal_rounded && !legacy_high_k8_r4) ||
         !codec->context || !codec->context->ops ||
         codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
         !codec->context->ops->ff8_multiply_add_outputs ||
@@ -7641,6 +7791,17 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         handled = false;
         return LEO2_SUCCESS;
     }
+    if (legacy_high_k8_r4 && missing_count != 4)
+    {
+        handled = false;
+        return LEO2_SUCCESS;
+    }
+    uint32_t missing_mask = 0;
+    if (legacy_high_k8_r4)
+    {
+        for (uint32_t missing = 0; missing < missing_count; ++missing)
+            missing_mask |= 1U << missing_originals[missing];
+    }
     uint32_t recovery_index = 0;
     while (codec->recovery_count - recovery_index >= sizeof(size_t))
     {
@@ -7686,10 +7847,14 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
     if (selected_count < missing_count)
         return LEO2_INTERNAL_ERROR;
 
+    const bool have_k8_r4_terminal_cache =
+        legacy_high_k8_r4 && HasLegacyHighK8R4TerminalCache(codec);
     size_t row_count = 0;
-    if (!CheckedMultiply(static_cast<size_t>(codec->original_count),
-            static_cast<size_t>(codec->recovery_count), row_count) ||
-        codec->direct_repair_generator_rows8.size() < row_count)
+    const bool have_generator_rows = CheckedMultiply(
+            static_cast<size_t>(codec->original_count),
+            static_cast<size_t>(codec->recovery_count), row_count) &&
+        codec->direct_repair_generator_rows8.size() >= row_count;
+    if (!have_generator_rows && !have_k8_r4_terminal_cache)
     {
         handled = false;
         return LEO2_SUCCESS;
@@ -7788,7 +7953,37 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         codec->direct_repair_generator_rows8;
     Element inverse
         [kDirectMaxRepairLosses][kDirectMaxRepairLosses] = {};
-    const bool have_cauchy_inverse =
+    uint8_t cached_pattern_index = UINT8_MAX;
+    if (have_k8_r4_terminal_cache &&
+        missing_mask <
+            codec->context->direct_k8r4_pattern_index8.size())
+    {
+        const uint8_t pattern_index =
+            codec->context->
+                direct_k8r4_pattern_index8[missing_mask];
+        if (pattern_index != UINT8_MAX)
+            cached_pattern_index = pattern_index;
+    }
+    const uint8_t* cached_surviving_originals = NULL;
+    const uint8_t* cached_repair_logs = NULL;
+    if (cached_pattern_index != UINT8_MAX)
+    {
+        const size_t surviving_offset =
+            static_cast<size_t>(cached_pattern_index) * 4U;
+        const size_t repair_offset =
+            static_cast<size_t>(cached_pattern_index) * 8U * 4U;
+        if (surviving_offset + 4U <=
+                codec->context->direct_k8r4_surviving_originals8.size() &&
+            repair_offset + 8U * 4U <=
+                codec->context->direct_k8r4_repair_logs8.size())
+        {
+            cached_surviving_originals = codec->context->
+                direct_k8r4_surviving_originals8.data() + surviving_offset;
+            cached_repair_logs = codec->context->
+                direct_k8r4_repair_logs8.data() + repair_offset;
+        }
+    }
+    const bool have_cauchy_inverse = cached_repair_logs ||
         PrepareDirectRepairCauchyInverse<Field>(codec,
             missing_originals, missing_count,
             codec->direct_barycentric8, rows,
@@ -7824,6 +8019,34 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
     }
 
     const leopard::backend::Ops& ops = *codec->context->ops;
+    if (cached_repair_logs && cached_surviving_originals &&
+        ShouldUseK8R4FourSourceTiny(shard_bytes) &&
+        ops.ff8_linear_combination4_tiny)
+    {
+        const void* sources[4] = {};
+        uint16_t logs[4] = {};
+        for (uint32_t output = 0; output < 4; ++output)
+        {
+            for (uint32_t source = 0; source < 4; ++source)
+            {
+                sources[source] = recovery[selected_parities[source]];
+                logs[source] = cached_repair_logs[source * 4U + output];
+            }
+            void* const destination = restored[missing_originals[output]];
+            ops.ff8_linear_combination4_tiny(
+                destination, sources, logs, false, shard_bytes);
+            for (uint32_t source = 0; source < 4; ++source)
+            {
+                sources[source] =
+                    original[cached_surviving_originals[source]];
+                logs[source] = cached_repair_logs[
+                    (source + 4U) * 4U + output];
+            }
+            ops.ff8_linear_combination4_tiny(
+                destination, sources, logs, true, shard_bytes);
+        }
+        return LEO2_SUCCESS;
+    }
     alignas(kScratchAlignment)
         uint8_t source_tile[kOneShotEqualRoundedTileBytes];
     alignas(kScratchAlignment)
@@ -7850,6 +8073,50 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
         if (!exact_vector_bytes)
             memset(source_tile + logical_bytes, 0,
                 execution_bytes - logical_bytes);
+
+        if (cached_repair_logs && cached_surviving_originals)
+        {
+            for (uint32_t output = 0; output < 4; ++output)
+            {
+                outputs[output] = exact_vector_bytes
+                    ? static_cast<uint8_t*>(
+                          restored[missing_originals[output]]) + offset
+                    : static_cast<void*>(output_tiles[output]);
+                memset(outputs[output], 0, execution_bytes);
+            }
+            for (uint32_t source_slot = 0;
+                 source_slot < 8; ++source_slot)
+            {
+                const void* source = source_slot < 4
+                    ? recovery[selected_parities[source_slot]]
+                    : original[
+                        cached_surviving_originals[source_slot - 4U]];
+                const void* execution_source =
+                    static_cast<const uint8_t*>(source) + offset;
+                if (!exact_vector_bytes)
+                {
+                    memcpy(source_tile, execution_source, logical_bytes);
+                    execution_source = source_tile;
+                }
+                for (uint32_t output = 0; output < 4; ++output)
+                {
+                    const uint8_t log =
+                        cached_repair_logs[source_slot * 4U + output];
+                    multiplier_logs[output] =
+                        log == UINT8_MAX ? UINT16_MAX : log;
+                }
+                ops.ff8_multiply_add_outputs(outputs, execution_source,
+                    multiplier_logs, 4, execution_bytes);
+            }
+            for (uint32_t output = 0;
+                 !exact_vector_bytes && output < 4; ++output)
+            {
+                memcpy(static_cast<uint8_t*>(
+                           restored[missing_originals[output]]) + offset,
+                    output_tiles[output], logical_bytes);
+            }
+            continue;
+        }
 
         for (uint32_t output = 0;
              output < missing_count; ++output)
@@ -7928,9 +8195,10 @@ static leo2_result TryOneShotEqualRoundedDirectRepair(
             for (uint32_t equation = 0;
                  equation < missing_count; ++equation)
             {
-                const Element coefficient = rows[
+                const size_t coefficient_index =
                     static_cast<size_t>(selected_parities[equation]) *
-                        codec->original_count + source];
+                        codec->original_count + source;
+                const Element coefficient = rows[coefficient_index];
                 multiplier_logs[equation] = coefficient == 0
                     ? UINT16_MAX : Field::Log(coefficient);
             }
@@ -12130,6 +12398,25 @@ LEO2_EXPORT leo2_result leo2_codec_create(
                                 codec, weights,
                                 codec->direct_repair_generator_rows8);
                         }
+                        if (g_one_shot_equal_rounded_direct_mode == 1U &&
+                            IsLegacyHighK8R4OneShotDirectRepairCodec(codec))
+                        {
+                            /* The exact table is shared by the context.  Keep
+                               its temporary generator rows out of each codec;
+                               a failed cache leaves the ordinary plan path. */
+                            std::call_once(
+                                codec->context->direct_k8r4_terminal_once,
+                                [&]() {
+                                    std::vector<DirectField8::Element> rows;
+                                    if (PrepareDirectRepairGeneratorRows<
+                                            DirectField8>(
+                                            codec, weights, rows))
+                                    {
+                                        PrepareLegacyHighK8R4TerminalCache(
+                                            codec, weights, rows);
+                                    }
+                                });
+                        }
                         codec->direct_barycentric8.swap(weights);
                     }
                 }
@@ -12545,6 +12832,14 @@ bool GetCodecDecodeMetadataInfo(
         codec->translated_low_full_loss_locator8.size();
     info.translated_factor_bytes = codec->translated_low_factors8.size() +
         codec->translated_low_factors16.size() * sizeof(uint16_t);
+    info.codec_direct_repair_generator_bytes =
+        codec->direct_repair_generator_rows8.size();
+    info.codec_k8r4_terminal_cache_bytes =
+        IsLegacyHighK8R4OneShotDirectRepairCodec(codec)
+            ? codec->context->direct_k8r4_pattern_index8.size() +
+                codec->context->direct_k8r4_surviving_originals8.size() +
+                codec->context->direct_k8r4_repair_logs8.size()
+            : 0;
     *info_out = info;
     return true;
 }

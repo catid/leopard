@@ -1429,6 +1429,26 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        if(LEO2_HAVE_AVX2_BACKEND AND
+           LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT)
+            # Production-linked coverage for the allocation-free maximum-loss
+            # K=8/R=4 public one-shot decoder.  The independent polynomial-
+            # basis oracle also proves that the cached reconstruction table
+            # retains the legacy-high wire profile.
+            add_executable(leopard2_k8r4_one_shot_direct_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_k8r4_one_shot_direct.cpp)
+            target_include_directories(
+                leopard2_k8r4_one_shot_direct_test PRIVATE tests/leopard2)
+            target_link_libraries(
+                leopard2_k8r4_one_shot_direct_test leopard)
+            add_test(NAME leopard2_k8r4_one_shot_direct
+                COMMAND leopard2_k8r4_one_shot_direct_test)
+            set_tests_properties(leopard2_k8r4_one_shot_direct PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
+
         if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
             add_executable(leopard2_low_p32_b64_terminal_test

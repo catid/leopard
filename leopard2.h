@@ -515,7 +515,11 @@ LEO2_EXPORT size_t leo2_decode_batch_binding_item_count(
 LEO2_EXPORT leo2_result leo2_decode_batch_binding_execute(
     const leo2_decode_batch_binding* binding);
 
-/* One-shot convenience wrapper.  It allocates and destroys plan setup state. */
+/*
+    One-shot convenience wrapper.  General patterns allocate and destroy plan
+    setup state; qualified no-op and bounded direct/transform terminals avoid
+    that transient allocation while preserving the same public validation.
+*/
 LEO2_EXPORT leo2_result leo2_decode_scratch_size(
     const leo2_codec* codec,
     uint64_t shard_bytes,
