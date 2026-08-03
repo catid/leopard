@@ -5899,21 +5899,16 @@ static void ExecuteTransformDecodePass(
         execution_requested_coordinates.data();
     const unsigned requested_count =
         static_cast<unsigned>(execution_requested_coordinates.size());
-    const bool bypass_high_pruned_schedules =
-        !use_generic && !use_low_specialized && use_tiled &&
-        BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
     const leopard2_internal::PrunedTransformBlock* const high_input_plans =
-        bypass_high_pruned_schedules ||
-            plan->high_pruned_input_blocks.empty()
+        plan->high_pruned_input_blocks.empty()
             ? NULL : plan->high_pruned_input_blocks.data();
-    const unsigned high_input_plan_count = bypass_high_pruned_schedules
-        ? 0U : static_cast<unsigned>(plan->high_pruned_input_blocks.size());
+    const unsigned high_input_plan_count = static_cast<unsigned>(
+        plan->high_pruned_input_blocks.size());
     const leopard2_internal::PrunedTransformPlan* const high_output_plans =
-        bypass_high_pruned_schedules ||
-            plan->high_pruned_output_plans.empty()
+        plan->high_pruned_output_plans.empty()
             ? NULL : plan->high_pruned_output_plans.data();
-    const unsigned high_output_plan_count = bypass_high_pruned_schedules
-        ? 0U : static_cast<unsigned>(plan->high_pruned_output_plans.size());
+    const unsigned high_output_plan_count = static_cast<unsigned>(
+        plan->high_pruned_output_plans.size());
     const leopard2_internal::PrunedTransformBlock* const low_input_plans =
         plan->low_pruned_input_blocks.empty()
             ? NULL : plan->low_pruned_input_blocks.data();
@@ -5971,15 +5966,24 @@ static void ExecuteTransformDecodePass(
                         low_input_plan_count, low_output_plan, work);
         }
         else if (use_tiled)
+        {
+            /* This branch is native high GF8; keep the policy out of low and
+               generic code generation as well as out of their execution. */
+            const bool bypass_high_pruned_schedules =
+                BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
             leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, plan->high_output_blocks.data(),
                 static_cast<unsigned>(plan->high_output_blocks.size()),
                 &plan->locator8[0], &codec->fixed_factors8[0],
-                high_requested_output, high_input_plans,
-                high_input_plan_count, high_output_plans,
-                high_output_plan_count, work);
+                high_requested_output,
+                bypass_high_pruned_schedules ? NULL : high_input_plans,
+                bypass_high_pruned_schedules ? 0U : high_input_plan_count,
+                bypass_high_pruned_schedules ? NULL : high_output_plans,
+                bypass_high_pruned_schedules ? 0U : high_output_plan_count,
+                work);
+        }
         else if (use_low_specialized)
         {
             const leopard2_internal::OutputDependencyView dependencies =
