@@ -115,6 +115,7 @@ struct Options
     bool report_decode_path;
     bool report_direct_executor;
     bool attest_source;
+    bool measure_one_shot_encode;
     bool measure_one_shot_decode;
     int one_shot_plan_setup_mode;
     int gf8_avx2_walsh_locator_mode;
@@ -163,6 +164,7 @@ struct Options
         , report_decode_path(false)
         , report_direct_executor(false)
         , attest_source(false)
+        , measure_one_shot_encode(false)
         , measure_one_shot_decode(false)
         , one_shot_plan_setup_mode(-1)
         , gf8_avx2_walsh_locator_mode(-1)
@@ -441,6 +443,8 @@ static void Usage(std::ostream& output, const char* program)
         << "                         diagnostic schemas take precedence)\n"
         << "  --report-decode-path  Emit selected-path metadata (base schema v3; later\n"
         << "                         diagnostic schemas take precedence)\n"
+        << "  --measure-one-shot-encode\n"
+        << "                         Also time the public leo2_encode entry point\n"
         << "  --measure-one-shot-decode\n"
         << "                         Time the public one-shot decode wrapper using schema v9\n"
         << "  --one-shot-plan-setup-mode 0|1|2|3\n"
@@ -516,6 +520,8 @@ static Options ParseOptions(int argc, char** argv)
         else if (argument == "--skip-legacy") options.skip_legacy = true;
         else if (argument == "--retain-samples") options.retain_samples = true;
         else if (argument == "--report-decode-path") options.report_decode_path = true;
+        else if (argument == "--measure-one-shot-encode")
+            options.measure_one_shot_encode = true;
         else if (argument == "--measure-one-shot-decode")
             options.measure_one_shot_decode = true;
         else if (argument == "--one-shot-plan-setup-mode")
@@ -1592,7 +1598,8 @@ static int Run(const Options& options)
 
     const bool extended_schema = options.skip_legacy || options.retain_samples ||
         options.report_decode_path || options.report_direct_executor ||
-        options.attest_source || options.measure_one_shot_decode ||
+        options.attest_source || options.measure_one_shot_encode ||
+        options.measure_one_shot_decode ||
         options.one_shot_plan_setup_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
@@ -1631,7 +1638,8 @@ static int Run(const Options& options)
                 CheckedSize(options.r, options.bytes, "parity digest"));
         }
     }
-    if (options.r1_small_reduction_mode >= 0)
+    if (options.measure_one_shot_encode ||
+        options.r1_small_reduction_mode >= 0)
     {
         for (size_t stripe_index = 0;
              stripe_index < stripes.size(); ++stripe_index)
@@ -1748,7 +1756,8 @@ static int Run(const Options& options)
     for (size_t i = 0; i < options.warmup; ++i)
     {
         run_encode_batch_execution();
-        if (options.r1_small_reduction_mode >= 0)
+        if (options.measure_one_shot_encode ||
+            options.r1_small_reduction_mode >= 0)
             run_one_shot_encode();
         run_decode_batch();
         if (options.measure_one_shot_decode)
@@ -1762,7 +1771,8 @@ static int Run(const Options& options)
         run_encode_batch_execution();
     });
     Summary one_shot_encode = Summary();
-    if (options.r1_small_reduction_mode >= 0)
+    if (options.measure_one_shot_encode ||
+        options.r1_small_reduction_mode >= 0)
     {
         one_shot_encode = Measure(
             options.iterations, options.reuse, options.retain_samples, [&]() {
@@ -2094,6 +2104,8 @@ static int Run(const Options& options)
             json << "    \"report_direct_executor\": true,\n";
         if (options.attest_source)
             json << "    \"attest_source\": true,\n";
+        if (options.measure_one_shot_encode)
+            json << "    \"measure_one_shot_encode\": true,\n";
         if (options.measure_one_shot_decode)
             json << "    \"measure_one_shot_decode\": true,\n";
         if (options.one_shot_plan_setup_mode >= 0)
@@ -2282,7 +2294,8 @@ static int Run(const Options& options)
     json << ",\n    \"encode_execution\": ";
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
         encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
-    if (options.r1_small_reduction_mode >= 0)
+    if (options.measure_one_shot_encode ||
+        options.r1_small_reduction_mode >= 0)
     {
         json << ",\n    \"one_shot_encode\": ";
         WriteSummary(json, one_shot_encode,
