@@ -245,6 +245,7 @@ require_expected_members()
             ssse3) expected_member=Leopard2BackendSSSE3.cpp.o ;;
             avx2) expected_member=Leopard2BackendAVX2.cpp.o ;;
             avx2_xor) expected_member=Leopard2BackendAVX2Xor.cpp.o ;;
+            avx2_p32) expected_member=Leopard2LowP32B64AVX2.cpp.o ;;
             gfni) expected_member=Leopard2BackendGFNI.cpp.o ;;
             avx512) expected_member=Leopard2BackendAVX512.cpp.o ;;
             '') continue ;;
@@ -318,7 +319,8 @@ scan_archive()
             Leopard2BackendSSSE3.cpp.o|Leopard2BackendSSSE3.cpp.obj)
                 object_class=ssse3 ;;
             Leopard2BackendAVX2.cpp.o|Leopard2BackendAVX2.cpp.obj|\
-            Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj)
+            Leopard2BackendAVX2Xor.cpp.o|Leopard2BackendAVX2Xor.cpp.obj|\
+            Leopard2LowP32B64AVX2.cpp.o|Leopard2LowP32B64AVX2.cpp.obj)
                 object_class=avx2 ;;
             Leopard2BackendGFNI.cpp.o|Leopard2BackendGFNI.cpp.obj)
                 object_class=gfni ;;
@@ -436,7 +438,7 @@ scan_build_metadata()
         violating_lines="$scratch_root/metadata-violations"
         candidate_lines="$scratch_root/metadata-candidates"
         LC_ALL=C grep -Ein -- "$forbidden_metadata" "$compile_commands" |
-            grep -Ev '(^|[/[:space:]"])Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512|GFNI)[.]cpp([[:space:]",]|$)' > \
+            grep -Ev '(^|[/[:space:]"])(Leopard2Backend(SSSE3|AVX2|AVX2Xor|AVX512|GFNI)|Leopard2LowP32B64AVX2)[.]cpp([[:space:]",]|$)' > \
                 "$candidate_lines" || true
         : > "$violating_lines"
         while IFS= read -r candidate_line
@@ -469,7 +471,8 @@ scan_build_metadata()
         fi
         for avx2_source in \
             Leopard2BackendAVX2.cpp \
-            Leopard2BackendAVX2Xor.cpp
+            Leopard2BackendAVX2Xor.cpp \
+            Leopard2LowP32B64AVX2.cpp
         do
             avx2_stem=${avx2_source%.cpp}
             avx2_pattern="(^|[/[:space:]\"])$avx2_stem[.]cpp([[:space:]\",]|$)"

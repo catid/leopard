@@ -1182,6 +1182,11 @@ static std::atomic<unsigned> g_one_shot_plan_setup_mode(3U);
 // in state one and the mature Algorithm 4 control is state two.  Atomic access
 // also keeps an accidental concurrent diagnostic toggle data-race-free.
 static std::atomic<unsigned> g_low_p32_b64_terminal_mode(1U);
+// States three/four arm a single-thread diagnostic route probe for the
+// enabled/disabled mode respectively.  The benchmark disarms the probe before
+// timing, so production and measured execution retain states one/two and pay
+// no thread-local accounting cost.
+static thread_local bool g_low_p32_b64_terminal_route_selected = false;
 #endif
 static const uint32_t kGF8Order = 256;
 static const uint32_t kGF16Order = 65536;
@@ -8266,12 +8271,14 @@ static void ExecuteRawTranslatedLowDecode(
             original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+        const unsigned exact_terminal_mode =
+            g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
         const bool exact_terminal =
-            g_low_p32_b64_terminal_mode.load(
-                std::memory_order_acquire) == 1U &&
+            (exact_terminal_mode == 1U || exact_terminal_mode == 3U) &&
             geometry.aligned_prefix_bytes == 64 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
+            pattern.missing_original_count >= 9 &&
             pattern.missing_original_count < 32 &&
             ops.kind == LEO2_BACKEND_AVX2 &&
             codec->translated_low_factors8.size() == 1 &&
@@ -8280,6 +8287,8 @@ static void ExecuteRawTranslatedLowDecode(
                 pattern.missing_originals, pattern.missing_original_count,
                 pattern.locator, codec->translated_low_factors8[0],
                 restored, work);
+        if (exact_terminal_mode == 3U || exact_terminal_mode == 4U)
+            g_low_p32_b64_terminal_route_selected = exact_terminal;
 #ifdef LEO2_ENABLE_TEST_HOOKS
         if (exact_terminal)
             g_test_low_p32_b64_terminal_calls.fetch_add(
@@ -12356,8 +12365,9 @@ bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
 bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    g_low_p32_b64_terminal_route_selected = false;
     g_low_p32_b64_terminal_mode.store(
-        enabled ? 1U : 2U, std::memory_order_release);
+        enabled ? 3U : 4U, std::memory_order_release);
     return true;
 #else
     (void)enabled;
@@ -12368,9 +12378,35 @@ bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled)
 unsigned LowP32B64TerminalModeForDiagnostics()
 {
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-    return g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
+    const unsigned mode =
+        g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
 #else
     return 0;
+#endif
+}
+
+bool LowP32B64TerminalRouteSelectedForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    return g_low_p32_b64_terminal_route_selected;
+#else
+    return false;
+#endif
+}
+
+bool FinishLowP32B64TerminalRouteProbeForDiagnostics()
+{
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+    const unsigned mode =
+        g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_low_p32_b64_terminal_mode.store(
+        mode == 3U ? 1U : 2U, std::memory_order_release);
+    return true;
+#else
+    return false;
 #endif
 }
 
