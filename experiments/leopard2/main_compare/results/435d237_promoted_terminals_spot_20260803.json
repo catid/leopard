@@ -1,0 +1,67 @@
+{
+  "schema": "leopard2-promoted-terminals-integration-spot/v1",
+  "status": "directional-confirmation",
+  "date_utc": "2026-08-03",
+  "candidate": {
+    "source_commit": "435d2373052ea403acd5f097325165532d8ecd79",
+    "source_tree": "ae104085a4ed79622bbdf76b426cde560e9b014f",
+    "binary_sha256": "9dcb4fb30530b7ed87c3ea8fe25f1e02f21dc4c4a3fc97fdfd6e37a9a226383b"
+  },
+  "baseline": {
+    "name": "Leopard main codec",
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "binary_sha256": "8e6dbc8dab50059b2c350669be270210e241beae18401f6a22c06ff9300e682d"
+  },
+  "method": {
+    "cpu": "AMD Ryzen 9 9950X3D",
+    "benchmark_cpu": 13,
+    "thread_count": 1,
+    "iterations": 21,
+    "warmup_iterations": 5,
+    "processes_per_implementation": 1,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "frozen_artifact_directory": "/tmp/leopard-combined-435d237-spot/frozen",
+    "classification": "directional only: pinned exact-binary post-integration spot check without the independent-round and sibling-jiffy gates used by the authoritative ABBA campaigns"
+  },
+  "results": {
+    "p32_b64_low_decode": {
+      "K": 32,
+      "R": 32,
+      "shard_bytes": 64,
+      "loss_count": 16,
+      "reuse": 256,
+      "leopard2_public_one_shot_median_us": 0.921027,
+      "leopard_main_decode_including_setup_median_us": 1.281266,
+      "main_over_leopard2": 1.391127513,
+      "route_selected": true,
+      "digests_match": true,
+      "candidate_raw_sha256": "7bf2e48abb9cdfa6dcbbaea39712d7571a997c82b117fcc32988155dda64c674",
+      "main_raw_sha256": "dabc71a8309d67477f9f5eaaf3ffb8ff02a5c0c235cff56c98c52fbf0041358a"
+    },
+    "t32_b256_high_encode": {
+      "K": 32,
+      "R": 32,
+      "shard_bytes": 256,
+      "loss_count": 16,
+      "reuse": 8192,
+      "leopard2_public_one_shot_median_us": 0.535316,
+      "leopard_main_encode_median_us": 0.572657,
+      "main_over_leopard2": 1.069755061,
+      "digests_match": true,
+      "candidate_raw_sha256": "567567165697eb11b5ebe0c4ab0f2d0d04aea2741503159b9f798e484b72edf5",
+      "main_raw_sha256": "fb2bcf2ff5cb70d7b50780f8c48f1d0fda04cb1395299458decfc1398f312669"
+    }
+  },
+  "quality_gates": {
+    "cmake_and_visual_studio_graph": "152/152 passed",
+    "default_release_focused_tests": "P32, T32, portable ISA, and portable-ISA registration passed",
+    "gf8_disabled_release": "passed; both optional objects and focused tests absent",
+    "features_disabled_release": "passed; both optional objects and focused tests absent",
+    "clang_18_strict": "-Wall -Wextra -Wpedantic -Werror build and focused tests passed",
+    "clang_18_asan_ubsan_lsan": "focused P32 and T32 tests passed; T32 max RSS 41216 KiB"
+  },
+  "authoritative_evidence": [
+    "experiments/leopard2/alg4_p32/results/p32_b64_terminal_amd_9950x3d_20260803.json",
+    "experiments/leopard2/gf8_high_encode/results/t32_b256_generated_checkpoint_20260803.json"
+  ]
+}
