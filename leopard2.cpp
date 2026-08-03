@@ -467,6 +467,19 @@
 #error "LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT must be 0 or 1"
 #endif
 
+/*
+    Same-text attribution control for the GF8/AVX2 K>=3,R=1 public-entry
+    shortcut.  It changes only immutable codec classification at setup; both
+    builds retain the same validators and XOR executors.
+*/
+#ifndef LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH
+#define LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH 0
+#endif
+#if LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH must be 0 or 1"
+#endif
+
 class leo2_thread_pool;
 
 struct leo2_context
@@ -563,7 +576,8 @@ enum TerminalR1Shape : uint8_t
        setup-classification byte avoids growing the opaque codec merely to
        name another single-shape terminal. */
     kTerminalT8K8R8 = 3,
-    kTerminalT2K4R2 = 4
+    kTerminalT2K4R2 = 4,
+    kTerminalR1K3PlusAVX2Xor = 5
 };
 
 static const uint32_t kCodecR1SmallReductionModeFlag = UINT32_C(0x80000000);
@@ -938,6 +952,10 @@ static volatile uint32_t g_one_shot_equal_rounded_direct_mode =
 #endif
 static volatile uint32_t g_cauchy_log_reuse_mode =
     2U - LEO2_EXPERIMENT_CAUCHY_LOG_REUSE;
+#ifdef LEO_HAS_FF8
+static volatile uint32_t g_r1_early_dispatch_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH;
+#endif
 
 #ifndef LEO_HAS_FF8
 /* The public dispatch wrappers remain compiled in field-reduced builds.
@@ -5582,6 +5600,21 @@ static uint8_t ClassifyTerminalR1Shape(const leo2_codec* codec)
         (codec->context->backend == LEO2_BACKEND_AVX2 ||
          codec->context->backend == LEO2_BACKEND_GFNI))
         return kTerminalR1K2AVX2Xor;
+
+    if (codec && g_r1_early_dispatch_mode == 1U &&
+        leopard2_internal::ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            codec->profile, codec->field,
+            codec->context ? codec->context->backend : LEO2_BACKEND_AUTO,
+            codec->shard_layout, codec->original_count,
+            codec->recovery_count, codec->padded_side) &&
+        codec->context && codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
+        codec->context->ops->xor_memory &&
+        codec->context->ops->xor_memory_2to1 &&
+        codec->context->ops->xor_memory_sources)
+    {
+        return kTerminalR1K3PlusAVX2Xor;
+    }
 #endif
     return kTerminalR1None;
 }
@@ -5719,6 +5752,32 @@ static LEO_FORCE_INLINE bool IsGF8AVX2K2R1TerminalEligible(
     return codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
         codec->context->backend == LEO2_BACKEND_AVX2 &&
         (shard_bytes == 64 || shard_bytes == 256 || shard_bytes == 1024);
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2R1EarlyEncodeEligible(
+    const leo2_codec* codec)
+{
+    if (!codec ||
+        codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2R1EarlyDecodeEligible(
+    const leo2_codec* codec)
+{
+    if (!codec ||
+        codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_decode_mode == LEO2_TEST_DECODE_AUTO;
+#else
+    return true;
+#endif
 }
 
 static LEO_FORCE_INLINE bool IsK1R1OrdinaryTerminalByteCount(
@@ -16324,6 +16383,9 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
     if (IsK1R1EncodeTerminalEligible(codec, shard_bytes))
         return EncodeGF8K1R1PublicTerminal(
             codec, shard_bytes, original, recovery, scratch, scratch_bytes);
+    if (IsGF8AVX2R1EarlyEncodeEligible(codec))
+        return EncodeInternal(codec, shard_bytes, original, recovery,
+            scratch, scratch_bytes, NULL, 0, false);
 #ifdef LEO_HAS_FF8
     if (IsGF8AVX2T2PackedTerminalEligible(codec, shard_bytes))
         return EncodeGF8AVX2T2PublicTerminal(
@@ -16496,6 +16558,12 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                 g_k1_fixed_1024_mode == 1U)
                 return EncodeGF8K1R1Batch1024Terminal(codec, items);
             return EncodeGF8K1R1BatchTerminal(codec, items);
+        }
+        if (IsGF8AVX2R1EarlyEncodeEligible(codec))
+        {
+            return EncodeInternal(codec, items[0].shard_bytes,
+                items[0].original, items[0].recovery, items[0].scratch,
+                items[0].scratch_bytes, items, sizeof(*items), false);
         }
 #ifdef LEO_HAS_FF8
         if (IsGF8AVX2T2PackedTerminalEligible(
@@ -19324,6 +19392,18 @@ LEO2_EXPORT leo2_result leo2_decode(
             codec, shard_bytes, original_present, recovery_present,
             original, recovery, restored_original, scratch, scratch_bytes,
             handled);
+        if (terminal_result != LEO2_SUCCESS || handled)
+            return terminal_result;
+    }
+    if (IsGF8AVX2R1EarlyDecodeEligible(codec))
+    {
+        bool metadata_checked = false;
+        bool handled = false;
+        const leo2_result terminal_result =
+            TryOneShotLegacyHighR1Terminal(
+                codec, shard_bytes, original_present, recovery_present,
+                original, recovery, restored_original, scratch, scratch_bytes,
+                metadata_checked, handled);
         if (terminal_result != LEO2_SUCCESS || handled)
             return terminal_result;
     }

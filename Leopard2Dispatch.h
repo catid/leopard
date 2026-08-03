@@ -35,6 +35,29 @@
 
 namespace leopard2_internal {
 
+/*
+    The ordinary GF8/AVX2 R=1 API family has no transform selection to make:
+    legacy-high parity and one-loss recovery are bytewise XOR.  Keep this
+    setup-only policy separate from execution so tests can prove that the
+    early public-entry dispatch never captures another field, profile, layout,
+    backend, or the mature K=1/K=2 terminals.
+*/
+static inline bool ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+    leo2_profile profile,
+    leo2_field field,
+    leo2_backend backend,
+    leo2_shard_layout shard_layout,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint32_t padded_side)
+{
+    return profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        field == LEO2_FIELD_GF8 && backend == LEO2_BACKEND_AVX2 &&
+        shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        original_count >= 3 && original_count < 256 &&
+        recovery_count == 1 && padded_side == 1;
+}
+
 enum DecodePath
 {
     kDecodePathNoOp = 0,

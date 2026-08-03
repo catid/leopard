@@ -1,0 +1,67 @@
+{
+  "schema": "leopard2-r1-early-dispatch-checkpoint/v1",
+  "date_utc": "2026-08-03",
+  "status": "directional_phase1_checkpoint",
+  "ratio_orientation": "baseline time divided by candidate time; values above one favor Leopard2",
+  "source": {
+    "base_commit": "dadccc257e9d1d230653ed39bd139edfac5d5110",
+    "worktree_diff_sha256": "bbac4b57243c09a3fcf2a4d9814170a8c157b0169a4f006c8240f92506a226f2",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "rejected_variant": {
+    "description": "A specialized per-input validator bypassed the mature aggregate packed-slab proof.",
+    "candidate_sha256": "94bc59c971562d248bab1f112809289f9e9c637761750f89d0991a2d948cdc7c",
+    "control_sha256": "1509e389052d706ca29b66bc2bb96a50d1d3baf671177f08e2cd48c19279fd91",
+    "result": "rejected",
+    "reason": "K=41 and K=129 at 64 bytes regressed encode by 18 to 23 percent. The validator was removed completely."
+  },
+  "selector_only_variant": {
+    "candidate_sha256": "185c25b6fc638ee4177de740e81581c0920cb5305a099803dc0d31315e3c036e",
+    "control_sha256": "9bf1b1028559c2490ae44505e7ff00e420ff8d9b3ffc9d05dc5a42ba89426d9f",
+    "exact_main_sha256": "b592265357cc898806cacbb79529a4bd84b5f6625da56fba806594d16948da96",
+    "execution": {
+      "benchmark_cpu": 4,
+      "reserved_smt_sibling": 20,
+      "rounds": 3,
+      "iterations_per_process": 9,
+      "warmups_per_process": 3,
+      "loss_pattern": "middle original",
+      "classification": "directional; canonical and pair locks held, frozen hashes verified before and after"
+    },
+    "same_source_control_over_candidate": [
+      {"K": 3, "bytes": 64, "batch_encode": 1.1164, "one_shot_encode": 1.0501, "one_shot_decode": 1.0651},
+      {"K": 3, "bytes": 256, "batch_encode": 1.0706, "one_shot_encode": 1.0288, "one_shot_decode": 1.0641},
+      {"K": 4, "bytes": 64, "batch_encode": 1.0868, "one_shot_encode": 1.0419, "one_shot_decode": 1.0555},
+      {"K": 4, "bytes": 256, "batch_encode": 1.0605, "one_shot_encode": 1.0084, "one_shot_decode": 1.0552},
+      {"K": 8, "bytes": 64, "batch_encode": 1.0824, "one_shot_encode": 1.0203, "one_shot_decode": 1.0487},
+      {"K": 8, "bytes": 256, "batch_encode": 1.0613, "one_shot_encode": 1.0218, "one_shot_decode": 1.0183},
+      {"K": 12, "bytes": 64, "batch_encode": 1.0603, "one_shot_encode": 1.0274, "one_shot_decode": 1.0211},
+      {"K": 12, "bytes": 256, "batch_encode": 1.0547, "one_shot_encode": 1.0222, "one_shot_decode": 1.0078},
+      {"K": 16, "bytes": 64, "batch_encode": 1.0557, "one_shot_encode": 1.0260, "one_shot_decode": 1.0203},
+      {"K": 32, "bytes": 64, "batch_encode": 1.0138, "one_shot_encode": 1.0104, "one_shot_decode": 1.0115},
+      {"K": 41, "bytes": 256, "batch_encode": 1.0153, "one_shot_encode": 1.0063, "one_shot_decode": 1.0081}
+    ],
+    "exact_main_over_candidate": [
+      {"K": 3, "bytes": 64, "batch_encode": 0.3343, "one_shot_encode": 0.3331, "one_shot_decode": 0.3592, "reused_decode": 0.3411},
+      {"K": 4, "bytes": 64, "batch_encode": 0.3671, "one_shot_encode": 0.3717, "one_shot_decode": 0.4185, "reused_decode": 0.3188},
+      {"K": 8, "bytes": 64, "batch_encode": 0.4440, "one_shot_encode": 0.4464, "one_shot_decode": 0.4582, "reused_decode": 0.4495},
+      {"K": 16, "bytes": 64, "batch_encode": 0.5238, "one_shot_encode": 0.5318, "one_shot_decode": 0.4851, "reused_decode": 0.4817},
+      {"K": 4, "bytes": 1024, "batch_encode": 1.0047, "one_shot_encode": 1.0002, "one_shot_decode": 0.9116, "reused_decode": 0.7898},
+      {"K": 8, "bytes": 1024, "batch_encode": 0.9958, "one_shot_encode": 0.9950, "one_shot_decode": 0.9654, "reused_decode": 0.9685},
+      {"K": 16, "bytes": 1024, "batch_encode": 1.1499, "one_shot_encode": 1.1464, "one_shot_decode": 1.0639, "reused_decode": 1.0740}
+    ],
+    "raw_artifacts": {
+      "same_source_path": "/tmp/leopard-r1-early-frozen-20260803-2/candidate-control-crossover.json",
+      "same_source_sha256": "ba2f2db2b87828eefab8e04a55cd628f37761e6af09c46910c1138e0919849ac",
+      "exact_main_path": "/tmp/leopard-r1-early-frozen-20260803-2/exact-main-directional.json",
+      "exact_main_sha256": "d6a220fce49e8419dad6f824b29e992d7186dc08cd2453a68947e3d97edee8d1"
+    }
+  },
+  "validation": {
+    "release_focused_tests": "6/6 passed",
+    "gf16_only_library_build": "passed",
+    "asan_ubsan_r1": "passed",
+    "first_sanitizer_build_attempt": "contained 512 MiB scope OOM; resumed serially in a 768 MiB scope"
+  },
+  "interpretation": "The early selector is a useful fixed-overhead improvement, especially for one-item batch encode, but it does not close the Leopard1 tiny-shard gap. Phase 2 must reduce byte execution cost without weakening Leopard2 validation."
+}

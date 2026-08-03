@@ -4,6 +4,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "Leopard2Dispatch.h"
 #include "Leopard2Direct.h"
 #include "leopard.h"
 #include "leopard2.h"
@@ -1277,6 +1278,127 @@ void test_k2_avx2_terminal_contract(leo2_backend backend)
         "GF8 K=2 terminal changed the GF16 scratch contract");
 }
 
+void test_r1_early_dispatch_policy()
+{
+    using leopard2_internal::ShouldUseGF8AVX2LegacyHighR1EarlyDispatch;
+    require(ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            3, 1, 1),
+        "R=1 early dispatch omitted its K=3 lower boundary");
+    require(ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            255, 1, 1),
+        "R=1 early dispatch omitted its GF8 upper boundary");
+    require(!ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            256, 1, 1),
+        "R=1 early dispatch accepted a code beyond the GF8 parent");
+
+    require(!ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            1, 1, 1) &&
+            !ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                2, 1, 1),
+        "R=1 early dispatch captured a mature K=1/K=2 terminal");
+    require(!ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            3, 1, 1) &&
+            !ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF16,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                3, 1, 1) &&
+            !ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_GF16_PADDED_ODD_V1,
+                3, 1, 1),
+        "R=1 early dispatch captured another profile, field, or layout");
+
+    const leo2_backend fallback_backends[] = {
+        LEO2_BACKEND_AUTO, LEO2_BACKEND_SCALAR, LEO2_BACKEND_SSSE3,
+        LEO2_BACKEND_AVX512, LEO2_BACKEND_GFNI
+    };
+    for (size_t i = 0;
+         i < sizeof(fallback_backends) / sizeof(fallback_backends[0]); ++i)
+    {
+        require(!ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                fallback_backends[i], LEO2_SHARD_LAYOUT_NATIVE_V1,
+                3, 1, 1),
+            "R=1 early dispatch captured a non-AVX2 backend");
+    }
+    require(!ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            3, 2, 2) &&
+            !ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                3, 1, 2),
+        "R=1 early dispatch captured another redundancy geometry");
+}
+
+void test_r1_early_one_item_encode_batch(leo2_backend backend)
+{
+    if (backend != LEO2_BACKEND_AVX2)
+        return;
+    R1Fixture fixture(backend, 7, 65, true, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1, 3);
+    if (leo2_context_backend(fixture.context) != LEO2_BACKEND_AVX2)
+        return;
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &scratch_bytes), LEO2_SUCCESS,
+        "R=1 early batch scratch query");
+    AlignedScratch scratch(scratch_bytes);
+    Bytes output_storage(fixture.bytes + 11U, 0x5a);
+    void* output[1] = { &output_storage[5] };
+    leo2_encode_batch_item item = {
+        fixture.bytes, &fixture.original[0], output,
+        scratch.data(), scratch_bytes
+    };
+    require_result(leo2_encode_batch(fixture.codec, &item, 1), LEO2_SUCCESS,
+        "R=1 early one-item batch encode");
+    require(std::memcmp(output[0], fixture.recovery[0], fixture.bytes) == 0,
+        "R=1 early one-item batch parity mismatch");
+    for (size_t i = 0; i < 5; ++i)
+        require(output_storage[i] == 0x5a,
+            "R=1 early one-item batch changed a prefix guard");
+    for (size_t i = 5 + fixture.bytes; i < output_storage.size(); ++i)
+        require(output_storage[i] == 0x5a,
+            "R=1 early one-item batch changed a suffix guard");
+
+    std::vector<const void*> invalid_original = fixture.original;
+    invalid_original[4] = NULL;
+    std::fill(output_storage.begin(), output_storage.end(), 0x6b);
+    item.original = &invalid_original[0];
+    require_result(leo2_encode_batch(fixture.codec, &item, 1),
+        LEO2_INVALID_ARGUMENT,
+        "R=1 early one-item batch accepted a null source");
+    require(std::all_of(output_storage.begin(), output_storage.end(),
+                [](uint8_t value) { return value == 0x6b; }),
+        "R=1 early one-item batch wrote before source validation");
+
+    item.original = &fixture.original[0];
+    void* descriptor_output[1] = { &item };
+    item.recovery = descriptor_output;
+    const leo2_encode_batch_item before = item;
+    require_result(leo2_encode_batch(fixture.codec, &item, 1), LEO2_OVERLAP,
+        "R=1 early one-item batch accepted descriptor/output overlap");
+    require(item.shard_bytes == before.shard_bytes &&
+            item.original == before.original &&
+            item.recovery == before.recovery && item.scratch == before.scratch &&
+            item.scratch_bytes == before.scratch_bytes,
+        "R=1 early one-item batch modified its descriptor on rejection");
+}
+
 void test_public_r1(leo2_backend backend)
 {
     /* K=1 is a copy-only code.  Its specialized validators do not stage any
@@ -1579,6 +1701,7 @@ void test_public_r1(leo2_backend backend)
 
     test_public_r1_overlap_rejection(backend);
     test_k2_avx2_terminal_contract(backend);
+    test_r1_early_one_item_encode_batch(backend);
     test_public_r1_multi_item_batch(backend);
 
     // Shared immutable mature and newly compact/fused plans must be race-free.
@@ -2052,6 +2175,7 @@ int main()
     try
     {
         require(leo_init() == Leopard_Success, "Leopard initialization");
+        test_r1_early_dispatch_policy();
         test_r1_small_reduction_diagnostic();
         const leo2_backend backends[] = {
             LEO2_BACKEND_SCALAR,
