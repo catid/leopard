@@ -6,7 +6,9 @@ copies every executable/archive into a lane-owned immutable artifact directory
 under the canonical benchmark lock, runs the exhaustive focused correctness
 gate, and executes nine mirrored ABBA rounds.  Target cells compare one shared
 candidate/control executable and exact main; selector-boundary neighbors prove
-that enabling the terminal is inert outside its qualified region.
+that enabling the terminal is inert outside its qualified region.  The timing
+mode selects either public one-shot decode or immutable reusable-plan execution
+from the same retained-sample benchmark document.
 """
 
 from __future__ import annotations
@@ -30,6 +32,12 @@ P32_SCHEMA = "leopard2-alg4-p32-terminal-abba/v1"
 P32_SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v1"
 P128_SCHEMA = "leopard2-alg4-p128-terminal-abba/v1"
 P128_SUMMARY_SCHEMA = "leopard2-alg4-p128-terminal-summary/v1"
+P32_REUSABLE_SCHEMA = "leopard2-alg4-p32-reusable-terminal-abba/v1"
+P32_REUSABLE_SUMMARY_SCHEMA = \
+    "leopard2-alg4-p32-reusable-terminal-summary/v1"
+P128_REUSABLE_SCHEMA = "leopard2-alg4-p128-reusable-terminal-abba/v1"
+P128_REUSABLE_SUMMARY_SCHEMA = \
+    "leopard2-alg4-p128-reusable-terminal-summary/v1"
 BENCHMARK_SCHEMAS = {
     "p32": "leopard2-benchmark-v18",
     "p128": "leopard2-benchmark-v20",
@@ -350,6 +358,7 @@ def benchmark_command(
 def validate_result(
     implementation: str, result: object, cell: Mapping[str, Any],
     source: Mapping[str, Any], iterations: int, warmup: int, terminal: str,
+    timing: str,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not a JSON object")
     parameters = result.get("parameters")
@@ -412,7 +421,8 @@ def validate_result(
             require(resolved.get("parent_count") == 256 and
                     resolved.get("padded_side") == 128,
                     "P128 target resolved another parent geometry")
-        metric = metrics.get("one_shot_decode_including_setup")
+        metric = metrics.get("one_shot_decode_including_setup" if
+                             timing == "one-shot" else "decode_execution")
     require(isinstance(metric, dict), "decode timing summary is absent")
     samples = metric.get("samples_us_per_batch_call")
     require(isinstance(samples, list) and len(samples) == iterations and
@@ -450,7 +460,7 @@ def run_one(
     implementation: str, executable: Path, identity: Mapping[str, Any],
     cell: Mapping[str, Any], cpu: int, source: Mapping[str, Any],
     iterations: int, warmup: int, directory: Path, label: str,
-    terminal: str,
+    terminal: str, timing: str,
 ) -> dict[str, Any]:
     require(sha256(executable) == identity["sha256"],
             f"{implementation} executable changed before execution")
@@ -479,7 +489,7 @@ def run_one(
         result = json.loads(result_path.read_text(encoding="utf-8"))
         normalized = validate_result(
             implementation, result, cell, source, iterations, warmup,
-            terminal)
+            terminal, timing)
     except (OSError, UnicodeError, json.JSONDecodeError, EvidenceError) as error:
         raise EvidenceError(
             f"{implementation} JSON/validation failure; retained {result_path}, "
@@ -533,6 +543,8 @@ def analyze(cell: Mapping[str, Any], rounds: Sequence[Mapping[str, Any]]) -> dic
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--terminal", required=True, choices=("p32", "p128"))
+    parser.add_argument("--timing", choices=("one-shot", "reusable"),
+                        default="one-shot")
     parser.add_argument("--candidate-build", required=True, type=Path)
     parser.add_argument("--candidate-source", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
@@ -581,11 +593,18 @@ def main() -> int:
         raise EvidenceError(f"canonical benchmark lock is busy: {LOCK_PATH}") \
             from error
 
-    raw_schema = P32_SCHEMA if options.terminal == "p32" else P128_SCHEMA
-    summary_schema = P32_SUMMARY_SCHEMA \
-        if options.terminal == "p32" else P128_SUMMARY_SCHEMA
+    if options.timing == "reusable":
+        raw_schema = P32_REUSABLE_SCHEMA if options.terminal == "p32" \
+            else P128_REUSABLE_SCHEMA
+        summary_schema = P32_REUSABLE_SUMMARY_SCHEMA \
+            if options.terminal == "p32" else P128_REUSABLE_SUMMARY_SCHEMA
+    else:
+        raw_schema = P32_SCHEMA if options.terminal == "p32" else P128_SCHEMA
+        summary_schema = P32_SUMMARY_SCHEMA \
+            if options.terminal == "p32" else P128_SUMMARY_SCHEMA
     raw: dict[str, Any] = {
         "schema": raw_schema, "terminal": options.terminal,
+        "timing": options.timing,
         "started_ns": time.time_ns(),
     }
     try:
@@ -666,7 +685,7 @@ def main() -> int:
         expected_pass = (
             b"PASS low_p32_p128_b64_terminal p32_payloads=2 "
             b"p32_patterns=67 p128_payloads=2 p128_patterns=136 "
-            b"p95_payloads=1 p95_patterns=103 parity_selections=2 routes=89\n")
+            b"p95_payloads=1 p95_patterns=103 parity_selections=2 routes=98\n")
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
@@ -676,7 +695,7 @@ def main() -> int:
                 "p32_payloads": 2, "p32_patterns": 67,
                 "p128_payloads": 2, "p128_patterns": 136,
                 "p95_payloads": 1, "p95_patterns": 103,
-                "parity_selections": 2, "public_routes": 89,
+                "parity_selections": 2, "public_routes": 98,
             },
         }
 
@@ -713,7 +732,7 @@ def main() -> int:
                             identities[implementation], cell, options.cpu,
                             candidate_source, options.iterations,
                             options.warmup, invocations, label,
-                            options.terminal))
+                            options.terminal, options.timing))
                     isolation = {
                         "benchmark_cpu": cpu_delta(
                             before_cpu, cpu_snapshot(options.cpu)),
@@ -775,6 +794,7 @@ def main() -> int:
         write_exclusive(options.output / "raw.json", raw)
         summary = {
             "schema": summary_schema,
+            "timing": options.timing,
             "status": "accepted" if not (
                 target_control_failure or target_main_failure or
                 neighbor_regressions) else "rejected",
