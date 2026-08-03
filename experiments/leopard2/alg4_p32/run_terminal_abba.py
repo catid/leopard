@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the AVX2 GF8 Algorithm 4 P32/N64/B64 decode terminal.
+"""Qualify bounded AVX2 GF8 Algorithm 4 generated decode terminals.
 
 The runner consumes a clean production build and an exact Leopard-main build,
 copies every executable/archive into a lane-owned immutable artifact directory
@@ -26,9 +26,14 @@ import time
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA = "leopard2-alg4-p32-terminal-abba/v1"
-SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v1"
-BENCHMARK_SCHEMA = "leopard2-benchmark-v18"
+P32_SCHEMA = "leopard2-alg4-p32-terminal-abba/v1"
+P32_SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v1"
+P128_SCHEMA = "leopard2-alg4-p128-terminal-abba/v1"
+P128_SUMMARY_SCHEMA = "leopard2-alg4-p128-terminal-summary/v1"
+BENCHMARK_SCHEMAS = {
+    "p32": "leopard2-benchmark-v18",
+    "p128": "leopard2-benchmark-v20",
+}
 MAIN_SCHEMA = "leopard-main-benchmark-v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
@@ -223,6 +228,10 @@ def validate_main_manifest(
     require(isinstance(value, dict) and
             value.get("schema") == "leopard2-p32-b64-exact-main-abba/v1",
             "exact-main manifest schema differs")
+    require(value.get("status") in (
+                "accepted",
+                "valid_direct_abba_with_noted_hardened_runner_model_gap"),
+            "exact-main provenance manifest has an unknown status")
     baseline = value.get("baseline")
     require(isinstance(baseline, dict) and
             baseline.get("source_commit") == source["head"] and
@@ -250,8 +259,9 @@ def cpu_delta(before: Mapping[str, int], after: Mapping[str, int]) -> dict[str, 
             for name in ("total", "idle", "nonidle")}
 
 
-def cells() -> list[dict[str, Any]]:
-    return [
+def cells(terminal: str) -> list[dict[str, Any]]:
+    if terminal == "p32":
+        return [
         {"id": "target-loss9", "K": 32, "R": 32, "bytes": 64,
          "loss": 9, "role": "target", "seed": 0xA4320901},
         {"id": "target-loss16", "K": 32, "R": 32, "bytes": 64,
@@ -270,12 +280,50 @@ def cells() -> list[dict[str, Any]]:
          "loss": 16, "role": "neighbor", "seed": 0xA4311001},
         {"id": "shape-neighbor-r31", "K": 32, "R": 31, "bytes": 64,
          "loss": 16, "role": "neighbor", "seed": 0xA4201001},
+        ]
+    return [
+        {"id": "target-k95-l47", "K": 95, "R": 95, "bytes": 64,
+         "loss": 47, "role": "target", "seed": 0xB0952F01},
+        {"id": "target-k95-l94", "K": 95, "R": 95, "bytes": 64,
+         "loss": 94, "role": "target", "seed": 0xB0955E01},
+        {"id": "target-k128-l64", "K": 128, "R": 128, "bytes": 64,
+         "loss": 64, "role": "target", "seed": 0xB1284001},
+        {"id": "target-k128-l127", "K": 128, "R": 128, "bytes": 64,
+         "loss": 127, "role": "target", "seed": 0xB1287F01},
+        {"id": "loss-k95-l46", "K": 95, "R": 95, "bytes": 64,
+         "loss": 46, "role": "neighbor", "seed": 0xB0952E01},
+        {"id": "loss-k95-l48", "K": 95, "R": 95, "bytes": 64,
+         "loss": 48, "role": "neighbor", "seed": 0xB0953001},
+        {"id": "loss-k95-l93", "K": 95, "R": 95, "bytes": 64,
+         "loss": 93, "role": "neighbor", "seed": 0xB0955D01},
+        {"id": "loss-k95-l95", "K": 95, "R": 95, "bytes": 64,
+         "loss": 95, "role": "neighbor", "seed": 0xB0955F01},
+        {"id": "loss-k128-l63", "K": 128, "R": 128, "bytes": 64,
+         "loss": 63, "role": "neighbor", "seed": 0xB1283F01},
+        {"id": "loss-k128-l65", "K": 128, "R": 128, "bytes": 64,
+         "loss": 65, "role": "neighbor", "seed": 0xB1284101},
+        {"id": "loss-k128-l126", "K": 128, "R": 128, "bytes": 64,
+         "loss": 126, "role": "neighbor", "seed": 0xB1287E01},
+        {"id": "loss-k128-l128", "K": 128, "R": 128, "bytes": 64,
+         "loss": 128, "role": "neighbor", "seed": 0xB1288001},
+        {"id": "byte-neighbor-63", "K": 128, "R": 128, "bytes": 63,
+         "loss": 127, "role": "neighbor", "seed": 0xB1287F3F},
+        {"id": "byte-neighbor-65", "K": 128, "R": 128, "bytes": 65,
+         "loss": 127, "role": "neighbor", "seed": 0xB1287F41},
+        {"id": "shape-k94-r95", "K": 94, "R": 95, "bytes": 64,
+         "loss": 47, "role": "neighbor", "seed": 0xB0942F01},
+        {"id": "shape-k95-r94", "K": 95, "R": 94, "bytes": 64,
+         "loss": 47, "role": "neighbor", "seed": 0xB1942F01},
+        {"id": "shape-k127-r128", "K": 127, "R": 128, "bytes": 64,
+         "loss": 64, "role": "neighbor", "seed": 0xB1274001},
+        {"id": "shape-k128-r127", "K": 128, "R": 127, "bytes": 64,
+         "loss": 64, "role": "neighbor", "seed": 0xB2274001},
     ]
 
 
 def benchmark_command(
     implementation: str, executable: Path, cell: Mapping[str, Any], cpu: int,
-    iterations: int, warmup: int, output: Path,
+    iterations: int, warmup: int, output: Path, terminal: str,
 ) -> list[str]:
     common = [
         "/usr/bin/taskset", "-c", str(cpu), "/usr/bin/prlimit",
@@ -289,17 +337,19 @@ def benchmark_command(
     if implementation == "main":
         return common + ["--json", str(output)]
     mode = "1" if implementation == "candidate" else "0"
+    terminal_option = "--low-p32-b64-terminal-mode" \
+        if terminal == "p32" else "--low-p128-b64-terminal-mode"
     return common + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--measure-one-shot-decode",
-        "--low-p32-b64-terminal-mode", mode, "--attest-source",
+        terminal_option, mode, "--attest-source",
         "--json", str(output),
     ]
 
 
 def validate_result(
     implementation: str, result: object, cell: Mapping[str, Any],
-    source: Mapping[str, Any], iterations: int, warmup: int,
+    source: Mapping[str, Any], iterations: int, warmup: int, terminal: str,
 ) -> dict[str, Any]:
     require(isinstance(result, dict), "benchmark output is not a JSON object")
     parameters = result.get("parameters")
@@ -336,7 +386,7 @@ def validate_result(
         build = result.get("build")
         expected_selected = implementation == "candidate" and \
             cell["role"] == "target"
-        require(result.get("schema") == BENCHMARK_SCHEMA and
+        require(result.get("schema") == BENCHMARK_SCHEMAS[terminal] and
                 resolved.get("backend") == "avx2" and
                 result.get("correctness", {}).get("leopard2_round_trip") is True,
                 "Leopard2 schema, backend, or correctness differs")
@@ -345,15 +395,23 @@ def validate_result(
                 build.get("source_tree") == source["tree"] and
                 build.get("source_tracked_dirty") is False,
                 "embedded candidate source identity differs")
-        require(build.get("low_p32_b64_terminal_mode_word") ==
+        prefix = f"low_{terminal}_b64_terminal"
+        require(parameters.get(f"{prefix}_mode") ==
+                (1 if implementation == "candidate" else 0),
+                "benchmark parameter selector mode differs from the label")
+        require(build.get(f"{prefix}_mode_word") ==
                 (1 if implementation == "candidate" else 2),
                 "runtime selector mode differs from the label")
         require(build.get(
-            "low_p32_b64_terminal_one_shot_route_expected_selected") is
+            f"{prefix}_one_shot_route_expected_selected") is
                 expected_selected and
-                build.get("low_p32_b64_terminal_one_shot_route_selected") is
+                build.get(f"{prefix}_one_shot_route_selected") is
                 expected_selected,
                 "actual terminal route differs from the frozen cell")
+        if terminal == "p128" and cell["role"] == "target":
+            require(resolved.get("parent_count") == 256 and
+                    resolved.get("padded_side") == 128,
+                    "P128 target resolved another parent geometry")
         metric = metrics.get("one_shot_decode_including_setup")
     require(isinstance(metric, dict), "decode timing summary is absent")
     samples = metric.get("samples_us_per_batch_call")
@@ -392,6 +450,7 @@ def run_one(
     implementation: str, executable: Path, identity: Mapping[str, Any],
     cell: Mapping[str, Any], cpu: int, source: Mapping[str, Any],
     iterations: int, warmup: int, directory: Path, label: str,
+    terminal: str,
 ) -> dict[str, Any]:
     require(sha256(executable) == identity["sha256"],
             f"{implementation} executable changed before execution")
@@ -399,7 +458,8 @@ def run_one(
     stdout_path = directory / f"{label}.stdout"
     stderr_path = directory / f"{label}.stderr"
     command = benchmark_command(
-        implementation, executable, cell, cpu, iterations, warmup, result_path)
+        implementation, executable, cell, cpu, iterations, warmup,
+        result_path, terminal)
     started = time.monotonic_ns()
     try:
         completed = subprocess.run(
@@ -418,7 +478,8 @@ def run_one(
     try:
         result = json.loads(result_path.read_text(encoding="utf-8"))
         normalized = validate_result(
-            implementation, result, cell, source, iterations, warmup)
+            implementation, result, cell, source, iterations, warmup,
+            terminal)
     except (OSError, UnicodeError, json.JSONDecodeError, EvidenceError) as error:
         raise EvidenceError(
             f"{implementation} JSON/validation failure; retained {result_path}, "
@@ -471,6 +532,7 @@ def analyze(cell: Mapping[str, Any], rounds: Sequence[Mapping[str, Any]]) -> dic
 
 def parse_arguments() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--terminal", required=True, choices=("p32", "p128"))
     parser.add_argument("--candidate-build", required=True, type=Path)
     parser.add_argument("--candidate-source", required=True, type=Path)
     parser.add_argument("--candidate", required=True, type=Path)
@@ -485,6 +547,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=21)
     parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--max-round-attempts", type=int, default=5)
     return parser.parse_args()
 
 
@@ -492,6 +555,8 @@ def main() -> int:
     options = parse_arguments()
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient timing samples")
+    require(options.max_round_attempts >= 1,
+            "max round attempts must be positive")
     require(not options.output.exists(), "output directory already exists")
     require(set(os.sched_getaffinity(0)) == {options.cpu},
             "runner must be singleton-pinned to the benchmark CPU")
@@ -516,7 +581,13 @@ def main() -> int:
         raise EvidenceError(f"canonical benchmark lock is busy: {LOCK_PATH}") \
             from error
 
-    raw: dict[str, Any] = {"schema": SCHEMA, "started_ns": time.time_ns()}
+    raw_schema = P32_SCHEMA if options.terminal == "p32" else P128_SCHEMA
+    summary_schema = P32_SUMMARY_SCHEMA \
+        if options.terminal == "p32" else P128_SUMMARY_SCHEMA
+    raw: dict[str, Any] = {
+        "schema": raw_schema, "terminal": options.terminal,
+        "started_ns": time.time_ns(),
+    }
     try:
         options.output.mkdir(parents=True)
         artifacts = options.output / "artifacts"
@@ -573,6 +644,7 @@ def main() -> int:
             "reserved_sibling": options.sibling,
             "iterations": options.iterations,
             "warmup": options.warmup,
+            "max_round_attempts": options.max_round_attempts,
             "cells": [],
         })
 
@@ -591,57 +663,82 @@ def main() -> int:
                 "focused correctness gate timed out; output retained") from error
         write_bytes_exclusive(correctness_stdout, completed.stdout)
         write_bytes_exclusive(correctness_stderr, completed.stderr)
-        expected_pass = (b"PASS low_p32_b64_terminal payloads=2 patterns=67 "
-                         b"parity_selections=2 routes=56\n")
+        expected_pass = (
+            b"PASS low_p32_p128_b64_terminal p32_payloads=2 "
+            b"p32_patterns=67 p128_payloads=2 p128_patterns=136 "
+            b"p95_payloads=1 p95_patterns=103 parity_selections=2 routes=89\n")
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
             "stdout": file_identity(correctness_stdout, allow_empty=True),
             "stderr": file_identity(correctness_stderr, allow_empty=True),
-            "coverage": {"payloads": 2, "patterns": 67,
-                         "parity_selections": 2, "public_routes": 56,
-                         "qualified_loss_counts": list(range(9, 32))},
+            "coverage": {
+                "p32_payloads": 2, "p32_patterns": 67,
+                "p128_payloads": 2, "p128_patterns": 136,
+                "p95_payloads": 1, "p95_patterns": 103,
+                "parity_selections": 2, "public_routes": 89,
+            },
         }
 
-        for cell_index, cell in enumerate(cells()):
+        campaign_cells = cells(options.terminal)
+        for cell_index, cell in enumerate(campaign_cells):
             cell_rounds = []
+            rejected_attempts = []
             for round_index in range(9):
-                if cell["role"] == "target":
-                    target_orders = (
-                        ("main", "candidate", "control", "control", "candidate", "main"),
-                        ("control", "main", "candidate", "candidate", "main", "control"),
-                        ("candidate", "control", "main", "main", "control", "candidate"),
-                    )
-                    order = target_orders[round_index % len(target_orders)]
-                elif round_index % 2 == 0:
-                    order = ("control", "candidate", "candidate", "control")
+                for attempt in range(options.max_round_attempts):
+                    if cell["role"] == "target":
+                        target_orders = (
+                            ("main", "candidate", "control", "control",
+                             "candidate", "main"),
+                            ("control", "main", "candidate", "candidate",
+                             "main", "control"),
+                            ("candidate", "control", "main", "main",
+                             "control", "candidate"),
+                        )
+                        order = target_orders[round_index % len(target_orders)]
+                    elif round_index % 2 == 0:
+                        order = ("control", "candidate", "candidate", "control")
+                    else:
+                        order = ("candidate", "control", "control", "candidate")
+                    before_cpu = cpu_snapshot(options.cpu)
+                    before_sibling = cpu_snapshot(options.sibling)
+                    values = []
+                    for slot, implementation in enumerate(order):
+                        label = (f"{cell['id']}-round{round_index}-"
+                                 f"attempt{attempt}-slot{slot}-{implementation}")
+                        executable = main_executable \
+                            if implementation == "main" else candidate
+                        values.append(run_one(
+                            implementation, executable,
+                            identities[implementation], cell, options.cpu,
+                            candidate_source, options.iterations,
+                            options.warmup, invocations, label,
+                            options.terminal))
+                    isolation = {
+                        "benchmark_cpu": cpu_delta(
+                            before_cpu, cpu_snapshot(options.cpu)),
+                        "reserved_sibling": cpu_delta(
+                            before_sibling, cpu_snapshot(options.sibling)),
+                    }
+                    attempt_value = {
+                        "round": round_index, "attempt": attempt,
+                        "order": list(order), "invocations": values,
+                        "isolation": isolation,
+                    }
+                    if isolation["reserved_sibling"]["nonidle"] == 0:
+                        cell_rounds.append(attempt_value)
+                        break
+                    rejected_attempts.append(attempt_value)
                 else:
-                    order = ("candidate", "control", "control", "candidate")
-                before_cpu = cpu_snapshot(options.cpu)
-                before_sibling = cpu_snapshot(options.sibling)
-                values = []
-                for slot, implementation in enumerate(order):
-                    label = (f"{cell['id']}-round{round_index}-slot{slot}-"
-                             f"{implementation}")
-                    executable = main_executable if implementation == "main" \
-                        else candidate
-                    values.append(run_one(
-                        implementation, executable, identities[implementation],
-                        cell, options.cpu, candidate_source,
-                        options.iterations, options.warmup, invocations, label))
-                isolation = {
-                    "benchmark_cpu": cpu_delta(
-                        before_cpu, cpu_snapshot(options.cpu)),
-                    "reserved_sibling": cpu_delta(
-                        before_sibling, cpu_snapshot(options.sibling)),
-                }
-                require(isolation["reserved_sibling"]["nonidle"] == 0,
-                        f"SMT sibling was active in {cell['id']} round {round_index}")
-                cell_rounds.append({"round": round_index, "order": list(order),
-                                    "invocations": values,
-                                    "isolation": isolation})
-            raw["cells"].append({"cell": dict(cell), "rounds": cell_rounds})
-            print(f"{cell_index + 1}/{len(cells())} {cell['id']}",
+                    raise EvidenceError(
+                        f"SMT sibling remained active in {cell['id']} "
+                        f"round {round_index} for "
+                        f"{options.max_round_attempts} attempts")
+            raw["cells"].append({
+                "cell": dict(cell), "rounds": cell_rounds,
+                "rejected_contaminated_attempts": rejected_attempts,
+            })
+            print(f"{cell_index + 1}/{len(campaign_cells)} {cell['id']}",
                   file=sys.stderr, flush=True)
 
         require(file_identity(Path(__file__)) == raw["runner"],
@@ -677,7 +774,7 @@ def main() -> int:
         raw["completed_ns"] = time.time_ns()
         write_exclusive(options.output / "raw.json", raw)
         summary = {
-            "schema": SUMMARY_SCHEMA,
+            "schema": summary_schema,
             "status": "accepted" if not (
                 target_control_failure or target_main_failure or
                 neighbor_regressions) else "rejected",
@@ -687,6 +784,9 @@ def main() -> int:
                               for name, value in identities.items()},
             "correctness": raw["correctness"]["coverage"],
             "all_rounds_zero_sibling_nonidle": True,
+            "rejected_contaminated_attempt_count": sum(
+                len(item["rejected_contaminated_attempts"])
+                for item in raw["cells"]),
             "target_control_failure": target_control_failure,
             "target_main_failure": target_main_failure,
             "credible_neighbor_regressions": neighbor_regressions,
