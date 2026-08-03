@@ -592,6 +592,7 @@ class CMakeProductionGraph(object):
         r"GENERAL_ONE_LOSS_DIRECT|HIGH_DIRECT_ENCODE(?:_AUTO)?|"
         r"HIGH_T8_(?:PARTIAL_BINDING|TWO_BLOCK_BINDING|RAGGED_BINDING)|"
         r"HIGH_T32_B256_GENERATED|ONE_SHOT_EQUAL_ROUNDED_DIRECT|"
+        r"LOW_P32_B64_TERMINAL|"
         r"GF8_SMALL_DIRECT_MODE)))|"
         r"CXX_FLAG_(?:O2|Oy|Zi|W4)|"
         r"(?:OpenMP|OPENMP|Threads|THREADS)_.+)$")
@@ -629,6 +630,8 @@ class CMakeProductionGraph(object):
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>",
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING="
             "$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>")),
+        ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")),
         ("leopard", "target_include_directories", (
             "PUBLIC", "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>",
             "$<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>")),
@@ -659,6 +662,15 @@ class CMakeProductionGraph(object):
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED="
             "$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>")),
         ("leopard2_backend_avx2_t32_b256", "target_compile_options", (
+            "PRIVATE", "/arch:AVX2")),
+        ("leopard2_low_p32_b64_avx2", "target_include_directories", (
+            "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}")),
+        ("leopard2_low_p32_b64_avx2", "target_compile_definitions", (
+            "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1",
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")),
+        ("leopard2_low_p32_b64_avx2", "target_compile_definitions", (
+            "PRIVATE", "NO_LEO_HAS_FF16=1")),
+        ("leopard2_low_p32_b64_avx2", "target_compile_options", (
             "PRIVATE", "/arch:AVX2")),
         ("leopard2_backend_ssse3", "target_compile_definitions", (
             "PRIVATE", "NO_LEO_HAS_FF8=1")),
@@ -871,6 +883,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
             "ON")): 1,
+        ("option", (
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+            "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal "
+            "when available", "ON")): 1,
         ("string", (
             "TOLOWER", "${LEO2_BACKEND_VARIANT}",
             "LEO2_BACKEND_VARIANT_NORMALIZED")): 1,
@@ -1167,6 +1183,10 @@ class CMakeProductionGraph(object):
             "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
             "Enable promoted generalized GF8/AVX2 one-loss direct repair",
             "ON"))),
+        ("trusted", ("option", (
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+            "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal "
+            "when available", "ON"))),
         ("protected", (
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "0", "CACHE", "STRING",
             "Default-off small GF8 direct-repair experiment: 0=transform, "
@@ -1268,6 +1288,22 @@ class CMakeProductionGraph(object):
         ("mutation", ("leopard2_backend_avx2_t32_b256",
             "target_compile_options", (
                 "PRIVATE", "/arch:AVX2"))),
+        ("object-definition", (
+            "leopard2_low_p32_b64_avx2", "OBJECT",
+            "Leopard2LowP32B64AVX2.cpp")),
+        ("mutation", ("leopard2_low_p32_b64_avx2",
+            "target_include_directories", (
+                "PRIVATE", "${CMAKE_CURRENT_SOURCE_DIR}"))),
+        ("mutation", ("leopard2_low_p32_b64_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1",
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"))),
+        ("mutation", ("leopard2_low_p32_b64_avx2",
+            "target_compile_definitions", (
+                "PRIVATE", "NO_LEO_HAS_FF16=1"))),
+        ("mutation", ("leopard2_low_p32_b64_avx2",
+            "target_compile_options", (
+                "PRIVATE", "/arch:AVX2"))),
         ("mutation", ("leopard2_backend_ssse3",
             "target_compile_definitions", (
                 "PRIVATE", "NO_LEO_HAS_FF8=1"))),
@@ -1295,6 +1331,11 @@ class CMakeProductionGraph(object):
         ("optional-object-attachment", (
             "leopard", "PRIVATE",
             "$<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>")),
+        ("optional-object-attachment", (
+            "leopard", "PRIVATE",
+            "$<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>")),
+        ("mutation", ("leopard", "target_compile_definitions", (
+            "PRIVATE", "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"))),
         ("mutation", ("leopard", "target_compile_definitions", (
             "PRIVATE", "LEO2_HAVE_AVX2_BACKEND=1"))),
         ("mutation", ("leopard", "target_link_libraries", (
@@ -2024,12 +2065,29 @@ class CMakeProductionGraph(object):
             bool_atom("option:LEOPARD_ENABLE_GF8"),
             bool_atom("option:LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"))
 
+    @staticmethod
+    def _p32_b64_object_guard():
+        return bool_and(
+            bool_atom("probe:LEO2_FLAG_ARCH_AVX2"),
+            bool_atom("option:LEOPARD_ENABLE_GF8"),
+            bool_atom("option:LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"))
+
     @classmethod
     def _expected_production_mutation_guard(cls, key):
         target, command, specification = key
         avx2_probe = bool_atom("probe:LEO2_FLAG_ARCH_AVX2")
         if target == "leopard2_backend_avx2_t32_b256":
             return cls._t32_b256_object_guard()
+        if target == "leopard2_low_p32_b64_avx2":
+            guard = cls._p32_b64_object_guard()
+            if specification == ("PRIVATE", "NO_LEO_HAS_FF16=1"):
+                guard = bool_and(
+                    guard,
+                    bool_not(bool_atom("option:LEOPARD_ENABLE_GF16")))
+            return guard
+        if (target == "leopard" and specification == (
+                "PRIVATE", "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")):
+            return cls._p32_b64_object_guard()
         disabled_fields = {
             ("PRIVATE", "NO_LEO_HAS_FF8=1"): "LEOPARD_ENABLE_GF8",
             ("PRIVATE", "NO_LEO_HAS_FF16=1"): "LEOPARD_ENABLE_GF16",
@@ -3486,6 +3544,17 @@ class CMakeProductionGraph(object):
                         "T32/B256 OBJECT definition or guard drift")
                 self.contract_events.append(
                     ("object-definition", expected))
+            elif target == "leopard2_low_p32_b64_avx2":
+                expected = (
+                    "leopard2_low_p32_b64_avx2", "OBJECT",
+                    "Leopard2LowP32B64AVX2.cpp")
+                if (kind != "OBJECT" or tuple(raw_tokens) != expected or
+                        reasons or not self._formula_equivalent(
+                            guard, self._p32_b64_object_guard())):
+                    raise ContractError(
+                        "P32/B64 OBJECT definition or guard drift")
+                self.contract_events.append(
+                    ("object-definition", expected))
             definitions = self.targets.setdefault(target, [])
             for definition in definitions:
                 if (definition[0] != kind or definition[1] != tokens):
@@ -3517,6 +3586,16 @@ class CMakeProductionGraph(object):
                         "T32/B256 OBJECT attachment guard drift")
                 self.contract_events.append(
                     ("optional-object-attachment", t32_attachment))
+            p32_attachment = (
+                "leopard", "PRIVATE",
+                "$<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>")
+            if tuple(raw_tokens) == p32_attachment:
+                if reasons or not self._formula_equivalent(
+                        guard, self._p32_b64_object_guard()):
+                    raise ContractError(
+                        "P32/B64 OBJECT attachment guard drift")
+                self.contract_events.append(
+                    ("optional-object-attachment", p32_attachment))
             if (conditional_depth and target == "leopard" and any(
                     not self._target_objects.match(token) for token in sources)):
                 field_sources = {
@@ -7277,6 +7356,68 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
         with self.assertRaisesRegex(
                 ContractError, "T32/B256 source definition guard drift"):
             self.resolve_text(wrong_guard, require_mutation_contract=True)
+
+    def test_p32_b64_promoted_object_is_modeled_and_default(self):
+        (sources, unused_headers, objects,
+         object_sources, unused_cmake) = self.resolve_text(
+            self.cmake, require_mutation_contract=True)
+        del unused_headers, unused_cmake
+        self.assertIn("Leopard2LowP32B64AVX2.cpp", sources)
+        self.assertIn("leopard2_low_p32_b64_avx2", objects)
+        self.assertIn("Leopard2LowP32B64AVX2.cpp", object_sources)
+
+    def test_p32_b64_object_definition_and_guard_are_exact(self):
+        condition = (
+            "if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND\n"
+            "   LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)")
+        self.assertEqual(1, self.cmake.count(condition))
+        mutations = (
+            self.cmake.replace(
+                condition,
+                "if(LEO2_HAVE_AVX2_BACKEND AND "
+                "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)", 1),
+            self.cmake.replace(
+                condition,
+                "if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)", 1),
+            self.cmake.replace(
+                "Leopard2LowP32B64AVX2.cpp)",
+                "Leopard2LowP32B64AVX2Lookalike.cpp)", 1),
+        )
+        for text in mutations:
+            with self.subTest(size=len(text)):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(
+                        ContractError,
+                        "P32/B64 OBJECT definition or guard drift"):
+                    self.resolve_text(text, require_mutation_contract=True)
+
+    def test_p32_b64_msvc_metadata_attachment_and_option_are_exact(self):
+        compile_option = """        target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
+            /arch:AVX2)"""
+        attachment_guard = (
+            "if(LEOPARD_ENABLE_GF8 AND\n"
+            "       LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)")
+        option = (
+            "option(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL\n"
+            "    \"Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 "
+            "terminal when available\"\n    ON)")
+        self.assertEqual(1, self.cmake.count(compile_option))
+        self.assertEqual(1, self.cmake.count(attachment_guard))
+        self.assertEqual(1, self.cmake.count(option))
+        mutations = (
+            (self.cmake.replace(
+                compile_option, compile_option.replace("AVX2", "AVX"), 1),
+             "unapproved production target compile/link mutation"),
+            (self.cmake.replace(attachment_guard, "if(TRUE)", 1),
+             "P32/B64 OBJECT attachment guard drift"),
+            (self.cmake.replace(option, option[:-3] + "OFF)", 1),
+             "trusted CMake command|compiler-control variable mutation"),
+        )
+        for text, error in mutations:
+            with self.subTest(error=error):
+                self.assertNotEqual(text, self.cmake)
+                with self.assertRaisesRegex(ContractError, error):
+                    self.resolve_text(text, require_mutation_contract=True)
 
     def test_impossible_msvc_compiler_conjunction_is_rejected(self):
         impossible_branches = (

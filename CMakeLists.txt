@@ -536,6 +536,37 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
     endif()
 endif()
 
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+   LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+    # Keep the promoted exact terminal in its own object so its presence
+    # cannot perturb GCC's call graph, constprop clones, or function placement
+    # in the mature AVX2 backend translation unit.
+    add_library(leopard2_low_p32_b64_avx2 OBJECT
+        Leopard2LowP32B64AVX2.cpp)
+    target_include_directories(leopard2_low_p32_b64_avx2 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_low_p32_b64_avx2 PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
+    if(NOT LEOPARD_ENABLE_GF16)
+        target_compile_definitions(leopard2_low_p32_b64_avx2 PRIVATE
+            NO_LEO_HAS_FF16=1)
+    endif()
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
+            /arch:AVX2)
+    endif()
+endif()
+
 if(LEO2_HAVE_SSSE3_BACKEND)
     if(NOT LEOPARD_ENABLE_GF8)
         target_compile_definitions(leopard2_backend_ssse3 PRIVATE
@@ -549,46 +580,10 @@ if(LEO2_HAVE_SSSE3_BACKEND)
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
 endif()
-set(LEO2_LOW_P32_B64_TERMINAL_ENABLED OFF)
-if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
-   LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
-    set(LEO2_LOW_P32_B64_TERMINAL_ENABLED ON)
-endif()
 
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
-    if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
-        # Keep the promoted exact terminal in its own object so its presence
-        # cannot perturb GCC's call graph, constprop clones, or function
-        # placement in the mature AVX2 backend translation unit.
-        add_library(leopard2_low_p32_b64_avx2 OBJECT
-            Leopard2LowP32B64AVX2.cpp)
-        target_include_directories(leopard2_low_p32_b64_avx2 PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR})
-        target_compile_definitions(leopard2_low_p32_b64_avx2 PRIVATE
-            LEO2_HAVE_AVX2_BACKEND=1
-            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
-        if(NOT LEOPARD_ENABLE_GF16)
-            target_compile_definitions(leopard2_low_p32_b64_avx2 PRIVATE
-                NO_LEO_HAS_FF16=1)
-        endif()
-        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
-           CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
-           CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
-            target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
-                -mavx2 -mno-avx512f)
-            if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
-                target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
-                    -falign-functions=64)
-            endif()
-        elseif(MSVC)
-            target_compile_options(leopard2_low_p32_b64_avx2 PRIVATE
-                /arch:AVX2)
-        endif()
-        target_sources(leopard PRIVATE
-            $<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>)
-    endif()
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -612,9 +607,14 @@ if(LEO2_HAVE_AVX2_BACKEND)
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
     endif()
-    target_compile_definitions(leopard PRIVATE
-        LEO2_HAVE_AVX2_BACKEND=1
-        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_LOW_P32_B64_TERMINAL_ENABLED}>)
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>)
+        target_compile_definitions(leopard PRIVATE
+            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
+    endif()
+    target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
 endif()
 if(LEO2_HAVE_AVX512_BACKEND)
     if(NOT LEOPARD_ENABLE_GF8)
@@ -973,13 +973,15 @@ if(LEO2_BUILD_TESTS)
         endif()
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
-        if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
+        if(LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
             target_sources(leopard_test_hooks PRIVATE
                 $<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>)
+            target_compile_definitions(leopard_test_hooks PRIVATE
+                LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1)
         endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
-            LEO2_HAVE_AVX2_BACKEND=1
-            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_LOW_P32_B64_TERMINAL_ENABLED}>)
+            LEO2_HAVE_AVX2_BACKEND=1)
     endif()
     if(LEO2_HAVE_AVX512_BACKEND)
         add_library(leopard2_backend_avx512_test_hooks OBJECT EXCLUDE_FROM_ALL
@@ -1257,7 +1259,8 @@ if(LEO2_BUILD_TESTS)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t32_b256)
                 endif()
-                if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
+                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_p32)
                 endif()
             endif()
@@ -1403,7 +1406,8 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
-        if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
+        if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
             add_executable(leopard2_low_p32_b64_terminal_test
                 tests/leopard2/direct_oracle.cpp
                 tests/leopard2/test_low_p32_b64_terminal.cpp)
