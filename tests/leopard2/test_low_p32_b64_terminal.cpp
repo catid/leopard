@@ -334,7 +334,8 @@ void ExercisePublicRoute(
     unsigned missing_offset = 0,
     bool unaligned = false,
     unsigned parity_stride = 0,
-    unsigned parity_offset = 0)
+    unsigned parity_offset = 0,
+    bool alias_surviving_inputs = false)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
@@ -366,6 +367,16 @@ void ExercisePublicRoute(
             state ^= state << 17;
             output[offset] = static_cast<uint8_t>(state >> 24);
         }
+    }
+    if (alias_surviving_inputs)
+    {
+        Require(original_count >= 2,
+            "public-route input-alias case needs two originals");
+        std::memcpy(&message[message_base +
+                static_cast<size_t>(original_count - 1) * row_stride],
+            &message[message_base +
+                static_cast<size_t>(original_count - 2) * row_stride],
+            shard_bytes);
     }
     const std::vector<uint8_t> original_message = message;
     std::vector<const void*> original(original_count);
@@ -417,6 +428,17 @@ void ExercisePublicRoute(
             "public-route missing stride generated a duplicate coordinate");
         original_present[coordinate] = 0;
         decode_original[coordinate] = NULL;
+    }
+    if (alias_surviving_inputs)
+    {
+        const unsigned first = original_count - 2;
+        const unsigned second = original_count - 1;
+        Require(original_present[first] != 0 && original_present[second] != 0,
+            "public-route input-alias rows must both survive");
+        Require(std::memcmp(decode_original[first], decode_original[second],
+                shard_bytes) == 0,
+            "public-route aliased rows must contain identical bytes");
+        decode_original[second] = decode_original[first];
     }
     if (parity_stride != 0)
     {
@@ -919,7 +941,12 @@ int main()
             false, false, 0, 1, 29, 9, true);
         ExercisePublicRoute(context, 128, 128, 64, 127,
             false, true, 0, 1, 29, 5, true);
-        route_count += 4;
+        // Input/input aliases are permitted when the bytes agree.  The last
+        // two systematic rows survive this prefix-loss case and deliberately
+        // share one decode pointer after their equal data was encoded.
+        ExercisePublicRoute(context, 128, 128, 64, 64,
+            false, false, 0, 1, 1, 0, false, 0, 0, true);
+        route_count += 5;
         Require(leopard2_internal::
                 LowP128B64TerminalRouteSelectedForDiagnostics(),
             "enabled P128 route probe did not observe the exact terminal");
@@ -928,6 +955,9 @@ int main()
             "finish enabled P128 terminal route probe");
         Require(leopard2_internal::LowP128B64TerminalModeForDiagnostics() == 1,
             "finished enabled P128 terminal did not retain mode one");
+        ExercisePublicRoute(context, 128, 128, 64, 64,
+            false, false, 0, 1);
+        ++route_count;
 
         Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
                 true),
