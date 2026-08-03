@@ -806,6 +806,14 @@ int main()
         ExerciseProductionT32TwoBlockBatch(context);
 #endif
         leo2_context_destroy(context);
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+        options.thread_count = 2;
+        context = NULL;
+        RequireResult(leo2_context_create(&options, &context),
+            LEO2_SUCCESS, "create production pooled AVX2 context");
+        ExerciseProductionT32TwoBlockBatch(context);
+        leo2_context_destroy(context);
+#endif
         std::printf("production balanced 64-byte terminal checks passed\n");
         return 0;
     }

@@ -15031,7 +15031,7 @@ static leo2_result EncodeInternal(
     defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_ENABLE_TEST_HOOKS)
     /*
-        Default-off coarse terminal for exactly two T=32 message blocks.  Dense
+        Qualified coarse terminal for exactly two T=32 message blocks.  Dense
         packed validation proves all three slabs and lets the callback derive
         row addresses from bases, avoiding 64 per-call work-pointer stores.
     */

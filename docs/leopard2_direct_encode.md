@@ -842,3 +842,49 @@ GF16-only, and Clang 18 ASan+UBSan+LSan gates passed. Full provenance,
 confidence intervals, rejected preliminary runs, and raw-result hashes are in
 `experiments/leopard2/gf8_high_encode/results/`
 `t8_tiny_checkpoint_20260731.json`.
+
+## Promoted T=32 two-message-block 256-byte encoder
+
+The legacy-high GF8/AVX2 encoder now has a bounded complete transform for
+exactly `K=64`, `R=T=32`, and 256-byte shards.  It inverse-transforms the first
+32-message block directly into the recovery accumulator, folds the shifted
+inverse transform of the second block through one 32-row temporary slab, and
+finishes with one forward transform.  Packed base pointers replace the general
+64-entry work-pointer traversal.  The wire profile, skew constants, arithmetic,
+public scratch size, and parity bytes are unchanged.
+
+The ordinary encode and multi-item batch entry points retain their full
+address and alias validation.  A reusable batch binding proves the packed
+layout once during setup and stores the work offset, so repeated execution is
+byte-heavy arithmetic only.  This setup/execution separation matters for a
+fair Leopard1 comparison: Leopard1's encode call has no equivalent batch-wide
+alias preflight.  Setup remains explicitly measured rather than treated as
+free.
+
+The frozen CPU-13 campaign used exact Leopard main at commit
+`6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198`, nine counterbalanced target
+rounds, three neighbor rounds, and 216 fresh processes.  No process or round
+was discarded, every workload/parity/recovery digest matched, the reserved
+SMT sibling remained idle, and no byte/count neighbor had a credible
+two-percent regression:
+
+| execution path | median candidate | setup | control / candidate, 95% CI | exact main / candidate, 95% CI |
+| --- | ---: | ---: | ---: | ---: |
+| reusable binding, batch 1 | 0.832 us | 0.500 us | 1.1230x `[1.1164,1.1296]` | 1.1046x `[1.0969,1.1124]` |
+| reusable binding, batch 8 | 6.756 us | 4.455 us | 1.1486x `[1.1418,1.1554]` | 1.1878x `[1.1855,1.1901]` |
+| ordinary one-shot, batch 1 | 0.862 us | included | 1.1032x `[1.0975,1.1089]` | 1.0680x `[1.0609,1.0751]` |
+
+The generated function is 9,671 bytes and its object audit found no EVEX,
+ZMM, opmask, or YMM stack-spill instruction.  Arbitrary shard layouts, sparse
+parity requests, adjacent byte/count shapes, non-AVX2 backends, and bindings
+with a worker pool retain the mature transform or scheduler.  Full provenance
+and confidence intervals are in
+`experiments/leopard2/gf8_high_encode/results/`
+`t32_two_block_b256_checkpoint_20260803.json`.
+
+The fresh production-default Release archive is byte-identical to the frozen
+candidate archive.  Default and selector-disabled direct-oracle tests,
+two-worker batch execution, general batch-alias and context/backend tests,
+GF8-only and GF16-only builds, GCC 13 and Clang 18 `-Werror` builds, and the
+Clang 18 ASan+UBSan focused test pass.  The feature-off and GF16-only archives
+contain neither the generated object nor its symbol.

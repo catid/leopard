@@ -80,10 +80,10 @@ option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
     "Disable the generated T=32/B=256 kernel without changing code layout"
     OFF)
 option(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK
-    "Enable the default-off GF8/AVX2 T=32,K=64,R=32,B=256 encoder candidate"
-    OFF)
+    "Enable the promoted GF8/AVX2 T=32,K=64,R=32,B=256 encoder"
+    ON)
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK
-    "Disable the T=32/K=64/B=256 candidate without changing code layout"
+    "Disable the promoted T=32/K=64/B=256 kernel without changing code layout"
     OFF)
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"

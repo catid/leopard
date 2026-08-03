@@ -1,0 +1,122 @@
+{
+  "schema": "leopard2-gf8-t32-two-block-b256-checkpoint/v1",
+  "status": "promoted",
+  "date_utc": "2026-08-03",
+  "scope": {
+    "operation": "encode",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "field": "GF8",
+    "backend": "AVX2",
+    "K": 64,
+    "R": 32,
+    "padded_side_T": 32,
+    "shard_bytes": 256,
+    "layouts": "complete packed systematic and recovery slabs",
+    "api_paths": [
+      "leo2_encode",
+      "leo2_encode_batch",
+      "leo2_encode_batch_binding_execute"
+    ],
+    "fallback_policy": "Every different count, byte size, backend, sparse output, arbitrary pointer layout, or pooled binding retains the mature transform and scheduler."
+  },
+  "source": {
+    "implementation_commit": "f1b972b31d59d2f87f50047890598825b6f40dc4",
+    "qualification_commit": "94bc8db1c9da811f526a34d9fcf95eb815597bae",
+    "qualification_tree": "530d35e13e3b2369646494ae0d0baaa5baf2fef6",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "runner": "experiments/leopard2/gf8_high_encode/run_t32_b256_two_block_abba.py"
+  },
+  "binary_provenance": {
+    "candidate_sha256": "203645a45fed8e13f52b119d6943635c0c3ade435a2f9f9344a1ce6ad6010573",
+    "control_sha256": "98dfc7892f447da8a96bc83277d296f897b7afe6ff750b9fc186c09d12f61e5a",
+    "exact_leopard_main_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084",
+    "candidate_control_executable_sections_sha256": "5e35cd7383c447cfff8477e6e0fe51e492750fe702103c9a02d37be857978c8a",
+    "candidate_archive_sha256": "3cbf07459ac6947ecd0aeb6f51d84593b49b1e779dab7810ebd45378b808312a",
+    "fresh_default_archive_bit_identical_to_candidate": true,
+    "selector_symbol": "_ZN7leopard7backend12_GLOBAL__N_1L25g_t32_b256_two_block_modeE",
+    "candidate_selector_word": 1,
+    "control_selector_word": 2,
+    "generated_function_bytes": 9671,
+    "generated_object_sha256": "1aa6b7a81e7595d7abb6ec8e6a97563ea540653e78b0657228ba3f2295e51ba0",
+    "isa_audit": "AVX2 only; no EVEX, ZMM, opmask, or YMM stack spill in the generated function"
+  },
+  "campaign": {
+    "host": "AMD Ryzen 9 9950X3D",
+    "cpu": 13,
+    "reserved_smt_sibling": 29,
+    "iterations_per_process": 21,
+    "warmup_per_process": 5,
+    "target_rounds": 9,
+    "neighbor_rounds": 3,
+    "cell_count": 11,
+    "process_count": 216,
+    "discarded_process_count": 0,
+    "discarded_round_attempts": 0,
+    "all_workload_and_output_digests_matched": true,
+    "all_rounds_zero_sibling_nonidle": true,
+    "credible_neighbor_regressions": [],
+    "credible_neighbor_one_shot_regressions": [],
+    "raw_sha256": "ba394bfe6a8f3ee23c58deca1bcd79d7c209f4ba0fa025d63190198cb1504588",
+    "summary_sha256": "f50260da2a88eb980153bcb6411d6185b90e4f3f751793124969ef6dcd19ec1c",
+    "targets": [
+      {
+        "id": "K64-R32-B256-batch1",
+        "reuse": 8192,
+        "candidate_execution_us": 0.831642,
+        "candidate_binding_setup_us": 0.5,
+        "control_over_candidate": 1.1229627612289756,
+        "control_over_candidate_ci95": [
+          1.116378291068631,
+          1.1295860670130862
+        ],
+        "exact_main_over_candidate": 1.1046313417928466,
+        "exact_main_over_candidate_ci95": [
+          1.0968720274101327,
+          1.112445545860214
+        ],
+        "ordinary_one_shot_exact_main_over_candidate": 1.0679615073590072,
+        "ordinary_one_shot_exact_main_over_candidate_ci95": [
+          1.0608861454101806,
+          1.0750840569791247
+        ]
+      },
+      {
+        "id": "K64-R32-B256-batch8",
+        "reuse": 1024,
+        "candidate_execution_us": 6.75642,
+        "candidate_binding_setup_us": 4.455,
+        "control_over_candidate": 1.1485702359101562,
+        "control_over_candidate_ci95": [
+          1.141761122033551,
+          1.1554199572578776
+        ],
+        "exact_main_over_candidate": 1.1877911851888472,
+        "exact_main_over_candidate_ci95": [
+          1.1854823612402563,
+          1.1901045057610908
+        ]
+      }
+    ]
+  },
+  "correctness": {
+    "oracles": [
+      "independent direct systematic generator",
+      "legacy Leopard parity",
+      "mature Leopard2 transform"
+    ],
+    "covered": [
+      "unaligned packed slabs",
+      "ordinary one-item and eight-item batches",
+      "reusable eight-item binding",
+      "two-worker pooled ordinary batch and binding scheduler fallback",
+      "mixed packed and aliased-input fallback",
+      "source/output/scratch guards",
+      "undersized and misaligned scratch",
+      "source/output and cross-item output overlap",
+      "atomic rejection before earlier output writes",
+      "K96 and K128 selector neighbors"
+    ],
+    "candidate_and_selector_disabled_focused_tests": "pass"
+  },
+  "promotion_reason": "Both execution and ordinary one-shot targets clear the five-percent same-source and exact-main lower-confidence gates, neighbors remain inert, setup is measured separately, and the generated kernel is bounded and spill-free."
+}
