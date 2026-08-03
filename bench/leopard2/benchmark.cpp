@@ -119,6 +119,7 @@ struct Options
     bool measure_one_shot_decode;
     int one_shot_plan_setup_mode;
     int low_p32_b64_terminal_mode;
+    int low_p128_b64_terminal_mode;
     int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
@@ -169,6 +170,7 @@ struct Options
         , measure_one_shot_decode(false)
         , one_shot_plan_setup_mode(-1)
         , low_p32_b64_terminal_mode(-1)
+        , low_p128_b64_terminal_mode(-1)
         , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
@@ -455,6 +457,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --low-p32-b64-terminal-mode 0|1\n"
          << "                         Attribution-only: mature or fused exact P32 terminal\n"
          << "                         in identical executable text using schema v18\n"
+        << "  --low-p128-b64-terminal-mode 0|1\n"
+         << "                         Attribution-only: mature or generated exact P128 terminal\n"
+         << "                         in identical executable text using schema v20\n"
         << "  --gf8-avx2-walsh-locator-mode 0|1\n"
         << "                         Attribution-only: disable or enable the dense setup kernel\n"
         << "                         within one-shot setup mode 3 using schema v16\n"
@@ -553,6 +558,16 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--low-p32-b64-terminal-mode must be exactly 0 or 1");
         }
+        else if (argument == "--low-p128-b64-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.low_p128_b64_terminal_mode = 0;
+            else if (mode == "1")
+                options.low_p128_b64_terminal_mode = 1;
+            else
+                Fail("--low-p128-b64-terminal-mode must be exactly 0 or 1");
+        }
         else if (argument == "--gf8-avx2-walsh-locator-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -632,7 +647,8 @@ static Options ParseOptions(int argc, char** argv)
     if (options.measure_one_shot_decode &&
         (options.report_decode_path || options.report_direct_executor ||
          (options.attest_source &&
-          options.low_p32_b64_terminal_mode < 0)))
+          options.low_p32_b64_terminal_mode < 0 &&
+          options.low_p128_b64_terminal_mode < 0)))
     {
         Fail("--measure-one-shot-decode currently uses a standalone schema "
              "and cannot be combined with path attestation or unrelated "
@@ -657,6 +673,7 @@ static Options ParseOptions(int argc, char** argv)
          !options.skip_legacy || !options.retain_samples ||
          !options.measure_one_shot_decode ||
          options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
@@ -675,6 +692,7 @@ static Options ParseOptions(int argc, char** argv)
          !options.measure_one_shot_decode ||
          options.r1_small_reduction_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
@@ -693,6 +711,7 @@ static Options ParseOptions(int argc, char** argv)
          options.one_shot_plan_setup_mode != 3 ||
          options.r1_small_reduction_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
@@ -710,6 +729,7 @@ static Options ParseOptions(int argc, char** argv)
          !options.skip_legacy || !options.retain_samples ||
          !options.measure_one_shot_decode ||
          options.one_shot_plan_setup_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
          options.gf8_avx2_walsh_locator_mode >= 0 ||
          options.r1_small_reduction_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
@@ -718,6 +738,26 @@ static Options ParseOptions(int argc, char** argv)
          options.disable_k9r6r8_b256_terminal))
     {
         Fail("--low-p32-b64-terminal-mode requires explicit high/GF8/AVX2, "
+             "batch=1, one thread, --skip-legacy, "
+             "--retain-samples, and --measure-one-shot-decode");
+    }
+    if (options.low_p128_b64_terminal_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal))
+    {
+        Fail("--low-p128-b64-terminal-mode requires explicit high/GF8/AVX2, "
              "batch=1, one thread, --skip-legacy, "
              "--retain-samples, and --measure-one-shot-decode");
     }
@@ -730,6 +770,8 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--one-shot-plan-setup-mode requires the ordinary benchmark");
     if (options.low_p32_b64_terminal_mode >= 0)
         Fail("--low-p32-b64-terminal-mode requires the ordinary benchmark");
+    if (options.low_p128_b64_terminal_mode >= 0)
+        Fail("--low-p128-b64-terminal-mode requires the ordinary benchmark");
 #endif
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
@@ -1341,12 +1383,26 @@ static bool LowP32B64TerminalRouteExpected(const Options& options)
         options.losses >= 9 && options.losses < 32;
 }
 
+static bool LowP128B64TerminalRouteExpected(const Options& options)
+{
+    if (options.low_p128_b64_terminal_mode != 1 || options.bytes != 64)
+        return false;
+    return (options.k == 95 && options.r == 95 &&
+               (options.losses == 47 || options.losses == 94)) ||
+           (options.k == 128 && options.r == 128 &&
+               (options.losses == 64 || options.losses == 127));
+}
+
 static int Run(const Options& options)
 {
     if (options.low_p32_b64_terminal_mode >= 0 &&
         !leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
             options.low_p32_b64_terminal_mode == 1))
         Fail("cannot set the low P32/B64 terminal attribution mode");
+    if (options.low_p128_b64_terminal_mode >= 0 &&
+        !leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
+            options.low_p128_b64_terminal_mode == 1))
+        Fail("cannot set the low P128/B64 terminal attribution mode");
     if (options.one_shot_plan_setup_mode >= 0 &&
         !leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(
             static_cast<unsigned>(options.one_shot_plan_setup_mode)))
@@ -1654,6 +1710,7 @@ static int Run(const Options& options)
         options.measure_one_shot_decode ||
         options.one_shot_plan_setup_mode >= 0 ||
         options.low_p32_b64_terminal_mode >= 0 ||
+        options.low_p128_b64_terminal_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
@@ -1661,6 +1718,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.low_p128_b64_terminal_mode >= 0 ? 20 :
         options.low_p32_b64_terminal_mode >= 0 ? 18 :
         options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
         options.one_shot_plan_setup_mode >= 0 ? 15 :
@@ -1678,6 +1736,7 @@ static int Run(const Options& options)
     uint64_t parity_digest = kFnv1a64Offset;
     uint64_t recovered_digest = kFnv1a64Offset;
     bool low_p32_b64_terminal_route_selected = false;
+    bool low_p128_b64_terminal_route_selected = false;
 
     run_encode_batch();
     if (extended_schema)
@@ -1744,6 +1803,17 @@ static int Run(const Options& options)
         if (low_p32_b64_terminal_route_selected !=
             LowP32B64TerminalRouteExpected(options))
             Fail("low P32/B64 actual route differs from selector contract");
+    }
+    if (options.low_p128_b64_terminal_mode >= 0)
+    {
+        low_p128_b64_terminal_route_selected = leopard2_internal::
+            LowP128B64TerminalRouteSelectedForDiagnostics();
+        if (!leopard2_internal::
+                FinishLowP128B64TerminalRouteProbeForDiagnostics())
+            Fail("low P128/B64 route probe did not finish");
+        if (low_p128_b64_terminal_route_selected !=
+            LowP128B64TerminalRouteExpected(options))
+            Fail("low P128/B64 actual route differs from selector contract");
     }
     if (one_shot_transient_plan)
     {
@@ -2062,6 +2132,29 @@ static int Run(const Options& options)
                 "\"K=R=P=32,N=64,GF8,AVX2,B=64,L=9..31,"
                 "public-one-shot-only\"";
     }
+    if (options.low_p128_b64_terminal_mode >= 0)
+    {
+        const bool route_expected_selected =
+            LowP128B64TerminalRouteExpected(options);
+        json << ",\n"
+             << "    \"low_p128_b64_terminal_diagnostic_mode\": "
+             << options.low_p128_b64_terminal_mode << ",\n"
+             << "    \"low_p128_b64_terminal_mode_word\": "
+             << leopard2_internal::
+                    LowP128B64TerminalModeForDiagnostics() << ",\n"
+             << "    \"low_p128_b64_terminal_enabled\": "
+             << (options.low_p128_b64_terminal_mode == 1
+                    ? "true" : "false") << ",\n"
+             << "    \"low_p128_b64_terminal_one_shot_route_expected_selected\": "
+             << (route_expected_selected ? "true" : "false") << ",\n"
+             << "    \"low_p128_b64_terminal_one_shot_route_selected\": "
+             << (low_p128_b64_terminal_route_selected ? "true" : "false")
+             << ",\n"
+             << "    \"low_p128_b64_terminal_selector_contract\": "
+                "\"P=128,N=256,GF8,AVX2,B=64;"
+                "K=R=95,L=47|94;K=R=128,L=64|127;"
+                "public-one-shot-only\"";
+    }
     if (options.one_shot_plan_setup_mode >= 0)
     {
         json << ",\n"
@@ -2199,6 +2292,9 @@ static int Run(const Options& options)
         if (options.low_p32_b64_terminal_mode >= 0)
             json << "    \"low_p32_b64_terminal_mode\": "
                  << options.low_p32_b64_terminal_mode << ",\n";
+        if (options.low_p128_b64_terminal_mode >= 0)
+            json << "    \"low_p128_b64_terminal_mode\": "
+                 << options.low_p128_b64_terminal_mode << ",\n";
         if (options.one_shot_plan_setup_mode >= 0)
             json << "    \"one_shot_plan_setup_mode\": "
                  << options.one_shot_plan_setup_mode << ",\n";
