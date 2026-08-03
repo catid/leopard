@@ -65,11 +65,12 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def file_identity(path: Path) -> dict[str, Any]:
+def file_identity(path: Path, *, allow_empty: bool = False) -> dict[str, Any]:
     resolved = path.resolve(strict=True)
     status = resolved.stat()
-    require(resolved.is_file() and status.st_size > 0,
-            f"required artifact is not a nonempty regular file: {resolved}")
+    require(resolved.is_file() and (allow_empty or status.st_size > 0),
+            f"required artifact is not a regular file with valid size: "
+            f"{resolved}")
     return {
         "path": str(resolved),
         "size": status.st_size,
@@ -427,8 +428,8 @@ def run_one(
         "command": command,
         "elapsed_ns": time.monotonic_ns() - started,
         "result": file_identity(result_path),
-        "stdout": file_identity(stdout_path),
-        "stderr": file_identity(stderr_path),
+        "stdout": file_identity(stdout_path, allow_empty=True),
+        "stderr": file_identity(stderr_path, allow_empty=True),
         "normalized": normalized,
     }
 
@@ -595,8 +596,8 @@ def main() -> int:
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
-            "stdout": file_identity(correctness_stdout),
-            "stderr": file_identity(correctness_stderr),
+            "stdout": file_identity(correctness_stdout, allow_empty=True),
+            "stderr": file_identity(correctness_stderr, allow_empty=True),
             "coverage": {"payloads": 2, "patterns": 67,
                          "parity_selections": 2, "public_routes": 56,
                          "qualified_loss_counts": list(range(9, 32))},
