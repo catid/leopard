@@ -8275,7 +8275,9 @@ static void ExecuteRawTranslatedLowDecode(
             g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
         const bool exact_terminal =
             (exact_terminal_mode == 1U || exact_terminal_mode == 3U) &&
-            geometry.aligned_prefix_bytes == 64 &&
+            geometry.aligned_prefix_bytes >= 64 &&
+            geometry.aligned_prefix_bytes <= 256 &&
+            (geometry.aligned_prefix_bytes & 63U) == 0 &&
             geometry.tail_bytes == 0 && n == 64 && p == 32 &&
             codec->original_count == 32 && codec->recovery_count == 32 &&
             pattern.missing_original_count >= 9 &&
@@ -8283,7 +8285,8 @@ static void ExecuteRawTranslatedLowDecode(
             ops.kind == LEO2_BACKEND_AVX2 &&
             codec->translated_low_factors8.size() == 1 &&
             leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
-                ops, const_cast<const void* const*>(coordinate_data),
+                ops, geometry.aligned_prefix_bytes,
+                const_cast<const void* const*>(coordinate_data),
                 pattern.missing_originals, pattern.missing_original_count,
                 pattern.locator, codec->translated_low_factors8[0],
                 restored, work);
