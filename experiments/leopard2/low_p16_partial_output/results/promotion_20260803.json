@@ -1,0 +1,250 @@
+{
+  "schema": "leopard2-low-p16-partial-output-promotion/v1",
+  "recorded_utc": "2026-08-03",
+  "decision": "promote",
+  "optimization": "GF8 AVX2 LOW_V1 P=16 dense partial final parity blocks write the final radix-4 outputs directly to caller buffers for d in {4,8,12}",
+  "source": {
+    "branch": "codex/leopard2",
+    "implementation_commit": "03f79627312dcff2e4576a37e1d5fb887e570d04",
+    "tree": "89fc25de96c11066f086afd88607dab8bf4e6af8",
+    "tracked_dirty_in_attested_binary": false
+  },
+  "artifacts": {
+    "leopard2_benchmark_sha256": "19adb2c4cd15c1ed8aa7ee5938fc843a9d8769bae9c6e36c3ae63d8ffb4024bb",
+    "leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "leopard_main_benchmark_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084",
+    "runner_sha256": "509fe9586d5bf0c6ed7c780f2c167a0559b10d5e85c1e017bf78ce902902f6eb",
+    "manifest_sha256": "86ffce5f62c2c92d670977c9b744f89564dc2f6b5603addef0d7412c9f3f7e33",
+    "manifest_payload_digest": "9ad06c5a7fe2dee82fa68ff0b4f790fa34a398d9d646ff446f5376b87bcd717a",
+    "summary_sha256": "5024150a37144c2e6b91672407ff556ceb796af49f408eca919c7db33ade806a",
+    "summary_payload_digest": "694e1fae30e875d668b0847a489a02c30c10336aa4eca1f09566232e274d15a5",
+    "raw_result_directory": "/tmp/leopard2-lowp16-authoritative-03f7962-v1",
+    "raw_result_size": "12 MiB"
+  },
+  "host": {
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "online_logical_cpus": 32,
+    "allowed_logical_cpus": 28,
+    "allowed_cpu_set": "0-13,16-29",
+    "sockets": 1,
+    "numa_nodes": 1,
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "coordinator_cpu": 12,
+    "frequency_driver": "amd-pstate-epp",
+    "governor": "powersave"
+  },
+  "resource_policy": {
+    "campaign_memory_max_bytes": 536870912,
+    "campaign_swap_max_bytes": 0,
+    "child_address_space_max_bytes": 268435456,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "reason_for_not_using_all_cpus": "Authoritative single-core cache-sensitive timing requires an isolated physical core and its SMT sibling; correctness and build gates were serialized after earlier session OOMs."
+  },
+  "correctness": {
+    "direct_oracle": {
+      "gcc_release": {
+        "result": "pass",
+        "elapsed_seconds": 66.64
+      },
+      "clang18_release": {
+        "result": "pass",
+        "elapsed_seconds": 66.25
+      },
+      "asan_ubsan_lsan": {
+        "result": "pass",
+        "peak_rss_kib": 454964,
+        "memory_scope_bytes": 2147483648,
+        "swap_max_bytes": 0
+      },
+      "oracle_parity_symbols_per_run": 50075685,
+      "focused_partial_output_checks_per_run": 143,
+      "profiles_per_run": 1024,
+      "basis_messages_per_run": 8704,
+      "random_messages_per_run": 1024
+    },
+    "coverage": [
+      "independent direct systematic generator and mature scatter control",
+      "all legal GF8 P=16 final parity cosets at offsets 0 through 224 for d=4,8,12",
+      "byte counts 1,3,31,32,33,63,64,65,127,128,129,255,256,257,1024",
+      "unaligned guarded source, output, and exact-sized scratch buffers",
+      "forced sparse-plan fallback and scalar fallback",
+      "allowed source aliasing, rejected overlap failure atomicity, and zero hot-path allocations",
+      "two-thread immutable-codec execution with per-thread scratch and outputs",
+      "same-executable diagnostic selector and observed-route probe"
+    ],
+    "traffic_proof": {
+      "mature_scatter_bytes": "2*d*round_up_64(shard_bytes) per byte pass",
+      "candidate_scatter_bytes": 0,
+      "candidate_avoided_scatter_bytes": "2*d*round_up_64(shard_bytes) per byte pass"
+    },
+    "integration_tests": [
+      "leopard2_backend_ops",
+      "leopard2_auto_encode_backend",
+      "leopard2_api",
+      "leopard2_encode_concurrency",
+      "leopard2_benchmark_json_regression"
+    ],
+    "compile_matrix": [
+      "strict GCC",
+      "strict Clang 18",
+      "GF8-only library",
+      "GF16-only library",
+      "ASan+UBSan+LSan"
+    ]
+  },
+  "campaign": {
+    "command": "systemd-run --user --scope --quiet -p MemoryMax=512M -p MemorySwapMax=0 taskset -c 12 python3 experiments/leopard2/low_p16_partial_output/run_abba.py run --leopard2 /tmp/leopard2-lowp16-clean-03f7962-release/bench_leopard2 --main /tmp/leopard2-full-loss-p32-oneshot-fa1c0c2-v3/artifacts/leopard_main_benchmark --source-commit 03f79627312dcff2e4576a37e1d5fb887e570d04 --source-tree 89fc25de96c11066f086afd88607dab8bf4e6af8 --output /tmp/leopard2-lowp16-authoritative-03f7962-v1",
+    "verification_command": "python3 experiments/leopard2/low_p16_partial_output/run_abba.py verify --output /tmp/leopard2-lowp16-authoritative-03f7962-v1",
+    "target_rounds": 9,
+    "neighbor_rounds": 3,
+    "retained_samples_per_process": 21,
+    "warmups_per_process": 5,
+    "calls_per_sample": 4096,
+    "accepted_processes": 270,
+    "rejected_isolation_attempts": 6,
+    "digest_failures": 0,
+    "target_gate_failures": 0,
+    "neighbor_gate_failures": 0,
+    "target_gate": "95% CI lower bound of control_time/candidate_time >= 1.05 for reusable and public one-shot encode",
+    "neighbor_gate": "fail only when 95% CI upper bound of control_time/candidate_time < 1/1.02"
+  },
+  "cells": [
+    {
+      "id": "target-k16-r12-b64",
+      "role": "target",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.269658, "ci95": [1.260135, 1.279253]},
+        "one_shot_encode": {"ratio": 1.238442, "ci95": [1.222055, 1.255049]}
+      },
+      "main_over_candidate_descriptive": {
+        "encode_execution": {"ratio": 0.642615, "ci95": [0.635604, 0.649703]},
+        "one_shot_encode": {"ratio": 0.646855, "ci95": [0.640574, 0.653198]}
+      }
+    },
+    {
+      "id": "target-k16-r12-b1024",
+      "role": "target",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.087059, "ci95": [1.081863, 1.092279]},
+        "one_shot_encode": {"ratio": 1.090895, "ci95": [1.085932, 1.095882]}
+      },
+      "main_over_candidate_descriptive": {
+        "encode_execution": {"ratio": 0.947912, "ci95": [0.943914, 0.951927]},
+        "one_shot_encode": {"ratio": 0.948462, "ci95": [0.943871, 0.953076]}
+      }
+    },
+    {
+      "id": "target-k16-r8-b64",
+      "role": "target",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.256451, "ci95": [1.244916, 1.268094]},
+        "one_shot_encode": {"ratio": 1.220514, "ci95": [1.204845, 1.236387]}
+      },
+      "main_over_candidate_descriptive": {
+        "encode_execution": {"ratio": 0.570119, "ci95": [0.564129, 0.576173]},
+        "one_shot_encode": {"ratio": 0.572947, "ci95": [0.563723, 0.582323]}
+      }
+    },
+    {
+      "id": "neighbor-k16-r4-b128",
+      "role": "neighbor",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.184331, "ci95": [1.153062, 1.216448]},
+        "one_shot_encode": {"ratio": 1.218398, "ci95": [1.207749, 1.229141]}
+      }
+    },
+    {
+      "id": "neighbor-k16-r4-b2048",
+      "role": "neighbor",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.025704, "ci95": [1.017253, 1.034225]},
+        "one_shot_encode": {"ratio": 1.024901, "ci95": [1.012446, 1.037510]}
+      }
+    },
+    {
+      "id": "neighbor-k9-r20-b65",
+      "role": "neighbor",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.092278, "ci95": [1.026136, 1.162683]},
+        "one_shot_encode": {"ratio": 1.087948, "ci95": [1.058624, 1.118085]}
+      }
+    },
+    {
+      "id": "neighbor-k9-r228-b64",
+      "role": "neighbor",
+      "route_selected": true,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.002849, "ci95": [0.952948, 1.055362]},
+        "one_shot_encode": {"ratio": 1.005445, "ci95": [0.993427, 1.017609]}
+      }
+    },
+    {
+      "id": "neighbor-k16-r11-b64",
+      "role": "neighbor",
+      "route_selected": false,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 0.990445, "ci95": [0.968955, 1.012412]},
+        "one_shot_encode": {"ratio": 0.989538, "ci95": [0.948277, 1.032594]}
+      }
+    },
+    {
+      "id": "neighbor-k16-r13-b64",
+      "role": "neighbor",
+      "route_selected": false,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.004599, "ci95": [0.986456, 1.023076]},
+        "one_shot_encode": {"ratio": 0.988135, "ci95": [0.962924, 1.014006]}
+      }
+    },
+    {
+      "id": "neighbor-k8-r4-b64",
+      "role": "neighbor",
+      "route_selected": false,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 0.997204, "ci95": [0.952128, 1.044414]},
+        "one_shot_encode": {"ratio": 1.003159, "ci95": [0.985266, 1.021377]}
+      }
+    },
+    {
+      "id": "neighbor-k17-r20-b64",
+      "role": "neighbor",
+      "route_selected": false,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 0.985874, "ci95": [0.963046, 1.009244]},
+        "one_shot_encode": {"ratio": 0.996081, "ci95": [0.952585, 1.041564]}
+      }
+    },
+    {
+      "id": "neighbor-k9-r16-b256",
+      "role": "neighbor",
+      "route_selected": false,
+      "control_over_candidate": {
+        "encode_execution": {"ratio": 1.010120, "ci95": [0.956279, 1.066992]},
+        "one_shot_encode": {"ratio": 0.993730, "ci95": [0.937593, 1.053228]}
+      }
+    }
+  ],
+  "leopard_main_interpretation": {
+    "wire_profiles_are_different": true,
+    "main_profile": "legacy_high_v1",
+    "leopard2_profile": "low_v1",
+    "parity_equality_required_across_profiles": false,
+    "original_and_recovered_digests_equal": true,
+    "main_ratios_are_promotion_gates": false,
+    "observed": "Explicit LOW_V1 remains slower than exact Leopard main in the three overlapping small K cells: about 54.6% slower for K=16,R=12,B=64, 5.4% slower for K=16,R=12,B=1024, and 74.5% slower for K=16,R=8,B=64 by public one-shot time. New-API AUTO selects LEGACY_HIGH_V1 rather than LOW_V1 when R<=K, so these explicit-low comparisons are not default-path regressions. LOW_V1 primarily covers R>K, which Leopard main rejects."
+  },
+  "conclusion": "The candidate passed independent algebra, safety, concurrency, backend, route-attribution, and isolated timing gates. Direct partial output removes the measured final scatter and gives credible target gains from 8.7% to 27.0% for reusable execution and 9.1% to 23.8% for public one-shot encode. No neighbor showed a credible regression greater than 2%.",
+  "limitations": [
+    "The authoritative campaign is single-core GF8 AVX2 on one Zen 5 host; other microarchitectures still rely on deterministic route bounds and correctness fallback.",
+    "This optimization does not remove the broader explicit LOW_V1 small-shard overhead versus Leopard main for R<=K.",
+    "Raw invocation evidence is retained under /tmp on this machine; this committed record contains its hashes and derived results but not the 12 MiB raw archive."
+  ]
+}
