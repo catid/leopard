@@ -2948,6 +2948,18 @@ def validate_retained_link_recipe_semantics(recipes, tools, units, schema):
         elif relative in (
                 "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp"):
             expected_prefix = "@build/CMakeFiles/leopard2_backend_avx2.dir/"
+        elif relative == "Leopard2BackendAVX2T16B64.cpp":
+            expected_prefix = \
+                "@build/CMakeFiles/leopard2_backend_avx2_t16_b64.dir/"
+        elif relative == "Leopard2BackendAVX2T32B256.cpp":
+            expected_prefix = \
+                "@build/CMakeFiles/leopard2_backend_avx2_t32_b256.dir/"
+        elif relative == "Leopard2BackendAVX2T2K4.cpp":
+            expected_prefix = \
+                "@build/CMakeFiles/leopard2_backend_avx2_t2_k4.dir/"
+        elif relative == "Leopard2LowP32B64AVX2.cpp":
+            expected_prefix = \
+                "@build/CMakeFiles/leopard2_low_p32_b64_avx2.dir/"
         elif relative == "Leopard2BackendAVX512.cpp":
             expected_prefix = \
                 "@build/CMakeFiles/leopard2_backend_avx512.dir/"
@@ -2956,8 +2968,8 @@ def validate_retained_link_recipe_semantics(recipes, tools, units, schema):
                 "@build/CMakeFiles/leopard2_backend_gfni.dir/"
         else:
             expected_prefix = "@build/CMakeFiles/leopard.dir/"
-        require(entry["output"].startswith(expected_prefix),
-                "canonical CMake object directory: " + relative)
+        require(entry["output"] == expected_prefix + relative + ".o",
+                "canonical CMake object path: " + relative)
     expected_library_outputs = [
         units[relative]["output"]
         for relative in archive_translation_units_for_schema(schema)]
@@ -5115,7 +5127,9 @@ def pre_xor_matrix_fixture(document):
         variant["schema"] = MATRIX_SCHEMA_V1
         variant["source_fingerprint"] = fingerprint["digest"]
         identity = variant["build_identity"]
-        for key in ("LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16"):
+        for key in (
+                "LEOPARD_ENABLE_GF8", "LEOPARD_ENABLE_GF16") + \
+                CURRENT_PRODUCTION_OBJECT_OPTIONS:
             identity["cache"].pop(key, None)
         identity["cache_sha256"] = sha256_bytes(
             canonical_bytes(identity["cache"]))
@@ -6570,6 +6584,20 @@ def self_test(repo):
         validate = lambda mp, bp: validate_manifest(
             mp, repo, bp, None, None, allow_self_test=True)
         validate(manifest_path, bundle_path)
+
+        candidate_build_record = \
+            manifest["provenance"]["builds"]["candidate"]
+        wrong_directory_units = copy.deepcopy(
+            candidate_build_record["translation_units"])
+        wrong_directory_units["Leopard2BackendAVX2T16B64.cpp"]["output"] = \
+            "@build/CMakeFiles/leopard.dir/" \
+            "Leopard2BackendAVX2T16B64.cpp.o"
+        expect_failure(
+            lambda: validate_retained_link_recipe_semantics(
+                candidate_build_record["link_recipes"],
+                candidate_build_record["tools"], wrong_directory_units,
+                SCHEMA),
+            "isolated AVX2 object directory substitution")
 
         mutations = []
         mutations.append(("current v10 target/archive relabeled as v6",
