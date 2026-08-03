@@ -5900,7 +5900,7 @@ static void ExecuteTransformDecodePass(
     const unsigned requested_count =
         static_cast<unsigned>(execution_requested_coordinates.size());
     const bool bypass_high_pruned_schedules =
-        !use_generic && use_tiled &&
+        !use_generic && !use_low_specialized && use_tiled &&
         BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
     const leopard2_internal::PrunedTransformBlock* const high_input_plans =
         bypass_high_pruned_schedules ||
