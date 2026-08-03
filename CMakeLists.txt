@@ -74,8 +74,8 @@ option(LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     "Enable the promoted two-message-block AVX2 T=8 binding fast path"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
-    "Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 encoder"
-    OFF)
+    "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder when available"
+    ON)
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
     "Disable the generated T=32/B=256 kernel without changing code layout"
     OFF)
@@ -509,7 +509,7 @@ endif()
 
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
    LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
-    # Keep the generated candidate in a trailing object of its own.  Enabling
+    # Keep the generated terminal in a trailing object of its own.  Enabling
     # it must not change compilation or layout of the mature AVX2 backend TU.
     add_library(leopard2_backend_avx2_t32_b256 OBJECT
         Leopard2BackendAVX2T32B256.cpp)
@@ -568,7 +568,8 @@ if(LEO2_HAVE_AVX2_BACKEND)
     endif()
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
-    if(TARGET leopard2_backend_avx2_t32_b256)
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
     endif()
@@ -1205,7 +1206,8 @@ if(LEO2_BUILD_TESTS)
                 if(LEOPARD_ENABLE_GF8)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
                 endif()
-                if(TARGET leopard2_backend_avx2_t32_b256)
+                if(LEOPARD_ENABLE_GF8 AND
+                   LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t32_b256)
                 endif()
@@ -1501,7 +1503,8 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
-        if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+        if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
             # Reuse the production/direct-oracle coverage at the generated
             # kernel's exact byte count.  This also holds out T=64 and T=128
             # balanced neighbors, which must retain the mature transform.
