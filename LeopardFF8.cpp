@@ -4723,6 +4723,23 @@ bool ReedSolomonDecodeLowP32B64TerminalExperimental(
         FFTSkewStorage, FFTSkewStorage + 32, FFTSkewStorage,
         restored, work);
 }
+
+bool ReedSolomonDecodeLowP128B64TerminalExperimental(
+    const backend::Ops& ops,
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const ffe_t* locator_logs,
+    ffe_t block_factor,
+    void* const* restored,
+    void** work)
+{
+    return backend::AVX2FF8LowP128B64Terminal(
+        ops, coordinate_data, requested_coordinates, requested_count,
+        locator_logs, block_factor,
+        FFTSkewStorage, FFTSkewStorage + 128, FFTSkewStorage,
+        restored, work);
+}
 #endif
 
 
