@@ -5864,29 +5864,28 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         public tail is zero-padded to one complete 64-byte pass and follows
         this pass-local rule.
     */
-    const bool t32_family =
-        buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
-        (buffer_bytes & (kScratchAlignment - 1U)) == 0 &&
-        codec->padded_side == 32 && codec->recovery_count == 32 &&
-        codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
-        codec->original_count > 32 && codec->original_count <= 224;
-    const bool t64_punctured_family =
-        buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
-        (buffer_bytes & (kScratchAlignment - 1U)) == 0 &&
-        codec->padded_side == 64 &&
+    if (buffer_bytes < kScratchAlignment || buffer_bytes > 512U ||
+        (buffer_bytes & (kScratchAlignment - 1U)) != 0 ||
+        codec->flags != 0 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        plan->missing_original_count != codec->recovery_count ||
+        PlanUsesTranslatedLowDecode(plan))
+        return false;
+
+    if (codec->padded_side == 32)
+    {
+        return codec->recovery_count == 32 &&
+            codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
+            codec->original_count > 32 && codec->original_count <= 224;
+    }
+    return codec->padded_side == 64 &&
         codec->recovery_count >= 33 && codec->recovery_count <= 62 &&
         codec->parent_count == kGF8Order &&
         codec->original_count >= 65 && codec->original_count <= 191;
-
-    return (t32_family || t64_punctured_family) &&
-        codec->flags == 0 &&
-        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-        codec->field == LEO2_FIELD_GF8 &&
-        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
-        codec->context && codec->context->ops &&
-        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
-        plan->missing_original_count == codec->recovery_count &&
-        !PlanUsesTranslatedLowDecode(plan);
 #else
     (void)plan;
     (void)buffer_bytes;
