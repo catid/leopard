@@ -86,8 +86,8 @@ option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
 option(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-    "Build the default-off GF8/AVX2 Algorithm 4 P32/N64/B64 terminal"
-    OFF)
+    "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal when available"
+    ON)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
@@ -106,11 +106,6 @@ if(NOT LEOPARD_ENABLE_GF8 AND NOT LEOPARD_ENABLE_GF16)
     message(FATAL_ERROR
         "At least one of LEOPARD_ENABLE_GF8 or LEOPARD_ENABLE_GF16 must be ON")
 endif()
-if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL AND NOT LEOPARD_ENABLE_GF8)
-    message(FATAL_ERROR
-        "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL requires GF8")
-endif()
-
 # Diagnostic-only backend selection.  auto is the portable default and does
 # not add definitions or target-local ISA options.  Forced variants hold the
 # wire format fixed while making backend determinism testable in isolated
@@ -554,13 +549,19 @@ if(LEO2_HAVE_SSSE3_BACKEND)
         $<TARGET_OBJECTS:leopard2_backend_ssse3>)
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_SSSE3_BACKEND=1)
 endif()
+set(LEO2_LOW_P32_B64_TERMINAL_ENABLED OFF)
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+   LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+    set(LEO2_LOW_P32_B64_TERMINAL_ENABLED ON)
+endif()
+
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
-    if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
-        # Keep the default-off exact terminal in its own object.  Enabling the
-        # experiment must not perturb GCC's call graph, constprop clones, or
-        # function placement in the mature AVX2 backend translation unit.
+    if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
+        # Keep the promoted exact terminal in its own object so its presence
+        # cannot perturb GCC's call graph, constprop clones, or function
+        # placement in the mature AVX2 backend translation unit.
         add_library(leopard2_low_p32_b64_avx2 OBJECT
             Leopard2LowP32B64AVX2.cpp)
         target_include_directories(leopard2_low_p32_b64_avx2 PRIVATE
@@ -613,10 +614,7 @@ if(LEO2_HAVE_AVX2_BACKEND)
     endif()
     target_compile_definitions(leopard PRIVATE
         LEO2_HAVE_AVX2_BACKEND=1
-        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
-elseif(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
-    message(FATAL_ERROR
-        "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL requires the AVX2 backend")
+        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_LOW_P32_B64_TERMINAL_ENABLED}>)
 endif()
 if(LEO2_HAVE_AVX512_BACKEND)
     if(NOT LEOPARD_ENABLE_GF8)
@@ -975,13 +973,13 @@ if(LEO2_BUILD_TESTS)
         endif()
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
-        if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+        if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
             target_sources(leopard_test_hooks PRIVATE
                 $<TARGET_OBJECTS:leopard2_low_p32_b64_avx2>)
         endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1
-            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL}>)
+            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=$<BOOL:${LEO2_LOW_P32_B64_TERMINAL_ENABLED}>)
     endif()
     if(LEO2_HAVE_AVX512_BACKEND)
         add_library(leopard2_backend_avx512_test_hooks OBJECT EXCLUDE_FROM_ALL
@@ -1259,6 +1257,9 @@ if(LEO2_BUILD_TESTS)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t32_b256)
                 endif()
+                if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
+                    list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_p32)
+                endif()
             endif()
             if(LEO2_HAVE_AVX512_BACKEND)
                 list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx512)
@@ -1402,7 +1403,7 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
-        if(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
+        if(LEO2_LOW_P32_B64_TERMINAL_ENABLED)
             add_executable(leopard2_low_p32_b64_terminal_test
                 tests/leopard2/direct_oracle.cpp
                 tests/leopard2/test_low_p32_b64_terminal.cpp)

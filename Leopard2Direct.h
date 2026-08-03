@@ -289,14 +289,20 @@ bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode);
 
 /*
     Same-executable attribution for the exact GF8/AVX2 Algorithm 4
-    P=32/N=64/B=64 terminal.  Enabled maps to initialized-data mode word one;
-    disabled maps to word two and retains the mature translated-low decoder.
+    P=32/N=64/B=64 terminal.  Enabled/disabled arm a one-call route probe,
+    reported as normalized mode words one/two; finishing the probe restores
+    the corresponding timing state and removes route-accounting overhead.
     Both modes execute from identical text.  Change this only while no decode
     is executing; this is an internal benchmark control, not public ABI.
 */
 bool SetLowP32B64TerminalEnabledForDiagnostics(bool enabled);
 
 unsigned LowP32B64TerminalModeForDiagnostics();
+
+// Read the calling thread's armed route probe, then disarm it before timing.
+bool LowP32B64TerminalRouteSelectedForDiagnostics();
+
+bool FinishLowP32B64TerminalRouteProbeForDiagnostics();
 
 /*
     Construct the ephemeral transform plan for the current diagnostic mode

@@ -192,6 +192,18 @@ std::vector<std::vector<unsigned> > BuildPatterns()
                 missing.push_back(i);
         patterns.push_back(missing);
     }
+
+    // Exercise every loss count admitted by the production selector.  The
+    // stride is coprime to 32, so each prefix is a distinct, non-contiguous
+    // requested-output mask rather than another lowest-index special case.
+    for (unsigned loss_count = 9; loss_count < kOriginalCount; ++loss_count)
+    {
+        missing.clear();
+        for (unsigned i = 0; i < loss_count; ++i)
+            missing.push_back((3U + i * 13U) & 31U);
+        std::sort(missing.begin(), missing.end());
+        patterns.push_back(missing);
+    }
     return patterns;
 }
 
@@ -205,7 +217,8 @@ void ExercisePattern(
     const leopard::backend::Ops& avx2,
     const std::vector<std::vector<uint8_t> >& message,
     const std::vector<std::vector<uint8_t> >& parity,
-    const std::vector<unsigned>& missing)
+    const std::vector<unsigned>& missing,
+    bool select_high_parity)
 {
     uint8_t erased[kParentCount] = {};
     uint8_t requested[kParentCount] = {};
@@ -225,12 +238,16 @@ void ExercisePattern(
         requested[coordinate] = 1;
         requested_coordinates[i] = coordinate;
     }
-    // The deterministic translated-low selector consumes the lowest L parity
-    // rows and marks every surplus row as a virtual erasure.
+    // Cover both ends of the parity block.  Selecting only the upper L rows
+    // makes the unselected lower rows genuine/virtual parity erasures and
+    // exercises locator normalization independently of the usual prefix.
     for (unsigned i = 0; i < kRecoveryCount; ++i)
     {
         const unsigned coordinate = kOriginalCount + i;
-        if (i < missing.size())
+        const bool selected = select_high_parity
+            ? i >= kRecoveryCount - missing.size()
+            : i < missing.size();
+        if (selected)
             coordinates[coordinate] = &parity[i][0];
         else
             erased[coordinate] = 1;
@@ -297,20 +314,25 @@ void ExercisePattern(
 
 void ExercisePublicRoute(
     leo2_context* context,
+    unsigned original_count,
+    unsigned recovery_count,
     size_t shard_bytes,
     unsigned missing_count,
     bool reusable_plan,
+    bool select_high_parity,
     uint64_t expected_terminal_calls)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
-        kOriginalCount, kRecoveryCount, LEO2_PROFILE_LEGACY_HIGH_V1,
+        original_count, recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_FIELD_GF8, NULL, &codec), "create public-route codec");
 
-    std::vector<uint8_t> message(kOriginalCount * shard_bytes);
-    std::vector<uint8_t> parity(kRecoveryCount * shard_bytes);
+    std::vector<uint8_t> message(original_count * shard_bytes);
+    std::vector<uint8_t> parity(recovery_count * shard_bytes);
     uint64_t state = UINT64_C(0x5055424c49435032) ^ shard_bytes ^
-        (static_cast<uint64_t>(missing_count) << 32);
+        (static_cast<uint64_t>(missing_count) << 32) ^
+        (static_cast<uint64_t>(original_count) << 16) ^ recovery_count ^
+        (select_high_parity ? UINT64_C(0x8000000000000000) : 0);
     for (size_t i = 0; i < message.size(); ++i)
     {
         state ^= state << 13;
@@ -318,11 +340,11 @@ void ExercisePublicRoute(
         state ^= state << 17;
         message[i] = static_cast<uint8_t>(state >> 24);
     }
-    std::vector<const void*> original(kOriginalCount);
-    std::vector<void*> recovery_output(kRecoveryCount);
-    for (unsigned i = 0; i < kOriginalCount; ++i)
+    std::vector<const void*> original(original_count);
+    std::vector<void*> recovery_output(recovery_count);
+    for (unsigned i = 0; i < original_count; ++i)
         original[i] = &message[static_cast<size_t>(i) * shard_bytes];
-    for (unsigned i = 0; i < kRecoveryCount; ++i)
+    for (unsigned i = 0; i < recovery_count; ++i)
         recovery_output[i] = &parity[static_cast<size_t>(i) * shard_bytes];
 
     size_t encode_scratch_bytes = 0;
@@ -334,23 +356,32 @@ void ExercisePublicRoute(
         &recovery_output[0], encode_scratch.bytes(), encode_scratch_bytes),
         "encode public-route parity");
 
-    std::vector<uint8_t> original_present(kOriginalCount, 1);
-    std::vector<uint8_t> recovery_present(kRecoveryCount, 1);
+    std::vector<uint8_t> original_present(original_count, 1);
+    std::vector<uint8_t> recovery_present(recovery_count, 1);
     std::vector<const void*> decode_original(original);
-    std::vector<const void*> decode_recovery(kRecoveryCount);
-    std::vector<void*> restored(kOriginalCount, static_cast<void*>(NULL));
+    std::vector<const void*> decode_recovery(recovery_count);
+    std::vector<void*> restored(original_count, static_cast<void*>(NULL));
     std::vector<uint8_t> restored_storage(
-        static_cast<size_t>(kOriginalCount) * shard_bytes, 0xa5);
-    for (unsigned i = 0; i < kRecoveryCount; ++i)
+        static_cast<size_t>(original_count) * shard_bytes, 0xa5);
+    for (unsigned i = 0; i < recovery_count; ++i)
         decode_recovery[i] = recovery_output[i];
     for (unsigned i = 0; i < missing_count; ++i)
     {
-        const unsigned coordinate =
-            missing_count == 16 ? i * 2U : i;
+        const unsigned coordinate = i;
         original_present[coordinate] = 0;
         decode_original[coordinate] = NULL;
         restored[coordinate] = &restored_storage[
             static_cast<size_t>(coordinate) * shard_bytes];
+    }
+    if (select_high_parity)
+    {
+        Require(missing_count <= recovery_count,
+            "high-parity route does not have enough recovery rows");
+        for (unsigned i = 0; i < recovery_count - missing_count; ++i)
+        {
+            recovery_present[i] = 0;
+            decode_recovery[i] = NULL;
+        }
     }
 
     leo2_decode_plan* plan = NULL;
@@ -390,7 +421,7 @@ void ExercisePublicRoute(
     Require(leo2_test_low_p32_b64_terminal_calls() ==
             expected_terminal_calls,
         "public-route terminal call count differs from exact predicate");
-    for (unsigned i = 0; i < kOriginalCount; ++i)
+    for (unsigned i = 0; i < original_count; ++i)
     {
         if (original_present[i])
             continue;
@@ -437,7 +468,12 @@ int main()
                 UINT64_C(0x6c6f775033324236) + payload);
             EncodeIndependentParity(field, generator, message, parity);
             for (size_t i = 0; i < patterns.size(); ++i)
-                ExercisePattern(*avx2, message, parity, patterns[i]);
+            {
+                ExercisePattern(
+                    *avx2, message, parity, patterns[i], false);
+                ExercisePattern(
+                    *avx2, message, parity, patterns[i], true);
+            }
         }
         leo2_context_options options = {};
         options.struct_size = sizeof(options);
@@ -448,27 +484,80 @@ int main()
             "create public-route AVX2 context");
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
             "production terminal mode did not start enabled");
-        ExercisePublicRoute(context, 64, 16, false, 1);
-        ExercisePublicRoute(context, 64, 31, false, 1);
-        ExercisePublicRoute(context, 64, 32, false, 0);
-        ExercisePublicRoute(context, 63, 16, false, 0);
-        ExercisePublicRoute(context, 65, 31, false, 0);
-        ExercisePublicRoute(context, 64, 16, true, 0);
+        unsigned route_count = 0;
+        for (unsigned loss_count = 9; loss_count < kOriginalCount;
+             ++loss_count)
+        {
+            ExercisePublicRoute(context, 32, 32, 64, loss_count,
+                false, false, 1);
+            ++route_count;
+            ExercisePublicRoute(context, 32, 32, 64, loss_count,
+                false, true, 1);
+            ++route_count;
+        }
+        // Explicit route-off neighbors prove every selector boundary: direct
+        // repair below L=9, all-loss at L=32, ragged byte tails, reusable
+        // plans, and adjacent public K/R shapes.
+        ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 63, 16, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 65, 16, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 64, 16, true, false, 0);
+        ExercisePublicRoute(context, 31, 32, 64, 16, false, false, 0);
+        ExercisePublicRoute(context, 32, 31, 64, 16, false, false, 0);
+        route_count += 7;
+
+        Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
+                true),
+            "arm enabled terminal route probe");
+        ExercisePublicRoute(
+            context, 32, 32, 64, 16, false, true, 1);
+        ++route_count;
+        Require(leopard2_internal::
+                LowP32B64TerminalRouteSelectedForDiagnostics(),
+            "enabled route probe did not observe the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP32B64TerminalRouteProbeForDiagnostics(),
+            "finish enabled terminal route probe");
+
+        Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
+                true),
+            "arm route-off loss-neighbor probe");
+        ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
+        ++route_count;
+        Require(!leopard2_internal::
+                LowP32B64TerminalRouteSelectedForDiagnostics(),
+            "L=8 direct-repair neighbor reached the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP32B64TerminalRouteProbeForDiagnostics(),
+            "finish route-off loss-neighbor probe");
         Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
                 false),
             "disable terminal for same-executable control");
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 2,
             "disabled terminal did not select mode word two");
-        ExercisePublicRoute(context, 64, 31, false, 0);
+        ExercisePublicRoute(
+            context, 32, 32, 64, 31, false, false, 0);
+        ++route_count;
+        Require(!leopard2_internal::
+                LowP32B64TerminalRouteSelectedForDiagnostics(),
+            "disabled route probe observed the exact terminal");
+        Require(leopard2_internal::
+                FinishLowP32B64TerminalRouteProbeForDiagnostics(),
+            "finish disabled terminal route probe");
         Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
                 true),
             "restore terminal after same-executable control");
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
             "enabled terminal did not restore mode word one");
+        Require(leopard2_internal::
+                FinishLowP32B64TerminalRouteProbeForDiagnostics(),
+            "finish final enabled terminal route probe");
         leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu routes=7\n",
-            patterns.size());
+            "PASS low_p32_b64_terminal payloads=2 patterns=%zu "
+            "parity_selections=2 routes=%u\n",
+            patterns.size(), route_count);
         return 0;
     }
     catch (const std::exception& exception)
