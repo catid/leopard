@@ -36,9 +36,9 @@ SEED_SCHEMA = "leopard2-equal-rounded-abba/v1"
 MANIFEST_SCHEMA = "leopard2-equal-rounded-manifest/v7"
 CELL_SCHEMA = "leopard2-equal-rounded-cell/v7"
 SUMMARY_SCHEMA = "leopard2-equal-rounded-summary/v7"
-ONE_SHOT_MANIFEST_SCHEMA = "leopard2-equal-rounded-one-shot-manifest/v1"
-ONE_SHOT_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cell/v1"
-ONE_SHOT_SUMMARY_SCHEMA = "leopard2-equal-rounded-one-shot-summary/v1"
+ONE_SHOT_MANIFEST_SCHEMA = "leopard2-equal-rounded-one-shot-manifest/v2"
+ONE_SHOT_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cell/v2"
+ONE_SHOT_SUMMARY_SCHEMA = "leopard2-equal-rounded-one-shot-summary/v2"
 CAUCHY_MANIFEST_SCHEMA = \
     "leopard2-equal-rounded-one-shot-cauchy-manifest/v1"
 CAUCHY_CELL_SCHEMA = "leopard2-equal-rounded-one-shot-cauchy-cell/v1"
@@ -270,6 +270,30 @@ def one_shot_matrix() -> list[dict[str, Any]]:
         one_shot_cell("neighbor-k128-r128-b514-l9",
                       128, 128, 514, 9, "neighbor", False, False),
     ))
+
+    # The legacy-high K=8/R=4 maximum-loss terminal is not equal-rounded,
+    # but it deliberately reuses the same initialized-data one-shot control
+    # and evidence contract.  Cover the tiny-kernel boundaries, ordinary
+    # vector/tail boundaries, the measured 2-KiB ceiling, and exact K/R/loss
+    # neighbors that must retain heap-owned plan construction.
+    for shard_bytes in (
+            1, 3, 4, 13, 14, 63, 64, 65,
+            255, 256, 257, 1024, 2048):
+        result.append(one_shot_cell(
+            f"k8r4-target-b{shard_bytes}-l4",
+            8, 4, shard_bytes, 4, "target", True, False))
+    result.extend((
+        one_shot_cell("k8r4-neighbor-cutoff-b2049-l4",
+                      8, 4, 2049, 4, "neighbor", False, False),
+        one_shot_cell("k8r4-neighbor-loss3-b64",
+                      8, 4, 64, 3, "neighbor", False, False),
+        one_shot_cell("k8r4-neighbor-k7-b64-l4",
+                      7, 4, 64, 4, "neighbor", False, False),
+        one_shot_cell("k8r4-neighbor-r3-b64-l3",
+                      8, 3, 64, 3, "neighbor", False, False),
+        one_shot_cell("k8r4-neighbor-k9-b64-l4",
+                      9, 4, 64, 4, "neighbor", False, False),
+    ))
     require(len({item["id"] for item in result}) == len(result),
             "one-shot matrix contains duplicate identifiers")
     return result
@@ -277,7 +301,8 @@ def one_shot_matrix() -> list[dict[str, Any]]:
 
 def cauchy_one_shot_matrix() -> list[dict[str, Any]]:
     """Reuse the frozen one-shot geometry while changing only setup math."""
-    result = one_shot_matrix()
+    result = [item for item in one_shot_matrix()
+              if not item["id"].startswith("k8r4-")]
     for item in result:
         item["measurement_mode"] = "one-shot-cauchy"
         item["control_direct"] = item["candidate_direct"]
@@ -1359,14 +1384,14 @@ def self_test() -> int:
             "matrix digest changed")
     one_shot_cells = matrix("one-shot")
     require(
-        len(one_shot_cells) == 68 and
-        sum(item["role"] == "target" for item in one_shot_cells) == 60 and
-        sum(item["role"] == "neighbor" for item in one_shot_cells) == 8 and
+        len(one_shot_cells) == 86 and
+        sum(item["role"] == "target" for item in one_shot_cells) == 73 and
+        sum(item["role"] == "neighbor" for item in one_shot_cells) == 13 and
         all(item.get("measurement_mode") == "one-shot"
             for item in one_shot_cells),
         "one-shot matrix shape changed")
     require(digest_object(one_shot_cells) ==
-            "f261d82446d2920149c648e51e86beb60a3c25ae8ff4d419d92c0940d7b940ab",
+            "90348609233f9ddd3dcb3f9e96eba49ba75be6da4384a9ca3b4d26a1bd92d83a",
             "one-shot matrix digest changed")
     cauchy_cells = matrix("one-shot-cauchy")
     require(
