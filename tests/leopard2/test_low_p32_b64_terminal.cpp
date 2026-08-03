@@ -66,6 +66,14 @@ void RequireResult(leo2_result result, const char* message)
             leo2_result_string(result));
 }
 
+void RequireFill(
+    const uint8_t* data, size_t bytes, uint8_t expected,
+    const char* message)
+{
+    for (size_t i = 0; i < bytes; ++i)
+        Require(data[i] == expected, message);
+}
+
 class AlignedBuffer
 {
 public:
@@ -324,7 +332,9 @@ void ExercisePublicRoute(
     uint64_t expected_p128_terminal_calls = 0,
     unsigned missing_stride = 1,
     unsigned missing_offset = 0,
-    bool unaligned = false)
+    bool unaligned = false,
+    unsigned parity_stride = 0,
+    unsigned parity_offset = 0)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
@@ -371,10 +381,16 @@ void ExercisePublicRoute(
     RequireResult(leo2_encode_scratch_size(
         codec, shard_bytes, &encode_scratch_bytes),
         "query public-route encode scratch");
-    AlignedBuffer encode_scratch(encode_scratch_bytes);
+    AlignedBuffer encode_scratch(encode_scratch_bytes + 128);
+    std::memset(encode_scratch.bytes(), 0xe1, encode_scratch_bytes + 128);
     RequireResult(leo2_encode(codec, shard_bytes, &original[0],
-        &recovery_output[0], encode_scratch.bytes(), encode_scratch_bytes),
+        &recovery_output[0], encode_scratch.bytes() + 64,
+        encode_scratch_bytes),
         "encode public-route parity");
+    RequireFill(encode_scratch.bytes(), 64, 0xe1,
+        "public-route encode scratched before its range");
+    RequireFill(encode_scratch.bytes() + 64 + encode_scratch_bytes,
+        64, 0xe1, "public-route encode scratched after its range");
     Require(message == original_message,
         "public-route encoder modified systematic input or its guards");
     const std::vector<uint8_t> encoded_parity = parity;
@@ -389,6 +405,9 @@ void ExercisePublicRoute(
         0xa5);
     for (unsigned i = 0; i < recovery_count; ++i)
         decode_recovery[i] = recovery_output[i];
+    for (unsigned i = 0; i < original_count; ++i)
+        restored[i] = &restored_storage[restored_base +
+            static_cast<size_t>(i) * row_stride];
     for (unsigned i = 0; i < missing_count; ++i)
     {
         const unsigned coordinate = static_cast<unsigned>(
@@ -398,10 +417,24 @@ void ExercisePublicRoute(
             "public-route missing stride generated a duplicate coordinate");
         original_present[coordinate] = 0;
         decode_original[coordinate] = NULL;
-        restored[coordinate] = &restored_storage[restored_base +
-            static_cast<size_t>(coordinate) * row_stride];
     }
-    if (select_high_parity)
+    if (parity_stride != 0)
+    {
+        std::fill(recovery_present.begin(), recovery_present.end(), 0);
+        std::fill(decode_recovery.begin(), decode_recovery.end(),
+            static_cast<const void*>(NULL));
+        for (unsigned i = 0; i < missing_count; ++i)
+        {
+            const unsigned coordinate = static_cast<unsigned>(
+                (parity_offset + static_cast<uint64_t>(i) * parity_stride) %
+                recovery_count);
+            Require(recovery_present[coordinate] == 0,
+                "public-route parity stride generated a duplicate coordinate");
+            recovery_present[coordinate] = 1;
+            decode_recovery[coordinate] = recovery_output[coordinate];
+        }
+    }
+    else if (select_high_parity)
     {
         Require(missing_count <= recovery_count,
             "high-parity route does not have enough recovery rows");
@@ -429,14 +462,15 @@ void ExercisePublicRoute(
             codec, shard_bytes, &decode_scratch_bytes),
             "query one-shot public-route scratch");
     }
-    AlignedBuffer decode_scratch(decode_scratch_bytes);
+    AlignedBuffer decode_scratch(decode_scratch_bytes + 128);
+    std::memset(decode_scratch.bytes(), 0xe2, decode_scratch_bytes + 128);
     leo2_test_reset_low_p32_b64_terminal_calls();
     leo2_test_reset_low_p128_b64_terminal_calls();
     if (reusable_plan)
     {
         RequireResult(leo2_decode_plan_execute(plan, shard_bytes,
             &decode_original[0], &decode_recovery[0], &restored[0],
-            decode_scratch.bytes(), decode_scratch_bytes),
+            decode_scratch.bytes() + 64, decode_scratch_bytes),
             "execute reusable public-route plan");
     }
     else
@@ -444,9 +478,13 @@ void ExercisePublicRoute(
         RequireResult(leo2_decode(codec, shard_bytes,
             &original_present[0], &recovery_present[0],
             &decode_original[0], &decode_recovery[0], &restored[0],
-            decode_scratch.bytes(), decode_scratch_bytes),
+            decode_scratch.bytes() + 64, decode_scratch_bytes),
             "execute one-shot public route");
     }
+    RequireFill(decode_scratch.bytes(), 64, 0xe2,
+        "public-route decode scratched before its range");
+    RequireFill(decode_scratch.bytes() + 64 + decode_scratch_bytes,
+        64, 0xe2, "public-route decode scratched after its range");
     Require(leo2_test_low_p32_b64_terminal_calls() ==
             expected_p32_terminal_calls,
         "public-route P32 terminal call count differs from exact predicate");
@@ -576,25 +614,28 @@ void ExerciseP128Pattern(
         kParent, erased, kPadded, locator);
     leopard::ff8::PrepareLowDecode(kParent, kPadded, &factor);
 
-    AlignedBuffer candidate_work_storage(kParent * kShardBytes);
+    AlignedBuffer candidate_work_storage(kParent * kShardBytes + 128);
     AlignedBuffer mature_work_storage(kParent * kShardBytes);
     AlignedBuffer generic_work_storage(kParent * kShardBytes);
-    AlignedBuffer restored_storage(kPadded * kShardBytes);
+    AlignedBuffer restored_storage(kPadded * kShardBytes + 128);
     void* candidate_work[kParent];
     void* mature_work[kParent];
     void* generic_work[kParent];
     for (unsigned i = 0; i < kParent; ++i)
     {
-        candidate_work[i] = candidate_work_storage.bytes() +
+        candidate_work[i] = candidate_work_storage.bytes() + 64 +
             static_cast<size_t>(i) * kShardBytes;
         mature_work[i] = mature_work_storage.bytes() +
             static_cast<size_t>(i) * kShardBytes;
         generic_work[i] = generic_work_storage.bytes() +
             static_cast<size_t>(i) * kShardBytes;
     }
-    std::memset(restored_storage.bytes(), 0xa5, kPadded * kShardBytes);
+    std::memset(candidate_work_storage.bytes(), 0xd1,
+        kParent * kShardBytes + 128);
+    std::memset(restored_storage.bytes(), 0xa5,
+        kPadded * kShardBytes + 128);
     for (unsigned coordinate = 0; coordinate < kPadded; ++coordinate)
-        restored[coordinate] = restored_storage.bytes() +
+        restored[coordinate] = restored_storage.bytes() + 64 +
             static_cast<size_t>(coordinate) * kShardBytes;
     for (size_t i = 0; i < missing.size(); ++i)
     {
@@ -615,6 +656,17 @@ void ExerciseP128Pattern(
         avx2, kShardBytes, kParent, coordinates,
         requested, locator, generic_work);
 
+    RequireFill(candidate_work_storage.bytes(), 64, 0xd1,
+        "P128/B64 terminal scratched before its work range");
+    RequireFill(candidate_work_storage.bytes() + 64 +
+            kParent * kShardBytes,
+        64, 0xd1, "P128/B64 terminal scratched after its work range");
+    RequireFill(restored_storage.bytes(), 64, 0xa5,
+        "P128/B64 terminal scratched before its output range");
+    RequireFill(restored_storage.bytes() + 64 +
+            kPadded * kShardBytes,
+        64, 0xa5, "P128/B64 terminal scratched after its output range");
+
     for (unsigned coordinate = 0; coordinate < kPadded; ++coordinate)
     {
         if (requested[coordinate])
@@ -633,7 +685,7 @@ void ExerciseP128Pattern(
         }
         else
         {
-            const uint8_t* untouched = restored_storage.bytes() +
+            const uint8_t* untouched = restored_storage.bytes() + 64 +
                 static_cast<size_t>(coordinate) * kShardBytes;
             for (size_t offset = 0; offset < kShardBytes; ++offset)
                 Require(untouched[offset] == 0xa5,
@@ -857,9 +909,9 @@ int main()
         // deliberately unaligned live inputs/outputs through both parity
         // selection ends.  Stride 37 is coprime to 95.
         ExercisePublicRoute(context, 95, 95, 64, 47,
-            false, false, 0, 1, 37, 11, true);
+            false, false, 0, 1, 37, 11, true, 41, 13);
         ExercisePublicRoute(context, 95, 95, 64, 94,
-            false, true, 0, 1, 37, 7, true);
+            false, true, 0, 1, 37, 7, true, 41, 3);
         // K=128 uses an odd stride to cover both requested-mask words while
         // retaining unique coordinates; all AVX loads/stores must tolerate
         // the distinct source/parity/output misalignments above.
