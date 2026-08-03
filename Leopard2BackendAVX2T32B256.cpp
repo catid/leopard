@@ -10,22 +10,32 @@
 
 namespace leopard { namespace backend {
 
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) && \
+#if (defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) || \
+     defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)) && \
     defined(LEO2_HAVE_AVX2_BACKEND) && !defined(NO_LEO_HAS_FF8)
 
 namespace {
-
-#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
-#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED 0
-#endif
 
 /*
     A volatile data selector keeps the control and candidate instruction
     streams identical.  Diagnostic builds change this initializer only; when
     disabled, the public routing TU falls through to the mature transform.
 */
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED 0
+#endif
 static volatile uint32_t g_t32_b256_generated_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED;
+#endif
+
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK 0
+#endif
+static volatile uint32_t g_t32_b256_multiblock_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK;
+#endif
 
 /*
     The ordinary TU stores two consecutive 16-byte rows per logarithm.  Read
@@ -236,6 +246,373 @@ static LEO_FORCE_INLINE void ForwardGroup(
     Store(work[base + 7], offset, x7);
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+
+static LEO_FORCE_INLINE void PreparedMulAdd(
+    __m256i& destination,
+    __m256i source,
+    __m256i low_table,
+    __m256i high_table)
+{
+    __m256i product = Product(source, low_table, high_table);
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ __volatile__("" : "+x"(product));
+#endif
+    destination = _mm256_xor_si256(destination, product);
+}
+
+static LEO_FORCE_INLINE __m256i LoadPackedRow(
+    const void* base,
+    unsigned row,
+    unsigned offset)
+{
+    const uint8_t* const bytes = static_cast<const uint8_t*>(base) +
+        static_cast<size_t>(row) * 256U + offset;
+    return _mm256_loadu_si256(reinterpret_cast<const __m256i*>(bytes));
+}
+
+static LEO_FORCE_INLINE void StorePackedRow(
+    void* base,
+    unsigned row,
+    unsigned offset,
+    __m256i value)
+{
+    uint8_t* const bytes = static_cast<uint8_t*>(base) +
+        static_cast<size_t>(row) * 256U + offset;
+    _mm256_storeu_si256(reinterpret_cast<__m256i*>(bytes), value);
+}
+
+static LEO_FORCE_INLINE void CandidateMemoryBoundary()
+{
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__ __volatile__("" ::: "memory");
+#endif
+}
+
+template<unsigned Log>
+static LEO_FORCE_INLINE void IFFT2PairPrepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& y0,
+    __m256i& x1, __m256i& y1)
+{
+    y0 = _mm256_xor_si256(y0, x0);
+    y1 = _mm256_xor_si256(y1, x1);
+    if (Log != 255)
+    {
+        const uint8_t* const table = tables + Log * 32U;
+        const __m256i low = Broadcast(table);
+        const __m256i high = Broadcast(table + 16);
+        PreparedMulAdd(x0, y0, low, high);
+        PreparedMulAdd(x1, y1, low, high);
+    }
+}
+
+template<unsigned Log>
+static LEO_FORCE_INLINE void IFFT2QuadPrepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& y0,
+    __m256i& x1, __m256i& y1,
+    __m256i& x2, __m256i& y2,
+    __m256i& x3, __m256i& y3)
+{
+    y0 = _mm256_xor_si256(y0, x0);
+    y1 = _mm256_xor_si256(y1, x1);
+    y2 = _mm256_xor_si256(y2, x2);
+    y3 = _mm256_xor_si256(y3, x3);
+    if (Log != 255)
+    {
+        const uint8_t* const table = tables + Log * 32U;
+        const __m256i low = Broadcast(table);
+        const __m256i high = Broadcast(table + 16);
+        PreparedMulAdd(x0, y0, low, high);
+        PreparedMulAdd(x1, y1, low, high);
+        PreparedMulAdd(x2, y2, low, high);
+        PreparedMulAdd(x3, y3, low, high);
+    }
+}
+
+template<unsigned Log>
+static LEO_FORCE_INLINE void FFT2PairPrepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& y0,
+    __m256i& x1, __m256i& y1)
+{
+    if (Log != 255)
+    {
+        const uint8_t* const table = tables + Log * 32U;
+        const __m256i low = Broadcast(table);
+        const __m256i high = Broadcast(table + 16);
+        PreparedMulAdd(x0, y0, low, high);
+        PreparedMulAdd(x1, y1, low, high);
+    }
+    y0 = _mm256_xor_si256(y0, x0);
+    y1 = _mm256_xor_si256(y1, x1);
+}
+
+template<unsigned Log>
+static LEO_FORCE_INLINE void FFT2QuadPrepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& y0,
+    __m256i& x1, __m256i& y1,
+    __m256i& x2, __m256i& y2,
+    __m256i& x3, __m256i& y3)
+{
+    if (Log != 255)
+    {
+        const uint8_t* const table = tables + Log * 32U;
+        const __m256i low = Broadcast(table);
+        const __m256i high = Broadcast(table + 16);
+        PreparedMulAdd(x0, y0, low, high);
+        PreparedMulAdd(x1, y1, low, high);
+        PreparedMulAdd(x2, y2, low, high);
+        PreparedMulAdd(x3, y3, low, high);
+    }
+    y0 = _mm256_xor_si256(y0, x0);
+    y1 = _mm256_xor_si256(y1, x1);
+    y2 = _mm256_xor_si256(y2, x2);
+    y3 = _mm256_xor_si256(y3, x3);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void IFFT4Prepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& x1, __m256i& x2, __m256i& x3)
+{
+    IFFT2<Log01>(tables, x0, x1);
+    IFFT2<Log23>(tables, x2, x3);
+    IFFT2PairPrepared<Log02>(tables, x0, x2, x1, x3);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void FFT4Prepared(
+    const uint8_t* tables,
+    __m256i& x0, __m256i& x1, __m256i& x2, __m256i& x3)
+{
+    FFT2PairPrepared<Log02>(tables, x0, x2, x1, x3);
+    FFT2<Log01>(tables, x0, x1);
+    FFT2<Log23>(tables, x2, x3);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log45,
+    unsigned Log67, unsigned Log02, unsigned Log46, unsigned Log04>
+static LEO_FORCE_INLINE void InverseGroupPrepared(
+    const uint8_t* tables,
+    const void* data,
+    void* work,
+    unsigned base,
+    unsigned offset)
+{
+    __m256i x0 = LoadPackedRow(data, base, offset);
+    __m256i x1 = LoadPackedRow(data, base + 1, offset);
+    __m256i x2 = LoadPackedRow(data, base + 2, offset);
+    __m256i x3 = LoadPackedRow(data, base + 3, offset);
+    __m256i x4 = LoadPackedRow(data, base + 4, offset);
+    __m256i x5 = LoadPackedRow(data, base + 5, offset);
+    __m256i x6 = LoadPackedRow(data, base + 6, offset);
+    __m256i x7 = LoadPackedRow(data, base + 7, offset);
+    IFFT2<Log01>(tables, x0, x1);
+    IFFT2<Log23>(tables, x2, x3);
+    IFFT2<Log45>(tables, x4, x5);
+    IFFT2<Log67>(tables, x6, x7);
+    IFFT2PairPrepared<Log02>(tables, x0, x2, x1, x3);
+    IFFT2PairPrepared<Log46>(tables, x4, x6, x5, x7);
+    IFFT2QuadPrepared<Log04>(
+        tables, x0, x4, x1, x5, x2, x6, x3, x7);
+    StorePackedRow(work, base, offset, x0);
+    StorePackedRow(work, base + 1, offset, x1);
+    StorePackedRow(work, base + 2, offset, x2);
+    StorePackedRow(work, base + 3, offset, x3);
+    StorePackedRow(work, base + 4, offset, x4);
+    StorePackedRow(work, base + 5, offset, x5);
+    StorePackedRow(work, base + 6, offset, x6);
+    StorePackedRow(work, base + 7, offset, x7);
+    CandidateMemoryBoundary();
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log45,
+    unsigned Log67, unsigned Log02, unsigned Log46, unsigned Log04>
+static LEO_FORCE_INLINE void ForwardGroupPrepared(
+    const uint8_t* tables,
+    void* work,
+    unsigned base,
+    unsigned offset)
+{
+    __m256i x0 = LoadPackedRow(work, base, offset);
+    __m256i x1 = LoadPackedRow(work, base + 1, offset);
+    __m256i x2 = LoadPackedRow(work, base + 2, offset);
+    __m256i x3 = LoadPackedRow(work, base + 3, offset);
+    __m256i x4 = LoadPackedRow(work, base + 4, offset);
+    __m256i x5 = LoadPackedRow(work, base + 5, offset);
+    __m256i x6 = LoadPackedRow(work, base + 6, offset);
+    __m256i x7 = LoadPackedRow(work, base + 7, offset);
+    FFT2QuadPrepared<Log04>(
+        tables, x0, x4, x1, x5, x2, x6, x3, x7);
+    FFT2PairPrepared<Log02>(tables, x0, x2, x1, x3);
+    FFT2PairPrepared<Log46>(tables, x4, x6, x5, x7);
+    FFT2<Log01>(tables, x0, x1);
+    FFT2<Log23>(tables, x2, x3);
+    FFT2<Log45>(tables, x4, x5);
+    FFT2<Log67>(tables, x6, x7);
+    StorePackedRow(work, base, offset, x0);
+    StorePackedRow(work, base + 1, offset, x1);
+    StorePackedRow(work, base + 2, offset, x2);
+    StorePackedRow(work, base + 3, offset, x3);
+    StorePackedRow(work, base + 4, offset, x4);
+    StorePackedRow(work, base + 5, offset, x5);
+    StorePackedRow(work, base + 6, offset, x6);
+    StorePackedRow(work, base + 7, offset, x7);
+    CandidateMemoryBoundary();
+}
+
+static LEO_FORCE_INLINE void InverseBlockShift32(
+    const uint8_t* tables,
+    const void* data,
+    void* work,
+    unsigned offset)
+{
+    InverseGroupPrepared<196,76,54,99,219,7,153>(
+        tables, data, work, 0, offset);
+    InverseGroupPrepared<19,49,67,52,111,28,102>(
+        tables, data, work, 8, offset);
+    InverseGroupPrepared<137,226,26,108,183,224,51>(
+        tables, data, work, 16, offset);
+    InverseGroupPrepared<27,134,38,139,131,222,187>(
+        tables, data, work, 24, offset);
+}
+
+static LEO_FORCE_INLINE void InverseBlockShift64(
+    const uint8_t* tables,
+    const void* data,
+    void* work,
+    unsigned offset)
+{
+    InverseGroupPrepared<241,254,31,239,196,76,219>(
+        tables, data, work, 0, offset);
+    InverseGroupPrepared<73,200,148,140,54,99,7>(
+        tables, data, work, 8, offset);
+    InverseGroupPrepared<199,251,180,6,19,49,111>(
+        tables, data, work, 16, offset);
+    InverseGroupPrepared<35,37,2,59,67,52,28>(
+        tables, data, work, 24, offset);
+}
+
+static LEO_FORCE_INLINE void InverseBlockShift96(
+    const uint8_t* tables,
+    const void* data,
+    void* work,
+    unsigned offset)
+{
+    InverseGroupPrepared<227,48,3,62,137,226,183>(
+        tables, data, work, 0, offset);
+    InverseGroupPrepared<1,41,146,16,26,108,224>(
+        tables, data, work, 8, offset);
+    InverseGroupPrepared<164,4,70,103,27,134,131>(
+        tables, data, work, 16, offset);
+    InverseGroupPrepared<143,192,127,105,38,139,222>(
+        tables, data, work, 24, offset);
+}
+
+static LEO_FORCE_INLINE void InverseBlockShift128(
+    const uint8_t* tables,
+    const void* data,
+    void* work,
+    unsigned offset)
+{
+    InverseGroupPrepared<160,29,167,144,241,254,196>(
+        tables, data, work, 0, offset);
+    InverseGroupPrepared<10,209,122,9,31,239,76>(
+        tables, data, work, 8, offset);
+    InverseGroupPrepared<242,126,53,88,73,200,54>(
+        tables, data, work, 16, offset);
+    InverseGroupPrepared<101,230,57,250,148,140,99>(
+        tables, data, work, 24, offset);
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void OuterInverse(
+    const uint8_t* tables,
+    void* work,
+    unsigned column,
+    unsigned offset)
+{
+    __m256i x0 = LoadPackedRow(work, column, offset);
+    __m256i x1 = LoadPackedRow(work, column + 8, offset);
+    __m256i x2 = LoadPackedRow(work, column + 16, offset);
+    __m256i x3 = LoadPackedRow(work, column + 24, offset);
+    IFFT4Prepared<Log01, Log23, Log02>(tables, x0, x1, x2, x3);
+    StorePackedRow(work, column, offset, x0);
+    StorePackedRow(work, column + 8, offset, x1);
+    StorePackedRow(work, column + 16, offset, x2);
+    StorePackedRow(work, column + 24, offset, x3);
+    CandidateMemoryBoundary();
+}
+
+static LEO_FORCE_INLINE void XorStore(
+    void* destination_base,
+    unsigned row,
+    unsigned offset,
+    __m256i value)
+{
+    StorePackedRow(destination_base, row, offset,
+        _mm256_xor_si256(
+            LoadPackedRow(destination_base, row, offset), value));
+}
+
+template<unsigned Log01, unsigned Log23, unsigned Log02>
+static LEO_FORCE_INLINE void OuterInverseXor(
+    const uint8_t* tables,
+    void* temporary,
+    void* accumulator,
+    unsigned column,
+    unsigned offset)
+{
+    __m256i x0 = LoadPackedRow(temporary, column, offset);
+    __m256i x1 = LoadPackedRow(temporary, column + 8, offset);
+    __m256i x2 = LoadPackedRow(temporary, column + 16, offset);
+    __m256i x3 = LoadPackedRow(temporary, column + 24, offset);
+    IFFT4Prepared<Log01, Log23, Log02>(tables, x0, x1, x2, x3);
+    XorStore(accumulator, column, offset, x0);
+    XorStore(accumulator, column + 8, offset, x1);
+    XorStore(accumulator, column + 16, offset, x2);
+    XorStore(accumulator, column + 24, offset, x3);
+    CandidateMemoryBoundary();
+}
+
+static LEO_FORCE_INLINE void OuterForward(
+    const uint8_t* tables,
+    void* work,
+    unsigned column,
+    unsigned offset)
+{
+    __m256i x0 = LoadPackedRow(work, column, offset);
+    __m256i x1 = LoadPackedRow(work, column + 8, offset);
+    __m256i x2 = LoadPackedRow(work, column + 16, offset);
+    __m256i x3 = LoadPackedRow(work, column + 24, offset);
+    FFT4Prepared<255,85,255>(tables, x0, x1, x2, x3);
+    StorePackedRow(work, column, offset, x0);
+    StorePackedRow(work, column + 8, offset, x1);
+    StorePackedRow(work, column + 16, offset, x2);
+    StorePackedRow(work, column + 24, offset, x3);
+    CandidateMemoryBoundary();
+}
+
+static LEO_FORCE_INLINE void ForwardBlock(
+    const uint8_t* tables,
+    void* work,
+    unsigned offset)
+{
+    ForwardGroupPrepared<255,85,17,34,255,85,255>(
+        tables, work, 0, offset);
+    ForwardGroupPrepared<153,102,51,187,17,34,85>(
+        tables, work, 8, offset);
+    ForwardGroupPrepared<219,7,111,28,153,102,17>(
+        tables, work, 16, offset);
+    ForwardGroupPrepared<183,224,131,222,51,187,34>(
+        tables, work, 24, offset);
+}
+
+#endif
+
 } // namespace
 
 #if defined(_MSC_VER)
@@ -253,6 +630,7 @@ static LEO_FORCE_INLINE void ForwardGroup(
 #define LEO2_AVX2_T32_B256_ENTRY
 #endif
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
 LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256(
     const void* const* data,
     void* const* recovery)
@@ -299,6 +677,76 @@ LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256(
 
     return true;
 }
+#endif
+
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    uint32_t original_count)
+{
+    if (g_t32_b256_multiblock_mode != 1U)
+        return false;
+    if (original_count != 64U && original_count != 96U &&
+        original_count != 128U)
+    {
+        return false;
+    }
+
+    LEO_DEBUG_ASSERT(data_base != NULL && recovery_base != NULL &&
+        temporary_base != NULL);
+    const uint8_t* const tables = Tables();
+    LEO_DEBUG_ASSERT(tables != NULL);
+    if (!tables)
+        return false;
+
+    const uint8_t* const data = static_cast<const uint8_t*>(data_base);
+    for (unsigned offset = 0; offset < 256; offset += 32)
+    {
+        /* First message block initializes the coefficient accumulator. */
+        InverseBlockShift32(tables, data, recovery_base, offset);
+        for (unsigned column = 0; column < 8; ++column)
+            OuterInverse<17,34,85>(tables, recovery_base, column, offset);
+
+        /* Later blocks fold their final inverse layers into that accumulator. */
+        InverseBlockShift64(
+            tables, data + 32U * 256U, temporary_base, offset);
+        for (unsigned column = 0; column < 8; ++column)
+        {
+            OuterInverseXor<153,102,17>(
+                tables, temporary_base, recovery_base, column, offset);
+        }
+
+        if (original_count >= 96U)
+        {
+            InverseBlockShift96(
+                tables, data + 64U * 256U, temporary_base, offset);
+            for (unsigned column = 0; column < 8; ++column)
+            {
+                OuterInverseXor<51,187,34>(
+                    tables, temporary_base, recovery_base, column, offset);
+            }
+        }
+        if (original_count == 128U)
+        {
+            InverseBlockShift128(
+                tables, data + 96U * 256U, temporary_base, offset);
+            for (unsigned column = 0; column < 8; ++column)
+            {
+                OuterInverseXor<219,7,153>(
+                    tables, temporary_base, recovery_base, column, offset);
+            }
+        }
+
+        for (unsigned column = 0; column < 8; ++column)
+            OuterForward(tables, recovery_base, column, offset);
+        ForwardBlock(tables, recovery_base, offset);
+    }
+
+    return true;
+}
+#endif
 
 #undef LEO2_AVX2_T32_B256_ENTRY
 #endif

@@ -710,6 +710,19 @@ bool TryAVX2FF8HighEncodeT32B256(
     const void* const* data,
     void* const* recovery);
 #endif
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+/*
+    Complete a dense legacy-high T=R=32, B=256 transform for K=64, 96,
+    or 128.  The three bases name packed 256-byte systematic, parity, and
+    32-row temporary slabs.  The concrete entry is selected only after public
+    validation and pure-AVX2 runtime dispatch.
+*/
+bool TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    uint32_t original_count);
+#endif
 #endif
 // Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen
 // variants.  The erased pointer types keep the private table layouts local to

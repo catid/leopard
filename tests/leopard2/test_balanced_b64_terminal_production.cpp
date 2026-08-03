@@ -28,6 +28,9 @@
 
 #include "direct_oracle.h"
 #include "leopard2.h"
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+#include "Leopard2Backend.h"
+#endif
 
 #include <cstdint>
 #include <cstdio>
@@ -51,6 +54,9 @@ static const unsigned kRecoveryCount = 32;
 #endif
 #ifndef LEO2_EXPECT_T32_B256_GENERATED
 #define LEO2_EXPECT_T32_B256_GENERATED 0
+#endif
+#ifndef LEO2_EXPECT_T32_B256_MULTIBLOCK
+#define LEO2_EXPECT_T32_B256_MULTIBLOCK 0
 #endif
 static const size_t kShardBytes = LEO2_BALANCED_PRODUCTION_SHARD_BYTES;
 static const size_t kGuardBytes = 64;
@@ -373,6 +379,183 @@ void ExerciseProductionBalancedSide(leo2_context* context, unsigned side)
     leo2_codec_destroy(codec);
 }
 
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+void CheckVariableParity(
+    const leopard2_test::BinaryField& field,
+    const leopard2_test::Matrix& generator,
+    unsigned original_count,
+    unsigned recovery_count,
+    const std::vector<const void*>& original,
+    const std::vector<void*>& recovery)
+{
+    for (unsigned parity = 0; parity < recovery_count; ++parity)
+    {
+        const std::vector<leopard2_test::Element>& row =
+            generator[original_count + parity];
+        const uint8_t* const encoded =
+            static_cast<const uint8_t*>(recovery[parity]);
+        for (size_t offset = 0; offset < kShardBytes; ++offset)
+        {
+            leopard2_test::Element expected = 0;
+            for (unsigned source = 0; source < original_count; ++source)
+            {
+                expected = field.add(expected, field.multiply(row[source],
+                    static_cast<const uint8_t*>(
+                        original[source])[offset]));
+            }
+            Require(encoded[offset] == expected,
+                "T32 multi-block parity differs from direct oracle");
+        }
+    }
+}
+
+void ExerciseProductionT32MultiBlock(
+    leo2_context* context,
+    unsigned original_count)
+{
+    static const unsigned recovery_count = 32;
+    Require(kShardBytes == 256,
+        "T32 multi-block production test requires 256-byte shards");
+    Require(original_count == 64 || original_count == 96 ||
+            original_count == 128,
+        "invalid T32 multi-block production shape");
+
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context, original_count, recovery_count,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, NULL, &codec),
+        LEO2_SUCCESS, "create T32 multi-block codec");
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(codec, kShardBytes,
+        &scratch_bytes), LEO2_SUCCESS,
+        "query T32 multi-block scratch");
+    const size_t alignment = leo2_scratch_alignment();
+    AlignedBuffer scratch(scratch_bytes + 2U * alignment);
+    std::memset(scratch.bytes(), kGuardValue, scratch.size());
+    void* const scratch_payload = scratch.bytes() + alignment;
+
+    const size_t input_bytes =
+        static_cast<size_t>(original_count) * kShardBytes;
+    const size_t output_bytes =
+        static_cast<size_t>(recovery_count) * kShardBytes;
+    AlignedBuffer input(input_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer output(output_bytes + 2U * kGuardBytes + 8U);
+    std::memset(input.bytes(), kGuardValue, input.size());
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const size_t input_offset = kGuardBytes + 1U;
+    const size_t output_offset = kGuardBytes + 3U;
+    uint8_t* const input_base = input.bytes() + input_offset;
+    uint8_t* const output_base = output.bytes() + output_offset;
+    uint64_t state = UINT64_C(0x5433324d554c5449) ^ original_count;
+    for (size_t i = 0; i < input_bytes; ++i)
+    {
+        state ^= state << 13;
+        state ^= state >> 7;
+        state ^= state << 17;
+        input_base[i] = static_cast<uint8_t>(state >> 24);
+    }
+    const std::vector<uint8_t> input_before(
+        input.bytes(), input.bytes() + input.size());
+    std::vector<const void*> original(original_count);
+    std::vector<void*> recovery(recovery_count);
+    for (unsigned i = 0; i < original_count; ++i)
+        original[i] = input_base + static_cast<size_t>(i) * kShardBytes;
+    for (unsigned i = 0; i < recovery_count; ++i)
+        recovery[i] = output_base + static_cast<size_t>(i) * kShardBytes;
+
+    const leopard2_test::BinaryField field =
+        leopard2_test::make_legacy_gf8();
+    const leopard2_test::ProfileLayout layout =
+        leopard2_test::make_profile_layout(
+            leopard2_test::kLegacyHigh,
+            original_count, recovery_count);
+    const leopard2_test::Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+
+    RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
+        scratch_payload, scratch_bytes), LEO2_SUCCESS,
+        "execute public T32 multi-block encode");
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "T32 multi-block encode modified source or guards");
+    CheckGuards(output, output_offset, output_bytes,
+        "T32 multi-block encode modified output guard");
+    CheckGuards(scratch, alignment, scratch_bytes,
+        "T32 multi-block encode modified scratch guard");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery);
+
+    std::memset(output.bytes(), kGuardValue, output.size());
+    leo2_encode_batch_item item = {
+        kShardBytes, &original[0], &recovery[0],
+        scratch_payload, scratch_bytes
+    };
+    RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+        "execute public T32 multi-block batch encode");
+    CheckGuards(output, output_offset, output_bytes,
+        "T32 multi-block batch modified output guard");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, recovery);
+
+    AlignedBuffer direct_output(output_bytes + 2U * kGuardBytes + 8U);
+    AlignedBuffer temporary(output_bytes + 2U * kGuardBytes + 8U);
+    std::memset(direct_output.bytes(), kGuardValue, direct_output.size());
+    std::memset(temporary.bytes(), kGuardValue, temporary.size());
+    const size_t direct_offset = kGuardBytes + 3U;
+    const size_t temporary_offset = kGuardBytes + 5U;
+    uint8_t* const direct_base = direct_output.bytes() + direct_offset;
+    uint8_t* const temporary_base = temporary.bytes() + temporary_offset;
+    std::vector<void*> direct_recovery(recovery_count);
+    for (unsigned i = 0; i < recovery_count; ++i)
+    {
+        direct_recovery[i] =
+            direct_base + static_cast<size_t>(i) * kShardBytes;
+    }
+    const bool selected =
+        leopard::backend::TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+            input_base, direct_base, temporary_base, original_count);
+#if LEO2_EXPECT_T32_B256_MULTIBLOCK
+    Require(selected, "T32 multi-block callback declined its exact shape");
+    CheckGuards(direct_output, direct_offset, output_bytes,
+        "T32 multi-block callback modified output guard");
+    CheckGuards(temporary, temporary_offset, output_bytes,
+        "T32 multi-block callback modified temporary guard");
+    CheckVariableParity(field, generator, original_count, recovery_count,
+        original, direct_recovery);
+#else
+    Require(!selected,
+        "disabled T32 multi-block callback accepted its exact shape");
+#endif
+    Require(!leopard::backend::
+            TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+                input_base, direct_base, temporary_base, 63U),
+        "T32 multi-block callback accepted an unsupported K");
+
+    std::memset(output.bytes(), kGuardValue, output.size());
+    const std::vector<uint8_t> output_before(
+        output.bytes(), output.bytes() + output.size());
+    RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
+        scratch_payload, scratch_bytes - 1U), LEO2_SCRATCH_TOO_SMALL,
+        "reject undersized T32 multi-block scratch");
+    RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
+        static_cast<uint8_t*>(scratch_payload) + 1U, scratch_bytes),
+        LEO2_BAD_ALIGNMENT, "reject misaligned T32 multi-block scratch");
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "rejected T32 multi-block scratch modified output");
+
+    void* const saved_recovery = recovery[0];
+    recovery[0] = input_base;
+    RequireResult(leo2_encode(codec, kShardBytes, &original[0], &recovery[0],
+        scratch_payload, scratch_bytes), LEO2_OVERLAP,
+        "reject T32 multi-block source/output overlap");
+    recovery[0] = saved_recovery;
+    Require(std::memcmp(input.bytes(), &input_before[0], input.size()) == 0,
+        "rejected T32 multi-block overlap modified input");
+    Require(std::memcmp(output.bytes(), &output_before[0], output.size()) == 0,
+        "rejected T32 multi-block overlap modified output");
+
+    leo2_codec_destroy(codec);
+}
+#endif
+
 } // namespace
 
 int main()
@@ -396,6 +579,11 @@ int main()
         ExerciseProduction(context);
         ExerciseProductionBalancedSide(context, 64);
         ExerciseProductionBalancedSide(context, 128);
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+        ExerciseProductionT32MultiBlock(context, 64);
+        ExerciseProductionT32MultiBlock(context, 96);
+        ExerciseProductionT32MultiBlock(context, 128);
+#endif
         leo2_context_destroy(context);
         std::printf("production balanced 64-byte terminal checks passed\n");
         return 0;

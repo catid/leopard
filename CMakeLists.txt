@@ -79,6 +79,12 @@ option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED
     "Disable the generated T=32/B=256 kernel without changing code layout"
     OFF)
+option(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK
+    "Enable the default-off GF8/AVX2 T=32,B=256 multi-block encoder candidate"
+    OFF)
+option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK
+    "Disable the T=32/B=256 multi-block candidate without changing code layout"
+    OFF)
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
@@ -351,6 +357,12 @@ if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
     set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1)
 endif()
+if(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+    # Keep candidate and same-source control routing byte-identical.  Their
+    # only intended difference is the isolated object's volatile selector.
+    set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK=1)
+endif()
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
     # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
     # trusted compile-command delta source-scoped for both the production and
@@ -510,7 +522,8 @@ if(LEO2_X86_TARGET)
 endif()
 
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
-   LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+   (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
+    LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK))
     # Keep the generated terminal in a trailing object of its own.  Enabling
     # it must not change compilation or layout of the mature AVX2 backend TU.
     add_library(leopard2_backend_avx2_t32_b256 OBJECT
@@ -518,9 +531,17 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
     target_include_directories(leopard2_backend_avx2_t32_b256 PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(leopard2_backend_avx2_t32_b256 PRIVATE
-        LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1
-        LEO2_HAVE_AVX2_BACKEND=1
-        LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>)
+        LEO2_HAVE_AVX2_BACKEND=1)
+    if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+        target_compile_definitions(leopard2_backend_avx2_t32_b256 PRIVATE
+            LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>)
+    endif()
+    if(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+        target_compile_definitions(leopard2_backend_avx2_t32_b256 PRIVATE
+            LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK=1
+            LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK=$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK}>)
+    endif()
     if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
        CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
@@ -603,7 +624,8 @@ if(LEO2_HAVE_AVX2_BACKEND)
     target_sources(leopard PRIVATE
         $<TARGET_OBJECTS:leopard2_backend_avx2>)
     if(LEOPARD_ENABLE_GF8 AND
-       LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+       (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
+        LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK))
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
     endif()
@@ -1255,7 +1277,8 @@ if(LEO2_BUILD_TESTS)
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES avx2_xor)
                 endif()
                 if(LEOPARD_ENABLE_GF8 AND
-                   LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+                   (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
+                    LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK))
                     list(APPEND LEO2_PORTABLE_ISA_EXPECTED_CLASSES
                         avx2_t32_b256)
                 endif()
@@ -1576,7 +1599,8 @@ if(LEO2_BUILD_TESTS)
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
         if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
-           LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
+           (LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED OR
+            LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK))
             # Reuse the production/direct-oracle coverage at the generated
             # kernel's exact byte count.  This also holds out T=64 and T=128
             # balanced neighbors, which must retain the mature transform.
@@ -1589,7 +1613,14 @@ if(LEO2_BUILD_TESTS)
             target_compile_definitions(
                 leopard2_t32_b256_generated_production_test PRIVATE
                 LEO2_BALANCED_PRODUCTION_SHARD_BYTES=256
-                "LEO2_EXPECT_T32_B256_GENERATED=$<NOT:$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>>")
+                "LEO2_EXPECT_T32_B256_GENERATED=$<AND:$<BOOL:${LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED}>,$<NOT:$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED}>>>")
+            if(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+                target_compile_definitions(
+                    leopard2_t32_b256_generated_production_test PRIVATE
+                    LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK=1
+                    LEO2_HAVE_AVX2_BACKEND=1
+                    "LEO2_EXPECT_T32_B256_MULTIBLOCK=$<NOT:$<BOOL:${LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK}>>")
+            endif()
             target_link_libraries(
                 leopard2_t32_b256_generated_production_test leopard)
             add_test(NAME leopard2_t32_b256_generated_production

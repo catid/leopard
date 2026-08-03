@@ -14931,6 +14931,34 @@ static leo2_result EncodeInternal(
                     kScratchAlignment
             : NULL;
     uint8_t* const work_storage = base + geometry.work_data_offset;
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK) && \
+    defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_ENABLE_TEST_HOOKS)
+    /*
+        Default-off coarse terminal for complete T=32 message blocks.  Dense
+        packed validation proves all three slabs and lets the callback derive
+        row addresses from bases, avoiding 64 per-call work-pointer stores.
+    */
+    if (dense_packed_full &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        (codec->original_count == 64U ||
+         codec->original_count == 96U ||
+         codec->original_count == 128U) &&
+        codec->recovery_count == 32U && codec->padded_side == 32U &&
+        shard_bytes == 256U && geometry.execution_tile_count == 1U &&
+        geometry.aligned_prefix_bytes == 256U &&
+        geometry.work_count >= 64U && geometry.work_slot_bytes == 256U &&
+        transform_ops.kind == LEO2_BACKEND_AVX2 &&
+        leopard::backend::TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+            original[0], recovery[0],
+            work_storage + 32U * geometry.work_slot_bytes,
+            codec->original_count))
+    {
+        return LEO2_SUCCESS;
+    }
+#endif
     leopard2_internal::SparseForwardPlanBatchView sparse_plans;
     if (!PrepareSparseEncodePlans(
             codec, geometry, recovery, requested_recovery_count,
