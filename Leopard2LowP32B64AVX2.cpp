@@ -69,7 +69,7 @@ static inline void XorRow64(
         reinterpret_cast<__m256i*>(destination + 32), second);
 }
 
-static void FinishInverse(
+static void FinishInverse32(
     const Ops& ops,
     void* const* work,
     const uint8_t* inverse_skew,
@@ -108,7 +108,7 @@ static void FinishInverse(
     }
 }
 
-static void FinalFFTReveal(
+static void FinalFFTReveal32(
     const Ops& ops,
     const unsigned char* tables,
     void* const* work,
@@ -266,7 +266,7 @@ bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
         }
     }
 
-    FinishInverse(ops, work, inverse_skew0, NULL);
+    FinishInverse32(ops, work, inverse_skew0, NULL);
 
     // In the normalized LCH basis, Algorithm 4's block-zero contribution is
     // A + A'.  The fixed triangular XOR circuit below is the exact
@@ -280,12 +280,235 @@ bool LEO2_LOW_P32_B64_NOINLINE AVX2FF8LowP32B64Terminal(
 
     // The block factor was folded into block one's locator weights.  Complete
     // its inverse transform and accumulate its last layer directly into A.
-    FinishInverse(ops, work + 32, inverse_skew1, work);
-    FinalFFTReveal(
+    FinishInverse32(ops, work + 32, inverse_skew1, work);
+    FinalFFTReveal32(
         ops, tables, work, forward_skew,
         requested_mask, locator_logs, restored);
     return true;
 }
+
+static void FinishInverse128(
+    const Ops& ops,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    void* const* xor_output)
+{
+    // The weighted input primitive executes distances one and two.  Preserve
+    // the mature radix-four order for distances 4/8 and 16/32, then fuse the
+    // distance-64 terminal into the optional block accumulator.
+    for (unsigned row = 0; row < 128; row += 16)
+    {
+        ops.ff8_ifft_butterfly4_range(
+            work + row, 4,
+            inverse_skew[row + 4], inverse_skew[row + 12],
+            inverse_skew[row + 8], 64, true);
+    }
+    for (unsigned row = 0; row < 128; row += 64)
+    {
+        ops.ff8_ifft_butterfly4_range(
+            work + row, 16,
+            inverse_skew[row + 16], inverse_skew[row + 48],
+            inverse_skew[row + 32], 64, true);
+    }
+
+    const uint16_t final_log = inverse_skew[64];
+    if (final_log != 255)
+    {
+        ops.ff8_ifft_butterfly2_range(
+            work, xor_output, 64, final_log, 64);
+        return;
+    }
+
+    for (unsigned lane = 0; lane < 64; ++lane)
+    {
+        if (xor_output)
+        {
+            XorRow64(xor_output[lane], work[lane]);
+            XorRow64(xor_output[lane + 64], work[lane]);
+            XorRow64(xor_output[lane + 64], work[lane + 64]);
+        }
+        else
+            XorRow64(work[lane + 64], work[lane]);
+    }
+}
+
+static void FinalFFTReveal128(
+    const Ops& ops,
+    const unsigned char* tables,
+    void* const* work,
+    const uint8_t* forward_skew,
+    const uint64_t requested_mask[2],
+    const uint8_t* locator_logs,
+    void* const* restored)
+{
+    ops.ff8_fft_butterfly4_range(
+        work, 32,
+        forward_skew[32], forward_skew[96], forward_skew[64], 64, true);
+    for (unsigned row = 0; row < 128; row += 32)
+    {
+        ops.ff8_fft_butterfly4_range(
+            work + row, 8,
+            forward_skew[row + 8], forward_skew[row + 24],
+            forward_skew[row + 16], 64, true);
+    }
+    for (unsigned row = 0; row < 128; row += 8)
+    {
+        ops.ff8_fft_butterfly4_range(
+            work + row, 2,
+            forward_skew[row + 2], forward_skew[row + 6],
+            forward_skew[row + 4], 64, true);
+    }
+
+    for (unsigned row = 0; row < 128; row += 2)
+    {
+        const uint8_t* x = static_cast<const uint8_t*>(work[row]);
+        const uint8_t* y = static_cast<const uint8_t*>(work[row + 1]);
+        __m256i x0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x));
+        __m256i x1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(x + 32));
+        __m256i y0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y));
+        __m256i y1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(y + 32));
+
+        const uint16_t transform_log = forward_skew[row + 1];
+        if (transform_log != 255)
+        {
+            const unsigned char* table =
+                tables + transform_log * kFF8TableBytes;
+            const __m256i low = BroadcastTable(table);
+            const __m256i high = BroadcastTable(
+                table + kFF8HighTableOffset);
+            x0 = _mm256_xor_si256(x0, ProductVector(y0, low, high));
+            x1 = _mm256_xor_si256(x1, ProductVector(y1, low, high));
+        }
+        y0 = _mm256_xor_si256(y0, x0);
+        y1 = _mm256_xor_si256(y1, x1);
+
+        const unsigned word = row >> 6;
+        const uint64_t x_bit = UINT64_C(1) << (row & 63U);
+        if ((requested_mask[word] & x_bit) != 0)
+        {
+            const uint16_t reveal_log =
+                static_cast<uint8_t>(255U - locator_logs[row]);
+            x0 = ApplyWeight(tables, x0, reveal_log);
+            x1 = ApplyWeight(tables, x1, reveal_log);
+            uint8_t* output = static_cast<uint8_t*>(restored[row]);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), x0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output + 32), x1);
+        }
+        const uint64_t y_bit = UINT64_C(1) << ((row + 1) & 63U);
+        if ((requested_mask[word] & y_bit) != 0)
+        {
+            const uint16_t reveal_log =
+                static_cast<uint8_t>(255U - locator_logs[row + 1]);
+            y0 = ApplyWeight(tables, y0, reveal_log);
+            y1 = ApplyWeight(tables, y1, reveal_log);
+            uint8_t* output = static_cast<uint8_t*>(restored[row + 1]);
+            _mm256_storeu_si256(reinterpret_cast<__m256i*>(output), y0);
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output + 32), y1);
+        }
+    }
+}
+
+#if defined(_MSC_VER)
+#define LEO2_LOW_P128_B64_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && !defined(__APPLE__)
+#define LEO2_LOW_P128_B64_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_low_p128_b64_terminal")))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_LOW_P128_B64_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_LOW_P128_B64_NOINLINE
+#endif
+
+bool LEO2_LOW_P128_B64_NOINLINE AVX2FF8LowP128B64Terminal(
+    const Ops& ops,
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    uint32_t requested_count,
+    const uint8_t* locator_logs,
+    uint8_t block_factor,
+    const uint8_t* inverse_skew0,
+    const uint8_t* inverse_skew1,
+    const uint8_t* forward_skew,
+    void* const* restored,
+    void* const* work)
+{
+    const unsigned char* tables = static_cast<const unsigned char*>(
+        GetAVX2FF8Tables());
+    if (ops.kind != LEO2_BACKEND_AVX2 || !ops.ff8_weighted_ifft_butterfly4 ||
+        !ops.ff8_ifft_butterfly4_range || !ops.ff8_fft_butterfly4_range ||
+        !ops.ff8_ifft_butterfly2_range || !coordinate_data ||
+        !requested_coordinates || requested_count == 0 ||
+        requested_count > 128 || !locator_logs || !inverse_skew0 ||
+        !inverse_skew1 || !forward_skew || !restored || !work || !tables)
+        return false;
+
+    uint64_t requested_mask[2] = {};
+    for (uint32_t i = 0; i < requested_count; ++i)
+    {
+        const uint32_t coordinate = requested_coordinates[i];
+        if (coordinate >= 128 || !restored[coordinate])
+            return false;
+        const unsigned word = coordinate >> 6;
+        const uint64_t bit = UINT64_C(1) << (coordinate & 63U);
+        if ((requested_mask[word] & bit) != 0)
+            return false;
+        requested_mask[word] |= bit;
+    }
+
+    for (unsigned block = 0; block < 2; ++block)
+    {
+        const unsigned base = block * 128;
+        const uint8_t* inverse_skew =
+            block == 0 ? inverse_skew0 : inverse_skew1;
+        for (unsigned row = 0; row < 128; row += 4)
+        {
+            const unsigned coordinate = base + row;
+            uint8_t live_mask = 0;
+            uint16_t weights[4];
+            for (unsigned lane = 0; lane < 4; ++lane)
+            {
+                const unsigned index = coordinate + lane;
+                if (coordinate_data[index])
+                    live_mask = static_cast<uint8_t>(
+                        live_mask | (1U << lane));
+                weights[lane] = block == 0
+                    ? locator_logs[index]
+                    : AddLogs(locator_logs[index], block_factor);
+            }
+            ops.ff8_weighted_ifft_butterfly4(
+                coordinate_data[coordinate],
+                coordinate_data[coordinate + 1],
+                coordinate_data[coordinate + 2],
+                coordinate_data[coordinate + 3],
+                work[coordinate], work[coordinate + 1],
+                work[coordinate + 2], work[coordinate + 3],
+                weights[0], weights[1], weights[2], weights[3], live_mask,
+                inverse_skew[row + 1], inverse_skew[row + 3],
+                inverse_skew[row + 2], 64);
+        }
+    }
+
+    FinishInverse128(ops, work, inverse_skew0, NULL);
+    for (unsigned i = 1; i < 128; ++i)
+    {
+        const unsigned width = ((i ^ (i - 1)) + 1) >> 1;
+        for (unsigned lane = 0; lane < width; ++lane)
+            XorRow64(work[i - width + lane], work[i + lane]);
+    }
+    FinishInverse128(ops, work + 128, inverse_skew1, work);
+    FinalFFTReveal128(
+        ops, tables, work, forward_skew,
+        requested_mask, locator_logs, restored);
+    return true;
+}
+
+#undef LEO2_LOW_P128_B64_NOINLINE
 
 #undef LEO2_LOW_P32_B64_NOINLINE
 

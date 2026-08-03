@@ -622,6 +622,15 @@ bool ReedSolomonDecodeLowP32B64TerminalExperimental(
     ffe_t block_factor,
     void* const* restored,
     void** work);
+bool ReedSolomonDecodeLowP128B64TerminalExperimental(
+    const backend::Ops& ops,
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    unsigned requested_count,
+    const ffe_t* locator_logs,
+    ffe_t block_factor,
+    void* const* restored,
+    void** work);
 #endif
 void ReedSolomonDecodeLowPlanned(
     uint64_t buffer_bytes,

@@ -60,6 +60,23 @@ bool AVX2FF8LowP32B64Terminal(
     const uint8_t* forward_skew,
     void* const* restored,
     void* const* work);
+
+// Default-off P=128/N=256/B=64 companion used to screen a bounded generated
+// Algorithm 4 schedule.  Its storage and disjointness contract is identical
+// to the P32 terminal, except that coordinate_data/work contain 256 rows and
+// requested coordinates are in [0,128).
+bool AVX2FF8LowP128B64Terminal(
+    const Ops& ops,
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    uint32_t requested_count,
+    const uint8_t* locator_logs,
+    uint8_t block_factor,
+    const uint8_t* inverse_skew0,
+    const uint8_t* inverse_skew1,
+    const uint8_t* forward_skew,
+    void* const* restored,
+    void* const* work);
 #endif
 
 typedef uint8_t (*FF8MultiplyLog)(uint8_t value, uint8_t multiplier_log);
