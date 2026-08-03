@@ -118,5 +118,18 @@
     "cells": ["K95/R95/L47", "K95/R95/L94", "K128/R128/L64", "K128/R128/L127"],
     "reusable_plans": false,
     "all_other_cells": "mature Algorithm 4 path"
+  },
+  "promotion_verification": {
+    "implementation_commit": "03a2bf7",
+    "implementation_tree": "b499ebae9436ad22c7d685ee6cf89944ad3462f8",
+    "promoted_benchmark_sha256": "2532c335dd8d2df575ade2958cd0bff6b2d429ce2bba82141d6785990cf38885",
+    "promoted_archive_sha256": "06a8fe9c282785315cff245ad41cd3ee5f0c14c7cd3de5c21691a663381708c9",
+    "promoted_correctness_test_sha256": "b5e8a38c93a8df69b62f310dd1a305743965caa8841dafe78f287f07d7d1191a",
+    "timed_text_section_sha256": "8c7a8ebed9531fe2eb56475dbd926dd61dbb05044be7552dac46c6be133ffd6c",
+    "promoted_text_section_sha256": "8c7a8ebed9531fe2eb56475dbd926dd61dbb05044be7552dac46c6be133ffd6c",
+    "timed_kernel_object_sha256": "d39b6aa26ca544c87d95f7e6455d4d027393854f3e36f8361c11858af73dac05",
+    "promoted_kernel_object_sha256": "d39b6aa26ca544c87d95f7e6455d4d027393854f3e36f8361c11858af73dac05",
+    "execution_code_identical_to_timed_candidate": true,
+    "focused_test": "PASS low_p32_p128_b64_terminal p32_payloads=2 p32_patterns=67 p128_payloads=2 p128_patterns=136 p95_payloads=1 p95_patterns=103 parity_selections=2 routes=89"
   }
 }
