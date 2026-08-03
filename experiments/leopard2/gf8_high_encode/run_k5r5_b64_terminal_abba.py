@@ -348,6 +348,11 @@ def normalized_compile_commands_identity(
                         + re.escape(diagnostic_value) + r"\b",
                         "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED=${MODE}",
                         item)
+                    expected_route = "1" if diagnostic_value == "0" else "0"
+                    item = re.sub(
+                        r"LEO2_EXPECT_T32_B256_GENERATED=" + expected_route +
+                        r"\b",
+                        "LEO2_EXPECT_T32_B256_GENERATED=${EXPECT}", item)
                     item = re.sub(
                         r"LEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=\\\""
                         r"[0-9a-f]{64}\\\"",
