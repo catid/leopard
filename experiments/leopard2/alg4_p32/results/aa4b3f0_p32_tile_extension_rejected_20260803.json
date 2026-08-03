@@ -1,0 +1,54 @@
+{
+  "schema": "leopard2-alg4-p32-tile-extension-checkpoint/v1",
+  "status": "rejected",
+  "date_utc": "2026-08-03",
+  "hypothesis": "Reuse the qualified 64-byte P32 Algorithm 4 terminal over two through four independent byte tiles.",
+  "candidate": {
+    "commit": "aa4b3f08a4fe433b68644f28670c95c824c6787e",
+    "tree": "5a9ee76f764b2ca0844b3ba6a33e774d43f2df2b",
+    "binary_sha256": "a373956c01698c9b39af0d8271dc6657d5802dc78d64cffcabb8a8e452b63ef4"
+  },
+  "baseline": {
+    "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "binary_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084"
+  },
+  "method": {
+    "runner_schema": "leopard2-alg4-p32-terminal-abba/v3",
+    "cpu": 13,
+    "reserved_smt_sibling": 29,
+    "rounds": 9,
+    "samples_per_observation": 21,
+    "warmups": 5,
+    "reuse": 256,
+    "frozen_binaries": true,
+    "same_binary_candidate_control": true,
+    "contaminated_attempts_rejected_and_retried": 1,
+    "raw_sha256": "96a1b3c8323c373ba3015ba6cabb32cc48cb8b5449cb8094fbb8e706162aafac",
+    "summary_sha256": "3e4a1073edfc06eb7ffdfadb9f7530679f3b59e52b306e3f236079c8773d432c"
+  },
+  "correctness": {
+    "widths": [64, 128, 192, 256],
+    "direct_candidate_mature_generic_cases": 406,
+    "b64_patterns": 67,
+    "parity_selections": 2,
+    "public_route_cases": 210,
+    "result": "passed"
+  },
+  "targets": [
+    {"bytes": 64, "loss": 9, "control_over_candidate": 1.200089, "control_ci95": [1.193002, 1.207219], "main_over_candidate": 1.458388, "main_ci95": [1.450574, 1.466243]},
+    {"bytes": 64, "loss": 16, "control_over_candidate": 1.186463, "control_ci95": [1.177367, 1.195628], "main_over_candidate": 1.382859, "main_ci95": [1.374727, 1.391040]},
+    {"bytes": 64, "loss": 31, "control_over_candidate": 1.232318, "control_ci95": [1.226951, 1.237709], "main_over_candidate": 1.344643, "main_ci95": [1.339708, 1.349597]},
+    {"bytes": 128, "loss": 9, "control_over_candidate": 1.004899, "control_ci95": [1.000253, 1.009566], "main_over_candidate": 1.252527, "main_ci95": [1.247600, 1.257473]},
+    {"bytes": 128, "loss": 16, "control_over_candidate": 1.009918, "control_ci95": [1.004267, 1.015601], "main_over_candidate": 1.228881, "main_ci95": [1.225059, 1.232715]},
+    {"bytes": 128, "loss": 31, "control_over_candidate": 1.028846, "control_ci95": [1.025781, 1.031920], "main_over_candidate": 1.175663, "main_ci95": [1.169532, 1.181825]},
+    {"bytes": 192, "loss": 9, "control_over_candidate": 0.884901, "control_ci95": [0.879491, 0.890345], "main_over_candidate": 1.135770, "main_ci95": [1.131053, 1.140507]},
+    {"bytes": 192, "loss": 16, "control_over_candidate": 0.932061, "control_ci95": [0.928359, 0.935779], "main_over_candidate": 1.129124, "main_ci95": [1.122923, 1.135359]},
+    {"bytes": 192, "loss": 31, "control_over_candidate": 0.944128, "control_ci95": [0.940563, 0.947707], "main_over_candidate": 1.090624, "main_ci95": [1.088576, 1.092675]},
+    {"bytes": 256, "loss": 9, "control_over_candidate": 0.840180, "control_ci95": [0.827190, 0.853375], "main_over_candidate": 1.086070, "main_ci95": [1.081967, 1.090189]},
+    {"bytes": 256, "loss": 16, "control_over_candidate": 0.868938, "control_ci95": [0.853770, 0.884374], "main_over_candidate": 1.057050, "main_ci95": [1.052809, 1.061307]},
+    {"bytes": 256, "loss": 31, "control_over_candidate": 0.888049, "control_ci95": [0.874462, 0.901847], "main_over_candidate": 1.030295, "main_ci95": [1.026343, 1.034262]}
+  ],
+  "neighbor_regressions": [],
+  "decision": "Do not promote the repeated-64-byte tiled terminal beyond B=64. It fails the same-source 1.05 floor at B=128 and is credibly slower than the mature Leopard2 Algorithm 4 path at B=192 and B=256. The mature path already beats exact Leopard main in these wider cells, so the default selector remains unchanged.",
+  "next_step": "Screen a structurally wider P32/P128 terminal that processes the complete byte range per transform call rather than repeating 64-byte setup and scatter work."
+}
