@@ -153,6 +153,7 @@ struct Counts
     uint64_t unaligned_checks;
     uint64_t batch_executions;
     uint64_t no_copy_checks;
+    uint64_t low_partial_output_checks;
     uint64_t high_source_staging_checks;
     uint64_t high_byte_tiling_checks;
     uint64_t gf8_coarse_oracle_checks;
@@ -165,6 +166,7 @@ struct Counts
         , mask_executions(0), boundary_profiles(0), allocation_checks(0)
         , concurrent_executions(0), contract_checks(0), dispatch_checks(0)
         , unaligned_checks(0), batch_executions(0), no_copy_checks(0)
+        , low_partial_output_checks(0)
         , high_source_staging_checks(0), high_byte_tiling_checks(0)
         , gf8_coarse_oracle_checks(0)
         , high_small_transform_checks(0)
@@ -791,6 +793,453 @@ void test_low_transform_no_coefficient_copy(
         ++counts->no_copy_checks;
         delete owner;
     }
+}
+
+void test_low_p16_partial_direct_output(
+    const BinaryField& gf8,
+    Counts* counts)
+{
+    leo2_context_options avx2_options = {};
+    avx2_options.struct_size = sizeof(avx2_options);
+    avx2_options.backend = LEO2_BACKEND_AVX2;
+    avx2_options.thread_count = 1;
+    leo2_context* avx2_context = NULL;
+    const leo2_result avx2_result = leo2_context_create(
+        &avx2_options, &avx2_context);
+    if (avx2_result == LEO2_UNSUPPORTED)
+        return;
+    require_result(avx2_result, "P16 partial-output AVX2 context create");
+    require(leo2_context_backend(avx2_context) == LEO2_BACKEND_AVX2,
+        "P16 partial-output context did not resolve to AVX2");
+
+    leo2_context_options scalar_options = {};
+    scalar_options.struct_size = sizeof(scalar_options);
+    scalar_options.backend = LEO2_BACKEND_SCALAR;
+    scalar_options.thread_count = 1;
+    leo2_context* scalar_context = NULL;
+    require_result(leo2_context_create(&scalar_options, &scalar_context),
+        "P16 partial-output scalar context create");
+    require(leo2_context_backend(scalar_context) == LEO2_BACKEND_SCALAR,
+        "P16 partial-output context did not resolve to scalar");
+
+    struct ModeGuard
+    {
+        explicit ModeGuard(bool initial) : initial_(initial) {}
+        ~ModeGuard()
+        {
+            leopard::ff8::TestOnlySetLowP16PartialDirectOutputEnabled(initial_);
+        }
+        bool initial_;
+    } mode_guard(
+        leopard::ff8::TestOnlyLowP16PartialDirectOutputEnabled());
+    (void)mode_guard;
+
+    struct Shape
+    {
+        unsigned k;
+        unsigned r;
+    };
+    const Shape shapes[] = {
+        { 16, 4 }, { 16, 8 }, { 16, 12 },
+        { 9, 20 }, { 9, 24 }, { 9, 28 }
+    };
+    const size_t byte_counts[] = {
+        1, 3, 31, 32, 33, 63, 64, 65,
+        127, 128, 129, 255, 256, 257, 1024
+    };
+    for (size_t shape_i = 0;
+         shape_i < sizeof(shapes) / sizeof(shapes[0]); ++shape_i)
+    {
+        const Shape& shape = shapes[shape_i];
+        const unsigned partial = shape.r & 15U;
+        require(partial == 4 || partial == 8 || partial == 12,
+            "P16 partial-output test shape is not aligned");
+        CodecOwner* avx2 = make_codec(avx2_context, shape.k, shape.r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+        CodecOwner* scalar = make_codec(scalar_context, shape.k, shape.r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+        require(leo2_codec_padded_side(avx2->codec) == 16,
+            "P16 partial-output test selected another side");
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLow, shape.k, shape.r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        const std::vector<uint8_t> dense(shape.r, 1);
+
+        for (size_t bytes_i = 0;
+             bytes_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++bytes_i)
+        {
+            const size_t bytes = byte_counts[bytes_i];
+            const uint64_t seed = UINT64_C(0x5031365041525400) +
+                static_cast<uint64_t>(shape_i) * 0x10000U + bytes;
+            const Shards original = random_shards(shape.k, bytes, seed);
+            const Shards original_before = original;
+            const Shards expected = oracle_parity(
+                gf8, generator, original, shape.r, LEO2_FIELD_GF8);
+
+            leopard::ff8::TestOnlySetLowP16PartialDirectOutputEnabled(false);
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+            const EncodeResult mature = encode(avx2->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense);
+            require_result(mature.result, "P16 mature transform encode");
+            compare_requested(mature.recovery, expected, dense, 0xa5,
+                "P16 mature transform/oracle", counts);
+            const leopard::ff8::TestOnlyLowEncodeCounts mature_counts =
+                leopard::ff8::TestOnlyGetLowEncodeCounts();
+
+            leopard::ff8::TestOnlySetLowP16PartialDirectOutputEnabled(true);
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+            const EncodeResult direct = encode(avx2->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense);
+            require_result(direct.result, "P16 direct-output encode");
+            compare_requested(direct.recovery, expected, dense, 0xa5,
+                "P16 direct-output/oracle", counts);
+            require(direct.recovery == mature.recovery,
+                "P16 direct output differs from mature transform");
+            require(original == original_before,
+                "P16 direct output modified a systematic source");
+            const leopard::ff8::TestOnlyLowEncodeCounts direct_counts =
+                leopard::ff8::TestOnlyGetLowEncodeCounts();
+
+            const uint64_t passes =
+                (bytes >= 64 ? 1U : 0U) + ((bytes & 63U) != 0 ? 1U : 0U);
+            const uint64_t rounded = (bytes + 63U) & ~UINT64_C(63);
+            const uint64_t full_blocks = shape.r / 16U;
+            if (mature_counts.direct_partial_output_blocks != 0 ||
+                direct_counts.direct_partial_output_blocks != passes)
+            {
+                std::ostringstream message;
+                message << "P16 partial-output block route count mismatch: K="
+                        << shape.k << " R=" << shape.r << " bytes=" << bytes
+                        << " mature="
+                        << mature_counts.direct_partial_output_blocks
+                        << " direct="
+                        << direct_counts.direct_partial_output_blocks
+                        << " expected=" << passes;
+                require(false, message.str());
+            }
+            require(mature_counts.direct_output_blocks ==
+                        full_blocks * passes &&
+                    direct_counts.direct_output_blocks ==
+                        (full_blocks + 1U) * passes,
+                "P16 direct-output total block count mismatch");
+            require(direct_counts.direct_output_shards -
+                        mature_counts.direct_output_shards ==
+                        static_cast<uint64_t>(partial) * passes,
+                "P16 direct-output shard count mismatch");
+            require(direct_counts.avoided_scatter_bytes -
+                        mature_counts.avoided_scatter_bytes ==
+                        2U * static_cast<uint64_t>(partial) * rounded,
+                "P16 direct-output traffic accounting mismatch");
+            require(mature_counts.scatter_bytes ==
+                        2U * static_cast<uint64_t>(partial) * rounded &&
+                    direct_counts.scatter_bytes == 0,
+                "P16 actual scatter traffic did not match the eliminated pass");
+            require(direct_counts.direct_output_butterfly4_out_of_place -
+                        mature_counts.direct_output_butterfly4_out_of_place ==
+                        static_cast<uint64_t>(partial / 4U) * passes,
+                "P16 direct-output radix-four count mismatch");
+
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+            const EncodeResult scalar_result = encode(scalar->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense);
+            require_result(scalar_result.result,
+                "P16 scalar fallback encode");
+            compare_requested(scalar_result.recovery, expected, dense, 0xa5,
+                "P16 scalar fallback/oracle", counts);
+            require(leopard::ff8::TestOnlyGetLowEncodeCounts()
+                        .direct_partial_output_blocks == 0,
+                "P16 scalar fallback entered the AVX2 partial route");
+
+            std::vector<uint8_t> holey = dense;
+            holey[shape.r - 2U] = 0;
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+            leopard::ff8::TestOnlyResetSparseEncodeCounts();
+            const EncodeResult sparse = encode(avx2->codec,
+                LEO2_TEST_ENCODE_FORCE_TRANSFORM, original, holey);
+            require_result(sparse.result, "P16 sparse fallback encode");
+            compare_requested(sparse.recovery, expected, holey, 0xa5,
+                "P16 sparse fallback/oracle", counts);
+            require(leopard::ff8::TestOnlyGetLowEncodeCounts()
+                        .direct_partial_output_blocks == 0,
+                "P16 sparse block entered the dense partial route");
+            require(leopard::ff8::TestOnlyGetSparseEncodeCounts()
+                        .exact_blocks != 0,
+                "P16 forced sparse fallback did not execute a sparse plan");
+            ++counts->low_partial_output_checks;
+        }
+        delete scalar;
+        delete avx2;
+    }
+
+    // Every aligned GF8 parity coset has a distinct transform shift.  Sweep
+    // the complete legal P=16 range so the partial final callback is checked
+    // at offsets 0,16,...,224 rather than only at the first two blocks.
+    for (unsigned recovery_offset = 0; recovery_offset <= 224;
+         recovery_offset += 16)
+    {
+        const unsigned partials[] = { 4, 8, 12 };
+        for (unsigned partial_i = 0; partial_i < 3; ++partial_i)
+        {
+            const unsigned k = 9;
+            const unsigned r = recovery_offset + partials[partial_i];
+            const size_t bytes = 64;
+            CodecOwner* owner = make_codec(avx2_context, k, r,
+                LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+            require(leo2_codec_padded_side(owner->codec) == 16,
+                "P16 coset sweep selected another side");
+            const ProfileLayout layout = leopard2_test::make_profile_layout(
+                leopard2_test::kLow, k, r);
+            const Matrix generator =
+                leopard2_test::direct_systematic_generator(gf8, layout);
+            const Shards original = random_shards(k, bytes,
+                UINT64_C(0x503136434f534554) + recovery_offset +
+                    partials[partial_i]);
+            const Shards expected = oracle_parity(
+                gf8, generator, original, r, LEO2_FIELD_GF8);
+            const std::vector<uint8_t> dense(r, 1);
+
+            leopard::ff8::TestOnlySetLowP16PartialDirectOutputEnabled(true);
+            leopard::ff8::TestOnlyResetLowEncodeCounts();
+            const EncodeResult actual = encode(owner->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense);
+            require_result(actual.result, "P16 parity-coset sweep encode");
+            compare_requested(actual.recovery, expected, dense, 0xa5,
+                "P16 parity-coset sweep/oracle", counts);
+            const leopard::ff8::TestOnlyLowEncodeCounts route =
+                leopard::ff8::TestOnlyGetLowEncodeCounts();
+            require(route.direct_partial_output_blocks == 1 &&
+                    route.direct_output_blocks == recovery_offset / 16U + 1U &&
+                    route.scatter_bytes == 0,
+                "P16 parity-coset sweep selected the wrong output route");
+            ++counts->low_partial_output_checks;
+            delete owner;
+        }
+    }
+
+    // The ordinary benchmark switches candidate/control inside one frozen
+    // executable.  Exercise its armed route probe and normalized timing modes
+    // here so a benchmark cannot silently measure the same path twice.
+    {
+        const unsigned k = 16;
+        const unsigned r = 4;
+        const size_t bytes = 64;
+        CodecOwner* owner = make_codec(avx2_context, k, r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLow, k, r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        const Shards original = random_shards(
+            k, bytes, UINT64_C(0x50313650524f4245));
+        const Shards expected = oracle_parity(
+            gf8, generator, original, r, LEO2_FIELD_GF8);
+        const std::vector<uint8_t> dense(r, 1);
+        for (unsigned enabled = 0; enabled <= 1; ++enabled)
+        {
+            require(leopard2_internal::
+                    SetLowP16PartialDirectOutputEnabledForDiagnostics(
+                        enabled != 0),
+                "P16 diagnostic route probe could not be armed");
+            const EncodeResult actual = encode(owner->codec,
+                LEO2_TEST_ENCODE_AUTO, original, dense);
+            require_result(actual.result, "P16 diagnostic probe encode");
+            compare_requested(actual.recovery, expected, dense, 0xa5,
+                "P16 diagnostic probe/oracle", counts);
+            require(leopard2_internal::
+                    LowP16PartialDirectOutputRouteSelectedForDiagnostics() ==
+                        (enabled != 0),
+                "P16 diagnostic probe reported the wrong route");
+            require(leopard2_internal::
+                    FinishLowP16PartialDirectOutputRouteProbeForDiagnostics(),
+                "P16 diagnostic route probe could not finish");
+            require(leopard2_internal::
+                    LowP16PartialDirectOutputModeForDiagnostics() ==
+                        (enabled != 0 ? 1U : 2U),
+                "P16 diagnostic timing mode did not normalize");
+            ++counts->low_partial_output_checks;
+        }
+        delete owner;
+    }
+
+    // Exercise the qualified path with unaligned inputs and outputs, a padded
+    // tail pass, guards, allowed source aliasing, failure atomicity, and no
+    // execution allocation.
+    {
+        const unsigned k = 9;
+        const unsigned r = 28;
+        const size_t bytes = 65;
+        const size_t input_prefix = 3;
+        const size_t output_prefix = 5;
+        const size_t suffix = 11;
+        const uint8_t canary = 0xd7;
+        CodecOwner* owner = make_codec(avx2_context, k, r,
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8);
+        require_result(leo2_test_codec_set_encode_mode(owner->codec,
+            LEO2_TEST_ENCODE_AUTO), "select P16 guarded AUTO transform");
+        const ProfileLayout layout = leopard2_test::make_profile_layout(
+            leopard2_test::kLow, k, r);
+        const Matrix generator =
+            leopard2_test::direct_systematic_generator(gf8, layout);
+        const Shards original = random_shards(
+            k, bytes, UINT64_C(0x5031364755415244));
+        const Shards expected = oracle_parity(
+            gf8, generator, original, r, LEO2_FIELD_GF8);
+        Shards input_storage(k, Bytes(input_prefix + bytes + suffix, canary));
+        Shards output_storage(r, Bytes(output_prefix + bytes + suffix, canary));
+        std::vector<const void*> input(k, NULL);
+        std::vector<void*> output(r, NULL);
+        for (unsigned i = 0; i < k; ++i)
+        {
+            memcpy(&input_storage[i][input_prefix], &original[i][0], bytes);
+            input[i] = &input_storage[i][input_prefix];
+        }
+        for (unsigned i = 0; i < r; ++i)
+            output[i] = &output_storage[i][output_prefix];
+        size_t scratch_bytes = 0;
+        require_result(leo2_encode_scratch_size(
+            owner->codec, bytes, &scratch_bytes),
+            "P16 guarded scratch query");
+        const size_t scratch_guard = leo2_scratch_alignment();
+        AlignedBuffer scratch_storage(
+            scratch_bytes + scratch_guard * 2U);
+        uint8_t* const scratch =
+            static_cast<uint8_t*>(scratch_storage.data()) + scratch_guard;
+        memset(scratch_storage.data(), canary, scratch_storage.size());
+        leopard::ff8::TestOnlyResetLowEncodeCounts();
+        begin_allocation_audit();
+        const leo2_result encoded = leo2_encode(owner->codec, bytes,
+            &input[0], &output[0], scratch, scratch_bytes);
+        const uint64_t allocations = end_allocation_audit();
+        require_result(encoded, "P16 guarded direct-output encode");
+        require(allocations == 0,
+            "P16 direct-output execution allocated C++ storage");
+        require(leopard::ff8::TestOnlyGetLowEncodeCounts()
+                    .direct_partial_output_blocks == 2,
+            "P16 guarded tail did not use both partial-output passes");
+        for (unsigned i = 0; i < r; ++i)
+            require(memcmp(&output_storage[i][output_prefix],
+                        &expected[i][0], bytes) == 0,
+                "P16 guarded direct output differs from oracle");
+
+        Shards aliased_original = original;
+        aliased_original[1] = aliased_original[0];
+        const Shards aliased_expected = oracle_parity(
+            gf8, generator, aliased_original, r, LEO2_FIELD_GF8);
+        input[1] = input[0];
+        for (unsigned i = 0; i < r; ++i)
+            std::fill(output_storage[i].begin() + output_prefix,
+                output_storage[i].begin() + output_prefix + bytes, canary);
+        require_result(leo2_encode(owner->codec, bytes, &input[0], &output[0],
+            scratch, scratch_bytes), "P16 aliased-source encode");
+        for (unsigned i = 0; i < r; ++i)
+            require(memcmp(&output_storage[i][output_prefix],
+                        &aliased_expected[i][0], bytes) == 0,
+                "P16 allowed source alias changed parity");
+
+        input[1] = &input_storage[1][input_prefix];
+        const Shards input_before = input_storage;
+        const Shards output_before = output_storage;
+        output[0] = const_cast<void*>(input[0]);
+        require(leo2_encode(owner->codec, bytes, &input[0], &output[0],
+                    scratch, scratch_bytes) == LEO2_OVERLAP,
+            "P16 direct output accepted an input/output overlap");
+        require(input_storage == input_before &&
+                output_storage == output_before,
+            "P16 overlap failure modified caller storage");
+        output[0] = &output_storage[0][output_prefix];
+
+        const uint8_t* const scratch_storage_bytes =
+            static_cast<const uint8_t*>(scratch_storage.data());
+        require(std::all_of(scratch_storage_bytes,
+                    scratch_storage_bytes + scratch_guard,
+                    [](uint8_t value) { return value == canary; }) &&
+                std::all_of(scratch_storage_bytes + scratch_guard +
+                        scratch_bytes,
+                    scratch_storage_bytes + scratch_storage.size(),
+                    [](uint8_t value) { return value == canary; }),
+            "P16 direct output changed a scratch guard");
+
+        for (unsigned i = 0; i < k; ++i)
+            require(std::all_of(input_storage[i].begin(),
+                        input_storage[i].begin() + input_prefix,
+                        [](uint8_t value) { return value == canary; }) &&
+                    std::all_of(input_storage[i].begin() +
+                            input_prefix + bytes, input_storage[i].end(),
+                        [](uint8_t value) { return value == canary; }),
+                "P16 direct output changed an input guard");
+        for (unsigned i = 0; i < r; ++i)
+            require(std::all_of(output_storage[i].begin(),
+                        output_storage[i].begin() + output_prefix,
+                        [](uint8_t value) { return value == canary; }) &&
+                    std::all_of(output_storage[i].begin() +
+                            output_prefix + bytes, output_storage[i].end(),
+                        [](uint8_t value) { return value == canary; }),
+                "P16 direct output changed an output guard");
+        counts->allocation_checks += 1;
+        counts->contract_checks += 2;
+        counts->unaligned_checks += k + r;
+        counts->low_partial_output_checks += 6;
+
+        // One immutable codec may execute the direct-output schedule
+        // concurrently when callers own disjoint scratch and destinations.
+        const std::vector<const void*> aligned_input = const_pointers(original);
+        struct Invocation
+        {
+            Invocation(unsigned count, size_t shard_bytes, size_t scratch_size)
+                : recovery(count, Bytes(shard_bytes, 0))
+                , pointers(count, NULL), scratch(scratch_size)
+            {
+                for (unsigned i = 0; i < count; ++i)
+                    pointers[i] = &recovery[i][0];
+            }
+            Shards recovery;
+            std::vector<void*> pointers;
+            AlignedBuffer scratch;
+        };
+        const unsigned worker_count = 2;
+        const unsigned repeats = 4;
+        std::vector<Invocation*> invocations(worker_count, NULL);
+        for (unsigned worker = 0; worker < worker_count; ++worker)
+            invocations[worker] = new Invocation(r, bytes, scratch_bytes);
+        std::atomic<unsigned> failures(0);
+        std::atomic<unsigned> ready(0);
+        std::atomic<bool> start(false);
+        std::vector<std::thread> workers;
+        for (unsigned worker = 0; worker < worker_count; ++worker)
+        {
+            workers.push_back(std::thread([&, worker]() {
+                ready.fetch_add(1, std::memory_order_release);
+                while (!start.load(std::memory_order_acquire))
+                    std::this_thread::yield();
+                for (unsigned repeat = 0; repeat < repeats; ++repeat)
+                {
+                    Invocation* call = invocations[worker];
+                    if (leo2_encode(owner->codec, bytes, &aligned_input[0],
+                            &call->pointers[0], call->scratch.data(),
+                            call->scratch.size()) != LEO2_SUCCESS ||
+                        call->recovery != expected)
+                    {
+                        failures.fetch_add(1, std::memory_order_relaxed);
+                    }
+                }
+            }));
+        }
+        while (ready.load(std::memory_order_acquire) != worker_count)
+            std::this_thread::yield();
+        start.store(true, std::memory_order_release);
+        for (size_t worker = 0; worker < workers.size(); ++worker)
+            workers[worker].join();
+        require(failures.load(std::memory_order_relaxed) == 0,
+            "concurrent P16 direct output was nondeterministic");
+        for (unsigned worker = 0; worker < worker_count; ++worker)
+            delete invocations[worker];
+        counts->concurrent_executions += worker_count * repeats;
+        delete owner;
+    }
+
+    leo2_context_destroy(scalar_context);
+    leo2_context_destroy(avx2_context);
 }
 
 void test_high_transform_source_staging(
@@ -3291,6 +3740,7 @@ int main()
         test_sparse_schedule_budget_fallback(context, &counts);
         test_low_transform_no_coefficient_copy(
             context, gf8, gf16, &counts);
+        test_low_p16_partial_direct_output(gf8, &counts);
         test_high_transform_source_staging(
             context, gf8, gf16, &counts);
         test_high_small_coarse_kernel(context, gf8, &counts);
@@ -3324,6 +3774,8 @@ int main()
                   << " unaligned_checks=" << counts.unaligned_checks
                   << " batch_executions=" << counts.batch_executions
                   << " no_copy_checks=" << counts.no_copy_checks
+                  << " low_partial_output_checks="
+                  << counts.low_partial_output_checks
                   << " high_source_staging_checks="
                   << counts.high_source_staging_checks
                   << " high_byte_tiling_checks="

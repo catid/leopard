@@ -31,6 +31,7 @@
 
 #ifdef LEO_HAS_FF8
 
+#include <atomic>
 #include <string.h>
 
 #ifndef LEO2_EXPERIMENT_HIGH_HALF_TAIL_COLUMN
@@ -47,12 +48,21 @@
 #error "LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE must be 0 or 1"
 #endif
 
-#if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
-#include <stdlib.h>
+/*
+    Same-text control for direct final-layer output from a dense partial P=16
+    LOW_V1 parity block.  Both values are nonzero so candidate/control builds
+    retain the same branch and transform code; only initialized data changes.
+*/
+#ifndef LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT
+#define LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT 1
+#endif
+#if LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT < 0 || \
+    LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT > 1
+#error "LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT must be 0 or 1"
 #endif
 
-#if defined(LEO2_ENABLE_TEST_HOOKS)
-#include <atomic>
+#if defined(LEO2_WEIGHTED_LOCATOR_BOUNDARY_ABBA)
+#include <stdlib.h>
 #endif
 
 #ifdef _MSC_VER
@@ -63,6 +73,15 @@ namespace leopard { namespace ff8 {
 
 static volatile uint32_t g_high_final_ifft2_range_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_T32_FINAL_IFFT2_RANGE;
+static std::atomic<uint32_t> g_low_p16_partial_direct_output_mode(
+    2U - LEO2_EXPERIMENT_LOW_P16_PARTIAL_DIRECT_OUTPUT);
+static thread_local bool g_low_p16_partial_direct_output_route_selected = false;
+
+static inline unsigned LowP16PartialDirectOutputMode()
+{
+    return g_low_p16_partial_direct_output_mode.load(
+        std::memory_order_relaxed);
+}
 
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 static std::atomic<uint64_t> TestIFFTDIT4Calls(0);
@@ -72,6 +91,10 @@ static std::atomic<uint64_t> TestLowFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestLowFFTButterfly8OutCalls(0);
 static std::atomic<uint64_t> TestLowDirectOutputBlocks(0);
+static std::atomic<uint64_t> TestLowDirectPartialOutputBlocks(0);
+static std::atomic<uint64_t> TestLowDirectOutputShards(0);
+static std::atomic<uint64_t> TestLowAvoidedScatterBytes(0);
+static std::atomic<uint64_t> TestLowScatterBytes(0);
 static std::atomic<uint64_t> TestLowDirectFFTButterfly2OutCalls(0);
 static std::atomic<uint64_t> TestLowDirectFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighIFFTButterfly4OutCalls(0);
@@ -2448,7 +2471,8 @@ enum SourceEvaluationCallsite
 // The coefficient pointers remain read-only across every parity or message
 // coset.  The backend combines the former copy pass with the first butterfly
 // pass.  Remaining layers operate in-place on evaluation_work, except that a
-// complete dense low-encode block may write its final layer to caller output.
+// dense full block, or a qualified aligned partial low-encode block, may
+// write its final layer to caller output.
 static void FFT_DIT_FromCoefficients(
     const backend::Ops& ops,
     const uint64_t bytes,
@@ -2462,7 +2486,12 @@ static void FFT_DIT_FromCoefficients(
 {
     (void)callsite;
     LEO_DEBUG_ASSERT(m >= 2);
-    LEO_DEBUG_ASSERT(!final_outputs || m_truncated == m);
+    LEO_DEBUG_ASSERT(!final_outputs || m_truncated == m ||
+        (callsite == SourceEvaluationLowEncode &&
+         (LowP16PartialDirectOutputMode() == 1U ||
+          LowP16PartialDirectOutputMode() == 3U) &&
+         ops.kind == LEO2_BACKEND_AVX2 && m == 16 &&
+         (m_truncated == 4 || m_truncated == 8 || m_truncated == 12)));
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     if (callsite == SourceEvaluationHighDecode)
         TestHighMatureOutputBlocks.fetch_add(
@@ -2594,7 +2623,7 @@ static void FFT_DIT_FromCoefficients(
         if (final_outputs && dist == 1 &&
             callsite == SourceEvaluationLowEncode)
             TestLowDirectFFTButterfly4OutCalls.fetch_add(
-                m / 4, std::memory_order_relaxed);
+                m_truncated / 4, std::memory_order_relaxed);
 #endif
         for (unsigned r = 0; r < m_truncated; r += dist4)
         {
@@ -3215,9 +3244,27 @@ void ReedSolomonEncodeLow(
 #endif
         const bool use_sparse =
             sparse_plans && block < sparse_plans->block_count;
-        bool direct_output = !use_sparse && requested_count == p;
-        for (unsigned i = 0; direct_output && i < p; ++i)
+        const bool dense_partial_candidate =
+            ops.kind == LEO2_BACKEND_AVX2 && p == 16 &&
+            requested_count == block_count && requested_count < p &&
+            (requested_count == 4 || requested_count == 8 ||
+             requested_count == 12);
+        const unsigned partial_mode = dense_partial_candidate
+            ? LowP16PartialDirectOutputMode()
+            : 2U;
+        const bool dense_partial_direct_output =
+            dense_partial_candidate &&
+            (partial_mode == 1U || partial_mode == 3U);
+        bool direct_output = !use_sparse &&
+            (requested_count == p || dense_partial_direct_output);
+        for (unsigned i = 0; direct_output && i < requested_count; ++i)
             direct_output = recovery[recovery_offset + i] != NULL;
+        if (dense_partial_candidate &&
+            (partial_mode == 3U || partial_mode == 4U))
+        {
+            g_low_p16_partial_direct_output_route_selected =
+                direct_output && dense_partial_direct_output;
+        }
         if (use_sparse)
         {
             const bool executed =
@@ -3250,6 +3297,14 @@ void ReedSolomonEncodeLow(
 #if defined(LEO2_ENABLE_TEST_HOOKS)
             TestLowDirectOutputBlocks.fetch_add(
                 1, std::memory_order_relaxed);
+            TestLowDirectOutputShards.fetch_add(
+                requested_count, std::memory_order_relaxed);
+            TestLowAvoidedScatterBytes.fetch_add(
+                static_cast<uint64_t>(requested_count) * buffer_bytes * 2U,
+                std::memory_order_relaxed);
+            if (requested_count < p)
+                TestLowDirectPartialOutputBlocks.fetch_add(
+                    1, std::memory_order_relaxed);
 #endif
             continue;
         }
@@ -3257,7 +3312,13 @@ void ReedSolomonEncodeLow(
         {
             void* const output = recovery[recovery_offset + i];
             if (output)
+            {
                 memcpy(output, work[p + i], buffer_bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                TestLowScatterBytes.fetch_add(
+                    buffer_bytes * 2U, std::memory_order_relaxed);
+#endif
+            }
         }
     }
 }
@@ -3975,6 +4036,41 @@ bool PreparePrunedTransformPlan(
 }
 
 
+bool SetLowP16PartialDirectOutputEnabledForDiagnostics(bool enabled)
+{
+    g_low_p16_partial_direct_output_route_selected = false;
+    g_low_p16_partial_direct_output_mode.store(
+        enabled ? 3U : 4U, std::memory_order_release);
+    return true;
+}
+
+
+unsigned LowP16PartialDirectOutputModeForDiagnostics()
+{
+    const unsigned mode = g_low_p16_partial_direct_output_mode.load(
+        std::memory_order_acquire);
+    return mode == 3U ? 1U : mode == 4U ? 2U : mode;
+}
+
+
+bool LowP16PartialDirectOutputRouteSelectedForDiagnostics()
+{
+    return g_low_p16_partial_direct_output_route_selected;
+}
+
+
+bool FinishLowP16PartialDirectOutputRouteProbeForDiagnostics()
+{
+    const unsigned mode = g_low_p16_partial_direct_output_mode.load(
+        std::memory_order_acquire);
+    if (mode != 3U && mode != 4U)
+        return false;
+    g_low_p16_partial_direct_output_mode.store(
+        mode == 3U ? 1U : 2U, std::memory_order_release);
+    return true;
+}
+
+
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 
 void TestOnlyResetTransformCallsiteCounts()
@@ -4002,6 +4098,10 @@ void TestOnlyResetLowEncodeCounts()
     TestLowFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
     TestLowFFTButterfly8OutCalls.store(0, std::memory_order_relaxed);
     TestLowDirectOutputBlocks.store(0, std::memory_order_relaxed);
+    TestLowDirectPartialOutputBlocks.store(0, std::memory_order_relaxed);
+    TestLowDirectOutputShards.store(0, std::memory_order_relaxed);
+    TestLowAvoidedScatterBytes.store(0, std::memory_order_relaxed);
+    TestLowScatterBytes.store(0, std::memory_order_relaxed);
     TestLowDirectFFTButterfly2OutCalls.store(0, std::memory_order_relaxed);
     TestLowDirectFFTButterfly4OutCalls.store(0, std::memory_order_relaxed);
 }
@@ -4018,11 +4118,33 @@ TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts()
         TestLowFFTButterfly8OutCalls.load(std::memory_order_relaxed);
     result.direct_output_blocks =
         TestLowDirectOutputBlocks.load(std::memory_order_relaxed);
+    result.direct_partial_output_blocks =
+        TestLowDirectPartialOutputBlocks.load(std::memory_order_relaxed);
+    result.direct_output_shards =
+        TestLowDirectOutputShards.load(std::memory_order_relaxed);
+    result.avoided_scatter_bytes =
+        TestLowAvoidedScatterBytes.load(std::memory_order_relaxed);
+    result.scatter_bytes =
+        TestLowScatterBytes.load(std::memory_order_relaxed);
     result.direct_output_butterfly2_out_of_place =
         TestLowDirectFFTButterfly2OutCalls.load(std::memory_order_relaxed);
     result.direct_output_butterfly4_out_of_place =
         TestLowDirectFFTButterfly4OutCalls.load(std::memory_order_relaxed);
     return result;
+}
+
+
+void TestOnlySetLowP16PartialDirectOutputEnabled(bool enabled)
+{
+    g_low_p16_partial_direct_output_mode.store(
+        enabled ? 1U : 2U, std::memory_order_relaxed);
+}
+
+
+bool TestOnlyLowP16PartialDirectOutputEnabled()
+{
+    const unsigned mode = LowP16PartialDirectOutputMode();
+    return mode == 1U || mode == 3U;
 }
 
 

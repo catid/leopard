@@ -406,6 +406,15 @@ void PrepareHighDecode(
     unsigned t,
     ffe_t* output_factors); // n elements; t..n-1 are initialized
 
+// Process-local, internal benchmark control for the dense partial P=16
+// LOW_V1 output path.  Enabling or disabling arms one route probe; finish the
+// probe before timing to normalize the mode and remove probe accounting.
+// Change the mode only while no encode call is executing.
+bool SetLowP16PartialDirectOutputEnabledForDiagnostics(bool enabled);
+unsigned LowP16PartialDirectOutputModeForDiagnostics();
+bool LowP16PartialDirectOutputRouteSelectedForDiagnostics();
+bool FinishLowP16PartialDirectOutputRouteProbeForDiagnostics();
+
 #if defined(LEO2_ENABLE_TEST_HOOKS)
 // Internal test-only access to the exact production LCH kernels and constants.
 // These are deliberately absent from leopard2.h and from non-test builds.
@@ -421,6 +430,10 @@ struct TestOnlyLowEncodeCounts
     uint64_t fft_butterfly4_out_of_place;
     uint64_t fft_butterfly8_out_of_place;
     uint64_t direct_output_blocks;
+    uint64_t direct_partial_output_blocks;
+    uint64_t direct_output_shards;
+    uint64_t avoided_scatter_bytes;
+    uint64_t scatter_bytes;
     uint64_t direct_output_butterfly2_out_of_place;
     uint64_t direct_output_butterfly4_out_of_place;
 };
@@ -478,6 +491,8 @@ void TestOnlyResetTransformCallsiteCounts();
 TestOnlyTransformCallsiteCounts TestOnlyGetTransformCallsiteCounts();
 void TestOnlyResetLowEncodeCounts();
 TestOnlyLowEncodeCounts TestOnlyGetLowEncodeCounts();
+void TestOnlySetLowP16PartialDirectOutputEnabled(bool enabled);
+bool TestOnlyLowP16PartialDirectOutputEnabled();
 void TestOnlyResetHighEncodeCounts();
 TestOnlyHighEncodeCounts TestOnlyGetHighEncodeCounts();
 void TestOnlyRecordT2PackedCall();

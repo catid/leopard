@@ -326,6 +326,19 @@ bool LowP128B64TerminalRouteSelectedForDiagnostics();
 bool FinishLowP128B64TerminalRouteProbeForDiagnostics();
 
 /*
+    Same-executable attribution for direct final-layer output from dense
+    partial GF8/AVX2 P=16 LOW_V1 parity blocks.  Enabled/disabled arm a
+    one-call route probe; finishing it normalizes the mode before timing.
+*/
+bool SetLowP16PartialDirectOutputEnabledForDiagnostics(bool enabled);
+
+unsigned LowP16PartialDirectOutputModeForDiagnostics();
+
+bool LowP16PartialDirectOutputRouteSelectedForDiagnostics();
+
+bool FinishLowP16PartialDirectOutputRouteProbeForDiagnostics();
+
+/*
     Construct the ephemeral transform plan for the current diagnostic mode
     and exact shard byte count.  The factory includes the same no-loss prefix
     probe used by the public wrapper so it does not duplicate that prefix in

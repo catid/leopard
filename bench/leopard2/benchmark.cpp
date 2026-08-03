@@ -120,6 +120,7 @@ struct Options
     int one_shot_plan_setup_mode;
     int low_p32_b64_terminal_mode;
     int low_p128_b64_terminal_mode;
+    int low_p16_partial_direct_output_mode;
     int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
@@ -171,6 +172,7 @@ struct Options
         , one_shot_plan_setup_mode(-1)
         , low_p32_b64_terminal_mode(-1)
         , low_p128_b64_terminal_mode(-1)
+        , low_p16_partial_direct_output_mode(-1)
         , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
@@ -460,6 +462,9 @@ static void Usage(std::ostream& output, const char* program)
         << "  --low-p128-b64-terminal-mode 0|1\n"
          << "                         Attribution-only: mature or generated exact P128 terminal\n"
          << "                         in identical executable text using schema v20\n"
+        << "  --low-p16-partial-direct-output-mode 0|1\n"
+         << "                         Attribution-only: mature scatter or direct partial output\n"
+         << "                         in identical executable text using schema v21\n"
         << "  --gf8-avx2-walsh-locator-mode 0|1\n"
         << "                         Attribution-only: disable or enable the dense setup kernel\n"
         << "                         within one-shot setup mode 3 using schema v16\n"
@@ -567,6 +572,16 @@ static Options ParseOptions(int argc, char** argv)
                 options.low_p128_b64_terminal_mode = 1;
             else
                 Fail("--low-p128-b64-terminal-mode must be exactly 0 or 1");
+        }
+        else if (argument == "--low-p16-partial-direct-output-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.low_p16_partial_direct_output_mode = 0;
+            else if (mode == "1")
+                options.low_p16_partial_direct_output_mode = 1;
+            else
+                Fail("--low-p16-partial-direct-output-mode must be exactly 0 or 1");
         }
         else if (argument == "--gf8-avx2-walsh-locator-mode")
         {
@@ -761,6 +776,27 @@ static Options ParseOptions(int argc, char** argv)
              "batch=1, one thread, --skip-legacy, "
              "--retain-samples, and --measure-one-shot-decode");
     }
+    if (options.low_p16_partial_direct_output_mode >= 0 &&
+        (options.batch != 1 || options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LOW_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_encode || options.measure_one_shot_decode ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal))
+    {
+        Fail("--low-p16-partial-direct-output-mode requires explicit "
+             "low/GF8/AVX2, batch=1, one thread, --skip-legacy, "
+             "--retain-samples, and --measure-one-shot-encode");
+    }
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH) || \
     defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
@@ -772,6 +808,8 @@ static Options ParseOptions(int argc, char** argv)
         Fail("--low-p32-b64-terminal-mode requires the ordinary benchmark");
     if (options.low_p128_b64_terminal_mode >= 0)
         Fail("--low-p128-b64-terminal-mode requires the ordinary benchmark");
+    if (options.low_p16_partial_direct_output_mode >= 0)
+        Fail("--low-p16-partial-direct-output-mode requires the ordinary benchmark");
 #endif
     if (options.force_generic_decode && options.force_specialized_decode)
         Fail("--force-generic and --force-specialized are mutually exclusive");
@@ -1395,8 +1433,25 @@ static bool LowP128B64TerminalRouteExpected(const Options& options)
                 options.losses == 128));
 }
 
+static bool LowP16PartialDirectOutputRouteExpected(
+    const Options& options,
+    const leo2_codec* codec)
+{
+    const uint32_t partial = options.r & 15U;
+    return options.low_p16_partial_direct_output_mode == 1 &&
+        leo2_codec_profile(codec) == LEO2_PROFILE_LOW_V1 &&
+        leo2_codec_field(codec) == LEO2_FIELD_GF8 &&
+        leo2_codec_padded_side(codec) == 16 &&
+        (partial == 4 || partial == 8 || partial == 12);
+}
+
 static int Run(const Options& options)
 {
+    if (options.low_p16_partial_direct_output_mode >= 0 &&
+        !leopard2_internal::
+            SetLowP16PartialDirectOutputEnabledForDiagnostics(
+                options.low_p16_partial_direct_output_mode == 1))
+        Fail("cannot set the low P16 partial-output attribution mode");
     if (options.low_p32_b64_terminal_mode >= 0 &&
         !leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
             options.low_p32_b64_terminal_mode == 1))
@@ -1713,6 +1768,7 @@ static int Run(const Options& options)
         options.one_shot_plan_setup_mode >= 0 ||
         options.low_p32_b64_terminal_mode >= 0 ||
         options.low_p128_b64_terminal_mode >= 0 ||
+        options.low_p16_partial_direct_output_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
@@ -1720,6 +1776,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.low_p16_partial_direct_output_mode >= 0 ? 21 :
         options.low_p128_b64_terminal_mode >= 0 ? 20 :
         options.low_p32_b64_terminal_mode >= 0 ? 18 :
         options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
@@ -1739,6 +1796,7 @@ static int Run(const Options& options)
     uint64_t recovered_digest = kFnv1a64Offset;
     bool low_p32_b64_terminal_route_selected = false;
     bool low_p128_b64_terminal_route_selected = false;
+    bool low_p16_partial_direct_output_route_selected = false;
 
     run_encode_batch();
     if (extended_schema)
@@ -1794,6 +1852,19 @@ static int Run(const Options& options)
         for (size_t i = 0; i < stripes.size(); ++i)
             CheckRestored(*stripes[i], options, losses,
                 "Leopard2 one-shot");
+    }
+    if (options.low_p16_partial_direct_output_mode >= 0)
+    {
+        low_p16_partial_direct_output_route_selected = leopard2_internal::
+            LowP16PartialDirectOutputRouteSelectedForDiagnostics();
+        if (!leopard2_internal::
+                FinishLowP16PartialDirectOutputRouteProbeForDiagnostics())
+            Fail("low P16 partial-output route probe did not finish");
+        if (low_p16_partial_direct_output_route_selected !=
+            LowP16PartialDirectOutputRouteExpected(options, codec))
+        {
+            Fail("low P16 partial-output actual route differs from selector contract");
+        }
     }
     if (options.low_p32_b64_terminal_mode >= 0)
     {
@@ -2112,6 +2183,28 @@ static int Run(const Options& options)
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k9r5_b256_terminal ? "true" : "false");
+    if (options.low_p16_partial_direct_output_mode >= 0)
+    {
+        const bool route_expected_selected =
+            LowP16PartialDirectOutputRouteExpected(options, codec);
+        json << ",\n"
+             << "    \"low_p16_partial_direct_output_diagnostic_mode\": "
+             << options.low_p16_partial_direct_output_mode << ",\n"
+             << "    \"low_p16_partial_direct_output_mode_word\": "
+             << leopard2_internal::
+                    LowP16PartialDirectOutputModeForDiagnostics() << ",\n"
+             << "    \"low_p16_partial_direct_output_enabled\": "
+             << (options.low_p16_partial_direct_output_mode == 1
+                    ? "true" : "false") << ",\n"
+             << "    \"low_p16_partial_direct_output_route_expected_selected\": "
+             << (route_expected_selected ? "true" : "false") << ",\n"
+             << "    \"low_p16_partial_direct_output_route_selected\": "
+             << (low_p16_partial_direct_output_route_selected
+                    ? "true" : "false") << ",\n"
+             << "    \"low_p16_partial_direct_output_selector_contract\": "
+                "\"LOW_V1,GF8,AVX2,P=16,d=R%16 in {4,8,12},"
+                "dense transmitted prefix,transform encode\"";
+    }
     if (options.low_p32_b64_terminal_mode >= 0)
     {
         const bool route_expected_selected =
@@ -2297,6 +2390,9 @@ static int Run(const Options& options)
         if (options.low_p128_b64_terminal_mode >= 0)
             json << "    \"low_p128_b64_terminal_mode\": "
                  << options.low_p128_b64_terminal_mode << ",\n";
+        if (options.low_p16_partial_direct_output_mode >= 0)
+            json << "    \"low_p16_partial_direct_output_mode\": "
+                 << options.low_p16_partial_direct_output_mode << ",\n";
         if (options.one_shot_plan_setup_mode >= 0)
             json << "    \"one_shot_plan_setup_mode\": "
                  << options.one_shot_plan_setup_mode << ",\n";

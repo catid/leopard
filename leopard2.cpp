@@ -13062,6 +13062,46 @@ bool FinishLowP128B64TerminalRouteProbeForDiagnostics()
 #endif
 }
 
+bool SetLowP16PartialDirectOutputEnabledForDiagnostics(bool enabled)
+{
+#ifdef LEO_HAS_FF8
+    return leopard::ff8::
+        SetLowP16PartialDirectOutputEnabledForDiagnostics(enabled);
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
+unsigned LowP16PartialDirectOutputModeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return leopard::ff8::LowP16PartialDirectOutputModeForDiagnostics();
+#else
+    return 0;
+#endif
+}
+
+bool LowP16PartialDirectOutputRouteSelectedForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return leopard::ff8::
+        LowP16PartialDirectOutputRouteSelectedForDiagnostics();
+#else
+    return false;
+#endif
+}
+
+bool FinishLowP16PartialDirectOutputRouteProbeForDiagnostics()
+{
+#ifdef LEO_HAS_FF8
+    return leopard::ff8::
+        FinishLowP16PartialDirectOutputRouteProbeForDiagnostics();
+#else
+    return false;
+#endif
+}
+
 leo2_result ExecuteOneShotTransformPlanForDiagnostics(
     const leo2_decode_plan* plan,
     uint64_t shard_bytes,
