@@ -44,11 +44,10 @@ CUDA_SUFFIXES = (".cu", ".cuh")
 KNOWN_SOURCE_SUFFIXES = COMPILE_SUFFIXES + HEADER_SUFFIXES + CUDA_SUFFIXES
 AVX2_SOURCE_FILES = {
     "Leopard2BackendAVX2.cpp",
+    "Leopard2BackendAVX2T32B256.cpp",
     "Leopard2BackendAVX2Xor.cpp",
 }
-DEFAULT_OFF_OPTIONAL_OBJECT_TARGETS = {
-    "leopard2_backend_avx2_t32_b256",
-}
+DEFAULT_OFF_OPTIONAL_OBJECT_TARGETS = set()
 EXPECTED_CONFIGS = {
     "debug|win32": ("Debug", "Win32"),
     "debug|x64": ("Debug", "x64"),
@@ -65,6 +64,7 @@ BACKEND_DEFINITIONS = {
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
     "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
     "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1",
     "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
 }
 PROTECTED_MACRO_NAMES = {
@@ -855,8 +855,8 @@ class CMakeProductionGraph(object):
             "path", "ON")): 1,
         ("option", (
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
-            "Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 encoder",
-            "OFF")): 1,
+            "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder "
+            "when available", "ON")): 1,
         ("option", (
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
             "Disable the generated T=32/B=256 kernel without changing code "
@@ -1151,8 +1151,8 @@ class CMakeProductionGraph(object):
             "path", "ON"))),
         ("trusted", ("option", (
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
-            "Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 encoder",
-            "OFF"))),
+            "Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 encoder "
+            "when available", "ON"))),
         ("trusted", ("option", (
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
             "Disable the generated T=32/B=256 kernel without changing code "
@@ -7198,12 +7198,12 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
                 ContractError, "no MSVC-reachable definition"):
             self.resolve_text(text)
 
-    def test_t32_b256_optional_object_is_modeled_but_not_default(self):
+    def test_t32_b256_promoted_object_is_modeled_and_default(self):
         (sources, unused_headers, objects,
          object_sources, unused_cmake) = self.resolve_text(
             self.cmake, require_mutation_contract=True)
         del unused_headers, unused_cmake
-        self.assertNotIn("Leopard2BackendAVX2T32B256.cpp", sources)
+        self.assertIn("Leopard2BackendAVX2T32B256.cpp", sources)
         self.assertIn("leopard2_backend_avx2_t32_b256", objects)
         self.assertIn("Leopard2BackendAVX2T32B256.cpp", object_sources)
 
@@ -7235,11 +7235,15 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
     def test_t32_b256_msvc_metadata_and_attachment_are_exact(self):
         option = """        target_compile_options(leopard2_backend_avx2_t32_b256 PRIVATE
             /arch:AVX2)"""
-        attachment_guard = "if(TARGET leopard2_backend_avx2_t32_b256)"
+        attachment_guard = (
+            "if(LEOPARD_ENABLE_GF8 AND\n"
+            "       LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)")
+        audit_guard = (
+            "if(LEOPARD_ENABLE_GF8 AND\n"
+            "                   LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)")
         self.assertEqual(1, self.cmake.count(option))
-        # One guard attaches the optional object; the second advertises its
-        # exact archive-member class to the portable-ISA audit.
-        self.assertEqual(2, self.cmake.count(attachment_guard))
+        self.assertEqual(1, self.cmake.count(attachment_guard))
+        self.assertEqual(1, self.cmake.count(audit_guard))
         mutations = (
             (self.cmake.replace(option, option.replace("AVX2", "AVX"), 1),
              "unapproved production target compile/link mutation"),
@@ -7255,16 +7259,16 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
     def test_t32_b256_options_and_router_selector_are_exact(self):
         option = (
             "option(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED\n"
-            "    \"Enable the default-off exact GF8/AVX2 K=R=T=32,B=256 "
-            "encoder\"\n    OFF)")
+            "    \"Enable the promoted exact GF8/AVX2 K=R=T=32,B=256 "
+            "encoder when available\"\n    ON)")
         selector_guard = "if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)"
         self.assertEqual(1, self.cmake.count(option))
-        self.assertGreaterEqual(self.cmake.count(selector_guard), 2)
-        default_on = self.cmake.replace(option, option[:-4] + "ON)", 1)
+        self.assertEqual(1, self.cmake.count(selector_guard))
+        default_off = self.cmake.replace(option, option[:-3] + "OFF)", 1)
         with self.assertRaisesRegex(
                 ContractError,
                 "trusted CMake command|compiler-control variable mutation"):
-            self.resolve_text(default_on, require_mutation_contract=True)
+            self.resolve_text(default_off, require_mutation_contract=True)
         wrong_guard = self.cmake.replace(
             selector_guard,
             "if(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED)", 1)
