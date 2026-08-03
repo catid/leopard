@@ -767,6 +767,14 @@ struct leo2_decode_plan
     // reusable plans own all routes they can execute; ephemeral one-shot
     // plans may own only the exact route selected for their known byte count.
     uint8_t prepared_transform_metadata;
+    /*
+        Immutable byte-independent classification for the promoted 64-byte
+        translated Algorithm 4 terminals.  Execution still checks the exact
+        byte count and the mutable same-executable diagnostic control, but it
+        never has to rediscover the K/R/loss/backend shape for a reusable
+        plan.  Zero selects the mature transform path.
+    */
+    uint8_t low_b64_terminal_kind;
     bool no_op;
     bool direct_xor;
     bool direct_copy;
@@ -8251,6 +8259,98 @@ static void PopulateRawTranslatedLowCoordinates(
     }
 }
 
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
+enum LowB64TerminalKind
+{
+    kLowB64TerminalNone = 0,
+    kLowB64TerminalP32 = 1,
+    kLowB64TerminalP128 = 2
+};
+
+static uint8_t ClassifyLowB64Terminal(
+    const leo2_codec* codec,
+    bool translated_low,
+    uint32_t missing_original_count)
+{
+    if (!codec || !translated_low || codec->flags != 0 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        codec->translated_low_factors8.size() != 1)
+        return kLowB64TerminalNone;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (codec->test_decode_mode != LEO2_TEST_DECODE_AUTO)
+        return kLowB64TerminalNone;
+#endif
+    if (codec->parent_count == 64 && codec->padded_side == 32 &&
+        codec->original_count == 32 && codec->recovery_count == 32 &&
+        missing_original_count >= 9 && missing_original_count < 32)
+        return kLowB64TerminalP32;
+    if (codec->parent_count == 256 && codec->padded_side == 128 &&
+        ((codec->original_count == 95 && codec->recovery_count == 95 &&
+          (missing_original_count == 47 ||
+           missing_original_count == 94)) ||
+         (codec->original_count == 128 && codec->recovery_count == 128 &&
+          (missing_original_count == 64 ||
+           missing_original_count == 127))))
+        return kLowB64TerminalP128;
+    return kLowB64TerminalNone;
+}
+
+static bool TryExecuteLowB64Terminal(
+    const leo2_codec* codec,
+    uint8_t terminal_kind,
+    size_t shard_bytes,
+    const void* const* coordinate_data,
+    const uint32_t* requested_coordinates,
+    uint32_t requested_count,
+    const uint8_t* locator,
+    void* const* restored,
+    void** work)
+{
+    if (!codec || shard_bytes != 64 ||
+        (terminal_kind != kLowB64TerminalP32 &&
+         terminal_kind != kLowB64TerminalP128))
+        return false;
+
+    const leopard::backend::Ops& ops = *codec->context->ops;
+    if (terminal_kind == kLowB64TerminalP32)
+    {
+        const unsigned mode =
+            g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
+        const bool executed = (mode == 1U || mode == 3U) &&
+            leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
+                ops, coordinate_data, requested_coordinates, requested_count,
+                locator, codec->translated_low_factors8[0], restored, work);
+        if (mode == 3U || mode == 4U)
+            g_low_p32_b64_terminal_route_selected = executed;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        if (executed)
+            g_test_low_p32_b64_terminal_calls.fetch_add(
+                1, std::memory_order_relaxed);
+#endif
+        return executed;
+    }
+
+    const unsigned mode =
+        g_low_p128_b64_terminal_mode.load(std::memory_order_acquire);
+    const bool executed = (mode == 1U || mode == 3U) &&
+        leopard::ff8::ReedSolomonDecodeLowP128B64TerminalExperimental(
+            ops, coordinate_data, requested_coordinates, requested_count,
+            locator, codec->translated_low_factors8[0], restored, work);
+    if (mode == 3U || mode == 4U)
+        g_low_p128_b64_terminal_route_selected = executed;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (executed)
+        g_test_low_p128_b64_terminal_calls.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
+    return executed;
+}
+#endif
+
 static void ExecuteRawTranslatedLowDecode(
     const leo2_codec* codec,
     const DecodeScratchGeometry& geometry,
@@ -8283,66 +8383,14 @@ static void ExecuteRawTranslatedLowDecode(
             original, recovery, 0, geometry.aligned_prefix_bytes,
             NULL, coordinate_data);
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
-        const unsigned p32_terminal_mode =
-            g_low_p32_b64_terminal_mode.load(std::memory_order_acquire);
-        const bool p32_terminal =
-            (p32_terminal_mode == 1U || p32_terminal_mode == 3U) &&
-            geometry.aligned_prefix_bytes == 64 &&
-            geometry.tail_bytes == 0 && n == 64 && p == 32 &&
-            codec->original_count == 32 && codec->recovery_count == 32 &&
-            pattern.missing_original_count >= 9 &&
-            pattern.missing_original_count < 32 &&
-            ops.kind == LEO2_BACKEND_AVX2 &&
-            codec->translated_low_factors8.size() == 1 &&
-            leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
-                ops, const_cast<const void* const*>(coordinate_data),
+        const uint8_t terminal_kind = ClassifyLowB64Terminal(
+            codec, true, pattern.missing_original_count);
+        const bool exact_terminal = geometry.tail_bytes == 0 &&
+            TryExecuteLowB64Terminal(
+                codec, terminal_kind, geometry.aligned_prefix_bytes,
+                const_cast<const void* const*>(coordinate_data),
                 pattern.missing_originals, pattern.missing_original_count,
-                pattern.locator, codec->translated_low_factors8[0],
-                restored, work);
-        if (p32_terminal_mode == 3U || p32_terminal_mode == 4U)
-            g_low_p32_b64_terminal_route_selected = p32_terminal;
-
-        const bool p128_target = !p32_terminal &&
-            geometry.aligned_prefix_bytes == 64 &&
-            geometry.tail_bytes == 0 && n == 256 && p == 128 &&
-            ops.kind == LEO2_BACKEND_AVX2 &&
-            codec->translated_low_factors8.size() == 1 && (
-            (codec->original_count == 95 &&
-                codec->recovery_count == 95 &&
-                (pattern.missing_original_count == 47 ||
-                 pattern.missing_original_count == 94)) ||
-            (codec->original_count == 128 &&
-                codec->recovery_count == 128 &&
-                (pattern.missing_original_count == 64 ||
-                 pattern.missing_original_count == 127)));
-        bool p128_terminal = false;
-        if (p128_target)
-        {
-            const unsigned p128_terminal_mode =
-                g_low_p128_b64_terminal_mode.load(
-                    std::memory_order_acquire);
-            p128_terminal =
-                (p128_terminal_mode == 1U ||
-                 p128_terminal_mode == 3U) &&
-                leopard::ff8::
-                    ReedSolomonDecodeLowP128B64TerminalExperimental(
-                        ops,
-                        const_cast<const void* const*>(coordinate_data),
-                        pattern.missing_originals,
-                        pattern.missing_original_count, pattern.locator,
-                        codec->translated_low_factors8[0], restored, work);
-            if (p128_terminal_mode == 3U || p128_terminal_mode == 4U)
-                g_low_p128_b64_terminal_route_selected = p128_terminal;
-        }
-        const bool exact_terminal = p32_terminal || p128_terminal;
-#ifdef LEO2_ENABLE_TEST_HOOKS
-        if (p32_terminal)
-            g_test_low_p32_b64_terminal_calls.fetch_add(
-                1, std::memory_order_relaxed);
-        if (p128_terminal)
-            g_test_low_p128_b64_terminal_calls.fetch_add(
-                1, std::memory_order_relaxed);
-#endif
+                pattern.locator, restored, work);
 #else
         const bool exact_terminal = false;
 #endif
@@ -16536,6 +16584,7 @@ static leo2_result DecodePlanCreateInternal(
         plan->direct_xor_original = std::numeric_limits<uint32_t>::max();
         plan->missing_original_count = missing_original_count;
         plan->prepared_transform_metadata = 0;
+        plan->low_b64_terminal_kind = 0;
         plan->no_op = missing_original_count == 0;
         plan->direct_xor = codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
@@ -16766,6 +16815,10 @@ static leo2_result DecodePlanCreateInternal(
             else if (codec->test_decode_mode ==
                      LEO2_TEST_DECODE_FORCE_TRANSLATED_LOW)
                 plan->translated_low = true;
+#endif
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL && defined(LEO_HAS_FF8)
+            plan->low_b64_terminal_kind = ClassifyLowB64Terminal(
+                codec, plan->translated_low, missing_original_count);
 #endif
             if (!plan->translated_low)
             {
@@ -17406,6 +17459,36 @@ static leo2_result DecodePlanExecuteInternal(
     uint8_t* const work_storage = base + geometry.work_data_offset;
     for (size_t i = 0; i < geometry.work_slot_count; ++i)
         work[i] = work_storage + i * geometry.work_slot_bytes;
+#if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL && defined(LEO_HAS_FF8)
+    /*
+        Reusable plans already own the exact translated locator and requested
+        coordinates consumed by the promoted terminal.  Ordinary execution
+        has validated all buffers and may also have populated the coordinate
+        view while checking aliases; batch and binding execution was
+        preflighted once, so it constructs that view here without repeating
+        validation.  The terminal writes requested originals directly and
+        therefore needs neither the mature reveal nor gather passes.
+    */
+    if (plan->low_b64_terminal_kind != kLowB64TerminalNone &&
+        geometry.aligned_prefix_bytes == 64 && geometry.tail_bytes == 0 &&
+        geometry.execution_tile_count == 1 &&
+        geometry.work_slot_count >= codec->parent_count &&
+        plan->locator8.size() == codec->parent_count)
+    {
+        if (!coordinates_prepopulated)
+        {
+            PopulateDecodeCoordinates(
+                plan, original, recovery, 0, 64, NULL, coordinate_data);
+        }
+        if (TryExecuteLowB64Terminal(
+                codec, plan->low_b64_terminal_kind, 64,
+                const_cast<const void* const*>(coordinate_data),
+                plan->missing_originals.data(),
+                plan->missing_original_count, plan->locator8.data(),
+                restored_original, work))
+            return LEO2_SUCCESS;
+    }
+#endif
     /*
         At this balanced full-recovery point the generic schedule has lower
         aggregate work despite Algorithm 5's smaller transform side: the

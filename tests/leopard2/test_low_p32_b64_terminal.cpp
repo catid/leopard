@@ -335,8 +335,11 @@ void ExercisePublicRoute(
     bool unaligned = false,
     unsigned parity_stride = 0,
     unsigned parity_offset = 0,
-    bool alias_surviving_inputs = false)
+    bool alias_surviving_inputs = false,
+    bool batch_binding = false)
 {
+    Require(!batch_binding || reusable_plan,
+        "decode binding requires a reusable public-route plan");
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
         original_count, recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
@@ -488,7 +491,63 @@ void ExercisePublicRoute(
     std::memset(decode_scratch.bytes(), 0xe2, decode_scratch_bytes + 128);
     leo2_test_reset_low_p32_b64_terminal_calls();
     leo2_test_reset_low_p128_b64_terminal_calls();
-    if (reusable_plan)
+    if (batch_binding)
+    {
+        std::vector<uint8_t> second_restored_storage(
+            restored_storage.size(), 0xa5);
+        std::vector<void*> second_restored(
+            original_count, static_cast<void*>(NULL));
+        for (unsigned i = 0; i < original_count; ++i)
+        {
+            second_restored[i] = &second_restored_storage[restored_base +
+                static_cast<size_t>(i) * row_stride];
+        }
+        AlignedBuffer second_scratch(decode_scratch_bytes + 128);
+        std::memset(
+            second_scratch.bytes(), 0xe2, decode_scratch_bytes + 128);
+        leo2_decode_batch_item items[2] = {};
+        for (unsigned item = 0; item < 2; ++item)
+        {
+            items[item].shard_bytes = shard_bytes;
+            items[item].original = &decode_original[0];
+            items[item].recovery = &decode_recovery[0];
+            items[item].restored_original = item == 0
+                ? &restored[0] : &second_restored[0];
+            items[item].scratch = item == 0
+                ? decode_scratch.bytes() + 64
+                : second_scratch.bytes() + 64;
+            items[item].scratch_bytes = decode_scratch_bytes;
+        }
+        leo2_decode_batch_binding* binding = NULL;
+        RequireResult(leo2_decode_batch_binding_create(
+            plan, items, 2, &binding),
+            "create reusable public-route binding");
+        Require(leo2_decode_batch_binding_item_count(binding) == 2,
+            "public-route binding item count differs");
+        RequireResult(leo2_decode_batch_binding_execute(binding),
+            "execute reusable public-route binding");
+        leo2_decode_batch_binding_destroy(binding);
+        RequireFill(second_scratch.bytes(), 64, 0xe2,
+            "binding decode scratched before its second range");
+        RequireFill(second_scratch.bytes() + 64 + decode_scratch_bytes,
+            64, 0xe2, "binding decode scratched after its second range");
+        std::vector<uint8_t> expected_second(
+            second_restored_storage.size(), 0xa5);
+        for (unsigned i = 0; i < original_count; ++i)
+        {
+            if (original_present[i])
+                continue;
+            Require(std::memcmp(second_restored[i], original[i],
+                    shard_bytes) == 0,
+                "binding terminal recovered incorrect second-item bytes");
+            std::memcpy(&expected_second[restored_base +
+                    static_cast<size_t>(i) * row_stride],
+                original[i], shard_bytes);
+        }
+        Require(second_restored_storage == expected_second,
+            "binding terminal wrote outside second-item output ranges");
+    }
+    else if (reusable_plan)
     {
         RequireResult(leo2_decode_plan_execute(plan, shard_bytes,
             &decode_original[0], &decode_recovery[0], &restored[0],
@@ -507,11 +566,26 @@ void ExercisePublicRoute(
         "public-route decode scratched before its range");
     RequireFill(decode_scratch.bytes() + 64 + decode_scratch_bytes,
         64, 0xe2, "public-route decode scratched after its range");
-    Require(leo2_test_low_p32_b64_terminal_calls() ==
-            expected_p32_terminal_calls,
+    const uint64_t actual_p32_calls =
+        leo2_test_low_p32_b64_terminal_calls();
+    const uint64_t actual_p128_calls =
+        leo2_test_low_p128_b64_terminal_calls();
+    if (actual_p32_calls != expected_p32_terminal_calls ||
+        actual_p128_calls != expected_p128_terminal_calls)
+    {
+        std::fprintf(stderr,
+            "route mismatch K=%u R=%u B=%zu L=%u reusable=%u "
+            "binding=%u P32=%llu/%llu P128=%llu/%llu\n",
+            original_count, recovery_count, shard_bytes, missing_count,
+            reusable_plan ? 1U : 0U, batch_binding ? 1U : 0U,
+            static_cast<unsigned long long>(actual_p32_calls),
+            static_cast<unsigned long long>(expected_p32_terminal_calls),
+            static_cast<unsigned long long>(actual_p128_calls),
+            static_cast<unsigned long long>(expected_p128_terminal_calls));
+    }
+    Require(actual_p32_calls == expected_p32_terminal_calls,
         "public-route P32 terminal call count differs from exact predicate");
-    Require(leo2_test_low_p128_b64_terminal_calls() ==
-            expected_p128_terminal_calls,
+    Require(actual_p128_calls == expected_p128_terminal_calls,
         "public-route P128 terminal call count differs from exact predicate");
     std::vector<uint8_t> expected_restored(restored_storage.size(), 0xa5);
     for (unsigned i = 0; i < original_count; ++i)
@@ -830,7 +904,9 @@ int main()
         leo2_context_options options = {};
         options.struct_size = sizeof(options);
         options.backend = LEO2_BACKEND_AVX2;
-        options.thread_count = 1;
+        // Two-item bindings exercise one immutable plan concurrently through
+        // the persistent worker pool; ordinary plan calls remain single-item.
+        options.thread_count = 2;
         leo2_context* context = NULL;
         RequireResult(leo2_context_create(&options, &context),
             "create public-route AVX2 context");
@@ -850,16 +926,22 @@ int main()
             ++route_count;
         }
         // Explicit route-off neighbors prove every selector boundary: direct
-        // repair below L=9, all-loss at L=32, ragged byte tails, reusable
-        // plans, and adjacent public K/R shapes.
+        // repair below L=9, all-loss at L=32, ragged byte tails, and adjacent
+        // public K/R shapes.  The exact reusable plan now shares the promoted
+        // terminal with the one-shot route.
         ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 63, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 32, 65, 16, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 64, 16, true, false, 0);
+        ExercisePublicRoute(context, 32, 32, 64, 16, true, false, 1);
+        ExercisePublicRoute(context, 32, 32, 63, 16, true, false, 0);
+        ExercisePublicRoute(context, 32, 32, 65, 16, true, false, 0);
         ExercisePublicRoute(context, 31, 32, 64, 16, false, false, 0);
         ExercisePublicRoute(context, 32, 31, 64, 16, false, false, 0);
-        route_count += 7;
+        route_count += 9;
+        ExercisePublicRoute(context, 32, 32, 64, 16,
+            true, false, 2, 0, 1, 0, false, 0, 0, false, true);
+        ++route_count;
 
         Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
                 true),
@@ -926,7 +1008,14 @@ int main()
                     p128_shapes[shape][1], false, high != 0, 0, 1);
                 ++route_count;
             }
+            ExercisePublicRoute(context,
+                p128_shapes[shape][0], p128_shapes[shape][0], 64,
+                p128_shapes[shape][1], true, false, 0, 1);
+            ++route_count;
         }
+        ExercisePublicRoute(context, 128, 128, 64, 127,
+            true, false, 0, 2, 1, 0, false, 0, 0, false, true);
+        ++route_count;
         // Non-contiguous K=95 patterns exercise shortening/puncturing and
         // deliberately unaligned live inputs/outputs through both parity
         // selection ends.  Stride 37 is coprime to 95.
@@ -993,7 +1082,9 @@ int main()
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 128, 65, 127,
             false, false, 0, 0);
-        ExercisePublicRoute(context, 128, 128, 64, 127,
+        ExercisePublicRoute(context, 128, 128, 63, 127,
+            true, false, 0, 0);
+        ExercisePublicRoute(context, 128, 128, 65, 127,
             true, false, 0, 0);
         ExercisePublicRoute(context, 127, 128, 64, 127,
             false, false, 0, 0);
@@ -1007,7 +1098,7 @@ int main()
             false, false, 0, 0);
         ExercisePublicRoute(context, 128, 127, 64, 64,
             false, false, 0, 0);
-        route_count += 17;
+        route_count += 18;
 
         Require(leopard2_internal::SetLowP128B64TerminalEnabledForDiagnostics(
                 false),
