@@ -28,7 +28,7 @@
 
 #include "direct_oracle.h"
 #include "leopard2.h"
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
 #include "Leopard2Backend.h"
 #endif
 
@@ -55,8 +55,8 @@ static const unsigned kRecoveryCount = 32;
 #ifndef LEO2_EXPECT_T32_B256_GENERATED
 #define LEO2_EXPECT_T32_B256_GENERATED 0
 #endif
-#ifndef LEO2_EXPECT_T32_B256_MULTIBLOCK
-#define LEO2_EXPECT_T32_B256_MULTIBLOCK 0
+#ifndef LEO2_EXPECT_T32_B256_TWO_BLOCK
+#define LEO2_EXPECT_T32_B256_TWO_BLOCK 0
 #endif
 static const size_t kShardBytes = LEO2_BALANCED_PRODUCTION_SHARD_BYTES;
 static const size_t kGuardBytes = 64;
@@ -379,7 +379,7 @@ void ExerciseProductionBalancedSide(leo2_context* context, unsigned side)
     leo2_codec_destroy(codec);
 }
 
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
 void CheckVariableParity(
     const leopard2_test::BinaryField& field,
     const leopard2_test::Matrix& generator,
@@ -409,7 +409,7 @@ void CheckVariableParity(
     }
 }
 
-void ExerciseProductionT32MultiBlock(
+void ExerciseProductionT32TwoBlockFamily(
     leo2_context* context,
     unsigned original_count)
 {
@@ -510,24 +510,25 @@ void ExerciseProductionT32MultiBlock(
             direct_base + static_cast<size_t>(i) * kShardBytes;
     }
     const bool selected =
-        leopard::backend::TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
-            input_base, direct_base, temporary_base, original_count);
-#if LEO2_EXPECT_T32_B256_MULTIBLOCK
-    Require(selected, "T32 multi-block callback declined its exact shape");
-    CheckGuards(direct_output, direct_offset, output_bytes,
-        "T32 multi-block callback modified output guard");
-    CheckGuards(temporary, temporary_offset, output_bytes,
-        "T32 multi-block callback modified temporary guard");
-    CheckVariableParity(field, generator, original_count, recovery_count,
-        original, direct_recovery);
+        original_count == 64U &&
+        leopard::backend::TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
+            input_base, direct_base, temporary_base);
+#if LEO2_EXPECT_T32_B256_TWO_BLOCK
+    Require(selected == (original_count == 64U),
+        "T32 two-block callback selector disagrees with its exact shape");
+    if (selected)
+    {
+        CheckGuards(direct_output, direct_offset, output_bytes,
+            "T32 two-block callback modified output guard");
+        CheckGuards(temporary, temporary_offset, output_bytes,
+            "T32 two-block callback modified temporary guard");
+        CheckVariableParity(field, generator, original_count, recovery_count,
+            original, direct_recovery);
+    }
 #else
     Require(!selected,
-        "disabled T32 multi-block callback accepted its exact shape");
+        "disabled T32 two-block callback accepted its exact shape");
 #endif
-    Require(!leopard::backend::
-            TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
-                input_base, direct_base, temporary_base, 63U),
-        "T32 multi-block callback accepted an unsupported K");
 
     std::memset(output.bytes(), kGuardValue, output.size());
     const std::vector<uint8_t> output_before(
@@ -579,10 +580,10 @@ int main()
         ExerciseProduction(context);
         ExerciseProductionBalancedSide(context, 64);
         ExerciseProductionBalancedSide(context, 128);
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
-        ExerciseProductionT32MultiBlock(context, 64);
-        ExerciseProductionT32MultiBlock(context, 96);
-        ExerciseProductionT32MultiBlock(context, 128);
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+        ExerciseProductionT32TwoBlockFamily(context, 64);
+        ExerciseProductionT32TwoBlockFamily(context, 96);
+        ExerciseProductionT32TwoBlockFamily(context, 128);
 #endif
         leo2_context_destroy(context);
         std::printf("production balanced 64-byte terminal checks passed\n");

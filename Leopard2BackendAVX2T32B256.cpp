@@ -11,7 +11,7 @@
 namespace leopard { namespace backend {
 
 #if (defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED) || \
-     defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)) && \
+     defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)) && \
     defined(LEO2_HAVE_AVX2_BACKEND) && !defined(NO_LEO_HAS_FF8)
 
 namespace {
@@ -29,12 +29,12 @@ static volatile uint32_t g_t32_b256_generated_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED;
 #endif
 
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
-#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK
-#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK 0
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+#ifndef LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK
+#define LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK 0
 #endif
-static volatile uint32_t g_t32_b256_multiblock_mode =
-    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_MULTIBLOCK;
+static volatile uint32_t g_t32_b256_two_block_mode =
+    1U + LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK;
 #endif
 
 /*
@@ -246,7 +246,7 @@ static LEO_FORCE_INLINE void ForwardGroup(
     Store(work[base + 7], offset, x7);
 }
 
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
 
 static LEO_FORCE_INLINE void PreparedMulAdd(
     __m256i& destination,
@@ -496,38 +496,6 @@ static LEO_FORCE_INLINE void InverseBlockShift64(
         tables, data, work, 24, offset);
 }
 
-static LEO_FORCE_INLINE void InverseBlockShift96(
-    const uint8_t* tables,
-    const void* data,
-    void* work,
-    unsigned offset)
-{
-    InverseGroupPrepared<227,48,3,62,137,226,183>(
-        tables, data, work, 0, offset);
-    InverseGroupPrepared<1,41,146,16,26,108,224>(
-        tables, data, work, 8, offset);
-    InverseGroupPrepared<164,4,70,103,27,134,131>(
-        tables, data, work, 16, offset);
-    InverseGroupPrepared<143,192,127,105,38,139,222>(
-        tables, data, work, 24, offset);
-}
-
-static LEO_FORCE_INLINE void InverseBlockShift128(
-    const uint8_t* tables,
-    const void* data,
-    void* work,
-    unsigned offset)
-{
-    InverseGroupPrepared<160,29,167,144,241,254,196>(
-        tables, data, work, 0, offset);
-    InverseGroupPrepared<10,209,122,9,31,239,76>(
-        tables, data, work, 8, offset);
-    InverseGroupPrepared<242,126,53,88,73,200,54>(
-        tables, data, work, 16, offset);
-    InverseGroupPrepared<101,230,57,250,148,140,99>(
-        tables, data, work, 24, offset);
-}
-
 template<unsigned Log01, unsigned Log23, unsigned Log02>
 static LEO_FORCE_INLINE void OuterInverse(
     const uint8_t* tables,
@@ -679,20 +647,14 @@ LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256(
 }
 #endif
 
-#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_MULTIBLOCK)
-LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
+#if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
+LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
     const void* data_base,
     void* recovery_base,
-    void* temporary_base,
-    uint32_t original_count)
+    void* temporary_base)
 {
-    if (g_t32_b256_multiblock_mode != 1U)
+    if (g_t32_b256_two_block_mode != 1U)
         return false;
-    if (original_count != 64U && original_count != 96U &&
-        original_count != 128U)
-    {
-        return false;
-    }
 
     LEO_DEBUG_ASSERT(data_base != NULL && recovery_base != NULL &&
         temporary_base != NULL);
@@ -716,27 +678,6 @@ LEO2_AVX2_T32_B256_ENTRY bool TryAVX2FF8HighEncodeT32B256MultiBlockPacked(
         {
             OuterInverseXor<153,102,17>(
                 tables, temporary_base, recovery_base, column, offset);
-        }
-
-        if (original_count >= 96U)
-        {
-            InverseBlockShift96(
-                tables, data + 64U * 256U, temporary_base, offset);
-            for (unsigned column = 0; column < 8; ++column)
-            {
-                OuterInverseXor<51,187,34>(
-                    tables, temporary_base, recovery_base, column, offset);
-            }
-        }
-        if (original_count == 128U)
-        {
-            InverseBlockShift128(
-                tables, data + 96U * 256U, temporary_base, offset);
-            for (unsigned column = 0; column < 8; ++column)
-            {
-                OuterInverseXor<219,7,153>(
-                    tables, temporary_base, recovery_base, column, offset);
-            }
         }
 
         for (unsigned column = 0; column < 8; ++column)
