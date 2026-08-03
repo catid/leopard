@@ -699,6 +699,16 @@ void AVX2FF8HighEncodeT2PackedTail(
     void* const* recovery,
     uint32_t original_count,
     uint64_t byte_count);
+#if defined(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+/*
+    Generated exact legacy-high K=R=T=16, B=64 transform.  This concrete
+    entry stays outside Ops: the public terminal has already proved pure AVX2,
+    native packed input/output slabs, and the exact immutable shape.
+*/
+bool TryAVX2FF8HighEncodeT16B64(
+    const void* const* data,
+    void* const* recovery);
+#endif
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
 /*
     Generated exact legacy-high K=R=T=32, B=256 transform.  This concrete

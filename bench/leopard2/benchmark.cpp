@@ -124,6 +124,7 @@ struct Options
     int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
     int k8r3r4_t4_terminal_mode;
+    int balanced_b64_terminal_mode;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
     bool disable_k9r6r8_b256_terminal;
@@ -176,6 +177,7 @@ struct Options
         , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
+        , balanced_b64_terminal_mode(-1)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
@@ -472,6 +474,9 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
         << "  --k8r3r4-t4-terminal-mode 0|1\n"
         << "                         Attribution-only: disable or enable the terminal\n"
+        << "  --balanced-b64-terminal-mode 0|1\n"
+        << "                         Attribution-only: mature or packed balanced path\n"
+        << "                         in identical executable text using schema v22\n"
         << "  --disable-k16r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
@@ -612,6 +617,16 @@ static Options ParseOptions(int argc, char** argv)
                 options.k8r3r4_t4_terminal_mode = 1;
             else
                 Fail("--k8r3r4-t4-terminal-mode must be exactly 0 or 1");
+        }
+        else if (argument == "--balanced-b64-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.balanced_b64_terminal_mode = 0;
+            else if (mode == "1")
+                options.balanced_b64_terminal_mode = 1;
+            else
+                Fail("--balanced-b64-terminal-mode must be exactly 0 or 1");
         }
         else if (argument == "--disable-k16r8-b256-terminal")
             options.disable_k16r8_b256_terminal = true;
@@ -1473,6 +1488,10 @@ static int Run(const Options& options)
             SetK8R3R4T4TerminalEnabledForDiagnostics(
                 options.k8r3r4_t4_terminal_mode == 1))
         Fail("cannot set the K8/R=3..4 T=4 terminal attribution mode");
+    if (options.balanced_b64_terminal_mode >= 0 &&
+        !leopard2_internal::SetBalancedB64TerminalEnabledForDiagnostics(
+            options.balanced_b64_terminal_mode == 1))
+        Fail("cannot set the balanced B64 terminal attribution mode");
     if (options.disable_k16r8_b256_terminal &&
         !leopard2_internal::SetK16R8B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K16/R8/256-byte terminal for attribution");
@@ -1770,12 +1789,14 @@ static int Run(const Options& options)
         options.low_p128_b64_terminal_mode >= 0 ||
         options.low_p16_partial_direct_output_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
+        options.balanced_b64_terminal_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.balanced_b64_terminal_mode >= 0 ? 22 :
         options.low_p16_partial_direct_output_mode >= 0 ? 21 :
         options.low_p128_b64_terminal_mode >= 0 ? 20 :
         options.low_p32_b64_terminal_mode >= 0 ? 18 :
@@ -2183,6 +2204,15 @@ static int Run(const Options& options)
          << ",\n"
          << "    \"k9r5_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k9r5_b256_terminal ? "true" : "false");
+    if (options.balanced_b64_terminal_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"balanced_b64_terminal_diagnostic_mode\": "
+             << options.balanced_b64_terminal_mode << ",\n"
+             << "    \"balanced_b64_terminal_enabled\": "
+             << (options.balanced_b64_terminal_mode == 1
+                    ? "true" : "false");
+    }
     if (options.low_p16_partial_direct_output_mode >= 0)
     {
         const bool route_expected_selected =

@@ -797,6 +797,7 @@ int main()
         RequireResult(result, LEO2_SUCCESS,
             "create production AVX2 context");
         ExerciseProduction(context);
+        ExerciseProductionBalancedSide(context, 16);
         ExerciseProductionBalancedSide(context, 64);
         ExerciseProductionBalancedSide(context, 128);
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)

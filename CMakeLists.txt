@@ -67,6 +67,9 @@ option(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
 option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR
     "Disable the promoted AVX2 T=8 encoder for same-source diagnostics"
     OFF)
+option(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    "Enable the generated exact GF8/AVX2 K=R=T=16,B=64 encoder when available"
+    ON)
 option(LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING
     "Enable the promoted shortened/punctured AVX2 T=8 binding fast path"
     ON)
@@ -558,6 +561,36 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
 endif()
 
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+   LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+    # Keep the three-pass generated kernel in a trailing object.  Its earlier
+    # in-TU prototype moved mature hot text and regressed unrelated T=32 work.
+    add_library(leopard2_backend_avx2_t16_b64 OBJECT
+        Leopard2BackendAVX2T16B64.cpp)
+    target_include_directories(leopard2_backend_avx2_t16_b64 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_backend_avx2_t16_b64 PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_backend_avx2_t16_b64 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(leopard2_backend_avx2_t16_b64 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_backend_avx2_t16_b64 PRIVATE
+            /arch:AVX2)
+    endif()
+    # Both ordinary and test-hook archives compile this routing source.  A
+    # source-local definition avoids perturbing unrelated baseline TUs.
+    set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+endif()
+
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
    LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
     # Keep the promoted exact terminal in its own object so its presence
     # cannot perturb GCC's call graph, constprop clones, or function placement
@@ -628,6 +661,11 @@ if(LEO2_HAVE_AVX2_BACKEND)
         LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK))
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t32_b256>)
+    endif()
+    if(LEOPARD_ENABLE_GF8 AND
+       LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t16_b64>)
     endif()
     if(LEOPARD_ENABLE_GF8 AND
        LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
@@ -995,6 +1033,11 @@ if(LEO2_BUILD_TESTS)
         endif()
         target_sources(leopard_test_hooks PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_test_hooks>)
+        if(LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+            target_sources(leopard_test_hooks PRIVATE
+                $<TARGET_OBJECTS:leopard2_backend_avx2_t16_b64>)
+        endif()
         if(LEOPARD_ENABLE_GF8 AND
            LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
             target_sources(leopard_test_hooks PRIVATE
@@ -1592,6 +1635,11 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(
             leopard2_balanced_b64_terminal_test PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1)
+        if(LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+            target_compile_definitions(
+                leopard2_balanced_b64_terminal_test PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+        endif()
         target_link_libraries(leopard2_balanced_b64_terminal_test
             leopard_test_hooks)
         add_test(NAME leopard2_balanced_b64_terminal

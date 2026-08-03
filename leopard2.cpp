@@ -62,6 +62,10 @@
 #include <omp.h>
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+#define LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED 0
+#endif
+
 /*
     Build-time-only selector used by the bounded AVX2 loss-5-through-8
     experiment. Zero retains the production transform control, one selects
@@ -5830,11 +5834,11 @@ static void GatherShardFromKernel(
         memcpy(destination, source, bytes);
 }
 
+#ifdef LEO_HAS_FF8
 static bool BypassTinyGF8AVX2HighPrunedSchedules(
     const leo2_decode_plan* plan,
     size_t buffer_bytes)
 {
-#ifdef LEO_HAS_FF8
     if (!plan || !plan->codec)
         return false;
     const leo2_codec* codec = plan->codec;
@@ -5888,12 +5892,8 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         codec->recovery_count >= 33 && codec->recovery_count <= 62 &&
         codec->parent_count == kGF8Order &&
         codec->original_count >= 65 && codec->original_count <= 191;
-#else
-    (void)plan;
-    (void)buffer_bytes;
-    return false;
-#endif
 }
+#endif
 
 static void ExecuteTransformDecodePass(
     const leo2_decode_plan* plan,
@@ -14638,7 +14638,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     if (!codec || shard_bytes != 64)
         return false;
     const uint32_t side = codec->padded_side;
-    if (side < 32 || side > 128 ||
+    const uint32_t minimum_side =
+        LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED ? 16U : 32U;
+    if (side < minimum_side || side > 128 ||
         ((codec->original_count ^ side) |
          (codec->recovery_count ^ side)) != 0)
         return false;
@@ -14679,8 +14681,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2BalancedB64PackedTerminalEligible(
     A balanced K=R=T code is one complete T-point inverse transform followed
     by one complete forward transform.  The exact-64-byte AVX2 transform
     layers are already independently qualified; this terminal changes only
-    the public-call boundary around that arithmetic.  T=16 remains excluded
-    because its direct screen did not recover the exact-main gap.
+    the public-call boundary around that arithmetic.  The T=16 specialization
+    uses a generated three-pass kernel in an isolated AVX2 object; larger
+    sides retain the mature transform arithmetic.
 
     All 2T public pointer entries are compared with their expected
     packed-slab coordinate before any output byte is written.  A mismatch is
@@ -14704,7 +14707,8 @@ TryEncodeGF8BalancedB64PackedTerminal(
     LEO_DEBUG_ASSERT(
         IsGF8AVX2BalancedB64PackedTerminalEligible(codec, 64));
 
-    static_assert(FixedSide == 32 || FixedSide == 64 || FixedSide == 128,
+    static_assert(FixedSide == 16 || FixedSide == 32 ||
+        FixedSide == 64 || FixedSide == 128,
         "balanced 64-byte terminal side is not qualified");
     static_assert(ProtectedCount <= 1,
         "balanced terminal protects at most one batch descriptor");
@@ -14788,14 +14792,25 @@ TryEncodeGF8BalancedB64PackedTerminal(
         return true;
     }
 
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+    if (FixedSide == 16)
+    {
+        if (!leopard::backend::TryAVX2FF8HighEncodeT16B64(
+                original, recovery))
+            return false;
+    }
+    else
+#endif
+    {
+        leopard::ff8::ReedSolomonEncode(
+            *codec->context->ops, 64, static_cast<unsigned>(side),
+            static_cast<unsigned>(side), static_cast<unsigned>(side),
+            static_cast<unsigned>(side),
+            original, const_cast<void**>(recovery), NULL, true);
+    }
 #ifdef LEO2_ENABLE_TEST_HOOKS
     leopard::ff8::TestOnlyRecordBalancedB64PackedCall();
 #endif
-    leopard::ff8::ReedSolomonEncode(
-        *codec->context->ops, 64, static_cast<unsigned>(side),
-        static_cast<unsigned>(side), static_cast<unsigned>(side),
-        static_cast<unsigned>(side),
-        original, const_cast<void**>(recovery), NULL, true);
     result_out = LEO2_SUCCESS;
     return true;
 }
@@ -16086,10 +16101,21 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             handled = TryEncodeGF8BalancedB64PackedTerminal<64, 0>(
                 codec, NULL, original, recovery, scratch, scratch_bytes,
                 terminal_result);
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+        else if (codec->padded_side == 128)
+            handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result);
+        else
+            handled = TryEncodeGF8BalancedB64PackedTerminal<16, 0>(
+                codec, NULL, original, recovery, scratch, scratch_bytes,
+                terminal_result);
+#else
         else
             handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
                 codec, NULL, original, recovery, scratch, scratch_bytes,
                 terminal_result);
+#endif
         if (handled)
             return terminal_result;
     }
@@ -16259,11 +16285,24 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result);
+#if LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED
+            else if (codec->padded_side == 128)
+                handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result);
+            else
+                handled = TryEncodeGF8BalancedB64PackedTerminal<16, 1>(
+                    codec, &item_range, items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result);
+#else
             else
                 handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result);
+#endif
             if (handled)
                 return terminal_result;
         }
