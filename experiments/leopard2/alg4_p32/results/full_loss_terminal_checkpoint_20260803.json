@@ -1,0 +1,146 @@
+{
+  "schema": "leopard2-full-loss-terminal-checkpoint/v1",
+  "date_utc": "2026-08-03",
+  "status": "accepted",
+  "candidate": {
+    "commit": "fa1c0c25acae95a0e7a8a6fc77ad57cfda0f338f",
+    "tree": "aa49c3b12362571ff347ed2977dff01e826c2c11",
+    "benchmark_sha256": "5d190347c90435d74e262d37385f4b7fe74f62cf594d3ddc6350d6499815c015",
+    "archive_sha256": "bf5e92f3facd1badc6b987b95585c5cafa6141c22f7cf86a6de700d61f3a5e9b",
+    "focused_test_sha256": "a7a48c77bc695c831fe56cc0556b9eab690536ae5ed47447457545311e7ee95e"
+  },
+  "exact_main": {
+    "commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "tree": "b7c8830d96a978f6ec14fe747095f066e351ae72",
+    "benchmark_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084"
+  },
+  "isolation": {
+    "cpu": 13,
+    "reserved_smt_sibling": 29,
+    "rounds_per_cell": 9,
+    "observations_per_implementation_per_round": 2,
+    "iterations_per_observation": 21,
+    "warmups_per_observation": 5,
+    "reuse": 256,
+    "all_rounds_zero_sibling_nonidle": true,
+    "rejected_contaminated_attempts": 0
+  },
+  "correctness": {
+    "p32_payloads": 2,
+    "p32_patterns": 68,
+    "p128_payloads": 2,
+    "p128_patterns": 137,
+    "p95_payloads": 1,
+    "p95_patterns": 104,
+    "parity_selections": 2,
+    "direct_kernel_cases": 1028,
+    "public_route_cases": 110,
+    "oracles": [
+      "direct systematic generator",
+      "mature Algorithm 4",
+      "generic LCH decoder"
+    ]
+  },
+  "codec_setup": {
+    "scope": "codec creation is reported separately from decode execution",
+    "median_us": {
+      "K32_R32": 2.145,
+      "K95_R95": 16.13,
+      "K128_R128": 28.221
+    },
+    "additional_immutable_locator_bytes": {
+      "K32_R32": 64,
+      "K95_R95": 256,
+      "K128_R128": 256
+    }
+  },
+  "full_loss_results": [
+    {
+      "K": 32,
+      "R": 32,
+      "bytes": 64,
+      "timing": "one-shot",
+      "same_source_speedup": 1.4713276819015462,
+      "same_source_ci95": [1.4563272348980498, 1.486482636357017],
+      "exact_main_speedup": 2.012641202672416,
+      "exact_main_ci95": [1.9930533196593536, 2.0324215969229593]
+    },
+    {
+      "K": 32,
+      "R": 32,
+      "bytes": 64,
+      "timing": "reusable",
+      "same_source_speedup": 1.1103909110872638,
+      "same_source_ci95": [1.0991268397881806, 1.1217704188379356],
+      "exact_main_speedup": 2.1345361491480386,
+      "exact_main_ci95": [2.1117372220461146, 2.1575812200748534]
+    },
+    {
+      "K": 95,
+      "R": 95,
+      "bytes": 64,
+      "timing": "one-shot",
+      "same_source_speedup": 1.069378606899891,
+      "same_source_ci95": [1.0629961316296381, 1.0757994040316852],
+      "exact_main_speedup": 1.5009393221259157,
+      "exact_main_ci95": [1.493051559095657, 1.5088687560584566]
+    },
+    {
+      "K": 95,
+      "R": 95,
+      "bytes": 64,
+      "timing": "reusable",
+      "same_source_speedup": 1.3062888903488217,
+      "same_source_ci95": [1.3027715812357121, 1.309815695726338],
+      "exact_main_speedup": 1.5716598736957377,
+      "exact_main_ci95": [1.5671478773828342, 1.5761848605572812]
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "bytes": 64,
+      "timing": "one-shot",
+      "same_source_speedup": 1.2372075167692322,
+      "same_source_ci95": [1.231476481280891, 1.2429652233051072],
+      "exact_main_speedup": 1.5788544779180989,
+      "exact_main_ci95": [1.5732547529689223, 1.5844741341081932]
+    },
+    {
+      "K": 128,
+      "R": 128,
+      "bytes": 64,
+      "timing": "reusable-control-neighbor",
+      "same_source_speedup": 1.000429787887397,
+      "same_source_ci95": [0.9971212580596572, 1.0037492956875074],
+      "decision": "retain mature reusable-plan decoder"
+    }
+  ],
+  "campaigns": [
+    {
+      "path": "/tmp/leopard2-full-loss-p32-oneshot-fa1c0c2-v3",
+      "raw_sha256": "3b0d3cb3908c3384550c0c6133bc79793f933b957dad54fdd3c0ee78be662526",
+      "summary_sha256": "9cbbb43462de8e2eadaec197a295a36eaa06eb05c17b12767e4c44550bcd0bae"
+    },
+    {
+      "path": "/tmp/leopard2-full-loss-p32-reusable-fa1c0c2-v1",
+      "raw_sha256": "d80715fe8c875ebabb72e5ec561855e0be2981e629a649cc81907b5de17dea83",
+      "summary_sha256": "93991238f02ea32ffc7524ff638ba4e72e0d18e7176e97fb443b066842cd2868"
+    },
+    {
+      "path": "/tmp/leopard2-full-loss-p128-oneshot-fa1c0c2-v1",
+      "raw_sha256": "32b4416801790cdaa73af0413e5be63c4e04fd7342f352ddfd3baa4fd693e97e",
+      "summary_sha256": "dee17ea5d64dc2bc293e8fc9a8c23a60e399fa6cf1d2fdad891e2ff33d796218"
+    },
+    {
+      "path": "/tmp/leopard2-full-loss-p128-reusable-fa1c0c2-v1",
+      "raw_sha256": "ee5c838088859cfc6061f0da1096533de711c8f81b09af646287ca5d9b095fa1",
+      "summary_sha256": "7a62dee35d0978f80cbbaca0461122f3aa42be56d2b7a5fc90d2379930bb0a60"
+    }
+  ],
+  "promotion": {
+    "one_shot": ["K=R=32,L=32", "K=R=95,L=95", "K=R=128,L=128"],
+    "reusable": ["K=R=32,L=32", "K=R=95,L=95"],
+    "not_promoted": ["reusable K=R=128,L=128"],
+    "credible_neighbor_regressions": []
+  }
+}
