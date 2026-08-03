@@ -26,8 +26,8 @@ import time
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA = "leopard2-alg4-p32-terminal-abba/v2"
-SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v2"
+SCHEMA = "leopard2-alg4-p32-terminal-abba/v3"
+SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v3"
 BENCHMARK_SCHEMA = "leopard2-benchmark-v19"
 MAIN_SCHEMA = "leopard-main-benchmark-v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
@@ -501,6 +501,7 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument("--sibling", required=True, type=int)
     parser.add_argument("--iterations", type=int, default=21)
     parser.add_argument("--warmup", type=int, default=5)
+    parser.add_argument("--max-round-attempts", type=int, default=5)
     return parser.parse_args()
 
 
@@ -508,6 +509,8 @@ def main() -> int:
     options = parse_arguments()
     require(options.iterations >= 3 and options.warmup >= 1,
             "insufficient timing samples")
+    require(options.max_round_attempts >= 1,
+            "max round attempts must be positive")
     require(not options.output.exists(), "output directory already exists")
     require(set(os.sched_getaffinity(0)) == {options.cpu},
             "runner must be singleton-pinned to the benchmark CPU")
@@ -589,6 +592,7 @@ def main() -> int:
             "reserved_sibling": options.sibling,
             "iterations": options.iterations,
             "warmup": options.warmup,
+            "max_round_attempts": options.max_round_attempts,
             "cells": [],
         })
 
@@ -624,42 +628,57 @@ def main() -> int:
 
         for cell_index, cell in enumerate(cells()):
             cell_rounds = []
+            rejected_attempts = []
             for round_index in range(9):
-                if cell["role"] == "target":
-                    target_orders = (
-                        ("main", "candidate", "control", "control", "candidate", "main"),
-                        ("control", "main", "candidate", "candidate", "main", "control"),
-                        ("candidate", "control", "main", "main", "control", "candidate"),
-                    )
-                    order = target_orders[round_index % len(target_orders)]
-                elif round_index % 2 == 0:
-                    order = ("control", "candidate", "candidate", "control")
+                for attempt in range(options.max_round_attempts):
+                    if cell["role"] == "target":
+                        target_orders = (
+                            ("main", "candidate", "control", "control", "candidate", "main"),
+                            ("control", "main", "candidate", "candidate", "main", "control"),
+                            ("candidate", "control", "main", "main", "control", "candidate"),
+                        )
+                        order = target_orders[round_index % len(target_orders)]
+                    elif round_index % 2 == 0:
+                        order = ("control", "candidate", "candidate", "control")
+                    else:
+                        order = ("candidate", "control", "control", "candidate")
+                    before_cpu = cpu_snapshot(options.cpu)
+                    before_sibling = cpu_snapshot(options.sibling)
+                    values = []
+                    for slot, implementation in enumerate(order):
+                        label = (f"{cell['id']}-round{round_index}-"
+                                 f"attempt{attempt}-slot{slot}-{implementation}")
+                        executable = main_executable \
+                            if implementation == "main" else candidate
+                        values.append(run_one(
+                            implementation, executable,
+                            identities[implementation], cell, options.cpu,
+                            candidate_source, options.iterations,
+                            options.warmup, invocations, label))
+                    isolation = {
+                        "benchmark_cpu": cpu_delta(
+                            before_cpu, cpu_snapshot(options.cpu)),
+                        "reserved_sibling": cpu_delta(
+                            before_sibling, cpu_snapshot(options.sibling)),
+                    }
+                    attempt_value = {
+                        "round": round_index, "attempt": attempt,
+                        "order": list(order), "invocations": values,
+                        "isolation": isolation,
+                    }
+                    if isolation["reserved_sibling"]["nonidle"] == 0:
+                        cell_rounds.append(attempt_value)
+                        break
+                    rejected_attempts.append(attempt_value)
                 else:
-                    order = ("candidate", "control", "control", "candidate")
-                before_cpu = cpu_snapshot(options.cpu)
-                before_sibling = cpu_snapshot(options.sibling)
-                values = []
-                for slot, implementation in enumerate(order):
-                    label = (f"{cell['id']}-round{round_index}-slot{slot}-"
-                             f"{implementation}")
-                    executable = main_executable if implementation == "main" \
-                        else candidate
-                    values.append(run_one(
-                        implementation, executable, identities[implementation],
-                        cell, options.cpu, candidate_source,
-                        options.iterations, options.warmup, invocations, label))
-                isolation = {
-                    "benchmark_cpu": cpu_delta(
-                        before_cpu, cpu_snapshot(options.cpu)),
-                    "reserved_sibling": cpu_delta(
-                        before_sibling, cpu_snapshot(options.sibling)),
-                }
-                require(isolation["reserved_sibling"]["nonidle"] == 0,
-                        f"SMT sibling was active in {cell['id']} round {round_index}")
-                cell_rounds.append({"round": round_index, "order": list(order),
-                                    "invocations": values,
-                                    "isolation": isolation})
-            raw["cells"].append({"cell": dict(cell), "rounds": cell_rounds})
+                    raise EvidenceError(
+                        f"SMT sibling remained active in {cell['id']} "
+                        f"round {round_index} for "
+                        f"{options.max_round_attempts} attempts")
+            raw["cells"].append({
+                "cell": dict(cell), "rounds": cell_rounds,
+                "rejected_contaminated_attempts": rejected_attempts,
+            })
             print(f"{cell_index + 1}/{len(cells())} {cell['id']}",
                   file=sys.stderr, flush=True)
 
@@ -706,6 +725,9 @@ def main() -> int:
                               for name, value in identities.items()},
             "correctness": raw["correctness"]["coverage"],
             "all_rounds_zero_sibling_nonidle": True,
+            "rejected_contaminated_attempt_count": sum(
+                len(item["rejected_contaminated_attempts"])
+                for item in raw["cells"]),
             "target_control_failure": target_control_failure,
             "target_main_failure": target_main_failure,
             "credible_neighbor_regressions": neighbor_regressions,
