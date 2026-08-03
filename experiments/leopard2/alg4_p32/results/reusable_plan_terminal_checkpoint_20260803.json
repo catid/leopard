@@ -1,0 +1,81 @@
+{
+  "schema": "leopard2-alg4-reusable-terminal-checkpoint/v1",
+  "status": "accepted",
+  "date_utc": "2026-08-03",
+  "candidate": {
+    "source_commit": "8a8aef5f7d4f4700c394f9044257d8982546e767",
+    "source_tree": "d9dd20e8b646f41837fd39974ab8b431c8944b9a",
+    "benchmark_sha256": "6163d77b5fbcb25368afec32e3cc6b3f9b42a95178dfa8fd4115e9777d6de696",
+    "archive_sha256": "ce112a95baa2561b4c1f7dc6fc69a1769fa40c1eec13c0f00dcd39fde979174d",
+    "focused_test_sha256": "b045958665b42f71ac1349c4c0673eda35c2953f01a73e0b831b23048c303663"
+  },
+  "baseline": {
+    "name": "exact Leopard main codec",
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "benchmark_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084",
+    "archive_sha256": "6d52f31270fb01f44a6cb23464e8681a33545d70996bc46338746d8c73264b3b"
+  },
+  "method": {
+    "cpu": "AMD Ryzen 9 9950X3D",
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "rounds": 9,
+    "observations_per_implementation_per_round": 2,
+    "iterations_per_observation": 21,
+    "warmup_iterations": 5,
+    "reuse": 256,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "shard_bytes": 64,
+    "same_source_control": "the same frozen executable with the exact terminal disabled through its atomic diagnostic mode",
+    "exact_main_comparison": "Leopard2 reusable execution excludes immutable plan setup; Leopard main's legacy decode API necessarily includes its per-call setup",
+    "all_rounds_zero_sibling_nonidle": true,
+    "rejected_contaminated_attempts": 0
+  },
+  "correctness": {
+    "focused_test": "PASS low_p32_p128_b64_terminal p32_payloads=2 p32_patterns=67 p128_payloads=2 p128_patterns=136 p95_payloads=1 p95_patterns=103 parity_selections=2 routes=98",
+    "pooled_binding_items": 2,
+    "release_ctest": "5/5 passed: terminal, batch aliasing, high/low duality, arbitrary counts, legacy golden",
+    "strict_gcc_13": "passed -Wall -Wextra -Wpedantic -Werror",
+    "strict_clang_18": "passed -Wall -Wextra -Wpedantic -Werror",
+    "clang_18_asan_ubsan_lsan": "passed; maximum RSS 69888 KiB",
+    "feature_disabled_build": "passed",
+    "gf16_only_build": "passed",
+    "workload_digests_matched": true,
+    "route_attestation_matched": true,
+    "artifact_hashes_unchanged": true
+  },
+  "reusable_execution": {
+    "p32_raw_local_path": "/tmp/leopard2-low-plan-reusable-p32-8a8aef5-v1/raw.json",
+    "p32_raw_sha256": "9dba23359d5f71525bc6d3cee819dfff52bd77f67e4b4ecc696e32b4e56ac29e",
+    "p128_raw_local_path": "/tmp/leopard2-low-plan-reusable-p128-8a8aef5-v1/raw.json",
+    "p128_raw_sha256": "a16b3cef1ce7d771d931d41c5fce1e0b986c9a6293a44cd12e89b9c529f21314",
+    "targets": [
+      {"id": "p32-k32-r32-l9", "control_over_candidate": 1.999479, "control_ci95": [1.985543, 2.013513], "main_over_candidate": 2.131716, "main_ci95": [2.112677, 2.150927]},
+      {"id": "p32-k32-r32-l16", "control_over_candidate": 2.076535, "control_ci95": [2.063911, 2.089236], "main_over_candidate": 2.128787, "main_ci95": [2.115959, 2.141693]},
+      {"id": "p32-k32-r32-l31", "control_over_candidate": 1.827285, "control_ci95": [1.813059, 1.841622], "main_over_candidate": 2.048707, "main_ci95": [2.039683, 2.057771]},
+      {"id": "p128-k95-r95-l47", "control_over_candidate": 2.098587, "control_ci95": [2.084484, 2.112786], "main_over_candidate": 1.613027, "main_ci95": [1.603649, 1.622460]},
+      {"id": "p128-k95-r95-l94", "control_over_candidate": 1.825310, "control_ci95": [1.810525, 1.840217], "main_over_candidate": 1.568385, "main_ci95": [1.555633, 1.581241]},
+      {"id": "p128-k128-r128-l64", "control_over_candidate": 2.042215, "control_ci95": [2.015674, 2.069106], "main_over_candidate": 1.600281, "main_ci95": [1.581501, 1.619284]},
+      {"id": "p128-k128-r128-l127", "control_over_candidate": 1.763850, "control_ci95": [1.750660, 1.777138], "main_over_candidate": 1.551341, "main_ci95": [1.541263, 1.561485]}
+    ],
+    "credible_neighbor_regressions": []
+  },
+  "one_shot_regression_replay": {
+    "p32_raw_local_path": "/tmp/leopard2-low-plan-oneshot-p32-8a8aef5-v1/raw.json",
+    "p32_raw_sha256": "19872375535baaa54f1ecb448a9b46a1ac047cb22d06b5516c73650c7c1e864a",
+    "p128_raw_local_path": "/tmp/leopard2-low-plan-oneshot-p128-8a8aef5-v1/raw.json",
+    "p128_raw_sha256": "0026941d66ddb6ef9f41dff53c87944838b1b1bc373a64888fc764810ce892da",
+    "minimum_control_lower_ci95": 1.205357,
+    "minimum_main_lower_ci95": 1.165490,
+    "credible_neighbor_regressions": []
+  },
+  "promotion_rule": {
+    "minimum_target_lower_ci95": 1.05,
+    "maximum_neighbor_regression": 0.02,
+    "reusable_target_pass": true,
+    "one_shot_replay_pass": true,
+    "neighbor_pass": true
+  }
+}
