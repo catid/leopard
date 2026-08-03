@@ -1,0 +1,262 @@
+{
+  "schema": "leopard2-t32-tiny-schedule-bypass-summary-v1",
+  "generated_utc": "2026-08-03T13:37:09Z",
+  "decision": {
+    "status": "promote",
+    "summary": "For native legacy-high GF8 AVX2 T=R=32 maximum-loss decode passes of 64 through 512 aligned bytes, execute the mature regular Algorithm 5 kernels instead of interpreting exact-mask pruned schedules.",
+    "wire_format_changed": false,
+    "field_arithmetic_changed": false,
+    "scratch_geometry_changed": false,
+    "plan_mutability_changed": false,
+    "scope": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "layout": "native_v1",
+      "padded_side_T": 32,
+      "transmitted_recovery_R": 32,
+      "parent_N": [128, 256],
+      "original_K_inclusive": [33, 224],
+      "loss_rule": "missing_original_count == R",
+      "aligned_pass_bytes_inclusive": [64, 512]
+    },
+    "fallback": "The immutable exact schedules remain in reusable plans. Forced-tiled codecs, partial loss, punctured R, translated-low, scalar, SSSE3, GF16, 576-byte aligned passes, and wider passes retain the prior path."
+  },
+  "implementation": {
+    "candidate_commits": [
+      "0af258e76cb56df47c44deccfb868895459aa78d",
+      "57052a8dde789f05507b2c58a847c163019c0cee",
+      "165855af459525eb756a9f2124fd7697ad561c4a"
+    ],
+    "predecessor_commit": "460d737b7739993370e22f752598b55d3d7bd43a",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_tree": "885439c6cb70e8aa45813e8ef8774c6eb78f081c",
+    "source_tracked_dirty_at_build": false,
+    "production_file": "leopard2.cpp",
+    "focused_test": "tests/leopard2/test_high_t32_tiny_schedule_policy.cpp",
+    "design_note": "The decision is pass-local so an immutable reusable plan can use the regular kernel for a small execution and retain pruning for a later large execution. The policy call is physically confined to the native-high GF8 tiled branch to avoid low/generic code-generation regressions."
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "compiler": "gcc 13.3.0",
+    "cmake": "3.28.3"
+  },
+  "build_and_binary_provenance": {
+    "build_type": "Release",
+    "backend_variant": "avx2",
+    "gf8_enabled": true,
+    "gf16_enabled": true,
+    "avx512f_disabled": true,
+    "avx512bw_disabled": true,
+    "avx512vl_disabled": true,
+    "gfni_disabled": true,
+    "candidate_binary_sha256": "4c5250440336afaceda502ecdfff99913fc844521b156ee174f16df5a1431260",
+    "predecessor_binary_sha256": "9aacf880bab3cfedf56e9df8bc105b3dc0698e40be4d90ead4c2a1f25c7f85d6",
+    "exact_main_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_evex_instruction_count": 0,
+    "predecessor_evex_instruction_count": 0,
+    "exact_main_evex_instruction_count": 0,
+    "hashes_identical_before_and_after_all_campaigns": true,
+    "source_attestation_sha256": "2db6a2e48dbdc59ff03db76215a3c444caf999d4cfbdb7374b61fbfc883e14a7"
+  },
+  "authoritative_method": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "batch": 1,
+    "reuse_for_execution_samples": 256,
+    "timing_samples_per_invocation": 21,
+    "warmup_calls_per_invocation": 5,
+    "independent_rounds_per_cell": 9,
+    "invocations_per_role_per_round": 2,
+    "counterbalancing": "ABBA with alternating order",
+    "interval": "two-sided Student-t 95% confidence interval over per-round paired log ratios, df=8",
+    "ratio_semantics": "baseline time divided by candidate time; values above 1 favor Leopard2",
+    "openmp_environment": {
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_NUM_THREADS": "1",
+      "OMP_THREAD_LIMIT": "1",
+      "OMP_PROC_BIND": "TRUE"
+    },
+    "per_process_memory_max": "512 MiB",
+    "swap_max": 0,
+    "note": "An initial one-shot and neighbor campaign omitted the explicit OpenMP controls and was invalidated. It reproducibly inflated K=224 candidate decode from about 3.22 to 4.36 microseconds. The invalid data was retained under *_invalid_omp_dynamic_unspecified and is excluded here."
+  },
+  "directional_cutoff_search": {
+    "authority": "directional only because the search binaries were built from a dirty candidate tree",
+    "all_k_screen": {
+      "artifact": "/tmp/leopard2-t32-bypass-all-multiples-460d737-v1/summary.json",
+      "cells": 3072,
+      "K_inclusive": [33, 224],
+      "aligned_bytes": [64, 128, 192, 256, 320, 384, 448, 512, 576, 640, 704, 768, 832, 896, 960, 1024],
+      "wins": 3071,
+      "apparent_losses": 1,
+      "apparent_loss_disposition": "K=222/B=384 had sibling contamination; a zero-sibling nine-round rerun favored the candidate by 1.164x.",
+      "geometric_ratio_at_64_bytes": 1.493624432,
+      "geometric_ratio_at_512_bytes": 1.138394273
+    },
+    "multi_seed_screen": {
+      "artifact": "/tmp/leopard2-t32-bypass-multiseed-460d737-v1/summary.json",
+      "cells": 768,
+      "qualified_cells_at_64_through_512_bytes": 384,
+      "qualified_wins": 384,
+      "geometric_ratio_at_64_bytes": 1.393243546,
+      "geometric_ratio_at_512_bytes": 1.114813689,
+      "weakest_qualified_ratio": 1.029986806,
+      "cutoff_reason": "K=33 losses appeared at 768 and 832 bytes, so the production cutoff is 512 aligned bytes."
+    }
+  },
+  "authoritative_raw_evidence": {
+    "root": "/tmp/leopard2-t32-bypass-165855a-pure-avx2-authoritative",
+    "reusable": {
+      "summary_sha256": "1dada8716e3641951c31346fb8ba13e40b3ec9497a4d088bae6b90c4e4cd9173",
+      "accepted_manifest_sha256": "bc3c7010c9525d35751f2e87ab5fceb3ec47ca00744fb830d6bd1666184b4499",
+      "accepted_rounds": 54,
+      "accepted_reports": 324,
+      "rejected_noisy_attempts": 1
+    },
+    "one_shot": {
+      "summary_sha256": "aee1ce9887f82a03ed5617d013bcaaa40c883f434b99ac9c9cf646f8bfdaa8c0",
+      "accepted_manifest_sha256": "5384d2a35c395cc4eec213be6844abada60c1874cffebbc96d06a7b9f71ccc63",
+      "accepted_rounds": 54,
+      "accepted_reports": 216,
+      "rejected_noisy_attempts": 0
+    },
+    "inert_neighbors": {
+      "summary_sha256": "422868d466dab4b250c3fa7416c09ae6bef619c396b3e0afaf909f57a74e7693",
+      "accepted_manifest_sha256": "786d6c0e23d9da16dbff04836817cf180e901372c719c41b164e6e72aaa74d6b",
+      "accepted_rounds": 81,
+      "accepted_reports": 324,
+      "rejected_noisy_attempts": 4
+    },
+    "validation": "All accepted schemas, selectors, counts, loss coordinates, workload digests, scratch geometry, and round trips matched. Every accepted sibling delta was zero."
+  },
+  "target_results": [
+    {
+      "K": 160,
+      "pruned_over_auto_execution": [1.544773, 1.536006, 1.553590],
+      "main_over_auto_execution": [1.516563, 1.512059, 1.521080],
+      "main_over_auto_one_shot": [1.175319, 1.164086, 1.186660],
+      "main_over_auto_encode": [1.088534, 1.051391, 1.126988],
+      "main_over_auto_amortized_reuse_8_64_256": [1.038079, 1.433943, 1.495028]
+    },
+    {
+      "K": 192,
+      "pruned_over_auto_execution": [1.579347, 1.555223, 1.603846],
+      "main_over_auto_execution": [1.457616, 1.437649, 1.477860],
+      "main_over_auto_one_shot": [1.146965, 1.142565, 1.151382],
+      "main_over_auto_encode": [1.122527, 1.107753, 1.137499],
+      "main_over_auto_amortized_reuse_8_64_256": [0.977873, 1.373388, 1.435605]
+    },
+    {
+      "K": 193,
+      "pruned_over_auto_execution": [1.598361, 1.585956, 1.610862],
+      "main_over_auto_execution": [1.438414, 1.433751, 1.443091],
+      "main_over_auto_one_shot": [1.124580, 1.121922, 1.127244],
+      "main_over_auto_encode": [1.142278, 1.128276, 1.156454],
+      "main_over_auto_amortized_reuse_8_64_256": [0.953921, 1.352544, 1.415940]
+    },
+    {
+      "K": 200,
+      "pruned_over_auto_execution": [1.555693, 1.547260, 1.564171],
+      "main_over_auto_execution": [1.365016, 1.359310, 1.370745],
+      "main_over_auto_one_shot": [1.083684, 1.078998, 1.088390],
+      "main_over_auto_encode": [1.151430, 1.122328, 1.181286],
+      "main_over_auto_amortized_reuse_8_64_256": [0.904193, 1.283263, 1.343616]
+    },
+    {
+      "K": 223,
+      "pruned_over_auto_execution": [1.518835, 1.506060, 1.531717],
+      "main_over_auto_execution": [1.339616, 1.328245, 1.351085],
+      "main_over_auto_one_shot": [1.061196, 1.058047, 1.064354],
+      "main_over_auto_encode": [1.117343, 1.102282, 1.132609],
+      "main_over_auto_amortized_reuse_8_64_256": [0.895796, 1.261489, 1.319191]
+    },
+    {
+      "K": 224,
+      "pruned_over_auto_execution": [1.590325, 1.580939, 1.599768],
+      "main_over_auto_execution": [1.397377, 1.391552, 1.403228],
+      "main_over_auto_one_shot": [1.099420, 1.095771, 1.103080],
+      "main_over_auto_encode": [1.111381, 1.103733, 1.119082],
+      "main_over_auto_amortized_reuse_8_64_256": [0.919745, 1.312198, 1.375062]
+    }
+  ],
+  "target_result_format": {
+    "three_element_arrays": ["ratio", "ci95_low", "ci95_high"],
+    "amortized_array_reuse_counts": [8, 64, 256],
+    "K_R_bytes_loss": "R=32, shard_bytes=64, loss_count=32 for every row"
+  },
+  "neighbor_results": {
+    "cells": [
+      "K=32 translated-low",
+      "L=31 partial loss",
+      "R=31 punctured recovery",
+      "B=576 cutoff",
+      "B=2048 wide",
+      "GF16 boundary",
+      "scalar backend",
+      "SSSE3 backend",
+      "low profile"
+    ],
+    "point_estimate_regressions_over_2_percent": 0,
+    "largest_decode_execution_regression_fraction": 0.003961393,
+    "largest_plan_setup_regression_fraction": 0.015241670,
+    "largest_plan_setup_regression_cell": "low profile",
+    "low_profile_decode_execution_regression_fraction": 0.000321500,
+    "note": "The low-profile setup CI permits a regression slightly above 2 percent, but its point estimate is 1.52 percent, the production path is not evaluated by the new predicate, and execution is neutral."
+  },
+  "correctness_and_safety": {
+    "focused_policy_cases": 20,
+    "focused_policy_coverage": [
+      "1/63/64/65/511/512/513/575/576/577-byte tails and boundaries",
+      "K=33 and K=224",
+      "clustered, striped, and random maximum-loss patterns",
+      "K=32, R=31, L=31, scalar, and forced-path negatives",
+      "exact scratch, unaligned guarded buffers, input immutability, and reusable plans"
+    ],
+    "high_pruned_legacy": {
+      "status": "PASS",
+      "cases": 13,
+      "parity_bytes": 60296,
+      "restored_bytes": 6742,
+      "workspaces": ["materialized", "tiled"]
+    },
+    "high_low_duality": {
+      "status": "PASS",
+      "parity_cases": 69,
+      "decode_cases": 798,
+      "restored_shards": 17598,
+      "exhaustive_patterns": 288,
+      "random_patterns": 360,
+      "parity_rebuilds": 798,
+      "backends": 3
+    },
+    "broad_api": {
+      "status": "PASS",
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486,
+      "maximum_rss_kib": 803120,
+      "swaps": 0
+    },
+    "clang_18_asan_ubsan_focused": {
+      "status": "PASS",
+      "leak_detection": true,
+      "undefined_behavior_halt": true
+    }
+  },
+  "limitations": [
+    "The ordinary reusable plan intentionally retains exact schedules; its full setup cost loses to Leopard main at reuse=1 and some reuse=8 cells, then wins every measured cell by reuse=64.",
+    "The public one-shot path uses cheaper transient setup and wins every measured target including setup.",
+    "This promotion covers only the dense native-high T=R=L=32 GF8 AVX2 region and does not imply that regular kernels beat pruning for other T, loss counts, shard sizes, fields, or backends.",
+    "The directional cutoff sweep used dirty candidate binaries and is used only to choose scope; promotion depends on the clean frozen campaigns."
+  ]
+}
