@@ -5841,13 +5841,19 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
 
     /*
         Exact-mask schedules save field butterflies, but their immutable
-        operation interpreter has a higher fixed cost than the mature T=32
-        kernels when one pass contains at most sixteen paired 64-byte kernel
-        iterations per row (32 YMM vectors).
+        operation interpreter has a higher fixed cost than the mature regular
+        kernels for selected tiny native-high passes.
         Pinned every-K and multi-seed screens covered K=33..224, R=L=32
         and every complete 64-byte pass size through 512 bytes.  The regular
         schedule won by 1.49x geometric mean at 64 bytes and 1.14x at 512
         bytes; the weakest uncontaminated multi-seed cell still won by 1.03x.
+
+        For T=64, a same-binary screen covered every K=65..191 and
+        R=L=33..62 pair at 64 bytes.  The regular schedule won all 3810 cells;
+        R=63 and R=64 form a sharp crossover where the exact schedule is
+        neutral or faster, so they remain pruned.  A five-shape size sweep
+        kept at least a 1.09x win through 512 bytes.  The advantage narrowed
+        beyond that point, so the production rule stops at 512 bytes.
 
         Keep the byte-aware choice at execution rather than discarding the
         plan's exact schedules: the same immutable plan may later execute a
@@ -5858,17 +5864,27 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         public tail is zero-padded to one complete 64-byte pass and follows
         this pass-local rule.
     */
-    return buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
+    const bool t32_family =
+        buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
         (buffer_bytes & (kScratchAlignment - 1U)) == 0 &&
+        codec->padded_side == 32 && codec->recovery_count == 32 &&
+        codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
+        codec->original_count > 32 && codec->original_count <= 224;
+    const bool t64_punctured_family =
+        buffer_bytes >= kScratchAlignment && buffer_bytes <= 512U &&
+        (buffer_bytes & (kScratchAlignment - 1U)) == 0 &&
+        codec->padded_side == 64 &&
+        codec->recovery_count >= 33 && codec->recovery_count <= 62 &&
+        codec->parent_count == kGF8Order &&
+        codec->original_count >= 65 && codec->original_count <= 191;
+
+    return (t32_family || t64_punctured_family) &&
         codec->flags == 0 &&
         codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
         codec->field == LEO2_FIELD_GF8 &&
         codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
         codec->context && codec->context->ops &&
         codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
-        codec->padded_side == 32 && codec->recovery_count == 32 &&
-        codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
-        codec->original_count > 32 && codec->original_count <= 224 &&
         plan->missing_original_count == codec->recovery_count &&
         !PlanUsesTranslatedLowDecode(plan);
 #else

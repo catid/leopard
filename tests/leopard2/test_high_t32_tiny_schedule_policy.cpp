@@ -8,7 +8,7 @@
 
 /*
     Production regression for the pass-local GF8/AVX2 native Algorithm 5
-    T=32 schedule policy.  Reusable AUTO plans retain their exact schedules,
+    tiny schedule policy.  Reusable AUTO plans retain their exact schedules,
     but qualified tiny maximum-loss passes execute the mature regular kernels.
     A forced-tiled codec is the same-executable pruned-schedule control.
 */
@@ -20,7 +20,7 @@
 #include "leopard2.h"
 
 #ifndef LEO2_ENABLE_TEST_HOOKS
-#error "The T=32 tiny schedule-policy test requires Leopard2 test hooks"
+#error "The high tiny schedule-policy test requires Leopard2 test hooks"
 #endif
 
 #include <algorithm>
@@ -383,8 +383,8 @@ void create_codec(
     require_result(leo2_codec_create(context, k, r,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, &options,
         owner.output()), label + " codec create");
-    require(leo2_codec_padded_side(owner.get()) == 32,
-        label + " did not create T=32");
+    require(leo2_codec_padded_side(owner.get()) == ceil_pow2(r),
+        label + " created the wrong padded redundancy side");
     require(leo2_codec_parent_count(owner.get()) ==
             ceil_pow2(k + ceil_pow2(r)),
         label + " parent count changed");
@@ -560,7 +560,8 @@ void run_campaign(
             return left.bytes < right.bytes;
         })->bytes;
     const uint32_t t = ceil_pow2(r);
-    require(t == 32, std::string(name) + " escaped T=32");
+    require(t == 32 || t == 64,
+        std::string(name) + " escaped the tested transform sides");
     const uint32_t parent = ceil_pow2(k + t);
     const size_t output_blocks =
         partial_output_block_count(k, r, missing);
@@ -689,7 +690,7 @@ int main()
             leo2_context_create(&options, &avx2_context);
         if (context_result == LEO2_UNSUPPORTED)
         {
-            std::cout << "SKIP high_t32_tiny_schedule_policy: "
+            std::cout << "SKIP high_tiny_schedule_policy: "
                          "AVX2 unavailable" << std::endl;
             return 0;
         }
@@ -757,6 +758,67 @@ int main()
             one_byte_case(64, RoutePrunedOnly),
             false, false, true, 0x54a32707U);
 
+        std::vector<ByteCase> t64_byte_matrix;
+        const size_t t64_regular_sizes[] = {
+            1, 63, 64, 65, 127, 128, 129, 511, 512, 513, 575
+        };
+        for (size_t i = 0;
+             i < sizeof(t64_regular_sizes) / sizeof(t64_regular_sizes[0]);
+             ++i)
+        {
+            const ByteCase entry = {
+                t64_regular_sizes[i], RouteRegularOnly
+            };
+            t64_byte_matrix.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            t64_byte_matrix.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            t64_byte_matrix.push_back(entry);
+        }
+        run_campaign(avx2_context, "t64-striped-byte-matrix",
+            99, 50, striped_missing(99, 50), t64_byte_matrix,
+            true, false, true, 0x54a32909U);
+        run_campaign(avx2_context, "t64-lower-k-clustered",
+            65, 33, clustered_missing(33),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a32a0aU);
+        run_campaign(avx2_context, "t64-upper-k-random",
+            124, 62, random_missing(124, 62, 0x60c44291U),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a32b0bU);
+        run_campaign(avx2_context, "t64-r63-neighbor",
+            124, 63, striped_missing(124, 63),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a32c0cU);
+        run_campaign(avx2_context, "t64-r64-neighbor",
+            124, 64, striped_missing(124, 64),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a32d0dU);
+        run_campaign(avx2_context, "t64-k64-neighbor",
+            64, 50, striped_missing(64, 50),
+            one_byte_case(64, RoutePrunedOnly),
+            false, true, false, 0x54a32e0eU);
+        run_campaign(avx2_context, "t64-upper-parent-regular",
+            125, 62, striped_missing(125, 62),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a32f0fU);
+        run_campaign(avx2_context, "t64-k191-regular",
+            191, 62, random_missing(191, 62, 0x7337ca09U),
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a33010U);
+        run_campaign(avx2_context, "t64-k192-neighbor",
+            192, 62, striped_missing(192, 62),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a33111U);
+        run_campaign(avx2_context, "t64-partial-loss-neighbor",
+            99, 50, striped_missing(99, 49),
+            one_byte_case(64, RoutePrunedOnly),
+            false, false, true, 0x54a33212U);
+
         leo2_context_options scalar_options = {};
         scalar_options.struct_size = sizeof(scalar_options);
         scalar_options.backend = LEO2_BACKEND_SCALAR;
@@ -771,12 +833,12 @@ int main()
         leo2_context_destroy(scalar_context);
         leo2_context_destroy(avx2_context);
 
-        std::cout << "PASS high_t32_tiny_schedule_policy" << std::endl;
+        std::cout << "PASS high_tiny_schedule_policy" << std::endl;
         return 0;
     }
     catch (const std::exception& error)
     {
-        std::cerr << "FAIL high_t32_tiny_schedule_policy: "
+        std::cerr << "FAIL high_tiny_schedule_policy: "
                   << error.what() << std::endl;
         return 1;
     }
