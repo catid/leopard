@@ -453,8 +453,8 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: time internal transform-plan setup and\n"
         << "                         execution (not public one-shot dispatch) using schema v15\n"
         << "  --low-p32-b64-terminal-mode 0|1\n"
-         << "                         Attribution-only: mature or fused exact P32 terminal\n"
-         << "                         in identical executable text using schema v18\n"
+        << "                         Attribution-only: mature or fused tiled P32 terminal\n"
+        << "                         in identical executable text using schema v19\n"
         << "  --gf8-avx2-walsh-locator-mode 0|1\n"
         << "                         Attribution-only: disable or enable the dense setup kernel\n"
         << "                         within one-shot setup mode 3 using schema v16\n"
@@ -1337,7 +1337,8 @@ static std::string LegacyUnavailableReason(
 static bool LowP32B64TerminalRouteExpected(const Options& options)
 {
     return options.low_p32_b64_terminal_mode == 1 &&
-        options.k == 32 && options.r == 32 && options.bytes == 64 &&
+        options.k == 32 && options.r == 32 && options.bytes >= 64 &&
+        options.bytes <= 256 && (options.bytes & 63U) == 0 &&
         options.losses >= 9 && options.losses < 32;
 }
 
@@ -1661,7 +1662,7 @@ static int Run(const Options& options)
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
-        options.low_p32_b64_terminal_mode >= 0 ? 18 :
+        options.low_p32_b64_terminal_mode >= 0 ? 19 :
         options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
         options.one_shot_plan_setup_mode >= 0 ? 15 :
         options.r1_small_reduction_mode >= 0 ? 12 :
@@ -2059,7 +2060,7 @@ static int Run(const Options& options)
              << (low_p32_b64_terminal_route_selected ? "true" : "false")
              << ",\n"
              << "    \"low_p32_b64_terminal_selector_contract\": "
-                "\"K=R=P=32,N=64,GF8,AVX2,B=64,L=9..31,"
+                "\"K=R=P=32,N=64,GF8,AVX2,B=64/128/192/256,L=9..31,"
                 "public-one-shot-only\"";
     }
     if (options.one_shot_plan_setup_mode >= 0)

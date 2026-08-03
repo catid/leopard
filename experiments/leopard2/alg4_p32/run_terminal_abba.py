@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Qualify the AVX2 GF8 Algorithm 4 P32/N64/B64 decode terminal.
+"""Qualify the AVX2 GF8 Algorithm 4 P32/N64 tiled decode terminal.
 
 The runner consumes a clean production build and an exact Leopard-main build,
 copies every executable/archive into a lane-owned immutable artifact directory
@@ -26,9 +26,9 @@ import time
 from typing import Any, Mapping, Sequence
 
 
-SCHEMA = "leopard2-alg4-p32-terminal-abba/v1"
-SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v1"
-BENCHMARK_SCHEMA = "leopard2-benchmark-v18"
+SCHEMA = "leopard2-alg4-p32-terminal-abba/v2"
+SUMMARY_SCHEMA = "leopard2-alg4-p32-terminal-summary/v2"
+BENCHMARK_SCHEMA = "leopard2-benchmark-v19"
 MAIN_SCHEMA = "leopard-main-benchmark-v1"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
@@ -223,6 +223,10 @@ def validate_main_manifest(
     require(isinstance(value, dict) and
             value.get("schema") == "leopard2-p32-b64-exact-main-abba/v1",
             "exact-main manifest schema differs")
+    require(value.get("status") in (
+                "accepted",
+                "valid_direct_abba_with_noted_hardened_runner_model_gap"),
+            "exact-main provenance manifest has an unknown status")
     baseline = value.get("baseline")
     require(isinstance(baseline, dict) and
             baseline.get("source_commit") == source["head"] and
@@ -232,7 +236,12 @@ def validate_main_manifest(
             baseline.get("archive_sha256") == sha256(archive),
             "exact-main manifest does not bind the supplied source/artifacts")
     return {"file": file_identity(path), "schema": value["schema"],
-            "status": value.get("status"), "baseline": dict(baseline)}
+            "status": value.get("status"), "baseline": dict(baseline),
+            "comparison_scope_validated_by_this_runner": {
+                "K": 32, "R": 32,
+                "shard_bytes": [64, 128, 192, 256],
+                "loss_counts": [9, 16, 31],
+            }}
 
 
 def cpu_snapshot(cpu: int) -> dict[str, int]:
@@ -251,26 +260,33 @@ def cpu_delta(before: Mapping[str, int], after: Mapping[str, int]) -> dict[str, 
 
 
 def cells() -> list[dict[str, Any]]:
-    return [
-        {"id": "target-loss9", "K": 32, "R": 32, "bytes": 64,
-         "loss": 9, "role": "target", "seed": 0xA4320901},
-        {"id": "target-loss16", "K": 32, "R": 32, "bytes": 64,
-         "loss": 16, "role": "target", "seed": 0xA4321001},
-        {"id": "target-loss31", "K": 32, "R": 32, "bytes": 64,
-         "loss": 31, "role": "target", "seed": 0xA4321F01},
-        {"id": "byte-neighbor-63", "K": 32, "R": 32, "bytes": 63,
-         "loss": 16, "role": "neighbor", "seed": 0xA4323F01},
-        {"id": "byte-neighbor-65", "K": 32, "R": 32, "bytes": 65,
-         "loss": 16, "role": "neighbor", "seed": 0xA4324101},
-        {"id": "loss-neighbor-8", "K": 32, "R": 32, "bytes": 64,
-         "loss": 8, "role": "neighbor", "seed": 0xA4320801},
-        {"id": "loss-neighbor-32", "K": 32, "R": 32, "bytes": 64,
-         "loss": 32, "role": "neighbor", "seed": 0xA4322001},
-        {"id": "shape-neighbor-k31", "K": 31, "R": 32, "bytes": 64,
-         "loss": 16, "role": "neighbor", "seed": 0xA4311001},
-        {"id": "shape-neighbor-r31", "K": 32, "R": 31, "bytes": 64,
-         "loss": 16, "role": "neighbor", "seed": 0xA4201001},
-    ]
+    values = []
+    for shard_bytes in (64, 128, 192, 256):
+        for loss_count in (9, 16, 31):
+            values.append({
+                "id": f"target-b{shard_bytes}-loss{loss_count}",
+                "K": 32, "R": 32, "bytes": shard_bytes,
+                "loss": loss_count, "role": "target",
+                "seed": 0xA4320000 ^ (shard_bytes << 8) ^ loss_count,
+            })
+    for shard_bytes in (63, 65, 127, 129, 191, 193, 255, 257, 320):
+        values.append({
+            "id": f"byte-neighbor-{shard_bytes}",
+            "K": 32, "R": 32, "bytes": shard_bytes,
+            "loss": 16, "role": "neighbor",
+            "seed": 0xA4320000 ^ (shard_bytes << 8) ^ 16,
+        })
+    values.extend((
+        {"id": "loss-neighbor-8", "K": 32, "R": 32, "bytes": 256,
+         "loss": 8, "role": "neighbor", "seed": 0xA4320804},
+        {"id": "loss-neighbor-32", "K": 32, "R": 32, "bytes": 256,
+         "loss": 32, "role": "neighbor", "seed": 0xA4322004},
+        {"id": "shape-neighbor-k31", "K": 31, "R": 32, "bytes": 256,
+         "loss": 16, "role": "neighbor", "seed": 0xA4311004},
+        {"id": "shape-neighbor-r31", "K": 32, "R": 31, "bytes": 256,
+         "loss": 16, "role": "neighbor", "seed": 0xA4201004},
+    ))
+    return values
 
 
 def benchmark_command(
@@ -591,15 +607,18 @@ def main() -> int:
                 "focused correctness gate timed out; output retained") from error
         write_bytes_exclusive(correctness_stdout, completed.stdout)
         write_bytes_exclusive(correctness_stderr, completed.stderr)
-        expected_pass = (b"PASS low_p32_b64_terminal payloads=2 patterns=67 "
-                         b"parity_selections=2 routes=56\n")
+        expected_pass = (b"PASS low_p32_b64_terminal widths=4 direct_cases=406 "
+                         b"b64_payloads=2 b64_patterns=67 "
+                         b"parity_selections=2 routes=210\n")
         require(completed.returncode == 0 and completed.stdout == expected_pass,
                 "focused correctness gate failed or changed its coverage")
         raw["correctness"] = {
             "stdout": file_identity(correctness_stdout, allow_empty=True),
             "stderr": file_identity(correctness_stderr, allow_empty=True),
-            "coverage": {"payloads": 2, "patterns": 67,
-                         "parity_selections": 2, "public_routes": 56,
+            "coverage": {"widths": [64, 128, 192, 256],
+                         "direct_cases": 406, "b64_payloads": 2,
+                         "b64_patterns": 67, "parity_selections": 2,
+                         "public_routes": 210,
                          "qualified_loss_counts": list(range(9, 32))},
         }
 

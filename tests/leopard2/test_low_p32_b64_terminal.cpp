@@ -51,7 +51,6 @@ namespace {
 static const unsigned kOriginalCount = 32;
 static const unsigned kRecoveryCount = 32;
 static const unsigned kParentCount = 64;
-static const size_t kShardBytes = 64;
 
 void Require(bool condition, const char* message)
 {
@@ -64,6 +63,27 @@ void RequireResult(leo2_result result, const char* message)
     if (result != LEO2_SUCCESS)
         throw std::runtime_error(std::string(message) + ": " +
             leo2_result_string(result));
+}
+
+void RequireGuards(
+    const std::vector<uint8_t>& storage,
+    size_t prefix_bytes,
+    size_t row_count,
+    size_t row_stride,
+    size_t active_bytes,
+    uint8_t sentinel,
+    const char* message)
+{
+    size_t cursor = 0;
+    for (size_t row = 0; row < row_count; ++row)
+    {
+        const size_t active_begin = prefix_bytes + row * row_stride;
+        for (; cursor < active_begin; ++cursor)
+            Require(storage[cursor] == sentinel, message);
+        cursor = active_begin + active_bytes;
+    }
+    for (; cursor < storage.size(); ++cursor)
+        Require(storage[cursor] == sentinel, message);
 }
 
 class AlignedBuffer
@@ -102,13 +122,16 @@ private:
     size_t bytes_;
 };
 
-void FillMessage(std::vector<std::vector<uint8_t> >& message, uint64_t seed)
+void FillMessage(
+    std::vector<std::vector<uint8_t> >& message,
+    size_t shard_bytes,
+    uint64_t seed)
 {
-    message.assign(kOriginalCount, std::vector<uint8_t>(kShardBytes));
+    message.assign(kOriginalCount, std::vector<uint8_t>(shard_bytes));
     uint64_t state = seed;
     for (unsigned row = 0; row < kOriginalCount; ++row)
     {
-        for (size_t offset = 0; offset < kShardBytes; ++offset)
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
         {
             state ^= state << 13;
             state ^= state >> 7;
@@ -123,14 +146,15 @@ void EncodeIndependentParity(
     const leopard2_test::BinaryField& field,
     const leopard2_test::Matrix& generator,
     const std::vector<std::vector<uint8_t> >& message,
+    size_t shard_bytes,
     std::vector<std::vector<uint8_t> >& parity)
 {
-    parity.assign(kRecoveryCount, std::vector<uint8_t>(kShardBytes));
+    parity.assign(kRecoveryCount, std::vector<uint8_t>(shard_bytes));
     for (unsigned output = 0; output < kRecoveryCount; ++output)
     {
         const std::vector<leopard2_test::Element>& row =
             generator[kOriginalCount + output];
-        for (size_t offset = 0; offset < kShardBytes; ++offset)
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
         {
             leopard2_test::Element value = 0;
             for (unsigned source = 0; source < kOriginalCount; ++source)
@@ -207,10 +231,27 @@ std::vector<std::vector<unsigned> > BuildPatterns()
     return patterns;
 }
 
-void SetWorkPointers(AlignedBuffer& storage, void** pointers)
+std::vector<std::vector<unsigned> > BuildAdmittedLossPatterns()
+{
+    std::vector<std::vector<unsigned> > patterns;
+    for (unsigned loss_count = 9; loss_count < kOriginalCount; ++loss_count)
+    {
+        std::vector<unsigned> missing;
+        for (unsigned i = 0; i < loss_count; ++i)
+            missing.push_back((7U + i * 11U) & 31U);
+        std::sort(missing.begin(), missing.end());
+        patterns.push_back(missing);
+    }
+    return patterns;
+}
+
+void SetWorkPointers(
+    AlignedBuffer& storage,
+    size_t shard_bytes,
+    void** pointers)
 {
     for (unsigned i = 0; i < kParentCount; ++i)
-        pointers[i] = storage.bytes() + static_cast<size_t>(i) * kShardBytes;
+        pointers[i] = storage.bytes() + static_cast<size_t>(i) * shard_bytes;
 }
 
 void ExercisePattern(
@@ -218,7 +259,8 @@ void ExercisePattern(
     const std::vector<std::vector<uint8_t> >& message,
     const std::vector<std::vector<uint8_t> >& parity,
     const std::vector<unsigned>& missing,
-    bool select_high_parity)
+    bool select_high_parity,
+    size_t shard_bytes)
 {
     uint8_t erased[kParentCount] = {};
     uint8_t requested[kParentCount] = {};
@@ -256,35 +298,35 @@ void ExercisePattern(
         kParentCount, erased, kRecoveryCount, locator);
     leopard::ff8::PrepareLowDecode(kParentCount, kOriginalCount, &factor);
 
-    AlignedBuffer candidate_work_storage(kParentCount * kShardBytes);
-    AlignedBuffer mature_work_storage(kParentCount * kShardBytes);
-    AlignedBuffer generic_work_storage(kParentCount * kShardBytes);
-    AlignedBuffer restored_storage(kOriginalCount * kShardBytes);
+    AlignedBuffer candidate_work_storage(kParentCount * shard_bytes);
+    AlignedBuffer mature_work_storage(kParentCount * shard_bytes);
+    AlignedBuffer generic_work_storage(kParentCount * shard_bytes);
+    AlignedBuffer restored_storage(kOriginalCount * shard_bytes);
     void* candidate_work[kParentCount];
     void* mature_work[kParentCount];
     void* generic_work[kParentCount];
-    SetWorkPointers(candidate_work_storage, candidate_work);
-    SetWorkPointers(mature_work_storage, mature_work);
-    SetWorkPointers(generic_work_storage, generic_work);
+    SetWorkPointers(candidate_work_storage, shard_bytes, candidate_work);
+    SetWorkPointers(mature_work_storage, shard_bytes, mature_work);
+    SetWorkPointers(generic_work_storage, shard_bytes, generic_work);
     std::memset(restored_storage.bytes(), 0xa5,
-        kOriginalCount * kShardBytes);
+        kOriginalCount * shard_bytes);
     for (size_t i = 0; i < missing.size(); ++i)
     {
         const unsigned coordinate = missing[i];
         restored[coordinate] = restored_storage.bytes() +
-            static_cast<size_t>(coordinate) * kShardBytes;
+            static_cast<size_t>(coordinate) * shard_bytes;
     }
 
     Require(leopard::ff8::ReedSolomonDecodeLowP32B64TerminalExperimental(
-            avx2, coordinates, requested_coordinates,
+            avx2, shard_bytes, coordinates, requested_coordinates,
             static_cast<unsigned>(missing.size()), locator, factor,
             restored, candidate_work),
-        "P32/B64 AVX2 terminal rejected a valid pattern");
+        "P32 tiled AVX2 terminal rejected a valid pattern");
     leopard::ff8::ReedSolomonDecodeLowPrepared(
-        avx2, kShardBytes, kParentCount, kOriginalCount,
+        avx2, shard_bytes, kParentCount, kOriginalCount,
         coordinates, requested, locator, &factor, mature_work);
     leopard::ff8::ReedSolomonDecodePrepared(
-        avx2, kShardBytes, kParentCount, coordinates,
+        avx2, shard_bytes, kParentCount, coordinates,
         requested, locator, generic_work);
 
     for (unsigned coordinate = 0; coordinate < kOriginalCount; ++coordinate)
@@ -292,22 +334,22 @@ void ExercisePattern(
         if (requested[coordinate])
         {
             Require(std::memcmp(restored[coordinate],
-                    &message[coordinate][0], kShardBytes) == 0,
-                "P32/B64 terminal differs from direct systematic data");
+                    &message[coordinate][0], shard_bytes) == 0,
+                "P32 tiled terminal differs from direct systematic data");
             Require(std::memcmp(restored[coordinate],
-                    mature_work[coordinate], kShardBytes) == 0,
-                "P32/B64 terminal differs from mature Algorithm 4");
+                    mature_work[coordinate], shard_bytes) == 0,
+                "P32 tiled terminal differs from mature Algorithm 4");
             Require(std::memcmp(restored[coordinate],
-                    generic_work[coordinate], kShardBytes) == 0,
-                "P32/B64 terminal differs from generic decode");
+                    generic_work[coordinate], shard_bytes) == 0,
+                "P32 tiled terminal differs from generic decode");
         }
         else
         {
             const uint8_t* untouched = restored_storage.bytes() +
-                static_cast<size_t>(coordinate) * kShardBytes;
-            for (size_t offset = 0; offset < kShardBytes; ++offset)
+                static_cast<size_t>(coordinate) * shard_bytes;
+            for (size_t offset = 0; offset < shard_bytes; ++offset)
                 Require(untouched[offset] == 0xa5,
-                    "P32/B64 terminal modified an unrequested output");
+                    "P32 tiled terminal modified an unrequested output");
         }
     }
 }
@@ -320,32 +362,56 @@ void ExercisePublicRoute(
     unsigned missing_count,
     bool reusable_plan,
     bool select_high_parity,
-    uint64_t expected_terminal_calls)
+    uint64_t expected_terminal_calls,
+    bool unaligned = false)
 {
     leo2_codec* codec = NULL;
     RequireResult(leo2_codec_create(context,
         original_count, recovery_count, LEO2_PROFILE_LEGACY_HIGH_V1,
         LEO2_FIELD_GF8, NULL, &codec), "create public-route codec");
 
-    std::vector<uint8_t> message(original_count * shard_bytes);
-    std::vector<uint8_t> parity(recovery_count * shard_bytes);
+    const size_t original_stride = shard_bytes + (unaligned ? 64U : 0U);
+    const size_t recovery_stride = shard_bytes + (unaligned ? 64U : 0U);
+    const size_t restored_stride = shard_bytes + (unaligned ? 64U : 0U);
+    const size_t original_offset = unaligned ? 1U : 0U;
+    const size_t recovery_offset = unaligned ? 3U : 0U;
+    const size_t restored_offset = unaligned ? 5U : 0U;
+    std::vector<uint8_t> message(
+        original_offset + original_count * original_stride, 0xcc);
+    std::vector<uint8_t> parity(
+        recovery_offset + recovery_count * recovery_stride, 0xd3);
     uint64_t state = UINT64_C(0x5055424c49435032) ^ shard_bytes ^
         (static_cast<uint64_t>(missing_count) << 32) ^
         (static_cast<uint64_t>(original_count) << 16) ^ recovery_count ^
         (select_high_parity ? UINT64_C(0x8000000000000000) : 0);
-    for (size_t i = 0; i < message.size(); ++i)
-    {
-        state ^= state << 13;
-        state ^= state >> 7;
-        state ^= state << 17;
-        message[i] = static_cast<uint8_t>(state >> 24);
-    }
     std::vector<const void*> original(original_count);
     std::vector<void*> recovery_output(recovery_count);
-    for (unsigned i = 0; i < original_count; ++i)
-        original[i] = &message[static_cast<size_t>(i) * shard_bytes];
+    for (unsigned row = 0; row < original_count; ++row)
+    {
+        uint8_t* const row_data = &message[
+            original_offset + static_cast<size_t>(row) * original_stride];
+        original[row] = row_data;
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
+        {
+            state ^= state << 13;
+            state ^= state >> 7;
+            state ^= state << 17;
+            row_data[offset] = static_cast<uint8_t>(state >> 24);
+        }
+    }
     for (unsigned i = 0; i < recovery_count; ++i)
-        recovery_output[i] = &parity[static_cast<size_t>(i) * shard_bytes];
+        recovery_output[i] = &parity[
+            recovery_offset + static_cast<size_t>(i) * recovery_stride];
+    if (unaligned)
+    {
+        for (unsigned i = 0; i < original_count; ++i)
+            Require((reinterpret_cast<uintptr_t>(original[i]) & 31U) != 0,
+                "source pointer unexpectedly vector-aligned");
+        for (unsigned i = 0; i < recovery_count; ++i)
+            Require((reinterpret_cast<uintptr_t>(recovery_output[i]) & 31U) != 0,
+                "parity pointer unexpectedly vector-aligned");
+    }
+    const std::vector<uint8_t> message_before = message;
 
     size_t encode_scratch_bytes = 0;
     RequireResult(leo2_encode_scratch_size(
@@ -355,6 +421,12 @@ void ExercisePublicRoute(
     RequireResult(leo2_encode(codec, shard_bytes, &original[0],
         &recovery_output[0], encode_scratch.bytes(), encode_scratch_bytes),
         "encode public-route parity");
+    Require(message == message_before,
+        "public-route encode modified source storage");
+    RequireGuards(parity, recovery_offset, recovery_count,
+        recovery_stride, shard_bytes, 0xd3,
+        "public-route encode modified an output guard byte");
+    const std::vector<uint8_t> parity_before_decode = parity;
 
     std::vector<uint8_t> original_present(original_count, 1);
     std::vector<uint8_t> recovery_present(recovery_count, 1);
@@ -362,7 +434,9 @@ void ExercisePublicRoute(
     std::vector<const void*> decode_recovery(recovery_count);
     std::vector<void*> restored(original_count, static_cast<void*>(NULL));
     std::vector<uint8_t> restored_storage(
-        static_cast<size_t>(original_count) * shard_bytes, 0xa5);
+        restored_offset + static_cast<size_t>(original_count) *
+            restored_stride,
+        0xa5);
     for (unsigned i = 0; i < recovery_count; ++i)
         decode_recovery[i] = recovery_output[i];
     for (unsigned i = 0; i < missing_count; ++i)
@@ -371,7 +445,11 @@ void ExercisePublicRoute(
         original_present[coordinate] = 0;
         decode_original[coordinate] = NULL;
         restored[coordinate] = &restored_storage[
-            static_cast<size_t>(coordinate) * shard_bytes];
+            restored_offset + static_cast<size_t>(coordinate) *
+                restored_stride];
+        if (unaligned)
+            Require((reinterpret_cast<uintptr_t>(restored[coordinate]) & 31U) != 0,
+                "restored pointer unexpectedly vector-aligned");
     }
     if (select_high_parity)
     {
@@ -425,11 +503,26 @@ void ExercisePublicRoute(
     {
         if (original_present[i])
             continue;
-        Require(std::memcmp(restored[i],
-                &message[static_cast<size_t>(i) * shard_bytes],
-                shard_bytes) == 0,
+        Require(std::memcmp(restored[i], original[i], shard_bytes) == 0,
             "public-route terminal recovered incorrect bytes");
     }
+    for (unsigned i = 0; i < original_count; ++i)
+    {
+        if (!original_present[i])
+            continue;
+        const uint8_t* const untouched = &restored_storage[
+            restored_offset + static_cast<size_t>(i) * restored_stride];
+        for (size_t offset = 0; offset < shard_bytes; ++offset)
+            Require(untouched[offset] == 0xa5,
+                "public-route decode modified an unrequested output");
+    }
+    RequireGuards(restored_storage, restored_offset, original_count,
+        restored_stride, shard_bytes, 0xa5,
+        "public-route decode modified an output guard byte");
+    Require(message == message_before,
+        "public-route decode modified source storage");
+    Require(parity == parity_before_decode,
+        "public-route decode modified parity storage");
     leo2_decode_plan_destroy(plan);
     leo2_codec_destroy(codec);
 }
@@ -460,19 +553,46 @@ int main()
         const leopard2_test::Matrix generator =
             leopard2_test::direct_systematic_generator(field, layout);
         const std::vector<std::vector<unsigned> > patterns = BuildPatterns();
+        const std::vector<std::vector<unsigned> > admitted_patterns =
+            BuildAdmittedLossPatterns();
+        unsigned direct_case_count = 0;
         for (unsigned payload = 0; payload < 2; ++payload)
         {
             std::vector<std::vector<uint8_t> > message;
             std::vector<std::vector<uint8_t> > parity;
-            FillMessage(message,
+            FillMessage(message, 64,
                 UINT64_C(0x6c6f775033324236) + payload);
-            EncodeIndependentParity(field, generator, message, parity);
+            EncodeIndependentParity(field, generator, message, 64, parity);
             for (size_t i = 0; i < patterns.size(); ++i)
             {
                 ExercisePattern(
-                    *avx2, message, parity, patterns[i], false);
+                    *avx2, message, parity, patterns[i], false, 64);
+                ++direct_case_count;
                 ExercisePattern(
-                    *avx2, message, parity, patterns[i], true);
+                    *avx2, message, parity, patterns[i], true, 64);
+                ++direct_case_count;
+            }
+        }
+        const size_t wider_bytes[] = { 128, 192, 256 };
+        for (size_t width_index = 0;
+             width_index < sizeof(wider_bytes) / sizeof(wider_bytes[0]);
+             ++width_index)
+        {
+            const size_t shard_bytes = wider_bytes[width_index];
+            std::vector<std::vector<uint8_t> > message;
+            std::vector<std::vector<uint8_t> > parity;
+            FillMessage(message, shard_bytes,
+                UINT64_C(0x74696c6550333232) + shard_bytes);
+            EncodeIndependentParity(
+                field, generator, message, shard_bytes, parity);
+            for (size_t i = 0; i < admitted_patterns.size(); ++i)
+            {
+                ExercisePattern(*avx2, message, parity,
+                    admitted_patterns[i], false, shard_bytes);
+                ++direct_case_count;
+                ExercisePattern(*avx2, message, parity,
+                    admitted_patterns[i], true, shard_bytes);
+                ++direct_case_count;
             }
         }
         leo2_context_options options = {};
@@ -485,33 +605,72 @@ int main()
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 1,
             "production terminal mode did not start enabled");
         unsigned route_count = 0;
-        for (unsigned loss_count = 9; loss_count < kOriginalCount;
-             ++loss_count)
+        const size_t admitted_bytes[] = { 64, 128, 192, 256 };
+        for (size_t width_index = 0;
+             width_index < sizeof(admitted_bytes) / sizeof(admitted_bytes[0]);
+             ++width_index)
         {
-            ExercisePublicRoute(context, 32, 32, 64, loss_count,
-                false, false, 1);
-            ++route_count;
-            ExercisePublicRoute(context, 32, 32, 64, loss_count,
-                false, true, 1);
-            ++route_count;
+            for (unsigned loss_count = 9; loss_count < kOriginalCount;
+                 ++loss_count)
+            {
+                ExercisePublicRoute(context, 32, 32,
+                    admitted_bytes[width_index], loss_count,
+                    false, false, 1);
+                ++route_count;
+                ExercisePublicRoute(context, 32, 32,
+                    admitted_bytes[width_index], loss_count,
+                    false, true, 1);
+                ++route_count;
+            }
         }
         // Explicit route-off neighbors prove every selector boundary: direct
-        // repair below L=9, all-loss at L=32, ragged byte tails, reusable
-        // plans, and adjacent public K/R shapes.
-        ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 64, 32, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 63, 16, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 65, 16, false, false, 0);
-        ExercisePublicRoute(context, 32, 32, 64, 16, true, false, 0);
+        // repair below L=9, all-loss at L=32, every ragged tile boundary,
+        // reusable plans, the upper size limit, and adjacent public K/R
+        // shapes.
+        for (size_t width_index = 0;
+             width_index < sizeof(admitted_bytes) / sizeof(admitted_bytes[0]);
+             ++width_index)
+        {
+            ExercisePublicRoute(context, 32, 32,
+                admitted_bytes[width_index], 8, false, false, 0);
+            ExercisePublicRoute(context, 32, 32,
+                admitted_bytes[width_index], 32, false, false, 0);
+            route_count += 2;
+        }
+        const size_t ragged_bytes[] = {
+            63, 65, 127, 129, 191, 193, 255, 257
+        };
+        for (size_t width_index = 0;
+             width_index < sizeof(ragged_bytes) / sizeof(ragged_bytes[0]);
+             ++width_index)
+        {
+            ExercisePublicRoute(context, 32, 32,
+                ragged_bytes[width_index], 16, false, false, 0);
+            ++route_count;
+        }
+        ExercisePublicRoute(context, 32, 32, 320, 16, false, false, 0);
+        ++route_count;
+        ExercisePublicRoute(context, 32, 32, 128, 16, true, false, 0);
+        ExercisePublicRoute(context, 32, 32, 256, 16, true, true, 0);
+        route_count += 2;
         ExercisePublicRoute(context, 31, 32, 64, 16, false, false, 0);
-        ExercisePublicRoute(context, 32, 31, 64, 16, false, false, 0);
-        route_count += 7;
+        ExercisePublicRoute(context, 32, 31, 256, 16, false, false, 0);
+        route_count += 2;
+
+        // Deliberately give each source, parity, and restored row a different
+        // non-vector-aligned address.  This covers the unaligned load/store
+        // contract at both two and four tiles.
+        ExercisePublicRoute(
+            context, 32, 32, 128, 16, false, false, 1, true);
+        ExercisePublicRoute(
+            context, 32, 32, 256, 31, false, true, 1, true);
+        route_count += 2;
 
         Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
                 true),
             "arm enabled terminal route probe");
         ExercisePublicRoute(
-            context, 32, 32, 64, 16, false, true, 1);
+            context, 32, 32, 256, 16, false, true, 1);
         ++route_count;
         Require(leopard2_internal::
                 LowP32B64TerminalRouteSelectedForDiagnostics(),
@@ -523,7 +682,7 @@ int main()
         Require(leopard2_internal::SetLowP32B64TerminalEnabledForDiagnostics(
                 true),
             "arm route-off loss-neighbor probe");
-        ExercisePublicRoute(context, 32, 32, 64, 8, false, false, 0);
+        ExercisePublicRoute(context, 32, 32, 256, 8, false, false, 0);
         ++route_count;
         Require(!leopard2_internal::
                 LowP32B64TerminalRouteSelectedForDiagnostics(),
@@ -537,7 +696,7 @@ int main()
         Require(leopard2_internal::LowP32B64TerminalModeForDiagnostics() == 2,
             "disabled terminal did not select mode word two");
         ExercisePublicRoute(
-            context, 32, 32, 64, 31, false, false, 0);
+            context, 32, 32, 256, 31, false, false, 0);
         ++route_count;
         Require(!leopard2_internal::
                 LowP32B64TerminalRouteSelectedForDiagnostics(),
@@ -555,9 +714,10 @@ int main()
             "finish final enabled terminal route probe");
         leo2_context_destroy(context);
         std::printf(
-            "PASS low_p32_b64_terminal payloads=2 patterns=%zu "
-            "parity_selections=2 routes=%u\n",
-            patterns.size(), route_count);
+            "PASS low_p32_b64_terminal widths=4 direct_cases=%u "
+            "b64_payloads=2 b64_patterns=%zu parity_selections=2 "
+            "routes=%u\n",
+            direct_case_count, patterns.size(), route_count);
         return 0;
     }
     catch (const std::exception& exception)

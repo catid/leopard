@@ -49,7 +49,9 @@ struct Ops;
 // transform, and reveal, then scatters only requested block-zero coordinates.
 // The caller owns 64 pairwise-disjoint work rows of at least 64 bytes; the
 // terminal deliberately reuses their first tile for every byte-independent
-// pass.
+// pass.  Every complete input and restored range must be disjoint from every
+// restored range, and all restored ranges must be mutually disjoint.  The
+// production caller validates this before entering the research callback.
 bool AVX2FF8LowP32B64Terminal(
     const Ops& ops,
     uint64_t buffer_bytes,
