@@ -131,5 +131,30 @@
     "promoted_kernel_object_sha256": "d39b6aa26ca544c87d95f7e6455d4d027393854f3e36f8361c11858af73dac05",
     "execution_code_identical_to_timed_candidate": true,
     "focused_test": "PASS low_p32_p128_b64_terminal p32_payloads=2 p32_patterns=67 p128_payloads=2 p128_patterns=136 p95_payloads=1 p95_patterns=103 parity_selections=2 routes=89"
+  },
+  "post_promotion_validation": {
+    "gcc_release_full_build": "pass",
+    "release_ctest": {
+      "passed": 132,
+      "registered": 134,
+      "candidate_related_failures_remaining": 0,
+      "benchmark_schema_diagnostic_regression_fixed_and_rerun": true,
+      "open_unrelated_harness_failures": [
+        "leopard2_build_provenance_compiler_replay",
+        "leopard2_high_decode_copy_build_identity"
+      ],
+      "follow_up_beads": [
+        "leopard-79h.16.6",
+        "leopard-79h.16.7"
+      ]
+    },
+    "clang18_werror_focused_build_and_test": "pass",
+    "clang18_asan_ubsan_focused_test": {
+      "status": "pass",
+      "peak_rss_kib": 90624,
+      "asan_quarantine_mib": 32
+    },
+    "validation_workloads_serialized": true,
+    "swap_disabled_for_bounded_runs": true
   }
 }
