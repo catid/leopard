@@ -277,6 +277,7 @@ def main() -> int:
             BASE.REQUIRE_EXPECTED_IDENTITIES is True and
             BASE.REQUIRE_BUILD_CLOSURE is True and
             BASE.REQUIRE_FULL_ELF_IDENTITY is True and
+            BASE.MAX_ISOLATION_ATTEMPTS == 3 and
             BASE.TARGET_CONTROL_FLOOR == 1.05 and
             BASE.TARGET_MAIN_FLOOR == 1.05 and
             math.isclose(BASE.NEIGHBOR_FLOOR, 1.0 / 1.02),

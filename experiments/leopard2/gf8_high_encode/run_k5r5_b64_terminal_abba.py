@@ -40,6 +40,7 @@ CONTROL_BUILD_MARKER: str | None = None
 REQUIRE_EXPECTED_IDENTITIES = False
 REQUIRE_BUILD_CLOSURE = False
 REQUIRE_FULL_ELF_IDENTITY = False
+MAX_ISOLATION_ATTEMPTS = 3
 LOCK_PATH = Path("/tmp/leopard-gf8-authoritative.lock")
 T95_DF2 = 4.302652729911275
 T95_DF3 = 3.182446305284263
@@ -1010,36 +1011,53 @@ def main() -> int:
             all_cells = cells()
             for cell_index, cell in enumerate(all_cells):
                 cell_raw = {"cell": dict(cell), "rounds": []}
+                raw["cells"].append(cell_raw)
                 order_cycle = TARGET_ORDER if cell.get(
                     "compare_main", cell["role"] == "target") \
                     else NEIGHBOR_ORDER
                 orders = select_round_orders(order_cycle, options.rounds)
                 for round_index, order in enumerate(orders):
-                    before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
-                    before_sibling = MAIN_SUPPORT.cpu_stat_snapshot(options.sibling)
-                    before_ns = time.monotonic_ns()
-                    invocations = [
-                        run_one(
-                            label, identities[label], cell, options.cpu,
-                            options.source_commit, options.source_tree,
-                            options.iterations, options.warmup, options.output)
-                        for label in order
-                    ]
-                    isolation = MAIN_SUPPORT.isolation_record(
-                        options.cpu, options.sibling, pair_lease,
-                        before_ns, time.monotonic_ns(), before_cpu,
-                        MAIN_SUPPORT.cpu_stat_snapshot(options.cpu),
-                        before_sibling,
-                        MAIN_SUPPORT.cpu_stat_snapshot(options.sibling))
-                    cell_raw["rounds"].append({
-                        "round": round_index,
-                        "order": list(order),
-                        "invocations": invocations,
-                        "isolation": isolation,
-                    })
-                    require(isolation["accepted"],
-                            f"contaminated {cell['id']} round {round_index}")
-                raw["cells"].append(cell_raw)
+                    discarded_attempts = []
+                    for attempt_index in range(MAX_ISOLATION_ATTEMPTS):
+                        before_cpu = MAIN_SUPPORT.cpu_stat_snapshot(options.cpu)
+                        before_sibling = MAIN_SUPPORT.cpu_stat_snapshot(
+                            options.sibling)
+                        before_ns = time.monotonic_ns()
+                        invocations = [
+                            run_one(
+                                label, identities[label], cell, options.cpu,
+                                options.source_commit, options.source_tree,
+                                options.iterations, options.warmup,
+                                options.output)
+                            for label in order
+                        ]
+                        isolation = MAIN_SUPPORT.isolation_record(
+                            options.cpu, options.sibling, pair_lease,
+                            before_ns, time.monotonic_ns(), before_cpu,
+                            MAIN_SUPPORT.cpu_stat_snapshot(options.cpu),
+                            before_sibling,
+                            MAIN_SUPPORT.cpu_stat_snapshot(options.sibling))
+                        attempt = {
+                            "attempt": attempt_index,
+                            "order": list(order),
+                            "invocations": invocations,
+                            "isolation": isolation,
+                        }
+                        if isolation["accepted"]:
+                            attempt["round"] = round_index
+                            attempt["discarded_attempts"] = discarded_attempts
+                            cell_raw["rounds"].append(attempt)
+                            break
+                        discarded_attempts.append(attempt)
+                    else:
+                        cell_raw["failed_round"] = {
+                            "round": round_index,
+                            "discarded_attempts": discarded_attempts,
+                        }
+                        require(False,
+                                f"contaminated {cell['id']} round "
+                                f"{round_index} for "
+                                f"{MAX_ISOLATION_ATTEMPTS} attempts")
                 print(f"{cell_index + 1}/{len(all_cells)} {cell['id']}",
                       file=sys.stderr, flush=True)
 
@@ -1128,6 +1146,15 @@ def main() -> int:
                 len(round_value["invocations"])
                 for cell_value in raw["cells"]
                 for round_value in cell_value["rounds"]),
+            "discarded_process_count": sum(
+                len(attempt["invocations"])
+                for cell_value in raw["cells"]
+                for round_value in cell_value["rounds"]
+                for attempt in round_value["discarded_attempts"]),
+            "discarded_round_attempts": sum(
+                len(round_value["discarded_attempts"])
+                for cell_value in raw["cells"]
+                for round_value in cell_value["rounds"]),
             "all_digests_matched": True,
             "all_rounds_zero_sibling_nonidle": all(
                 round_value["isolation"]["delta"]
@@ -1160,6 +1187,8 @@ def main() -> int:
             "status": summary["status"],
             "cells": summary["cell_count"],
             "processes": summary["process_count"],
+            "discarded_processes": summary["discarded_process_count"],
+            "discarded_round_attempts": summary["discarded_round_attempts"],
             "credible_neighbor_regressions": credible_neighbor_regressions,
             "credible_neighbor_one_shot_regressions":
                 credible_neighbor_one_shot_regressions,
