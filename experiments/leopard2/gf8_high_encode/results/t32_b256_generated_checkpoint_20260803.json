@@ -1,0 +1,154 @@
+{
+  "schema": "leopard2-gf8-t32-b256-generated-checkpoint/v1",
+  "status": "accepted",
+  "date_utc": "2026-08-03",
+  "candidate": {
+    "source_commit": "1bd0c23168df918b71b07e313db2bf95b3e6463a",
+    "source_tree": "89ca5f279451b43ee2450c134fd8db790bed31fe",
+    "binary_sha256": "e0ac38f87c16d39e892e437c8e6f5fc5487007a9ac65ef6b04ff230517baee5b",
+    "archive_sha256": "8b667d2da5f5700aac2cdc76e89c33cc63c5cdbe7e866e3fe0fa3e022d55a5c0"
+  },
+  "same_source_control": {
+    "binary_sha256": "cffa65c955ccb0ed0b21060557f5fcee59a5a0a7236d65bf9a513248a6eca8ad",
+    "archive_sha256": "914165de058426db64dcf2f405d74a4512f17b5bd2699597f48220d4c9426b2e"
+  },
+  "baseline": {
+    "name": "Leopard main codec",
+    "source_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "binary_sha256": "8e6dbc8dab50059b2c350669be270210e241beae18401f6a22c06ff9300e682d"
+  },
+  "provenance": {
+    "normalized_full_elf_sha256": "dc896a4684deecfa68487146509b68a1465b9a6de0bd840e9309a782adbde414",
+    "candidate_control_elf_differing_bytes": 21,
+    "normalized_compile_commands_sha256": "2cb9e52c103f2389dbafba7708077acdb8e6d80ab83ca341af2d8cb23922ba4b",
+    "archive_selector_byte_offset": 290690,
+    "candidate_control_archive_difference_bytes": 1,
+    "candidate_control_executable_sections_sha256": "2628249e8ae1e92b4ed14d29c6bcfcdaf825246ed217e44979dab91f8ec7d7e9",
+    "artifacts_unchanged_after_campaign": true,
+    "runner_and_support_unchanged_after_campaign": true
+  },
+  "method": {
+    "cpu": "AMD Ryzen 9 9950X3D",
+    "benchmark_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "rounds_per_target": 9,
+    "observations_per_implementation_per_round": 2,
+    "iterations_per_observation": 15,
+    "warmup_iterations": 64,
+    "reuse": 8192,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 32,
+    "R": 32,
+    "shard_bytes": 256,
+    "process_invocations": 942,
+    "discarded_process_invocations": 0,
+    "discarded_round_attempts": 0,
+    "raw_evidence_sha256": "1f31ea10905d151adc269837b07ecd6ec4d0e3ca4fc323a07a795039ddb99582",
+    "summary_sha256": "18625d90a0c27adaa9ffaee8f7bd16feb2d3605e72644ac718d9fb53648fda11",
+    "raw_evidence_local_path": "/tmp/leopard2-t32-1bd0c23-authoritative-v2/raw.json"
+  },
+  "target_speedups": [
+    {
+      "loss_count": 1,
+      "batch_control_over_candidate": 1.257850411565483,
+      "batch_control_ci95": [1.24431394854269, 1.2715341331088303],
+      "batch_main_over_candidate": 1.071569419260125,
+      "batch_main_ci95": [1.060980561241915, 1.0822639567961567],
+      "one_shot_control_over_candidate": 1.2186838527783848,
+      "one_shot_control_ci95": [1.208303673684026, 1.2291532049178793],
+      "one_shot_main_over_candidate": 1.0673389294711315,
+      "one_shot_main_ci95": [1.0571858569972887, 1.0775895107037008]
+    },
+    {
+      "loss_count": 2,
+      "batch_control_over_candidate": 1.2492878521621087,
+      "batch_control_ci95": [1.2336892872689351, 1.265083642749983],
+      "batch_main_over_candidate": 1.0700826271601762,
+      "batch_main_ci95": [1.0630611073196097, 1.077150524147392],
+      "one_shot_control_over_candidate": 1.2166145915095794,
+      "one_shot_control_ci95": [1.2042896853259477, 1.2290656328866667],
+      "one_shot_main_over_candidate": 1.0687468742217854,
+      "one_shot_main_ci95": [1.0612906276471197, 1.0762555057054795]
+    },
+    {
+      "loss_count": 4,
+      "batch_control_over_candidate": 1.2508653504395968,
+      "batch_control_ci95": [1.236548065470943, 1.265348407087167],
+      "batch_main_over_candidate": 1.0834646623852786,
+      "batch_main_ci95": [1.0754075048183442, 1.0915821857091634],
+      "one_shot_control_over_candidate": 1.21239154018279,
+      "one_shot_control_ci95": [1.2039466790827915, 1.2208956361976213],
+      "one_shot_main_over_candidate": 1.0764680313607529,
+      "one_shot_main_ci95": [1.0714643238633812, 1.0814951060278581]
+    },
+    {
+      "loss_count": 8,
+      "batch_control_over_candidate": 1.2483083256645884,
+      "batch_control_ci95": [1.2386954796304765, 1.2579957718004968],
+      "batch_main_over_candidate": 1.0801174839628271,
+      "batch_main_ci95": [1.073453087044304, 1.0868232559417266],
+      "one_shot_control_over_candidate": 1.2216305579602331,
+      "one_shot_control_ci95": [1.2104398292460392, 1.2329247469259232],
+      "one_shot_main_over_candidate": 1.0817779081169998,
+      "one_shot_main_ci95": [1.0732279872660737, 1.090395942311432]
+    },
+    {
+      "loss_count": 16,
+      "batch_control_over_candidate": 1.2445135459449292,
+      "batch_control_ci95": [1.225604375434488, 1.263714455565119],
+      "batch_main_over_candidate": 1.0734987649736734,
+      "batch_main_ci95": [1.0644452841792096, 1.0826292488003397],
+      "one_shot_control_over_candidate": 1.2151577111600356,
+      "one_shot_control_ci95": [1.2017973456503557, 1.2286666036798628],
+      "one_shot_main_over_candidate": 1.0759012683122793,
+      "one_shot_main_ci95": [1.063336171786327, 1.0886148424833033]
+    },
+    {
+      "loss_count": 32,
+      "batch_control_over_candidate": 1.248424142619686,
+      "batch_control_ci95": [1.2339716589255902, 1.263045896234543],
+      "batch_main_over_candidate": 1.0752924532734585,
+      "batch_main_ci95": [1.0638164202978289, 1.0868922851774983],
+      "one_shot_control_over_candidate": 1.21456568603163,
+      "one_shot_control_ci95": [1.200718289749934, 1.2285727787095744],
+      "one_shot_main_over_candidate": 1.0743590341484783,
+      "one_shot_main_ci95": [1.0658400548705658, 1.0829461033875498]
+    }
+  ],
+  "neighbor_guard": {
+    "cells": 13,
+    "byte_counts": [64, 255, 256, 257, 1024],
+    "shape_counts": [
+      [16, 8], [16, 16], [31, 31], [31, 32],
+      [32, 31], [32, 33], [33, 32], [64, 64]
+    ],
+    "batch_sizes": [1, 8],
+    "credible_batch_regressions": [],
+    "credible_one_shot_regressions": [],
+    "minimum_batch_ci95_upper_bound": 1.002049737445453,
+    "minimum_one_shot_ci95_upper_bound": 1.0036250135803868
+  },
+  "quality_gates": {
+    "release_direct_generator_and_legacy_parity": "passed",
+    "release_portable_isa_and_registration": "passed",
+    "default_on_release_build": "passed; generated object and focused production test present",
+    "gf8_disabled_release_build": "passed; generated object and focused test absent",
+    "feature_disabled_release_build": "passed; generated object and focused test absent",
+    "clang_18_wall_wextra_wpedantic_werror": "passed",
+    "clang_18_asan_ubsan_lsan": "passed, max RSS 38144 KiB",
+    "visual_studio_and_cmake_graph_model": "149/149 passed",
+    "runner_synthetic_and_negative_checks": "passed",
+    "generated_object_text_bytes": 5983,
+    "evex_zmm_opmask_matches": 0,
+    "detected_vector_stack_spills": 0
+  },
+  "promotion_rule": {
+    "minimum_target_lower_ci95": 1.05,
+    "maximum_neighbor_regression": 0.02,
+    "batch_target_pass": true,
+    "public_one_shot_target_pass": true,
+    "neighbor_pass": true
+  }
+}
