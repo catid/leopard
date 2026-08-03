@@ -1482,7 +1482,8 @@ def main() -> int:
             executable, arguments, path_diagnostic)
     one_shot_diagnostic = (
         "--measure-one-shot-decode currently uses a standalone schema and "
-        "cannot be combined with path/source attestation")
+        "cannot be combined with path attestation or unrelated "
+        "source-attestation modes")
     for incompatible in (
             "--attest-source", "--report-decode-path",
             "--report-direct-executor"):
