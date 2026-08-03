@@ -1,0 +1,257 @@
+{
+  "schema": "leopard2-t64-tiny-schedule-bypass-summary-v1",
+  "generated_utc": "2026-08-03T14:41:55Z",
+  "decision": {
+    "status": "promote",
+    "summary": "For native legacy-high GF8 AVX2 T=64 maximum-loss decode passes of 64 through 512 aligned bytes, execute the mature regular Algorithm 5 kernels instead of interpreting exact-mask pruned schedules in the measured punctured region.",
+    "wire_format_changed": false,
+    "field_arithmetic_changed": false,
+    "scratch_geometry_changed": false,
+    "plan_mutability_changed": false,
+    "scope": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "layout": "native_v1",
+      "padded_side_T": 64,
+      "transmitted_recovery_R_inclusive": [33, 62],
+      "parent_N": 256,
+      "original_K_inclusive": [65, 191],
+      "loss_rule": "missing_original_count == R",
+      "aligned_pass_bytes_inclusive": [64, 512]
+    },
+    "fallback": "The immutable exact schedules remain in reusable plans. Forced-tiled codecs, partial loss, R=63/64, K outside 65..191, translated-low, scalar, SSSE3, GF16, 576-byte aligned passes, and wider passes retain the prior path."
+  },
+  "implementation": {
+    "candidate_commits": [
+      "06e2b97cd00777626cb9a633277ebfa459d87da6",
+      "2f6f010dade3ef9877b614eee910cc0e3ead6eba",
+      "d84162b2b66e4113649d77704fcbb37e51ef2989"
+    ],
+    "predecessor_commit": "77e505f1265a65e3231d984ef6268f8273d5f86d",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "candidate_tree": "75422ca58d0e80c7d773994e0e89524f61931d24",
+    "source_tracked_dirty_at_build": false,
+    "production_file": "leopard2.cpp",
+    "focused_test": "tests/leopard2/test_high_t32_tiny_schedule_policy.cpp",
+    "design_note": "The pass-local decision preserves each plan's exact schedules for later larger executions. Backend rejection is the first material predicate so non-AVX2 execution does not pay the T64 policy checks. Forced-tiled test codecs preserve a same-binary pruned control."
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "physical_cores": 16,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "compiler": "gcc 13.3.0",
+    "cmake": "3.28.3"
+  },
+  "build_and_binary_provenance": {
+    "build_type": "Release",
+    "backend_variant": "avx2",
+    "gf8_enabled": true,
+    "gf16_enabled": true,
+    "candidate_binary_sha256": "389120b6a8a72c9134c3dc61375e106a7d26d8aa3dffb6518305b9905dce9058",
+    "predecessor_binary_sha256": "f36193e15ab720647040eb79381e7138f65aa30494a66334e5f80e9d743b8b03",
+    "exact_main_binary_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "candidate_evex_instruction_count": 0,
+    "hashes_identical_before_and_after_campaign": true
+  },
+  "authoritative_method": {
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "timed_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "accepted_sibling_nonidle_jiffies": 0,
+    "batch": 1,
+    "reuse_for_execution_samples": 256,
+    "timing_samples_per_invocation": 21,
+    "warmup_calls_per_invocation": 5,
+    "independent_rounds_per_cell": 9,
+    "invocations_per_role_per_round": 2,
+    "counterbalancing": "ABBA with alternating order",
+    "interval": "two-sided Student-t 95% confidence interval over per-round paired log ratios, df=8",
+    "ratio_semantics": "baseline time divided by optimized/current time; values above 1 favor the current Leopard2 candidate",
+    "openmp_environment": {
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_NUM_THREADS": "1",
+      "OMP_THREAD_LIMIT": "1",
+      "OMP_PROC_BIND": "TRUE"
+    },
+    "per_process_memory_max": "512 MiB",
+    "swap_max": 0,
+    "accepted_rounds": 153,
+    "rejected_rounds": 0,
+    "note": "Two earlier campaigns were invalidated and excluded: one injected undeclared OMP_PLACES=cores, and one compared an auto-backend candidate build with pure-AVX2 controls. The final campaign used matching pure-AVX2 build flags and exactly the four declared OpenMP variables above."
+  },
+  "directional_scope_search": {
+    "authority": "directional only because the search binaries were built from a dirty candidate tree",
+    "all_k_r_screen": {
+      "roots": [
+        "/tmp/leopard2-t64-dirty-screen-20260803-v1",
+        "/tmp/leopard2-t64-dirty-screen-20260803-v2"
+      ],
+      "K_inclusive": [65, 191],
+      "R_inclusive": [33, 62],
+      "bytes": 64,
+      "loss_rule": "L=R",
+      "cells": 3810,
+      "regular_wins": 3810,
+      "geometric_ratio": 1.5116,
+      "minimum_ratio": 1.3349,
+      "crossover": "R=63 and R=64 were neutral or favored pruning and are excluded."
+    },
+    "size_screen": {
+      "root": "/tmp/leopard2-t64-dirty-screen-20260803-v3",
+      "shapes": [[65, 33], [99, 50], [124, 62], [160, 50], [191, 62]],
+      "regular_won_every_shape_through_bytes": 1024,
+      "geometric_ratio_at_512_bytes": 1.1349,
+      "minimum_ratio_at_512_bytes": 1.0988,
+      "production_cutoff_reason": "512 bytes matches the independently promoted T32 cutoff and retains a robust margin while limiting policy complexity."
+    }
+  },
+  "authoritative_raw_evidence": {
+    "root": "/tmp/leopard2-t64-d84162b-pure-avx2-v2-authoritative",
+    "summary": "final-v1/summary.json",
+    "summary_sha256": "86931b6992b84cfbfcaf721dbeaaed1e626c13baa37fe33e0c10120d4a631679",
+    "target_cells": 8,
+    "inert_neighbor_cells": 9,
+    "validation": "All workload digests and round trips matched. Candidate, predecessor, and exact-main binary hashes were unchanged after the campaign, and every accepted sibling delta was zero."
+  },
+  "target_results": [
+    {
+      "K_R_bytes_loss": [65, 33, 64, 33],
+      "pruned_over_auto_decode_execution": [1.456185, 1.449119, 1.463286],
+      "main_over_auto_decode_execution": [1.572517, 1.568627, 1.576418],
+      "main_over_auto_one_shot": [1.237731, 1.233666, 1.241808]
+    },
+    {
+      "K_R_bytes_loss": [99, 50, 64, 50],
+      "pruned_over_auto_decode_execution": [1.551736, 1.546354, 1.557136],
+      "main_over_auto_decode_execution": [1.255934, 1.252868, 1.259008],
+      "main_over_auto_one_shot": [1.024900, 1.020434, 1.029385]
+    },
+    {
+      "K_R_bytes_loss": [124, 62, 64, 62],
+      "pruned_over_auto_decode_execution": [1.584546, 1.577643, 1.591479],
+      "main_over_auto_decode_execution": [1.334340, 1.329051, 1.339651],
+      "main_over_auto_one_shot": [1.071683, 1.067543, 1.075839]
+    },
+    {
+      "K_R_bytes_loss": [160, 50, 64, 50],
+      "pruned_over_auto_decode_execution": [1.612700, 1.606925, 1.618495],
+      "main_over_auto_decode_execution": [1.270336, 1.266232, 1.274453],
+      "main_over_auto_one_shot": [1.039001, 1.036115, 1.041895]
+    },
+    {
+      "K_R_bytes_loss": [191, 62, 64, 62],
+      "pruned_over_auto_decode_execution": [1.655986, 1.650816, 1.661173],
+      "main_over_auto_decode_execution": [1.218530, 1.212072, 1.225023],
+      "main_over_auto_one_shot": [0.996715, 0.990878, 1.002587]
+    },
+    {
+      "K_R_bytes_loss": [65, 33, 512, 33],
+      "pruned_over_auto_decode_execution": [1.125024, 1.123205, 1.126847],
+      "main_over_auto_decode_execution": [1.545411, 1.543238, 1.547586],
+      "main_over_auto_one_shot": [1.445049, 1.443853, 1.446245]
+    },
+    {
+      "K_R_bytes_loss": [99, 50, 512, 50],
+      "pruned_over_auto_decode_execution": [1.142727, 1.141649, 1.143806],
+      "main_over_auto_decode_execution": [1.359996, 1.357772, 1.362224],
+      "main_over_auto_one_shot": [1.283862, 1.282667, 1.285058]
+    },
+    {
+      "K_R_bytes_loss": [191, 62, 512, 62],
+      "pruned_over_auto_decode_execution": [1.157076, 1.155503, 1.158650],
+      "main_over_auto_decode_execution": [1.211126, 1.209668, 1.212586],
+      "main_over_auto_one_shot": [1.148044, 1.145857, 1.150236]
+    }
+  ],
+  "target_result_format": {
+    "ratio_arrays": ["ratio", "ci95_low", "ci95_high"],
+    "minimum_pruned_over_auto_ci95_low": 1.123205,
+    "note": "The K=191/R=62/B=64 public one-shot result is a statistical tie, while reusable execution remains 21.85 percent faster than exact main and 65.60 percent faster than the pruned control."
+  },
+  "inert_neighbor_results": {
+    "cells": [
+      "K=64 lower boundary",
+      "K=192 upper boundary",
+      "R=63 crossover",
+      "R=64 crossover",
+      "L=R-1 partial loss",
+      "B=576 cutoff",
+      "existing T32 policy",
+      "scalar backend",
+      "SSSE3 backend"
+    ],
+    "point_estimate_regressions_over_2_percent": 0,
+    "worst_one_shot_ratio": 0.987487,
+    "worst_one_shot_cell": "K=64/R=50/B=64",
+    "worst_encode_ratio": 0.989191,
+    "worst_encode_cell": "K=124/R=63/B=64",
+    "scalar_decode_execution": [0.999948, 0.998614, 1.001285]
+  },
+  "correctness_and_safety": {
+    "release_focused_tests": {
+      "status": "PASS",
+      "tests": [
+        "leopard2_high_pruned_legacy",
+        "leopard2_high_t32_tiny_schedule_policy",
+        "leopard2_high_low_duality"
+      ]
+    },
+    "focused_policy_cases": 42,
+    "focused_policy_coverage": [
+      "T32 and T64 byte/tail boundaries from 1 through 577 bytes",
+      "K=64/65/124/125/191/192 and R=33/50/62/63/64 boundaries",
+      "clustered, striped, and random maximum-loss patterns",
+      "partial loss, forced-pruned, and scalar exclusions",
+      "exact scratch, unaligned guarded buffers, input immutability, and reusable plans"
+    ],
+    "high_pruned_legacy": {
+      "status": "PASS",
+      "cases": 13,
+      "parity_bytes": 60296,
+      "restored_bytes": 6742,
+      "workspaces": ["materialized", "tiled"]
+    },
+    "high_low_duality": {
+      "status": "PASS",
+      "parity_cases": 69,
+      "decode_cases": 798,
+      "restored_shards": 17598,
+      "exhaustive_patterns": 288,
+      "random_patterns": 360,
+      "parity_rebuilds": 798,
+      "backends": 3
+    },
+    "broad_api": {
+      "status": "PASS",
+      "high_compatibility_bytes": 3736998,
+      "low_oracle_symbols": 17017,
+      "recovered_shards": 4693,
+      "plan_executions": 1051,
+      "tail_cases": 486,
+      "maximum_rss_kib": 801500,
+      "swaps": 0
+    },
+    "clang_18_asan_ubsan": {
+      "status": "PASS",
+      "tests": [
+        "leopard2_high_pruned_legacy",
+        "leopard2_high_t32_tiny_schedule_policy",
+        "leopard2_high_low_duality"
+      ],
+      "leak_detection": true,
+      "undefined_behavior_halt": true,
+      "memory_max": "512 MiB",
+      "swap_max": 0
+    }
+  },
+  "limitations": [
+    "The promotion is target-specific: dense native-high T=64 GF8 AVX2 maximum-loss decoding only. It makes no scalar, SSSE3, AVX-512, GF16, ARM, partial-loss, or low-profile claim.",
+    "Exact main public one-shot at K=191/R=62/B=64 is statistically tied with Leopard2 because transient setup dominates; reusable execution is still materially faster.",
+    "The dirty all-K and size screens select policy scope only. Promotion depends on the clean frozen, provenance-matched, zero-sibling authoritative campaign.",
+    "R=63 and R=64 are intentionally excluded because the regular/pruned crossover is sharp."
+  ]
+}
