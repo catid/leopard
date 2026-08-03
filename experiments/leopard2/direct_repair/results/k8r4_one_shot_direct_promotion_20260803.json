@@ -1,0 +1,140 @@
+{
+  "schema": "leopard2-k8r4-one-shot-direct-promotion/v1",
+  "date_utc": "2026-08-03",
+  "bead": "leopard-79h.38.2.5.2",
+  "source": {
+    "commit": "a8517ae7bf8d7a5fb6ea27f2d6999f955921ee1e",
+    "tree": "8f1ccdb7048babc9b6f067aeb2d7ce4bf90d24b5",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "target": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": 8,
+    "R": 4,
+    "loss": 4,
+    "shard_bytes": "1..2048",
+    "dispatch_limit_bytes": 2048,
+    "description": "allocation-free one-shot maximum-loss direct reconstruction using an immutable context-owned cache for all 70 erasure patterns"
+  },
+  "cache": {
+    "missing_mask_to_pattern_bytes": 256,
+    "surviving_original_indices_bytes": 280,
+    "reconstruction_multiplier_logs_bytes": 2240,
+    "total_bytes_per_matching_context": 2776,
+    "hot_path_allocations": 0
+  },
+  "authoritative_benchmark": {
+    "raw_directory": "/tmp/leopard2-k8r4-a8517ae-authoritative-v1",
+    "summary_digest": "2b4482f7bf4420ba2c21a1a62717676001acfc4d162b2a31b6726ff104f9b4b2",
+    "manifest_sha256": "466806f45c200b505b4c77e5c51164d8a082dad754ac4e1213123d6cda0526e9",
+    "candidate_sha256": "3b62dffa5e11b6e6ad2411e2b9c7ad8e9a44fcab5063474c4b86a8ae5e95fb26",
+    "same_source_feature_off_sha256": "ad4157f42fb909ebdd4711553b89acf24ff4d8e665e3f48b5e622781e187fea9",
+    "exact_main_sha256": "af17f32e04d8d8eaf1445e322b34a11ce4cef02ecb84488d6aa844f1c53c9084",
+    "timing_cpu": 13,
+    "reserved_smt_sibling": 29,
+    "coordinator_cpu": 12,
+    "target_rounds": 9,
+    "neighbor_rounds": 3,
+    "iterations": 21,
+    "warmup": 5,
+    "reuse": 256,
+    "accepted_processes": 276,
+    "rejected_isolation_attempts": 17,
+    "all_digests_matched": true,
+    "verified": true,
+    "target_control_geomean": 2.7456642681761796,
+    "target_exact_main_geomean": 3.0672972354885997,
+    "minimum_target_control_ci95_lower": 1.2698009708993503,
+    "minimum_target_exact_main_ci95_lower": 1.8585988365747168,
+    "targets": [
+      {
+        "shard_bytes": 64,
+        "same_source_fallback_over_candidate": { "ratio": 5.985079814567849, "ci95": [5.871400220751424, 6.100960425103353] },
+        "exact_main_over_candidate": { "ratio": 5.355266105495883, "ci95": [5.264988163658159, 5.447092029309847] }
+      },
+      {
+        "shard_bytes": 256,
+        "same_source_fallback_over_candidate": { "ratio": 4.164772995042249, "ci95": [4.099876984368818, 4.230696229756153] },
+        "exact_main_over_candidate": { "ratio": 4.015012543987834, "ci95": [3.949450255869201, 4.081663189560004] }
+      },
+      {
+        "shard_bytes": 1024,
+        "same_source_fallback_over_candidate": { "ratio": 1.7819964048812016, "ci95": [1.764056835047906, 1.8001184111073674] },
+        "exact_main_over_candidate": { "ratio": 2.200579496681344, "ci95": [2.1760375849594267, 2.2253981983976665] }
+      },
+      {
+        "shard_bytes": 2048,
+        "same_source_fallback_over_candidate": { "ratio": 1.2794450043192518, "ci95": [1.2698009708993503, 1.28916228337586] },
+        "exact_main_over_candidate": { "ratio": 1.8707615193462348, "ci95": [1.8585988365747168, 1.8830037947922391] }
+      }
+    ],
+    "neighbors": [
+      { "id": "cutoff-b2049-l4", "same_source_fallback_over_candidate": { "ratio": 1.0186159726771213, "ci95": [0.9616179182022888, 1.0789924773164326] } },
+      { "id": "k7-r4-b64-l4", "same_source_fallback_over_candidate": { "ratio": 1.0656333511854525, "ci95": [1.0255031419629443, 1.1073339443749564] } },
+      { "id": "k9-r4-b64-l4", "same_source_fallback_over_candidate": { "ratio": 1.0734863276502287, "ci95": [1.0529326962282142, 1.0944411734766828] } },
+      { "id": "k8-r4-b64-l3", "same_source_fallback_over_candidate": { "ratio": 1.0497560541405992, "ci95": [1.0376036822595942, 1.062050754103953] } },
+      { "id": "k8-r3-b64-l3", "same_source_fallback_over_candidate": { "ratio": 1.063446038769792, "ci95": [1.040443378557281, 1.0869572536886491] } }
+    ]
+  },
+  "correctness": {
+    "focused_release": {
+      "exhaustive_max_loss_patterns_per_size": 70,
+      "shard_size_count": 28,
+      "decode_cases": 1960,
+      "independent_oracle_parity_bytes": 40848,
+      "covers": [
+        "independent polynomial-basis generator oracle",
+        "every maximum-loss pattern",
+        "arbitrary tails through the 2048-byte dispatch boundary",
+        "unaligned and guard-buffer access",
+        "allowed aliasing and in-place recovery",
+        "failure atomicity",
+        "zero hot-path allocation",
+        "scalar and SSSE3 fallback equivalence",
+        "2049-byte and three-loss fallback"
+      ],
+      "result": "pass"
+    },
+    "strict_compilers": {
+      "flags": "-Wall -Wextra -Wpedantic -Werror",
+      "gcc_result": "pass",
+      "clang18_result": "pass",
+      "gf8_only_result": "pass",
+      "gf16_only_result": "pass"
+    },
+    "sanitizers": {
+      "toolchain": "clang18",
+      "enabled": ["AddressSanitizer", "UndefinedBehaviorSanitizer", "LeakSanitizer"],
+      "result": "pass"
+    },
+    "production_integration": {
+      "passed": 10,
+      "failed": 0,
+      "tests": [
+        "leopard2_translated_metadata",
+        "leopard2_translated_metadata_hooks",
+        "leopard2_k8r4_one_shot_direct",
+        "leopard2_public_api_contract",
+        "leopard2_one_shot_no_loss",
+        "leopard2_one_shot_no_loss_hooks",
+        "leopard2_high_low_duality",
+        "leopard2_arbitrary_counts_acceptance",
+        "leopard2_direct_repair",
+        "leopard2_legacy_golden"
+      ],
+      "result": "pass"
+    }
+  },
+  "resource_policy": {
+    "controller_subworkers": 0,
+    "build_parallelism": 1,
+    "test_parallelism": 1,
+    "build_memory_max_bytes": 536870912,
+    "ordinary_test_memory_max_bytes": 268435456,
+    "integration_and_sanitizer_memory_max_bytes": 536870912,
+    "reason": "The host had repeated OOM restarts, so correctness and authoritative timing were deliberately serialized and resident-memory capped."
+  },
+  "disposition": "promote"
+}

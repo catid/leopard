@@ -2681,6 +2681,7 @@ static bool IsLegacyHighK8R4OneShotDirectRepairCodec(
         codec->parent_dimension == 12;
 }
 
+#ifdef LEO_HAS_FF8
 static bool HasLegacyHighK8R4TerminalCache(const leo2_codec* codec)
 {
     return IsLegacyHighK8R4OneShotDirectRepairCodec(codec) &&
@@ -2688,6 +2689,7 @@ static bool HasLegacyHighK8R4TerminalCache(const leo2_codec* codec)
         codec->context->direct_k8r4_surviving_originals8.size() == 70U * 4U &&
         codec->context->direct_k8r4_repair_logs8.size() == 70U * 8U * 4U;
 }
+#endif
 
 static bool IsGeneralDirectOneLossCodec(
     const leo2_codec* codec)
