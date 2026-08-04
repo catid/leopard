@@ -1,0 +1,180 @@
+{
+  "schema": "leopard2-gf8-t8-full-parity-terminals-evidence/v1",
+  "date_utc": "2026-08-04",
+  "status": "completed_with_scoped_promotion",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "explicit_avx2",
+    "promoted_cells": [
+      { "K": 5, "R": 5, "shard_bytes": 256 },
+      { "K": 6, "R": 6, "shard_bytes": 256 },
+      { "K": 7, "R": 7, "shard_bytes": 256 },
+      { "K": 8, "R": 8, "shard_bytes": 256 },
+      { "K": 5, "R": 5, "shard_bytes": 1024 },
+      { "K": 6, "R": 6, "shard_bytes": 1024 }
+    ],
+    "excluded_cells": [
+      {
+        "K": 7,
+        "R": 7,
+        "shard_bytes": 1024,
+        "reason": "Nine-round exact-main lower confidence bound was 1.046970, below the 1.05 promotion floor."
+      },
+      {
+        "K": 8,
+        "R": 8,
+        "shard_bytes": 1024,
+        "reason": "Exact-main confidence interval included parity with Leopard1."
+      }
+    ],
+    "candidate_path": "Packed ordinary and one-item batch public encode terminals. K5 uses the exact shortened/punctured circuit, K6 and K7 use exact AVX2 T8 partial-output callbacks, and K8 uses the complete T8 callback.",
+    "fallback_contract": "Detached, sparse, overlapping, irregular-size, punctured-neighbor, non-AVX2, malformed-flag, and ineligible calls remain on the mature path."
+  },
+  "ratio_orientation": "Reference time divided by promoted Leopard2 time; values above one favor the promoted path.",
+  "source_identity": {
+    "candidate_commit": "f00a0c6308be17e57d1288feeb59f04fd62a33c3",
+    "candidate_tree": "a51833da5fc431eba4240d11f7e2f240ff79e5d5",
+    "candidate_source_status": "clean",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_build_identity": {
+    "candidate_benchmark_sha256": "e6e81422fc509084d5b116d7eb4c38161968332fc078651693d0840ecd531764",
+    "candidate_static_archive_sha256": "c9c9f3bd252017ff028db013b3b6ad8117e26c10b36e128d302f7100c47b9151",
+    "candidate_cmake_cache_sha256": "ac2ef7d41f6d004ed2e2c71a3755bb7cc5c6d2295d9611663df219c6f7ba7ad0",
+    "candidate_link_recipe_sha256": "659c43329dab220187eb24695fd9c8abb0ababe508610d23550fa75c8e229329",
+    "exact_main_benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "prechange_leopard2_benchmark_sha256": "28531f281d15340f08c189df793a33967b5c7c4cdb2e8adacaae23b1106f88b0",
+    "build_type": "Release",
+    "compiler": "gcc 13.3.0"
+  },
+  "authoritative_campaign": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-13,16-29",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "coordinator_cpu": 0,
+    "thread_count": 1,
+    "rounds": 5,
+    "order_per_round": "ABCCBA, rotated between rounds",
+    "roles": {
+      "A": "exact Leopard main",
+      "B": "same Leopard2 binary with the T8 full-parity terminal disabled",
+      "C": "same Leopard2 binary with the terminal enabled"
+    },
+    "iterations_per_process": 21,
+    "warmup_iterations": 5,
+    "plan_reuse": 8192,
+    "child_invocations": 180,
+    "statistics": "Geometric ratio with Student-t 95 percent interval over five independent round log contrasts; each role has two observations per round.",
+    "smt_sibling_cpu_counters_unchanged": true,
+    "binary_hashes_verified_before_and_after": true
+  },
+  "results": [
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 256,
+      "parity_digest_fnv1a64": "eaedaa14ba4bba34",
+      "terminal_control_over_candidate": [2.089797644, 2.047267923, 2.133210873],
+      "exact_main_over_candidate": [1.435942109, 1.387243207, 1.486350578]
+    },
+    {
+      "K": 6,
+      "R": 6,
+      "shard_bytes": 256,
+      "parity_digest_fnv1a64": "bc8905f51734148d",
+      "terminal_control_over_candidate": [1.866154779, 1.848419655, 1.884060066],
+      "exact_main_over_candidate": [1.305935181, 1.290300256, 1.321759559]
+    },
+    {
+      "K": 7,
+      "R": 7,
+      "shard_bytes": 256,
+      "parity_digest_fnv1a64": "96f86702e99a3a5b",
+      "terminal_control_over_candidate": [1.688786799, 1.659591512, 1.718495685],
+      "exact_main_over_candidate": [1.179887936, 1.163692139, 1.196309139]
+    },
+    {
+      "K": 8,
+      "R": 8,
+      "shard_bytes": 256,
+      "parity_digest_fnv1a64": "83cc025ff7dfb9bf",
+      "terminal_control_over_candidate": [1.562500338, 1.532735410, 1.592843286],
+      "exact_main_over_candidate": [1.134127404, 1.119554356, 1.148890147]
+    },
+    {
+      "K": 5,
+      "R": 5,
+      "shard_bytes": 1024,
+      "parity_digest_fnv1a64": "207eca629d5d2e58",
+      "terminal_control_over_candidate": [1.381091211, 1.365365534, 1.396998009],
+      "exact_main_over_candidate": [1.265323705, 1.248935373, 1.281927082]
+    },
+    {
+      "K": 6,
+      "R": 6,
+      "shard_bytes": 1024,
+      "parity_digest_fnv1a64": "d084284b83138bfd",
+      "terminal_control_over_candidate": [1.292516218, 1.280127767, 1.305024558],
+      "exact_main_over_candidate": [1.178715038, 1.164739022, 1.192858755]
+    }
+  ],
+  "correctness_and_safety_gates": {
+    "all_180_authoritative_invocations_round_trip": true,
+    "all_120_leopard2_invocations_attest_clean_commit_and_tree": true,
+    "all_exact_main_candidate_and_control_parity_digests_match": true,
+    "release_focused_tests": "2/2 passed",
+    "feature_off_focused_tests": "2/2 passed",
+    "gf8_only_library_build": "passed",
+    "gf16_only_library_build": "passed",
+    "clang18_asan_ubsan_focused_tests": "2/2 passed",
+    "unaligned_and_scalar_tail_test": "passed at 65 bytes",
+    "error_atomicity_aliasing_sparse_detached_and_batch_tests": "passed",
+    "punctured_neighbor_cross_product_tests": "passed for K,R in 5..8 at 256 and 1024 bytes",
+    "boundary_tests": "passed at 255/256/257 and 1023/1024/1025 bytes"
+  },
+  "neighbor_regression_evidence": {
+    "screen_cells": 42,
+    "screen_geometric_prechange_over_candidate": 1.011388,
+    "confirmed_cells": [
+      { "K": 8, "R": 6, "shard_bytes": 256, "ratio": [0.987160, 0.965626, 1.009175] },
+      { "K": 6, "R": 5, "shard_bytes": 256, "ratio": [0.995490, 0.983172, 1.007963] },
+      { "K": 8, "R": 7, "shard_bytes": 256, "ratio": [0.994265, 0.986434, 1.002159] }
+    ],
+    "conclusion": "No neighboring cell has a statistically credible regression greater than two percent."
+  },
+  "rejected_experiments": [
+    {
+      "name": "K7 R7 1024-byte promotion",
+      "exact_main_over_candidate": [1.058659, 1.046970, 1.070479],
+      "conclusion": "Useful mean improvement, but the strict five-percent lower-confidence gate was not met."
+    },
+    {
+      "name": "K8 R8 1024-byte promotion",
+      "exact_main_over_candidate": [1.011693, 0.990204, 1.033649],
+      "conclusion": "Inconclusive and therefore excluded."
+    },
+    {
+      "name": "Manual spill-free K6/K7 transform rearrangement",
+      "prechange_over_variant": [0.997818, 0.990490, 1.005201],
+      "conclusion": "No measurable win; implementation was removed before commit."
+    }
+  ],
+  "raw_artifacts": {
+    "authoritative_root": "/tmp/leopard-t8-full-final-clean-isolated-abc-f00a0c6-20260804-v1",
+    "authoritative_json_bundle_sha256": "7a9314eb17cb30daebba0d782218adb20803bf500029de4ed18f6528da5fa556",
+    "neighbor_screen_root": "/tmp/leopard-t8-full-neighbor-screen-20260804-v1",
+    "neighbor_screen_bundle_sha256": "a46d8da3bec5e811e2d69123fab49c12401df8110f9ed96fc30cd14fc662b99a",
+    "neighbor_confirmation_root": "/tmp/leopard-t8-full-neighbor-confirm-20260804-v1",
+    "neighbor_confirmation_bundle_sha256": "4d39646f9c24fa725618e05b25f0ed9051f9f5cab983979518252cca670a4866",
+    "k7_1024_root": "/tmp/leopard-t8-exact-k67-abc-20260804-v1",
+    "k7_1024_bundle_sha256": "b9166cc651ce0ffc2ccb2e1abec97a2e3bc8bc14b93a668c3cee935ac359a5f5",
+    "k8_1024_root": "/tmp/leopard-t8-full-parity-main-abba-20260804-v1",
+    "k8_1024_bundle_sha256": "64fa8ae05e07a41d8d724ca29acfbecb5bbf50f56ce03561ff07e82ba2822ca5",
+    "spill_free_rejection_root": "/tmp/leopard-t8-k7-old-new-abba-20260804-v1",
+    "spill_free_rejection_bundle_sha256": "0a60660408a51a1c129e72b968bc396cb173a563f7a29c447662d49e3ce1be1e",
+    "bundle_algorithm": "SHA-256 of the lexicographically path-sorted sha256sum lines for all top-level JSON files."
+  },
+  "resource_note": "Builds were deliberately serialized at -j1 with memory caps after prior OOMs. Authoritative cache-sensitive timings deliberately used one isolated physical core; this is the scientifically valid exception to full-machine parallelism."
+}
