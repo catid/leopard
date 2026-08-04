@@ -54,12 +54,15 @@ from pathlib import Path
 
 
 REPORT_SCHEMA_V8 = "leopard2-affinity-supervisor/v8"
-REPORT_SCHEMA = "leopard2-affinity-supervisor/v9"
+REPORT_SCHEMA_V9 = "leopard2-affinity-supervisor/v9"
+REPORT_SCHEMA = "leopard2-affinity-supervisor/v10"
 ACCEPTANCE_SCHEMA = "leopard2-affinity-acceptance/v1"
 BINDING_SCHEMA_V2 = "leopard2-affinity-main-binding/v2"
-BINDING_SCHEMA = "leopard2-affinity-main-binding/v3"
+BINDING_SCHEMA_V3 = "leopard2-affinity-main-binding/v3"
+BINDING_SCHEMA = "leopard2-affinity-main-binding/v4"
 BINDING_TO_REPORT_SCHEMA = {
     BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
+    BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
     BINDING_SCHEMA: REPORT_SCHEMA,
 }
 REPORT_TO_BINDING_SCHEMA = {
@@ -73,7 +76,8 @@ MAIN_MANIFEST_SCHEMA_V8 = "leopard2-main-compare-manifest/v8"
 MAIN_MANIFEST_SCHEMA_V9 = "leopard2-main-compare-manifest/v9"
 MAIN_MANIFEST_SCHEMA_V10 = "leopard2-main-compare-manifest/v10"
 MAIN_MANIFEST_SCHEMA_V11 = "leopard2-main-compare-manifest/v11"
-MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v12"
+MAIN_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
+MAIN_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v13"
 MAIN_RAW_SCHEMA_V5 = "leopard2-main-compare-raw/v5"
 MAIN_RAW_SCHEMA_V6 = "leopard2-main-compare-raw/v6"
 MAIN_RAW_SCHEMA_V7 = "leopard2-main-compare-raw/v7"
@@ -81,7 +85,8 @@ MAIN_RAW_SCHEMA_V8 = "leopard2-main-compare-raw/v8"
 MAIN_RAW_SCHEMA_V9 = "leopard2-main-compare-raw/v9"
 MAIN_RAW_SCHEMA_V10 = "leopard2-main-compare-raw/v10"
 MAIN_RAW_SCHEMA_V11 = "leopard2-main-compare-raw/v11"
-MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v12"
+MAIN_RAW_SCHEMA_V12 = "leopard2-main-compare-raw/v12"
+MAIN_RAW_SCHEMA = "leopard2-main-compare-raw/v13"
 MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
     MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
@@ -90,6 +95,7 @@ MAIN_MANIFEST_TO_RAW_SCHEMA = {
     MAIN_MANIFEST_SCHEMA_V9: MAIN_RAW_SCHEMA_V9,
     MAIN_MANIFEST_SCHEMA_V10: MAIN_RAW_SCHEMA_V10,
     MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
+    MAIN_MANIFEST_SCHEMA_V12: MAIN_RAW_SCHEMA_V12,
     MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
 }
 REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
@@ -102,6 +108,7 @@ REPORT_TO_MAIN_MANIFEST_SCHEMAS = {
         MAIN_MANIFEST_SCHEMA_V10,
         MAIN_MANIFEST_SCHEMA_V11,
     )),
+    REPORT_SCHEMA_V9: frozenset((MAIN_MANIFEST_SCHEMA_V12,)),
     REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
 }
 MAIN_SUPERVISION_SCHEMA = "leopard2-main-supervision/v1"
@@ -219,6 +226,7 @@ STRICT_BENCHMARK_ENVIRONMENT = {
 }
 REPORT_SCHEMA_ENVIRONMENTS = {
     REPORT_SCHEMA_V8: STRICT_BENCHMARK_ENVIRONMENT_V8,
+    REPORT_SCHEMA_V9: STRICT_BENCHMARK_ENVIRONMENT,
     REPORT_SCHEMA: STRICT_BENCHMARK_ENVIRONMENT,
 }
 PID_NAMESPACE_KEYS = {"device", "inode"}
@@ -5467,6 +5475,9 @@ def test_binding():
               transaction.report["execution"]["environment"] ==
               STRICT_BENCHMARK_ENVIRONMENT,
               "new report did not use the current schema/environment contract")
+        pre_k8_report = json.loads(json.dumps(transaction.report))
+        pre_k8_report["schema"] = REPORT_SCHEMA_V9
+        validate_report(pre_k8_report)
         historical_report = json.loads(json.dumps(transaction.report))
         historical_report["schema"] = REPORT_SCHEMA_V8
         historical_report["execution"]["environment"] = dict(
@@ -5581,6 +5592,14 @@ def test_binding():
         validate_binding(
             binding, binding_path, manifest_path,
             sha256_bytes(manifest_path.read_bytes()))
+        relabeled_binding = json.loads(json.dumps(binding))
+        relabeled_binding["schema"] = BINDING_SCHEMA_V3
+        relabeled_binding.pop("digest")
+        relabeled_binding["digest"] = sha256_value(relabeled_binding)
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding_structure_only(relabeled_binding),
+            "current binding relabeled as pre-K8 evidence")
         expect_exception(
             IsolationError,
             lambda: validate_binding(
@@ -5625,6 +5644,23 @@ def test_binding():
             seal_value["digest"] = sha256_value(seal_value)
             atomic_json(acceptance_path(report_path), seal_value)
 
+        check(BINDING_TO_REPORT_SCHEMA == {
+                  BINDING_SCHEMA_V2: REPORT_SCHEMA_V8,
+                  BINDING_SCHEMA_V3: REPORT_SCHEMA_V9,
+                  BINDING_SCHEMA: REPORT_SCHEMA,
+              } and REPORT_TO_MAIN_MANIFEST_SCHEMAS == {
+                  REPORT_SCHEMA_V8: frozenset((
+                      MAIN_MANIFEST_SCHEMA_V5,
+                      MAIN_MANIFEST_SCHEMA_V6,
+                      MAIN_MANIFEST_SCHEMA_V7,
+                      MAIN_MANIFEST_SCHEMA_V8,
+                      MAIN_MANIFEST_SCHEMA_V9,
+                      MAIN_MANIFEST_SCHEMA_V10,
+                      MAIN_MANIFEST_SCHEMA_V11,
+                  )),
+                  REPORT_SCHEMA_V9: frozenset((MAIN_MANIFEST_SCHEMA_V12,)),
+                  REPORT_SCHEMA: frozenset((MAIN_MANIFEST_SCHEMA,)),
+              }, "affinity report/binding generation matrix changed")
         check(MAIN_MANIFEST_TO_RAW_SCHEMA == {
                   MAIN_MANIFEST_SCHEMA_V5: MAIN_RAW_SCHEMA_V5,
                   MAIN_MANIFEST_SCHEMA_V6: MAIN_RAW_SCHEMA_V6,
@@ -5633,9 +5669,12 @@ def test_binding():
                   MAIN_MANIFEST_SCHEMA_V9: MAIN_RAW_SCHEMA_V9,
                   MAIN_MANIFEST_SCHEMA_V10: MAIN_RAW_SCHEMA_V10,
                   MAIN_MANIFEST_SCHEMA_V11: MAIN_RAW_SCHEMA_V11,
+                  MAIN_MANIFEST_SCHEMA_V12: MAIN_RAW_SCHEMA_V12,
                   MAIN_MANIFEST_SCHEMA: MAIN_RAW_SCHEMA,
               }, "main-comparison manifest/raw replay matrix changed")
 
+        pre_k8_raw = json.loads(json.dumps(raw_payload))
+        pre_k8_raw["schema"] = MAIN_RAW_SCHEMA_V12
         historical_raw = json.loads(json.dumps(raw_payload))
         historical_raw["schema"] = MAIN_RAW_SCHEMA_V11
         historical_raw["campaign"]["child_environment"] = dict(
@@ -5657,12 +5696,53 @@ def test_binding():
                 transaction.report, manifest_path),
             "current binding with historical campaign environment")
 
+        install_bundle(pre_k8_raw, MAIN_MANIFEST_SCHEMA_V12)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                transaction.report, manifest_path),
+            "current report with pre-K8 manifest schema")
+
         install_bundle(historical_raw, MAIN_MANIFEST_SCHEMA_V11)
         expect_exception(
             IsolationError,
             lambda: validate_main_manifest_binding(
                 transaction.report, manifest_path),
             "current report with historical manifest schema")
+
+        install_accepted_report(pre_k8_report)
+        install_bundle(raw_payload)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_k8_report, manifest_path),
+            "pre-K8 report with current manifest schema")
+        install_bundle(historical_raw, MAIN_MANIFEST_SCHEMA_V11)
+        expect_exception(
+            IsolationError,
+            lambda: validate_main_manifest_binding(
+                pre_k8_report, manifest_path),
+            "pre-K8 report with pre-v12 manifest schema")
+        install_bundle(pre_k8_raw, MAIN_MANIFEST_SCHEMA_V12)
+        pre_k8_binding_path = evidence / "affinity-binding-v3.json"
+        create_binding(report_path, manifest_path, pre_k8_binding_path)
+        pre_k8_binding = load_json(
+            pre_k8_binding_path, "pre-K8 test binding")
+        check(pre_k8_binding["schema"] == BINDING_SCHEMA_V3 and
+              pre_k8_binding["report"]["schema"] == REPORT_SCHEMA_V9,
+              "pre-K8 binding replay changed its schema pair")
+        validate_binding(
+            pre_k8_binding, pre_k8_binding_path, manifest_path,
+            sha256_bytes(manifest_path.read_bytes()))
+        upgraded_pre_k8_binding = json.loads(json.dumps(pre_k8_binding))
+        upgraded_pre_k8_binding["schema"] = BINDING_SCHEMA
+        upgraded_pre_k8_binding.pop("digest")
+        upgraded_pre_k8_binding["digest"] = sha256_value(
+            upgraded_pre_k8_binding)
+        expect_exception(
+            IsolationError,
+            lambda: validate_binding_structure_only(upgraded_pre_k8_binding),
+            "pre-K8 binding relabeled as current evidence")
 
         install_accepted_report(historical_report)
         install_bundle(raw_payload)

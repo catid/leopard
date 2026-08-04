@@ -28,7 +28,8 @@ from pathlib import Path
 HISTORICAL_SCHEMA = "leopard2-backend-matrix/v1"
 PRE_GFNI_SCHEMA = "leopard2-backend-matrix/v2"
 PRE_T16_SCHEMA = "leopard2-backend-matrix/v3"
-SCHEMA = "leopard2-backend-matrix/v4"
+PRE_K8_SCHEMA = "leopard2-backend-matrix/v4"
+SCHEMA = "leopard2-backend-matrix/v5"
 VARIANTS = ("auto", "scalar", "ssse3", "avx2", "avx512")
 COMPARE_TESTS = (
     "field_options",
@@ -271,14 +272,19 @@ PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS = {
 PRE_T16_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS)
 PRE_T16_EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2BackendGFNI.cpp"] = 2
-EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS = dict(
     PRE_T16_EXPECTED_COMPILE_SOURCE_COUNTS)
-EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2BackendAVX2T2K4.cpp"] = 1
-EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2BackendAVX2T16B64.cpp"] = 1
-EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2BackendAVX2T32B256.cpp"] = 1
-EXPECTED_COMPILE_SOURCE_COUNTS["Leopard2LowP32B64AVX2.cpp"] = 1
-EXPECTED_COMPILE_SOURCE_COUNTS["tests/leopard2/test_t2_k4_production.cpp"] = 1
-EXPECTED_COMPILE_SOURCE_COUNTS.update({
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS[
+    "Leopard2BackendAVX2T2K4.cpp"] = 1
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS[
+    "Leopard2BackendAVX2T16B64.cpp"] = 1
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS[
+    "Leopard2BackendAVX2T32B256.cpp"] = 1
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS[
+    "Leopard2LowP32B64AVX2.cpp"] = 1
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS[
+    "tests/leopard2/test_t2_k4_production.cpp"] = 1
+PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS.update({
     "tests/leopard2/direct_oracle.cpp": 33,
     "tests/leopard2/test_balanced_b64_terminal.cpp": 1,
     "tests/leopard2/test_balanced_b64_terminal_production.cpp": 2,
@@ -303,6 +309,10 @@ EXPECTED_COMPILE_SOURCE_COUNTS.update({
     "tests/leopard2/test_t4_packed_terminal_family_production.cpp": 1,
     "tests/leopard2/test_translated_metadata.cpp": 2,
 })
+EXPECTED_COMPILE_SOURCE_COUNTS = dict(
+    PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS)
+EXPECTED_COMPILE_SOURCE_COUNTS[
+    "Leopard2BackendAVX2T8K8B1024.cpp"] = 1
 PRE_GFNI_SOURCE_FILES = (
     "CMakeLists.txt",
     "LeopardCommon.cpp",
@@ -377,7 +387,7 @@ PRE_GFNI_SOURCE_FILES = (
 )
 PRE_T16_SOURCE_FILES = PRE_GFNI_SOURCE_FILES + (
     "Leopard2BackendGFNI.cpp",)
-SOURCE_FILES = PRE_T16_SOURCE_FILES + (
+PRE_K8_SOURCE_FILES = PRE_T16_SOURCE_FILES + (
     "Leopard2BackendAVX2T2K4.cpp",
     "Leopard2BackendAVX2T16B64.cpp",
     "Leopard2BackendAVX2T32B256.cpp",
@@ -407,6 +417,9 @@ SOURCE_FILES = PRE_T16_SOURCE_FILES + (
     "tests/leopard2/test_t4_packed_terminal_family_production.cpp",
     "tests/leopard2/test_translated_metadata.cpp",
 )
+SOURCE_FILES = PRE_K8_SOURCE_FILES + (
+    "Leopard2BackendAVX2T8K8B1024.cpp",
+)
 
 
 def evidence_contract(schema=SCHEMA):
@@ -414,23 +427,26 @@ def evidence_contract(schema=SCHEMA):
 
     Keeping this as data, rather than another hand-copied list, makes a matrix
     producer change fail the consumer's schema/contract binding immediately.
-    Schema v2 remains available for historical butterfly-v9 replay, and v3
-    retains the GFNI-only closure used by butterfly-v10.  Current schema v4
-    additionally binds every promoted conditional AVX2/GF8 object, the
-    dedicated T2/K4 test source, and the selectors that control that source
-    closure.
+    Schema v2 remains available for historical butterfly-v9 replay, v3
+    retains the GFNI-only closure used by butterfly-v10, and v4 preserves the
+    promoted conditional AVX2/GF8 and T2/K4 closure used by butterfly-v11.
+    Current schema v5 additionally binds the fixed-shape T8/K8/B1024 object.
     """
-    if schema not in (PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, SCHEMA):
+    if schema not in (
+            PRE_GFNI_SCHEMA, PRE_T16_SCHEMA, PRE_K8_SCHEMA, SCHEMA):
         raise ValueError("unsupported backend-matrix evidence schema")
     current = schema == SCHEMA
+    pre_k8 = schema == PRE_K8_SCHEMA
     pre_t16 = schema == PRE_T16_SCHEMA
     contract = {
         "schema": schema,
         "source_files": tuple(
             SOURCE_FILES if current else
+            PRE_K8_SOURCE_FILES if pre_k8 else
             PRE_T16_SOURCE_FILES if pre_t16 else PRE_GFNI_SOURCE_FILES),
         "expected_compile_source_counts": dict(
             EXPECTED_COMPILE_SOURCE_COUNTS if current else
+            PRE_K8_EXPECTED_COMPILE_SOURCE_COUNTS if pre_k8 else
             PRE_T16_EXPECTED_COMPILE_SOURCE_COUNTS if pre_t16 else
             PRE_GFNI_EXPECTED_COMPILE_SOURCE_COUNTS),
         "compare_tests": tuple(COMPARE_TESTS),
@@ -442,7 +458,8 @@ def evidence_contract(schema=SCHEMA):
         },
         "build_targets": tuple(BUILD_TARGETS),
         "build_cache_keys": tuple(
-            BUILD_CACHE_KEYS if current else PRE_T16_BUILD_CACHE_KEYS) + (
+            BUILD_CACHE_KEYS if current or pre_k8 else
+            PRE_T16_BUILD_CACHE_KEYS) + (
             "CMAKE_C_COMPILER", "CMAKE_CXX_COMPILER"),
         "base_backend_failure_tests": tuple(BASE_BACKEND_FAILURE_TESTS),
         "avx512_backend_failure_tests": tuple(
@@ -451,7 +468,7 @@ def evidence_contract(schema=SCHEMA):
         "portable_ctest_regex": PORTABLE_CTEST_REGEX,
         "cuda_ctest_regex": CUDA_CTEST_REGEX,
     }
-    if current or pre_t16:
+    if current or pre_k8 or pre_t16:
         contract["gfni_backend_failure_tests"] = tuple(
             GFNI_BACKEND_FAILURE_TESTS)
     return contract
@@ -542,6 +559,8 @@ def expected_compile_source_counts(cache):
             ("Leopard2BackendAVX2.cpp", have_avx2),
             ("Leopard2BackendAVX2Xor.cpp", have_avx2 and have_gf8),
             ("Leopard2BackendAVX2T2K4.cpp", have_avx2 and have_gf8),
+            ("Leopard2BackendAVX2T8K8B1024.cpp",
+             have_avx2 and have_gf8),
             ("Leopard2BackendAVX2T16B64.cpp", have_t16),
             ("Leopard2BackendAVX2T32B256.cpp", have_t32),
             ("Leopard2LowP32B64AVX2.cpp", have_p32),
@@ -1408,6 +1427,7 @@ def self_test():
     current_contract = evidence_contract()
     historical_contract = evidence_contract(PRE_GFNI_SCHEMA)
     pre_t16_contract = evidence_contract(PRE_T16_SCHEMA)
+    pre_k8_contract = evidence_contract(PRE_K8_SCHEMA)
     check(current_contract["schema"] == SCHEMA,
           "current contract schema")
     check(len(current_contract["source_files"]) ==
@@ -1420,6 +1440,8 @@ def self_test():
           "pre-GFNI contract schema")
     check(pre_t16_contract["schema"] == PRE_T16_SCHEMA,
           "pre-T16 contract schema")
+    check(pre_k8_contract["schema"] == PRE_K8_SCHEMA,
+          "pre-K8 contract schema")
     check("gfni_backend_failure_tests" in current_contract,
           "current contract GFNI failure tests")
     check("gfni_backend_failure_tests" not in historical_contract,
@@ -1450,6 +1472,30 @@ def self_test():
     check("Leopard2BackendAVX2T2K4.cpp" in
           current_contract["expected_compile_source_counts"],
           "current contract T2/K4 compile closure")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" in
+          current_contract["source_files"],
+          "current contract T8/K8/B1024 source")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" in
+          current_contract["expected_compile_source_counts"],
+          "current contract T8/K8/B1024 compile closure")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" not in
+          pre_k8_contract["source_files"],
+          "pre-K8 contract excludes T8/K8/B1024 source")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" not in
+          pre_k8_contract["expected_compile_source_counts"],
+          "pre-K8 contract excludes T8/K8/B1024 compile closure")
+    check("Leopard2BackendAVX2T2K4.cpp" in
+          pre_k8_contract["source_files"],
+          "pre-K8 contract retains T2/K4 source")
+    check("Leopard2BackendAVX2T16B64.cpp" in
+          pre_k8_contract["source_files"],
+          "pre-K8 contract retains T16/B64 source")
+    check("Leopard2BackendAVX2T32B256.cpp" in
+          pre_k8_contract["source_files"],
+          "pre-K8 contract retains T32/B256 source")
+    check("Leopard2LowP32B64AVX2.cpp" in
+          pre_k8_contract["source_files"],
+          "pre-K8 contract retains low P32/B64 source")
     check("tests/leopard2/test_t2_k4_production.cpp" in
           current_contract["expected_compile_source_counts"],
           "current contract T2/K4 test compile closure")
@@ -1660,6 +1706,8 @@ def self_test():
           "AVX2 XOR object excluded without compiler probe")
     check("Leopard2BackendAVX2T2K4.cpp" not in no_isa,
           "AVX2 T2/K4 object excluded without compiler probe")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" not in no_isa,
+          "AVX2 T8/K8/B1024 object excluded without compiler probe")
     check("Leopard2BackendAVX2T16B64.cpp" not in no_isa,
           "AVX2 T16/B64 object excluded without compiler probe")
     check("Leopard2BackendAVX2T32B256.cpp" not in no_isa,
@@ -1688,6 +1736,8 @@ def self_test():
           "AVX2 XOR compile-source count")
     check(avx2_only.get("Leopard2BackendAVX2T2K4.cpp") == 1,
           "AVX2 T2/K4 compile-source count")
+    check(avx2_only.get("Leopard2BackendAVX2T8K8B1024.cpp") == 1,
+          "AVX2 T8/K8/B1024 compile-source count")
     check(avx2_only.get("Leopard2BackendAVX2T16B64.cpp") == 1,
           "AVX2 T16/B64 compile-source count")
     check(avx2_only.get("Leopard2BackendAVX2T32B256.cpp") == 1,
@@ -1755,6 +1805,8 @@ def self_test():
           "GF8-only AVX2 XOR object excluded from GF16 build")
     check("Leopard2BackendAVX2T2K4.cpp" not in gf16_only,
           "GF8-only AVX2 T2/K4 object excluded from GF16 build")
+    check("Leopard2BackendAVX2T8K8B1024.cpp" not in gf16_only,
+          "GF8-only AVX2 T8/K8/B1024 object excluded from GF16 build")
     check("Leopard2BackendAVX2T16B64.cpp" not in gf16_only,
           "GF8-only AVX2 T16/B64 object excluded from GF16 build")
     check("Leopard2BackendAVX2T32B256.cpp" not in gf16_only,

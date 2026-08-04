@@ -3484,6 +3484,16 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEOPARD_ENABLE_GF16": "ON",
         }
         validated = provenance._validate_candidate_required_cache(cache)
+        v6_cache = dict(cache)
+        v6_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
+        v6_validated = provenance._validate_candidate_required_cache(
+            v6_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
+        self.assertEqual(
+            v6_validated["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3602,7 +3612,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5 and current"):
+                        "supports only v5, v6, and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3681,6 +3691,10 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             },
         }
+        v6 = copy.deepcopy(current)
+        v6["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
         v4 = {
             "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
             "validated_cache": {
@@ -3715,6 +3729,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "invocation_schema"],
             provenance.REPLAY_INVOCATION_SCHEMA)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v6, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -3998,6 +4018,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendAVX2T2K4.cpp": (
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
+            "Leopard2BackendAVX2T8K8B1024.cpp": (
+                ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendAVX2T16B64.cpp": (
                 ("-mavx2", "-mno-avx512f"), "avx2-no-avx512"),
             "Leopard2BackendAVX2T32B256.cpp": (
@@ -4143,6 +4165,68 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance._validate_compile_flags(
                 response, Path("leopard2.cpp"))
 
+    def test_k8_live_range_flag_requires_unambiguous_gnu_driver(self) -> None:
+        source = Path("Leopard2BackendAVX2T8K8B1024.cpp")
+        current_cache = {
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+        }
+
+        def compile_argv(*extra: str) -> list[str]:
+            return [
+                str(tool_path("c++")),
+                "-Wall", "-Wextra", "-fopenmp",
+                "-O3", "-DNDEBUG", "-O3", "-std=gnu++11",
+                "-mavx2", "-mno-avx512f", *extra,
+                "-o", f"{source.name}.o", "-c", str(source),
+            ]
+
+        gnu_drivers = (
+            "/usr/bin/g++",
+            "/usr/bin/g++-13",
+            "/usr/bin/x86_64-linux-gnu-g++-13",
+            "/opt/cross/bin/aarch64-linux-gnu-g++",
+        )
+        for compiler_path in gnu_drivers:
+            with self.subTest(gnu=compiler_path):
+                self.assertTrue(
+                    provenance._resolved_compiler_is_gnu(compiler_path))
+                self.assertEqual(
+                    provenance._validate_compile_flags(
+                        compile_argv("-flive-range-shrinkage"), source,
+                        cache=current_cache, compiler_path=compiler_path),
+                    "avx2-no-avx512")
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "non-canonical or indirect compile option"):
+                    provenance._validate_compile_flags(
+                        compile_argv(), source, cache=current_cache,
+                        compiler_path=compiler_path)
+
+        ambiguous_drivers = (
+            "/usr/bin/compiler",
+            "/usr/bin/clang++-18",
+            "/usr/bin/ccache",
+            "/usr/lib/ccache-g++",
+            "/usr/bin/vendor-g++",
+            "g++",
+        )
+        for compiler_path in ambiguous_drivers:
+            with self.subTest(ambiguous=compiler_path):
+                self.assertFalse(
+                    provenance._resolved_compiler_is_gnu(compiler_path))
+                self.assertEqual(
+                    provenance._validate_compile_flags(
+                        compile_argv(), source, cache=current_cache,
+                        compiler_path=compiler_path),
+                    "avx2-no-avx512")
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "non-canonical or indirect compile option"):
+                    provenance._validate_compile_flags(
+                        compile_argv("-flive-range-shrinkage"), source,
+                        cache=current_cache, compiler_path=compiler_path)
+
     def test_isolated_avx2_member_definitions_are_exact(self) -> None:
         cache = {
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
@@ -4163,6 +4247,10 @@ class ExactCommandValidationTests(unittest.TestCase):
         member_definitions = {
             "Leopard2BackendAVX2T2K4.cpp": {
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
+            },
+            "Leopard2BackendAVX2T8K8B1024.cpp": {
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
             },
             "Leopard2BackendAVX2T16B64.cpp": {
                 "-DLEO2_HAVE_AVX2_BACKEND=1",
@@ -4397,6 +4485,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
         }
         self.assertEqual(
             provenance._validate_compile_flags(
@@ -4427,6 +4516,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
+            "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
         }
         self.assertEqual(
             provenance._validate_compile_flags(
@@ -4445,6 +4535,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "Leopard2BackendAVX2.cpp",
             "Leopard2BackendAVX2Xor.cpp",
             "Leopard2BackendAVX2T2K4.cpp",
+            "Leopard2BackendAVX2T8K8B1024.cpp",
             t16_name,
             t32_name,
             p32_name,
@@ -4469,7 +4560,11 @@ class ExactCommandValidationTests(unittest.TestCase):
         t2_path = (
             SOURCE_ROOT / "Leopard2BackendAVX2T2K4.cpp").resolve(
                 strict=True)
+        t8_k8_b1024_path = (
+            SOURCE_ROOT / "Leopard2BackendAVX2T8K8B1024.cpp").resolve(
+                strict=True)
         self.assertIn(t2_path, expected)
+        self.assertIn(t8_k8_b1024_path, expected)
         self.assertIn((SOURCE_ROOT / p32_name).resolve(strict=True), expected)
         self.assertIn((SOURCE_ROOT / t16_name).resolve(strict=True), expected)
         self.assertIn((SOURCE_ROOT / t32_name).resolve(strict=True), expected)
@@ -4480,12 +4575,20 @@ class ExactCommandValidationTests(unittest.TestCase):
             expected_configuration_schema=
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5)
         self.assertNotIn(t2_path, historical_expected)
+        self.assertNotIn(t8_k8_b1024_path, historical_expected)
         self.assertIn(
             (SOURCE_ROOT / t16_name).resolve(strict=True),
             historical_expected)
         self.assertIn(
             (SOURCE_ROOT / t32_name).resolve(strict=True),
             historical_expected)
+
+        v6_expected = provenance._expected_library_sources(
+            SOURCE_ROOT, cache, tracked,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
+        self.assertIn(t2_path, v6_expected)
+        self.assertNotIn(t8_k8_b1024_path, v6_expected)
 
         disabled_cache = dict(cache)
         disabled_cache["LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"] = "OFF"

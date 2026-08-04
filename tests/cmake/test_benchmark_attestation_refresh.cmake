@@ -63,7 +63,7 @@ function(leo2_read_effective_configuration
     endif()
     file(READ "${configuration_file}" configuration)
     string(REGEX MATCH
-        "^schema=leopard2-benchmark-build-configuration/v6\nsha256=([0-9a-f]+)\n"
+        "^schema=leopard2-benchmark-build-configuration/v7\nsha256=([0-9a-f]+)\n"
         header "${configuration}")
     set(declared_digest "${CMAKE_MATCH_1}")
     string(LENGTH "${declared_digest}" declared_digest_length)
@@ -190,7 +190,7 @@ function(leo2_read_effective_configuration
     string(REGEX REPLACE "^[^=]+=" "" cached_schema "${cached_schema}")
     if(NOT cached_digest STREQUAL declared_digest OR
        NOT cached_schema STREQUAL
-           "leopard2-benchmark-build-configuration/v6")
+           "leopard2-benchmark-build-configuration/v7")
         message(FATAL_ERROR
             "Effective build configuration differs from its cache binding")
     endif()

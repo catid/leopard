@@ -52,6 +52,7 @@ from leopard2_build_provenance import (
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+    BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
     CANONICAL_REPLAY_RECIPE_SCHEMA,
     CORE_LIBRARY_SOURCES,
     LEGACY_REPLAY_RECIPE_SCHEMA,
@@ -111,12 +112,14 @@ RUN_CONTRACT_SCHEMA_V4 = "leopard2-all-k-gap-contract/v4"
 RUN_CONTRACT_SCHEMA_V5 = "leopard2-all-k-gap-contract/v5"
 RUN_CONTRACT_SCHEMA_V6 = "leopard2-all-k-gap-contract/v6"
 RUN_CONTRACT_SCHEMA_V7 = "leopard2-all-k-gap-contract/v7"
-RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v8"
+RUN_CONTRACT_SCHEMA_V8 = "leopard2-all-k-gap-contract/v8"
+RUN_CONTRACT_SCHEMA = "leopard2-all-k-gap-contract/v9"
 MANIFEST_SCHEMA_V4 = "leopard2-all-k-gap-manifest/v4"
 MANIFEST_SCHEMA_V5 = "leopard2-all-k-gap-manifest/v5"
 MANIFEST_SCHEMA_V6 = "leopard2-all-k-gap-manifest/v6"
 MANIFEST_SCHEMA_V7 = "leopard2-all-k-gap-manifest/v7"
-MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v8"
+MANIFEST_SCHEMA_V8 = "leopard2-all-k-gap-manifest/v8"
+MANIFEST_SCHEMA = "leopard2-all-k-gap-manifest/v9"
 ALL_K_EVIDENCE_CONTRACTS = {
     RUN_CONTRACT_SCHEMA_V4: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA_V1,
@@ -146,6 +149,13 @@ ALL_K_EVIDENCE_CONTRACTS = {
         "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
         "replay_invocation": REPLAY_INVOCATION_SCHEMA,
     },
+    RUN_CONTRACT_SCHEMA_V8: {
+        "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
+        "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
+        "proof": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+        "replay_plan": CANONICAL_REPLAY_RECIPE_SCHEMA,
+        "replay_invocation": REPLAY_INVOCATION_SCHEMA,
+    },
     RUN_CONTRACT_SCHEMA: {
         "closure": PRODUCTION_BUILD_CLOSURE_SCHEMA,
         "configuration": BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
@@ -159,6 +169,7 @@ MANIFEST_TO_CONTRACT_SCHEMA = {
     MANIFEST_SCHEMA_V5: RUN_CONTRACT_SCHEMA_V5,
     MANIFEST_SCHEMA_V6: RUN_CONTRACT_SCHEMA_V6,
     MANIFEST_SCHEMA_V7: RUN_CONTRACT_SCHEMA_V7,
+    MANIFEST_SCHEMA_V8: RUN_CONTRACT_SCHEMA_V8,
     MANIFEST_SCHEMA: RUN_CONTRACT_SCHEMA,
 }
 RUN_CONTRACT_KEYS_V7 = frozenset((
@@ -177,6 +188,7 @@ ALL_K_CHILD_ENVIRONMENTS = {
     RUN_CONTRACT_SCHEMA_V5: CHILD_ENV_V7,
     RUN_CONTRACT_SCHEMA_V6: CHILD_ENV_V7,
     RUN_CONTRACT_SCHEMA_V7: CHILD_ENV_V7,
+    RUN_CONTRACT_SCHEMA_V8: CHILD_ENV,
     RUN_CONTRACT_SCHEMA: CHILD_ENV,
 }
 ALL_K_BUILD_CACHE_KEYS_V2 = frozenset((
@@ -1530,11 +1542,12 @@ def validate_run_contract_evidence(
     require(expected is not None,
             "all-K run contract schema is unsupported")
     expected_contract_keys = (
-        RUN_CONTRACT_KEYS if contract_schema == RUN_CONTRACT_SCHEMA
+        RUN_CONTRACT_KEYS
+        if contract_schema in (RUN_CONTRACT_SCHEMA_V8, RUN_CONTRACT_SCHEMA)
         else RUN_CONTRACT_KEYS_V7)
     require(set(contract) == expected_contract_keys,
             "all-K run contract schema tuple or fields differ")
-    if contract_schema == RUN_CONTRACT_SCHEMA:
+    if contract_schema in (RUN_CONTRACT_SCHEMA_V8, RUN_CONTRACT_SCHEMA):
         require(canonical_equal(
             contract.get("child_environment"),
             child_environment_for_contract_schema(contract_schema)),
@@ -1564,6 +1577,7 @@ def validate_run_contract_evidence(
         RUN_CONTRACT_SCHEMA_V5: ALL_K_BUILD_CACHE_KEYS_V3,
         RUN_CONTRACT_SCHEMA_V6: ALL_K_BUILD_CACHE_KEYS_V4,
         RUN_CONTRACT_SCHEMA_V7: ALL_K_BUILD_CACHE_KEYS_V5,
+        RUN_CONTRACT_SCHEMA_V8: ALL_K_BUILD_CACHE_KEYS,
         RUN_CONTRACT_SCHEMA: ALL_K_BUILD_CACHE_KEYS,
     }[contract_schema]
     require(
@@ -1587,7 +1601,7 @@ def validate_run_contract_evidence(
         cache.get("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE") == "OFF" and
         cache.get("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE") in {"0", "1", "2"},
         "all-K run contract selector tuple differs")
-    if contract_schema == RUN_CONTRACT_SCHEMA:
+    if contract_schema in (RUN_CONTRACT_SCHEMA_V8, RUN_CONTRACT_SCHEMA):
         require(
             cache.get("LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR") == "OFF" and
             cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and

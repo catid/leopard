@@ -215,9 +215,13 @@ UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5 = frozenset((
     "Leopard2BackendAVX2.cpp",
     "Leopard2BackendAVX2Xor.cpp",
 ))
-UNCONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
+UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V6 = frozenset((
     *UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5,
     "Leopard2BackendAVX2T2K4.cpp",
+))
+UNCONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
+    *UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V6,
+    "Leopard2BackendAVX2T8K8B1024.cpp",
 ))
 CONDITIONAL_AVX2_LIBRARY_SOURCES = frozenset((
     "Leopard2BackendAVX2T16B64.cpp",
@@ -249,8 +253,10 @@ BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4 = \
     "leopard2-benchmark-build-configuration/v4"
 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5 = \
     "leopard2-benchmark-build-configuration/v5"
-BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6 = \
     "leopard2-benchmark-build-configuration/v6"
+BENCHMARK_BUILD_CONFIGURATION_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v7"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA_V2 = \
     "leopard2-reproducible-build-proof/v2"
 REPRODUCIBLE_BUILD_PROOF_SCHEMA = \
@@ -4498,6 +4504,23 @@ def _compile_output(
     return _resolve_build_operand(build, directory, output_value)
 
 
+_GNU_CXX_DRIVER_BASENAME = re.compile(
+    r"(?:g\+\+|(?:[A-Za-z0-9_.+]+-)+"
+    r"(?:gnu|gnueabi(?:hf)?|eabi|elf|musl|mingw32)-g\+\+)"
+    r"(?:-[0-9]+(?:\.[0-9]+)*)?")
+
+
+def _resolved_compiler_is_gnu(
+    compiler_path: Path | str | None,
+) -> bool:
+    """Classify only an unambiguous resolved GNU C++ driver pathname."""
+    if compiler_path is None:
+        return False
+    path = Path(compiler_path)
+    return path.is_absolute() and \
+        _GNU_CXX_DRIVER_BASENAME.fullmatch(path.name) is not None
+
+
 def _validate_compile_flags(
     tokens: Sequence[str], source: Path, *,
     source_root: Path | None = None,
@@ -4506,6 +4529,7 @@ def _validate_compile_flags(
     library_sources: set[Path] | None = None,
     benchmark_source: bool | None = None,
     lexical_build_output: bool = False,
+    compiler_path: Path | str | None = None,
 ) -> str:
     """Accept only the direct GCC/Clang argv emitted by this CMake graph.
 
@@ -4576,6 +4600,11 @@ def _validate_compile_flags(
         "-std=gnu++11": 1,
     })
     expected_options.update(expected_target_flags)
+    if (name == "Leopard2BackendAVX2T8K8B1024.cpp" and
+            cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
+            _resolved_compiler_is_gnu(compiler_path)):
+        expected_options["-flive-range-shrinkage"] = 1
     if ((name.startswith(("Leopard2BackendAVX2",
                           "Leopard2BackendGFNI")) or
          name == p32_source_name) and
@@ -4602,6 +4631,7 @@ def _validate_compile_flags(
         current_configuration = (
             cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             })
         if current_configuration:
@@ -4615,6 +4645,10 @@ def _validate_compile_flags(
                 expected_definitions.add(
                     "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         available_names = {path.name for path in library_sources}
+        t8_k8_b1024_source_name = "Leopard2BackendAVX2T8K8B1024.cpp"
+        t8_k8_b1024_available = (
+            name == t8_k8_b1024_source_name or
+            t8_k8_b1024_source_name in available_names)
         t16_source_name = "Leopard2BackendAVX2T16B64.cpp"
         t16_available = (
             name == t16_source_name or t16_source_name in available_names)
@@ -4671,6 +4705,9 @@ def _validate_compile_flags(
             ):
                 if backend_name in available_names:
                     expected_definitions.add(definition)
+            if t8_k8_b1024_available:
+                expected_definitions.add(
+                    "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1")
             if name == "leopard2.cpp" and t16_generated:
                 expected_definitions.add(
                     "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1")
@@ -4698,6 +4735,11 @@ def _validate_compile_flags(
             ))
         elif name == "Leopard2BackendAVX2T2K4.cpp":
             expected_definitions.add("-DLEO2_HAVE_AVX2_BACKEND=1")
+        elif name == t8_k8_b1024_source_name:
+            expected_definitions.update((
+                "-DLEO2_HAVE_AVX2_BACKEND=1",
+                "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
+            ))
         elif name == t16_source_name:
             require(t16_generated,
                     "T16/B64 source contradicts its disabled selector")
@@ -4876,6 +4918,7 @@ def _expected_library_sources(
 ) -> set[Path]:
     require(expected_configuration_schema in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "candidate source-closure configuration schema is unsupported")
@@ -4884,11 +4927,14 @@ def _expected_library_sources(
     if _cmake_true(cache.get("LEOPARD_ENABLE_GF16")):
         names.add("LeopardFF16.cpp")
     names.add("Leopard2BackendSSSE3.cpp")
-    names.update(
-        UNCONDITIONAL_AVX2_LIBRARY_SOURCES
-        if expected_configuration_schema ==
-            BENCHMARK_BUILD_CONFIGURATION_SCHEMA
-        else UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5)
+    if (expected_configuration_schema ==
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA):
+        names.update(UNCONDITIONAL_AVX2_LIBRARY_SOURCES)
+    elif (expected_configuration_schema ==
+          BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6):
+        names.update(UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V6)
+    else:
+        names.update(UNCONDITIONAL_AVX2_LIBRARY_SOURCES_V5)
     if _cmake_true(cache.get("LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED")):
         names.add("Leopard2BackendAVX2T16B64.cpp")
     if (_cmake_true(
@@ -4972,15 +5018,17 @@ def _validate_candidate_required_cache(
     }
     require(expected_configuration_schema in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "candidate CMake cache configuration schema is unsupported")
     required_exact = dict(required_exact_v5)
-    if (expected_configuration_schema ==
-            BENCHMARK_BUILD_CONFIGURATION_SCHEMA):
+    if expected_configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         required_exact.update({
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
-                BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                expected_configuration_schema,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
@@ -5029,7 +5077,9 @@ def _reproducible_replay_contract(
     if closure_schema == PRODUCTION_BUILD_CLOSURE_SCHEMA:
         configuration_schema = cache.get(
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA")
-        if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+        if configuration_schema in {
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
             require(
                 cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT") ==
                     "ON" and
@@ -5051,12 +5101,11 @@ def _reproducible_replay_contract(
                     "OFF" and
                 cache.get("LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL") ==
                     "ON",
-                "current reproducible-build closure configuration contract "
+                "v6/current reproducible-build closure configuration contract "
                 "differs")
             return {
                 "closure_schema": PRODUCTION_BUILD_CLOSURE_SCHEMA,
-                "configuration_schema":
-                    BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+                "configuration_schema": configuration_schema,
                 "proof_schema": REPRODUCIBLE_BUILD_PROOF_SCHEMA,
                 "recipe_schema": CANONICAL_REPLAY_RECIPE_SCHEMA,
                 "invocation_schema": REPLAY_INVOCATION_SCHEMA,
@@ -5447,7 +5496,8 @@ def candidate_build_provenance(
             flag_profile = _validate_compile_flags(
                 tokens, source_operand,
                 source_root=source, build_root=build, cache=cache,
-                library_sources=expected_library_sources)
+                library_sources=expected_library_sources,
+                compiler_path=compiler_identity["path"])
             if role == "archive":
                 archive_sources.add(source_operand)
             else:
@@ -5964,12 +6014,14 @@ def _reproducible_configure_argv(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V3,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] = \
             cache.get("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT")
     if configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V4,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR":
@@ -5987,6 +6039,7 @@ def _reproducible_configure_argv(
         })
     if configuration_schema in {
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED":
@@ -5995,7 +6048,9 @@ def _reproducible_configure_argv(
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED":
                 cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"),
         })
-    if configuration_schema == BENCHMARK_BUILD_CONFIGURATION_SCHEMA:
+    if configuration_schema in {
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
+            BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         cmake_values.update({
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK":
                 cache.get(
@@ -7792,6 +7847,22 @@ def _canonical_replay_makefile_bytes(
             isinstance(cache.get("CMAKE_CXX_COMPILER"), str) and
             cache["CMAKE_CXX_COMPILER"],
             "canonical replay candidate cache is malformed")
+    compiler_identity = candidate.get("compiler")
+    compiler_path_value = (
+        compiler_identity.get("path")
+        if isinstance(compiler_identity, Mapping) else None)
+    if not (isinstance(compiler_path_value, str) and
+            Path(compiler_path_value).is_absolute()):
+        # Current production records retain the resolved compiler artifact,
+        # while historical and adversarial replay fixtures predate that
+        # redundant identity.  Their already-validated cache still binds the
+        # exact absolute driver used by every restored compile command.  An
+        # ambiguous spelling such as /usr/bin/compiler remains fail-closed in
+        # the GNU-only option classifier.
+        compiler_path_value = cache["CMAKE_CXX_COMPILER"]
+    require(Path(compiler_path_value).is_absolute(),
+            "canonical replay compiler path is malformed")
+    compiler_path = Path(compiler_path_value)
 
     prepared_records: list[
         tuple[Mapping[str, Any], str, list[str], str, Path]] = []
@@ -7861,7 +7932,7 @@ def _canonical_replay_makefile_bytes(
             restored, source_operand, source_root=source, build_root=build,
             cache=cache, library_sources=library_sources,
             benchmark_source=(role == "benchmark"),
-            lexical_build_output=True)
+            lexical_build_output=True, compiler_path=compiler_path)
         require(item.get("flag_profile") == profile,
                 "canonical replay compile flag profile differs")
         arguments = item["compile_entry"]["normalized_arguments"]
@@ -9005,6 +9076,7 @@ def _capture_replayed_candidate_provenance(
     configuration_schema = replay_contract.get("configuration_schema")
     require(configuration_schema in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
             "replayed candidate capture configuration schema is unsupported")
@@ -9030,9 +9102,10 @@ def verify_reproducible_candidate_build(
     replay_configuration_schema = replay_contract["configuration_schema"]
     require(replay_configuration_schema in {
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5,
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6,
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             },
-            "clean replay generation supports only v5 and current "
+            "clean replay generation supports only v5, v6, and current "
             "configuration contracts")
     source = Path(str(candidate.get("source_root", ""))).resolve(strict=True)
     target = str(candidate.get("executable_target", ""))
