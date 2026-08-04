@@ -617,6 +617,40 @@ if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
     endif()
 endif()
 
+if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
+    # The fixed legacy-skew K=R=7/8, B=1024 leaves are isolated so their
+    # constant propagation and register scheduling cannot perturb mature
+    # AVX2 kernels.
+    add_library(leopard2_backend_avx2_t8_k8_b1024 OBJECT
+        Leopard2BackendAVX2T8K8B1024.cpp)
+    target_include_directories(leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR})
+    target_compile_definitions(leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+        LEO2_HAVE_AVX2_BACKEND=1
+        LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1)
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR
+       CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
+        target_compile_options(leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+            -mavx2 -mno-avx512f)
+        if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+            # GCC otherwise extends three transform values across unrelated
+            # nibble products and spills them in this register-tight leaf.
+            target_compile_options(
+                leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+                -flive-range-shrinkage)
+        endif()
+        if(LEO2_FLAG_FALIGN_FUNCTIONS_64)
+            target_compile_options(
+                leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+                -falign-functions=64)
+        endif()
+    elseif(MSVC)
+        target_compile_options(leopard2_backend_avx2_t8_k8_b1024 PRIVATE
+            /arch:AVX2)
+    endif()
+endif()
+
 if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
    LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL)
     # Keep the promoted exact terminal in its own object so its presence
@@ -704,6 +738,10 @@ if(LEO2_HAVE_AVX2_BACKEND)
     if(LEOPARD_ENABLE_GF8)
         target_sources(leopard PRIVATE
             $<TARGET_OBJECTS:leopard2_backend_avx2_t2_k4>)
+        target_sources(leopard PRIVATE
+            $<TARGET_OBJECTS:leopard2_backend_avx2_t8_k8_b1024>)
+        target_compile_definitions(leopard PRIVATE
+            LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1)
     endif()
     target_compile_definitions(leopard PRIVATE LEO2_HAVE_AVX2_BACKEND=1)
 endif()
@@ -1079,6 +1117,10 @@ if(LEO2_BUILD_TESTS)
         if(LEOPARD_ENABLE_GF8)
             target_sources(leopard_test_hooks PRIVATE
                 $<TARGET_OBJECTS:leopard2_backend_avx2_t2_k4>)
+            target_sources(leopard_test_hooks PRIVATE
+                $<TARGET_OBJECTS:leopard2_backend_avx2_t8_k8_b1024>)
+            target_compile_definitions(leopard_test_hooks PRIVATE
+                LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1)
         endif()
         target_compile_definitions(leopard_test_hooks PRIVATE
             LEO2_HAVE_AVX2_BACKEND=1)

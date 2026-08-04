@@ -15383,10 +15383,6 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T8FullParityPackedTerminalEligible(
          (codec->terminal_r1_t8_shape < kTerminalT8K5R5 ||
           codec->terminal_r1_t8_shape > kTerminalT8K7R7)))
         return false;
-    /* Exact-main promotion evidence covers every dense count at 256 bytes,
-       while only K=5 and K=6 clear the five-percent gate at 1024 bytes. */
-    if (shard_bytes == 1024 && codec->original_count >= 7)
-        return false;
     if (g_t8_full_parity_terminal_mode != 1U)
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
@@ -15435,9 +15431,9 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T8FullParityPackedTerminalEligible(
     and punctured circuits; K=8 consumes the complete tile directly.  Every
     check finishes before the first parity byte is written.
 */
-template<size_t ProtectedCount>
+template<uint32_t StaticCount, size_t StaticByteCount, size_t ProtectedCount>
 static LEO2_T8_FULL_PARITY_TERMINAL_NOINLINE bool
-TryEncodeGF8T8FullParityPackedTerminal(
+TryEncodeGF8T8FullParityPackedTerminalFixed(
     const leo2_codec* codec,
     const AddressRange* protected_ranges,
     uint64_t shard_bytes,
@@ -15451,8 +15447,19 @@ TryEncodeGF8T8FullParityPackedTerminal(
         IsGF8AVX2T8FullParityPackedTerminalEligible(codec, shard_bytes));
     static_assert(ProtectedCount <= 1,
         "T=8 full-parity terminal supports one protected descriptor");
-    const uint32_t count = codec->original_count;
-    const size_t byte_count = static_cast<size_t>(shard_bytes);
+    static_assert(StaticCount == 0 ||
+            (StaticCount >= 5 && StaticCount <= 8),
+        "fixed T=8 full-parity terminal supports K=R=5..8");
+    static_assert(StaticByteCount == 0 || StaticByteCount == 1024,
+        "fixed T=8 full-parity byte count must be 1024");
+    const uint32_t count = StaticCount != 0
+        ? StaticCount : codec->original_count;
+    const size_t byte_count = StaticByteCount != 0
+        ? StaticByteCount : static_cast<size_t>(shard_bytes);
+    LEO_DEBUG_ASSERT(StaticCount == 0 || codec->original_count == StaticCount);
+    LEO_DEBUG_ASSERT(StaticCount == 0 || codec->recovery_count == StaticCount);
+    LEO_DEBUG_ASSERT(
+        StaticByteCount == 0 || shard_bytes == StaticByteCount);
 
     const size_t metadata_bytes =
         2U * count * sizeof(AddressRange) +
@@ -15548,17 +15555,51 @@ TryEncodeGF8T8FullParityPackedTerminal(
     }
     else if (count == 8)
     {
-        leopard::ff8::ReedSolomonEncodeOneBlockT8(
-            *codec->context->ops, original, recovery, shard_bytes);
+        if (byte_count == 1024)
+            leopard::ff8::ReedSolomonEncodeK8R8T8B1024(
+                *codec->context->ops, original, recovery);
+        else
+            leopard::ff8::ReedSolomonEncodeOneBlockT8(
+                *codec->context->ops, original, recovery, shard_bytes);
     }
     else
     {
-        ExecuteHighT8PartialBinding(
-            *codec->context->ops, count, count, shard_bytes,
-            original, recovery);
+        LEO_DEBUG_ASSERT(false);
+        result_out = LEO2_INTERNAL_ERROR;
+        return true;
     }
     result_out = LEO2_SUCCESS;
     return true;
+}
+
+template<size_t ProtectedCount>
+static LEO_FORCE_INLINE bool TryEncodeGF8T8FullParityPackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    if ((codec->original_count == 7 || codec->original_count == 8) &&
+        shard_bytes == 1024)
+    {
+        if (codec->original_count == 7)
+            return TryEncodeGF8T8FullParityPackedTerminalFixed<
+                7, 1024, ProtectedCount>(
+                codec, protected_ranges, shard_bytes, original, recovery,
+                scratch, scratch_bytes, result_out);
+        return TryEncodeGF8T8FullParityPackedTerminalFixed<
+            8, 1024, ProtectedCount>(
+            codec, protected_ranges, shard_bytes, original, recovery,
+            scratch, scratch_bytes, result_out);
+    }
+    return TryEncodeGF8T8FullParityPackedTerminalFixed<
+        0, 0, ProtectedCount>(
+        codec, protected_ranges, shard_bytes, original, recovery,
+        scratch, scratch_bytes, result_out);
 }
 
 #undef LEO2_T8_FULL_PARITY_TERMINAL_NOINLINE

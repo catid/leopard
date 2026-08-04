@@ -379,6 +379,21 @@ typedef void (*FF8HighEncodeOneBlock)(
     const uint8_t* forward_skew,
     uint64_t byte_count);
 
+// Isolated pure-AVX2 leaves for the prevalidated K=R=7/8, B=1024 legacy
+// shapes.
+// Keeping this circuit out of the mature backend translation unit prevents
+// its register allocation and text placement from perturbing neighboring
+// transform sizes.  The K data rows and K work rows must each have exact
+// 1024-byte numeric strides; the caller must validate all ranges and aliasing
+// before entry.  The rows need not belong to one C++ allocation.
+bool InitializeAVX2FF8HighEncodeK8R8T8B1024(const void* tables);
+void AVX2FF8HighEncodeK7R7T8B1024(
+    const void* const* data,
+    void* const* work);
+void AVX2FF8HighEncodeK8R8T8B1024(
+    const void* const* data,
+    void* const* work);
+
 /*
     Complete dense encode for exactly two T=8 message blocks and a shard whose
     byte count is a 64-byte multiple through 1024.  data has 16 readable rows,

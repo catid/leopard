@@ -208,6 +208,11 @@ void ReedSolomonEncodeK7R7T8(
     void* const* work,
     uint64_t byte_count);
 
+void ReedSolomonEncodeK8R8T8B1024(
+    const backend::Ops& ops,
+    const void* const* data,
+    void* const* work);
+
 /*
     Execute a prevalidated item-major dense T=4 batch.  This wrapper supplies
     Leopard's immutable legacy coordinate skews while the pure-AVX2 backend
@@ -461,6 +466,8 @@ struct TestOnlyHighEncodeCounts
     uint64_t t2_packed_calls;
     uint64_t t4_packed_calls;
     uint64_t t8_packed_calls;
+    uint64_t t8_k7_b1024_direct_calls;
+    uint64_t t8_k8_b1024_direct_calls;
     uint64_t balanced_b64_packed_calls;
     uint64_t final_ifft2_range_calls;
     uint64_t tail_column_calls;

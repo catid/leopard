@@ -254,6 +254,18 @@ uint64_t T8PackedCalls()
     return leopard::ff8::TestOnlyGetHighEncodeCounts().t8_packed_calls;
 }
 
+uint64_t T8K8B1024DirectCalls()
+{
+    return leopard::ff8::TestOnlyGetHighEncodeCounts().
+        t8_k8_b1024_direct_calls;
+}
+
+uint64_t T8K7B1024DirectCalls()
+{
+    return leopard::ff8::TestOnlyGetHighEncodeCounts().
+        t8_k7_b1024_direct_calls;
+}
+
 leo2_codec* CreateCodec(leo2_context* context, const Cell& cell)
 {
     leo2_codec* codec = NULL;
@@ -312,6 +324,12 @@ void ExerciseCell(
     std::vector<const void*> original(cell.original_count);
     std::vector<void*> recovery(cell.recovery_count);
     const leopard2_test::Matrix generator = MakeGenerator(cell);
+    const bool expect_k7_direct = expect_terminal &&
+        cell.original_count == 7 && cell.recovery_count == 7 &&
+        cell.shard_bytes == 1024;
+    const bool expect_k8_direct = expect_terminal &&
+        cell.original_count == 8 && cell.recovery_count == 8 &&
+        cell.shard_bytes == 1024;
 
     FillGuards(input);
     FillGuards(output);
@@ -326,6 +344,12 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute packed public encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed public terminal selection mismatch");
+    RequireCell(T8K7B1024DirectCalls() ==
+            (expect_k7_direct ? 1U : 0U), cell,
+        "packed public K7 direct-leaf selection mismatch");
+    RequireCell(T8K8B1024DirectCalls() ==
+            (expect_k8_direct ? 1U : 0U), cell,
+        "packed public direct-leaf selection mismatch");
     CheckParity(cell, generator, original, recovery);
     RequireSourceUnchanged(input, aligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes, cell);
@@ -340,6 +364,12 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute packed one-item batch encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "packed one-item batch terminal selection mismatch");
+    RequireCell(T8K7B1024DirectCalls() ==
+            (expect_k7_direct ? 1U : 0U), cell,
+        "packed one-item batch K7 direct-leaf selection mismatch");
+    RequireCell(T8K8B1024DirectCalls() ==
+            (expect_k8_direct ? 1U : 0U), cell,
+        "packed one-item batch direct-leaf selection mismatch");
     CheckParity(cell, generator, original, recovery);
     RequireSourceUnchanged(input, aligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes, cell);
@@ -358,6 +388,12 @@ void ExerciseCell(
         LEO2_SUCCESS, cell, "execute unaligned packed public encode");
     RequireCell(T8PackedCalls() == (expect_terminal ? 1U : 0U), cell,
         "unaligned packed terminal selection mismatch");
+    RequireCell(T8K7B1024DirectCalls() ==
+            (expect_k7_direct ? 1U : 0U), cell,
+        "unaligned packed K7 direct-leaf selection mismatch");
+    RequireCell(T8K8B1024DirectCalls() ==
+            (expect_k8_direct ? 1U : 0U), cell,
+        "unaligned packed direct-leaf selection mismatch");
     CheckParity(cell, generator, original, recovery);
     RequireSourceUnchanged(input, unaligned_input_before, cell);
     RequireOutputGuards(output, kGuardBytes + 3U, cell);
@@ -376,6 +412,8 @@ void ExercisePromotedMatrix(
         { 8, 8, 256 },
         { 5, 5, 1024 },
         { 6, 6, 1024 },
+        { 7, 7, 1024 },
+        { 8, 8, 1024 },
         /* Retain the separately qualified balanced 64-byte terminal. */
         { 8, 8, 64 }
     };
@@ -405,10 +443,6 @@ void ExerciseNonPromotedCells(leo2_context* context)
         }
     }
 
-    /* K=7/8 did not clear the exact-main promotion gate at 1024 bytes. */
-    ExerciseCell(context, Cell{ 7, 7, 1024 }, false);
-    ExerciseCell(context, Cell{ 8, 8, 1024 }, false);
-
     /* Every punctured T=8 neighbor stays on the mature general path. */
     static const size_t exact_bytes[] = { 256, 1024 };
     for (unsigned original_count = 5; original_count <= 8; ++original_count)
@@ -434,9 +468,8 @@ void ExerciseNonPromotedCells(leo2_context* context)
     ExerciseCell(context, Cell{ 7, 8, 64 }, false);
 }
 
-void ExerciseForcedTransform(leo2_context* context)
+void ExerciseForcedTransform(leo2_context* context, const Cell& cell)
 {
-    const Cell cell = { 8, 8, 64 };
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes);
@@ -459,6 +492,10 @@ void ExerciseForcedTransform(leo2_context* context)
         LEO2_SUCCESS, cell, "execute forced mature transform");
     RequireCell(T8PackedCalls() == 0, cell,
         "forced transform entered the packed K=8/R=8/T=8 terminal");
+    RequireCell(T8K7B1024DirectCalls() == 0, cell,
+        "forced transform entered the K=7/R=7/B=1024 direct leaf");
+    RequireCell(T8K8B1024DirectCalls() == 0, cell,
+        "forced transform entered the K=8/R=8/B=1024 direct leaf");
     CheckParity(cell, MakeGenerator(cell), original, recovery);
     RequireResult(leo2_test_codec_set_encode_mode(
         codec, LEO2_TEST_ENCODE_AUTO),
@@ -708,11 +745,133 @@ void ExerciseScalarFallbacks()
         "create scalar K=8/R=8/T=8 fallback context");
     static const Cell cells[] = {
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
-        { 5, 5, 1024 }, { 6, 6, 1024 }, { 8, 8, 64 }
+        { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
+        { 8, 8, 1024 }, { 8, 8, 64 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
         ExerciseCell(context, cells[i], false);
     leo2_context_destroy(context);
+}
+
+void ExerciseAdjacentShardSubobjects(leo2_context* context)
+{
+    /* Each row is a distinct array subobject even though the enclosing array
+       gives the terminal the exact numeric 1024-byte stride it requires.
+       This guards the direct leaf's integer-address implementation against a
+       regression to cross-object C++ pointer arithmetic from row zero. */
+    struct ShardObject
+    {
+        uint8_t bytes[1024];
+    };
+    static_assert(sizeof(ShardObject) == 1024,
+        "direct-leaf subobject fixture gained padding");
+
+    for (unsigned count = 7; count <= 8; ++count)
+    {
+        const Cell cell = { count, count, 1024 };
+        leo2_codec* codec = CreateCodec(context, cell);
+        AlignedBuffer scratch(QueryScratch(codec, cell));
+        ShardObject input[8];
+        ShardObject input_before[8];
+        ShardObject output[8];
+        std::vector<const void*> original(count);
+        std::vector<void*> recovery(count);
+        for (unsigned lane = 0; lane < 8; ++lane)
+        {
+            for (size_t i = 0; i < sizeof(input[lane].bytes); ++i)
+            {
+                input[lane].bytes[i] = static_cast<uint8_t>(
+                    lane * 71U + i * 43U + (i >> 3) * 19U + 0x5dU);
+                output[lane].bytes[i] = 0xa5;
+            }
+            if (lane < count)
+            {
+                original[lane] = input[lane].bytes;
+                recovery[lane] = output[lane].bytes;
+            }
+        }
+        std::memcpy(input_before, input, sizeof(input));
+
+        leopard::ff8::TestOnlyResetHighEncodeCounts();
+        RequireResult(leo2_encode(codec, cell.shard_bytes,
+            &original[0], &recovery[0], scratch.data(), scratch.size()),
+            LEO2_SUCCESS, cell, "encode adjacent shard subobjects");
+        RequireCell(T8PackedCalls() == 1, cell,
+            "adjacent shard subobjects missed the packed terminal");
+        RequireCell(T8K7B1024DirectCalls() == (count == 7 ? 1U : 0U), cell,
+            "adjacent shard subobjects selected the wrong K7 direct leaf");
+        RequireCell(T8K8B1024DirectCalls() == (count == 8 ? 1U : 0U), cell,
+            "adjacent shard subobjects selected the wrong K8 direct leaf");
+        CheckParity(cell, MakeGenerator(cell), original, recovery);
+        RequireCell(std::memcmp(input, input_before, sizeof(input)) == 0, cell,
+            "adjacent shard subobject encode modified source data");
+        leo2_codec_destroy(codec);
+    }
+}
+
+void ExerciseDirectLinearBasis(leo2_context* context)
+{
+    /* The direct leaves are GF(2)-linear.  Exercise every source/bit basis
+       vector against the independent generator oracle so the handwritten
+       circuit is not accepted merely because a dense fixture happened to
+       mask a transcribed coefficient. */
+    struct ShardObject
+    {
+        uint8_t bytes[1024];
+    };
+    static_assert(sizeof(ShardObject) == 1024,
+        "direct-leaf basis fixture gained padding");
+
+    for (unsigned count = 7; count <= 8; ++count)
+    {
+        const Cell cell = { count, count, 1024 };
+        leo2_codec* codec = CreateCodec(context, cell);
+        AlignedBuffer scratch(QueryScratch(codec, cell));
+        ShardObject input[8];
+        ShardObject input_before[8];
+        ShardObject output[8];
+        std::vector<const void*> original(count);
+        std::vector<void*> recovery(count);
+        for (unsigned lane = 0; lane < count; ++lane)
+        {
+            original[lane] = input[lane].bytes;
+            recovery[lane] = output[lane].bytes;
+        }
+        const leopard2_test::Matrix generator = MakeGenerator(cell);
+
+        for (unsigned source = 0; source < count; ++source)
+        {
+            for (unsigned bit = 0; bit < 8; ++bit)
+            {
+                std::memset(input, 0, sizeof(input));
+                std::memset(output, 0xa5, sizeof(output));
+                const size_t offset =
+                    (source * 131U + bit * 127U) % cell.shard_bytes;
+                input[source].bytes[offset] =
+                    static_cast<uint8_t>(1U << bit);
+                std::memcpy(input_before, input, sizeof(input));
+
+                leopard::ff8::TestOnlyResetHighEncodeCounts();
+                RequireResult(leo2_encode(codec, cell.shard_bytes,
+                    &original[0], &recovery[0],
+                    scratch.data(), scratch.size()),
+                    LEO2_SUCCESS, cell, "encode direct linear basis");
+                RequireCell(T8PackedCalls() == 1, cell,
+                    "linear basis missed the packed terminal");
+                RequireCell(T8K7B1024DirectCalls() ==
+                        (count == 7 ? 1U : 0U), cell,
+                    "linear basis selected the wrong K7 direct leaf");
+                RequireCell(T8K8B1024DirectCalls() ==
+                        (count == 8 ? 1U : 0U), cell,
+                    "linear basis selected the wrong K8 direct leaf");
+                CheckParity(cell, generator, original, recovery);
+                RequireCell(std::memcmp(
+                        input, input_before, sizeof(input)) == 0, cell,
+                    "linear-basis encode modified source data");
+            }
+        }
+        leo2_codec_destroy(codec);
+    }
 }
 
 void ExerciseAutoBackend(bool full_parity_terminal_available)
@@ -728,7 +887,8 @@ void ExerciseAutoBackend(bool full_parity_terminal_available)
         leo2_context_backend(context) == LEO2_BACKEND_AVX2;
     static const Cell cells[] = {
         { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
-        { 5, 5, 1024 }, { 6, 6, 1024 }, { 8, 8, 64 }
+        { 5, 5, 1024 }, { 6, 6, 1024 }, { 7, 7, 1024 },
+        { 8, 8, 1024 }, { 8, 8, 64 }
     };
     for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
     {
@@ -771,12 +931,19 @@ int main()
             "create AVX2 K=8/R=8/T=8 terminal context");
 
         ExercisePromotedMatrix(context, full_parity_terminal_available);
+        if (full_parity_terminal_available)
+        {
+            ExerciseAdjacentShardSubobjects(context);
+            ExerciseDirectLinearBasis(context);
+        }
         ExerciseNonPromotedCells(context);
-        ExerciseForcedTransform(context);
+        ExerciseForcedTransform(context, Cell{ 8, 8, 64 });
+        ExerciseForcedTransform(context, Cell{ 7, 7, 1024 });
+        ExerciseForcedTransform(context, Cell{ 8, 8, 1024 });
         static const Cell promoted_cells[] = {
             { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
             { 8, 8, 256 }, { 5, 5, 1024 }, { 6, 6, 1024 },
-            { 8, 8, 64 }
+            { 7, 7, 1024 }, { 8, 8, 1024 }, { 8, 8, 64 }
         };
         for (size_t i = 0;
              i < sizeof(promoted_cells) / sizeof(promoted_cells[0]); ++i)

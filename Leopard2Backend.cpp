@@ -1532,6 +1532,83 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
     return true;
 }
 
+static bool TestAVX2FF8HighEncodeDirectEntries(const Ops& ops)
+{
+#if defined(LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT) && \
+    !defined(LEO2_GFNI_VARIANT)
+    if (ops.kind != LEO2_BACKEND_AVX2)
+        return true;
+
+    static const uint8_t kInverseSkew[8] = {
+        255, 153, 17, 102, 85, 51, 34, 187
+    };
+    static const uint8_t kForwardSkew[8] = {
+        0, 255, 255, 85, 255, 17, 85, 34
+    };
+
+    for (unsigned active = 7; active <= 8; ++active)
+    {
+        /*
+            Preserve each direct entry's packed-slab precondition while
+            making both slabs deliberately unaligned.  Compare every active
+            parity row and prove that the inactive suffix and guards stay
+            untouched.
+        */
+        static const size_t kBytes = 1024;
+        static const size_t kSlabBytes = 8 * kBytes;
+        static const size_t kGuardBytes = 3;
+        uint8_t input[kSlabBytes + 2 * kGuardBytes];
+        uint8_t input_before[kSlabBytes + 2 * kGuardBytes];
+        uint8_t actual[kSlabBytes + 2 * kGuardBytes];
+        uint8_t actual_before[kSlabBytes + 2 * kGuardBytes];
+        uint8_t expected[kSlabBytes + 2 * kGuardBytes];
+        const void* input_pointers[8];
+        void* actual_pointers[8];
+        void* expected_pointers[8];
+        for (size_t i = 0; i < sizeof(input); ++i)
+        {
+            input[i] = input_before[i] = static_cast<uint8_t>(
+                i * 73U + (i >> 5) * 19U + 0x35U);
+            actual[i] = actual_before[i] = expected[i] = static_cast<uint8_t>(
+                i * 29U + (i >> 4) * 47U + 0xc3U);
+        }
+        for (unsigned lane = 0; lane < 8; ++lane)
+        {
+            const size_t offset = kGuardBytes + lane * kBytes;
+            input_pointers[lane] = input + offset;
+            actual_pointers[lane] = actual + offset;
+            expected_pointers[lane] = expected + offset;
+        }
+        if (active == 7)
+        {
+            std::memset(input + kGuardBytes + 7 * kBytes, 0, kBytes);
+            std::memset(input_before + kGuardBytes + 7 * kBytes, 0, kBytes);
+        }
+
+        ReferenceFF8HighEncodeOneBlock(
+            ops, input_pointers, expected_pointers, 8,
+            kInverseSkew, kForwardSkew, kBytes);
+        if (active == 7)
+            AVX2FF8HighEncodeK7R7T8B1024(
+                input_pointers, actual_pointers);
+        else
+            AVX2FF8HighEncodeK8R8T8B1024(
+                input_pointers, actual_pointers);
+
+        const size_t active_end = kGuardBytes + active * kBytes;
+        if (std::memcmp(input, input_before, sizeof(input)) != 0 ||
+            std::memcmp(actual, expected, active_end) != 0 ||
+            std::memcmp(actual + active_end, actual_before + active_end,
+                sizeof(actual) - active_end) != 0)
+            return false;
+    }
+#else
+    (void)ops;
+#endif
+
+    return true;
+}
+
 static bool TestFF8HighEncodeTwoBlocksT8(const Ops& ops)
 {
     if (!ops.ff8_high_encode_two_blocks_t8 &&
@@ -3315,6 +3392,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
         !TestFF8ButterflyRanges(ops) ||
         !TestFF8IFFTButterfly2Range(ops) ||
         !TestFF8HighEncodeOneBlock(ops) ||
+        !TestAVX2FF8HighEncodeDirectEntries(ops) ||
         !TestFF8HighEncodeTwoBlocksT8(ops) ||
         !TestFF8HighEncodeSmall(ops) ||
         !TestFF8HighEncodeT2K4(ops, args.ff8_multiply_log) ||
@@ -3447,6 +3525,12 @@ static bool RegisterQualifiedOps(
 {
     if (!ops || ops->kind != expected_kind)
         return false;
+#if defined(LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT) && defined(LEO_HAS_FF8) && \
+    !defined(LEO2_GFNI_VARIANT)
+    if (expected_kind == LEO2_BACKEND_AVX2 &&
+        !InitializeAVX2FF8HighEncodeK8R8T8B1024(GetAVX2FF8Tables()))
+        return false;
+#endif
 #ifdef LEO2_ENABLE_TEST_HOOKS
     if (ConsumeTestFault(KATFaultFor(expected_kind)))
         return false;
