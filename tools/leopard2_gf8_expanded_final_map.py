@@ -40,6 +40,10 @@ MATRIX_SCHEMA = "leopard2-expanded-final-matrix/v2"
 MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
 BASELINE_SHA256 = (
     "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910")
+PADDED_MAIN_BASELINE_SHA256 = (
+    "34a73d4481c989cf8e5b881b24c1a066b6bf356a707e01998e9e19d008f2d973")
+BASELINE_CONTRACT_LEGACY_V1 = "legacy_exact_v1"
+BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2 = "logical_zero_pad_v2"
 CANONICAL_MATRIX_CELL_COUNT = 341
 CANONICAL_MATRIX_SHA256 = (
     "3d5d423fe35760727ac1e9751036d9e208be1e69886e27a18c95009204d85d6e")
@@ -49,6 +53,34 @@ R1_TINY_EXACT_MAIN_K = (3, 4, 8, 24, 32)
 R1_TINY_EXACT_MAIN_BYTES = (64, 256)
 R1_TINY_EXACT_MAIN_REUSE = 87381
 R1_TINY_MISSING_POSITIONS = ("first", "middle", "last")
+R1_TINY_EXACT_MAIN_MATRIX_SHA256 = (
+    "7a51f3bc4f4a9bffafef1f29b962b1176b04a128a4ef64f8a729e7a077b42695")
+K4_R2_PRODUCTION_AVX2_PROFILE = "k4-r2-production-avx2-exact-main"
+K4_R2_PRODUCTION_AVX2_BYTES = (63, 64, 65, 256, 1024, 2048, 2049)
+K4_R2_PRODUCTION_AVX2_REUSE = 8192
+K4_R2_PRODUCTION_AVX2_ITERATIONS = 21
+K4_R2_PRODUCTION_AVX2_WARMUP = 32
+K4_R2_PRODUCTION_AVX2_MATRIX_SHA256 = (
+    "f085476ffe395f7104a7111cfa4d6ec6cfa5d5bf9646f544f6477f47fd187bfb")
+K4_R2_TARGET_LOSS_PATTERNS = (
+    (63, (0, 1), "adjacent_front"),
+    (64, (0, 3), "separated_edges"),
+    (65, (2, 3), "adjacent_tail"),
+    (256, (1, 2), "adjacent_middle"),
+    (1024, (0, 3), "separated_edges"),
+    (2048, (0, 1), "adjacent_front"),
+    (2049, (1, 3), "separated_interior_tail"),
+)
+# Keep R=2 neighbors at their maximum two-original loss.  R=1 necessarily
+# uses its sole correctable loss, while R=3 uses maximum loss to exercise the
+# neighboring T=4 decoder rather than timing a disguised R=2 pattern.
+K4_R2_NEIGHBOR_LOSS_PATTERNS = (
+    (2, 2, (0, 1), "k_lower_all_originals"),
+    (3, 2, (0, 2), "k_lower_separated"),
+    (5, 2, (1, 4), "k_upper_separated"),
+    (4, 1, (2,), "r_lower_single"),
+    (4, 3, (0, 1, 3), "r_upper_maximum"),
+)
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
@@ -162,7 +194,8 @@ R1_SELECTOR_BOUNDARIES = (
 DIRECT_ODD_LOSSES = (3, 5, 6, 7)
 
 BYTE_LABELS = {
-    64: "64b", 256: "256b", 1024: "1k", 2048: "2k",
+    63: "63b", 64: "64b", 65: "65b", 256: "256b", 1024: "1k",
+    2048: "2k", 2049: "2049b",
     4096: "4k", 8192: "8k", 16384: "16k", 65536: "64k",
     1048576: "1m", 2097152: "2m", 4194304: "4m",
     8388608: "8m", 16777216: "16m",
@@ -271,9 +304,9 @@ def xorshift64_next(state):
     return value
 
 
-def r1_missing_index(k, seed):
-    if k <= 0:
-        raise RuntimeError("R=1 loss selection requires positive K")
+def selected_missing_indices(k, loss, seed):
+    if k <= 0 or loss < 0 or loss > k:
+        raise RuntimeError("loss selection requires 0 <= loss <= K")
     state = (seed ^ 0xd1b54a32d192ed03) & ((1 << 64) - 1)
     if state == 0:
         state = 0x9e3779b97f4a7c15
@@ -283,7 +316,11 @@ def r1_missing_index(k, seed):
         selected = state % remaining
         order[remaining - 1], order[selected] = (
             order[selected], order[remaining - 1])
-    return order[0]
+    return tuple(sorted(order[:loss]))
+
+
+def r1_missing_index(k, seed):
+    return selected_missing_indices(k, 1, seed)[0]
 
 
 def r1_missing_position_index(k, position):
@@ -297,17 +334,27 @@ def r1_missing_position_index(k, position):
 
 
 def r1_seed_for_missing_index(identifier, k, missing_index, used_seeds):
+    return seed_for_missing_indices(
+        identifier, k, (missing_index,), used_seeds)
+
+
+def seed_for_missing_indices(identifier, k, missing_indices, used_seeds):
+    missing_indices = tuple(sorted(missing_indices))
+    if (not missing_indices or len(missing_indices) != len(set(missing_indices))
+            or missing_indices[0] < 0 or missing_indices[-1] >= k):
+        raise RuntimeError("expected missing indices are invalid")
     modulus = 1 << 63
     initial = stable_seed(identifier)
     for offset in range(1 << 20):
         seed = (initial + offset) % modulus
         if seed in used_seeds:
             continue
-        if r1_missing_index(k, seed) == missing_index:
+        if selected_missing_indices(
+                k, len(missing_indices), seed) == missing_indices:
             used_seeds.add(seed)
             return seed
     raise RuntimeError(
-        "could not find a bounded unique R=1 seed for " + identifier)
+        "could not find a bounded unique loss seed for " + identifier)
 
 
 def iteration_policy(byte_count, confirmation):
@@ -498,11 +545,94 @@ def make_r1_tiny_exact_main_matrix():
     }
 
 
+def make_k4_r2_production_avx2_matrix():
+    cells = []
+    used_seeds = set()
+
+    def append_cell(k, r, byte_count, missing_indices, pattern, role):
+        loss = len(missing_indices)
+        if loss < 1 or loss > min(k, r):
+            raise RuntimeError("K4/R2 gate contains an invalid loss pattern")
+        identifier = "%s-missing-%s" % (
+            cell_key(
+                k, r, byte_count, loss,
+                K4_R2_PRODUCTION_AVX2_REUSE, 1),
+            "-".join(str(index) for index in missing_indices),
+        )
+        seed = seed_for_missing_indices(
+            identifier, k, missing_indices, used_seeds)
+        cells.append({
+            "id": identifier,
+            "K": k,
+            "R": r,
+            "T": ceil_pow2(r),
+            "bytes": byte_count,
+            "loss": loss,
+            "loss_pattern": pattern,
+            "reuse": K4_R2_PRODUCTION_AVX2_REUSE,
+            "batch": 1,
+            "seed": seed,
+            "expected_missing_original_indices": list(missing_indices),
+            "diagnostic_iterations": K4_R2_PRODUCTION_AVX2_ITERATIONS,
+            "diagnostic_warmup": K4_R2_PRODUCTION_AVX2_WARMUP,
+            "abba_iterations": K4_R2_PRODUCTION_AVX2_ITERATIONS,
+            "abba_warmup": K4_R2_PRODUCTION_AVX2_WARMUP,
+            "estimated_peak_bytes": (
+                6 * (k + r) * byte_count + (64 << 20)),
+            "tags": [
+                "k4_r2_production_avx2_gate", role,
+                "loss_" + pattern,
+            ],
+        })
+
+    for byte_count, missing_indices, pattern in K4_R2_TARGET_LOSS_PATTERNS:
+        append_cell(
+            4, 2, byte_count, missing_indices, pattern, "k4_r2_target")
+    for k, r, missing_indices, pattern in K4_R2_NEIGHBOR_LOSS_PATTERNS:
+        append_cell(
+            k, r, 64, missing_indices, pattern, "k4_r2_neighbor")
+
+    cells.sort(key=lambda cell: cell["id"])
+    for index, cell in enumerate(cells):
+        cell["index"] = index
+        cell["tags"].sort()
+    return {
+        "schema": MATRIX_SCHEMA,
+        "profile": K4_R2_PRODUCTION_AVX2_PROFILE,
+        "description": (
+            "Strict exact-main K=4,R=2 AVX2 production gate with adjacent "
+            "and separated maximum-loss target patterns plus K/R neighbors"),
+        "loss_pattern_policy": {
+            "target": (
+                "K=4,R=2 always loses the maximum two originals; adjacent "
+                "pairs represent burst losses and separated pairs represent "
+                "independent losses"),
+            "neighbors": (
+                "R=2 neighbors lose two originals, R=1 loses one, and the "
+                "R=3 neighbor loses three to exercise its maximum-loss T=4 "
+                "decoder"),
+        },
+        "baseline_commit": MAIN_COMMIT,
+        "baseline_sha256": PADDED_MAIN_BASELINE_SHA256,
+        "cell_count": len(cells),
+        "diagnostic_child_invocations": 2 * len(cells),
+        "maximum_abba_child_invocations_at_three_rounds": 12 * len(cells),
+        "sizes": sorted({cell["bytes"] for cell in cells}),
+        "transform_sides": sorted({cell["T"] for cell in cells}),
+        "losses": sorted({cell["loss"] for cell in cells}),
+        "reuse_counts": [K4_R2_PRODUCTION_AVX2_REUSE],
+        "batch_counts": [1],
+        "cells": cells,
+    }
+
+
 def make_matrix(profile=CANONICAL_MATRIX_PROFILE):
     if profile == CANONICAL_MATRIX_PROFILE:
         return make_canonical_matrix()
     if profile == R1_TINY_EXACT_MAIN_PROFILE:
         return make_r1_tiny_exact_main_matrix()
+    if profile == K4_R2_PRODUCTION_AVX2_PROFILE:
+        return make_k4_r2_production_avx2_matrix()
     raise RuntimeError("unknown matrix profile: " + profile)
 
 
@@ -527,15 +657,70 @@ def validate_matrix(matrix):
                 len(R1_TINY_EXACT_MAIN_BYTES) *
                 len(R1_TINY_MISSING_POSITIONS)):
             raise RuntimeError("R=1 tiny exact-main cell count drifted")
+        if matrix["baseline_sha256"] != BASELINE_SHA256:
+            raise RuntimeError("R=1 tiny exact-main baseline identity drifted")
+        if matrix_digest(matrix) != R1_TINY_EXACT_MAIN_MATRIX_SHA256:
+            raise RuntimeError("R=1 tiny exact-main matrix SHA-256 drifted")
         for cell in matrix["cells"]:
             if r1_missing_index(cell["K"], cell["seed"]) != \
                     cell["expected_missing_original_index"]:
                 raise RuntimeError("R=1 tiny exact-main seed coverage drifted")
         return
+    if profile == K4_R2_PRODUCTION_AVX2_PROFILE:
+        expected_count = (
+            len(K4_R2_TARGET_LOSS_PATTERNS) +
+            len(K4_R2_NEIGHBOR_LOSS_PATTERNS))
+        if len(matrix["cells"]) != expected_count:
+            raise RuntimeError("K4/R2 production AVX2 cell count drifted")
+        if matrix["baseline_sha256"] != PADDED_MAIN_BASELINE_SHA256:
+            raise RuntimeError(
+                "K4/R2 production AVX2 baseline identity drifted")
+        if matrix_digest(matrix) != K4_R2_PRODUCTION_AVX2_MATRIX_SHA256:
+            raise RuntimeError(
+                "K4/R2 production AVX2 matrix SHA-256 drifted")
+        target_cells = [
+            cell for cell in matrix["cells"]
+            if "k4_r2_target" in cell["tags"]]
+        neighbor_cells = [
+            cell for cell in matrix["cells"]
+            if "k4_r2_neighbor" in cell["tags"]]
+        if (tuple(sorted(cell["bytes"] for cell in target_cells)) !=
+                K4_R2_PRODUCTION_AVX2_BYTES or
+                any((cell["K"], cell["R"], cell["loss"]) != (4, 2, 2)
+                    for cell in target_cells) or
+                any(cell["bytes"] != 64 for cell in neighbor_cells)):
+            raise RuntimeError(
+                "K4/R2 production AVX2 target/neighbor grid drifted")
+        for cell in matrix["cells"]:
+            expected_missing = tuple(
+                cell["expected_missing_original_indices"])
+            if selected_missing_indices(
+                    cell["K"], cell["loss"], cell["seed"]) != \
+                    expected_missing:
+                raise RuntimeError(
+                    "K4/R2 production AVX2 seed coverage drifted")
+            if (cell["reuse"] != K4_R2_PRODUCTION_AVX2_REUSE or
+                    cell["batch"] != 1 or
+                    cell["diagnostic_iterations"] !=
+                    K4_R2_PRODUCTION_AVX2_ITERATIONS or
+                    cell["diagnostic_warmup"] !=
+                    K4_R2_PRODUCTION_AVX2_WARMUP or
+                    cell["abba_iterations"] !=
+                    K4_R2_PRODUCTION_AVX2_ITERATIONS or
+                    cell["abba_warmup"] !=
+                    K4_R2_PRODUCTION_AVX2_WARMUP):
+                raise RuntimeError(
+                    "K4/R2 production AVX2 timing policy drifted")
+            if "k4_r2_production_avx2_gate" not in cell["tags"]:
+                raise RuntimeError(
+                    "K4/R2 production AVX2 mandatory tag drifted")
+        return
     if profile != CANONICAL_MATRIX_PROFILE:
         raise RuntimeError("unknown matrix profile: " + str(profile))
     if len(matrix["cells"]) != CANONICAL_MATRIX_CELL_COUNT:
         raise RuntimeError("canonical matrix cell count drifted")
+    if matrix["baseline_sha256"] != BASELINE_SHA256:
+        raise RuntimeError("canonical matrix baseline identity drifted")
     if matrix_digest(matrix) != CANONICAL_MATRIX_SHA256:
         raise RuntimeError("canonical matrix SHA-256 drifted")
     required_sizes = {64, 256, 1024, 2048, 4096, 8192, 16384, 65536,
@@ -1030,12 +1215,108 @@ def benchmark_environment():
     }
 
 
+def validate_baseline_contract(baseline_contract):
+    if baseline_contract not in (
+            BASELINE_CONTRACT_LEGACY_V1,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2):
+        raise RuntimeError("unknown exact-main baseline contract")
+
+
+def physical_shard_bytes(kind, logical_bytes, baseline_contract):
+    if kind not in ("baseline", "candidate"):
+        raise RuntimeError("unknown benchmark implementation kind")
+    validate_baseline_contract(baseline_contract)
+    if (isinstance(logical_bytes, bool) or
+            not isinstance(logical_bytes, int) or logical_bytes < 1):
+        raise RuntimeError("logical shard bytes must be a positive integer")
+    if kind == "baseline":
+        if baseline_contract == BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2:
+            return (logical_bytes + 63) & ~63
+        if logical_bytes & 63:
+            raise RuntimeError(
+                "legacy exact-main v1 requires 64-byte-aligned shards")
+    return logical_bytes
+
+
+def benchmark_byte_arguments(kind, logical_bytes, baseline_contract):
+    physical_bytes = physical_shard_bytes(
+        kind, logical_bytes, baseline_contract)
+    result = ["--bytes", str(physical_bytes)]
+    if (kind == "baseline" and
+            baseline_contract == BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2 and
+            physical_bytes != logical_bytes):
+        result += ["--logical-bytes", str(logical_bytes)]
+    return result
+
+
+def expected_benchmark_byte_identity(
+        kind, logical_bytes, baseline_contract):
+    physical_bytes = physical_shard_bytes(
+        kind, logical_bytes, baseline_contract)
+    return {
+        "baseline_contract": baseline_contract,
+        "logical_shard_bytes": logical_bytes,
+        "physical_shard_bytes": physical_bytes,
+        "padded_application_bytes": physical_bytes != logical_bytes,
+        "ratio_scope": "time_per_call",
+        "digest_scope": "logical_prefix",
+    }
+
+
+def validate_benchmark_byte_identity(
+        kind, document, cell, baseline_contract):
+    logical_bytes = cell["bytes"]
+    physical_bytes = physical_shard_bytes(
+        kind, logical_bytes, baseline_contract)
+    parameters = document.get("parameters")
+    resolved = document.get("resolved")
+    if not isinstance(parameters, dict) or not isinstance(resolved, dict):
+        raise RuntimeError("benchmark byte identity is missing")
+    if parameters.get("shard_bytes") != physical_bytes:
+        raise RuntimeError("benchmark physical shard bytes mismatch")
+    if kind == "baseline":
+        if baseline_contract == BASELINE_CONTRACT_LEGACY_V1:
+            correctness = document.get("correctness")
+            if (document.get("schema") != "leopard-main-benchmark-v1" or
+                    "logical_shard_bytes" in parameters or
+                    "padded_application_bytes" in resolved or
+                    "padding_policy" in resolved or
+                    not isinstance(correctness, dict) or
+                    "logical_prefix_fingerprinted" in correctness):
+                raise RuntimeError(
+                    "legacy v1 baseline byte identity mismatch")
+        else:
+            padded = physical_bytes != logical_bytes
+            expected_schema = (
+                "leopard-main-benchmark-v2" if padded else
+                "leopard-main-benchmark-v1")
+            correctness = document.get("correctness")
+            if (document.get("schema") != expected_schema or
+                    parameters.get("logical_shard_bytes") != logical_bytes or
+                    resolved.get("padded_application_bytes") is not padded or
+                    resolved.get("padding_policy") !=
+                        "zero suffix per shard" or
+                    not isinstance(correctness, dict) or
+                    correctness.get(
+                        "logical_prefix_fingerprinted") is not True):
+                raise RuntimeError(
+                    "baseline logical-byte padding identity mismatch")
+    elif "logical_shard_bytes" in parameters:
+        raise RuntimeError(
+            "candidate unexpectedly reported logical-byte adaptation")
+    return expected_benchmark_byte_identity(
+        kind, logical_bytes, baseline_contract)
+
+
 def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
                      warmup, maximum_attempts, candidate_commit,
-                     require_idle_sibling, snapshot_descriptor):
+                     require_idle_sibling, snapshot_descriptor,
+                     baseline_contract):
     common = [
         "--k", str(cell["K"]), "--r", str(cell["R"]),
-        "--bytes", str(cell["bytes"]), "--loss", str(cell["loss"]),
+    ] + benchmark_byte_arguments(
+        kind, cell["bytes"], baseline_contract) + [
+        "--loss", str(cell["loss"]),
         "--batch", str(cell["batch"]), "--reuse", str(cell["reuse"]),
         "--iterations", str(iterations), "--warmup", str(warmup),
         "--threads", "1", "--seed", str(cell["seed"]), "--json", "-",
@@ -1099,12 +1380,16 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
             raise InvocationError("invalid benchmark JSON: %s" % error,
                                   details)
         parameters = document["parameters"]
+        byte_identity = validate_benchmark_byte_identity(
+            kind, document, cell, baseline_contract)
         observed = (
             parameters["K"], parameters["R"], parameters["shard_bytes"],
             parameters["loss_count"], parameters["batch"],
             parameters["reuse"], parameters["seed"])
         expected = (
-            cell["K"], cell["R"], cell["bytes"], cell["loss"],
+            cell["K"], cell["R"],
+            physical_shard_bytes(
+                kind, cell["bytes"], baseline_contract), cell["loss"],
             cell["batch"], cell["reuse"], cell["seed"])
         if observed != expected:
             raise RuntimeError("benchmark parameter mismatch for " + cell["id"])
@@ -1163,7 +1448,8 @@ def invoke_benchmark(kind, executable, cpu, sibling, cell, iterations,
             "stdout_sha256": hashlib.sha256(process.stdout).hexdigest(),
             "stderr_sha256": hashlib.sha256(process.stderr).hexdigest(),
             "rejected_attempts": rejected,
-            "times_us": times, "document": document,
+            "times_us": times, "byte_identity": byte_identity,
+            "document": document,
         }
     raise InvocationError(
         "reserved sibling contamination persisted",
@@ -1179,15 +1465,36 @@ def digest_tuple(document):
 def validate_call_identity(calls, cell):
     expected_digest = None
     expected_missing = None
-    required_missing = cell.get("expected_missing_original_index")
+    required_missing_index = cell.get("expected_missing_original_index")
+    required_missing_indices = cell.get("expected_missing_original_indices")
+    if (required_missing_index is not None and
+            required_missing_indices is not None):
+        raise RuntimeError("cell declares two expected missing-set formats")
+    if required_missing_indices is not None:
+        if (not isinstance(required_missing_indices, list) or
+                any(isinstance(index, bool) or not isinstance(index, int)
+                    for index in required_missing_indices)):
+            raise RuntimeError("expected missing original set is malformed")
+        required_missing = tuple(required_missing_indices)
+        if (required_missing != tuple(sorted(set(required_missing))) or
+                len(required_missing) != cell["loss"] or
+                any(index < 0 or index >= cell["K"]
+                    for index in required_missing)):
+            raise RuntimeError("expected missing original set is invalid")
+    elif required_missing_index is not None:
+        required_missing = (required_missing_index,)
+    else:
+        required_missing = None
     candidate_route = None
     for call in calls:
         document = call["document"]
         digest = digest_tuple(document)
         missing = tuple(document["parameters"]["missing_original_indices"])
-        if required_missing is not None and missing != (required_missing,):
-            raise RuntimeError(
-                "expected missing original index mismatch for " + cell["id"])
+        if required_missing is not None and missing != required_missing:
+            message = "expected missing original set mismatch for "
+            if required_missing_index is not None:
+                message = "expected missing original index mismatch for "
+            raise RuntimeError(message + cell["id"])
         if expected_digest is None:
             expected_digest, expected_missing = digest, missing
         if digest != expected_digest or missing != expected_missing:
@@ -1306,7 +1613,35 @@ def machine_provenance():
     }
 
 
+def matrix_baseline_sha256(matrix):
+    observed = matrix.get("baseline_sha256")
+    if (not isinstance(observed, str) or
+            SHA256_PATTERN.fullmatch(observed) is None):
+        raise RuntimeError("matrix baseline SHA-256 is invalid")
+    profile = matrix.get("profile", CANONICAL_MATRIX_PROFILE)
+    if profile in (CANONICAL_MATRIX_PROFILE, R1_TINY_EXACT_MAIN_PROFILE):
+        required = BASELINE_SHA256
+    elif profile == K4_R2_PRODUCTION_AVX2_PROFILE:
+        required = PADDED_MAIN_BASELINE_SHA256
+    else:
+        raise RuntimeError("unknown matrix profile baseline identity")
+    if observed != required:
+        raise RuntimeError("matrix baseline SHA-256 differs from its profile")
+    return required
+
+
+def matrix_baseline_contract(matrix):
+    baseline_sha256 = matrix_baseline_sha256(matrix)
+    if baseline_sha256 == BASELINE_SHA256:
+        return BASELINE_CONTRACT_LEGACY_V1
+    if baseline_sha256 == PADDED_MAIN_BASELINE_SHA256:
+        return BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2
+    raise RuntimeError("matrix baseline has no byte contract")
+
+
 def common_provenance(args, matrix):
+    expected_baseline_sha256 = matrix_baseline_sha256(matrix)
+    baseline_contract = matrix_baseline_contract(matrix)
     source = source_provenance(args.candidate_source, args.candidate_commit)
     build_executable = (
         args.candidate_build_executable or args.candidate)
@@ -1319,7 +1654,8 @@ def common_provenance(args, matrix):
     try:
         baseline_source, baseline_descriptor, baseline_snapshot = \
             snapshot_executable(
-                args.baseline, "baseline benchmark", BASELINE_SHA256)
+                args.baseline, "baseline benchmark",
+                expected_baseline_sha256)
         descriptors.append(baseline_descriptor)
         candidate_source, candidate_descriptor, candidate_snapshot = \
             snapshot_executable(args.candidate, "candidate benchmark")
@@ -1341,9 +1677,11 @@ def common_provenance(args, matrix):
                        "file_sha256": sha256_file(args.matrix),
                        "cell_count": len(matrix["cells"])},
             "frozen_main_commit": MAIN_COMMIT,
+            "baseline_contract": baseline_contract,
             "baseline": {
                 "path": baseline_source["path"],
                 "sha256": baseline_snapshot["sha256"],
+                "expected_sha256": expected_baseline_sha256,
                 "source_file": baseline_source,
                 "snapshot": baseline_snapshot,
                 "isa": inspect_isa(
@@ -1365,6 +1703,7 @@ def common_provenance(args, matrix):
             "machine": machine_provenance(),
         }
         runtime = {
+            "baseline_contract": baseline_contract,
             "baseline": {
                 "path": baseline_path, "descriptor": baseline_descriptor},
             "candidate": {
@@ -1502,7 +1841,8 @@ def diagnostic_cell(cell, pair, args, identity_digest, run_dir, memory_gate,
                     cell["diagnostic_iterations"],
                     cell["diagnostic_warmup"], args.maximum_attempts,
                     args.candidate_commit, False,
-                    runtime[kind]["descriptor"]))
+                    runtime[kind]["descriptor"],
+                    runtime["baseline_contract"]))
         identity = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "diagnostic",
@@ -1540,6 +1880,12 @@ def diagnostic_summary(run_dir, identity, identity_digest, matrix, results,
             "selected_decode_path": row["selected_decode_path"],
             "selected_decode_rule": row["selected_decode_rule"],
             "workload_digests": row["workload_digests"],
+            "benchmark_byte_identity": {
+                kind: expected_benchmark_byte_identity(
+                    kind, row["cell"]["bytes"],
+                    matrix_baseline_contract(matrix))
+                for kind in ("baseline", "candidate")
+            },
             "missing_original_indices": row["missing_original_indices"],
         } for row in rows],
     }
@@ -1694,7 +2040,7 @@ def selected_abba_cells(matrix, diagnostic, threshold, include, exclude):
         "loss_sweep", "reuse_sweep", "batch_sweep", "large_tiling",
         "selector_isolation", "r1_selector_fallback",
         "r1_selector_promoted", "r1_large_recovery", "direct_odd_arity",
-        "r1_tiny_exact_main",
+        "r1_tiny_exact_main", "k4_r2_production_avx2_gate",
     }
     selected = []
     for cell in matrix["cells"]:
@@ -1732,7 +2078,8 @@ def abba_cell(cell, pair, args, identity_digest, run_dir, runtime):
                     kind, executable, cpu, sibling, cell,
                     cell["abba_iterations"], cell["abba_warmup"],
                     args.maximum_attempts, args.candidate_commit, True,
-                    runtime[kind]["descriptor"]))
+                    runtime[kind]["descriptor"],
+                    runtime["baseline_contract"]))
         exact = validate_call_identity(calls, cell)
         value = {
             "schema": SCHEMA, "status": "complete", "stage": "abba",
@@ -1818,6 +2165,12 @@ def run_abba(args):
                     "selected_decode_path": row["selected_decode_path"],
                     "selected_decode_rule": row["selected_decode_rule"],
                     "workload_digests": row["workload_digests"],
+                    "benchmark_byte_identity": {
+                        kind: expected_benchmark_byte_identity(
+                            kind, row["cell"]["bytes"],
+                            matrix_baseline_contract(matrix))
+                        for kind in ("baseline", "candidate")
+                    },
                     "missing_original_indices":
                         row["missing_original_indices"],
                 } for row in rows],
@@ -1838,7 +2191,8 @@ def make_dry_run_manifest(matrix, diagnostic_summary_path=None, near_ratio=1.10)
                       "large_tiling", "selector_isolation",
                       "r1_selector_fallback", "r1_selector_promoted",
                       "r1_large_recovery", "direct_odd_arity",
-                      "r1_tiny_exact_main"}
+                      "r1_tiny_exact_main",
+                      "k4_r2_production_avx2_gate"}
     mandatory = [cell for cell in matrix["cells"]
                  if set(cell["tags"]) & mandatory_tags]
     selected = None
@@ -1956,6 +2310,11 @@ def self_test():
         canonical_digest == CANONICAL_MATRIX_SHA256,
         "canonical matrix retained frozen digest",
     )
+    check(
+        matrix_baseline_sha256(matrix) == BASELINE_SHA256 and
+        matrix_baseline_contract(matrix) == BASELINE_CONTRACT_LEGACY_V1,
+        "canonical matrix retains exact-main v1 baseline",
+    )
     r1_matrix = make_matrix(R1_TINY_EXACT_MAIN_PROFILE)
     validate_matrix(r1_matrix)
     check(
@@ -1963,9 +2322,14 @@ def self_test():
         "R=1 tiny exact-main profile determinism",
     )
     check(
-        matrix_digest(r1_matrix) ==
-        matrix_digest(make_matrix(R1_TINY_EXACT_MAIN_PROFILE)),
-        "R=1 tiny exact-main digest determinism",
+        matrix_digest(r1_matrix) == R1_TINY_EXACT_MAIN_MATRIX_SHA256,
+        "R=1 tiny exact-main retained frozen digest",
+    )
+    check(
+        matrix_baseline_sha256(r1_matrix) == BASELINE_SHA256 and
+        matrix_baseline_contract(r1_matrix) ==
+            BASELINE_CONTRACT_LEGACY_V1,
+        "R=1 tiny exact-main retains exact-main v1 baseline",
     )
     r1_ids = [cell["id"] for cell in r1_matrix["cells"]]
     r1_seeds = [cell["seed"] for cell in r1_matrix["cells"]]
@@ -2004,14 +2368,262 @@ def self_test():
             for cell in r1_matrix["cells"]),
         "R=1 tiny exact-main bounded call shape",
     )
+    k4_r2_matrix = make_matrix(K4_R2_PRODUCTION_AVX2_PROFILE)
+    validate_matrix(k4_r2_matrix)
+    check(
+        k4_r2_matrix == make_matrix(K4_R2_PRODUCTION_AVX2_PROFILE),
+        "K4/R2 production AVX2 profile determinism",
+    )
+    check(
+        matrix_digest(k4_r2_matrix) ==
+        K4_R2_PRODUCTION_AVX2_MATRIX_SHA256,
+        "K4/R2 production AVX2 frozen digest",
+    )
+    check(
+        matrix_baseline_sha256(k4_r2_matrix) ==
+        PADDED_MAIN_BASELINE_SHA256 and
+        matrix_baseline_contract(k4_r2_matrix) ==
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2 and
+        matrix_baseline_sha256(k4_r2_matrix) != BASELINE_SHA256,
+        "K4/R2 production AVX2 pins exact-main v2 baseline",
+    )
+    k4_r2_ids = [cell["id"] for cell in k4_r2_matrix["cells"]]
+    k4_r2_seeds = [cell["seed"] for cell in k4_r2_matrix["cells"]]
+    check(
+        len(k4_r2_ids) == len(set(k4_r2_ids)) and
+        len(k4_r2_seeds) == len(set(k4_r2_seeds)),
+        "K4/R2 production AVX2 unique IDs and seeds",
+    )
+    observed_k4_r2_targets = {
+        (cell["bytes"],
+         tuple(cell["expected_missing_original_indices"]),
+         cell["loss_pattern"])
+        for cell in k4_r2_matrix["cells"]
+        if "k4_r2_target" in cell["tags"]
+    }
+    check(
+        observed_k4_r2_targets == set(K4_R2_TARGET_LOSS_PATTERNS),
+        "K4/R2 production AVX2 target size/loss-pattern grid",
+    )
+    observed_k4_r2_neighbors = {
+        (cell["K"], cell["R"],
+         tuple(cell["expected_missing_original_indices"]),
+         cell["loss_pattern"])
+        for cell in k4_r2_matrix["cells"]
+        if "k4_r2_neighbor" in cell["tags"]
+    }
+    check(
+        observed_k4_r2_neighbors == set(K4_R2_NEIGHBOR_LOSS_PATTERNS),
+        "K4/R2 production AVX2 neighbor loss-pattern grid",
+    )
+    check(
+        all(selected_missing_indices(
+                cell["K"], cell["loss"], cell["seed"]) ==
+            tuple(cell["expected_missing_original_indices"])
+            for cell in k4_r2_matrix["cells"]),
+        "K4/R2 production AVX2 seeds select declared losses",
+    )
+    check(
+        all(cell["reuse"] == K4_R2_PRODUCTION_AVX2_REUSE and
+            cell["batch"] == 1 and
+            cell["diagnostic_iterations"] ==
+                K4_R2_PRODUCTION_AVX2_ITERATIONS and
+            cell["diagnostic_warmup"] ==
+                K4_R2_PRODUCTION_AVX2_WARMUP and
+            cell["abba_iterations"] ==
+                K4_R2_PRODUCTION_AVX2_ITERATIONS and
+            cell["abba_warmup"] == K4_R2_PRODUCTION_AVX2_WARMUP
+            for cell in k4_r2_matrix["cells"]),
+        "K4/R2 production AVX2 timing and reuse policy",
+    )
+
+    def byte_identity_document(kind, logical_bytes, baseline_contract):
+        physical_bytes = physical_shard_bytes(
+            kind, logical_bytes, baseline_contract)
+        document = {
+            "schema": "candidate-self-test",
+            "parameters": {"shard_bytes": physical_bytes},
+            "resolved": {},
+            "correctness": {},
+        }
+        if (kind == "baseline" and baseline_contract ==
+                BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2):
+            padded = physical_bytes != logical_bytes
+            document["schema"] = (
+                "leopard-main-benchmark-v2" if padded else
+                "leopard-main-benchmark-v1")
+            document["parameters"]["logical_shard_bytes"] = logical_bytes
+            document["resolved"].update({
+                "padded_application_bytes": padded,
+                "padding_policy": "zero suffix per shard",
+            })
+            document["correctness"][
+                "logical_prefix_fingerprinted"] = True
+        elif kind == "baseline":
+            document["schema"] = "leopard-main-benchmark-v1"
+        return document
+
+    for logical_bytes, baseline_bytes in (
+            (63, 64), (64, 64), (65, 128), (2049, 2112)):
+        baseline_arguments = benchmark_byte_arguments(
+            "baseline", logical_bytes,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        candidate_arguments = benchmark_byte_arguments(
+            "candidate", logical_bytes,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        check(
+            baseline_arguments[:2] == ["--bytes", str(baseline_bytes)] and
+            candidate_arguments == ["--bytes", str(logical_bytes)],
+            "exact-main tail physical-byte command %d" % logical_bytes,
+        )
+        if baseline_bytes == logical_bytes:
+            check(
+                "--logical-bytes" not in baseline_arguments,
+                "aligned exact-main command remains unchanged",
+            )
+        else:
+            logical_position = baseline_arguments.index("--logical-bytes")
+            check(
+                baseline_arguments[logical_position + 1] ==
+                str(logical_bytes),
+                "exact-main tail command declares logical bytes %d" %
+                logical_bytes,
+            )
+        baseline_document = byte_identity_document(
+            "baseline", logical_bytes,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        candidate_document = byte_identity_document(
+            "candidate", logical_bytes,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        cell = {"bytes": logical_bytes}
+        baseline_identity = validate_benchmark_byte_identity(
+            "baseline", baseline_document, cell,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        candidate_identity = validate_benchmark_byte_identity(
+            "candidate", candidate_document, cell,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+        check(
+            baseline_identity["physical_shard_bytes"] == baseline_bytes and
+            baseline_identity["logical_shard_bytes"] == logical_bytes and
+            baseline_identity["padded_application_bytes"] is
+                (baseline_bytes != logical_bytes) and
+            baseline_identity["ratio_scope"] == "time_per_call" and
+            baseline_identity["digest_scope"] == "logical_prefix" and
+            candidate_identity["physical_shard_bytes"] == logical_bytes and
+            candidate_identity["logical_shard_bytes"] == logical_bytes and
+            candidate_identity["padded_application_bytes"] is False,
+            "exact-main/candidate byte identity %d" % logical_bytes,
+        )
+        wrong_physical = json.loads(json.dumps(baseline_document))
+        wrong_physical["parameters"]["shard_bytes"] = logical_bytes
+        if logical_bytes == baseline_bytes:
+            wrong_physical["parameters"]["shard_bytes"] += 64
+        expect_runtime_error(
+            lambda value=wrong_physical, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "baseline", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "physical shard bytes mismatch",
+            "exact-main rejects wrong physical bytes %d" % logical_bytes,
+        )
+        wrong_logical = json.loads(json.dumps(baseline_document))
+        wrong_logical["parameters"]["logical_shard_bytes"] += 1
+        expect_runtime_error(
+            lambda value=wrong_logical, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "baseline", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "logical-byte padding identity mismatch",
+            "exact-main rejects wrong logical bytes %d" % logical_bytes,
+        )
+        wrong_padding = json.loads(json.dumps(baseline_document))
+        wrong_padding["resolved"]["padded_application_bytes"] = not (
+            baseline_bytes != logical_bytes)
+        expect_runtime_error(
+            lambda value=wrong_padding, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "baseline", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "logical-byte padding identity mismatch",
+            "exact-main rejects wrong padding flag %d" % logical_bytes,
+        )
+        wrong_policy = json.loads(json.dumps(baseline_document))
+        wrong_policy["resolved"]["padding_policy"] = "unspecified"
+        expect_runtime_error(
+            lambda value=wrong_policy, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "baseline", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "logical-byte padding identity mismatch",
+            "exact-main rejects wrong padding policy %d" % logical_bytes,
+        )
+        wrong_candidate_physical = json.loads(json.dumps(candidate_document))
+        wrong_candidate_physical["parameters"]["shard_bytes"] += 64
+        expect_runtime_error(
+            lambda value=wrong_candidate_physical, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "candidate", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "physical shard bytes mismatch",
+            "candidate rejects padded physical bytes %d" % logical_bytes,
+        )
+        adapted_candidate = json.loads(json.dumps(candidate_document))
+        adapted_candidate["parameters"][
+            "logical_shard_bytes"] = logical_bytes
+        expect_runtime_error(
+            lambda value=adapted_candidate, selected_cell=cell:
+                validate_benchmark_byte_identity(
+                    "candidate", value, selected_cell,
+                    BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+            "unexpectedly reported logical-byte adaptation",
+            "candidate rejects logical-byte adaptation %d" % logical_bytes,
+        )
+    legacy_v1_cell = {"bytes": 64}
+    legacy_v1_document = byte_identity_document(
+        "baseline", 64, BASELINE_CONTRACT_LEGACY_V1)
+    legacy_v1_document["correctness"]["round_trip"] = True
+    check(
+        benchmark_byte_arguments(
+            "baseline", 64, BASELINE_CONTRACT_LEGACY_V1) ==
+        ["--bytes", "64"] and
+        validate_benchmark_byte_identity(
+            "baseline", legacy_v1_document, legacy_v1_cell,
+            BASELINE_CONTRACT_LEGACY_V1)["baseline_contract"] ==
+        BASELINE_CONTRACT_LEGACY_V1,
+        "sparse exact-main v1 byte identity remains accepted",
+    )
+    expect_runtime_error(
+        lambda: validate_benchmark_byte_identity(
+            "baseline", legacy_v1_document, legacy_v1_cell,
+            BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2),
+        "logical-byte padding identity mismatch",
+        "K4 v2 contract rejects sparse exact-main v1 output",
+    )
+    aligned_v2_document = byte_identity_document(
+        "baseline", 64, BASELINE_CONTRACT_LOGICAL_ZERO_PAD_V2)
+    expect_runtime_error(
+        lambda: validate_benchmark_byte_identity(
+            "baseline", aligned_v2_document, legacy_v1_cell,
+            BASELINE_CONTRACT_LEGACY_V1),
+        "legacy v1 baseline byte identity mismatch",
+        "legacy contract rejects enhanced exact-main v2 output",
+    )
+    expect_runtime_error(
+        lambda: benchmark_byte_arguments(
+            "baseline", 63, BASELINE_CONTRACT_LEGACY_V1),
+        "requires 64-byte-aligned shards",
+        "legacy exact-main v1 tail command",
+    )
     identity_cell = r1_matrix["cells"][0]
 
-    def identity_call(kind, missing_index):
+    def identity_call(kind, missing_indices):
+        if isinstance(missing_indices, int):
+            missing_indices = [missing_indices]
         return {
             "kind": kind,
             "document": {
                 "parameters": {
-                    "missing_original_indices": [missing_index]},
+                    "missing_original_indices": list(missing_indices)},
                 "resolved": {
                     "selected_decode_path": "direct_xor",
                     "selected_decode_rule": "r1_self_test"},
@@ -2043,6 +2655,39 @@ def self_test():
             "expected missing original index mismatch",
             "R=1 exact rejects wrong %s loss" % kind,
         )
+    exact_identity_cell = next(
+        cell for cell in k4_r2_matrix["cells"]
+        if cell["K"] == 4 and cell["R"] == 2 and cell["bytes"] == 64)
+    exact_missing = exact_identity_cell[
+        "expected_missing_original_indices"]
+    exact_identity_calls = [
+        identity_call("baseline", exact_missing),
+        identity_call("candidate", exact_missing),
+    ]
+    check(
+        validate_call_identity(exact_identity_calls, exact_identity_cell)[
+            "missing_original_indices"] == exact_missing,
+        "K4/R2 exact expected loss set accepts matching invocations",
+    )
+    for invocation_index, kind in enumerate(("baseline", "candidate")):
+        wrong_calls = json.loads(json.dumps(exact_identity_calls))
+        wrong_calls[invocation_index]["document"]["parameters"][
+            "missing_original_indices"] = [0, 1]
+        expect_runtime_error(
+            lambda calls=wrong_calls: validate_call_identity(
+                calls, exact_identity_cell),
+            "expected missing original set mismatch",
+            "K4/R2 exact rejects wrong %s loss set" % kind,
+        )
+    digest_mismatch_calls = json.loads(json.dumps(exact_identity_calls))
+    digest_mismatch_calls[1]["document"]["workload_digests"][
+        "transmitted_parity"] = "different"
+    expect_runtime_error(
+        lambda: validate_call_identity(
+            digest_mismatch_calls, exact_identity_cell),
+        "wire/recovery digest or missing-set mismatch",
+        "K4/R2 exact rejects baseline/candidate digest mismatch",
+    )
     check(
         parse_cpu_list("0-2,5,8-9") == {0, 1, 2, 5, 8, 9},
         "CPU-list parsing",
@@ -2104,6 +2749,35 @@ def self_test():
         lambda: validate_matrix(source_mutation),
         "deterministic built-in matrix",
         "matrix provenance mutation",
+    )
+    k4_r2_mutation = json.loads(canonical_bytes(k4_r2_matrix))
+    k4_r2_mutation["cells"][0]["expected_missing_original_indices"][0] += 1
+    expect_runtime_error(
+        lambda: validate_matrix(k4_r2_mutation),
+        "deterministic built-in matrix",
+        "K4/R2 exact loss-pattern mutation",
+    )
+    k4_r2_v1_baseline_mutation = json.loads(canonical_bytes(k4_r2_matrix))
+    k4_r2_v1_baseline_mutation["baseline_sha256"] = BASELINE_SHA256
+    expect_runtime_error(
+        lambda: matrix_baseline_sha256(k4_r2_v1_baseline_mutation),
+        "differs from its profile",
+        "K4/R2 rejects exact-main v1 baseline identity",
+    )
+    canonical_v2_baseline_mutation = json.loads(encoded)
+    canonical_v2_baseline_mutation[
+        "baseline_sha256"] = PADDED_MAIN_BASELINE_SHA256
+    expect_runtime_error(
+        lambda: matrix_baseline_sha256(canonical_v2_baseline_mutation),
+        "differs from its profile",
+        "canonical profile rejects exact-main v2 baseline identity",
+    )
+    malformed_baseline_mutation = json.loads(encoded)
+    malformed_baseline_mutation["baseline_sha256"] = "invalid"
+    expect_runtime_error(
+        lambda: matrix_baseline_sha256(malformed_baseline_mutation),
+        "is invalid",
+        "malformed matrix baseline identity",
     )
 
     calls = []
@@ -2206,6 +2880,28 @@ def self_test():
             r1_matrix, r1_diagnostic_fixture, 1.10, [], [])} ==
         {cell["id"] for cell in r1_matrix["cells"]},
         "R=1 tiny exact-main profile makes every cell ABBA-mandatory",
+    )
+    k4_r2_diagnostic_fixture = json.loads(json.dumps(diagnostic_fixture))
+    k4_r2_diagnostic_fixture["matrix_sha256"] = matrix_digest(k4_r2_matrix)
+    k4_r2_diagnostic_fixture["cell_count"] = len(k4_r2_matrix["cells"])
+    k4_r2_diagnostic_fixture["rows"] = [
+        {
+            "id": cell["id"], "cell": cell,
+            "ratios": {metric: 2.0 for metric in RATIO_METRICS},
+        }
+        for cell in k4_r2_matrix["cells"]
+    ]
+    validate_diagnostic_summary(k4_r2_diagnostic_fixture, k4_r2_matrix)
+    check(
+        {cell["id"] for cell in selected_abba_cells(
+            k4_r2_matrix, k4_r2_diagnostic_fixture, 1.10, [], [])} ==
+        {cell["id"] for cell in k4_r2_matrix["cells"]},
+        "K4/R2 production AVX2 profile makes every cell ABBA-mandatory",
+    )
+    check(
+        make_dry_run_manifest(k4_r2_matrix)[
+            "mandatory_abba_cell_count"] == len(k4_r2_matrix["cells"]),
+        "K4/R2 dry run declares every cell ABBA-mandatory",
     )
     target_cell = next(
         cell for cell in matrix["cells"] if set(cell["tags"]) == {"core"})
@@ -2524,6 +3220,8 @@ def self_test():
         "matrix_sha256": canonical_digest,
         "r1_tiny_exact_main_cells": len(r1_matrix["cells"]),
         "r1_tiny_exact_main_sha256": matrix_digest(r1_matrix),
+        "k4_r2_production_avx2_cells": len(k4_r2_matrix["cells"]),
+        "k4_r2_production_avx2_sha256": matrix_digest(k4_r2_matrix),
         "selector_isolation_cells": len(selectors),
         "r1_selector_boundary_cells": len(r1_boundaries),
         "direct_odd_arity_cells": len(direct_odd),
@@ -2567,7 +3265,11 @@ def parse_arguments():
     make.add_argument("--output", required=True)
     make.add_argument(
         "--profile",
-        choices=(CANONICAL_MATRIX_PROFILE, R1_TINY_EXACT_MAIN_PROFILE),
+        choices=(
+            CANONICAL_MATRIX_PROFILE,
+            R1_TINY_EXACT_MAIN_PROFILE,
+            K4_R2_PRODUCTION_AVX2_PROFILE,
+        ),
         default=CANONICAL_MATRIX_PROFILE,
         help="deterministic matrix profile (default: canonical)")
     dry = subparsers.add_parser("dry-run")

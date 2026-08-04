@@ -1,0 +1,121 @@
+{
+  "schema": "leopard2-r1-ordinary-exact-main-evidence/v1",
+  "date_utc": "2026-08-04",
+  "status": "completed",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "explicit_avx2",
+    "R": 1,
+    "K_values": [3, 4, 8, 24, 32],
+    "shard_bytes": [64, 256],
+    "missing_original_positions": ["first", "middle", "last"],
+    "batch": 1,
+    "candidate_path": "ordinary Leopard2 benchmark entry paths; no prevalidated binding executable was timed",
+    "baseline": "exact Leopard main-branch codec"
+  },
+  "ratio_orientation": "Leopard1 time divided by Leopard2 time; values above one favor Leopard2",
+  "metric_semantics": {
+    "encode": "Leopard1 encode execution divided by ordinary Leopard2 encode execution",
+    "decode_first": "Leopard1 decode including setup divided by Leopard2 decode execution plus one full decode-plan setup",
+    "decode_reuse": "Leopard1 decode including setup divided by Leopard2 decode execution plus decode-plan setup amortized over 87381 executions"
+  },
+  "source_identity": {
+    "candidate_implementation_commit": "de1ebce1b7dc29458f80370bdaa6d73db15ae307",
+    "candidate_implementation_tree": "1c56d0236d8d44c0821178b0b36fc6697a228e4a",
+    "candidate_source_status": "clean",
+    "campaign_tooling_commit": "00b4d117de84f7e5e94098a519308385e753e9fb",
+    "campaign_tooling_tree": "3c2851cd090a8e2e67fb54e65a619504db8f623e",
+    "campaign_runner_sha256": "e9f511ed254e39687c8357753ac8ff26345008a50ac44df928036df647c50284",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "frozen_build_identity": {
+    "candidate_benchmark_sha256": "28531f281d15340f08c189df793a33967b5c7c4cdb2e8adacaae23b1106f88b0",
+    "candidate_prevalidated_binding_benchmark_sha256_not_timed": "c12c3e1162e5900d3aa3ba9fcaaf92b279cd5b8620c8ae207eb6bb49fb9959aa",
+    "exact_main_benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "cmake_cache_sha256": "bb9f79c8679cab3e0b6c64d907185b1f85f00d8f8b4f50d989f8c9c832535d45",
+    "compile_commands_sha256": "e6a4d2c12f8be3d57ce790a476ebac4fa1ec25d516f396cd508d53eaa3c62bd9",
+    "static_archive_sha256": "7364a5e558417f215c2cca606e4a6ff82c73a2c0fc719aa130118e4b4919d897",
+    "build_type": "Release",
+    "compiler": "gcc 13.3.0",
+    "candidate_build_tree_and_timing_artifact_byte_equal": true,
+    "candidate_build_tree_and_timing_artifact_size": 1244336,
+    "candidate_and_baseline_executed_from": "separate Linux sealed memfd snapshots",
+    "candidate_evex_instruction_count": 0,
+    "baseline_evex_instruction_count": 0
+  },
+  "raw_artifacts": {
+    "ephemeral_root": "/tmp/leopard-r1-de1ebce-exact-main-20260804-v1",
+    "matrix_file_sha256": "8b77f1857d54da575a8adda784787208c02629c0323ab9a9bb933f9c10378e17",
+    "matrix_canonical_sha256": "7a51f3bc4f4a9bffafef1f29b962b1176b04a128a4ef64f8a729e7a077b42695",
+    "diagnostic_summary_sha256": "b67003c424e75152c7470236942e76cbc59bbea29fd33a16325605613eacb98c",
+    "diagnostic_identity_file_sha256": "25bb4a657203c46b09a707b2b02217bdd8fc179f94b49e5aeb7964730e4daf27",
+    "diagnostic_identity_canonical_sha256": "3ac3e76ada46f345323101795e4fc1ce478a262a9e195049a038b78bbc2915ef",
+    "authoritative_summary_sha256": "419c9789b04a35e5a510a8e9ca9e9657fa4fcb88c2498f113ea09acacf1eca66",
+    "authoritative_identity_file_sha256": "793ef569e56ff3993f33a2fc6a51bb1875fe89c3b742d5b0484f3e84cfc38106",
+    "authoritative_identity_canonical_sha256": "f7486a80e7cf0a72a039047a9afd572bce06ebd4d281df5ea48369221a1c33fe",
+    "candidate_attestation_sha256": "d901e9ad425037726fa38089d82737c46f07d619f89fb7782c506a1f01dc850a",
+    "candidate_smoke_sha256": "91f7b45a75743b5f912d8ed34bc7962d47ce6597d15f32e58e78634cf1ecccbe",
+    "baseline_smoke_sha256": "c6d72591254791b06f9636aa02e79a7a57f6bd952fd25944d918947fdea74ad9"
+  },
+  "campaign": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "platform": "Linux 6.8.0-134-generic x86_64, glibc 2.39",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "thread_count": 1,
+    "cells": 30,
+    "diagnostic_iterations": 15,
+    "diagnostic_warmup_iterations": 2,
+    "diagnostic_child_invocations": 60,
+    "authoritative_rounds": 3,
+    "authoritative_order": ["baseline", "candidate", "candidate", "baseline"],
+    "authoritative_iterations_per_process": 21,
+    "authoritative_warmup_iterations": 2,
+    "authoritative_child_invocations": 360,
+    "plan_reuse": 87381,
+    "statistics": "geometric ratio with Student-t 95 percent interval over three independent ABBA round log contrasts",
+    "authoritative_elapsed_seconds": 32.58432108396664
+  },
+  "correctness_and_provenance_gates": {
+    "all_30_cells_completed": true,
+    "all_360_authoritative_invocations_round_trip": true,
+    "all_baseline_candidate_wire_and_recovery_digests_match": true,
+    "all_expected_missing_original_indices_match": true,
+    "all_candidate_calls_resolved_gf8_avx2": true,
+    "all_candidate_decode_routes_were_direct": true,
+    "accepted_invocations_with_sibling_activity": 0,
+    "rejected_attempts": 0,
+    "candidate_source_commit_tree_and_cleanliness_rechecked_after_timing": true,
+    "candidate_object_archive_and_link_closure_rechecked_after_timing": true,
+    "candidate_build_executable_and_timing_artifact_rechecked_after_timing": true,
+    "baseline_and_candidate_artifact_hashes_rechecked_after_timing": true,
+    "sealed_snapshot_hashes_rechecked_after_timing": true
+  },
+  "aggregate_ratios": {
+    "metric_order": ["encode", "decode_first", "decode_reuse"],
+    "value_format": ["geometric_mean_across_first_middle_last", "minimum", "maximum"],
+    "cells": [
+      {"K": 3, "bytes": 64, "values": [[0.450343, 0.445778, 0.453447], [0.136846, 0.133349, 0.140758], [0.553276, 0.537229, 0.564239]]},
+      {"K": 3, "bytes": 256, "values": [[0.662637, 0.649886, 0.678412], [0.151304, 0.148629, 0.156006], [0.683703, 0.658042, 0.717719]]},
+      {"K": 4, "bytes": 64, "values": [[0.590600, 0.579920, 0.610866], [0.101766, 0.096541, 0.108962], [0.685974, 0.678449, 0.699823]]},
+      {"K": 4, "bytes": 256, "values": [[0.764234, 0.757198, 0.773821], [0.138008, 0.134955, 0.142692], [0.796593, 0.774347, 0.808410]]},
+      {"K": 8, "bytes": 64, "values": [[0.788837, 0.784457, 0.794985], [0.238833, 0.233387, 0.243453], [0.846700, 0.838085, 0.859982]]},
+      {"K": 8, "bytes": 256, "values": [[0.900694, 0.897302, 0.903675], [0.346419, 0.344942, 0.347930], [0.988478, 0.978859, 0.993381]]},
+      {"K": 24, "bytes": 64, "values": [[1.228185, 1.212190, 1.238329], [0.486412, 0.477745, 0.493303], [1.264239, 1.261369, 1.269394]]},
+      {"K": 24, "bytes": 256, "values": [[1.340215, 1.330055, 1.352770], [0.683268, 0.674564, 0.698277], [1.304674, 1.281469, 1.344935]]},
+      {"K": 32, "bytes": 64, "values": [[1.391845, 1.389393, 1.395140], [0.576721, 0.538190, 0.619616], [1.456575, 1.432919, 1.492512]]},
+      {"K": 32, "bytes": 256, "values": [[1.386975, 1.379815, 1.395073], [0.740938, 0.693115, 0.805180], [1.373725, 1.357770, 1.398273]]}
+    ]
+  },
+  "interpretation": {
+    "ordinary_tiny_cells": "Leopard2 remains slower than exact main at K=3 and K=4 for both sizes. It also remains slower at K=8 except that reused decode at 256 bytes is approximately at parity but still below one in every measured position.",
+    "structural_crossover": "Ordinary Leopard2 encode and heavily reused decode are faster in every measured K=24 and K=32 cell.",
+    "first_decode": "Decode with a fresh plan remains slower than exact main in every measured cell because Leopard2 plan setup dominates these tiny workloads.",
+    "residual_attribution": "The R=1 arithmetic is no longer the tiny-cell bottleneck. Prior same-binary TSC attribution at 07391da measured K3/B64 raw fixed encode at 7.4 cycles, a prevalidated binding at 38.8 cycles, and the ordinary public encode at 51.9 cycles; decode measured 8.2, 32.7, and 52.9 cycles respectively. The residual is pointer-range, null, overlap, alias, error-order, immutable-object, and plan/setup validation that exact main does not provide at the same contract strength.",
+    "exhausted_safe_scope": "The campaign implementation includes fixed register-resident B64/B256 AVX2 reducers, setup-qualified immutable bindings, and packed ordinary encode, batch, reusable-plan, and one-shot decode terminals. Removing the remaining K3/K4 public-call checks would weaken documented Leopard2 safety semantics; callers that can establish those invariants ahead of time use the separate prevalidated binding path. This is a bounded API-semantics exception, not evidence against the redundancy-side algorithm.",
+    "binding_directional_control": "A separate non-authoritative same-binary K3/B64 screen measured the fixed prevalidated binding at 0.002719 microseconds encode and 0.002656 microseconds decode versus 0.011676 and 0.009467 for the mature binding. It is excluded from the exact-main ratios above because it is a different API contract.",
+    "claim_limit": "This campaign establishes the sampled R=1 regions only; it does not claim that ordinary Leopard2 wins all tiny K values or all shard sizes."
+  }
+}
