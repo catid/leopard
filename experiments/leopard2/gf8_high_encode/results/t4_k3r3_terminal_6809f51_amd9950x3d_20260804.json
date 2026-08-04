@@ -1,0 +1,157 @@
+{
+  "schema": "leopard2-gf8-t4-k3r3-terminal-evidence/v1",
+  "date_utc": "2026-08-04",
+  "status": "completed_with_scoped_promotion",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "explicit_avx2",
+    "K": 3,
+    "R": 3,
+    "T": 4,
+    "promoted_shard_bytes": [64, 128, 256, 512, 1024],
+    "candidate_path": "Packed ordinary and one-item batch terminal using the already-qualified AVX2 T4 batch circuit.",
+    "fallback_contract": "All other byte counts, K3/R4, sparse outputs, detached layouts, aliases, forced-transform calls, non-AVX2 backends, and field-disabled builds retain the mature behavior."
+  },
+  "ratio_orientation": "Reference time divided by final Leopard2 time; values above one favor final Leopard2.",
+  "ratio_value_format": ["geometric_ratio", "student_t_ci95_low", "student_t_ci95_high"],
+  "implementation_commits": [
+    {
+      "commit": "8c8450e92b804eaf50bb6a7611ddc9bebfb8b7a8",
+      "subject": "Optimize GF8 K3 R3 tiny encodes"
+    },
+    {
+      "commit": "20eb02e53208b5a5fd3b970e75474039b1a07167",
+      "subject": "Preserve ragged T4 fallback cost"
+    },
+    {
+      "commit": "6809f51b8e8c64de727716c8236195372c55b5fb",
+      "subject": "Prioritize ragged T4 rejection"
+    }
+  ],
+  "source_identity": {
+    "candidate_commit": "6809f51b8e8c64de727716c8236195372c55b5fb",
+    "candidate_tree": "bbd7c9b370355864a76ea6fb8d5610afc57bd3a9",
+    "candidate_source_status": "clean",
+    "prechange_leopard2_commit": "f00a0c6308be17e57d1288feeb59f04fd62a33c3",
+    "prechange_leopard2_tree": "a51833da5fc431eba4240d11f7e2f240ff79e5d5",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_build_identity": {
+    "candidate_benchmark_sha256": "9d4cfbb6f69f315a0d632eeb92f49e7b4f7b829469ea87cb8c003428d618e2fa",
+    "candidate_static_archive_sha256": "91cf92eb32e196eeec0b8da56535cd7eb6b32364e049f125627ff4621c91143c",
+    "candidate_cmake_cache_sha256": "18ad25aef50dd79e8dec3bc391416c3ed499f68c7fa78e93bd6eba70d259cd2f",
+    "candidate_library_link_recipe_sha256": "e62e351a5c7824ad04dc18d12a684f94ee7d75088981ee8f588b007aa7b666d7",
+    "candidate_benchmark_link_recipe_sha256": "659c43329dab220187eb24695fd9c8abb0ababe508610d23550fa75c8e229329",
+    "prechange_leopard2_benchmark_sha256": "e6e81422fc509084d5b116d7eb4c38161968332fc078651693d0840ecd531764",
+    "exact_main_benchmark_sha256": "a43d7f43ff2e887ebcd47a1e94f806847a5d8b858a4e383e6c8d5e528a7dd910",
+    "build_type": "Release",
+    "compiler": "gcc 13.3.0"
+  },
+  "authoritative_campaign": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-13,16-29",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "coordinator_cpu": 0,
+    "thread_count": 1,
+    "rounds": 5,
+    "order_per_round": "balanced symmetric six-call rotations of exact-main, prechange, candidate, candidate, prechange, exact-main",
+    "iterations_per_process": 21,
+    "warmup_iterations": 5,
+    "plan_reuse": 8192,
+    "target_child_invocations": 150,
+    "statistics": "Geometric ratio with Student-t 95 percent interval over five independent round log contrasts; each role has two observations per round.",
+    "reserved_sibling_non_idle_counters_unchanged": true,
+    "binary_hashes_verified_after_timing": true
+  },
+  "target_results": [
+    {
+      "shard_bytes": 64,
+      "parity_digest_fnv1a64": "e968e5b2fe580d38",
+      "exact_main_over_candidate_batch": [1.094060111, 1.053692214, 1.135974538],
+      "exact_main_over_candidate_one_shot": [1.120097658, 1.085526734, 1.155769567],
+      "prechange_over_candidate_batch": [2.533936479, 2.491126728, 2.577481911],
+      "prechange_over_candidate_one_shot": [2.495554682, 2.452798238, 2.539056444]
+    },
+    {
+      "shard_bytes": 128,
+      "parity_digest_fnv1a64": "c5fafe34f40baee2",
+      "exact_main_over_candidate_batch": [1.110526466, 1.081818119, 1.139996650],
+      "exact_main_over_candidate_one_shot": [1.125903994, 1.094889184, 1.157797358],
+      "prechange_over_candidate_batch": [2.251323836, 2.208355354, 2.295128366],
+      "prechange_over_candidate_one_shot": [2.249742683, 2.210472199, 2.289710833]
+    },
+    {
+      "shard_bytes": 256,
+      "parity_digest_fnv1a64": "3aab04a711348a7e",
+      "exact_main_over_candidate_batch": [1.149039954, 1.130151960, 1.168243620],
+      "exact_main_over_candidate_one_shot": [1.151940890, 1.126068842, 1.178407363],
+      "prechange_over_candidate_batch": [1.949612120, 1.933343972, 1.966017158],
+      "prechange_over_candidate_one_shot": [1.931534010, 1.915719497, 1.947479073]
+    },
+    {
+      "shard_bytes": 512,
+      "parity_digest_fnv1a64": "6a52691d066846ad",
+      "exact_main_over_candidate_batch": [1.130642651, 1.121016686, 1.140351273],
+      "exact_main_over_candidate_one_shot": [1.136015564, 1.124409056, 1.147741878],
+      "prechange_over_candidate_batch": [1.600645832, 1.582098470, 1.619410629],
+      "prechange_over_candidate_one_shot": [1.587619429, 1.571645601, 1.603755611]
+    },
+    {
+      "shard_bytes": 1024,
+      "parity_digest_fnv1a64": "8f51c9364b6e83f3",
+      "exact_main_over_candidate_batch": [1.183367606, 1.175967204, 1.190814580],
+      "exact_main_over_candidate_one_shot": [1.186371133, 1.181281554, 1.191482640],
+      "prechange_over_candidate_batch": [1.358861628, 1.349156791, 1.368636274],
+      "prechange_over_candidate_one_shot": [1.358891123, 1.356165902, 1.361621821]
+    }
+  ],
+  "final_neighbor_confirmation": {
+    "ratio_orientation": "prechange Leopard2 time divided by final Leopard2 time",
+    "child_invocations": 120,
+    "cells": [
+      { "K": 3, "R": 3, "shard_bytes": 1, "batch": [0.993125965, 0.985695993, 1.000611943], "one_shot": [0.983512220, 0.977390803, 0.989671976] },
+      { "K": 3, "R": 3, "shard_bytes": 32, "batch": [1.000301707, 0.988121884, 1.012631661], "one_shot": [0.994872719, 0.989679202, 1.000093489] },
+      { "K": 3, "R": 3, "shard_bytes": 63, "batch": [1.000019478, 0.993900114, 1.006176519], "one_shot": [0.998567579, 0.986616371, 1.010663556] },
+      { "K": 3, "R": 3, "shard_bytes": 129, "batch": [0.996878907, 0.974013027, 1.020281586], "one_shot": [0.993248506, 0.988794975, 0.997722096] },
+      { "K": 3, "R": 3, "shard_bytes": 257, "batch": [0.990935898, 0.978663642, 1.003362045], "one_shot": [0.990395383, 0.983469338, 0.997370204] },
+      { "K": 4, "R": 4, "shard_bytes": 64, "batch": [0.999419704, 0.974603318, 1.024867990], "one_shot": [0.991842549, 0.967801134, 1.016481183] }
+    ],
+    "worst_mean_regression_percent": 1.648778,
+    "conclusion": "No measured neighboring mean regression exceeds the two-percent gate."
+  },
+  "correctness_and_safety_gates": {
+    "all_150_target_invocations_round_trip": true,
+    "all_120_neighbor_invocations_round_trip": true,
+    "all_candidate_and_prechange_calls_attest_clean_exact_commit_and_tree": true,
+    "all_exact_main_prechange_candidate_workload_parity_and_recovery_digests_match": true,
+    "independent_direct_generator_oracle": "passed",
+    "legacy_leopard_parity_oracle_on_aligned_legal_cells": "passed",
+    "release_focused_terminal_tests": "2/2 passed",
+    "release_binding_and_batch_aliasing_tests": "2/2 passed",
+    "clang18_asan_ubsan_focused_tests": "2/2 passed",
+    "gf8_only_focused_tests": "2/2 passed",
+    "gf16_only_library_build": "passed",
+    "tail_and_nonpromotion_bytes": [1, 32, 63, 65, 96, 127, 129, 255, 257, 511, 513, 1023, 1025, 2048],
+    "ordinary_batch_binding_unaligned_alias_overlap_error_atomicity_forced_transform_and_scalar_fallback_coverage": "passed"
+  },
+  "sanitizer_and_reduced_field_builds": {
+    "clang18_asan_ubsan_cmake_cache_sha256": "3655f3235607ef8301497b3e2c74d56c0f7139c745a53a6b60c1d30389bec3b1",
+    "gf8_only_cmake_cache_sha256": "2d935f40ce924bf68b7114bab43dcfbf144b75395432015e908037926c975bc3",
+    "gf16_only_cmake_cache_sha256": "2fc23609908c205ea89467bbe4b766026deef723b4d22bf8add9fd006fb5b65b"
+  },
+  "regression_iteration": {
+    "initial_observation": "The first exact-size equality chain produced a 2.53-percent mean one-shot loss at the 1-byte mature fallback.",
+    "fix": "Represent the exact size set as bounded powers of two, reject all ragged sizes before loading codec shape, and evaluate that byte rejection first.",
+    "final_observation": "The clean 1-byte mean loss is 1.65 percent and every sampled neighbor is below the two-percent gate."
+  },
+  "raw_artifacts": {
+    "target_root": "/tmp/leopard-k3r3-t4-final-clean-isolated-abc-6809f51-20260804-v1/results",
+    "target_json_bundle_sha256": "00bf7223165236cc54e1c6d992ca1c133b175020cc3fa0517fd61bc4b390e589",
+    "neighbor_root": "/tmp/leopard-k3r3-t4-final-clean-neighbor-confirm-6809f51-20260804-v1/results",
+    "neighbor_json_bundle_sha256": "6a2b8581ff064a2532d3da27b8f6eae68587c30d43a480f6fc100384e783391b",
+    "bundle_algorithm": "SHA-256 of lexicographically path-sorted sha256sum lines for all top-level JSON files."
+  },
+  "resource_note": "Builds were deliberately serialized at -j1 with 512 MiB or 768 MiB virtual-memory caps after prior OOMs. Cache-sensitive timings deliberately used one isolated physical core while the SMT sibling remained non-idle-counter quiet."
+}
