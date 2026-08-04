@@ -7657,12 +7657,84 @@ DecodeK2R1TerminalValidatedDynamic(
 
 #undef LEO2_K2_DECODE_VALIDATED_NOINLINE
 
-static leo2_result DecodeDirectXorValidated(
+static LEO_FORCE_INLINE bool TryValidatePackedGF8R1DecodeInputs(
+    const leo2_codec* codec,
+    uint32_t missing,
+    size_t shard_bytes,
+    const void* const* original,
+    const AddressRange& scratch_range,
+    const AddressRange& output_range,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(codec && codec->field == LEO2_FIELD_GF8 &&
+        codec->original_count >= 3 && missing < codec->original_count &&
+        (shard_bytes == 64 || shard_bytes == 256));
+    if (!original)
+        return false;
+
+    const uint32_t anchor = missing == 0 ? 1U : 0U;
+    const uintptr_t anchor_address =
+        reinterpret_cast<uintptr_t>(original[anchor]);
+    const size_t anchor_offset = static_cast<size_t>(anchor) * shard_bytes;
+    if (anchor_address < anchor_offset)
+        return false;
+    const uintptr_t base = anchor_address - anchor_offset;
+    size_t total_bytes = 0;
+    if (!CheckedMultiply(codec->original_count, shard_bytes, total_bytes) ||
+        base > std::numeric_limits<uintptr_t>::max() - total_bytes)
+        return false;
+
+    uintptr_t mismatch = 0;
+    for (uint32_t i = 0; i < codec->original_count; ++i)
+    {
+        const uintptr_t expected = i == missing
+            ? 0 : base + static_cast<size_t>(i) * shard_bytes;
+        mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^ expected;
+    }
+    if (mismatch != 0)
+        return false;
+
+    if (missing != 0)
+    {
+        AddressRange prefix;
+        if (!MakeRange(reinterpret_cast<const void*>(base),
+                static_cast<uint64_t>(missing) * shard_bytes, prefix))
+            return false;
+        if (RangesOverlap(prefix, scratch_range) ||
+            RangesOverlap(prefix, output_range))
+        {
+            result_out = LEO2_OVERLAP;
+            return true;
+        }
+    }
+    if (missing + 1U < codec->original_count)
+    {
+        const uintptr_t suffix_begin =
+            base + static_cast<size_t>(missing + 1U) * shard_bytes;
+        const uint64_t suffix_bytes =
+            static_cast<uint64_t>(codec->original_count - missing - 1U) *
+            shard_bytes;
+        AddressRange suffix;
+        if (!MakeRange(reinterpret_cast<const void*>(suffix_begin),
+                suffix_bytes, suffix))
+            return false;
+        if (RangesOverlap(suffix, scratch_range) ||
+            RangesOverlap(suffix, output_range))
+        {
+            result_out = LEO2_OVERLAP;
+            return true;
+        }
+    }
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+template<size_t ProtectedCount, bool FixedGF8R1 = false>
+static leo2_result DecodeDirectXorValidatedCore(
     const leo2_codec* codec,
     uint32_t missing,
     uint64_t shard_bytes,
     const AddressRange* protected_ranges,
-    size_t protected_count,
     const void* const* original,
     const void* const* recovery,
     void* const* restored,
@@ -7671,17 +7743,34 @@ static leo2_result DecodeDirectXorValidated(
 {
     if (shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
-    if (codec && codec->original_count == 1 &&
+    if (!FixedGF8R1 && codec && codec->original_count == 1 &&
         codec->recovery_count == 1 && missing == 0)
         return DecodeK1R1TerminalValidated(
-            codec, shard_bytes, protected_ranges, protected_count,
+            codec, shard_bytes, protected_ranges, ProtectedCount,
             original, recovery, restored, scratch, scratch_bytes);
-    ScratchLayout layout;
-    size_t rounded_bytes = 0;
-    leo2_result result = DirectDecodeLayout(
-        codec, shard_bytes, layout, rounded_bytes);
-    if (result != LEO2_SUCCESS)
-        return result;
+    ScratchLayout layout = { 0, 0, 0, 0 };
+    leo2_result result = LEO2_SUCCESS;
+    if (FixedGF8R1)
+    {
+        LEO_DEBUG_ASSERT(codec && codec->field == LEO2_FIELD_GF8 &&
+            codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            codec->recovery_count == 1 && codec->original_count >= 3 &&
+            (shard_bytes == 64 || shard_bytes == 256));
+        const size_t range_bytes =
+            (static_cast<size_t>(codec->original_count) * 2U + 1U) *
+            sizeof(AddressRange);
+        layout.total_bytes =
+            (range_bytes + kScratchAlignment - 1U) &
+            ~(kScratchAlignment - 1U);
+    }
+    else
+    {
+        size_t rounded_bytes = 0;
+        result = DirectDecodeLayout(
+            codec, shard_bytes, layout, rounded_bytes);
+        if (result != LEO2_SUCCESS)
+            return result;
+    }
     AddressRange scratch_range = { 0, 0 };
     result = CheckScratch(
         scratch, scratch_bytes, layout, scratch_range);
@@ -7691,19 +7780,20 @@ static leo2_result DecodeDirectXorValidated(
         missing >= codec->original_count)
         return LEO2_INVALID_ARGUMENT;
 
-    if (protected_count > 2 || (protected_count != 0 && !protected_ranges))
+    LEO_DEBUG_ASSERT(ProtectedCount <= 2);
+    if (ProtectedCount != 0 && !protected_ranges)
         return LEO2_INVALID_ARGUMENT;
-    AddressRange metadata_ranges[5];
+    AddressRange metadata_ranges[3 + ProtectedCount];
     if (!MakeArrayRange(original, codec->original_count,
             sizeof(*original), metadata_ranges[0]) ||
-        !MakeArrayRange(recovery, codec->recovery_count,
+        !MakeArrayRange(recovery, FixedGF8R1 ? 1U : codec->recovery_count,
             sizeof(*recovery), metadata_ranges[1]) ||
         !MakeArrayRange(restored, codec->original_count,
             sizeof(*restored), metadata_ranges[2]))
         return LEO2_INVALID_ARGUMENT;
-    for (size_t i = 0; i < protected_count; ++i)
+    for (size_t i = 0; i < ProtectedCount; ++i)
         metadata_ranges[3 + i] = protected_ranges[i];
-    const size_t metadata_count = 3 + protected_count;
+    const size_t metadata_count = 3 + ProtectedCount;
     if (RangeOverlapsAny(
             scratch_range, metadata_ranges, metadata_count))
         return LEO2_OVERLAP;
@@ -7716,7 +7806,17 @@ static leo2_result DecodeDirectXorValidated(
         RangeOverlapsAny(output_range, metadata_ranges, metadata_count))
         return LEO2_OVERLAP;
 
-    for (uint32_t i = 0; i < codec->original_count; ++i)
+    bool packed_inputs = false;
+    if (FixedGF8R1)
+    {
+        packed_inputs = TryValidatePackedGF8R1DecodeInputs(
+            codec, missing, static_cast<size_t>(shard_bytes), original,
+            scratch_range, output_range, result);
+        if (packed_inputs && result != LEO2_SUCCESS)
+            return result;
+    }
+    for (uint32_t i = 0;
+         !packed_inputs && i < codec->original_count; ++i)
     {
         const bool expected = i != missing;
         if ((original[i] != NULL) != expected)
@@ -7729,7 +7829,8 @@ static leo2_result DecodeDirectXorValidated(
         if (RangesOverlap(input_range, scratch_range) ||
             RangesOverlap(input_range, output_range))
             return LEO2_OVERLAP;
-        if (!HasValidSystematicPad(codec, original[i], shard_bytes))
+        if (!FixedGF8R1 &&
+            !HasValidSystematicPad(codec, original[i], shard_bytes))
             return LEO2_INVALID_ARGUMENT;
     }
 
@@ -7742,9 +7843,71 @@ static leo2_result DecodeDirectXorValidated(
         RangesOverlap(recovery_range, output_range))
         return LEO2_OVERLAP;
 
-    ExecuteDirectXorDecode(codec, missing, static_cast<size_t>(shard_bytes),
-        original, recovery, restored);
+    if (FixedGF8R1)
+    {
+#ifdef LEO_HAS_FF8
+        const leopard::backend::Ops* const ops = codec->context->ops;
+        const leopard::backend::XorMemorySourcesFixed fixed =
+            SelectGF8AVX2R1FixedXorCallback(
+                ops, static_cast<size_t>(shard_bytes));
+        if (ops && ops->kind == LEO2_BACKEND_AVX2 && fixed)
+        {
+            fixed(restored[missing], recovery[0], original,
+                codec->original_count, missing);
+        }
+        else
+        {
+            ExecuteDirectXorDecode(
+                codec, missing, static_cast<size_t>(shard_bytes),
+                original, recovery, restored);
+        }
+#else
+        /* FixedGF8R1 is unreachable in an FF16-only library, but the public
+           template callers are still parsed and instantiated.  Keep that
+           field-reduced build independent of FF8-only callback helpers. */
+        ExecuteDirectXorDecode(
+            codec, missing, static_cast<size_t>(shard_bytes),
+            original, recovery, restored);
+#endif
+    }
+    else
+    {
+        ExecuteDirectXorDecode(
+            codec, missing, static_cast<size_t>(shard_bytes),
+            original, recovery, restored);
+    }
     return LEO2_SUCCESS;
+}
+
+static leo2_result DecodeDirectXorValidated(
+    const leo2_codec* codec,
+    uint32_t missing,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    size_t protected_count,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    switch (protected_count)
+    {
+    case 0:
+        return DecodeDirectXorValidatedCore<0>(
+            codec, missing, shard_bytes, NULL, original, recovery,
+            restored, scratch, scratch_bytes);
+    case 1:
+        return DecodeDirectXorValidatedCore<1>(
+            codec, missing, shard_bytes, protected_ranges, original,
+            recovery, restored, scratch, scratch_bytes);
+    case 2:
+        return DecodeDirectXorValidatedCore<2>(
+            codec, missing, shard_bytes, protected_ranges, original,
+            recovery, restored, scratch, scratch_bytes);
+    default:
+        return LEO2_INVALID_ARGUMENT;
+    }
 }
 
 static leo2_result ValidateDecodeBuffers(
@@ -15939,6 +16102,104 @@ EncodeGF8K1R1Batch1024Terminal(
     return LEO2_SUCCESS;
 }
 
+#ifdef LEO_HAS_FF8
+/*
+    The common R=1 application layout is two dense slabs.  Prove that layout
+    with the same aggregate validator as EncodeInternal, but retain the
+    scratch range already established here and enter the fixed AVX2 reducer
+    directly.  Any layout the aggregate proof does not recognize falls back
+    to the exact general validator before a byte is written.
+*/
+template<size_t ProtectedCount>
+static LEO2_FIXED_R1_ENCODE_NOINLINE bool
+TryEncodeGF8AVX2R1FixedPackedTerminal(
+    const leo2_codec* codec,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    const void* protected_metadata,
+    size_t protected_metadata_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(codec &&
+        codec->terminal_r1_t8_shape == kTerminalR1K3PlusAVX2FixedXor &&
+        (shard_bytes == 64 || shard_bytes == 256));
+    LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+
+    const size_t range_bytes =
+        (static_cast<size_t>(codec->original_count) + 1U) *
+        sizeof(AddressRange);
+    const ScratchLayout layout = {
+        0, 0, 0,
+        (range_bytes + kScratchAlignment - 1U) &
+            ~(kScratchAlignment - 1U)
+    };
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(original, codec->original_count,
+            sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(recovery, 1, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    if (ProtectedCount != 0)
+    {
+        if (!protected_metadata || protected_metadata_bytes == 0 ||
+            !MakeRange(protected_metadata,
+                static_cast<uint64_t>(protected_metadata_bytes),
+                metadata_ranges[2]))
+        {
+            result_out = LEO2_INVALID_ARGUMENT;
+            return true;
+        }
+    }
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!TryValidateDensePackedGF8EncodeBuffers(
+            codec, shard_bytes, original, recovery, scratch_range,
+            metadata_ranges, 2 + ProtectedCount, result_out))
+        return false;
+    if (result_out != LEO2_SUCCESS)
+        return true;
+
+    const leopard::backend::Ops* const ops = codec->context->ops;
+    const leopard::backend::XorMemorySourcesFixed fixed =
+        SelectGF8AVX2R1FixedXorCallback(
+            ops, static_cast<size_t>(shard_bytes));
+    if (ops && ops->kind == LEO2_BACKEND_AVX2 && fixed)
+    {
+        fixed(recovery[0], original[0], original + 1,
+            codec->original_count - 1, codec->original_count - 1);
+    }
+    else
+    {
+        /* Test hooks may replace the context table after codec setup. */
+        ExecuteSingleSideEncode(
+            codec, static_cast<size_t>(shard_bytes), original, recovery);
+    }
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+#endif
+
 #undef LEO2_FIXED_R1_ENCODE_NOINLINE
 
 static leo2_result EncodeInternal(
@@ -16480,9 +16741,18 @@ static LEO_FORCE_INLINE leo2_result TryOneShotLegacyHighR1Terminal(
             return DecodeK1R1TerminalValidated(
                 codec, shard_bytes, protected_ranges, 2, original, recovery,
                 restored_original, scratch, scratch_bytes);
-        return DecodeDirectXorValidated(codec, missing, shard_bytes,
-            protected_ranges, 2, original, recovery, restored_original,
-            scratch, scratch_bytes);
+        if ((shard_bytes == 64 || shard_bytes == 256) &&
+            IsGF8AVX2R1FixedXorEligible(
+                codec, static_cast<size_t>(shard_bytes), true))
+        {
+            return DecodeDirectXorValidatedCore<2, true>(
+                codec, missing, shard_bytes, protected_ranges,
+                original, recovery, restored_original,
+                scratch, scratch_bytes);
+        }
+        return DecodeDirectXorValidatedCore<2>(
+            codec, missing, shard_bytes, protected_ranges,
+            original, recovery, restored_original, scratch, scratch_bytes);
     }
 #if LEO2_EXPERIMENT_ONE_SHOT_NO_LOSS_SHORT_CIRCUIT
     if (missing_count == 0)
@@ -16579,8 +16849,22 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
         return EncodeGF8K1R1PublicTerminal(
             codec, shard_bytes, original, recovery, scratch, scratch_bytes);
     if (IsGF8AVX2R1EarlyEncodeEligible(codec))
+    {
+#ifdef LEO_HAS_FF8
+        if ((shard_bytes == 64 || shard_bytes == 256) &&
+            codec->terminal_r1_t8_shape ==
+                kTerminalR1K3PlusAVX2FixedXor)
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8AVX2R1FixedPackedTerminal<0>(
+                    codec, shard_bytes, original, recovery,
+                    scratch, scratch_bytes, NULL, 0, terminal_result))
+                return terminal_result;
+        }
+#endif
         return EncodeInternal(codec, shard_bytes, original, recovery,
             scratch, scratch_bytes, NULL, 0, false);
+    }
 #ifdef LEO_HAS_FF8
     if (IsGF8AVX2T2PackedTerminalEligible(codec, shard_bytes))
         return EncodeGF8AVX2T2PublicTerminal(
@@ -16756,6 +17040,21 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
         }
         if (IsGF8AVX2R1EarlyEncodeEligible(codec))
         {
+#ifdef LEO_HAS_FF8
+            if ((items[0].shard_bytes == 64 ||
+                 items[0].shard_bytes == 256) &&
+                codec->terminal_r1_t8_shape ==
+                    kTerminalR1K3PlusAVX2FixedXor)
+            {
+                leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+                if (TryEncodeGF8AVX2R1FixedPackedTerminal<1>(
+                        codec, items[0].shard_bytes, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, items, sizeof(*items),
+                        terminal_result))
+                    return terminal_result;
+            }
+#endif
             return EncodeInternal(codec, items[0].shard_bytes,
                 items[0].original, items[0].recovery, items[0].scratch,
                 items[0].scratch_bytes, items, sizeof(*items), false);
@@ -18250,6 +18549,57 @@ static LEO_FORCE_INLINE bool IsK1R1PlanTerminalEligible(
 #endif
 }
 
+static LEO_FORCE_INLINE bool IsGF8AVX2R1FixedPlanTerminalEligible(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes)
+{
+    if (!plan || (shard_bytes != 64 && shard_bytes != 256) ||
+        (plan->diagnostic_shard_bytes != 0 &&
+         plan->diagnostic_shard_bytes != shard_bytes) ||
+        !plan->direct_xor || plan->missing_original_count != 1)
+        return false;
+    if (!PlanHasCompactDirectXor(plan) &&
+        plan->missing_originals.size() != 1)
+        return false;
+    return IsGF8AVX2R1FixedXorEligible(
+        plan->codec, static_cast<size_t>(shard_bytes), true);
+}
+
+#if defined(_MSC_VER)
+#define LEO2_FIXED_R1_PLAN_NOINLINE __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_FIXED_R1_PLAN_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_fixed_r1_plan"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_FIXED_R1_PLAN_NOINLINE __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_FIXED_R1_PLAN_NOINLINE
+#endif
+
+template<size_t ProtectedCount>
+static LEO2_FIXED_R1_PLAN_NOINLINE leo2_result
+DecodeGF8AVX2R1FixedPlanTerminal(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes,
+    const AddressRange* protected_ranges,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored_original,
+    void* scratch,
+    size_t scratch_bytes)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2R1FixedPlanTerminalEligible(plan, shard_bytes));
+    LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+    const uint32_t missing = PlanHasCompactDirectXor(plan)
+        ? plan->direct_xor_original : plan->missing_originals[0];
+    return DecodeDirectXorValidatedCore<ProtectedCount, true>(
+        plan->codec, missing, shard_bytes, protected_ranges,
+        original, recovery, restored_original, scratch, scratch_bytes);
+}
+
+#undef LEO2_FIXED_R1_PLAN_NOINLINE
+
 #if defined(_MSC_VER)
 #define LEO2_K1_BATCH_NOINLINE __declspec(noinline)
 #elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
@@ -18849,6 +19199,12 @@ LEO2_EXPORT leo2_result leo2_decode_plan_execute(
             plan->codec, shard_bytes, original, recovery,
             restored_original, scratch, scratch_bytes);
     }
+    if (IsGF8AVX2R1FixedPlanTerminalEligible(plan, shard_bytes))
+    {
+        return DecodeGF8AVX2R1FixedPlanTerminal<0>(
+            plan, shard_bytes, NULL, original, recovery,
+            restored_original, scratch, scratch_bytes);
+    }
     return DecodePlanExecuteInternal(
         plan, shard_bytes, original, recovery, restored_original,
         scratch, scratch_bytes, false, NULL, 0, false);
@@ -18987,6 +19343,15 @@ leo2_decode_plan_execute_batch(
                 g_k1_fixed_1024_mode == 1U)
                 return ExecuteK1R1DecodeBatch1024Item(plan, items);
             return ExecuteK1R1DecodeBatchItem(plan, items);
+        }
+        if (IsGF8AVX2R1FixedPlanTerminalEligible(
+                plan, items[0].shard_bytes))
+        {
+            return DecodeGF8AVX2R1FixedPlanTerminal<1>(
+                plan, items[0].shard_bytes, &item_range,
+                items[0].original, items[0].recovery,
+                items[0].restored_original, items[0].scratch,
+                items[0].scratch_bytes);
         }
     }
     return DecodeBatchAfterK1(plan, items, item_count);

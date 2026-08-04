@@ -1592,6 +1592,377 @@ void test_r1_fixed_avx2_bindings(leo2_backend backend)
 #endif
 }
 
+void require_packed_r1_parity(
+    const Bytes& original_slab,
+    const void* parity,
+    uint32_t original_count,
+    size_t shard_bytes,
+    const char* message)
+{
+    Bytes expected(shard_bytes, 0);
+    for (uint32_t shard = 0; shard < original_count; ++shard)
+        for (size_t byte = 0; byte < shard_bytes; ++byte)
+            expected[byte] ^=
+                original_slab[static_cast<size_t>(shard) * shard_bytes + byte];
+    require(std::memcmp(parity, &expected[0], shard_bytes) == 0, message);
+}
+
+void test_r1_fixed_avx2_packed_rejections(
+    leo2_codec* codec,
+    uint32_t original_count,
+    size_t shard_bytes,
+    Bytes& original_slab,
+    const Bytes& pristine_originals,
+    std::vector<const void*>& original,
+    const void* parity)
+{
+    require(original_count == 3 && shard_bytes == 64,
+        "packed R=1 rejection fixture has the wrong shape");
+
+    size_t encode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        codec, shard_bytes, &encode_scratch_bytes), LEO2_SUCCESS,
+        "packed R=1 rejection encode scratch query");
+    require(encode_scratch_bytes >= shard_bytes,
+        "packed R=1 rejection encode scratch is unexpectedly small");
+    AlignedScratch encode_scratch(encode_scratch_bytes);
+
+    /* Input/output overlap is rejected before the packed terminal can alter
+       any live source coordinate. */
+    void* recovery_output[1] = { &original_slab[0] };
+    require_result(leo2_encode(codec, shard_bytes, &original[0],
+        recovery_output, encode_scratch.data(), encode_scratch_bytes),
+        LEO2_OVERLAP, "packed R=1 encode input/output overlap");
+    require(original_slab == pristine_originals,
+        "packed R=1 encode wrote before input/output rejection");
+
+    /* The output may not consume the caller's scratch span. */
+    std::memset(encode_scratch.data(), 0xa7, encode_scratch_bytes);
+    recovery_output[0] = encode_scratch.data();
+    require_result(leo2_encode(codec, shard_bytes, &original[0],
+        recovery_output, encode_scratch.data(), encode_scratch_bytes),
+        LEO2_OVERLAP, "packed R=1 encode scratch/output overlap");
+    const uint8_t* const encode_scratch_bytes_view =
+        static_cast<const uint8_t*>(encode_scratch.data());
+    require(std::all_of(encode_scratch_bytes_view,
+                encode_scratch_bytes_view + encode_scratch_bytes,
+                [](uint8_t value) { return value == 0xa7; }),
+        "packed R=1 encode wrote before scratch/output rejection");
+
+    /* A one-item batch descriptor is protected metadata.  Use an aligned,
+       padded envelope so it can safely stand in for scratch in one rejection
+       and for the output destination in the next. */
+    struct alignas(64) EncodeItemEnvelope
+    {
+        leo2_encode_batch_item item;
+        uint8_t tail[256];
+    } encode_envelope;
+    require(reinterpret_cast<uintptr_t>(&encode_envelope) %
+                leo2_scratch_alignment() == 0,
+        "packed R=1 encode metadata envelope is misaligned");
+    std::memset(&encode_envelope, 0x3e, sizeof(encode_envelope));
+    Bytes ordinary_output(shard_bytes, 0x6d);
+    recovery_output[0] = &ordinary_output[0];
+    encode_envelope.item.shard_bytes = shard_bytes;
+    encode_envelope.item.original = &original[0];
+    encode_envelope.item.recovery = recovery_output;
+    encode_envelope.item.scratch = &encode_envelope;
+    encode_envelope.item.scratch_bytes = encode_scratch_bytes;
+    Bytes encode_envelope_before(sizeof(encode_envelope));
+    std::memcpy(&encode_envelope_before[0], &encode_envelope,
+        sizeof(encode_envelope));
+    require_result(leo2_encode_batch(codec, &encode_envelope.item, 1),
+        LEO2_OVERLAP, "packed R=1 encode scratch/metadata overlap");
+    require(std::memcmp(&encode_envelope, &encode_envelope_before[0],
+                sizeof(encode_envelope)) == 0 &&
+            std::all_of(ordinary_output.begin(), ordinary_output.end(),
+                [](uint8_t value) { return value == 0x6d; }),
+        "packed R=1 encode wrote before scratch/metadata rejection");
+
+    void* descriptor_output[1] = { &encode_envelope.item };
+    encode_envelope.item.recovery = descriptor_output;
+    encode_envelope.item.scratch = encode_scratch.data();
+    std::memcpy(&encode_envelope_before[0], &encode_envelope,
+        sizeof(encode_envelope));
+    require_result(leo2_encode_batch(codec, &encode_envelope.item, 1),
+        LEO2_OVERLAP, "packed R=1 encode output/batch-metadata overlap");
+    require(std::memcmp(&encode_envelope, &encode_envelope_before[0],
+                sizeof(encode_envelope)) == 0,
+        "packed R=1 encode wrote before batch-metadata rejection");
+
+    const uint32_t missing = 1;
+    std::vector<uint8_t> original_present(original_count, 1);
+    original_present[missing] = 0;
+    const uint8_t recovery_present[1] = { 1 };
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        recovery_present, &plan), LEO2_SUCCESS,
+        "packed R=1 rejection plan create");
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, shard_bytes, &decode_scratch_bytes), LEO2_SUCCESS,
+        "packed R=1 rejection decode scratch query");
+    require(decode_scratch_bytes >= shard_bytes,
+        "packed R=1 rejection decode scratch is unexpectedly small");
+    AlignedScratch decode_scratch(decode_scratch_bytes);
+    std::vector<const void*> received = original;
+    received[missing] = NULL;
+    const void* recovery[1] = { parity };
+    std::vector<void*> restored(original_count, NULL);
+
+    /* The hole itself is the only source-slab coordinate that may be used as
+       output.  A live-coordinate output remains forbidden and atomic. */
+    restored[missing] = &original_slab[0];
+    require_result(leo2_decode_plan_execute(plan, shard_bytes, &received[0],
+        recovery, &restored[0], decode_scratch.data(), decode_scratch_bytes),
+        LEO2_OVERLAP, "packed R=1 decode live-input/output overlap");
+    require(original_slab == pristine_originals,
+        "packed R=1 decode wrote before live-input/output rejection");
+
+    std::memset(decode_scratch.data(), 0xb8, decode_scratch_bytes);
+    restored[missing] = decode_scratch.data();
+    require_result(leo2_decode_plan_execute(plan, shard_bytes, &received[0],
+        recovery, &restored[0], decode_scratch.data(), decode_scratch_bytes),
+        LEO2_OVERLAP, "packed R=1 decode scratch/output overlap");
+    const uint8_t* const decode_scratch_bytes_view =
+        static_cast<const uint8_t*>(decode_scratch.data());
+    require(std::all_of(decode_scratch_bytes_view,
+                decode_scratch_bytes_view + decode_scratch_bytes,
+                [](uint8_t value) { return value == 0xb8; }),
+        "packed R=1 decode wrote before scratch/output rejection");
+
+    /* One-shot presence maps are protected metadata, including in the fixed
+       packed terminal that skips the ordinary per-shard range scan. */
+    Bytes presence_output(shard_bytes, 1);
+    presence_output[missing] = 0;
+    const Bytes presence_before = presence_output;
+    Bytes one_shot_output(shard_bytes, 0x91);
+    restored[missing] = &presence_output[0];
+    require_result(leo2_decode(codec, shard_bytes, &presence_output[0],
+        recovery_present, &received[0], recovery, &restored[0],
+        decode_scratch.data(), decode_scratch_bytes), LEO2_OVERLAP,
+        "packed R=1 decode output/presence-metadata overlap");
+    require(presence_output == presence_before,
+        "packed R=1 decode wrote before presence-metadata rejection");
+
+    /* The reusable-plan terminal likewise protects the one-item descriptor,
+       both from scratch and from the restored output. */
+    struct alignas(64) DecodeItemEnvelope
+    {
+        leo2_decode_batch_item item;
+        uint8_t tail[256];
+    } decode_envelope;
+    require(reinterpret_cast<uintptr_t>(&decode_envelope) %
+                leo2_scratch_alignment() == 0,
+        "packed R=1 decode metadata envelope is misaligned");
+    std::memset(&decode_envelope, 0x52, sizeof(decode_envelope));
+    std::fill(one_shot_output.begin(), one_shot_output.end(), 0x91);
+    restored[missing] = &one_shot_output[0];
+    decode_envelope.item.shard_bytes = shard_bytes;
+    decode_envelope.item.original = &received[0];
+    decode_envelope.item.recovery = recovery;
+    decode_envelope.item.restored_original = &restored[0];
+    decode_envelope.item.scratch = &decode_envelope;
+    decode_envelope.item.scratch_bytes = decode_scratch_bytes;
+    Bytes decode_envelope_before(sizeof(decode_envelope));
+    std::memcpy(&decode_envelope_before[0], &decode_envelope,
+        sizeof(decode_envelope));
+    require_result(leo2_decode_plan_execute_batch(
+        plan, &decode_envelope.item, 1), LEO2_OVERLAP,
+        "packed R=1 decode scratch/batch-metadata overlap");
+    require(std::memcmp(&decode_envelope, &decode_envelope_before[0],
+                sizeof(decode_envelope)) == 0 &&
+            std::all_of(one_shot_output.begin(), one_shot_output.end(),
+                [](uint8_t value) { return value == 0x91; }),
+        "packed R=1 decode wrote before scratch/metadata rejection");
+
+    restored[missing] = &decode_envelope.item;
+    decode_envelope.item.scratch = decode_scratch.data();
+    std::memcpy(&decode_envelope_before[0], &decode_envelope,
+        sizeof(decode_envelope));
+    require_result(leo2_decode_plan_execute_batch(
+        plan, &decode_envelope.item, 1), LEO2_OVERLAP,
+        "packed R=1 decode output/batch-metadata overlap");
+    require(std::memcmp(&decode_envelope, &decode_envelope_before[0],
+                sizeof(decode_envelope)) == 0,
+        "packed R=1 decode wrote before batch-metadata rejection");
+    leo2_decode_plan_destroy(plan);
+}
+
+void test_r1_fixed_avx2_packed_public_terminals(leo2_backend backend)
+{
+    if (backend != LEO2_BACKEND_AVX2)
+        return;
+
+    const uint32_t counts[] = { 3, 255 };
+    const size_t byte_sizes[] = { 64, 256 };
+    for (size_t count_i = 0;
+         count_i < sizeof(counts) / sizeof(counts[0]); ++count_i)
+        for (size_t byte_i = 0;
+             byte_i < sizeof(byte_sizes) / sizeof(byte_sizes[0]); ++byte_i)
+        {
+            const uint32_t k = counts[count_i];
+            const size_t bytes = byte_sizes[byte_i];
+            leo2_context_options context_options = {};
+            context_options.struct_size = sizeof(context_options);
+            context_options.backend = LEO2_BACKEND_AVX2;
+            context_options.thread_count = 1;
+            leo2_context* context = NULL;
+            require_result(leo2_context_create(&context_options, &context),
+                LEO2_SUCCESS, "packed R=1 context create");
+            require(leo2_context_backend(context) == LEO2_BACKEND_AVX2,
+                "packed R=1 context selected another backend");
+
+            leo2_codec_options codec_options = {};
+            codec_options.struct_size = sizeof(codec_options);
+            codec_options.shard_layout = LEO2_SHARD_LAYOUT_NATIVE_V1;
+            leo2_codec* codec = NULL;
+            require_result(leo2_codec_create(context, k, 1,
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                &codec_options, &codec), LEO2_SUCCESS,
+                "packed R=1 codec create");
+
+            Bytes original_slab(static_cast<size_t>(k) * bytes);
+            fill(original_slab,
+                static_cast<uint32_t>(k * 19U + bytes));
+            const Bytes pristine_originals = original_slab;
+            std::vector<const void*> original(k, NULL);
+            for (uint32_t shard = 0; shard < k; ++shard)
+                original[shard] = &original_slab[
+                    static_cast<size_t>(shard) * bytes];
+
+            size_t encode_scratch_bytes = 0;
+            require_result(leo2_encode_scratch_size(
+                codec, bytes, &encode_scratch_bytes), LEO2_SUCCESS,
+                "packed R=1 encode scratch query");
+            AlignedScratch encode_scratch(encode_scratch_bytes);
+            Bytes parity_storage(bytes + 11U, 0xa5);
+            void* recovery_output[1] = { &parity_storage[5] };
+            require_result(leo2_encode(codec, bytes, &original[0],
+                recovery_output, encode_scratch.data(), encode_scratch_bytes),
+                LEO2_SUCCESS, "packed R=1 one-shot encode");
+            require_packed_r1_parity(pristine_originals, recovery_output[0],
+                k, bytes, "packed R=1 one-shot parity mismatch");
+
+            std::fill(parity_storage.begin(), parity_storage.end(), 0x5a);
+            leo2_encode_batch_item encode_item = {
+                bytes, &original[0], recovery_output,
+                encode_scratch.data(), encode_scratch_bytes
+            };
+            require_result(leo2_encode_batch(codec, &encode_item, 1),
+                LEO2_SUCCESS, "packed R=1 one-item batch encode");
+            require_packed_r1_parity(pristine_originals, recovery_output[0],
+                k, bytes, "packed R=1 one-item batch parity mismatch");
+            for (size_t i = 0; i < 5; ++i)
+                require(parity_storage[i] == 0x5a,
+                    "packed R=1 encode changed a prefix guard");
+            for (size_t i = 5 + bytes; i < parity_storage.size(); ++i)
+                require(parity_storage[i] == 0x5a,
+                    "packed R=1 encode changed a suffix guard");
+
+            const void* recovery[1] = { recovery_output[0] };
+            size_t one_shot_scratch_bytes = 0;
+            require_result(leo2_decode_scratch_size(
+                codec, bytes, &one_shot_scratch_bytes), LEO2_SUCCESS,
+                "packed R=1 one-shot decode scratch query");
+            AlignedScratch one_shot_scratch(one_shot_scratch_bytes);
+            const uint32_t missing_indices[] = { 0, k / 2U, k - 1U };
+            for (size_t missing_i = 0;
+                 missing_i < sizeof(missing_indices) /
+                     sizeof(missing_indices[0]); ++missing_i)
+            {
+                const uint32_t missing = missing_indices[missing_i];
+                std::vector<uint8_t> original_present(k, 1);
+                original_present[missing] = 0;
+                const uint8_t recovery_present[1] = { 1 };
+                std::vector<const void*> received = original;
+                received[missing] = NULL;
+                std::vector<void*> restored(k, NULL);
+
+                /* The absent coordinate is not an input range.  Restoring
+                   directly into that physical hole is therefore valid. */
+                std::memcpy(&original_slab[0], &pristine_originals[0],
+                    original_slab.size());
+                std::memset(&original_slab[
+                    static_cast<size_t>(missing) * bytes], 0xc7, bytes);
+                restored[missing] = &original_slab[
+                    static_cast<size_t>(missing) * bytes];
+                require_result(leo2_decode(codec, bytes,
+                    &original_present[0], recovery_present, &received[0],
+                    recovery, &restored[0], one_shot_scratch.data(),
+                    one_shot_scratch_bytes), LEO2_SUCCESS,
+                    "packed R=1 one-shot decode into missing hole");
+                require(original_slab == pristine_originals,
+                    "packed R=1 one-shot restored the wrong hole");
+
+                leo2_decode_plan* plan = NULL;
+                require_result(leo2_decode_plan_create(codec,
+                    &original_present[0], recovery_present, &plan),
+                    LEO2_SUCCESS, "packed R=1 batch plan create");
+                size_t plan_scratch_bytes = 0;
+                require_result(leo2_decode_plan_scratch_size(
+                    plan, bytes, &plan_scratch_bytes), LEO2_SUCCESS,
+                    "packed R=1 batch decode scratch query");
+                AlignedScratch plan_scratch(plan_scratch_bytes);
+                std::memset(&original_slab[
+                    static_cast<size_t>(missing) * bytes], 0xcf, bytes);
+                require_result(leo2_decode_plan_execute(
+                    plan, bytes, &received[0], recovery, &restored[0],
+                    plan_scratch.data(), plan_scratch_bytes), LEO2_SUCCESS,
+                    "packed R=1 reusable-plan decode into missing hole");
+                require(original_slab == pristine_originals,
+                    "packed R=1 reusable plan restored the wrong hole");
+                std::memset(&original_slab[
+                    static_cast<size_t>(missing) * bytes], 0xd4, bytes);
+                leo2_decode_batch_item decode_item = {
+                    bytes, &received[0], recovery, &restored[0],
+                    plan_scratch.data(), plan_scratch_bytes
+                };
+                require_result(leo2_decode_plan_execute_batch(
+                    plan, &decode_item, 1), LEO2_SUCCESS,
+                    "packed R=1 one-item batch decode into missing hole");
+                require(original_slab == pristine_originals,
+                    "packed R=1 one-item batch restored the wrong hole");
+                leo2_decode_plan_destroy(plan);
+            }
+
+            if (k == 3 && bytes == 64)
+            {
+                test_r1_fixed_avx2_packed_rejections(codec, k, bytes,
+                    original_slab, pristine_originals, original,
+                    recovery[0]);
+            }
+            leo2_codec_destroy(codec);
+            leo2_context_destroy(context);
+        }
+
+    /* A valid non-packed layout must fall through to the mature validator
+       instead of being rejected by the aggregate packed proof. */
+    R1Fixture fallback(backend, 3, 64, false, LEO2_FIELD_GF8,
+        LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
+    require(reinterpret_cast<uintptr_t>(fallback.original[1]) !=
+            reinterpret_cast<uintptr_t>(fallback.original[0]) +
+                fallback.bytes,
+        "non-packed R=1 fallback fixture accidentally became packed");
+    execute_and_check_decode(fallback);
+    size_t fallback_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(fallback.codec, fallback.bytes,
+        &fallback_scratch_bytes), LEO2_SUCCESS,
+        "non-packed R=1 batch encode scratch query");
+    AlignedScratch fallback_scratch(fallback_scratch_bytes);
+    Bytes fallback_parity(fallback.bytes, 0);
+    void* fallback_recovery[1] = { &fallback_parity[0] };
+    leo2_encode_batch_item fallback_item = {
+        fallback.bytes, &fallback.original[0], fallback_recovery,
+        fallback_scratch.data(), fallback_scratch_bytes
+    };
+    require_result(leo2_encode_batch(fallback.codec, &fallback_item, 1),
+        LEO2_SUCCESS, "non-packed R=1 one-item batch encode fallback");
+    require(std::memcmp(fallback_recovery[0], fallback.recovery[0],
+                fallback.bytes) == 0,
+        "non-packed R=1 one-item batch parity mismatch");
+}
+
 void test_public_r1(leo2_backend backend)
 {
     /* K=1 is a copy-only code.  Its specialized validators do not stage any
@@ -1896,6 +2267,7 @@ void test_public_r1(leo2_backend backend)
     test_k2_avx2_terminal_contract(backend);
     test_r1_early_one_item_encode_batch(backend);
     test_r1_fixed_avx2_bindings(backend);
+    test_r1_fixed_avx2_packed_public_terminals(backend);
     test_public_r1_multi_item_batch(backend);
 
     // Shared immutable mature and newly compact/fused plans must be race-free.
