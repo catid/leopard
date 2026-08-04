@@ -2306,7 +2306,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
@@ -2349,7 +2349,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL=ON",
                 configure)
             self.assertIn(
-                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL=OFF",
+                "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL=ON",
                 configure)
             self.assertIn(
                 "-DLEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED:BOOL=OFF",
@@ -2367,6 +2367,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             v5_cache = dict(cache)
             v5_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5
+            v5_cache["LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"] = "OFF"
             for selector in v6_only:
                 v5_cache.pop(selector)
             v5_configure = provenance._reproducible_configure_argv(
@@ -3377,7 +3378,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                     "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                     "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                    "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
                     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
@@ -3475,7 +3476,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
@@ -3493,7 +3494,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING": "ON",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
@@ -3661,7 +3662,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
                 "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT": "ON",
                 "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
-                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
+                "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",

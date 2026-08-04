@@ -43,6 +43,12 @@ BASELINE_SHA256 = (
 CANONICAL_MATRIX_CELL_COUNT = 341
 CANONICAL_MATRIX_SHA256 = (
     "3d5d423fe35760727ac1e9751036d9e208be1e69886e27a18c95009204d85d6e")
+CANONICAL_MATRIX_PROFILE = "canonical"
+R1_TINY_EXACT_MAIN_PROFILE = "r1-tiny-exact-main"
+R1_TINY_EXACT_MAIN_K = (3, 4, 8, 24, 32)
+R1_TINY_EXACT_MAIN_BYTES = (64, 256)
+R1_TINY_EXACT_MAIN_REUSE = 87381
+R1_TINY_MISSING_POSITIONS = ("first", "middle", "last")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 ABBA_ORDER = ("baseline", "candidate", "candidate", "baseline")
@@ -256,6 +262,54 @@ def stable_seed(key):
     return int.from_bytes(digest[:8], "big") & ((1 << 63) - 1)
 
 
+def xorshift64_next(state):
+    mask = (1 << 64) - 1
+    value = state
+    value = (value ^ (value << 13)) & mask
+    value = (value ^ (value >> 7)) & mask
+    value = (value ^ (value << 17)) & mask
+    return value
+
+
+def r1_missing_index(k, seed):
+    if k <= 0:
+        raise RuntimeError("R=1 loss selection requires positive K")
+    state = (seed ^ 0xd1b54a32d192ed03) & ((1 << 64) - 1)
+    if state == 0:
+        state = 0x9e3779b97f4a7c15
+    order = list(range(k))
+    for remaining in range(k, 1, -1):
+        state = xorshift64_next(state)
+        selected = state % remaining
+        order[remaining - 1], order[selected] = (
+            order[selected], order[remaining - 1])
+    return order[0]
+
+
+def r1_missing_position_index(k, position):
+    if position == "first":
+        return 0
+    if position == "middle":
+        return k // 2
+    if position == "last":
+        return k - 1
+    raise RuntimeError("unknown R=1 missing-position label: " + position)
+
+
+def r1_seed_for_missing_index(identifier, k, missing_index, used_seeds):
+    modulus = 1 << 63
+    initial = stable_seed(identifier)
+    for offset in range(1 << 20):
+        seed = (initial + offset) % modulus
+        if seed in used_seeds:
+            continue
+        if r1_missing_index(k, seed) == missing_index:
+            used_seeds.add(seed)
+            return seed
+    raise RuntimeError(
+        "could not find a bounded unique R=1 seed for " + identifier)
+
+
 def iteration_policy(byte_count, confirmation):
     if byte_count <= 1024:
         return (21 if confirmation else 15, 2)
@@ -312,7 +366,7 @@ def loss_values(k, r):
     return sorted(value for value in values if value <= min(k, r))
 
 
-def make_matrix():
+def make_canonical_matrix():
     cells = {}
     all_shapes = CORE_SHAPES + BOUNDARY_SHAPES
     for unused_name, k, r in all_shapes:
@@ -382,6 +436,76 @@ def make_matrix():
     return matrix
 
 
+def make_r1_tiny_exact_main_matrix():
+    cells = []
+    used_seeds = set()
+    for k in R1_TINY_EXACT_MAIN_K:
+        for byte_count in R1_TINY_EXACT_MAIN_BYTES:
+            for position in R1_TINY_MISSING_POSITIONS:
+                missing_index = r1_missing_position_index(k, position)
+                identifier = "%s-missing-%s" % (
+                    cell_key(
+                        k, 1, byte_count, 1,
+                        R1_TINY_EXACT_MAIN_REUSE, 1),
+                    position,
+                )
+                seed = r1_seed_for_missing_index(
+                    identifier, k, missing_index, used_seeds)
+                diagnostic_iterations, diagnostic_warmup = iteration_policy(
+                    byte_count, False)
+                abba_iterations, abba_warmup = iteration_policy(
+                    byte_count, True)
+                cells.append({
+                    "id": identifier,
+                    "K": k,
+                    "R": 1,
+                    "T": 1,
+                    "bytes": byte_count,
+                    "loss": 1,
+                    "reuse": R1_TINY_EXACT_MAIN_REUSE,
+                    "batch": 1,
+                    "seed": seed,
+                    "expected_missing_original_index": missing_index,
+                    "diagnostic_iterations": diagnostic_iterations,
+                    "diagnostic_warmup": diagnostic_warmup,
+                    "abba_iterations": abba_iterations,
+                    "abba_warmup": abba_warmup,
+                    "estimated_peak_bytes": (
+                        6 * (k + 1) * byte_count + (64 << 20)),
+                    "tags": [
+                        "r1_tiny_exact_main", "missing_" + position],
+                })
+    cells.sort(key=lambda cell: cell["id"])
+    for index, cell in enumerate(cells):
+        cell["index"] = index
+        cell["tags"].sort()
+    return {
+        "schema": MATRIX_SCHEMA,
+        "profile": R1_TINY_EXACT_MAIN_PROFILE,
+        "description": (
+            "Tiny R=1 exact-main first/middle/last loss confirmation"),
+        "baseline_commit": MAIN_COMMIT,
+        "baseline_sha256": BASELINE_SHA256,
+        "cell_count": len(cells),
+        "diagnostic_child_invocations": 2 * len(cells),
+        "maximum_abba_child_invocations_at_three_rounds": 12 * len(cells),
+        "sizes": list(R1_TINY_EXACT_MAIN_BYTES),
+        "transform_sides": [1],
+        "losses": [1],
+        "reuse_counts": [R1_TINY_EXACT_MAIN_REUSE],
+        "batch_counts": [1],
+        "cells": cells,
+    }
+
+
+def make_matrix(profile=CANONICAL_MATRIX_PROFILE):
+    if profile == CANONICAL_MATRIX_PROFILE:
+        return make_canonical_matrix()
+    if profile == R1_TINY_EXACT_MAIN_PROFILE:
+        return make_r1_tiny_exact_main_matrix()
+    raise RuntimeError("unknown matrix profile: " + profile)
+
+
 def matrix_digest(matrix):
     return sha256_bytes(canonical_bytes(matrix))
 
@@ -389,17 +513,31 @@ def matrix_digest(matrix):
 def validate_matrix(matrix):
     if matrix.get("schema") != MATRIX_SCHEMA:
         raise RuntimeError("matrix schema mismatch")
-    regenerated = make_matrix()
+    profile = matrix.get("profile", CANONICAL_MATRIX_PROFILE)
+    regenerated = make_matrix(profile)
     if matrix != regenerated:
         raise RuntimeError("matrix differs from the deterministic built-in matrix")
-    if len(matrix["cells"]) != CANONICAL_MATRIX_CELL_COUNT:
-        raise RuntimeError("canonical matrix cell count drifted")
-    if matrix_digest(matrix) != CANONICAL_MATRIX_SHA256:
-        raise RuntimeError("canonical matrix SHA-256 drifted")
     ids = [cell["id"] for cell in matrix["cells"]]
     seeds = [cell["seed"] for cell in matrix["cells"]]
     if len(ids) != len(set(ids)) or len(seeds) != len(set(seeds)):
         raise RuntimeError("matrix IDs or seeds are not unique")
+    if profile == R1_TINY_EXACT_MAIN_PROFILE:
+        if len(matrix["cells"]) != (
+                len(R1_TINY_EXACT_MAIN_K) *
+                len(R1_TINY_EXACT_MAIN_BYTES) *
+                len(R1_TINY_MISSING_POSITIONS)):
+            raise RuntimeError("R=1 tiny exact-main cell count drifted")
+        for cell in matrix["cells"]:
+            if r1_missing_index(cell["K"], cell["seed"]) != \
+                    cell["expected_missing_original_index"]:
+                raise RuntimeError("R=1 tiny exact-main seed coverage drifted")
+        return
+    if profile != CANONICAL_MATRIX_PROFILE:
+        raise RuntimeError("unknown matrix profile: " + str(profile))
+    if len(matrix["cells"]) != CANONICAL_MATRIX_CELL_COUNT:
+        raise RuntimeError("canonical matrix cell count drifted")
+    if matrix_digest(matrix) != CANONICAL_MATRIX_SHA256:
+        raise RuntimeError("canonical matrix SHA-256 drifted")
     required_sizes = {64, 256, 1024, 2048, 4096, 8192, 16384, 65536,
                       1048576, 2097152, 4194304, 8388608, 16777216}
     if set(matrix["sizes"]) != required_sizes:
@@ -498,6 +636,47 @@ def file_identity(path, label):
         "device": after.st_dev, "inode": after.st_ino,
         "mode": after.st_mode, "size": after.st_size,
         "mtime_ns": after.st_mtime_ns, "ctime_ns": after.st_ctime_ns,
+    }
+
+
+def equivalent_executable_identities(build_path, artifact_path):
+    build = file_identity(build_path, "candidate build-tree executable")
+    artifact = file_identity(artifact_path, "candidate timing artifact")
+    if (build["size"], build["sha256"]) != \
+            (artifact["size"], artifact["sha256"]):
+        raise RuntimeError(
+            "candidate build-tree executable and timing artifact differ")
+    build_descriptor = os.open(
+        build["path"], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    artifact_descriptor = os.open(
+        artifact["path"], os.O_RDONLY | getattr(os, "O_CLOEXEC", 0))
+    try:
+        offset = 0
+        while offset < build["size"]:
+            length = min(1 << 20, build["size"] - offset)
+            build_block = os.pread(build_descriptor, length, offset)
+            artifact_block = os.pread(artifact_descriptor, length, offset)
+            if (len(build_block) != length or
+                    artifact_block != build_block):
+                raise RuntimeError(
+                    "candidate build-tree executable and timing artifact "
+                    "differ byte-for-byte")
+            offset += length
+    finally:
+        os.close(artifact_descriptor)
+        os.close(build_descriptor)
+    if file_identity(build["path"], "candidate build-tree executable") != \
+            build or file_identity(
+                artifact["path"], "candidate timing artifact") != artifact:
+        raise RuntimeError(
+            "candidate executable changed during byte-equivalence validation")
+    return {
+        "schema": "leopard2-executable-equivalence/v1",
+        "build_tree_executable": build,
+        "selected_timing_artifact": artifact,
+        "equal_size": build["size"],
+        "equal_sha256": build["sha256"],
+        "byte_for_byte_equal": True,
     }
 
 
@@ -1000,11 +1179,15 @@ def digest_tuple(document):
 def validate_call_identity(calls, cell):
     expected_digest = None
     expected_missing = None
+    required_missing = cell.get("expected_missing_original_index")
     candidate_route = None
     for call in calls:
         document = call["document"]
         digest = digest_tuple(document)
         missing = tuple(document["parameters"]["missing_original_indices"])
+        if required_missing is not None and missing != (required_missing,):
+            raise RuntimeError(
+                "expected missing original index mismatch for " + cell["id"])
         if expected_digest is None:
             expected_digest, expected_missing = digest, missing
         if digest != expected_digest or missing != expected_missing:
@@ -1125,9 +1308,13 @@ def machine_provenance():
 
 def common_provenance(args, matrix):
     source = source_provenance(args.candidate_source, args.candidate_commit)
+    build_executable = (
+        args.candidate_build_executable or args.candidate)
     build = cmake_provenance(
-        args.candidate_build, args.candidate_source, args.candidate)
+        args.candidate_build, args.candidate_source, build_executable)
     reproducible_build = verify_reproducible_candidate_build(build)
+    executable_equivalence = equivalent_executable_identities(
+        build_executable, args.candidate)
     descriptors = []
     try:
         baseline_source, baseline_descriptor, baseline_snapshot = \
@@ -1137,6 +1324,10 @@ def common_provenance(args, matrix):
         candidate_source, candidate_descriptor, candidate_snapshot = \
             snapshot_executable(args.candidate, "candidate benchmark")
         descriptors.append(candidate_descriptor)
+        if candidate_source != \
+                executable_equivalence["selected_timing_artifact"]:
+            raise RuntimeError(
+                "candidate timing artifact changed before snapshot")
         baseline_path = snapshot_path(baseline_descriptor)
         candidate_path = snapshot_path(candidate_descriptor)
         attestation = candidate_source_attestation(
@@ -1169,6 +1360,7 @@ def common_provenance(args, matrix):
             },
             "candidate_source": source,
             "candidate_build": build,
+            "candidate_executable_equivalence": executable_equivalence,
             "candidate_reproducible_build": reproducible_build,
             "machine": machine_provenance(),
         }
@@ -1226,6 +1418,13 @@ def source_still_frozen(provenance, runtime):
     if observed_build != expected_build:
         raise RuntimeError(
             "candidate source/object/archive/link closure changed during stage")
+    expected_equivalence = provenance["candidate_executable_equivalence"]
+    observed_equivalence = equivalent_executable_identities(
+        expected_equivalence["build_tree_executable"]["path"],
+        expected_equivalence["selected_timing_artifact"]["path"])
+    if observed_equivalence != expected_equivalence:
+        raise RuntimeError(
+            "candidate build executable or timing artifact changed during stage")
     for role in ("baseline", "candidate"):
         recorded = provenance[role]
         if file_identity(recorded["path"], role + " benchmark") != \
@@ -1495,6 +1694,7 @@ def selected_abba_cells(matrix, diagnostic, threshold, include, exclude):
         "loss_sweep", "reuse_sweep", "batch_sweep", "large_tiling",
         "selector_isolation", "r1_selector_fallback",
         "r1_selector_promoted", "r1_large_recovery", "direct_odd_arity",
+        "r1_tiny_exact_main",
     }
     selected = []
     for cell in matrix["cells"]:
@@ -1637,7 +1837,8 @@ def make_dry_run_manifest(matrix, diagnostic_summary_path=None, near_ratio=1.10)
     mandatory_tags = {"loss_sweep", "reuse_sweep", "batch_sweep",
                       "large_tiling", "selector_isolation",
                       "r1_selector_fallback", "r1_selector_promoted",
-                      "r1_large_recovery", "direct_odd_arity"}
+                      "r1_large_recovery", "direct_odd_arity",
+                      "r1_tiny_exact_main"}
     mandatory = [cell for cell in matrix["cells"]
                  if set(cell["tags"]) & mandatory_tags]
     selected = None
@@ -1745,6 +1946,103 @@ def self_test():
 
     matrix = make_matrix()
     validate_matrix(matrix)
+    canonical_digest = matrix_digest(matrix)
+    check("profile" not in matrix, "canonical matrix has no new profile field")
+    check(
+        len(matrix["cells"]) == CANONICAL_MATRIX_CELL_COUNT,
+        "canonical matrix retained cell count",
+    )
+    check(
+        canonical_digest == CANONICAL_MATRIX_SHA256,
+        "canonical matrix retained frozen digest",
+    )
+    r1_matrix = make_matrix(R1_TINY_EXACT_MAIN_PROFILE)
+    validate_matrix(r1_matrix)
+    check(
+        r1_matrix == make_matrix(R1_TINY_EXACT_MAIN_PROFILE),
+        "R=1 tiny exact-main profile determinism",
+    )
+    check(
+        matrix_digest(r1_matrix) ==
+        matrix_digest(make_matrix(R1_TINY_EXACT_MAIN_PROFILE)),
+        "R=1 tiny exact-main digest determinism",
+    )
+    r1_ids = [cell["id"] for cell in r1_matrix["cells"]]
+    r1_seeds = [cell["seed"] for cell in r1_matrix["cells"]]
+    check(
+        len(r1_ids) == len(set(r1_ids)) and
+        len(r1_seeds) == len(set(r1_seeds)),
+        "R=1 tiny exact-main unique IDs and seeds",
+    )
+    observed_r1_grid = {
+        (cell["K"], cell["bytes"],
+         next(tag[len("missing_"):] for tag in cell["tags"]
+              if tag.startswith("missing_")),
+         cell["expected_missing_original_index"])
+        for cell in r1_matrix["cells"]
+    }
+    expected_r1_grid = {
+        (k, byte_count, position,
+         r1_missing_position_index(k, position))
+        for k in R1_TINY_EXACT_MAIN_K
+        for byte_count in R1_TINY_EXACT_MAIN_BYTES
+        for position in R1_TINY_MISSING_POSITIONS
+    }
+    check(
+        observed_r1_grid == expected_r1_grid,
+        "R=1 tiny exact-main K/bytes/loss-position coverage",
+    )
+    check(
+        all(r1_missing_index(cell["K"], cell["seed"]) ==
+            cell["expected_missing_original_index"]
+            for cell in r1_matrix["cells"]),
+        "R=1 tiny exact-main seeds select declared losses",
+    )
+    check(
+        all(cell["reuse"] == R1_TINY_EXACT_MAIN_REUSE and
+            cell["loss"] == 1 and cell["batch"] == 1
+            for cell in r1_matrix["cells"]),
+        "R=1 tiny exact-main bounded call shape",
+    )
+    identity_cell = r1_matrix["cells"][0]
+
+    def identity_call(kind, missing_index):
+        return {
+            "kind": kind,
+            "document": {
+                "parameters": {
+                    "missing_original_indices": [missing_index]},
+                "resolved": {
+                    "selected_decode_path": "direct_xor",
+                    "selected_decode_rule": "r1_self_test"},
+                "workload_digests": {
+                    "algorithm": "sha256", "original_data": "a",
+                    "transmitted_parity": "b",
+                    "recovered_originals": "c"},
+            },
+        }
+
+    required_missing = identity_cell["expected_missing_original_index"]
+    identity_calls = [
+        identity_call("baseline", required_missing),
+        identity_call("candidate", required_missing),
+    ]
+    check(
+        validate_call_identity(identity_calls, identity_cell)[
+            "missing_original_indices"] == [required_missing],
+        "R=1 exact expected loss accepts every matching invocation",
+    )
+    for invocation_index, kind in enumerate(("baseline", "candidate")):
+        wrong_calls = json.loads(json.dumps(identity_calls))
+        wrong_calls[invocation_index]["document"]["parameters"][
+            "missing_original_indices"] = [
+                (required_missing + 1) % identity_cell["K"]]
+        expect_runtime_error(
+            lambda calls=wrong_calls: validate_call_identity(
+                calls, identity_cell),
+            "expected missing original index mismatch",
+            "R=1 exact rejects wrong %s loss" % kind,
+        )
     check(
         parse_cpu_list("0-2,5,8-9") == {0, 1, 2, 5, 8, 9},
         "CPU-list parsing",
@@ -1892,6 +2190,23 @@ def self_test():
         diagnostic_fixture,
         "complete diagnostic summary",
     )
+    r1_diagnostic_fixture = json.loads(json.dumps(diagnostic_fixture))
+    r1_diagnostic_fixture["matrix_sha256"] = matrix_digest(r1_matrix)
+    r1_diagnostic_fixture["cell_count"] = len(r1_matrix["cells"])
+    r1_diagnostic_fixture["rows"] = [
+        {
+            "id": cell["id"], "cell": cell,
+            "ratios": {metric: 2.0 for metric in RATIO_METRICS},
+        }
+        for cell in r1_matrix["cells"]
+    ]
+    validate_diagnostic_summary(r1_diagnostic_fixture, r1_matrix)
+    check(
+        {cell["id"] for cell in selected_abba_cells(
+            r1_matrix, r1_diagnostic_fixture, 1.10, [], [])} ==
+        {cell["id"] for cell in r1_matrix["cells"]},
+        "R=1 tiny exact-main profile makes every cell ABBA-mandatory",
+    )
     target_cell = next(
         cell for cell in matrix["cells"] if set(cell["tags"]) == {"core"})
     selected_before = selected_abba_cells(
@@ -1980,6 +2295,32 @@ def self_test():
         executable = Path(directory) / "fixture"
         executable.write_bytes(Path("/bin/true").read_bytes())
         executable.chmod(0o500)
+        build_executable = Path(directory) / "build-fixture"
+        build_executable.write_bytes(executable.read_bytes())
+        build_executable.chmod(0o500)
+        split_equivalence = equivalent_executable_identities(
+            build_executable, executable)
+        check(
+            split_equivalence["byte_for_byte_equal"] is True and
+            split_equivalence["build_tree_executable"]["path"] !=
+            split_equivalence["selected_timing_artifact"]["path"],
+            "separate build executable and timing artifact equivalence",
+        )
+        check(
+            equivalent_executable_identities(
+                executable, executable)["equal_sha256"] ==
+            split_equivalence["equal_sha256"],
+            "candidate build executable defaults to selected artifact",
+        )
+        mismatched_executable = Path(directory) / "mismatched-fixture"
+        mismatched_executable.write_bytes(executable.read_bytes() + b"X")
+        mismatched_executable.chmod(0o500)
+        expect_runtime_error(
+            lambda: equivalent_executable_identities(
+                build_executable, mismatched_executable),
+            "timing artifact differ",
+            "mismatched build executable and timing artifact",
+        )
         source_identity, descriptor, snapshot_identity = snapshot_executable(
             executable, "self-test fixture")
         try:
@@ -2180,7 +2521,9 @@ def self_test():
     check(check_count > 1, "self-test executed a nontrivial check set")
     print(json.dumps({
         "self_test": "passed", "matrix_cells": len(matrix["cells"]),
-        "matrix_sha256": matrix_digest(matrix),
+        "matrix_sha256": canonical_digest,
+        "r1_tiny_exact_main_cells": len(r1_matrix["cells"]),
+        "r1_tiny_exact_main_sha256": matrix_digest(r1_matrix),
         "selector_isolation_cells": len(selectors),
         "r1_selector_boundary_cells": len(r1_boundaries),
         "direct_odd_arity_cells": len(direct_odd),
@@ -2196,6 +2539,10 @@ def add_benchmark_arguments(parser):
     parser.add_argument("--matrix", required=True)
     parser.add_argument("--baseline", required=True)
     parser.add_argument("--candidate", required=True)
+    parser.add_argument(
+        "--candidate-build-executable",
+        help=("build-tree executable used to validate CMake/object/archive/"
+              "link provenance; defaults to --candidate"))
     parser.add_argument("--candidate-commit", required=True)
     parser.add_argument("--candidate-source", required=True)
     parser.add_argument("--candidate-build", required=True)
@@ -2218,6 +2565,11 @@ def parse_arguments():
     subparsers = parser.add_subparsers(dest="command", required=True)
     make = subparsers.add_parser("make-matrix")
     make.add_argument("--output", required=True)
+    make.add_argument(
+        "--profile",
+        choices=(CANONICAL_MATRIX_PROFILE, R1_TINY_EXACT_MAIN_PROFILE),
+        default=CANONICAL_MATRIX_PROFILE,
+        help="deterministic matrix profile (default: canonical)")
     dry = subparsers.add_parser("dry-run")
     dry.add_argument("--matrix", required=True)
     dry.add_argument("--output", required=True)
@@ -2251,7 +2603,7 @@ def main():
     if args.command == "self-test":
         self_test()
     elif args.command == "make-matrix":
-        matrix = make_matrix()
+        matrix = make_matrix(args.profile)
         validate_matrix(matrix)
         atomic_json(args.output, matrix)
         print(json.dumps({"output": os.path.realpath(args.output),

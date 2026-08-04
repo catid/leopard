@@ -4983,6 +4983,7 @@ def _validate_candidate_required_cache(
                 BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED": "ON",
+            "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "ON",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
         })
@@ -5037,7 +5038,7 @@ def _reproducible_replay_contract(
                     "ON" and
                 cache.get("LEO2_EXPERIMENT_CAUCHY_LOG_REUSE") == "ON" and
                 cache.get("LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED") ==
-                    "OFF" and
+                    "ON" and
                 cache.get(
                     "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED") ==
                     "OFF" and
