@@ -230,8 +230,8 @@ void ExercisePackedCell(
     if (k == 4 && (bytes == 64 || bytes == 65))
     {
         /* Exhaust every byte value in every source coordinate.  B=64 proves
-           the AVX2 table maps, while B=65 places the value in the scalar tail
-           and proves that it uses the identical legacy representation. */
+           the AVX2 table maps, while B=65 places the value in the overlapping
+           four-byte tail and proves the identical legacy representation. */
         const size_t offset = bytes == 64 ? 0U : 64U;
         for (unsigned source = 0; source < k; ++source)
         {
@@ -581,6 +581,13 @@ int main()
         }
         RequireResult(result, LEO2_SUCCESS, "create AVX2 T=2 context");
 
+        /* K=4 owns the generated circuit whose 16..31-byte remainder now
+           uses an overlapping in-range vector.  Exhaust every exact length
+           through the first two vector boundaries across public, batch, and
+           reusable-binding entry points. */
+        for (size_t bytes = 1; bytes <= 65; ++bytes)
+            ExercisePackedCell(context, 4, bytes, true);
+
         static const size_t sizes[] = {
             1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
             127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
@@ -593,6 +600,8 @@ int main()
             for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
             {
                 const size_t bytes = sizes[i];
+                if (k == 4 && bytes <= 65)
+                    continue;
                 const bool selected = bytes <= 2048 ||
                     (k == 4 && bytes <= kK4TerminalMaximumBytes);
                 ExercisePackedCell(context, k, bytes, selected);

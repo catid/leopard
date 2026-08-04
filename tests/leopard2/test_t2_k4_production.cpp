@@ -27,6 +27,7 @@
 */
 
 #include "direct_oracle.h"
+#include "Leopard2Backend.h"
 #include "leopard2.h"
 
 #include <cstdint>
@@ -40,6 +41,11 @@
 
 #if defined(_MSC_VER)
 #include <malloc.h>
+#endif
+
+#if defined(__linux__)
+#include <sys/mman.h>
+#include <unistd.h>
 #endif
 
 namespace {
@@ -258,6 +264,89 @@ void ExerciseCell(leo2_context* context, size_t shard_bytes)
     leo2_codec_destroy(codec);
 }
 
+#if defined(__linux__)
+
+class GuardedPageBuffer
+{
+public:
+    explicit GuardedPageBuffer(size_t bytes)
+        : mapping_(MAP_FAILED)
+        , mapping_bytes_(0)
+        , value_(NULL)
+    {
+        const long page_size_value = sysconf(_SC_PAGESIZE);
+        if (page_size_value <= 0 ||
+            bytes > static_cast<size_t>(page_size_value))
+            throw std::runtime_error("invalid guard-page size");
+        const size_t page_size = static_cast<size_t>(page_size_value);
+        mapping_bytes_ = 2U * page_size;
+        mapping_ = mmap(NULL, mapping_bytes_, PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (mapping_ == MAP_FAILED)
+            throw std::bad_alloc();
+        uint8_t* const base = static_cast<uint8_t*>(mapping_);
+        if (mprotect(base + page_size, page_size, PROT_NONE) != 0)
+        {
+            munmap(mapping_, mapping_bytes_);
+            mapping_ = MAP_FAILED;
+            throw std::runtime_error("mprotect guard page failed");
+        }
+        value_ = base + page_size - bytes;
+    }
+
+    ~GuardedPageBuffer()
+    {
+        if (mapping_ != MAP_FAILED)
+            munmap(mapping_, mapping_bytes_);
+    }
+
+    uint8_t* bytes() const { return value_; }
+
+private:
+    GuardedPageBuffer(const GuardedPageBuffer&);
+    GuardedPageBuffer& operator=(const GuardedPageBuffer&);
+    void* mapping_;
+    size_t mapping_bytes_;
+    uint8_t* value_;
+};
+
+void ExerciseGuardPageCell(size_t shard_bytes)
+{
+    GuardedPageBuffer input0(shard_bytes);
+    GuardedPageBuffer input1(shard_bytes);
+    GuardedPageBuffer input2(shard_bytes);
+    GuardedPageBuffer input3(shard_bytes);
+    GuardedPageBuffer output0(shard_bytes);
+    GuardedPageBuffer output1(shard_bytes);
+    GuardedPageBuffer* const inputs[kOriginalCount] = {
+        &input0, &input1, &input2, &input3
+    };
+    std::vector<uint8_t> packed_input(kOriginalCount * shard_bytes);
+    FillInput(&packed_input[0], shard_bytes);
+    const void* original[kOriginalCount] = { NULL, NULL, NULL, NULL };
+    for (unsigned i = 0; i < kOriginalCount; ++i)
+    {
+        std::memcpy(inputs[i]->bytes(),
+            &packed_input[static_cast<size_t>(i) * shard_bytes],
+            shard_bytes);
+        original[i] = inputs[i]->bytes();
+    }
+    std::memset(output0.bytes(), kGuardValue, shard_bytes);
+    std::memset(output1.bytes(), kGuardValue, shard_bytes);
+    void* recovery[kRecoveryCount] = {
+        output0.bytes(), output1.bytes()
+    };
+
+    /* Each shard ends immediately before its own PROT_NONE page.  Any
+       over-read or over-write by the overlapping final vector faults here,
+       including accesses hidden by the ordinary packed slab's next shard. */
+    leopard::backend::AVX2FF8HighEncodeT2K4Packed(
+        original, recovery, shard_bytes);
+    CheckParity(shard_bytes, original, recovery);
+}
+
+#endif
+
 void ExerciseProductionContracts(leo2_context* context)
 {
     const size_t shard_bytes = 65;
@@ -405,10 +494,23 @@ int main()
         Require(leo2_context_thread_count(context) == 2U, 0,
             "production context did not retain two worker threads");
 
+        for (size_t bytes = 1; bytes <= 65; ++bytes)
+            ExerciseCell(context, bytes);
+#if defined(__linux__)
+        for (size_t bytes = 8; bytes <= 65; ++bytes)
+            ExerciseGuardPageCell(bytes);
+#endif
+
+        /* Exercise both sides of the overlapping-vector cutoff after
+           progressively larger complete-vector prefixes. */
         static const size_t sizes[] = {
-            1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
-            127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
-            1984, 2016, 2047, 2048, 2049, 2111, 2112, 2113,
+            79, 80, 81, 94, 95, 96,
+            127, 128, 129, 143, 144, 145, 158, 159, 160,
+            255, 256, 257, 271, 272, 273, 286, 287, 288,
+            527, 528, 529, 542, 543, 544,
+            1023, 1024, 1025, 1039, 1040, 1041, 1054, 1055, 1056,
+            1984, 2016, 2031, 2032, 2033, 2046, 2047, 2048,
+            2049, 2111, 2112, 2113,
             4095, 4096, 4097, 8192, 16384, 16385,
             32768, 65536, 65537, 1024U * 1024U
         };

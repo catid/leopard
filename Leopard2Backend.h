@@ -753,6 +753,9 @@ void AVX2FF8HighEncodeT2PackedTail(
     void* const* recovery,
     uint32_t original_count,
     uint64_t byte_count);
+/* The K=4 generated circuit additionally uses exact 4/8/16-byte vectors and
+   overlapping in-range final vectors, so arbitrary positive byte counts do
+   not require scalar fixed-field multiplication once one vector fits. */
 void AVX2FF8HighEncodeT2K4Packed(
     const void* const* data,
     void* const* recovery,

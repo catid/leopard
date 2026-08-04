@@ -6,6 +6,7 @@
 #include "Leopard2Backend.h"
 #include "LeopardCommon.h"
 
+#include <cstring>
 #include <immintrin.h>
 
 namespace leopard { namespace backend {
@@ -48,6 +49,97 @@ static LEO_FORCE_INLINE uint8_t ProductByte(
     return static_cast<uint8_t>(
         table[value & 15U] ^
         table[kNibbleHalfBytes + (value >> 4)]);
+}
+
+template<size_t Bytes>
+struct SmallVectorIO;
+
+template<>
+struct SmallVectorIO<4U>
+{
+    static LEO_FORCE_INLINE __m128i Load(const uint8_t* source)
+    {
+        uint32_t value;
+        std::memcpy(&value, source, sizeof(value));
+        return _mm_cvtsi32_si128(static_cast<int>(value));
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, __m128i value)
+    {
+        const uint32_t word = static_cast<uint32_t>(_mm_cvtsi128_si32(value));
+        std::memcpy(destination, &word, sizeof(word));
+    }
+};
+
+template<>
+struct SmallVectorIO<8U>
+{
+    static LEO_FORCE_INLINE __m128i Load(const uint8_t* source)
+    {
+        return _mm_loadl_epi64(reinterpret_cast<const __m128i*>(source));
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, __m128i value)
+    {
+        _mm_storel_epi64(reinterpret_cast<__m128i*>(destination), value);
+    }
+};
+
+template<>
+struct SmallVectorIO<16U>
+{
+    static LEO_FORCE_INLINE __m128i Load(const uint8_t* source)
+    {
+        return _mm_loadu_si128(reinterpret_cast<const __m128i*>(source));
+    }
+
+    static LEO_FORCE_INLINE void Store(uint8_t* destination, __m128i value)
+    {
+        _mm_storeu_si128(reinterpret_cast<__m128i*>(destination), value);
+    }
+};
+
+static LEO_FORCE_INLINE __m128i Product128(
+    __m128i data,
+    __m128i low_table,
+    __m128i high_table,
+    __m128i mask)
+{
+    const __m128i low = _mm_shuffle_epi8(
+        low_table, _mm_and_si128(data, mask));
+    const __m128i high = _mm_shuffle_epi8(
+        high_table,
+        _mm_and_si128(_mm_srli_epi64(data, 4), mask));
+    return _mm_xor_si128(low, high);
+}
+
+template<size_t Bytes>
+static LEO_FORCE_INLINE void EncodeSmallVector(
+    const uint8_t* const* input,
+    uint8_t* output0,
+    uint8_t* output1,
+    uint64_t offset,
+    __m128i multiply2_low,
+    __m128i multiply2_high,
+    __m128i multiply4_low,
+    __m128i multiply4_high,
+    __m128i mask)
+{
+    const __m128i a = SmallVectorIO<Bytes>::Load(input[0] + offset);
+    const __m128i b = SmallVectorIO<Bytes>::Load(input[1] + offset);
+    const __m128i c = SmallVectorIO<Bytes>::Load(input[2] + offset);
+    const __m128i d = SmallVectorIO<Bytes>::Load(input[3] + offset);
+    const __m128i common = _mm_xor_si128(
+        Product128(_mm_xor_si128(a, b),
+            multiply2_low, multiply2_high, mask),
+        Product128(_mm_xor_si128(c, d),
+            multiply4_low, multiply4_high, mask));
+    const __m128i parity0 = _mm_xor_si128(
+        _mm_xor_si128(a, c), common);
+    const __m128i parity1 = _mm_xor_si128(
+        _mm_xor_si128(b, d), common);
+    SmallVectorIO<Bytes>::Store(output0 + offset, parity0);
+    SmallVectorIO<Bytes>::Store(output1 + offset, parity1);
 }
 
 static LEO_FORCE_INLINE void EncodeVector(
@@ -139,8 +231,8 @@ LEO2_AVX2_T2_K4_ENTRY void AVX2FF8HighEncodeT2K4Packed(
     if (byte_count >= 32U)
     {
         /* These four fixed tables are invariant across every byte chunk.
-           Keeping them in YMM registers removes four broadcasts per loop
-           without penalizing scalar-only tails shorter than one vector. */
+           Keeping them in YMM registers removes four broadcasts per loop and
+           also supplies the narrower overlapping final-vector paths. */
         const __m256i mask = _mm256_set1_epi8(15);
         const __m256i multiply2_low = Broadcast(multiply2);
         const __m256i multiply2_high =
@@ -156,6 +248,98 @@ LEO2_AVX2_T2_K4_ENTRY void AVX2FF8HighEncodeT2K4Packed(
             offset += 32U;
         }
         while (byte_count - offset >= 32U);
+
+        const uint64_t tail_bytes = byte_count - offset;
+        if (tail_bytes == 0)
+            return;
+
+        /* Every byte is independent, so a final vector may safely overlap
+           the preceding vector.  For a 16..31-byte remainder this keeps the
+           load/store interval wholly inside [0, byte_count) while avoiding
+           the substantially slower scalar nibble-table loop. */
+        if (tail_bytes >= 16U)
+        {
+            EncodeVector(input, output0, output1, byte_count - 32U,
+                multiply2_low, multiply2_high,
+                multiply4_low, multiply4_high, mask);
+            return;
+        }
+
+        const __m128i mask128 = _mm256_castsi256_si128(mask);
+        const __m128i multiply2_low128 =
+            _mm256_castsi256_si128(multiply2_low);
+        const __m128i multiply2_high128 =
+            _mm256_castsi256_si128(multiply2_high);
+        const __m128i multiply4_low128 =
+            _mm256_castsi256_si128(multiply4_low);
+        const __m128i multiply4_high128 =
+            _mm256_castsi256_si128(multiply4_high);
+        if (tail_bytes >= 8U)
+        {
+            EncodeSmallVector<16U>(input, output0, output1, byte_count - 16U,
+                multiply2_low128, multiply2_high128,
+                multiply4_low128, multiply4_high128, mask128);
+            return;
+        }
+        if (tail_bytes >= 4U)
+        {
+            EncodeSmallVector<8U>(input, output0, output1, byte_count - 8U,
+                multiply2_low128, multiply2_high128,
+                multiply4_low128, multiply4_high128, mask128);
+            return;
+        }
+        EncodeSmallVector<4U>(input, output0, output1, byte_count - 4U,
+            multiply2_low128, multiply2_high128,
+            multiply4_low128, multiply4_high128, mask128);
+        return;
+    }
+    else if (byte_count >= 16U)
+    {
+        const __m128i mask = _mm_set1_epi8(15);
+        const __m128i multiply2_low = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(multiply2));
+        const __m128i multiply2_high = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(
+                multiply2 + kNibbleHalfBytes));
+        const __m128i multiply4_low = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(multiply4));
+        const __m128i multiply4_high = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(
+                multiply4 + kNibbleHalfBytes));
+        EncodeSmallVector<16U>(input, output0, output1, 0,
+            multiply2_low, multiply2_high,
+            multiply4_low, multiply4_high, mask);
+        if (byte_count != 16U)
+        {
+            EncodeSmallVector<16U>(input, output0, output1, byte_count - 16U,
+                multiply2_low, multiply2_high,
+                multiply4_low, multiply4_high, mask);
+        }
+        return;
+    }
+    else if (byte_count >= 8U)
+    {
+        const __m128i mask = _mm_set1_epi8(15);
+        const __m128i multiply2_low = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(multiply2));
+        const __m128i multiply2_high = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(
+                multiply2 + kNibbleHalfBytes));
+        const __m128i multiply4_low = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(multiply4));
+        const __m128i multiply4_high = _mm_loadu_si128(
+            reinterpret_cast<const __m128i*>(
+                multiply4 + kNibbleHalfBytes));
+        EncodeSmallVector<8U>(input, output0, output1, 0,
+            multiply2_low, multiply2_high,
+            multiply4_low, multiply4_high, mask);
+        if (byte_count != 8U)
+        {
+            EncodeSmallVector<8U>(input, output0, output1, byte_count - 8U,
+                multiply2_low, multiply2_high,
+                multiply4_low, multiply4_high, mask);
+        }
+        return;
     }
     for (; offset < byte_count; ++offset)
     {

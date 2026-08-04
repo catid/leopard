@@ -1807,6 +1807,9 @@ if(LEO2_BUILD_TESTS)
                 tests/leopard2/test_t2_k4_production.cpp)
             target_include_directories(
                 leopard2_t2_k4_production_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_t2_k4_production_test PRIVATE
+                    LEO2_HAVE_AVX2_BACKEND=1)
             target_link_libraries(leopard2_t2_k4_production_test leopard)
             add_test(NAME leopard2_t2_k4_production
                 COMMAND leopard2_t2_k4_production_test)
