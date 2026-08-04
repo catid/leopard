@@ -46,6 +46,7 @@
 namespace {
 
 static const unsigned kRecoveryCount = 2;
+static const size_t kK4TerminalMaximumBytes = 16U * 1024U * 1024U;
 
 void Require(bool condition, const char* message)
 {
@@ -584,7 +585,8 @@ int main()
             1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
             127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
             1984, 2016, 2047, 2048, 2049, 2111, 2112, 2113,
-            4095, 4096, 4097, 8192, 16384, 16385
+            4095, 4096, 4097, 8192, 16384, 16385,
+            32768, 65536, 65537
         };
         for (unsigned k = 2; k <= 4; ++k)
         {
@@ -592,7 +594,7 @@ int main()
             {
                 const size_t bytes = sizes[i];
                 const bool selected = bytes <= 2048 ||
-                    (k == 4 && bytes <= 16384);
+                    (k == 4 && bytes <= kK4TerminalMaximumBytes);
                 ExercisePackedCell(context, k, bytes, selected);
             }
         }
