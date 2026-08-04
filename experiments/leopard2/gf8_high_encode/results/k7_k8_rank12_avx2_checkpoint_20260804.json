@@ -1,0 +1,143 @@
+{
+  "schema": "leopard2-gf8-k7-k8-rank12-avx2-checkpoint/v1",
+  "created_utc": "2026-08-04T09:30:00Z",
+  "status": "production-implemented-final-authoritative-isolation-pending",
+  "candidate": {
+    "branch": "codex/leopard2",
+    "commit": "d0e5fb73761df062ba9845881957e60e9c327b48",
+    "implementation_commit": "cf3f045",
+    "provenance_commit": "d0e5fb7"
+  },
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "AVX2",
+    "cells": [
+      {"K": 7, "R": 7, "shard_bytes": 1024},
+      {"K": 8, "R": 8, "shard_bytes": 1024}
+    ]
+  },
+  "implementation": {
+    "translation_unit": "Leopard2BackendAVX2T8K8B1024.cpp",
+    "isolated_cmake_target": "leopard2_backend_avx2_t8_k8_b1024",
+    "algorithm": "fixed-register rank-12 GF(2)-linear circuit with AVX2 nibble-table products",
+    "k7": {
+      "product_count": 12,
+      "notes": "Fixed-register generated circuit; no stack spills in the byte loop."
+    },
+    "k8": {
+      "product_count": 12,
+      "product_sources": {
+        "log85": ["1357", "0457", "3467", "2567"],
+        "log17": ["13", "46", "0257", "134567"],
+        "log153": ["1347", "1257", "0357", "4567"]
+      },
+      "source_cse": ["u=I5^I7", "a=I1^I3", "b=I4^I6", "s0=a^u"],
+      "static_loop_counts": {
+        "instructions": 182,
+        "vpshufb": 24,
+        "vpand": 24,
+        "shifts": 12,
+        "vpxor": 75,
+        "table_broadcasts": 6,
+        "input_memory_operands": 36,
+        "output_stores": 8,
+        "stack_spills": 0
+      }
+    },
+    "runtime_guards": [
+      "AVX2 startup known-answer test against the mature transform",
+      "packed full-parity K=R=7/8 and B=1024 selector",
+      "fallback on unaligned, partial-output, overlap, or unsupported shapes"
+    ]
+  },
+  "same_source_performance": {
+    "k8_rank12_global_cse_vs_exact15": {
+      "artifact": "/tmp/leopard-k8-rank12-globalcse-screen-20260804T071500Z",
+      "control_over_candidate": 1.135040013,
+      "hierarchical_95_ci": [1.130866712, 1.139266865]
+    },
+    "k8_source_cse_vs_rank12_global_cse": {
+      "artifact": "/tmp/leopard-k8-rank12-sourcecse-screen-20260804T073500Z",
+      "control_over_candidate": 1.056941478,
+      "hierarchical_95_ci": [1.046337459, 1.066157022],
+      "abba_rounds": 9
+    },
+    "k7_rank12_fixed_register_vs_exact15": {
+      "control_over_candidate": 1.0643369,
+      "hierarchical_95_ci": [1.0552775, 1.0716243]
+    },
+    "k7_base_cse_increment": {
+      "speedup": 1.024049,
+      "hierarchical_95_ci": [1.016481, 1.032179]
+    },
+    "k7_source_reuse_increment": {
+      "speedup": 1.015532,
+      "hierarchical_95_ci": [1.002509, 1.028725]
+    }
+  },
+  "exact_main_comparison": {
+    "baseline_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "frozen_hashes": {
+      "baseline_executable_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+      "baseline_archive_sha256": "ca0f40a4c334b4199e22deab07fc20b0fe36abbe75fce105fbee00b78dff0cc5",
+      "candidate_executable_sha256": "66f63dd4217b50bca641b5b365add7b55a65947b4652b45aa26c399a0d290a92",
+      "candidate_archive_sha256": "34207d90943f7e859a7c87c1a2cf986df157676e60471d5ad92e9a3fd9590ec4"
+    },
+    "diagnostic_abba_v4": {
+      "artifact": "/tmp/leopard-k7k8-final-exact-main-v13-d0e5fb7-v4",
+      "failure_bundle_sha256": "c0084885006487b0a17b84c38abd74a56b2a7685eacbff90778644c678a5865a",
+      "sampling": {"rounds": 3, "iterations": 9, "warmup": 2, "reuse": 8192},
+      "encode_baseline_over_leopard2": {
+        "k7_r7_b1024": {"estimate": 1.2073219473, "student_t_95_ci": [1.1916192403, 1.2232315785]},
+        "k8_r8_b1024": {"estimate": 1.2426167022, "student_t_95_ci": [1.1675606445, 1.3224977014]}
+      },
+      "correctness": "All 24 invocations passed; original, parity, and recovery digests matched for every baseline/candidate pair.",
+      "authoritative": false,
+      "rejection": "Reserved SMT sibling CPU 31 accumulated 5 non-idle jiffies over the approximately 29-minute campaign; the fail-closed runner permits zero."
+    },
+    "additional_rejected_runs": [
+      {
+        "artifact": "/tmp/leopard-k7k8-final-exact-main-v13-d0e5fb7-v2-affinity.json",
+        "reason": "Containment rejected an unprovable same-UID newcomer before a comparison completed."
+      },
+      {
+        "artifact": "/tmp/leopard-k7k8-final-exact-main-v13-d0e5fb7-v3",
+        "reason": "All 24 invocations and digests passed, but sibling CPU 30 accumulated 1 non-idle jiffy."
+      },
+      {
+        "artifact": "/tmp/leopard-k7-final-exact-main-v13-d0e5fb7-v5-affinity.json",
+        "reason": "Containment rejected a process identity race after five K7 invocations."
+      },
+      {
+        "artifact": "/tmp/leopard-k7-final-exact-main-v13-d0e5fb7-v6",
+        "reason": "All K7 invocations completed, but sibling CPU 30 accumulated 2 non-idle jiffies."
+      }
+    ],
+    "disposition": "The measured performance gate has a large repeatable margin, but a zero-sibling-jiffy accepted supervisor binding remains pending. No rejected run is cited as authoritative evidence."
+  },
+  "correctness_gates": {
+    "release": {
+      "tests": ["leopard2_backend_ops", "leopard2_k8r8_b64_terminal", "leopard2_high_direct_production"],
+      "result": "3/3 passed"
+    },
+    "asan_ubsan": {
+      "compiler": "clang++-18",
+      "flags": "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+      "tests": ["leopard2_backend_ops", "leopard2_k8r8_b64_terminal", "leopard2_high_direct_production"],
+      "result": "3/3 passed in 17.61 seconds",
+      "maximum_rss_kib": 324096
+    },
+    "independent_basis_oracle": "All 120 GF(2) source-bit basis vectors for K7/K8 matched the independent generator oracle.",
+    "backend_and_project_closure": "Backend matrix 140 checks and project graph 164/164 passed at the frozen candidate commit."
+  },
+  "bounded_negative_experiments": [
+    "K8 naive rank-12 direct fanout",
+    "K8 no-auxiliary circuit",
+    "K8 reload-log85 schedule",
+    "K8 hand fixed-15 schedule",
+    "K8 prep-log17 schedule",
+    "alignment-only routing",
+    "alternate compiler-flag screens beyond the retained GCC live-range shrinkage flag"
+  ]
+}
