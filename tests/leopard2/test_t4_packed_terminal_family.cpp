@@ -255,7 +255,11 @@ void CheckLegacyParity(
     const std::vector<const void*>& original,
     const std::vector<void*>& recovery)
 {
-    if ((cell.shard_bytes & 63U) != 0)
+    /* The old API intentionally retains its recovery_count <= original_count
+       contract.  R>K neighbors remain valid Leopard2/direct-oracle tests but
+       cannot be submitted to Leopard1 as a compatibility oracle. */
+    if ((cell.shard_bytes & 63U) != 0 ||
+        cell.recovery_count > cell.original_count)
         return;
 
     const unsigned work_count = leo_encode_work_count(
@@ -413,6 +417,10 @@ void ExerciseCell(
 
 void ExercisePromotedMatrix(leo2_context* context)
 {
+    static const size_t k3_bytes[] = { 64, 128, 256, 512, 1024 };
+    for (size_t i = 0; i < sizeof(k3_bytes) / sizeof(k3_bytes[0]); ++i)
+        ExerciseCell(context, Cell{ 3, 3, k3_bytes[i] }, true);
+
     static const size_t bytes[] = { 64, 128, 256, 512 };
     for (unsigned k = 4; k <= 7; ++k)
     {
@@ -439,6 +447,22 @@ void ExercisePromotedMatrix(leo2_context* context)
 void ExerciseNonPromotedCells(leo2_context* context)
 {
     static const Cell cells[] = {
+        { 3, 3, 1 },
+        { 3, 3, 32 },
+        { 3, 3, 63 },
+        { 3, 3, 65 },
+        { 3, 3, 96 },
+        { 3, 3, 127 },
+        { 3, 3, 129 },
+        { 3, 3, 255 },
+        { 3, 3, 257 },
+        { 3, 3, 511 },
+        { 3, 3, 513 },
+        { 3, 3, 1023 },
+        { 3, 3, 1025 },
+        { 3, 3, 2048 },
+        { 3, 4, 64 },
+        { 3, 4, 1024 },
         { 4, 3, 63 },
         { 8, 3, 63 },
         { 8, 4, 63 },
@@ -488,6 +512,7 @@ void ExerciseK8DiagnosticControl(leo2_context* context)
     ExerciseCell(context, Cell{ 8, 4, 1024 }, false);
 
     /* The process-local selector is deliberately confined to K=8. */
+    ExerciseCell(context, Cell{ 3, 3, 1024 }, true);
     ExerciseCell(context, Cell{ 4, 3, 1024 }, true);
     ExerciseCell(context, Cell{ 7, 4, 512 }, true);
 
@@ -661,7 +686,7 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
 
 void ExerciseValidationAtomicity(leo2_context* context, const Cell& cell)
 {
-    RequireCell(cell.recovery_count == 4 &&
+    RequireCell((cell.recovery_count == 3 || cell.recovery_count == 4) &&
             (cell.shard_bytes == 64 || cell.shard_bytes == 512 ||
              cell.shard_bytes == 1024),
         cell, "invalid validation-atomicity fixture");
@@ -762,7 +787,8 @@ void ExerciseValidationAtomicity(leo2_context* context, const Cell& cell)
     SetPackedPointers(
         input.bytes(), output.bytes(), cell, original, recovery);
     ResetOutput(output.bytes(), cell);
-    recovery[3] = recovery[2];
+    recovery[cell.recovery_count - 1U] =
+        recovery[cell.recovery_count - 2U];
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, cell.shard_bytes,
         &original[0], &recovery[0], scratch.data(), scratch_bytes),
@@ -812,6 +838,8 @@ void ExerciseScalarFallbacks()
     Require(leo2_context_create(&options, &context) == LEO2_SUCCESS,
         "create scalar T=4 fallback context");
     static const Cell cells[] = {
+        { 3, 3, 64 },
+        { 3, 3, 1024 },
         { 4, 3, 64 },
         { 5, 4, 128 },
         { 7, 3, 256 },
@@ -858,11 +886,15 @@ int main()
         ExercisePromotedMatrix(context);
         ExerciseNonPromotedCells(context);
         ExerciseK8DiagnosticControl(context);
+        ExerciseForcedTransform(context, Cell{ 3, 3, 64 });
+        ExerciseForcedTransform(context, Cell{ 3, 3, 1024 });
         ExerciseForcedTransform(context, Cell{ 7, 4, 256 });
         ExerciseForcedTransform(context, Cell{ 7, 4, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 128 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 512 });
         ExerciseForcedTransform(context, Cell{ 8, 3, 1024 });
+        ExerciseFallbackLayouts(context, Cell{ 3, 3, 64 });
+        ExerciseFallbackLayouts(context, Cell{ 3, 3, 1024 });
         ExerciseFallbackLayouts(context, Cell{ 4, 3, 64 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 7, 4, 512 });
@@ -870,6 +902,8 @@ int main()
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 256 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 512 });
         ExerciseFallbackLayouts(context, Cell{ 8, 4, 1024 });
+        ExerciseValidationAtomicity(context, Cell{ 3, 3, 64 });
+        ExerciseValidationAtomicity(context, Cell{ 3, 3, 1024 });
         ExerciseValidationAtomicity(context, Cell{ 4, 4, 64 });
         ExerciseValidationAtomicity(context, Cell{ 7, 4, 512 });
         ExerciseValidationAtomicity(context, Cell{ 8, 4, 64 });

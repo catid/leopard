@@ -296,6 +296,10 @@ int main()
         if (result != LEO2_SUCCESS)
             throw std::runtime_error("create production AVX2 context");
 
+        static const size_t k3_bytes[] = { 64, 128, 256, 512, 1024 };
+        for (size_t i = 0; i < sizeof(k3_bytes) / sizeof(k3_bytes[0]); ++i)
+            ExerciseCell(context, Cell{ 3, 3, k3_bytes[i] });
+
         static const size_t bytes[] = { 64, 128, 256, 512 };
         for (unsigned k = 4; k <= 7; ++k)
         {
