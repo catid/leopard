@@ -1,0 +1,145 @@
+{
+  "schema": "leopard2-r1-fixed-avx2-evidence/v1",
+  "date_utc": "2026-08-03",
+  "status": "promoted",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "R": 1,
+    "K_range": [3, 255],
+    "shard_bytes": [64, 256],
+    "operation": "fixed-size register-resident XOR encode and one-loss recovery"
+  },
+  "source": {
+    "candidate_commit": "07391da3aa1a6b1659efa1443891111b0c2adf0c",
+    "candidate_tree": "d1605a1fe143bf2bb7b7f6f34b0eb2cac4e0a12f",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_binaries": {
+    "candidate_and_control_sha256": "95511b91aca34054bc307321f7186903f6914ddaf2833fa178ab8161c8adaa26",
+    "candidate_control_same_inode": true,
+    "exact_main_sha256": "34a73d4481c989cf8e5b881b24c1a066b6bf356a707e01998e9e19d008f2d973"
+  },
+  "raw_artifacts": {
+    "summary": ".research/leopard2/r1-fixed-avx2-07391da-v4b/summary.json",
+    "summary_sha256": "1dddb48c26fb3936973d8d472f65b50b4b421ff6bd426acf8c51eb0d60a4d14c",
+    "manifest": ".research/leopard2/r1-fixed-avx2-07391da-v4b/manifest.json",
+    "manifest_sha256": "d976a82ac769cecab6954f7d763dd7da6cf9b48f6afb08ba38ebba900cb60ead"
+  },
+  "campaign": {
+    "runner": "experiments/leopard2/r1_xor/run_fixed_avx2_abba.py",
+    "rounds": 5,
+    "iterations_per_process": 5,
+    "warmup_iterations": 2,
+    "cells": 116,
+    "target_cells": 84,
+    "inert_control_cells": 32,
+    "processes": 4640,
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "child_address_space_bytes": 268435456,
+    "all_rounds_accepted": true,
+    "all_workload_digests_matched": true,
+    "all_reserved_sibling_nonidle_jiffies_zero": true,
+    "contrast": "same-binary BAAB/ABBA candidate versus mature reducer, interleaved with exact-main MAAM/AMMA",
+    "statistics": "geometric speedup with Student-t 95% interval over independent round log contrasts"
+  },
+  "promotion_gates": {
+    "target_metrics_with_ci95_low_at_least_1_05": "420/420",
+    "control_metrics_checked": 160,
+    "control_metrics_with_credible_regression_over_2_percent": 0,
+    "target_metrics": [
+      "batch_encode",
+      "one_shot_encode",
+      "decode_execution",
+      "decode_reuse_amortized",
+      "one_shot_decode"
+    ],
+    "target_loss_positions": ["first", "middle", "last"],
+    "control_regions": {
+      "K": [2],
+      "shard_bytes": [128, 512]
+    }
+  },
+  "representative_geometric_speedups": [
+    {
+      "K": 3,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 1.116913, "one_shot_encode": 1.113008, "decode_execution": 1.132744, "one_shot_decode": 1.125635},
+      "candidate_vs_exact_main": {"batch_encode": 0.395444, "one_shot_encode": 0.391784, "one_shot_decode": 0.431458}
+    },
+    {
+      "K": 3,
+      "bytes": 256,
+      "candidate_vs_mature": {"batch_encode": 1.122356, "one_shot_encode": 1.097966, "decode_execution": 1.164201, "one_shot_decode": 1.173985},
+      "candidate_vs_exact_main": {"batch_encode": 0.479309, "one_shot_encode": 0.475718, "one_shot_decode": 0.578177}
+    },
+    {
+      "K": 8,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 1.370322, "one_shot_encode": 1.354415, "decode_execution": 1.342274, "one_shot_decode": 1.321316},
+      "candidate_vs_exact_main": {"batch_encode": 0.610551, "one_shot_encode": 0.611052, "one_shot_decode": 0.573612}
+    },
+    {
+      "K": 8,
+      "bytes": 256,
+      "candidate_vs_mature": {"batch_encode": 1.422325, "one_shot_encode": 1.388681, "decode_execution": 1.296367, "one_shot_decode": 1.265334},
+      "candidate_vs_exact_main": {"batch_encode": 0.866149, "one_shot_encode": 0.850042, "one_shot_decode": 0.802082}
+    },
+    {
+      "K": 24,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 1.734016, "one_shot_encode": 1.716431, "decode_execution": 1.527158, "one_shot_decode": 1.500614},
+      "candidate_vs_exact_main": {"batch_encode": 0.998587, "one_shot_encode": 1.001144, "one_shot_decode": 0.791723}
+    },
+    {
+      "K": 24,
+      "bytes": 256,
+      "candidate_vs_mature": {"batch_encode": 1.672384, "one_shot_encode": 1.646724, "decode_execution": 1.404408, "one_shot_decode": 1.384034},
+      "candidate_vs_exact_main": {"batch_encode": 1.361105, "one_shot_encode": 1.353712, "one_shot_decode": 1.025681}
+    },
+    {
+      "K": 32,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 1.863447, "one_shot_encode": 1.905166, "decode_execution": 1.576760, "one_shot_decode": 1.542675},
+      "candidate_vs_exact_main": {"batch_encode": 1.198143, "one_shot_encode": 1.199215, "one_shot_decode": 0.860139}
+    },
+    {
+      "K": 32,
+      "bytes": 256,
+      "candidate_vs_mature": {"batch_encode": 1.716918, "one_shot_encode": 1.685065, "decode_execution": 1.399157, "one_shot_decode": 1.411702},
+      "candidate_vs_exact_main": {"batch_encode": 1.456798, "one_shot_encode": 1.448244, "one_shot_decode": 1.074866}
+    },
+    {
+      "K": 64,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 2.354658, "one_shot_encode": 2.343618, "decode_execution": 1.794126, "one_shot_decode": 1.747840},
+      "candidate_vs_exact_main": {"batch_encode": 1.629285, "one_shot_encode": 1.614678, "one_shot_decode": 1.147972}
+    },
+    {
+      "K": 128,
+      "bytes": 256,
+      "candidate_vs_mature": {"batch_encode": 1.874032, "one_shot_encode": 1.861574, "decode_execution": 1.551762, "one_shot_decode": 1.527945},
+      "candidate_vs_exact_main": {"batch_encode": 1.754243, "one_shot_encode": 1.748680, "one_shot_decode": 1.162127}
+    },
+    {
+      "K": 255,
+      "bytes": 64,
+      "candidate_vs_mature": {"batch_encode": 2.435573, "one_shot_encode": 2.436557, "decode_execution": 1.710858, "one_shot_decode": 1.705728},
+      "candidate_vs_exact_main": {"batch_encode": 2.055885, "one_shot_encode": 2.062736, "one_shot_decode": 1.248834}
+    }
+  ],
+  "correctness_and_safety": {
+    "release_focused_ctest": "7/7 passed: backend_ops, context_backends, r1_xor, public_api_contract, batch_aliasing, legacy_golden, benchmark_json_regression",
+    "asan_ubsan_focused_ctest": "3/3 passed: backend_ops, r1_xor, public_api_contract",
+    "field_builds": "GF8-only and GF16-only library builds passed",
+    "in_place_gfni_diagnostic": "r1_xor and backend_ops passed 2/2",
+    "assembly": "fixed64/fixed256 contain no EVEX, ZMM, mask, vector-stack references, or calls; fixed256 executes eight final stores and fixed64 executes two on every reachable public path"
+  },
+  "conclusion": {
+    "promotion": "Enable the fixed B64/B256 pure-AVX2 reducer for the full public K=3..255 range.",
+    "main_residual": "The byte reducer is no longer the bottleneck. Exact-main losses remain at small K: encode reaches parity near K=24 at B64 and wins at K=24/B256 or K=31+, while one-shot decode reaches parity around K=31/B256, K=32/B256, or K=63/B64.",
+    "next_work": "Profile and reduce public validation, object traversal, and one-shot plan/setup costs without weakening error, overlap, or aliasing semantics."
+  }
+}
