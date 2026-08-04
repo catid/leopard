@@ -577,7 +577,8 @@ enum TerminalR1Shape : uint8_t
        name another single-shape terminal. */
     kTerminalT8K8R8 = 3,
     kTerminalT2K4R2 = 4,
-    kTerminalR1K3PlusAVX2Xor = 5
+    kTerminalR1K3PlusAVX2Xor = 5,
+    kTerminalR1K3PlusAVX2FixedXor = 6
 };
 
 static const uint32_t kCodecR1SmallReductionModeFlag = UINT32_C(0x80000000);
@@ -955,6 +956,7 @@ static volatile uint32_t g_cauchy_log_reuse_mode =
 #ifdef LEO_HAS_FF8
 static volatile uint32_t g_r1_early_dispatch_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_R1_EARLY_DISPATCH;
+static std::atomic<unsigned> g_r1_fixed_avx2_xor_mode(1U);
 #endif
 
 #ifndef LEO_HAS_FF8
@@ -5613,6 +5615,10 @@ static uint8_t ClassifyTerminalR1Shape(const leo2_codec* codec)
         codec->context->ops->xor_memory_2to1 &&
         codec->context->ops->xor_memory_sources)
     {
+        if (g_r1_fixed_avx2_xor_mode.load(std::memory_order_acquire) == 1U &&
+            codec->context->ops->xor_memory_sources_fixed64 &&
+            codec->context->ops->xor_memory_sources_fixed256)
+            return kTerminalR1K3PlusAVX2FixedXor;
         return kTerminalR1K3PlusAVX2Xor;
     }
 #endif
@@ -5758,7 +5764,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2R1EarlyEncodeEligible(
     const leo2_codec* codec)
 {
     if (!codec ||
-        codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor)
+        (codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor &&
+         codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2FixedXor))
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
@@ -5771,12 +5778,85 @@ static LEO_FORCE_INLINE bool IsGF8AVX2R1EarlyDecodeEligible(
     const leo2_codec* codec)
 {
     if (!codec ||
-        codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor)
+        (codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2Xor &&
+         codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2FixedXor))
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_decode_mode == LEO2_TEST_DECODE_AUTO;
 #else
     return true;
+#endif
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2R1FixedXorEligible(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    bool decoding)
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    if (shard_bytes != 64 && shard_bytes != 256)
+        return false;
+    if (!codec ||
+        codec->terminal_r1_t8_shape != kTerminalR1K3PlusAVX2FixedXor)
+        return false;
+    if (!(decoding ? IsGF8AVX2R1EarlyDecodeEligible(codec)
+                   : IsGF8AVX2R1EarlyEncodeEligible(codec)))
+        return false;
+    const leopard::backend::Ops* const ops = codec->context
+        ? codec->context->ops : NULL;
+    if (!ops || !(shard_bytes == 64
+            ? ops->xor_memory_sources_fixed64
+            : ops->xor_memory_sources_fixed256))
+        return false;
+    /* The immutable terminal byte was classified with the complete public
+       profile/field/layout/count and resolved-Ops predicate.  Do not reload
+       those fields on every 64-byte call merely to repeat setup-time work. */
+    return true;
+#else
+    (void)codec;
+    (void)shard_bytes;
+    (void)decoding;
+    return false;
+#endif
+}
+
+static LEO_FORCE_INLINE bool TryExecuteGF8AVX2R1FixedXor(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    bool decoding,
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source)
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    if (!IsGF8AVX2R1FixedXorEligible(codec, shard_bytes, decoding))
+        return false;
+    const leopard::backend::Ops* const ops = codec->context
+        ? codec->context->ops : NULL;
+    const leopard::backend::XorMemorySourcesFixed fixed = !ops
+        ? NULL
+        : (shard_bytes == 64 ? ops->xor_memory_sources_fixed64
+                             : ops->xor_memory_sources_fixed256);
+    /* Test hooks may replace a context's qualified Ops table after codec
+       construction.  Fail back to the mature reducer if that replacement
+       removes the callback cached by the terminal classification. */
+    if (!fixed)
+        return false;
+    fixed(destination, initial_source, sources, source_count,
+        excluded_source);
+    return true;
+#else
+    (void)codec;
+    (void)shard_bytes;
+    (void)decoding;
+    (void)destination;
+    (void)initial_source;
+    (void)sources;
+    (void)source_count;
+    (void)excluded_source;
+    return false;
 #endif
 }
 
@@ -6991,7 +7071,6 @@ static void ExecuteSingleSideEncode(
     const void* const* original,
     void* const* recovery)
 {
-    const leopard::backend::Ops& ops = *codec->context->ops;
     if (codec->profile == LEO2_PROFILE_LOW_V1)
     {
         LEO_DEBUG_ASSERT(codec->original_count == 1);
@@ -7005,6 +7084,11 @@ static void ExecuteSingleSideEncode(
     LEO_DEBUG_ASSERT(codec->recovery_count == 1);
     if (!recovery[0])
         return;
+    if (TryExecuteGF8AVX2R1FixedXor(codec, shard_bytes, false,
+            recovery[0], original[0], original + 1,
+            codec->original_count - 1, codec->original_count - 1))
+        return;
+    const leopard::backend::Ops& ops = *codec->context->ops;
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
         const leopard::backend::XorMemorySources reduce =
@@ -7037,6 +7121,10 @@ static LEO_FORCE_INLINE void ExecuteDirectXorDecode(
     const void* const* recovery,
     void* const* restored_original)
 {
+    if (TryExecuteGF8AVX2R1FixedXor(codec, shard_bytes, true,
+            restored_original[missing], recovery[0], original,
+            codec->original_count, missing))
+        return;
     const leopard::backend::Ops& ops = *codec->context->ops;
     if (UseCoarseR1Xor(codec, shard_bytes))
     {
@@ -13130,6 +13218,29 @@ bool SetR1SmallReductionModeForDiagnostics(unsigned mode)
     return true;
 }
 
+bool SetR1FixedAVX2XorModeForDiagnostics(unsigned mode)
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND)
+    if (mode > 1U)
+        return false;
+    g_r1_fixed_avx2_xor_mode.store(mode, std::memory_order_release);
+    return true;
+#else
+    (void)mode;
+    return false;
+#endif
+}
+
+bool R1FixedAVX2XorCandidateEnabledForDiagnostics()
+{
+#if defined(LEO_HAS_FF8) && defined(LEO2_HAVE_AVX2_BACKEND) && \
+    !defined(LEO2_GFNI_VARIANT)
+    return true;
+#else
+    return false;
+#endif
+}
+
 bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
 {
     if (mode > 3U)
@@ -13343,6 +13454,9 @@ bool GetCodecR1ReductionPathInfo(
 
     const leopard::backend::Ops& ops = *codec->context->ops;
     const auto select_path = [&](bool decoding) {
+        if (IsGF8AVX2R1FixedXorEligible(
+                codec, static_cast<size_t>(shard_bytes), decoding))
+            return kR1ReductionFixedAVX2;
         if (UseCoarseR1Xor(codec, static_cast<size_t>(shard_bytes)))
         {
             const leopard::backend::XorMemorySources reduction =

@@ -283,6 +283,17 @@ bool SetK9R6R8B256TerminalEnabledForDiagnostics(bool enabled);
 bool SetR1SmallReductionModeForDiagnostics(unsigned mode);
 
 /*
+    Select the fixed-size AVX2 R=1 reducer for codecs created after this call.
+    Existing codecs retain their immutable setup-time classification.
+    This is diagnostic process-global state; callers must serialize changes
+    with codec creation when deterministic attribution is required.
+*/
+bool SetR1FixedAVX2XorModeForDiagnostics(unsigned mode);
+
+/* Build provenance for the isolated fixed-size AVX2 R=1 candidate. */
+bool R1FixedAVX2XorCandidateEnabledForDiagnostics();
+
+/*
     Same-executable attribution for ephemeral one-shot decode-plan setup.
     Mode zero prepares the reusable AUTO metadata superset; mode one uses the
     call's exact shard byte count to prepare only the transform route that
@@ -374,7 +385,8 @@ enum R1ReductionPath
     kR1ReductionDense,
     kR1ReductionCoarse,
     kR1ReductionFusedFinal,
-    kR1ReductionGroup4
+    kR1ReductionGroup4,
+    kR1ReductionFixedAVX2
 };
 
 struct CodecR1ReductionPathInfo

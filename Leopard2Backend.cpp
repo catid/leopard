@@ -2721,6 +2721,94 @@ static bool TestXor(const Ops& ops)
     return true;
 }
 
+static bool TestFixedR1Xor(const Ops& ops)
+{
+    if ((ops.xor_memory_sources_fixed64 != NULL) !=
+            (ops.xor_memory_sources_fixed256 != NULL))
+        return false;
+    if (!ops.xor_memory_sources_fixed64)
+        return true;
+
+    static const uint32_t kMaximumSourceCount = 31;
+    static const uint32_t source_counts[] = { 2, 3, 7, 9, 31 };
+    static const size_t byte_counts[] = { 64, 256 };
+    uint8_t initial[258];
+    uint8_t initial_before[258];
+    uint8_t source_data[kMaximumSourceCount][258];
+    uint8_t source_data_before[kMaximumSourceCount][258];
+    uint8_t output[258];
+    uint8_t expected[258];
+    const void* sources[kMaximumSourceCount];
+
+    for (size_t byte = 0; byte < sizeof(initial); ++byte)
+    {
+        initial[byte] = static_cast<uint8_t>(byte * 101U + 29U);
+        for (uint32_t source = 0; source < kMaximumSourceCount; ++source)
+        {
+            source_data[source][byte] = static_cast<uint8_t>(
+                byte * (37U + source * 6U) + source * 53U + 11U);
+        }
+    }
+    std::memcpy(initial_before, initial, sizeof(initial));
+    std::memcpy(source_data_before, source_data, sizeof(source_data));
+
+    for (size_t count_i = 0;
+         count_i < sizeof(byte_counts) / sizeof(byte_counts[0]); ++count_i)
+    {
+        const size_t bytes = byte_counts[count_i];
+        const XorMemorySourcesFixed fixed = bytes == 64
+            ? ops.xor_memory_sources_fixed64
+            : ops.xor_memory_sources_fixed256;
+        for (size_t source_count_i = 0;
+             source_count_i <
+                 sizeof(source_counts) / sizeof(source_counts[0]);
+             ++source_count_i)
+        {
+            const uint32_t source_count = source_counts[source_count_i];
+            const uint32_t exclusions[] = {
+                source_count, 0, source_count / 2, source_count - 1
+            };
+            for (size_t exclusion_i = 0;
+                 exclusion_i < sizeof(exclusions) / sizeof(exclusions[0]);
+                 ++exclusion_i)
+            {
+                const uint32_t excluded = exclusions[exclusion_i];
+                for (uint32_t source = 0; source < source_count; ++source)
+                    sources[source] = source_data[source] + 1;
+                /* Read-only source aliasing is part of the public contract. */
+                sources[source_count - 1] = source_data[0] + 1;
+                if (excluded < source_count)
+                    sources[excluded] = NULL;
+
+                std::memset(output, 0xa5, sizeof(output));
+                std::memset(expected, 0xa5, sizeof(expected));
+                for (size_t byte = 0; byte < bytes; ++byte)
+                {
+                    uint8_t value = initial[byte + 1];
+                    for (uint32_t source = 0;
+                         source < source_count; ++source)
+                    {
+                        if (source == excluded)
+                            continue;
+                        value ^= static_cast<const uint8_t*>(
+                            sources[source])[byte];
+                    }
+                    expected[byte + 1] = value;
+                }
+
+                fixed(output + 1, initial + 1, sources,
+                    source_count, excluded);
+                if (std::memcmp(output, expected, sizeof(output)) != 0 ||
+                    std::memcmp(initial, initial_before, sizeof(initial)) != 0 ||
+                    std::memcmp(source_data, source_data_before,
+                        sizeof(source_data)) != 0)
+                    return false;
+            }
+        }
+    }
+    return true;
+}
+
 static bool TestCopyMemory(const Ops& ops)
 {
     if (!ops.copy_memory)
@@ -3057,7 +3145,7 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
 {
     if (!ops.name || !ops.xor_memory || !ops.xor_memory_2to1 ||
         !ops.xor_memory_sources || !ops.xor_memory4 || !TestXor(ops) ||
-        !TestCopyMemory(ops))
+        !TestFixedR1Xor(ops) || !TestCopyMemory(ops))
         return false;
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=
         (ops.copy_memory != NULL))
@@ -3086,6 +3174,11 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (expected_pure_avx2_callbacks !=
         (ops.ff8_walsh_locator != NULL))
         return false;
+    if (expected_pure_avx2_callbacks !=
+            (ops.xor_memory_sources_fixed64 != NULL) ||
+        expected_pure_avx2_callbacks !=
+            (ops.xor_memory_sources_fixed256 != NULL))
+        return false;
 #else
     if (ops.xor_memory_sources_fused_final)
         return false;
@@ -3094,6 +3187,9 @@ static bool TestOps(const Ops& ops, const InitializeArgs& args)
     if (ops.ff8_high_encode_t4_batch)
         return false;
     if (ops.ff8_walsh_locator)
+        return false;
+    if (ops.xor_memory_sources_fixed64 ||
+        ops.xor_memory_sources_fixed256)
         return false;
 #endif
     if ((ops.kind == LEO2_BACKEND_AVX2 || ops.kind == LEO2_BACKEND_GFNI) !=

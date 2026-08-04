@@ -133,6 +133,13 @@ typedef void (*XorMemorySources)(
     uint32_t source_count,
     uint64_t byte_count);
 
+typedef void (*XorMemorySourcesFixed)(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source);
+
 // XOR a small dense array of read-only inputs into a fresh destination.  The
 // destination is disjoint from every source; sources may alias one another.
 // This optional operation is used only when the selected backend has a
@@ -588,6 +595,10 @@ struct Ops
     // Optional pure-AVX2 active-parent locator construction.  Scalar and
     // other SIMD backends retain the established field implementation.
     FF8WalshLocator ff8_walsh_locator;
+    // Optional paired pure-AVX2 fixed-payload R=1 reductions.  Both callbacks
+    // must be published together after their startup known-answer test.
+    XorMemorySourcesFixed xor_memory_sources_fixed64;
+    XorMemorySourcesFixed xor_memory_sources_fixed256;
 };
 
 struct X86Features
@@ -660,6 +671,30 @@ void AVX2XorMemorySourcesGroup4(
     const void* const* sources,
     uint32_t source_count,
     uint64_t byte_count);
+
+/*
+    Register-resident R=1 reductions for the two qualified tiny payloads.
+    The caller has already proved that destination is disjoint from the
+    read-only inputs.  excluded_source equals source_count for dense encoding;
+    for one-loss decoding it identifies the sole null source.  Splitting the
+    loop around that known index lets the same arithmetic serve both paths
+    without a temporary pointer array or a branch per source.  These concrete
+    entries are published only by the pure AVX2 object and are called only
+    after runtime qualification.
+*/
+void AVX2XorMemorySourcesFixed64(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source);
+
+void AVX2XorMemorySourcesFixed256(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source);
 #endif
 
 #if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \

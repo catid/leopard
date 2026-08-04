@@ -1281,6 +1281,7 @@ void test_k2_avx2_terminal_contract(leo2_backend backend)
 void test_r1_early_dispatch_policy()
 {
     using leopard2_internal::ShouldUseGF8AVX2LegacyHighR1EarlyDispatch;
+    using leopard2_internal::ShouldUseGF8AVX2LegacyHighR1FixedXor;
     require(ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
             LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
@@ -1342,6 +1343,40 @@ void test_r1_early_dispatch_policy()
                 LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
                 3, 1, 2),
         "R=1 early dispatch captured another redundancy geometry");
+
+    require(ShouldUseGF8AVX2LegacyHighR1FixedXor(
+            LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            3, 1, 1, 64) &&
+            ShouldUseGF8AVX2LegacyHighR1FixedXor(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                255, 1, 1, 256),
+        "fixed AVX2 R=1 dispatch omitted an exact byte/count boundary");
+    const uint64_t fixed_byte_controls[] = { 1, 63, 65, 255, 257, 1024 };
+    for (size_t i = 0;
+         i < sizeof(fixed_byte_controls) / sizeof(fixed_byte_controls[0]);
+         ++i)
+    {
+        require(!ShouldUseGF8AVX2LegacyHighR1FixedXor(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                3, 1, 1, fixed_byte_controls[i]),
+            "fixed AVX2 R=1 dispatch escaped its exact byte cells");
+    }
+    require(!ShouldUseGF8AVX2LegacyHighR1FixedXor(
+            LEO2_PROFILE_LOW_V1, LEO2_FIELD_GF8,
+            LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+            3, 1, 1, 64) &&
+            !ShouldUseGF8AVX2LegacyHighR1FixedXor(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_GFNI, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                3, 1, 1, 256) &&
+            !ShouldUseGF8AVX2LegacyHighR1FixedXor(
+                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                LEO2_BACKEND_AVX2, LEO2_SHARD_LAYOUT_NATIVE_V1,
+                2, 1, 1, 64),
+        "fixed AVX2 R=1 dispatch captured a fallback family");
 }
 
 void test_r1_early_one_item_encode_batch(leo2_backend backend)
@@ -1899,6 +1934,34 @@ void test_r1_small_reduction_diagnostic()
         "R=1 small-reduction mode accepted an invalid value");
     if (!public_backend_available(LEO2_BACKEND_AVX2))
         return;
+    const bool fixed_enabled =
+        R1FixedAVX2XorCandidateEnabledForDiagnostics();
+    const auto fixed_or = [fixed_enabled](R1ReductionPath fallback) {
+        return fixed_enabled ? kR1ReductionFixedAVX2 : fallback;
+    };
+
+    require(!SetR1FixedAVX2XorModeForDiagnostics(2),
+        "fixed AVX2 R=1 mode accepted an invalid value");
+    R1Fixture fixed_captured_on(LEO2_BACKEND_AVX2, 3, 64, false,
+        LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
+    require_r1_reduction_paths(fixed_captured_on.codec, 64, false,
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
+    require(SetR1FixedAVX2XorModeForDiagnostics(0),
+        "cannot disable fixed AVX2 R=1 mode");
+    require_r1_reduction_paths(fixed_captured_on.codec, 64, false,
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
+    R1Fixture fixed_captured_off(LEO2_BACKEND_AVX2, 3, 64, false,
+        LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
+    require_r1_reduction_paths(fixed_captured_off.codec, 64, false,
+        kR1ReductionPairwise, kR1ReductionPairwise);
+    require(SetR1FixedAVX2XorModeForDiagnostics(1),
+        "cannot re-enable fixed AVX2 R=1 mode");
+    require_r1_reduction_paths(fixed_captured_off.codec, 64, false,
+        kR1ReductionPairwise, kR1ReductionPairwise);
+    R1Fixture fixed_captured_on_again(LEO2_BACKEND_AVX2, 3, 64, false,
+        LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
+    require_r1_reduction_paths(fixed_captured_on_again.codec, 64, false,
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
 
     const uint32_t off_counts[] = { 2, 4, 8 };
     for (size_t count_i = 0;
@@ -1908,7 +1971,7 @@ void test_r1_small_reduction_diagnostic()
             false, LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
             off_counts[count_i] / 2U);
         const R1ReductionPath expected = off_counts[count_i] == 2
-            ? kR1ReductionK2Terminal : kR1ReductionPairwise;
+            ? kR1ReductionK2Terminal : fixed_or(kR1ReductionPairwise);
         require_r1_reduction_paths(fixture.codec, 256, false,
             expected, expected);
         execute_and_check_decode(fixture);
@@ -1950,7 +2013,8 @@ void test_r1_small_reduction_diagnostic()
             LEO2_SHARD_LAYOUT_NATIVE_V1, 2);
         require_r1_reduction_paths(fixture.codec,
             production_k4_control_sizes[i], false,
-            kR1ReductionPairwise, kR1ReductionPairwise);
+            fixed_or(kR1ReductionPairwise),
+            fixed_or(kR1ReductionPairwise));
         execute_and_check_decode(fixture);
     }
 
@@ -1978,8 +2042,11 @@ void test_r1_small_reduction_diagnostic()
         const ProductionCoarseCase& c = production_coarse_cases[i];
         R1Fixture fixture(LEO2_BACKEND_AVX2, c.k, c.bytes, false,
             LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, c.k / 2U);
+        const R1ReductionPath expected =
+            (c.bytes == 64 || c.bytes == 256)
+                ? fixed_or(c.expected) : c.expected;
         require_r1_reduction_paths(fixture.codec, c.bytes, false,
-            c.expected, c.expected);
+            expected, expected);
         execute_and_check_decode(fixture);
     }
 
@@ -1988,21 +2055,22 @@ void test_r1_small_reduction_diagnostic()
     R1Fixture captured_off(LEO2_BACKEND_AVX2, 3, 256, false,
         LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
     require_r1_reduction_paths(captured_off.codec, 256, false,
-        kR1ReductionPairwise, kR1ReductionPairwise);
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
     require(SetR1SmallReductionModeForDiagnostics(1),
         "cannot enable R=1 small-reduction mode");
     require_r1_reduction_paths(captured_off.codec, 256, false,
-        kR1ReductionPairwise, kR1ReductionPairwise);
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
     R1Fixture captured_on(LEO2_BACKEND_AVX2, 3, 256, false,
         LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
     require(SetR1SmallReductionModeForDiagnostics(0),
         "cannot disable R=1 small-reduction mode");
     require_r1_reduction_paths(captured_on.codec, 256, true,
-        kR1ReductionFusedFinal, kR1ReductionFusedFinal);
+        fixed_or(kR1ReductionFusedFinal),
+        fixed_or(kR1ReductionFusedFinal));
     R1Fixture captured_off_again(LEO2_BACKEND_AVX2, 3, 256, false,
         LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, 1);
     require_r1_reduction_paths(captured_off_again.codec, 256, false,
-        kR1ReductionPairwise, kR1ReductionPairwise);
+        fixed_or(kR1ReductionPairwise), fixed_or(kR1ReductionPairwise));
 
     require(SetR1SmallReductionModeForDiagnostics(1),
         "cannot re-enable R=1 small-reduction mode");
@@ -2043,8 +2111,12 @@ void test_r1_small_reduction_diagnostic()
                 candidate_counts[count_i], exact_sizes[size_i], false,
                 LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
                 candidate_counts[count_i] / 2U);
+            const R1ReductionPath expected =
+                (exact_sizes[size_i] == 64 || exact_sizes[size_i] == 256)
+                    ? fixed_or(candidate_paths[count_i])
+                    : candidate_paths[count_i];
             require_r1_reduction_paths(fixture.codec, exact_sizes[size_i],
-                true, candidate_paths[count_i], candidate_paths[count_i]);
+                true, expected, expected);
             execute_and_check_decode(fixture);
         }
     }
@@ -2060,7 +2132,8 @@ void test_r1_small_reduction_diagnostic()
                 LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1,
                 missing_positions[missing_i]);
             require_r1_reduction_paths(fixture.codec, 256, true,
-                candidate_paths[count_i], candidate_paths[count_i]);
+                fixed_or(candidate_paths[count_i]),
+                fixed_or(candidate_paths[count_i]));
             execute_and_check_decode(fixture);
         }
     }
@@ -2110,7 +2183,8 @@ void test_r1_small_reduction_diagnostic()
     require_r1_reduction_paths(k8.codec, 1024, true,
         kR1ReductionCoarse, kR1ReductionCoarse);
 
-    /* K=1/5/6/7 and every non-AVX2 backend retain their mature policies. */
+    /* K=1 retains its copy terminal.  K=5/6/7 exercise the fixed reducer,
+       while every non-AVX2 backend retains its mature policy. */
     R1Fixture k1(LEO2_BACKEND_AVX2, 1, 256, false, LEO2_FIELD_GF8,
         LEO2_SHARD_LAYOUT_NATIVE_V1);
     require_r1_reduction_paths(k1.codec, 256, true,
@@ -2120,7 +2194,8 @@ void test_r1_small_reduction_diagnostic()
         R1Fixture fixture(LEO2_BACKEND_AVX2, k, 256, false,
             LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, k / 2U);
         require_r1_reduction_paths(fixture.codec, 256, true,
-            kR1ReductionPairwise, kR1ReductionPairwise);
+            fixed_or(kR1ReductionPairwise),
+            fixed_or(kR1ReductionPairwise));
     }
 
     const leo2_backend controls[] = {
@@ -2240,6 +2315,7 @@ int main()
             "final_remainder_k=7,12..15,20..23 "
             "group4_encode_k=25..252@4096B "
             "group4_decode_k=41..252@4096B "
+            "fixed_avx2_dispatch_range_k=3..255@64,256B "
             "null_boundaries=0,7,8,15,16,last "
             "batch=2,8,64 batch_k=3,5,6,7,9,129 "
             "batch_bytes=4096,4097 "

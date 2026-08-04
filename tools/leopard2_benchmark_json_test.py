@@ -35,7 +35,7 @@ PRODUCTION_DECODE_PATH_RULE_PAIRS = frozenset({
 })
 R1_REDUCTION_PATHS = frozenset({
     "not_applicable", "k1_copy", "k2_terminal", "pairwise", "dense",
-    "coarse", "fused_final", "group4",
+    "coarse", "fused_final", "group4", "fixed_avx2",
 })
 R1_TIMED_ENCODE_API = (
     "leo2_encode_batch:item_count=1:no_preflight_scratch")
@@ -44,10 +44,16 @@ R1_TIMED_REUSED_DECODE_API = (
     "leo2_decode_plan_execute_batch:item_count=1:"
     "no_preflight_scratch:one_loss_direct_xor")
 R1_TIMED_ONE_SHOT_DECODE_API = "leo2_decode:one_loss"
+R1_FIXED_AVX2_SELECTOR_CONTRACT = (
+    "LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,B=64|256,"
+    "native_layout,auto_encode_decode")
 ONE_SHOT_SCHEMAS = frozenset({
     "leopard2-benchmark-v8", "leopard2-benchmark-v9",
     "leopard2-benchmark-v12", "leopard2-benchmark-v15",
-    "leopard2-benchmark-v16",
+    "leopard2-benchmark-v16", "leopard2-benchmark-v23",
+})
+R1_SCHEMAS = frozenset({
+    "leopard2-benchmark-v12", "leopard2-benchmark-v23",
 })
 TRANSIENT_PLAN_SCHEMAS = frozenset({
     "leopard2-benchmark-v15", "leopard2-benchmark-v16",
@@ -346,6 +352,7 @@ def run(
     disable_k9r5_b256_terminal: bool = False,
     disable_k9r6r8_b256_terminal: bool = False,
     r1_small_reduction_mode: int | None = None,
+    r1_fixed_avx2_mode: int | None = None,
     one_shot_plan_setup_mode: int | None = None,
     gf8_avx2_walsh_locator_mode: int | None = None,
     *,
@@ -357,6 +364,13 @@ def run(
             (type(r1_small_reduction_mode) is int and
              r1_small_reduction_mode in {0, 1}),
             "R=1 small-reduction mode must be absent, zero, or one")
+    require(r1_fixed_avx2_mode is None or
+            (type(r1_fixed_avx2_mode) is int and
+             r1_fixed_avx2_mode in {0, 1}),
+            "fixed AVX2 R=1 mode must be absent, zero, or one")
+    require(r1_small_reduction_mode is None or
+            r1_fixed_avx2_mode is None,
+            "R=1 diagnostic modes must be mutually exclusive")
     require(one_shot_plan_setup_mode is None or
             (type(one_shot_plan_setup_mode) is int and
              one_shot_plan_setup_mode in {0, 1, 2, 3}),
@@ -369,6 +383,7 @@ def run(
         output = Path(temporary) / "result.json"
         diagnostic_avx2 = (
             r1_small_reduction_mode is not None or
+            r1_fixed_avx2_mode is not None or
             one_shot_plan_setup_mode is not None or
             gf8_avx2_walsh_locator_mode is not None)
         field = "gf8" if diagnostic_avx2 else "auto"
@@ -400,6 +415,10 @@ def run(
             command.extend((
                 "--r1-small-reduction-mode",
                 str(r1_small_reduction_mode)))
+        if r1_fixed_avx2_mode is not None:
+            command.extend((
+                "--r1-fixed-avx2-mode",
+                str(r1_fixed_avx2_mode)))
         if one_shot_plan_setup_mode is not None:
             command.extend((
                 "--one-shot-plan-setup-mode",
@@ -431,7 +450,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "leopard2-benchmark-v8", "leopard2-benchmark-v9",
                 "leopard2-benchmark-v10", "leopard2-benchmark-v11",
                 "leopard2-benchmark-v12", "leopard2-benchmark-v15",
-                "leopard2-benchmark-v16",
+                "leopard2-benchmark-v16", "leopard2-benchmark-v23",
             }, "benchmark schema is unsupported")
     expected_top = {
         "schema", "build", "parameters", "resolved", "correctness",
@@ -443,6 +462,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "leopard2-benchmark-v9", "leopard2-benchmark-v10",
         "leopard2-benchmark-v11", "leopard2-benchmark-v12",
         "leopard2-benchmark-v15", "leopard2-benchmark-v16",
+        "leopard2-benchmark-v23",
     }:
         expected_top.add("workload_digests")
     require(set(document) == expected_top, "top-level JSON keys changed")
@@ -463,6 +483,19 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         expected_build.update({
             "r1_small_reduction_diagnostic_mode",
             "r1_small_reduction_codec_enabled",
+            "r1_encode_reduction_path",
+            "r1_decode_reduction_path",
+            "r1_timed_encode_api",
+            "r1_timed_one_shot_encode_api",
+            "r1_timed_reused_decode_api",
+            "r1_timed_one_shot_decode_api",
+        })
+    if document["schema"] == "leopard2-benchmark-v23":
+        expected_build.update({
+            "r1_fixed_avx2_diagnostic_mode",
+            "r1_fixed_avx2_candidate_enabled",
+            "r1_small_reduction_codec_enabled",
+            "r1_fixed_avx2_selector_contract",
             "r1_encode_reduction_path",
             "r1_decode_reduction_path",
             "r1_timed_encode_api",
@@ -495,7 +528,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         expected_build.add("one_shot_equal_rounded_direct_enabled")
     if document["schema"] in {
             "leopard2-benchmark-v9", "leopard2-benchmark-v12",
-            "leopard2-benchmark-v15", "leopard2-benchmark-v16"}:
+            "leopard2-benchmark-v15", "leopard2-benchmark-v16",
+            "leopard2-benchmark-v23"}:
         expected_build.update({
             "one_shot_equal_rounded_direct_enabled",
             "cauchy_log_reuse_enabled",
@@ -519,6 +553,17 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 type(build["r1_small_reduction_codec_enabled"]) is bool and
                 build["r1_small_reduction_codec_enabled"] is (mode == 1),
                 "R=1 small-reduction mode metadata is invalid")
+    if document["schema"] == "leopard2-benchmark-v23":
+        build = document["build"]
+        mode = build["r1_fixed_avx2_diagnostic_mode"]
+        require(type(mode) is int and mode in {0, 1} and
+                build["r1_fixed_avx2_candidate_enabled"] is True and
+                build["r1_small_reduction_codec_enabled"] is False and
+                build["r1_fixed_avx2_selector_contract"] ==
+                    R1_FIXED_AVX2_SELECTOR_CONTRACT,
+                "fixed AVX2 R=1 mode metadata is invalid")
+    if document["schema"] in R1_SCHEMAS:
+        build = document["build"]
         for name in (
                 "r1_encode_reduction_path", "r1_decode_reduction_path"):
             require(type(build[name]) is str and
@@ -569,7 +614,8 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 "one-shot build selector is not Boolean")
     if document["schema"] in {
             "leopard2-benchmark-v9", "leopard2-benchmark-v12",
-            "leopard2-benchmark-v15", "leopard2-benchmark-v16"}:
+            "leopard2-benchmark-v15", "leopard2-benchmark-v16",
+            "leopard2-benchmark-v23"}:
         require(type(document["build"][
                     "cauchy_log_reuse_enabled"]) is bool,
                 "Cauchy-log-reuse build selector is not Boolean")
@@ -643,6 +689,11 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
                 mode == document["build"][
                     "gf8_avx2_walsh_locator_diagnostic_mode"],
                 "GF8 AVX2 Walsh-locator parameter is invalid or inconsistent")
+    if document["schema"] == "leopard2-benchmark-v23":
+        mode = parameters.get("r1_fixed_avx2_mode")
+        require(type(mode) is int and mode in {0, 1} and
+                mode == document["build"]["r1_fixed_avx2_diagnostic_mode"],
+                "fixed AVX2 R=1 parameter is invalid or inconsistent")
     require(type(document["resolved"]["thread_count"]) is int and
             document["resolved"]["thread_count"] > 0 and
             type(document["resolved"]["parent_count"]) is int and
@@ -713,7 +764,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         })
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_memory.add("one_shot_transient_scratch_bytes_per_stripe")
-    if document["schema"] == "leopard2-benchmark-v12":
+    if document["schema"] in R1_SCHEMAS:
         expected_memory.update({
             "encode_batch_preflight_scratch_bytes",
             "decode_batch_preflight_scratch_bytes",
@@ -735,7 +786,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         "decode_execution", "decode_amortized_at_reuse", "rate_semantics"}
     if document["schema"] in ONE_SHOT_SCHEMAS:
         expected_metrics.add("one_shot_decode_including_setup")
-    if document["schema"] == "leopard2-benchmark-v12":
+    if document["schema"] in R1_SCHEMAS:
         expected_metrics.add("one_shot_encode")
     if document["schema"] in TRANSIENT_PLAN_SCHEMAS:
         expected_metrics.update({
@@ -772,7 +823,7 @@ def validate_common(document: dict[str, Any], retain_samples: bool) -> None:
         input_rate_name="input_GB_per_s",
         output_rate_name="parity_output_GB_per_s",
         input_bytes=encode_input_bytes, output_bytes=encode_output_bytes)
-    if document["schema"] == "leopard2-benchmark-v12":
+    if document["schema"] in R1_SCHEMAS:
         validate_timing_summary(
             document["metrics"]["one_shot_encode"], "one_shot_encode",
             retain_samples=retain_samples, iterations=iterations,
@@ -988,6 +1039,71 @@ def validate_r1_small_reduction_report(
         "encode_execution": None,
         "decode_including_setup": None,
     }, "R=1 attribution did not completely exclude the legacy timing lane")
+
+
+def validate_r1_fixed_avx2_report(
+    document: dict[str, Any],
+    expected_mode: int,
+    expected_parameters: set[str],
+    expected_path: str,
+) -> None:
+    require(type(expected_mode) is int and expected_mode in {0, 1},
+            "invalid expected fixed AVX2 R=1 mode")
+    require(expected_path in {"pairwise", "fixed_avx2"},
+            "invalid expected fixed AVX2 R=1 path")
+    require(document.get("schema") == "leopard2-benchmark-v23",
+            "fixed AVX2 R=1 benchmark schema changed")
+    validate_common(document, True)
+    validate_workload_digests(document)
+
+    build = document["build"]
+    require(build["r1_fixed_avx2_diagnostic_mode"] == expected_mode and
+            build["r1_fixed_avx2_candidate_enabled"] is True and
+            build["r1_small_reduction_codec_enabled"] is False and
+            build["r1_encode_reduction_path"] == expected_path and
+            build["r1_decode_reduction_path"] == expected_path,
+            "fixed AVX2 R=1 attribution selected an unexpected path")
+
+    parameters = document["parameters"]
+    require(set(parameters) == expected_parameters and
+            parameters["K"] == 3 and parameters["R"] == 1 and
+            parameters["requested_profile"] == "legacy_high_v1" and
+            parameters["requested_field"] == "gf8" and
+            parameters["requested_backend"] == "avx2" and
+            parameters["shard_bytes"] == 64 and
+            parameters["loss_count"] == 1 and
+            parameters["batch"] == 1 and parameters["reuse"] == 1 and
+            parameters["iterations"] == 1 and
+            parameters["warmup"] == 0 and
+            parameters["thread_count"] == 1 and
+            parameters["skip_legacy"] is True and
+            parameters["retain_samples"] is True and
+            parameters["measure_one_shot_decode"] is True and
+            parameters["r1_fixed_avx2_mode"] == expected_mode,
+            "fixed AVX2 R=1 benchmark is not the ordinary one-item cell")
+
+    require(document["resolved"] == {
+        "profile": "legacy_high_v1",
+        "field": "gf8",
+        "backend": "avx2",
+        "thread_count": 1,
+        "parent_count": 4,
+        "padded_side": 1,
+    }, "fixed AVX2 R=1 resolved codec identity changed")
+    memory = document["memory"]
+    require(memory["encode_batch_preflight_scratch_bytes"] == 0 and
+            memory["decode_batch_preflight_scratch_bytes"] == 0 and
+            memory["one_shot_decode_scratch_bytes_batch"] ==
+                memory["one_shot_decode_scratch_bytes_per_stripe"],
+            "fixed AVX2 R=1 report changed the one-item API scope")
+    require(document["legacy"] == {
+        "available": False,
+        "unavailable_reason": "disabled by --skip-legacy",
+        "codec_setup": None,
+        "decode_timing_includes_setup": True,
+        "encode_execution": None,
+        "decode_including_setup": None,
+    }, "fixed AVX2 R=1 attribution did not exclude the legacy lane")
 
 
 def validate_direct_executor_report(
@@ -1472,6 +1588,80 @@ def main() -> int:
     require_schema_modes_rejected(
         prevalidated_executable, r1_contract_arguments,
         "--r1-small-reduction-mode requires the ordinary benchmark")
+
+    fixed_r1_parameters = r1_parameters | {"r1_fixed_avx2_mode"}
+    fixed_r1_mode_zero = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_fixed_avx2_mode=0, k=3, r=1, losses=1)
+    fixed_r1_mode_one = run(
+        executable, True, measure_one_shot_decode=True,
+        r1_fixed_avx2_mode=1, k=3, r=1, losses=1)
+    validate_r1_fixed_avx2_report(
+        fixed_r1_mode_zero, 0, fixed_r1_parameters, "pairwise")
+    validate_r1_fixed_avx2_report(
+        fixed_r1_mode_one, 1, fixed_r1_parameters, "fixed_avx2")
+    require(fixed_r1_mode_zero["workload_digests"] ==
+                fixed_r1_mode_one["workload_digests"],
+            "fixed AVX2 R=1 attribution changed encoded or recovered data")
+
+    malformed_fixed_r1_mode = copy.deepcopy(fixed_r1_mode_zero)
+    malformed_fixed_r1_mode["build"][
+        "r1_fixed_avx2_diagnostic_mode"] = False
+    require_common_rejected(
+        malformed_fixed_r1_mode, "Boolean fixed AVX2 R=1 mode")
+    malformed_fixed_r1_candidate = copy.deepcopy(fixed_r1_mode_zero)
+    malformed_fixed_r1_candidate["build"][
+        "r1_fixed_avx2_candidate_enabled"] = False
+    require_common_rejected(
+        malformed_fixed_r1_candidate, "disabled fixed AVX2 candidate")
+    malformed_fixed_r1_small = copy.deepcopy(fixed_r1_mode_zero)
+    malformed_fixed_r1_small["build"][
+        "r1_small_reduction_codec_enabled"] = True
+    require_common_rejected(
+        malformed_fixed_r1_small, "enabled small reduction in fixed report")
+    malformed_fixed_r1_contract = copy.deepcopy(fixed_r1_mode_zero)
+    malformed_fixed_r1_contract["build"][
+        "r1_fixed_avx2_selector_contract"] = "ambiguous"
+    require_common_rejected(
+        malformed_fixed_r1_contract, "ambiguous fixed selector contract")
+    malformed_fixed_r1_path = copy.deepcopy(fixed_r1_mode_zero)
+    malformed_fixed_r1_path["build"]["r1_decode_reduction_path"] = "unknown"
+    require_common_rejected(
+        malformed_fixed_r1_path, "unknown fixed AVX2 R=1 path")
+
+    require_schema_modes_rejected(
+        executable, ("--r1-fixed-avx2-mode", "2"),
+        "--r1-fixed-avx2-mode must be exactly 0 or 1")
+    require_schema_modes_rejected(
+        executable, ("--r1-fixed-avx2-mode", "0"),
+        "--r1-fixed-avx2-mode requires explicit high/GF8/AVX2, "
+        "R=1, one loss, batch=1, one thread, --skip-legacy, "
+        "--retain-samples, and --measure-one-shot-decode")
+    fixed_r1_contract_arguments = (
+        "--k", "3", "--r", "1", "--profile", "high",
+        "--field", "gf8", "--backend", "avx2", "--bytes", "64",
+        "--loss", "1", "--batch", "1", "--reuse", "1",
+        "--iterations", "1", "--warmup", "0", "--threads", "1",
+        "--skip-legacy", "--retain-samples", "--measure-one-shot-decode",
+        "--r1-fixed-avx2-mode", "0",
+    )
+    require_schema_modes_rejected(
+        executable,
+        fixed_r1_contract_arguments +
+            ("--disable-k9r6r8-b256-terminal",),
+        "--r1-fixed-avx2-mode requires explicit high/GF8/AVX2, "
+        "R=1, one loss, batch=1, one thread, --skip-legacy, "
+        "--retain-samples, and --measure-one-shot-decode")
+    require_schema_modes_rejected(
+        executable,
+        fixed_r1_contract_arguments +
+            ("--r1-small-reduction-mode", "0"),
+        "--r1-small-reduction-mode requires explicit high/GF8/AVX2, "
+        "R=1, one loss, batch=1, one thread, --skip-legacy, "
+        "--retain-samples, and --measure-one-shot-decode")
+    require_schema_modes_rejected(
+        prevalidated_executable, fixed_r1_contract_arguments,
+        "--r1-fixed-avx2-mode requires the ordinary benchmark")
 
     path_diagnostic = (
         "--attest-source and --report-decode-path use distinct JSON schemas")

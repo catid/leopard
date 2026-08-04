@@ -58,6 +58,22 @@ static inline bool ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
         recovery_count == 1 && padded_side == 1;
 }
 
+static inline bool ShouldUseGF8AVX2LegacyHighR1FixedXor(
+    leo2_profile profile,
+    leo2_field field,
+    leo2_backend backend,
+    leo2_shard_layout shard_layout,
+    uint32_t original_count,
+    uint32_t recovery_count,
+    uint32_t padded_side,
+    uint64_t shard_bytes)
+{
+    return (shard_bytes == 64 || shard_bytes == 256) &&
+        ShouldUseGF8AVX2LegacyHighR1EarlyDispatch(
+            profile, field, backend, shard_layout, original_count,
+            recovery_count, padded_side);
+}
+
 enum DecodePath
 {
     kDecodePathNoOp = 0,

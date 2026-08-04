@@ -9,6 +9,7 @@
 
 #include "Leopard2Backend.h"
 
+#include <cassert>
 #include <cstring>
 #include <immintrin.h>
 
@@ -23,6 +24,173 @@ namespace leopard { namespace backend {
 #else
 #define LEO2_AVX2_XOR_FORCE_INLINE inline
 #endif
+
+#if defined(_MSC_VER)
+#define LEO2_AVX2_FIXED_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) && !defined(__clang__) && defined(__ELF__)
+#define LEO2_AVX2_FIXED_NOINLINE \
+    __attribute__((noinline, noclone, section(".text.leo2_avx2_r1_fixed"), \
+        aligned(64)))
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_AVX2_FIXED_NOINLINE \
+    __attribute__((noinline, section(".text.leo2_avx2_r1_fixed"), aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_AVX2_FIXED_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_AVX2_FIXED_NOINLINE
+#endif
+
+static LEO2_AVX2_XOR_FORCE_INLINE void AVX2AccumulateFixed64(
+    const void* source_pointer,
+    __m256i& accumulator0,
+    __m256i& accumulator1)
+{
+    const uint8_t* const source =
+        static_cast<const uint8_t*>(source_pointer);
+    assert(source != NULL);
+    accumulator0 = _mm256_xor_si256(accumulator0,
+        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source)));
+    accumulator1 = _mm256_xor_si256(accumulator1,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 32)));
+}
+
+static LEO2_AVX2_XOR_FORCE_INLINE void AVX2AccumulateFixed256(
+    const void* source_pointer,
+    __m256i& accumulator0,
+    __m256i& accumulator1,
+    __m256i& accumulator2,
+    __m256i& accumulator3,
+    __m256i& accumulator4,
+    __m256i& accumulator5,
+    __m256i& accumulator6,
+    __m256i& accumulator7)
+{
+    const uint8_t* const source =
+        static_cast<const uint8_t*>(source_pointer);
+    assert(source != NULL);
+    accumulator0 = _mm256_xor_si256(accumulator0,
+        _mm256_loadu_si256(reinterpret_cast<const __m256i*>(source)));
+    accumulator1 = _mm256_xor_si256(accumulator1,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 32)));
+    accumulator2 = _mm256_xor_si256(accumulator2,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 64)));
+    accumulator3 = _mm256_xor_si256(accumulator3,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 96)));
+    accumulator4 = _mm256_xor_si256(accumulator4,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 128)));
+    accumulator5 = _mm256_xor_si256(accumulator5,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 160)));
+    accumulator6 = _mm256_xor_si256(accumulator6,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 192)));
+    accumulator7 = _mm256_xor_si256(accumulator7,
+        _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(source + 224)));
+}
+
+LEO2_AVX2_FIXED_NOINLINE void AVX2XorMemorySourcesFixed64(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source)
+{
+    assert(destination != NULL && initial_source != NULL && sources != NULL);
+    assert(excluded_source <= source_count);
+    assert(excluded_source == source_count ||
+        sources[excluded_source] == NULL);
+    const uint8_t* const initial =
+        static_cast<const uint8_t*>(initial_source);
+    __m256i accumulator0 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial));
+    __m256i accumulator1 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 32));
+
+    uint32_t source_index = 0;
+    for (; source_index < excluded_source; ++source_index)
+        AVX2AccumulateFixed64(
+            sources[source_index], accumulator0, accumulator1);
+    if (excluded_source < source_count)
+        ++source_index;
+    for (; source_index < source_count; ++source_index)
+        AVX2AccumulateFixed64(
+            sources[source_index], accumulator0, accumulator1);
+
+    uint8_t* const output = static_cast<uint8_t*>(destination);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output), accumulator0);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 32), accumulator1);
+}
+
+LEO2_AVX2_FIXED_NOINLINE void AVX2XorMemorySourcesFixed256(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source)
+{
+    assert(destination != NULL && initial_source != NULL && sources != NULL);
+    assert(excluded_source <= source_count);
+    assert(excluded_source == source_count ||
+        sources[excluded_source] == NULL);
+    const uint8_t* const initial =
+        static_cast<const uint8_t*>(initial_source);
+    __m256i accumulator0 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial));
+    __m256i accumulator1 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 32));
+    __m256i accumulator2 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 64));
+    __m256i accumulator3 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 96));
+    __m256i accumulator4 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 128));
+    __m256i accumulator5 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 160));
+    __m256i accumulator6 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 192));
+    __m256i accumulator7 = _mm256_loadu_si256(
+        reinterpret_cast<const __m256i*>(initial + 224));
+
+    uint32_t source_index = 0;
+    for (; source_index < excluded_source; ++source_index)
+        AVX2AccumulateFixed256(sources[source_index],
+            accumulator0, accumulator1, accumulator2, accumulator3,
+            accumulator4, accumulator5, accumulator6, accumulator7);
+    if (excluded_source < source_count)
+        ++source_index;
+    for (; source_index < source_count; ++source_index)
+        AVX2AccumulateFixed256(sources[source_index],
+            accumulator0, accumulator1, accumulator2, accumulator3,
+            accumulator4, accumulator5, accumulator6, accumulator7);
+
+    uint8_t* const output = static_cast<uint8_t*>(destination);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output), accumulator0);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 32), accumulator1);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 64), accumulator2);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 96), accumulator3);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 128), accumulator4);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 160), accumulator5);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 192), accumulator6);
+    _mm256_storeu_si256(
+        reinterpret_cast<__m256i*>(output + 224), accumulator7);
+}
+
+#undef LEO2_AVX2_FIXED_NOINLINE
 
 template<unsigned SourceCount>
 static LEO2_AVX2_XOR_FORCE_INLINE void AVX2XorMemoryFusedFinalGroup(

@@ -123,6 +123,7 @@ struct Options
     int low_p16_partial_direct_output_mode;
     int gf8_avx2_walsh_locator_mode;
     int r1_small_reduction_mode;
+    int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
     int balanced_b64_terminal_mode;
     bool disable_k16r8_b256_terminal;
@@ -176,6 +177,7 @@ struct Options
         , low_p16_partial_direct_output_mode(-1)
         , gf8_avx2_walsh_locator_mode(-1)
         , r1_small_reduction_mode(-1)
+        , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , balanced_b64_terminal_mode(-1)
         , disable_k16r8_b256_terminal(false)
@@ -472,6 +474,11 @@ static void Usage(std::ostream& output, const char* program)
         << "                         within one-shot setup mode 3 using schema v16\n"
         << "  --r1-small-reduction-mode 0|1\n"
         << "                         Attribution-only: snapshot the small R=1 AVX2 policy\n"
+        << "  --r1-fixed-avx2-mode 0|1\n"
+        << "                         Attribution-only: disable or enable the fixed-size\n"
+        << "                         R=1 AVX2 reducer in identical executable text\n"
+        << "                         using schema v23; off-region K/byte cells are\n"
+        << "                         admitted as inert selector controls\n"
         << "  --k8r3r4-t4-terminal-mode 0|1\n"
         << "                         Attribution-only: disable or enable the terminal\n"
         << "  --balanced-b64-terminal-mode 0|1\n"
@@ -608,6 +615,16 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--r1-small-reduction-mode must be exactly 0 or 1");
         }
+        else if (argument == "--r1-fixed-avx2-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.r1_fixed_avx2_mode = 0;
+            else if (mode == "1")
+                options.r1_fixed_avx2_mode = 1;
+            else
+                Fail("--r1-fixed-avx2-mode must be exactly 0 or 1");
+        }
         else if (argument == "--k8r3r4-t4-terminal-mode")
         {
             const std::string mode = NeedValue(argc, argv, i);
@@ -702,6 +719,7 @@ static Options ParseOptions(int argc, char** argv)
          options.backend != LEO2_BACKEND_AVX2 ||
          !options.skip_legacy || !options.retain_samples ||
          !options.measure_one_shot_decode ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
          options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
@@ -713,6 +731,30 @@ static Options ParseOptions(int argc, char** argv)
              "R=1, one loss, batch=1, one thread, --skip-legacy, "
              "--retain-samples, and --measure-one-shot-decode");
     }
+    if (options.r1_fixed_avx2_mode >= 0 &&
+        (options.r != 1 || options.batch != 1 || options.losses != 1 ||
+         options.threads != 1 ||
+         options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+         options.field != LEO2_FIELD_GF8 ||
+         options.backend != LEO2_BACKEND_AVX2 ||
+         !options.skip_legacy || !options.retain_samples ||
+         !options.measure_one_shot_decode ||
+         options.r1_small_reduction_mode >= 0 ||
+         options.one_shot_plan_setup_mode >= 0 ||
+         options.gf8_avx2_walsh_locator_mode >= 0 ||
+         options.low_p32_b64_terminal_mode >= 0 ||
+         options.low_p128_b64_terminal_mode >= 0 ||
+         options.low_p16_partial_direct_output_mode >= 0 ||
+         options.k8r3r4_t4_terminal_mode >= 0 ||
+         options.balanced_b64_terminal_mode >= 0 ||
+         options.disable_k16r8_b256_terminal ||
+         options.disable_k9r5_b256_terminal ||
+         options.disable_k9r6r8_b256_terminal))
+    {
+        Fail("--r1-fixed-avx2-mode requires explicit high/GF8/AVX2, "
+             "R=1, one loss, batch=1, one thread, --skip-legacy, "
+             "--retain-samples, and --measure-one-shot-decode");
+    }
     if (options.one_shot_plan_setup_mode >= 0 &&
         (options.batch != 1 || options.threads != 1 ||
          options.profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
@@ -721,6 +763,7 @@ static Options ParseOptions(int argc, char** argv)
          !options.skip_legacy || !options.retain_samples ||
          !options.measure_one_shot_decode ||
          options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
          options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
@@ -740,6 +783,7 @@ static Options ParseOptions(int argc, char** argv)
          !options.measure_one_shot_decode ||
          options.one_shot_plan_setup_mode != 3 ||
          options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
          options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
@@ -762,6 +806,7 @@ static Options ParseOptions(int argc, char** argv)
          options.low_p128_b64_terminal_mode >= 0 ||
          options.gf8_avx2_walsh_locator_mode >= 0 ||
          options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
          options.disable_k9r5_b256_terminal ||
@@ -781,6 +826,7 @@ static Options ParseOptions(int argc, char** argv)
          options.one_shot_plan_setup_mode >= 0 ||
          options.gf8_avx2_walsh_locator_mode >= 0 ||
          options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
          options.disable_k16r8_b256_terminal ||
@@ -801,6 +847,7 @@ static Options ParseOptions(int argc, char** argv)
          options.one_shot_plan_setup_mode >= 0 ||
          options.gf8_avx2_walsh_locator_mode >= 0 ||
          options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0 ||
          options.low_p32_b64_terminal_mode >= 0 ||
          options.low_p128_b64_terminal_mode >= 0 ||
          options.k8r3r4_t4_terminal_mode >= 0 ||
@@ -817,6 +864,8 @@ static Options ParseOptions(int argc, char** argv)
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if (options.r1_small_reduction_mode >= 0)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
+    if (options.r1_fixed_avx2_mode >= 0)
+        Fail("--r1-fixed-avx2-mode requires the ordinary benchmark");
     if (options.one_shot_plan_setup_mode >= 0)
         Fail("--one-shot-plan-setup-mode requires the ordinary benchmark");
     if (options.low_p32_b64_terminal_mode >= 0)
@@ -1028,6 +1077,7 @@ static const char* R1ReductionPathName(
     case kR1ReductionCoarse: return "coarse";
     case kR1ReductionFusedFinal: return "fused_final";
     case kR1ReductionGroup4: return "group4";
+    case kR1ReductionFixedAVX2: return "fixed_avx2";
     }
     return "unknown";
 }
@@ -1480,9 +1530,22 @@ static int Run(const Options& options)
             static_cast<unsigned>(options.one_shot_plan_setup_mode)))
         Fail("cannot set the one-shot plan-setup attribution mode");
     if (options.r1_small_reduction_mode >= 0 &&
+        !leopard2_internal::SetR1FixedAVX2XorModeForDiagnostics(0))
+    {
+        Fail("cannot disable the fixed AVX2 R=1 reducer for "
+             "small-reduction attribution");
+    }
+    if (options.r1_small_reduction_mode >= 0 &&
         !leopard2_internal::SetR1SmallReductionModeForDiagnostics(
             static_cast<unsigned>(options.r1_small_reduction_mode)))
         Fail("cannot set the R=1 small-reduction attribution mode");
+    if (options.r1_fixed_avx2_mode >= 0 &&
+        !leopard2_internal::SetR1SmallReductionModeForDiagnostics(0))
+        Fail("cannot disable R=1 small-reduction attribution");
+    if (options.r1_fixed_avx2_mode >= 0 &&
+        !leopard2_internal::SetR1FixedAVX2XorModeForDiagnostics(
+            static_cast<unsigned>(options.r1_fixed_avx2_mode)))
+        Fail("cannot set the fixed AVX2 R=1 attribution mode");
     if (options.k8r3r4_t4_terminal_mode >= 0 &&
         !leopard2_internal::
             SetK8R3R4T4TerminalEnabledForDiagnostics(
@@ -1543,7 +1606,8 @@ static int Run(const Options& options)
         &codec_options, &codec),
         "codec create");
     leopard2_internal::CodecR1ReductionPathInfo r1_reduction_path_info = {};
-    if (options.r1_small_reduction_mode >= 0 &&
+    if ((options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0) &&
         !leopard2_internal::GetCodecR1ReductionPathInfo(
             codec, options.bytes, &r1_reduction_path_info))
         Fail("R=1 reduction-path introspection failed");
@@ -1671,7 +1735,8 @@ static int Run(const Options& options)
     RequireLeo2(leo2_decode_plan_batch_preflight_scratch_size(
         plan, decode_items.size(), &decode_batch_preflight_bytes),
         "decode batch preflight scratch query");
-    if (options.r1_small_reduction_mode >= 0 &&
+    if ((options.r1_small_reduction_mode >= 0 ||
+         options.r1_fixed_avx2_mode >= 0) &&
         (encode_batch_preflight_bytes != 0 ||
          decode_batch_preflight_bytes != 0))
     {
@@ -1789,6 +1854,7 @@ static int Run(const Options& options)
         options.low_p128_b64_terminal_mode >= 0 ||
         options.low_p16_partial_direct_output_mode >= 0 ||
         options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0 ||
         options.balanced_b64_terminal_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
@@ -1802,6 +1868,7 @@ static int Run(const Options& options)
         options.low_p32_b64_terminal_mode >= 0 ? 18 :
         options.gf8_avx2_walsh_locator_mode >= 0 ? 16 :
         options.one_shot_plan_setup_mode >= 0 ? 15 :
+        options.r1_fixed_avx2_mode >= 0 ? 23 :
         options.r1_small_reduction_mode >= 0 ? 12 :
         options.k8r3r4_t4_terminal_mode == 0 ? 11 :
         options.disable_k9r6r8_b256_terminal ? 10 :
@@ -1834,7 +1901,8 @@ static int Run(const Options& options)
         }
     }
     if (options.measure_one_shot_encode ||
-        options.r1_small_reduction_mode >= 0)
+        options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0)
     {
         for (size_t stripe_index = 0;
              stripe_index < stripes.size(); ++stripe_index)
@@ -1987,7 +2055,8 @@ static int Run(const Options& options)
     {
         run_encode_batch_execution();
         if (options.measure_one_shot_encode ||
-            options.r1_small_reduction_mode >= 0)
+            options.r1_small_reduction_mode >= 0 ||
+            options.r1_fixed_avx2_mode >= 0)
             run_one_shot_encode();
         run_decode_batch();
         if (options.measure_one_shot_decode)
@@ -2002,7 +2071,8 @@ static int Run(const Options& options)
     });
     Summary one_shot_encode = Summary();
     if (options.measure_one_shot_encode ||
-        options.r1_small_reduction_mode >= 0)
+        options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0)
     {
         one_shot_encode = Measure(
             options.iterations, options.reuse, options.retain_samples, [&]() {
@@ -2314,15 +2384,34 @@ static int Run(const Options& options)
              << (options.gf8_avx2_walsh_locator_mode == 1
                     ? "true" : "false");
     }
-    if (options.r1_small_reduction_mode >= 0)
+    if (options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0)
     {
-        json << ",\n"
-             << "    \"r1_small_reduction_diagnostic_mode\": "
-             << options.r1_small_reduction_mode << ",\n"
-             << "    \"r1_small_reduction_codec_enabled\": "
-             << (r1_reduction_path_info.small_reduction_mode_enabled
-                    ? "true" : "false") << ",\n"
-             << "    \"r1_encode_reduction_path\": \""
+        json << ",\n";
+        if (options.r1_small_reduction_mode >= 0)
+        {
+            json << "    \"r1_small_reduction_diagnostic_mode\": "
+                 << options.r1_small_reduction_mode << ",\n"
+                 << "    \"r1_small_reduction_codec_enabled\": "
+                 << (r1_reduction_path_info.small_reduction_mode_enabled
+                        ? "true" : "false") << ",\n";
+        }
+        else
+        {
+            json << "    \"r1_fixed_avx2_diagnostic_mode\": "
+                 << options.r1_fixed_avx2_mode << ",\n"
+                 << "    \"r1_fixed_avx2_candidate_enabled\": "
+                 << (leopard2_internal::
+                        R1FixedAVX2XorCandidateEnabledForDiagnostics()
+                        ? "true" : "false") << ",\n"
+                 << "    \"r1_small_reduction_codec_enabled\": "
+                 << (r1_reduction_path_info.small_reduction_mode_enabled
+                        ? "true" : "false") << ",\n"
+                 << "    \"r1_fixed_avx2_selector_contract\": "
+                    "\"LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,"
+                    "B=64|256,native_layout,auto_encode_decode\",\n";
+        }
+        json << "    \"r1_encode_reduction_path\": \""
              << R1ReductionPathName(r1_reduction_path_info.encode_path)
              << "\",\n"
              << "    \"r1_decode_reduction_path\": \""
@@ -2429,6 +2518,9 @@ static int Run(const Options& options)
         if (options.gf8_avx2_walsh_locator_mode >= 0)
             json << "    \"gf8_avx2_walsh_locator_mode\": "
                  << options.gf8_avx2_walsh_locator_mode << ",\n";
+        if (options.r1_fixed_avx2_mode >= 0)
+            json << "    \"r1_fixed_avx2_mode\": "
+                 << options.r1_fixed_avx2_mode << ",\n";
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
@@ -2575,7 +2667,8 @@ static int Run(const Options& options)
          << "    \"decode_scratch_bytes_per_stripe\": " << decode_scratch_bytes << ",\n"
          << "    \"encode_scratch_bytes_batch\": " << encode_scratch_batch << ",\n"
          << "    \"decode_scratch_bytes_batch\": " << decode_scratch_batch;
-    if (options.r1_small_reduction_mode >= 0)
+    if (options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0)
     {
         json << ",\n"
              << "    \"encode_batch_preflight_scratch_bytes\": "
@@ -2610,7 +2703,8 @@ static int Run(const Options& options)
     WriteSummary(json, encode_execution, encode_input_bytes, "input_GB_per_s",
         encode_output_bytes, "parity_output_GB_per_s", 4, options.retain_samples);
     if (options.measure_one_shot_encode ||
-        options.r1_small_reduction_mode >= 0)
+        options.r1_small_reduction_mode >= 0 ||
+        options.r1_fixed_avx2_mode >= 0)
     {
         json << ",\n    \"one_shot_encode\": ";
         WriteSummary(json, one_shot_encode,
