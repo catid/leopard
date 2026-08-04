@@ -683,6 +683,19 @@ static LEO_FORCE_INLINE bool R1SmallReductionModeEnabled(
         (codec->flags & kCodecR1SmallReductionModeFlag) != 0;
 }
 
+#ifdef LEO_HAS_FF8
+struct leo2_r1_fixed_avx2_binding_state
+{
+    leopard::backend::XorMemorySourcesFixed callback;
+    void* destination;
+    const void* initial_source;
+    const void* const* sources;
+    size_t shard_bytes;
+    uint32_t source_count;
+    uint32_t excluded_source;
+};
+#endif
+
 struct leo2_encode_batch_binding
 {
     const leo2_codec* codec;
@@ -695,6 +708,8 @@ struct leo2_encode_batch_binding
     const void* k1_copy_source;
     void* k1_copy_destination;
     size_t k1_copy_bytes;
+    /* Setup-proven one-stripe GF8/AVX2 K>=3,R=1 byte executor. */
+    leo2_r1_fixed_avx2_binding_state r1_fixed_avx2;
     const leopard::backend::Ops* high_t4_batch_ops;
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
@@ -726,6 +741,8 @@ struct leo2_decode_batch_binding
     const void* k1_copy_source;
     void* k1_copy_destination;
     size_t k1_copy_bytes;
+    /* Setup-proven one-stripe GF8/AVX2 K>=3,R=1 byte executor. */
+    leo2_r1_fixed_avx2_binding_state r1_fixed_avx2;
 #endif
 };
 
@@ -5819,6 +5836,48 @@ static LEO_FORCE_INLINE bool IsGF8AVX2R1FixedXorEligible(
     return false;
 #endif
 }
+
+#ifdef LEO_HAS_FF8
+static LEO_FORCE_INLINE leopard::backend::XorMemorySourcesFixed
+SelectGF8AVX2R1FixedXorCallback(
+    const leopard::backend::Ops* ops,
+    size_t shard_bytes)
+{
+    if (!ops)
+        return NULL;
+    return shard_bytes == 64
+        ? ops->xor_memory_sources_fixed64
+        : ops->xor_memory_sources_fixed256;
+}
+
+static LEO_FORCE_INLINE bool R1FixedAVX2BindingCallbackIsLive(
+    const leo2_codec* codec,
+    leopard::backend::XorMemorySourcesFixed callback,
+    size_t shard_bytes,
+    bool decoding)
+{
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* A test may replace the context table after binding setup.  Never enter
+       a callback captured from the previous table: retain the binding's
+       prevalidated metadata, but fall back through the live generic executor
+       so forced diagnostic modes and backend tracing remain authoritative. */
+    if (!IsGF8AVX2R1FixedXorEligible(
+            codec, shard_bytes, decoding))
+        return false;
+    const leopard::backend::Ops* const live_ops =
+        codec && codec->context ? codec->context->ops : NULL;
+    return live_ops && live_ops->kind == LEO2_BACKEND_AVX2 &&
+        SelectGF8AVX2R1FixedXorCallback(
+            live_ops, shard_bytes) == callback;
+#else
+    static_cast<void>(codec);
+    static_cast<void>(callback);
+    static_cast<void>(shard_bytes);
+    static_cast<void>(decoding);
+    return true;
+#endif
+}
+#endif
 
 static LEO_FORCE_INLINE bool TryExecuteGF8AVX2R1FixedXor(
     const leo2_codec* codec,
@@ -13241,6 +13300,28 @@ bool R1FixedAVX2XorCandidateEnabledForDiagnostics()
 #endif
 }
 
+bool EncodeBatchBindingUsesR1FixedAVX2ForDiagnostics(
+    const leo2_encode_batch_binding* binding)
+{
+#ifdef LEO_HAS_FF8
+    return binding && binding->r1_fixed_avx2.callback;
+#else
+    static_cast<void>(binding);
+    return false;
+#endif
+}
+
+bool DecodeBatchBindingUsesR1FixedAVX2ForDiagnostics(
+    const leo2_decode_batch_binding* binding)
+{
+#ifdef LEO_HAS_FF8
+    return binding && binding->r1_fixed_avx2.callback;
+#else
+    static_cast<void>(binding);
+    return false;
+#endif
+}
+
 bool SetOneShotPlanSetupModeForDiagnostics(unsigned mode)
 {
     if (mode > 3U)
@@ -16979,6 +17060,13 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
     binding->k1_copy_source = NULL;
     binding->k1_copy_destination = NULL;
     binding->k1_copy_bytes = 0;
+    binding->r1_fixed_avx2.callback = NULL;
+    binding->r1_fixed_avx2.destination = NULL;
+    binding->r1_fixed_avx2.initial_source = NULL;
+    binding->r1_fixed_avx2.sources = NULL;
+    binding->r1_fixed_avx2.shard_bytes = 0;
+    binding->r1_fixed_avx2.source_count = 0;
+    binding->r1_fixed_avx2.excluded_source = 0;
     binding->high_t4_batch_ops = NULL;
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING && defined(LEO_HAS_FF8)
@@ -17175,6 +17263,34 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
             static_cast<size_t>(binding->items[0].shard_bytes);
     }
 
+    /* Binding setup has already proved every source, output, metadata, and
+       optional-scratch range.  Freeze the exact one-stripe byte executor so
+       repeated tiny-shard calls do not rebuild generic batch/internal frames.
+       A one-item call is synchronous even when the context owns a pool, so
+       retaining that pool does not change scheduling or parallelism here. */
+    if (binding->items.size() == 1 &&
+        IsGF8AVX2R1FixedXorEligible(codec,
+            static_cast<size_t>(binding->items[0].shard_bytes), false))
+    {
+        const leopard::backend::Ops* const ops = codec->context->ops;
+        leopard::backend::XorMemorySourcesFixed const callback =
+            SelectGF8AVX2R1FixedXorCallback(
+                ops, static_cast<size_t>(binding->items[0].shard_bytes));
+        if (ops && ops->kind == LEO2_BACKEND_AVX2 && callback)
+        {
+            leo2_r1_fixed_avx2_binding_state& state =
+                binding->r1_fixed_avx2;
+            state.callback = callback;
+            state.destination = binding->recovery_pointers[0];
+            state.initial_source = binding->original_pointers[0];
+            state.sources = binding->original_pointers.data() + 1;
+            state.shard_bytes = static_cast<size_t>(
+                binding->items[0].shard_bytes);
+            state.source_count = codec->original_count - 1;
+            state.excluded_source = state.source_count;
+        }
+    }
+
     /*
         Small homogeneous T=4 bindings can bypass the general per-stripe
         scratch geometry and amortize the AVX2 multiplication-table setup over
@@ -17333,6 +17449,7 @@ LEO2_EXPORT int leo2_test_encode_batch_binding_uses_k1_copy(
     return 0;
 #endif
 }
+
 #endif
 
 #if defined(_MSC_VER)
@@ -17480,6 +17597,21 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_execute(
             CopyGF8K1TerminalBytes(binding->k1_copy_ops,
                 binding->k1_copy_destination, binding->k1_copy_source,
                 binding->k1_copy_bytes);
+        }
+        return LEO2_SUCCESS;
+    }
+    const leo2_r1_fixed_avx2_binding_state& r1_fixed =
+        binding->r1_fixed_avx2;
+    if (r1_fixed.callback &&
+        R1FixedAVX2BindingCallbackIsLive(
+            binding->codec, r1_fixed.callback,
+            r1_fixed.shard_bytes, false))
+    {
+        if (r1_fixed.destination)
+        {
+            r1_fixed.callback(r1_fixed.destination,
+                r1_fixed.initial_source, r1_fixed.sources,
+                r1_fixed.source_count, r1_fixed.excluded_source);
         }
         return LEO2_SUCCESS;
     }
@@ -19133,6 +19265,13 @@ LEO2_EXPORT leo2_result leo2_decode_batch_binding_create(
     binding->k1_copy_source = NULL;
     binding->k1_copy_destination = NULL;
     binding->k1_copy_bytes = 0;
+    binding->r1_fixed_avx2.callback = NULL;
+    binding->r1_fixed_avx2.destination = NULL;
+    binding->r1_fixed_avx2.initial_source = NULL;
+    binding->r1_fixed_avx2.sources = NULL;
+    binding->r1_fixed_avx2.shard_bytes = 0;
+    binding->r1_fixed_avx2.source_count = 0;
+    binding->r1_fixed_avx2.excluded_source = 0;
 #endif
 
     /* Preserve the public true-no-op rule without dereferencing or copying
@@ -19308,6 +19447,33 @@ LEO2_EXPORT leo2_result leo2_decode_batch_binding_create(
         binding->k1_copy_bytes =
             static_cast<size_t>(binding->items[0].shard_bytes);
     }
+
+    if (binding->items.size() == 1 &&
+        plan->direct_xor && plan->missing_original_count == 1 &&
+        IsGF8AVX2R1FixedXorEligible(codec,
+            static_cast<size_t>(binding->items[0].shard_bytes), true))
+    {
+        const uint32_t missing = PlanHasCompactDirectXor(plan)
+            ? plan->direct_xor_original : plan->missing_originals[0];
+        const leopard::backend::Ops* const ops = codec->context->ops;
+        leopard::backend::XorMemorySourcesFixed const callback =
+            SelectGF8AVX2R1FixedXorCallback(
+                ops, static_cast<size_t>(binding->items[0].shard_bytes));
+        if (missing < codec->original_count && ops &&
+            ops->kind == LEO2_BACKEND_AVX2 && callback)
+        {
+            leo2_r1_fixed_avx2_binding_state& state =
+                binding->r1_fixed_avx2;
+            state.callback = callback;
+            state.destination = binding->restored_pointers[missing];
+            state.initial_source = binding->recovery_pointers[0];
+            state.sources = binding->original_pointers.data();
+            state.shard_bytes = static_cast<size_t>(
+                binding->items[0].shard_bytes);
+            state.source_count = codec->original_count;
+            state.excluded_source = missing;
+        }
+    }
 #endif
 
     *binding_out = binding;
@@ -19337,6 +19503,18 @@ LEO2_EXPORT leo2_result leo2_decode_batch_binding_execute(
         CopyGF8K1TerminalBytes(binding->k1_copy_ops,
             binding->k1_copy_destination, binding->k1_copy_source,
             binding->k1_copy_bytes);
+        return LEO2_SUCCESS;
+    }
+    const leo2_r1_fixed_avx2_binding_state& r1_fixed =
+        binding->r1_fixed_avx2;
+    if (r1_fixed.callback &&
+        R1FixedAVX2BindingCallbackIsLive(
+            binding->plan ? binding->plan->codec : NULL,
+            r1_fixed.callback, r1_fixed.shard_bytes, true))
+    {
+        r1_fixed.callback(r1_fixed.destination,
+            r1_fixed.initial_source, r1_fixed.sources,
+            r1_fixed.source_count, r1_fixed.excluded_source);
         return LEO2_SUCCESS;
     }
 #endif

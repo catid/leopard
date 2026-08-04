@@ -515,7 +515,8 @@ void execute_and_check_decode(const R1Fixture& fixture)
 }
 
 void execute_public_r1_multi_item_batch(
-    const R1Fixture& fixture, size_t batch_count, bool adversarial)
+    const R1Fixture& fixture, size_t batch_count, bool adversarial,
+    int expected_fixed_binding = -1)
 {
     static const size_t kOutputOffset = 5;
     size_t scratch_bytes = 0;
@@ -637,7 +638,7 @@ void execute_public_r1_multi_item_batch(
         std::fill(restored_storage[item_i].begin(),
             restored_storage[item_i].end(), 0x5a);
     std::unique_ptr<AlignedScratch> binding_optional_scratch;
-    if (batch_count == 1)
+    if (batch_count == 1 && scratch_bytes == 0)
     {
         binding_optional_scratch.reset(new AlignedScratch(64));
         items[0].scratch = binding_optional_scratch->data();
@@ -650,12 +651,28 @@ void execute_public_r1_multi_item_batch(
     require(binding != NULL &&
             leo2_decode_batch_binding_item_count(binding) == items.size(),
         "R=1 decode binding item-count mismatch");
+    if (expected_fixed_binding >= 0)
+    {
+        require(leopard2_internal::
+                    DecodeBatchBindingUsesR1FixedAVX2ForDiagnostics(
+                        binding) == (expected_fixed_binding != 0),
+            "R=1 decode binding selected the wrong fixed AVX2 route");
+    }
     const void* const* const saved_binding_recovery = items[0].recovery;
     void* const* const saved_binding_restored = items[0].restored_original;
+    const uint32_t surviving_original = fixture.k > 1
+        ? (fixture.missing == 0 ? 1U : 0U) : fixture.missing;
+    const void* const saved_original_entry =
+        received[0][surviving_original];
+    void* const saved_restored_entry = restored[0][fixture.missing];
     items[0].recovery = NULL;
     items[0].restored_original = NULL;
+    received[0][surviving_original] = NULL;
+    restored[0][fixture.missing] = NULL;
     require_result(leo2_decode_batch_binding_execute(binding),
         LEO2_SUCCESS, "R=1 decode binding captured-metadata execute");
+    received[0][surviving_original] = saved_original_entry;
+    restored[0][fixture.missing] = saved_restored_entry;
     items[0].recovery = saved_binding_recovery;
     items[0].restored_original = saved_binding_restored;
     check_outputs();
@@ -1434,6 +1451,147 @@ void test_r1_early_one_item_encode_batch(leo2_backend backend)
         "R=1 early one-item batch modified its descriptor on rejection");
 }
 
+void execute_r1_fixed_encode_binding(
+    R1Fixture& fixture, int expected_fixed_binding, bool check_null_output)
+{
+    size_t scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(
+        fixture.codec, fixture.bytes, &scratch_bytes), LEO2_SUCCESS,
+        "fixed R=1 encode binding scratch query");
+    AlignedScratch scratch(scratch_bytes);
+    Bytes output_storage(fixture.bytes + 11U, 0x5a);
+    void* output[1] = { &output_storage[5] };
+    leo2_encode_batch_item item = {
+        fixture.bytes, &fixture.original[0], output,
+        scratch.data(), scratch_bytes
+    };
+    leo2_encode_batch_binding* binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        fixture.codec, &item, 1, &binding), LEO2_SUCCESS,
+        "fixed R=1 encode binding create");
+    require(leopard2_internal::
+                EncodeBatchBindingUsesR1FixedAVX2ForDiagnostics(binding) ==
+            (expected_fixed_binding != 0),
+        "R=1 encode binding selected the wrong fixed AVX2 route");
+
+    const auto check_output = [&]() {
+        Bytes expected(fixture.bytes, 0);
+        for (uint32_t source = 0; source < fixture.k; ++source)
+        {
+            const uint8_t* const input =
+                static_cast<const uint8_t*>(fixture.original[source]);
+            for (size_t i = 0; i < fixture.bytes; ++i)
+                expected[i] ^= input[i];
+        }
+        require(std::memcmp(output[0], &expected[0], fixture.bytes) == 0,
+            "fixed R=1 encode binding parity mismatch");
+        for (size_t i = 0; i < 5; ++i)
+            require(output_storage[i] == 0x5a,
+                "fixed R=1 encode binding changed a prefix guard");
+        for (size_t i = 5 + fixture.bytes; i < output_storage.size(); ++i)
+            require(output_storage[i] == 0x5a,
+                "fixed R=1 encode binding changed a suffix guard");
+    };
+
+    /* The binding owns its descriptor and pointer-array snapshots. */
+    const void* const* const saved_original = item.original;
+    void* const* const saved_recovery = item.recovery;
+    const void* const saved_original_entry = fixture.original[0];
+    void* const saved_recovery_entry = output[0];
+    item.original = NULL;
+    item.recovery = NULL;
+    fixture.original[0] = NULL;
+    output[0] = NULL;
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "fixed R=1 encode binding captured-metadata execute");
+    fixture.original[0] = saved_original_entry;
+    output[0] = saved_recovery_entry;
+    item.original = saved_original;
+    item.recovery = saved_recovery;
+    check_output();
+
+    uint8_t* const live_source = const_cast<uint8_t*>(
+        static_cast<const uint8_t*>(fixture.original[fixture.k - 1U]));
+    const uint8_t saved_byte = live_source[0];
+    live_source[0] ^= 0x6du;
+    std::fill(output_storage.begin(), output_storage.end(), 0x5a);
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "fixed R=1 encode binding live-source execute");
+    check_output();
+    live_source[0] = saved_byte;
+    std::fill(output_storage.begin(), output_storage.end(), 0x5a);
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "fixed R=1 encode binding repeated execute");
+    check_output();
+    leo2_encode_batch_binding_destroy(binding);
+
+    if (!check_null_output)
+        return;
+    output[0] = NULL;
+    binding = NULL;
+    require_result(leo2_encode_batch_binding_create(
+        fixture.codec, &item, 1, &binding), LEO2_SUCCESS,
+        "fixed R=1 unrequested encode binding create");
+    require(leopard2_internal::
+                EncodeBatchBindingUsesR1FixedAVX2ForDiagnostics(binding) ==
+            (expected_fixed_binding != 0),
+        "unrequested R=1 output changed fixed binding selection");
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "fixed R=1 unrequested encode binding execute");
+    require_result(leo2_encode_batch_binding_execute(binding), LEO2_SUCCESS,
+        "fixed R=1 unrequested encode binding repeated execute");
+    leo2_encode_batch_binding_destroy(binding);
+
+}
+
+void test_r1_fixed_avx2_bindings(leo2_backend backend)
+{
+    const int selected =
+        backend == LEO2_BACKEND_AVX2 &&
+        leopard2_internal::R1FixedAVX2XorCandidateEnabledForDiagnostics()
+            ? 1 : 0;
+    struct BindingCase
+    {
+        uint32_t k;
+        size_t bytes;
+        uint32_t missing;
+        bool alias_inputs;
+        uint32_t thread_count;
+        int expected;
+    };
+    const BindingCase cases[] = {
+        { 3, 64, 0, false, 1, selected },
+        { 7, 256, 3, true, 1, selected },
+        { 3, 128, 1, false, 1, 0 },
+        { 3, 512, 2, false, 1, 0 },
+        { 2, 64, 0, false, 1, 0 },
+        { 2, 256, 1, false, 1, 0 },
+        { 255, 64, 254, false, 1, selected },
+        { 3, 64, 1, false, 4, selected },
+        { 3, 256, 2, false, 0, selected }
+    };
+    for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i)
+    {
+        const BindingCase& c = cases[i];
+        R1Fixture fixture(backend, c.k, c.bytes, c.alias_inputs,
+            LEO2_FIELD_GF8, LEO2_SHARD_LAYOUT_NATIVE_V1, c.missing,
+            c.thread_count);
+        execute_r1_fixed_encode_binding(
+            fixture, c.expected, i == 0 && selected != 0);
+        execute_public_r1_multi_item_batch(
+            fixture, 1, false, c.expected);
+    }
+#ifdef LEO_HAS_FF16
+    if (backend == LEO2_BACKEND_AVX2)
+    {
+        R1Fixture gf16_control(backend, 3, 64, false,
+            LEO2_FIELD_GF16, LEO2_SHARD_LAYOUT_NATIVE_V1, 2, 1);
+        execute_r1_fixed_encode_binding(gf16_control, 0, false);
+        execute_public_r1_multi_item_batch(gf16_control, 1, false, 0);
+    }
+#endif
+}
+
 void test_public_r1(leo2_backend backend)
 {
     /* K=1 is a copy-only code.  Its specialized validators do not stage any
@@ -1737,6 +1895,7 @@ void test_public_r1(leo2_backend backend)
     test_public_r1_overlap_rejection(backend);
     test_k2_avx2_terminal_contract(backend);
     test_r1_early_one_item_encode_batch(backend);
+    test_r1_fixed_avx2_bindings(backend);
     test_public_r1_multi_item_batch(backend);
 
     // Shared immutable mature and newly compact/fused plans must be race-free.

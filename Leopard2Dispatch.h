@@ -475,4 +475,11 @@ leo2_result GetContextGF16CachePolicy(
     uint64_t* live_set_target_bytes_out,
     uint64_t* tile_threshold_bytes_out);
 
+/* Build-tree diagnostics, intentionally absent from the public C ABI. */
+bool EncodeBatchBindingUsesR1FixedAVX2ForDiagnostics(
+    const leo2_encode_batch_binding* binding);
+
+bool DecodeBatchBindingUsesR1FixedAVX2ForDiagnostics(
+    const leo2_decode_batch_binding* binding);
+
 } // namespace leopard2_internal

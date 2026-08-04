@@ -27,6 +27,7 @@
 */
 
 #include "Leopard2Backend.h"
+#include "Leopard2Dispatch.h"
 #include "Leopard2Direct.h"
 #include "LeopardFF16.h"
 #include "LeopardFF8.h"
@@ -147,6 +148,25 @@ struct TraceState
 };
 
 TraceState g_trace;
+
+std::atomic<uint64_t> g_stale_r1_fixed64_calls(0);
+leopard::backend::XorMemorySourcesFixed g_stale_r1_fixed64_delegate = NULL;
+
+void trace_stale_r1_fixed64(
+    void* destination,
+    const void* initial_source,
+    const void* const* sources,
+    uint32_t source_count,
+    uint32_t excluded_source)
+{
+    g_stale_r1_fixed64_calls.fetch_add(1, std::memory_order_relaxed);
+    const leopard::backend::XorMemorySourcesFixed delegate =
+        g_stale_r1_fixed64_delegate;
+    if (!delegate)
+        std::abort();
+    delegate(destination, initial_source, sources, source_count,
+        excluded_source);
+}
 
 const leopard::backend::Ops* trace_delegate()
 {
@@ -1870,6 +1890,118 @@ const ContextEntry* find_effective_context(
     return NULL;
 }
 
+void test_r1_fixed_binding_stale_ops_fallback(
+    const std::vector<ContextEntry>& contexts)
+{
+    const ContextEntry* const avx2 =
+        find_effective_context(contexts, LEO2_BACKEND_AVX2);
+    if (!avx2 || !avx2->table->xor_memory_sources_fixed64 ||
+        !leopard2_internal::
+            R1FixedAVX2XorCandidateEnabledForDiagnostics())
+        return;
+
+    const CodecCase test_case = {
+        3, 1, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 64
+    };
+    const Shards originals = make_originals(test_case, 0x243f6a88U);
+    leo2_codec* codec = NULL;
+    const Shards expected_recovery = encode_case(
+        avx2->context, test_case, originals, &codec);
+
+    std::vector<uint8_t> original_present(test_case.k, 1);
+    const uint8_t recovery_present[1] = { 1 };
+    const uint32_t missing = 1;
+    original_present[missing] = 0;
+    leo2_decode_plan* plan = NULL;
+    require_result(leo2_decode_plan_create(codec, &original_present[0],
+        recovery_present, &plan), LEO2_SUCCESS,
+        "stale-Ops R=1 plan create");
+
+    size_t encode_scratch_bytes = 0;
+    size_t decode_scratch_bytes = 0;
+    require_result(leo2_encode_scratch_size(codec, test_case.bytes,
+        &encode_scratch_bytes), LEO2_SUCCESS,
+        "stale-Ops R=1 encode scratch query");
+    require_result(leo2_decode_plan_scratch_size(plan, test_case.bytes,
+        &decode_scratch_bytes), LEO2_SUCCESS,
+        "stale-Ops R=1 decode scratch query");
+    AlignedBuffer encode_scratch(encode_scratch_bytes);
+    AlignedBuffer decode_scratch(decode_scratch_bytes);
+
+    const std::vector<const void*> encode_originals =
+        const_pointers(originals);
+    Shards actual_recovery(1, Bytes(test_case.bytes));
+    std::vector<void*> encode_recovery = mutable_pointers(actual_recovery);
+    leo2_encode_batch_item encode_item = {
+        test_case.bytes, &encode_originals[0], &encode_recovery[0],
+        encode_scratch.data(), encode_scratch_bytes
+    };
+
+    std::vector<const void*> decode_originals =
+        const_pointers(originals);
+    decode_originals[missing] = NULL;
+    const std::vector<const void*> decode_recovery =
+        const_pointers(expected_recovery);
+    Shards restored(test_case.k, Bytes(test_case.bytes));
+    std::vector<void*> restored_originals(test_case.k, NULL);
+    restored_originals[missing] = &restored[missing][0];
+    leo2_decode_batch_item decode_item = {
+        test_case.bytes, &decode_originals[0], &decode_recovery[0],
+        &restored_originals[0], decode_scratch.data(), decode_scratch_bytes
+    };
+
+    leopard::backend::Ops stale_ops = *avx2->table;
+    g_stale_r1_fixed64_delegate =
+        avx2->table->xor_memory_sources_fixed64;
+    stale_ops.xor_memory_sources_fixed64 = trace_stale_r1_fixed64;
+
+    leo2_encode_batch_binding* encode_binding = NULL;
+    leopard::backend::TestSetContextOps(avx2->context, &stale_ops);
+    const leo2_result encode_create = leo2_encode_batch_binding_create(
+        codec, &encode_item, 1, &encode_binding);
+    /* Restore before checking the result so a thrown assertion can never
+       strand the shared context on this stack-owned Ops table. */
+    leopard::backend::TestSetContextOps(avx2->context, avx2->table);
+    require_result(encode_create, LEO2_SUCCESS,
+        "stale-Ops R=1 encode binding create");
+    require(leopard2_internal::
+            EncodeBatchBindingUsesR1FixedAVX2ForDiagnostics(encode_binding),
+        "stale-Ops R=1 encode binding did not cache the fixed callback");
+
+    leo2_decode_batch_binding* decode_binding = NULL;
+    leopard::backend::TestSetContextOps(avx2->context, &stale_ops);
+    const leo2_result decode_create = leo2_decode_batch_binding_create(
+        plan, &decode_item, 1, &decode_binding);
+    leopard::backend::TestSetContextOps(avx2->context, avx2->table);
+    require_result(decode_create, LEO2_SUCCESS,
+        "stale-Ops R=1 decode binding create");
+    require(leopard2_internal::
+            DecodeBatchBindingUsesR1FixedAVX2ForDiagnostics(decode_binding),
+        "stale-Ops R=1 decode binding did not cache the fixed callback");
+
+    g_stale_r1_fixed64_calls.store(0, std::memory_order_relaxed);
+    require_result(leo2_encode_batch_binding_execute(encode_binding),
+        LEO2_SUCCESS, "stale-Ops R=1 encode binding execute");
+    require(g_stale_r1_fixed64_calls.load(std::memory_order_relaxed) == 0,
+        "R=1 encode binding entered a callback from a replaced Ops table");
+    require(actual_recovery == expected_recovery,
+        "stale-Ops R=1 encode fallback changed parity");
+
+    g_stale_r1_fixed64_calls.store(0, std::memory_order_relaxed);
+    require_result(leo2_decode_batch_binding_execute(decode_binding),
+        LEO2_SUCCESS, "stale-Ops R=1 decode binding execute");
+    require(g_stale_r1_fixed64_calls.load(std::memory_order_relaxed) == 0,
+        "R=1 decode binding entered a callback from a replaced Ops table");
+    require(restored[missing] == originals[missing],
+        "stale-Ops R=1 decode fallback restored the wrong original");
+
+    g_stale_r1_fixed64_delegate = NULL;
+    leo2_decode_batch_binding_destroy(decode_binding);
+    leo2_encode_batch_binding_destroy(encode_binding);
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
 void execute_avx2_tier_gf8_large_r1_xor_dispatch(
     const ContextEntry* const avx2)
 {
@@ -3254,6 +3386,7 @@ int main()
         test_avx2_gf8_inplace_butterfly2_boundaries();
         test_traced_context_dispatch(contexts);
         test_avx2_gf8_large_r1_xor_dispatch(contexts);
+        test_r1_fixed_binding_stale_ops_fallback(contexts);
         test_avx2_r1_absent_parity_noop(contexts);
         test_non_avx2_large_r1_xor_exclusion(contexts);
         test_gf8_high_forward_fusion_policy(contexts);

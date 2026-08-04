@@ -403,7 +403,7 @@ LEO2_EXPORT leo2_result leo2_encode_batch_with_preflight_scratch(
 
     The codec, every captured shard buffer, and every captured per-item scratch
     span must remain alive and retain the same size and address until the
-    binding is destroyed.  Shard bytes may change between executions.  One
+    binding is destroyed.  Shard contents may change between executions.  One
     binding must not execute concurrently with itself because it captures
     writable parity and scratch spans; separate bindings remain subject to
     their ordinary buffer-disjointness obligations.  Destroying a binding
