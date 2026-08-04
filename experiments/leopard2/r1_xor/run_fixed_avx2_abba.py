@@ -2,9 +2,13 @@
 """Run the evidence-grade fixed-size AVX2 GF8 R=1 A/B campaign.
 
 This runner never builds code.  Candidate and control must be equal-length
-hard links to one lane-owned frozen ``bench_leopard2`` inode.  Their only
-runtime difference is ``--r1-fixed-avx2-mode 1`` versus ``0``; the benchmark
-forces the older small-reduction experiment off before codec construction.
+hard links to one lane-owned frozen benchmark inode.  By default that inode is
+``bench_leopard2`` and the existing ordinary-public-API campaign is unchanged.
+``--prevalidated-binding`` instead requires the separately compiled
+``bench_leopard2_prevalidated_batch`` target and reports binding setup apart
+from binding execution.  In either campaign the only candidate/control runtime
+difference is ``--r1-fixed-avx2-mode 1`` versus ``0``; the benchmark forces the
+older small-reduction experiment off before codec construction.
 Exact Leopard main is measured in the same alternating MAAM/AMMA segments as
 the same-source BAAB/ABBA comparison.  Each completed cell is an atomic resume
 unit and every child is address-space limited.
@@ -21,7 +25,9 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import json
+import math
 import re
+import statistics
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -32,6 +38,11 @@ MANIFEST_SCHEMA = "leopard2-r1-fixed-avx2-manifest/v1"
 CELL_SCHEMA = "leopard2-r1-fixed-avx2-cell/v1"
 SUMMARY_SCHEMA = "leopard2-r1-fixed-avx2-summary/v1"
 FAILURE_SCHEMA = "leopard2-r1-fixed-avx2-failure/v1"
+BINDING_SCHEMA = "leopard2-r1-fixed-avx2-binding-abba/v1"
+BINDING_MANIFEST_SCHEMA = "leopard2-r1-fixed-avx2-binding-manifest/v1"
+BINDING_CELL_SCHEMA = "leopard2-r1-fixed-avx2-binding-cell/v1"
+BINDING_SUMMARY_SCHEMA = "leopard2-r1-fixed-avx2-binding-summary/v1"
+BINDING_FAILURE_SCHEMA = "leopard2-r1-fixed-avx2-binding-failure/v1"
 BENCHMARK_SCHEMA = "leopard2-benchmark-v23"
 MODE_SYMBOL = "_ZN12_GLOBAL__N_1L24g_r1_fixed_avx2_xor_modeE"
 BENCHMARK_CPU = 4
@@ -43,6 +54,33 @@ POSITIONS = ("first", "middle", "last")
 SELECTOR_CONTRACT = (
     "LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,B=64|256,native_layout,"
     "auto_encode_decode")
+PREVALIDATED_ENCODE_API = "leo2_encode_batch_binding_execute"
+PREVALIDATED_DECODE_API = "leo2_decode_batch_binding_execute"
+PREVALIDATED_ENCODE_SETUP_API = "leo2_encode_batch_binding_create"
+PREVALIDATED_DECODE_SETUP_API = "leo2_decode_batch_binding_create"
+PREVALIDATED_BUILD_FIELDS = (
+    "prevalidated_batch_experiment",
+    "high_t4_batch_diagnostic_disabled",
+    "high_t4_batch_selected",
+    "high_t8_one_block_extended_enabled",
+    "high_t8_one_block_beyond_512_enabled",
+    "high_t8_one_kilobyte_extension_enabled",
+    "high_t8_tiny_binding_enabled",
+    "high_t8_ragged_binding_enabled",
+    "high_t8_one_block_selected",
+    "high_t8_two_block_128_192_enabled",
+    "high_t8_two_block_320_enabled",
+    "high_t8_two_block_extended_enabled",
+    "high_t8_two_block_selected",
+)
+PREVALIDATED_ATTRIBUTION_BUILD_FIELDS = (
+    "r1_prevalidated_binding_attribution",
+    "r1_encode_binding_setup_api",
+    "r1_decode_binding_setup_api",
+    "r1_binding_setup_reported_separately",
+    "r1_binding_item_count",
+)
+_PREVALIDATED_BINDING = False
 
 
 def load_module(path: Path, name: str) -> Any:
@@ -63,7 +101,10 @@ BASE = load_module(BASE_PATH, "r1_fixed_avx2_evidence_base")
 EvidenceError = BASE.EvidenceError
 require = BASE.require
 BASE_VALIDATE_RESULT = BASE.validate_result
+BASE_CAPTURE_SOURCES_AND_BUILDS = BASE.capture_sources_and_builds
+BASE_ANALYZE_CELL = BASE.analyze_cell
 BASE_RUNNER_DEPENDENCIES = tuple(BASE.RUNNER_DEPENDENCIES)
+BASE_API_LANES = BASE.API_LANES
 
 
 ORDINARY_BATCH_ROUTE_PROOF = {
@@ -74,6 +115,64 @@ ORDINARY_BATCH_ROUTE_PROOF = {
         "APIs and the actual leo2_encode/leo2_decode one-shot lanes. The "
         "fixed diagnostic additionally proves that the older small-reduction "
         "policy was disabled before immutable codec classification."),
+}
+
+PREVALIDATED_BINDING_ROUTE_PROOF = {
+    "required_schema": BENCHMARK_SCHEMA,
+    "required_batch_item_count": 1,
+    "required_loss_count": 1,
+    "required_build_fields": {
+        "prevalidated_batch_experiment": True,
+        "r1_prevalidated_binding_attribution": True,
+        "r1_encode_binding_setup_api": PREVALIDATED_ENCODE_SETUP_API,
+        "r1_decode_binding_setup_api": PREVALIDATED_DECODE_SETUP_API,
+        "r1_binding_setup_reported_separately": True,
+        "r1_binding_item_count": 1,
+        "r1_timed_encode_api": PREVALIDATED_ENCODE_API,
+        "r1_timed_reused_decode_api": PREVALIDATED_DECODE_API,
+    },
+    "required_parameter_fields": {"prevalidated_binding": True},
+    "required_metric_fields": [
+        "encode_binding_setup", "decode_binding_setup"],
+    "path_attestation_scope": (
+        "Schema v23 plus the compile-time prevalidated marker, explicit CLI "
+        "attribution marker, exact binding create/execute API names, and "
+        "separate setup metrics prove that encode_execution and "
+        "decode_execution time immutable one-item binding executors."),
+}
+
+PREVALIDATED_API_LANES = {
+    **BASE_API_LANES,
+    "main_encode": BASE_API_LANES["main_encode"],
+    "main_decode_one_call": BASE_API_LANES["main_decode_one_call"],
+    "binding_encode_setup": {
+        "implementation": "leopard2",
+        "api": PREVALIDATED_ENCODE_SETUP_API,
+        "item_count": 1,
+        "metric": "encode_binding_setup",
+    },
+    "binding_encode_execution": {
+        "implementation": "leopard2",
+        "api": PREVALIDATED_ENCODE_API,
+        "item_count": 1,
+        "setup_excluded": True,
+        "metric": "encode_execution",
+    },
+    "decode_plan_setup": BASE_API_LANES["leopard2_decode_plan_setup"],
+    "binding_decode_setup": {
+        "implementation": "leopard2",
+        "api": PREVALIDATED_DECODE_SETUP_API,
+        "item_count": 1,
+        "metric": "decode_binding_setup",
+    },
+    "binding_decode_execution": {
+        "implementation": "leopard2",
+        "api": PREVALIDATED_DECODE_API,
+        "item_count": 1,
+        "setup_excluded": True,
+        "execution_scope": "one_loss_direct_xor",
+        "metric": "decode_execution",
+    },
 }
 
 
@@ -194,9 +293,13 @@ def benchmark_command(
     require(implementation in {"candidate", "control"},
             "unknown Leopard2 implementation lane")
     mode = "1" if implementation == "candidate" else "0"
-    return common[:-2] + [
+    command = common[:-2] + [
         "--profile", "high", "--field", "gf8", "--backend", "avx2",
         "--skip-legacy", "--retain-samples", "--measure-one-shot-decode",
+    ]
+    if _PREVALIDATED_BINDING:
+        command.append("--prevalidated-binding")
+    return command + [
         "--r1-fixed-avx2-mode", mode, "--json", "-",
     ]
 
@@ -220,10 +323,12 @@ def validate_result(
         "control_reduction_path"])
     parameters = result.get("parameters")
     build = result.get("build")
+    metrics = result.get("metrics")
     require(result.get("schema") == BENCHMARK_SCHEMA and
             isinstance(parameters, Mapping) and
             parameters.get("r1_fixed_avx2_mode") == mode and
             isinstance(build, Mapping) and
+            isinstance(metrics, Mapping) and
             build.get("r1_fixed_avx2_diagnostic_mode") == mode and
             build.get("r1_fixed_avx2_candidate_enabled") is True and
             build.get("r1_small_reduction_codec_enabled") is False and
@@ -234,11 +339,53 @@ def validate_result(
             "fixed AVX2 mode, disabled legacy experiment, selector contract, "
             "or execution route differs")
 
+    if _PREVALIDATED_BINDING:
+        require(parameters.get("prevalidated_binding") is True and
+                all(name in build for name in PREVALIDATED_BUILD_FIELDS) and
+                build.get("prevalidated_batch_experiment") is True and
+                all(type(build.get(name)) is bool
+                    for name in PREVALIDATED_BUILD_FIELDS) and
+                all(build.get(name) == value for name, value in
+                    PREVALIDATED_BINDING_ROUTE_PROOF[
+                        "required_build_fields"].items()) and
+                all(name in metrics for name in
+                    PREVALIDATED_BINDING_ROUTE_PROOF[
+                        "required_metric_fields"]),
+                "prevalidated build identity, explicit binding opt-in, exact "
+                "timed APIs, or separate binding setup metrics differ")
+    else:
+        require("prevalidated_binding" not in parameters and
+                all(name not in build for name in PREVALIDATED_BUILD_FIELDS) and
+                all(name not in build
+                    for name in PREVALIDATED_ATTRIBUTION_BUILD_FIELDS) and
+                "encode_binding_setup" not in metrics and
+                "decode_binding_setup" not in metrics,
+                "ordinary campaign unexpectedly selected a prevalidated "
+                "binding benchmark")
+
     # Reuse the mature schema-v12 API/metrics validator after validating all
     # schema-v23 fields above.  The synthetic small-mode fields are local to
     # this adapter and only let the shared routine apply its existing metric,
     # API-scope, digest, and amortization checks.
     adapted = json.loads(json.dumps(result))
+    encode_binding_setup = 0.0
+    decode_binding_setup = 0.0
+    if _PREVALIDATED_BINDING:
+        encode_binding_setup = BASE.metric_median(
+            metrics, "encode_binding_setup", "median_us", iterations,
+            "samples_us")
+        decode_binding_setup = BASE.metric_median(
+            metrics, "decode_binding_setup", "median_us", iterations,
+            "samples_us")
+        for name in PREVALIDATED_BUILD_FIELDS:
+            del adapted["build"][name]
+        for name in PREVALIDATED_ATTRIBUTION_BUILD_FIELDS:
+            del adapted["build"][name]
+        del adapted["parameters"]["prevalidated_binding"]
+        del adapted["metrics"]["encode_binding_setup"]
+        del adapted["metrics"]["decode_binding_setup"]
+        adapted["build"].update(
+            ORDINARY_BATCH_ROUTE_PROOF["required_build_fields"])
     adapted["schema"] = "leopard2-benchmark-v12"
     adapted["build"]["r1_small_reduction_diagnostic_mode"] = mode
     adapted["build"]["r1_small_reduction_codec_enabled"] = mode == 1
@@ -248,7 +395,209 @@ def validate_result(
     normalized["reduction_path"] = expected_path
     normalized["fixed_avx2_candidate_enabled"] = True
     normalized["small_reduction_codec_enabled"] = False
+    if _PREVALIDATED_BINDING:
+        ordinary_metrics = normalized["metrics_us"]
+        encode_execution = ordinary_metrics["batch_encode"]
+        decode_execution = ordinary_metrics["decode_execution"]
+        codec_setup = ordinary_metrics["codec_setup"]
+        plan_setup = ordinary_metrics["decode_plan_setup"]
+        reuse = float(cell["reuse"])
+        normalized["metrics_us"] = {
+            "codec_setup": codec_setup,
+            "binding_encode_setup": encode_binding_setup,
+            "binding_encode_execution": encode_execution,
+            "binding_encode_first_use":
+                encode_binding_setup + encode_execution,
+            "binding_encode_reuse_amortized":
+                encode_execution + encode_binding_setup / reuse,
+            "decode_plan_setup": plan_setup,
+            "binding_decode_setup": decode_binding_setup,
+            "binding_decode_execution": decode_execution,
+            "binding_decode_first_use":
+                plan_setup + decode_binding_setup + decode_execution,
+            "binding_decode_reuse_amortized":
+                decode_execution +
+                (plan_setup + decode_binding_setup) / reuse,
+        }
+        normalized["api_lanes"] = PREVALIDATED_API_LANES
+        normalized["prevalidated_binding"] = True
     return normalized
+
+
+def candidate_target_name() -> str:
+    return (
+        "bench_leopard2_prevalidated_batch" if _PREVALIDATED_BINDING else
+        "bench_leopard2")
+
+
+def capture_sources_and_builds(
+    options: argparse.Namespace,
+) -> dict[str, Any]:
+    """Bind provenance to the selected ordinary or prevalidated target."""
+    if not _PREVALIDATED_BINDING:
+        return BASE_CAPTURE_SOURCES_AND_BUILDS(options)
+
+    candidate_source = options.source_root.resolve(strict=True)
+    main_source = options.main_source_root.resolve(strict=True)
+    try:
+        sources = BASE.MAIN_SUPPORT.git_capture.capture_git_identities((
+            (candidate_source, options.source_commit, False),
+            (main_source, BASE.MAIN_COMMIT, True),
+        ))
+    except Exception as error:
+        raise EvidenceError(f"source capture failed: {error}") from error
+    require(sources[0].get("tree") == options.source_tree and
+            sources[0].get("tracked_status") == "clean" and
+            sources[1].get("tree") is not None and
+            sources[1].get("tracked_status") == "clean",
+            "source tree or tracked cleanliness differs")
+
+    candidate_build = options.build_dir.resolve(strict=True)
+    target = candidate_target_name()
+    candidate_executable = candidate_build / target
+    try:
+        candidate_provenance = \
+            BASE.BUILD_PROVENANCE.candidate_build_provenance(
+                candidate_build, candidate_source, candidate_executable,
+                target)
+    except Exception as error:
+        raise EvidenceError(f"candidate build provenance failed: {error}") \
+            from error
+
+    main_build = options.main_build_dir.resolve(strict=True)
+    main_build_executable = main_build / "leopard_main_benchmark"
+    main_archive = main_build / "libleopard_main_exact.a"
+    main_specification = {
+        "baseline_build_dir": str(main_build),
+        "baseline_executable": str(main_build_executable),
+        "baseline_archive": str(main_archive),
+        "baseline_source_root": str(main_source),
+        "candidate_source_root": str(candidate_source),
+        "baseline_pure_avx2": True,
+    }
+    try:
+        main_provenance = BASE.MAIN_SUPPORT.build_provenance(
+            "baseline", main_specification)
+    except Exception as error:
+        raise EvidenceError(f"exact-main build provenance failed: {error}") \
+            from error
+    return {
+        "candidate_source": sources[0],
+        "main_source": sources[1],
+        "candidate_build": candidate_provenance,
+        "main_build": main_provenance,
+    }
+
+
+def analyze_binding_cell(
+    cell: Mapping[str, Any],
+    rounds: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Analyze binding execution without naming it as an ordinary API call."""
+    require(bool(rounds), "cell has no completed rounds")
+    reference = rounds[0]["segments"][0]["invocations"][0][
+        "normalized"]["digests"]
+    same_source_names = (
+        "codec_setup", "binding_encode_setup",
+        "binding_encode_execution", "binding_encode_first_use",
+        "binding_encode_reuse_amortized", "decode_plan_setup",
+        "binding_decode_setup", "binding_decode_execution",
+        "binding_decode_first_use", "binding_decode_reuse_amortized",
+    )
+    exact_main_comparisons = {
+        "exact_main_leo_encode_vs_binding_encode_execution_"
+        "semantically_different":
+            ("legacy_encode", "binding_encode_execution"),
+        "exact_main_leo_encode_vs_binding_encode_first_use_"
+        "semantically_different":
+            ("legacy_encode", "binding_encode_first_use"),
+        "exact_main_leo_decode_vs_binding_decode_execution_"
+        "semantically_different":
+            ("legacy_decode", "binding_decode_execution"),
+        "exact_main_leo_decode_vs_binding_decode_first_use_"
+        "semantically_different":
+            ("legacy_decode", "binding_decode_first_use"),
+    }
+    logs = {
+        "candidate_vs_control": {name: [] for name in same_source_names},
+        "candidate_vs_main": {
+            name: [] for name in exact_main_comparisons},
+    }
+    for round_index, round_value in enumerate(rounds):
+        require(round_value.get("round") == round_index,
+                "round sequence is not contiguous and zero-based")
+        isolation = round_value.get("isolation")
+        require(isinstance(isolation, Mapping) and
+                isolation.get("accepted") is True and
+                isolation.get("delta", {}).get(
+                    "reserved_sibling", {}).get("nonidle_jiffies") == 0,
+                "contaminated round cannot be analyzed")
+        segments = round_value.get("segments")
+        require(isinstance(segments, list) and len(segments) == 2,
+                "round does not contain two balanced segments")
+        expected_segments = BASE.ROUND_SEGMENTS[round_index % 2]
+        for segment_index, segment in enumerate(segments):
+            require(isinstance(segment, Mapping),
+                    "round segment is not an object")
+            expected_order = expected_segments[segment_index]
+            invocations = segment.get("invocations")
+            require(isinstance(invocations, list) and
+                    segment.get("order") == list(expected_order) and
+                    [item.get("implementation")
+                     if isinstance(item, Mapping) else None
+                     for item in invocations] == list(expected_order) and
+                    len(invocations) == 4 and
+                    all(item["normalized"]["digests"] == reference
+                        for item in invocations),
+                    "balanced segment order or workload digests differ")
+            baseline = segment.get("baseline")
+            expected_baseline = (
+                "main" if "main" in expected_order else "control")
+            require(baseline == expected_baseline,
+                    "segment baseline differs from its declared order")
+            candidates = [item for item in invocations
+                          if item["implementation"] == "candidate"]
+            baselines = [item for item in invocations
+                         if item["implementation"] == baseline]
+            require(len(candidates) == len(baselines) == 2,
+                    "balanced segment lacks two observations per lane")
+            contrast = (
+                "candidate_vs_main" if baseline == "main" else
+                "candidate_vs_control")
+            comparisons = (
+                exact_main_comparisons if baseline == "main" else
+                {name: (name, name) for name in same_source_names})
+            for name, (baseline_name, candidate_name) in comparisons.items():
+                candidate_log = statistics.mean(math.log(
+                    item["normalized"]["metrics_us"][candidate_name])
+                    for item in candidates)
+                baseline_log = statistics.mean(math.log(
+                    item["normalized"]["metrics_us"][baseline_name])
+                    for item in baselines)
+                logs[contrast][name].append(baseline_log - candidate_log)
+    return {
+        "cell": dict(cell),
+        "digests": dict(reference),
+        "candidate_vs_control": {
+            name: BASE.confidence_interval(values)
+            for name, values in logs["candidate_vs_control"].items()
+        },
+        "candidate_vs_main": {
+            name: BASE.confidence_interval(values)
+            for name, values in logs["candidate_vs_main"].items()
+        },
+        "exact_main_comparison_semantics": {
+            "equivalent_public_api_semantics": False,
+            "label": "cross_api_structural_reference_only",
+            "main_calls": ["leo_encode", "leo_decode"],
+            "leopard2_calls": [
+                PREVALIDATED_ENCODE_API, PREVALIDATED_DECODE_API],
+            "reason": (
+                "Exact Leopard main has no reusable prevalidated-binding API; "
+                "these ratios compare distinct call/setup contracts and are "
+                "not ordinary-public-API speedup claims."),
+        },
+    }
 
 
 def make_contract(
@@ -277,7 +626,7 @@ def make_contract(
                 for left, right in zip(candidate_example, control_example)),
             "candidate/control argv allocation shape differs")
     return {
-        "schema": SCHEMA,
+        "schema": BASE.SCHEMA,
         "main_commit": BASE.MAIN_COMMIT,
         "source_commit": options.source_commit,
         "source_tree": options.source_tree,
@@ -290,17 +639,39 @@ def make_contract(
         "runtime_attribution": {
             "candidate_arguments": ["--r1-fixed-avx2-mode", "1"],
             "control_arguments": ["--r1-fixed-avx2-mode", "0"],
+            "shared_prevalidated_binding_argument":
+                _PREVALIDATED_BINDING,
             "small_reduction_forced_off_before_codec_creation": True,
             "only_runtime_difference": True,
             "candidate_control_equal_argument_lengths": True,
         },
         "api_lane_contract": BASE.API_LANES,
-        "ordinary_batch_route_proof": ORDINARY_BATCH_ROUTE_PROOF,
+        ("prevalidated_binding_route_proof" if _PREVALIDATED_BINDING else
+         "ordinary_batch_route_proof"): (
+            PREVALIDATED_BINDING_ROUTE_PROOF if _PREVALIDATED_BINDING else
+            ORDINARY_BATCH_ROUTE_PROOF),
         "benchmark_api_scope": (
+            "Schema v23 times leo2_encode_batch_binding_execute and "
+            "leo2_decode_batch_binding_execute while reporting both binding "
+            "creation costs separately. Exact-main leo_encode/leo_decode "
+            "ratios are cross-API structural references, not ordinary API "
+            "speedup claims."
+            if _PREVALIDATED_BINDING else
             "Schema v23 times ordinary leo2_encode_batch(item_count=1), "
             "leo2_decode_plan_execute_batch(item_count=1), and distinct "
             "leo2_encode/leo2_decode one-shot calls without prevalidated "
             "bindings or preflight scratch."),
+        "exact_main_comparison_semantics": (
+            {
+                "equivalent_public_api_semantics": False,
+                "label": "cross_api_structural_reference_only",
+                "main_calls": ["leo_encode", "leo_decode"],
+                "leopard2_calls": [
+                    PREVALIDATED_ENCODE_API, PREVALIDATED_DECODE_API],
+            } if _PREVALIDATED_BINDING else {
+                "equivalent_public_api_semantics": True,
+                "label": "ordinary_public_api_comparison",
+            }),
         "isolation": {
             "canonical_lock": str(BASE.LOCK_PATH),
             "benchmark_cpu": options.cpu,
@@ -341,25 +712,41 @@ def make_contract(
     }
 
 
-def configure_base(main_sha256: str | None = None) -> None:
+def configure_base(
+    main_sha256: str | None = None,
+    prevalidated_binding: bool = False,
+) -> None:
     """Install this campaign's policy into the shared evidence engine."""
-    BASE.SCHEMA = SCHEMA
-    BASE.MANIFEST_SCHEMA = MANIFEST_SCHEMA
-    BASE.CELL_SCHEMA = CELL_SCHEMA
-    BASE.SUMMARY_SCHEMA = SUMMARY_SCHEMA
-    BASE.FAILURE_SCHEMA = FAILURE_SCHEMA
+    global _PREVALIDATED_BINDING
+    _PREVALIDATED_BINDING = prevalidated_binding
+    BASE.SCHEMA = BINDING_SCHEMA if prevalidated_binding else SCHEMA
+    BASE.MANIFEST_SCHEMA = (
+        BINDING_MANIFEST_SCHEMA if prevalidated_binding else MANIFEST_SCHEMA)
+    BASE.CELL_SCHEMA = (
+        BINDING_CELL_SCHEMA if prevalidated_binding else CELL_SCHEMA)
+    BASE.SUMMARY_SCHEMA = (
+        BINDING_SUMMARY_SCHEMA if prevalidated_binding else SUMMARY_SCHEMA)
+    BASE.FAILURE_SCHEMA = (
+        BINDING_FAILURE_SCHEMA if prevalidated_binding else FAILURE_SCHEMA)
     BASE.MODE_SYMBOL = MODE_SYMBOL
     BASE.BENCHMARK_CPU = BENCHMARK_CPU
     BASE.RESERVED_SIBLING = RESERVED_SIBLING
     BASE.RUNNER_PATH = RUNNER_PATH
     BASE.RUNNER_DEPENDENCIES = (RUNNER_PATH,) + BASE_RUNNER_DEPENDENCIES
     BASE.ORDINARY_BATCH_ROUTE_PROOF = ORDINARY_BATCH_ROUTE_PROOF
+    BASE.API_LANES = (
+        PREVALIDATED_API_LANES if prevalidated_binding else BASE_API_LANES)
     BASE.validate_frozen_candidate_identity = validate_candidate_identity
     BASE.expected_reduction_path = expected_reduction_path
     BASE.campaign_cells = campaign_cells
     BASE.benchmark_command = benchmark_command
     BASE.validate_result = validate_result
     BASE.make_contract = make_contract
+    BASE.capture_sources_and_builds = (
+        capture_sources_and_builds if prevalidated_binding else
+        BASE_CAPTURE_SOURCES_AND_BUILDS)
+    BASE.analyze_cell = (
+        analyze_binding_cell if prevalidated_binding else BASE_ANALYZE_CELL)
     if main_sha256 is not None:
         BASE.MAIN_SHA256 = main_sha256
 
@@ -367,6 +754,7 @@ def configure_base(main_sha256: str | None = None) -> None:
 def fixture_result(
     cell: Mapping[str, Any], mode: int,
     iterations: int = 5, warmup: int = 2,
+    prevalidated_binding: bool = False,
 ) -> dict[str, Any]:
     def setup(value: float) -> dict[str, Any]:
         return {"median_us": value, "samples_us": [value] * iterations}
@@ -380,7 +768,7 @@ def fixture_result(
     path = str(cell[
         "candidate_reduction_path" if mode == 1 else
         "control_reduction_path"])
-    return {
+    result = {
         "schema": BENCHMARK_SCHEMA,
         "parameters": {
             "K": cell["K"], "R": 1, "shard_bytes": cell["bytes"],
@@ -434,6 +822,23 @@ def fixture_result(
             "one_shot_decode_including_setup": execution(7.0),
         },
     }
+    if prevalidated_binding:
+        result["parameters"]["prevalidated_binding"] = True
+        result["build"].update({
+            name: False for name in PREVALIDATED_BUILD_FIELDS})
+        result["build"]["prevalidated_batch_experiment"] = True
+        result["build"].update({
+            "r1_prevalidated_binding_attribution": True,
+            "r1_encode_binding_setup_api": PREVALIDATED_ENCODE_SETUP_API,
+            "r1_decode_binding_setup_api": PREVALIDATED_DECODE_SETUP_API,
+            "r1_binding_setup_reported_separately": True,
+            "r1_binding_item_count": 1,
+            "r1_timed_encode_api": PREVALIDATED_ENCODE_API,
+            "r1_timed_reused_decode_api": PREVALIDATED_DECODE_API,
+        })
+        result["metrics"]["encode_binding_setup"] = setup(0.5)
+        result["metrics"]["decode_binding_setup"] = setup(0.75)
+    return result
 
 
 def self_test() -> int:
@@ -520,6 +925,87 @@ def self_test() -> int:
             raise EvidenceError(
                 f"self-test accepted diagnostic mutation: {mutation}")
 
+    configure_base(prevalidated_binding=True)
+    require(candidate_target_name() == "bench_leopard2_prevalidated_batch",
+            "self-test selected the wrong prevalidated provenance target")
+    binding_candidate = benchmark_command(
+        "candidate", Path("/frozen/a/benchmark"), sample,
+        BENCHMARK_CPU, 5, 2)
+    binding_control = benchmark_command(
+        "control", Path("/frozen/b/benchmark"), sample,
+        BENCHMARK_CPU, 5, 2)
+    require("--prevalidated-binding" in binding_candidate and
+            "--prevalidated-binding" in binding_control and
+            binding_candidate[-4:] == [
+                "--r1-fixed-avx2-mode", "1", "--json", "-"] and
+            binding_control[-4:] == [
+                "--r1-fixed-avx2-mode", "0", "--json", "-"] and
+            len(binding_candidate) == len(binding_control) and
+            all(len(left) == len(right) for left, right in
+                zip(binding_candidate, binding_control)),
+            "self-test prevalidated binding argv attribution failed")
+
+    binding_fixture = fixture_result(
+        sample, 1, prevalidated_binding=True)
+    binding_normalized = validate_result(
+        "candidate", binding_fixture, sample, 5, 2)
+    require(binding_normalized.get("prevalidated_binding") is True and
+            binding_normalized["api_lanes"][
+                "binding_encode_execution"]["api"] ==
+                PREVALIDATED_ENCODE_API and
+            binding_normalized["api_lanes"][
+                "binding_decode_execution"]["api"] ==
+                PREVALIDATED_DECODE_API and
+            math.isclose(binding_normalized["metrics_us"][
+                "binding_encode_first_use"], 2.5) and
+            math.isclose(binding_normalized["metrics_us"][
+                "binding_decode_first_use"], 7.75),
+            "self-test binding setup/execution normalization changed")
+    for mutation in (
+            "compile_marker", "explicit_marker", "parameter_marker",
+            "encode_api", "decode_api", "encode_setup_api",
+            "decode_setup_api", "setup_separate", "item_count",
+            "encode_setup_metric", "decode_setup_metric"):
+        changed = json.loads(json.dumps(binding_fixture))
+        if mutation == "compile_marker":
+            changed["build"]["prevalidated_batch_experiment"] = False
+        elif mutation == "explicit_marker":
+            changed["build"]["r1_prevalidated_binding_attribution"] = False
+        elif mutation == "parameter_marker":
+            changed["parameters"]["prevalidated_binding"] = False
+        elif mutation == "encode_api":
+            changed["build"]["r1_timed_encode_api"] = "leo2_encode_batch"
+        elif mutation == "decode_api":
+            changed["build"]["r1_timed_reused_decode_api"] = \
+                "leo2_decode_plan_execute_batch"
+        elif mutation == "encode_setup_api":
+            changed["build"]["r1_encode_binding_setup_api"] += "!"
+        elif mutation == "decode_setup_api":
+            changed["build"]["r1_decode_binding_setup_api"] += "!"
+        elif mutation == "setup_separate":
+            changed["build"]["r1_binding_setup_reported_separately"] = False
+        elif mutation == "item_count":
+            changed["build"]["r1_binding_item_count"] = 2
+        elif mutation == "encode_setup_metric":
+            del changed["metrics"]["encode_binding_setup"]
+        else:
+            del changed["metrics"]["decode_binding_setup"]
+        try:
+            validate_result("candidate", changed, sample, 5, 2)
+        except EvidenceError:
+            pass
+        else:
+            raise EvidenceError(
+                "self-test accepted prevalidated binding mutation: " +
+                mutation)
+
+    configure_base()
+    require(candidate_target_name() == "bench_leopard2" and
+            "--prevalidated-binding" not in benchmark_command(
+                "candidate", Path("/frozen/a/benchmark"), sample,
+                BENCHMARK_CPU, 5, 2),
+            "self-test failed to restore ordinary campaign behavior")
+
     require(BASE.inspect_isa_disassembly(
         "  10: c5 fd ef c0 vpxor ymm0,ymm0,ymm0") == {
             "evex_prefixed_instruction_count": 0,
@@ -530,6 +1016,7 @@ def self_test() -> int:
         "cells": len(cells),
         "targets": 84,
         "controls": 32,
+        "prevalidated_binding_contract": "passed",
     }, sort_keys=True))
     return 0
 
@@ -537,13 +1024,18 @@ def self_test() -> int:
 def parse_arguments(arguments: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--self-test", action="store_true")
+    parser.add_argument(
+        "--prevalidated-binding", action="store_true",
+        help=("benchmark the explicit one-item prevalidated binding "
+              "create/execute contract instead of ordinary batch APIs"))
     parser.add_argument("--candidate", type=Path)
     parser.add_argument("--control", type=Path)
     parser.add_argument("--main", type=Path)
     parser.add_argument("--candidate-sha256")
     parser.add_argument("--main-sha256")
     parser.add_argument("--build-dir", type=Path,
-                        help="provenance root containing bench_leopard2")
+                        help=("provenance root containing bench_leopard2 or "
+                              "bench_leopard2_prevalidated_batch"))
     parser.add_argument("--source-root", type=Path)
     parser.add_argument("--source-commit")
     parser.add_argument("--source-tree")
@@ -588,7 +1080,7 @@ def main(arguments: Sequence[str] | None = None) -> int:
     options = parse_arguments(arguments)
     if options.self_test:
         return self_test()
-    configure_base(options.main_sha256)
+    configure_base(options.main_sha256, options.prevalidated_binding)
     return BASE.run_campaign(options)
 
 

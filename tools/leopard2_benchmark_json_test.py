@@ -44,6 +44,11 @@ R1_TIMED_REUSED_DECODE_API = (
     "leo2_decode_plan_execute_batch:item_count=1:"
     "no_preflight_scratch:one_loss_direct_xor")
 R1_TIMED_ONE_SHOT_DECODE_API = "leo2_decode:one_loss"
+R1_PREVALIDATED_TIMED_ENCODE_API = "leo2_encode_batch_binding_execute"
+R1_PREVALIDATED_TIMED_REUSED_DECODE_API = (
+    "leo2_decode_batch_binding_execute")
+R1_ENCODE_BINDING_SETUP_API = "leo2_encode_batch_binding_create"
+R1_DECODE_BINDING_SETUP_API = "leo2_decode_batch_binding_create"
 R1_FIXED_AVX2_SELECTOR_CONTRACT = (
     "LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,B=64|256,"
     "native_layout,auto_encode_decode")
@@ -353,6 +358,7 @@ def run(
     disable_k9r6r8_b256_terminal: bool = False,
     r1_small_reduction_mode: int | None = None,
     r1_fixed_avx2_mode: int | None = None,
+    prevalidated_binding: bool = False,
     one_shot_plan_setup_mode: int | None = None,
     gf8_avx2_walsh_locator_mode: int | None = None,
     *,
@@ -371,6 +377,9 @@ def run(
     require(r1_small_reduction_mode is None or
             r1_fixed_avx2_mode is None,
             "R=1 diagnostic modes must be mutually exclusive")
+    require(type(prevalidated_binding) is bool and
+            (not prevalidated_binding or r1_fixed_avx2_mode is not None),
+            "prevalidated binding requires a fixed AVX2 R=1 mode")
     require(one_shot_plan_setup_mode is None or
             (type(one_shot_plan_setup_mode) is int and
              one_shot_plan_setup_mode in {0, 1, 2, 3}),
@@ -419,6 +428,8 @@ def run(
             command.extend((
                 "--r1-fixed-avx2-mode",
                 str(r1_fixed_avx2_mode)))
+        if prevalidated_binding:
+            command.append("--prevalidated-binding")
         if one_shot_plan_setup_mode is not None:
             command.extend((
                 "--one-shot-plan-setup-mode",
@@ -1106,6 +1117,69 @@ def validate_r1_fixed_avx2_report(
     }, "fixed AVX2 R=1 attribution did not exclude the legacy lane")
 
 
+def validate_prevalidated_r1_fixed_avx2_report(
+    document: dict[str, Any],
+    expected_mode: int,
+    expected_parameters: set[str],
+    expected_path: str,
+) -> None:
+    require(type(expected_mode) is int and expected_mode in {0, 1},
+            "invalid expected prevalidated fixed AVX2 R=1 mode")
+    require(expected_path in {"pairwise", "fixed_avx2"},
+            "invalid expected prevalidated fixed AVX2 R=1 path")
+    validate_prevalidated_batch_variant(document, True)
+    validate_workload_digests(document)
+
+    build = document["build"]
+    require(build["r1_fixed_avx2_diagnostic_mode"] == expected_mode and
+            build["r1_fixed_avx2_candidate_enabled"] is True and
+            build["r1_small_reduction_codec_enabled"] is False and
+            build["r1_encode_reduction_path"] == expected_path and
+            build["r1_decode_reduction_path"] == expected_path,
+            "prevalidated fixed AVX2 R=1 selected an unexpected path")
+
+    parameters = document["parameters"]
+    require(set(parameters) == expected_parameters and
+            parameters["K"] == 3 and parameters["R"] == 1 and
+            parameters["requested_profile"] == "legacy_high_v1" and
+            parameters["requested_field"] == "gf8" and
+            parameters["requested_backend"] == "avx2" and
+            parameters["shard_bytes"] == 64 and
+            parameters["loss_count"] == 1 and
+            parameters["batch"] == 1 and parameters["reuse"] == 1 and
+            parameters["iterations"] == 1 and
+            parameters["warmup"] == 0 and
+            parameters["thread_count"] == 1 and
+            parameters["skip_legacy"] is True and
+            parameters["retain_samples"] is True and
+            parameters["measure_one_shot_decode"] is True and
+            parameters["r1_fixed_avx2_mode"] == expected_mode and
+            parameters["prevalidated_binding"] is True,
+            "prevalidated fixed AVX2 R=1 report changed its one-item cell")
+    require(document["resolved"] == {
+        "profile": "legacy_high_v1",
+        "field": "gf8",
+        "backend": "avx2",
+        "thread_count": 1,
+        "parent_count": 4,
+        "padded_side": 1,
+    }, "prevalidated fixed AVX2 R=1 codec identity changed")
+    memory = document["memory"]
+    require(memory["encode_batch_preflight_scratch_bytes"] == 0 and
+            memory["decode_batch_preflight_scratch_bytes"] == 0 and
+            memory["one_shot_decode_scratch_bytes_batch"] ==
+                memory["one_shot_decode_scratch_bytes_per_stripe"],
+            "prevalidated fixed AVX2 R=1 report changed API scratch scope")
+    require(document["legacy"] == {
+        "available": False,
+        "unavailable_reason": "disabled by --skip-legacy",
+        "codec_setup": None,
+        "decode_timing_includes_setup": True,
+        "encode_execution": None,
+        "decode_including_setup": None,
+    }, "prevalidated fixed AVX2 R=1 report included the legacy lane")
+
+
 def validate_direct_executor_report(
     document: dict[str, Any],
     expected_executor: str,
@@ -1244,18 +1318,57 @@ def validate_prevalidated_batch_variant(
         "high_t8_two_block_selected",
     }
     metric_fields = {"encode_binding_setup", "decode_binding_setup"}
+    r1_binding_fields = {
+        "r1_prevalidated_binding_attribution",
+        "r1_encode_binding_setup_api",
+        "r1_decode_binding_setup_api",
+        "r1_binding_setup_reported_separately",
+        "r1_binding_item_count",
+    }
     require(isinstance(document.get("build"), dict) and
             build_fields <= set(document["build"]),
             "prevalidated benchmark build markers are incomplete")
     require(isinstance(document.get("metrics"), dict) and
             metric_fields <= set(document["metrics"]),
             "prevalidated benchmark setup metrics are incomplete")
+    require(isinstance(document.get("parameters"), dict),
+            "prevalidated benchmark parameters are missing")
+    r1_binding = "prevalidated_binding" in document["parameters"]
+    if r1_binding:
+        build = document["build"]
+        require(document.get("schema") == "leopard2-benchmark-v23" and
+                document["parameters"]["prevalidated_binding"] is True and
+                r1_binding_fields <= set(build) and
+                build["r1_prevalidated_binding_attribution"] is True and
+                build["r1_encode_binding_setup_api"] ==
+                    R1_ENCODE_BINDING_SETUP_API and
+                build["r1_decode_binding_setup_api"] ==
+                    R1_DECODE_BINDING_SETUP_API and
+                build["r1_binding_setup_reported_separately"] is True and
+                type(build["r1_binding_item_count"]) is int and
+                build["r1_binding_item_count"] == 1 and
+                build["r1_timed_encode_api"] ==
+                    R1_PREVALIDATED_TIMED_ENCODE_API and
+                build["r1_timed_one_shot_encode_api"] ==
+                    R1_TIMED_ONE_SHOT_ENCODE_API and
+                build["r1_timed_reused_decode_api"] ==
+                    R1_PREVALIDATED_TIMED_REUSED_DECODE_API and
+                build["r1_timed_one_shot_decode_api"] ==
+                    R1_TIMED_ONE_SHOT_DECODE_API,
+                "prevalidated R=1 binding attribution is invalid")
 
     normalized = copy.deepcopy(document)
     for name in build_fields:
         del normalized["build"][name]
     for name in metric_fields:
         del normalized["metrics"][name]
+    if r1_binding:
+        for name in r1_binding_fields:
+            del normalized["build"][name]
+        del normalized["parameters"]["prevalidated_binding"]
+        normalized["build"]["r1_timed_encode_api"] = R1_TIMED_ENCODE_API
+        normalized["build"]["r1_timed_reused_decode_api"] = (
+            R1_TIMED_REUSED_DECODE_API)
     validate_common(normalized, retain_samples)
 
     build = document["build"]
@@ -1265,7 +1378,7 @@ def validate_prevalidated_batch_variant(
     require(build["high_t4_batch_selected"] is False and
             build["high_t8_one_block_selected"] is False and
             build["high_t8_two_block_selected"] is False,
-            "K=1/R=1 unexpectedly selected a T=4/T=8 encode binding")
+            "R=1 unexpectedly selected a T=4/T=8 encode binding")
 
     iterations = document["parameters"]["iterations"]
     for name in sorted(metric_fields):
@@ -1604,6 +1717,49 @@ def main() -> int:
                 fixed_r1_mode_one["workload_digests"],
             "fixed AVX2 R=1 attribution changed encoded or recovered data")
 
+    prevalidated_fixed_r1_parameters = fixed_r1_parameters | {
+        "prevalidated_binding"}
+    prevalidated_fixed_r1_mode_zero = run(
+        prevalidated_executable, True, measure_one_shot_decode=True,
+        r1_fixed_avx2_mode=0, prevalidated_binding=True,
+        k=3, r=1, losses=1)
+    prevalidated_fixed_r1_mode_one = run(
+        prevalidated_executable, True, measure_one_shot_decode=True,
+        r1_fixed_avx2_mode=1, prevalidated_binding=True,
+        k=3, r=1, losses=1)
+    validate_prevalidated_r1_fixed_avx2_report(
+        prevalidated_fixed_r1_mode_zero, 0,
+        prevalidated_fixed_r1_parameters, "pairwise")
+    validate_prevalidated_r1_fixed_avx2_report(
+        prevalidated_fixed_r1_mode_one, 1,
+        prevalidated_fixed_r1_parameters, "fixed_avx2")
+    require(fixed_r1_mode_zero["workload_digests"] ==
+                fixed_r1_mode_one["workload_digests"] ==
+                prevalidated_fixed_r1_mode_zero["workload_digests"] ==
+                prevalidated_fixed_r1_mode_one["workload_digests"],
+            "prevalidated binding changed encoded or recovered R=1 data")
+
+    malformed_binding_attribution = copy.deepcopy(
+        prevalidated_fixed_r1_mode_zero)
+    malformed_binding_attribution["build"][
+        "r1_prevalidated_binding_attribution"] = False
+    require_prevalidated_rejected(
+        malformed_binding_attribution, "disabled R=1 binding attribution")
+    malformed_binding_api = copy.deepcopy(prevalidated_fixed_r1_mode_zero)
+    malformed_binding_api["build"]["r1_timed_encode_api"] = (
+        R1_TIMED_ENCODE_API)
+    require_prevalidated_rejected(
+        malformed_binding_api, "ambiguous R=1 binding timed API")
+    malformed_binding_parameter = copy.deepcopy(
+        prevalidated_fixed_r1_mode_zero)
+    malformed_binding_parameter["parameters"]["prevalidated_binding"] = False
+    require_prevalidated_rejected(
+        malformed_binding_parameter, "disabled R=1 binding parameter")
+    missing_r1_binding_setup = copy.deepcopy(prevalidated_fixed_r1_mode_zero)
+    del missing_r1_binding_setup["metrics"]["decode_binding_setup"]
+    require_prevalidated_rejected(
+        missing_r1_binding_setup, "missing R=1 decode binding setup")
+
     malformed_fixed_r1_mode = copy.deepcopy(fixed_r1_mode_zero)
     malformed_fixed_r1_mode["build"][
         "r1_fixed_avx2_diagnostic_mode"] = False
@@ -1661,7 +1817,12 @@ def main() -> int:
         "--retain-samples, and --measure-one-shot-decode")
     require_schema_modes_rejected(
         prevalidated_executable, fixed_r1_contract_arguments,
-        "--r1-fixed-avx2-mode requires the ordinary benchmark")
+        "--r1-fixed-avx2-mode in the prevalidated benchmark requires "
+        "--prevalidated-binding")
+    require_schema_modes_rejected(
+        prevalidated_executable, ("--prevalidated-binding",),
+        "--prevalidated-binding requires --r1-fixed-avx2-mode in the "
+        "prevalidated benchmark")
 
     path_diagnostic = (
         "--attest-source and --report-decode-path use distinct JSON schemas")

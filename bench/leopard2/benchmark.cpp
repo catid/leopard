@@ -131,6 +131,7 @@ struct Options
     bool disable_k9r6r8_b256_terminal;
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     bool disable_high_t4_binding;
+    bool prevalidated_binding;
 #endif
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     bool force_translated_low;
@@ -185,6 +186,7 @@ struct Options
         , disable_k9r6r8_b256_terminal(false)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         , disable_high_t4_binding(false)
+        , prevalidated_binding(false)
 #endif
 #if defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         , force_translated_low(false)
@@ -501,6 +503,9 @@ static void Usage(std::ostream& output, const char* program)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         << "  --disable-high-t4-binding\n"
         << "                         Attribution-only: retain the prior T=4 path\n"
+        << "  --prevalidated-binding\n"
+        << "                         Attribute R=1 fixed-AVX2 execution through reusable\n"
+        << "                         prevalidated encode/decode bindings; setup remains separate\n"
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         << "  --high-evaluator-mode NAME\n"
@@ -668,6 +673,8 @@ static Options ParseOptions(int argc, char** argv)
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         else if (argument == "--disable-high-t4-binding")
             options.disable_high_t4_binding = true;
+        else if (argument == "--prevalidated-binding")
+            options.prevalidated_binding = true;
 #endif
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         else if (argument == "--high-evaluator-mode")
@@ -859,8 +866,29 @@ static Options ParseOptions(int argc, char** argv)
              "low/GF8/AVX2, batch=1, one thread, --skip-legacy, "
              "--retain-samples, and --measure-one-shot-encode");
     }
-#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH) || \
-    defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+    if (options.r1_small_reduction_mode >= 0)
+        Fail("--r1-small-reduction-mode requires the ordinary benchmark");
+    if (options.r1_fixed_avx2_mode >= 0 &&
+        !options.prevalidated_binding)
+    {
+        Fail("--r1-fixed-avx2-mode in the prevalidated benchmark requires "
+             "--prevalidated-binding");
+    }
+    if (options.prevalidated_binding && options.r1_fixed_avx2_mode < 0)
+    {
+        Fail("--prevalidated-binding requires --r1-fixed-avx2-mode in the "
+             "prevalidated benchmark");
+    }
+    if (options.one_shot_plan_setup_mode >= 0)
+        Fail("--one-shot-plan-setup-mode requires the ordinary benchmark");
+    if (options.low_p32_b64_terminal_mode >= 0)
+        Fail("--low-p32-b64-terminal-mode requires the ordinary benchmark");
+    if (options.low_p128_b64_terminal_mode >= 0)
+        Fail("--low-p128-b64-terminal-mode requires the ordinary benchmark");
+    if (options.low_p16_partial_direct_output_mode >= 0)
+        Fail("--low-p16-partial-direct-output-mode requires the ordinary benchmark");
+#elif defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
     defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
     if (options.r1_small_reduction_mode >= 0)
         Fail("--r1-small-reduction-mode requires the ordinary benchmark");
@@ -2410,22 +2438,53 @@ static int Run(const Options& options)
                  << "    \"r1_fixed_avx2_selector_contract\": "
                     "\"LEGACY_HIGH_V1,GF8,AVX2,R=1,K=3..255,"
                     "B=64|256,native_layout,auto_encode_decode\",\n";
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+            if (options.prevalidated_binding)
+            {
+                json << "    \"r1_prevalidated_binding_attribution\": "
+                        "true,\n"
+                     << "    \"r1_encode_binding_setup_api\": "
+                        "\"leo2_encode_batch_binding_create\",\n"
+                     << "    \"r1_decode_binding_setup_api\": "
+                        "\"leo2_decode_batch_binding_create\",\n"
+                     << "    \"r1_binding_setup_reported_separately\": "
+                        "true,\n"
+                     << "    \"r1_binding_item_count\": 1,\n";
+            }
+#endif
         }
         json << "    \"r1_encode_reduction_path\": \""
              << R1ReductionPathName(r1_reduction_path_info.encode_path)
              << "\",\n"
              << "    \"r1_decode_reduction_path\": \""
              << R1ReductionPathName(r1_reduction_path_info.decode_path)
-             << "\",\n"
-             << "    \"r1_timed_encode_api\": "
-                "\"leo2_encode_batch:item_count=1:no_preflight_scratch\",\n"
-             << "    \"r1_timed_one_shot_encode_api\": "
-                "\"leo2_encode\",\n"
-             << "    \"r1_timed_reused_decode_api\": "
-                "\"leo2_decode_plan_execute_batch:item_count=1:"
-                "no_preflight_scratch:one_loss_direct_xor\",\n"
-             << "    \"r1_timed_one_shot_decode_api\": "
-                "\"leo2_decode:one_loss\"";
+             << "\",\n";
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        if (options.prevalidated_binding)
+        {
+            json << "    \"r1_timed_encode_api\": "
+                    "\"leo2_encode_batch_binding_execute\",\n"
+                 << "    \"r1_timed_one_shot_encode_api\": "
+                    "\"leo2_encode\",\n"
+                 << "    \"r1_timed_reused_decode_api\": "
+                    "\"leo2_decode_batch_binding_execute\",\n"
+                 << "    \"r1_timed_one_shot_decode_api\": "
+                    "\"leo2_decode:one_loss\"";
+        }
+        else
+#endif
+        {
+            json << "    \"r1_timed_encode_api\": "
+                    "\"leo2_encode_batch:item_count=1:"
+                    "no_preflight_scratch\",\n"
+                 << "    \"r1_timed_one_shot_encode_api\": "
+                    "\"leo2_encode\",\n"
+                 << "    \"r1_timed_reused_decode_api\": "
+                    "\"leo2_decode_plan_execute_batch:item_count=1:"
+                    "no_preflight_scratch:one_loss_direct_xor\",\n"
+                 << "    \"r1_timed_one_shot_decode_api\": "
+                    "\"leo2_decode:one_loss\"";
+        }
     }
     if (options.disable_k9r6r8_b256_terminal)
     {
@@ -2521,6 +2580,10 @@ static int Run(const Options& options)
         if (options.r1_fixed_avx2_mode >= 0)
             json << "    \"r1_fixed_avx2_mode\": "
                  << options.r1_fixed_avx2_mode << ",\n";
+#if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
+        if (options.prevalidated_binding)
+            json << "    \"prevalidated_binding\": true,\n";
+#endif
     }
     json << "    \"shard_bytes\": " << options.bytes << ",\n"
          << "    \"loss_count\": " << options.losses << ",\n"
