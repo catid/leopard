@@ -1,0 +1,112 @@
+{
+  "schema": "leopard2-t16-tiny-schedule-bypass-negative-v1",
+  "generated_utc": "2026-08-04T02:56:50Z",
+  "decision": {
+    "status": "rejected",
+    "summary": "Do not bypass the exact pruned Algorithm 5 schedules for the native GF8 AVX2 T=16 maximum-loss fringe. The regular and pruned executors are effectively tied, with no credible five-percent production region.",
+    "production_change_retained": false,
+    "wire_format_changed": false,
+    "field_arithmetic_changed": false,
+    "kill_criterion": "Reject when a broad screen and counterbalanced confirmation fail to show a statistically credible improvement of at least five percent in a coherent target region.",
+    "reason": "The 288-cell screen produced a 1.003423 geometric ratio and only 164 wins. Five-round paired ABBA confirmation put every target and boundary interval within 1.42 percent of parity; several point estimates favored pruning."
+  },
+  "hypothesis": {
+    "candidate": "For pass-local aligned work from 64 through 512 bytes, omit immutable exact input and output schedules and execute the mature regular Algorithm 5 kernels.",
+    "candidate_scope": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "layout": "native_v1",
+      "padded_side_T": 16,
+      "parent_N": 64,
+      "original_K_inclusive": [17, 28],
+      "transmitted_recovery_R_inclusive": [9, 14],
+      "loss_rule": "missing_original_count == R",
+      "aligned_pass_bytes_inclusive": [64, 512]
+    },
+    "control": "The same executable with --force-tiled, which retains the exact pruned schedules.",
+    "arithmetic_difference": "none"
+  },
+  "provenance": {
+    "source_head": "01f7fb9c098bb7d01c428b5fb785c0db1c92f11c",
+    "source_head_tree": "e49dbb7ffcd6ca2c4e173ac121af29bc68a4c945",
+    "dirty_candidate_diff_sha256": "0662b9f7f1cb42bd2fcb3bb0fe038515a1182cb1a600177bdc9b0b0cfa4289ea",
+    "frozen_binary": "/tmp/leopard-t16-directional-20260804-v1/bench_leopard2",
+    "frozen_binary_sha256": "0daacfdc2c989e829111c09bfb6c7de5e900084bed31ae7cfa0f7b627ea70039",
+    "cmake_cache_sha256": "ac2ef7d41f6d004ed2e2c71a3755bb7cc5c6d2295d9611663df219c6f7ba7ad0",
+    "link_recipe_sha256": "659c43329dab220187eb24695fd9c8abb0ababe508610d23550fa75c8e229329",
+    "authority": "directional rejection evidence from one immutable dirty-candidate binary; it is not promotion evidence",
+    "hashes_rechecked_after_campaign": true
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "compiler": "gcc 13.3.0",
+    "timed_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "numa_nodes": 1
+  },
+  "broad_screen": {
+    "artifact": "/tmp/leopard-t16-directional-20260804-v1/t16-full-region-screen.tsv",
+    "artifact_sha256": "993dc8249835a092248559b91f8c7c4f37e4dadfe9117b9ac73286f888fceaa3",
+    "method": "One process pair per cell with process order alternated by cell; 11 retained timing samples, four warmups, and reuse 128.",
+    "K_inclusive": [17, 28],
+    "R_inclusive": [9, 14],
+    "bytes": [64, 128, 256, 512],
+    "loss_rule": "L=R",
+    "seed": 9473,
+    "cells": 288,
+    "regular_wins": 164,
+    "ratio_semantics": "pruned execution time divided by regular candidate execution time; values above one favor the candidate",
+    "geometric_ratio": 1.003423,
+    "minimum_ratio": 0.962038,
+    "maximum_ratio": 1.050775,
+    "by_bytes": [
+      {"bytes": 64, "cells": 72, "regular_wins": 34, "geometric_ratio": 1.000520},
+      {"bytes": 128, "cells": 72, "regular_wins": 33, "geometric_ratio": 1.000316},
+      {"bytes": 256, "cells": 72, "regular_wins": 29, "geometric_ratio": 0.998574},
+      {"bytes": 512, "cells": 72, "regular_wins": 68, "geometric_ratio": 1.014363}
+    ]
+  },
+  "paired_confirmation": {
+    "raw_calls": "/tmp/leopard-t16-directional-20260804-v1/abba-v1/calls.tsv",
+    "raw_calls_sha256": "994d50abc960a2d56368a331eb6bf7cb6e870ffadf9dc23108eb659f17663d93",
+    "rounds": "/tmp/leopard-t16-directional-20260804-v1/abba-v1/rounds.tsv",
+    "rounds_sha256": "8cc8cf4c04431587638c7e163d8ef9bd05f86bd31d4755b2037cc6df66292508",
+    "method": "Five independent rounds per cell. Each round used ABBA or BAAB process order, two invocations per role, 21 retained timing samples, five warmups, and reuse 256.",
+    "interval": "Two-sided Student-t 95 percent interval over the five paired round log ratios, df=4.",
+    "seed": 9473,
+    "workload_digests_equal_within_every_round": true,
+    "round_trips_passed": true,
+    "results": [
+      {"cell": "K17_R9_B512_L9", "ratio": 0.989670475, "ci95_low": 0.967289750, "ci95_high": 1.012569035},
+      {"cell": "K22_R10_B512_L10", "ratio": 1.005443850, "ci95_low": 0.999663842, "ci95_high": 1.011257278},
+      {"cell": "K24_R12_B64_L12", "ratio": 0.993240798, "ci95_low": 0.977311291, "ci95_high": 1.009429946},
+      {"cell": "K24_R12_B128_L12", "ratio": 1.000579024, "ci95_low": 0.992220733, "ci95_high": 1.009007723},
+      {"cell": "K24_R12_B256_L12", "ratio": 1.000004029, "ci95_low": 0.993017418, "ci95_high": 1.007039797},
+      {"cell": "K24_R12_B511_L12", "ratio": 1.000655736, "ci95_low": 0.996424379, "ci95_high": 1.004905061},
+      {"cell": "K24_R12_B512_L12", "ratio": 0.999934429, "ci95_low": 0.992693075, "ci95_high": 1.007228605},
+      {"cell": "K24_R12_B513_L12", "ratio": 0.995136218, "ci95_low": 0.991020994, "ci95_high": 0.999268530},
+      {"cell": "K24_R12_B575_L12", "ratio": 1.000282755, "ci95_low": 0.991439235, "ci95_high": 1.009205159},
+      {"cell": "K24_R12_B576_L12", "ratio": 1.002478300, "ci95_low": 0.997469511, "ci95_high": 1.007512241},
+      {"cell": "K24_R12_B577_L12", "ratio": 1.000292414, "ci95_low": 0.993116136, "ci95_high": 1.007520547},
+      {"cell": "K28_R14_B512_L14", "ratio": 0.999951601, "ci95_low": 0.993557152, "ci95_high": 1.006387205},
+      {"cell": "K24_R15_B512_L15_inert", "ratio": 0.997891526, "ci95_low": 0.991791880, "ci95_high": 1.004028687},
+      {"cell": "K24_R16_B512_L16_inert", "ratio": 0.998493773, "ci95_low": 0.989829399, "ci95_high": 1.007233989},
+      {"cell": "K29_R9_B512_L9_inert", "ratio": 1.000604982, "ci95_low": 0.996010586, "ci95_high": 1.005220571},
+      {"cell": "K24_R14_B512_L13_inert", "ratio": 1.003799534, "ci95_low": 0.993524784, "ci95_high": 1.014180542}
+    ]
+  },
+  "correctness_and_safety": {
+    "independent_static_review": "No semantic defect found; eligibility was fail-closed and arithmetic was unchanged.",
+    "release_route_matrix": "PASS for every K=17..28, R=9..16, two maximum-loss patterns, B=63/64/65/128/256/512/1024, forced-pruned controls, one-shot, scalar, GF16, K16/K29, and partial-loss neighbors.",
+    "release_neighbor_ctest": "PASS 7/7: high_direct_production, context_backends, public_api_contract, decode_high_acceptance, high_pruned_legacy, high_t32_tiny_schedule_policy, legacy_golden.",
+    "reduced_field_builds": "PASS GF8-only and GF16-only field-options production gates.",
+    "clang18_asan_ubsan": "PASS focused route matrix with leak detection and undefined-behavior halt; peak RSS 249344 KiB."
+  },
+  "conclusion": {
+    "interpretation": "T=16 has too little schedule-interpreter overhead for regular execution to provide a robust win. The apparent 1.4 percent 512-byte screen advantage disappeared under counterbalancing, showing that process-order drift dominated the unpaired signal.",
+    "action": "Remove the candidate bypass and test-only route instrumentation. Retain the exact pruned schedules for all T=16 production calls.",
+    "next_step": "Pursue structural work with a larger expected margin, such as T8 full-parity generated terminals, K3/R3 T4 terminals, or reducing staged shard-data scratch."
+  }
+}
