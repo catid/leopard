@@ -14793,7 +14793,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
     /* Every promoted ordinary terminal is 64-byte aligned.  Reject ragged
        mature-path calls before loading the codec shape so adding a new fixed
        shape cannot tax arbitrary-byte fallbacks. */
-    if (!codec || (shard_bytes & 63U) != 0 ||
+    if ((shard_bytes & 63U) != 0 || !codec ||
         codec->terminal_t4_shape == kTerminalT4None ||
         !IsGF8AVX2T4PackedTerminalByteCount(
             codec->terminal_t4_shape, shard_bytes))
