@@ -1,0 +1,295 @@
+{
+  "schema": "leopard2-gf8-t2-k4-exact-main-evidence/v1",
+  "date_utc": "2026-08-04",
+  "status": "completed_with_scoped_promotion",
+  "scope": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "explicit_avx2",
+    "target": {"K": 4, "R": 2, "T": 2},
+    "target_shard_bytes": [63, 64, 65, 256, 1024, 2048, 2049],
+    "neighbor_shapes": [[2, 2], [3, 2], [4, 1], [4, 3], [5, 2]],
+    "loss_policy": "Every K=4,R=2 target loses the maximum two originals, using adjacent and separated practical patterns. Neighbors lose their maximum sampled original count.",
+    "batch": 1,
+    "candidate_path": "Ordinary Leopard2 packed public encode path and direct decode path; no prevalidated binding executable was timed.",
+    "baseline": "Leopard main-branch codec through the padding-aware v2 exact-main benchmark harness"
+  },
+  "ratio_orientation": "Leopard1 time divided by Leopard2 time; values above one favor Leopard2",
+  "metric_semantics": {
+    "encode": "Leopard1 encode execution divided by ordinary Leopard2 encode execution",
+    "decode_first": "Leopard1 decode including setup divided by Leopard2 decode execution plus one full decode-plan setup",
+    "decode_reuse": "Leopard1 decode including setup divided by Leopard2 decode execution plus decode-plan setup amortized over 8192 executions",
+    "row_value_format": ["ratio", "ci95_low", "ci95_high"]
+  },
+  "source_identity": {
+    "candidate_implementation_commit": "de1ebce1b7dc29458f80370bdaa6d73db15ae307",
+    "candidate_implementation_tree": "1c56d0236d8d44c0821178b0b36fc6697a228e4a",
+    "candidate_source_status": "clean",
+    "campaign_tooling_commit": "86327c6d02904bc1cf8006791ec1ce01ada50ddf",
+    "campaign_tooling_tree": "9feceeb4b467c6145ac52c815052bdf216007f62",
+    "campaign_runner_sha256": "3a85d11f9421449a3848b8c23b13c46c1be4469b0b695f058412d3e9a57d5ac0",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_tree": "b7c8830d96a978f6ec14fe747095f066e351ae72"
+  },
+  "frozen_build_identity": {
+    "candidate_benchmark_sha256": "28531f281d15340f08c189df793a33967b5c7c4cdb2e8adacaae23b1106f88b0",
+    "candidate_benchmark_size": 1244336,
+    "exact_main_v2_benchmark_sha256": "34a73d4481c989cf8e5b881b24c1a066b6bf356a707e01998e9e19d008f2d973",
+    "exact_main_v2_benchmark_size": 1174696,
+    "cmake_cache_sha256": "bb9f79c8679cab3e0b6c64d907185b1f85f00d8f8b4f50d989f8c9c832535d45",
+    "compile_commands_sha256": "e6a4d2c12f8be3d57ce790a476ebac4fa1ec25d516f396cd508d53eaa3c62bd9",
+    "static_archive_sha256": "7364a5e558417f215c2cca606e4a6ff82c73a2c0fc719aa130118e4b4919d897",
+    "archive_link_recipe_sha256": "de7a2a54fa1524b44d7ac80cbd977e4b721aa7d03e0953a1b58daac8a2419c49",
+    "benchmark_object_sha256": "b857552b5d56892ea821d1bf5b45c02f5e76c7b6295650d840a59ce4684183e3",
+    "t2_k4_object_sha256": "02bc35124ab7880e7346cf92d6d81c131497d4a4fed46f59a2c1342df7e827ee",
+    "build_type": "Release",
+    "compiler": "gcc 13.3.0",
+    "reproducible_build_proof_schema": "leopard2-reproducible-build-proof/v3",
+    "candidate_build_tree_and_timing_artifact_byte_equal": true,
+    "candidate_and_baseline_executed_from": "separate Linux sealed memfd snapshots",
+    "candidate_evex_instruction_count": 0,
+    "baseline_evex_instruction_count": 0
+  },
+  "baseline_byte_contract": {
+    "name": "logical_zero_pad_v2",
+    "logical_data_rule": "Both codecs receive identical deterministic logical bytes and all output/recovery digests cover only the logical prefix.",
+    "leopard1_physical_rule": "The Leopard1 harness rounds each shard up to the next 64-byte multiple and zero-fills the suffix because the legacy API requires 64-byte multiples.",
+    "leopard2_physical_rule": "Leopard2 processes the exact positive logical byte count without application-visible padding.",
+    "aligned_rule": "At 64, 256, 1024, and 2048 bytes, both codecs process the same physical byte count.",
+    "ragged_examples": [
+      {"logical_bytes": 63, "leopard1_physical_bytes": 64, "leopard2_physical_bytes": 63},
+      {"logical_bytes": 65, "leopard1_physical_bytes": 128, "leopard2_physical_bytes": 65},
+      {"logical_bytes": 2049, "leopard1_physical_bytes": 2112, "leopard2_physical_bytes": 2049}
+    ],
+    "ratio_scope": "time_per_call",
+    "warning": "Ragged ratios are semantically fair for the public APIs but are not equal-physical-work microbenchmarks."
+  },
+  "raw_artifacts": {
+    "ephemeral_campaign_root": "/tmp/leopard-k4r2-de1ebce-exact-main-20260804-v1",
+    "ephemeral_frozen_build_root": "/tmp/leopard-r1-de1ebce-exact-main-20260804-v1",
+    "matrix_file_sha256": "3dd6608002ff14121581701451a6724e5251ce52d63063bfdbd9ba7f0aebbef4",
+    "matrix_canonical_sha256": "f085476ffe395f7104a7111cfa4d6ec6cfa5d5bf9646f544f6477f47fd187bfb",
+    "diagnostic_summary_file_sha256": "3143a6393928e98332355f8f58c6269df01b3a1f55c046718f1faa214d4b5cff",
+    "diagnostic_identity_file_sha256": "b73563018f82bf0fbf7c110bbd5ea27f5178645ad2f2848592beca3fbe9caf7a",
+    "diagnostic_identity_canonical_sha256": "663584d4210501abd0101595be3bc32ecc21741f338f462b5ca9846a1a106b8d",
+    "diagnostic_cell_manifest_sha256": "b07a58a9c572bc8ec02e382a81f36bd63303589227b76e76e0f58be8184fdf08",
+    "authoritative_summary_file_sha256": "f39e4dd68f8667e3ced8f8c0e9a27eccd77c7af7dad261ad674a0ca4b45c6998",
+    "authoritative_identity_file_sha256": "3ee2d2258be19836c650dad0bfed02ac695007e1f5c6fc274a00caf92810e45d",
+    "authoritative_identity_canonical_sha256": "557646a5062436004a3aa9aa69dc2ab9156e5284d9b34efb96f37f6a8a2169ca",
+    "authoritative_cell_manifest_sha256": "1617e9c6a6edfd3d245fe647213ab06febbe71b9a106c0a6657149a29f4fbe37",
+    "validated_merged_bundle_sha256": "4ff72941753bc17864bcd8dae41e7cc22638e6110f5459df04e8e8ed2eb038ac",
+    "cell_manifest_algorithm": "SHA-256 of lexicographically sorted lines formatted as '<cell-file-sha256>  <basename>\\n'",
+    "candidate_attestation_sha256": "d901e9ad425037726fa38089d82737c46f07d619f89fb7782c506a1f01dc850a",
+    "candidate_smoke_sha256": "91f7b45a75743b5f912d8ed34bc7962d47ce6597d15f32e58e78634cf1ecccbe",
+    "baseline_smoke_sha256": "c6d72591254791b06f9636aa02e79a7a57f6bd952fd25944d918947fdea74ad9"
+  },
+  "campaign": {
+    "machine": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "platform": "Linux 6.8.0-134-generic x86_64, glibc 2.39",
+    "benchmark_cpu": 4,
+    "reserved_smt_sibling": 20,
+    "thread_count": 1,
+    "cells": 12,
+    "diagnostic_iterations_per_process": 21,
+    "diagnostic_warmup_iterations": 32,
+    "diagnostic_child_invocations": 24,
+    "authoritative_rounds": 3,
+    "authoritative_order": ["baseline", "candidate", "candidate", "baseline"],
+    "authoritative_iterations_per_process": 21,
+    "authoritative_warmup_iterations": 32,
+    "authoritative_child_invocations": 144,
+    "plan_reuse": 8192,
+    "statistics": "Geometric ratio with Student-t 95 percent interval over three independent ABBA round log contrasts",
+    "authoritative_elapsed_seconds": 15.008102108025923
+  },
+  "correctness_and_provenance_gates": {
+    "all_12_cells_completed": true,
+    "all_144_authoritative_invocations_round_trip": true,
+    "all_baseline_candidate_wire_and_recovery_digests_match": true,
+    "all_expected_missing_original_indices_match": true,
+    "all_candidate_calls_resolved_legacy_high_gf8_avx2": true,
+    "all_candidate_decode_routes_were_direct": true,
+    "all_byte_identity_records_match_logical_zero_pad_v2": true,
+    "accepted_invocations_with_sibling_activity": 0,
+    "rejected_attempts": 0,
+    "candidate_source_commit_tree_and_cleanliness_rechecked_after_timing": true,
+    "candidate_object_archive_and_link_closure_rechecked_after_timing": true,
+    "candidate_build_executable_and_timing_artifact_rechecked_after_timing": true,
+    "baseline_and_candidate_artifact_hashes_rechecked_after_timing": true,
+    "sealed_snapshot_hashes_rechecked_after_timing": true,
+    "runner_hash_rechecked_after_timing": true,
+    "matrix_and_summary_hashes_recomputed_for_this_checkpoint": true
+  },
+  "ratios": [
+    {
+      "matrix_index": 0,
+      "id": "k2-r2-64b-l2-u8192-b1-missing-0-1",
+      "classification": "existing_neighbor_route",
+      "K": 2, "R": 2, "bytes": 64, "missing_original_indices": [0, 1],
+      "seed": 4399119120241944084,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [1.2887590680831211, 1.2544440950812932, 1.3240127177280399],
+        "decode_first": [2.979855943199978, 2.797357738541233, 3.1742602384687255],
+        "decode_reuse": [13.756839326823405, 13.578073426368551, 13.93795881943835]
+      }
+    },
+    {
+      "matrix_index": 1,
+      "id": "k3-r2-64b-l2-u8192-b1-missing-0-2",
+      "classification": "existing_neighbor_route",
+      "K": 3, "R": 2, "bytes": 64, "missing_original_indices": [0, 2],
+      "seed": 1930813215010123105,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [1.979649348572366, 1.9457574220052083, 2.0141316173237254],
+        "decode_first": [2.74030493428399, 2.5810415193506677, 2.909395713537513],
+        "decode_reuse": [12.314686185899179, 12.246531597780162, 12.383220068992008]
+      }
+    },
+    {
+      "matrix_index": 2,
+      "id": "k4-r1-64b-l1-u8192-b1-missing-2",
+      "classification": "existing_neighbor_route",
+      "K": 4, "R": 1, "bytes": 64, "missing_original_indices": [2],
+      "seed": 6926943278697158402,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [0.5792281179568458, 0.5208287389830326, 0.6441756906251667],
+        "decode_first": [0.10041614408827053, 0.09634052076479173, 0.10466418401634128],
+        "decode_reuse": [0.691885949791699, 0.6542408823963884, 0.7316971170705978]
+      }
+    },
+    {
+      "matrix_index": 3,
+      "id": "k4-r2-1k-l2-u8192-b1-missing-0-3",
+      "classification": "aligned_promoted_target",
+      "K": 4, "R": 2, "bytes": 1024, "missing_original_indices": [0, 3],
+      "seed": 7445616633806429906,
+      "physical_bytes": {"leopard1": 1024, "leopard2": 1024},
+      "metrics": {
+        "encode": [1.7019267441236328, 1.6772351604413227, 1.7269818274028508],
+        "decode_first": [2.750596675439622, 2.6050719123707657, 2.9042507560008977],
+        "decode_reuse": [6.073927233193969, 5.979687926304378, 6.169651742500892]
+      }
+    },
+    {
+      "matrix_index": 4,
+      "id": "k4-r2-2049b-l2-u8192-b1-missing-1-3",
+      "classification": "post_cutoff_fallback_followup",
+      "K": 4, "R": 2, "bytes": 2049, "missing_original_indices": [1, 3],
+      "seed": 5247355266781092540,
+      "physical_bytes": {"leopard1": 2112, "leopard2": 2049},
+      "metrics": {
+        "encode": [0.6023128599621507, 0.49505247007647263, 0.7328127889549673],
+        "decode_first": [2.7774362725085773, 2.728941529059792, 2.8267927933597443],
+        "decode_reuse": [4.514650851213627, 4.440489529449828, 4.590050753005435]
+      }
+    },
+    {
+      "matrix_index": 5,
+      "id": "k4-r2-256b-l2-u8192-b1-missing-1-2",
+      "classification": "aligned_promoted_target",
+      "K": 4, "R": 2, "bytes": 256, "missing_original_indices": [1, 2],
+      "seed": 8255819420915517353,
+      "physical_bytes": {"leopard1": 256, "leopard2": 256},
+      "metrics": {
+        "encode": [1.698873665462544, 1.5959908859092775, 1.8083886046490878],
+        "decode_first": [2.662517376141123, 2.6098474550583797, 2.7162502407999303],
+        "decode_reuse": [8.970561639638568, 8.93263028314421, 9.008654067145596]
+      }
+    },
+    {
+      "matrix_index": 6,
+      "id": "k4-r2-2k-l2-u8192-b1-missing-0-1",
+      "classification": "aligned_promoted_target",
+      "K": 4, "R": 2, "bytes": 2048, "missing_original_indices": [0, 1],
+      "seed": 6039971950230749879,
+      "physical_bytes": {"leopard1": 2048, "leopard2": 2048},
+      "metrics": {
+        "encode": [1.6969588148341148, 1.670088707587078, 1.724261236041594],
+        "decode_first": [2.779929992340779, 2.6833109086478037, 2.8800280792694894],
+        "decode_reuse": [4.789443098383524, 4.754591802733621, 4.824549855040147]
+      }
+    },
+    {
+      "matrix_index": 7,
+      "id": "k4-r2-63b-l2-u8192-b1-missing-0-1",
+      "classification": "ragged_tail_followup",
+      "K": 4, "R": 2, "bytes": 63, "missing_original_indices": [0, 1],
+      "seed": 1857896957098990912,
+      "physical_bytes": {"leopard1": 64, "leopard2": 63},
+      "metrics": {
+        "encode": [0.42495621435694986, 0.41018383645395845, 0.4402606052977911],
+        "decode_first": [1.8234423123470693, 1.7860570790704675, 1.8616100825781303],
+        "decode_reuse": [4.205367778728072, 4.02686777326943, 4.391780199925874]
+      }
+    },
+    {
+      "matrix_index": 8,
+      "id": "k4-r2-64b-l2-u8192-b1-missing-0-3",
+      "classification": "aligned_promoted_target",
+      "K": 4, "R": 2, "bytes": 64, "missing_original_indices": [0, 3],
+      "seed": 2617520755599863267,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [1.7809544399009793, 1.6079643238151753, 1.972555404386937],
+        "decode_first": [2.547620987654693, 2.392039832637264, 2.713321328592981],
+        "decode_reuse": [10.471101150078274, 10.319017656436179, 10.625426076946717]
+      }
+    },
+    {
+      "matrix_index": 9,
+      "id": "k4-r2-65b-l2-u8192-b1-missing-2-3",
+      "classification": "padded_baseline_comparison",
+      "K": 4, "R": 2, "bytes": 65, "missing_original_indices": [2, 3],
+      "seed": 3748495682223423470,
+      "physical_bytes": {"leopard1": 128, "leopard2": 65},
+      "metrics": {
+        "encode": [1.7813369834104433, 1.7067325149318417, 1.8592025526580758],
+        "decode_first": [2.466318867486019, 2.401851625513893, 2.532516451683845],
+        "decode_reuse": [9.80558648634803, 9.669941670116817, 9.943134056163295]
+      }
+    },
+    {
+      "matrix_index": 10,
+      "id": "k4-r3-64b-l3-u8192-b1-missing-0-1-3",
+      "classification": "existing_neighbor_route",
+      "K": 4, "R": 3, "bytes": 64, "missing_original_indices": [0, 1, 3],
+      "seed": 8004827981659935247,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [1.0784840177787294, 1.0167307315412684, 1.143988020152551],
+        "decode_first": [1.8533353352715944, 1.7941202971414847, 1.9145047689605401],
+        "decode_reuse": [8.008526277221481, 7.93215144444105, 8.085636486163486]
+      }
+    },
+    {
+      "matrix_index": 11,
+      "id": "k5-r2-64b-l2-u8192-b1-missing-1-4",
+      "classification": "existing_neighbor_route",
+      "K": 5, "R": 2, "bytes": 64, "missing_original_indices": [1, 4],
+      "seed": 4546765040966982900,
+      "physical_bytes": {"leopard1": 64, "leopard2": 64},
+      "metrics": {
+        "encode": [0.4243710724606219, 0.4091314050097658, 0.44017839974195994],
+        "decode_first": [2.23075065563463, 2.185925340644506, 2.27649517350264],
+        "decode_reuse": [9.045275686993774, 8.947551053436728, 9.144067663329512]
+      }
+    }
+  ],
+  "conclusion": {
+    "aligned_target_wins": "At equal physical work, ordinary Leopard2 encode is credibly 1.697x to 1.781x faster at 64, 256, 1024, and 2048 bytes; every lower 95 percent bound exceeds 1.59.",
+    "padded_65_result": "At 65 logical bytes Leopard2 is 1.781x faster, but Leopard1 must process 128 physical bytes while Leopard2 processes 65. This validates useful public-API behavior, not an equal-physical-work kernel claim.",
+    "ragged_63_loss": "At 63 logical bytes Leopard2 encode is 0.425x main. The generated circuit's scalar remainder dominates this nearly-one-vector shape even though Leopard1 processes one extra zero byte.",
+    "post_cutoff_2049_loss": "At 2049 logical bytes Leopard2 encode is 0.602x main. This cell is immediately above the generated terminal's 2048-byte eligibility ceiling and measures the existing mature fallback.",
+    "decode_result": "Direct Leopard2 decode is faster in every K=4,R=2 target, including fresh-plan and reused-plan metrics; this campaign's scoped encoder gaps do not apply to decode.",
+    "neighbor_interpretation": "The five neighbor rows measure routes that already existed in de1ebce. Their ratios are directional Leopard2-versus-main context only; because this campaign did not toggle the K=4,R=2 circuit within one source build, ratios below one at K=4,R=1 and K=5,R=2 are not candidate-induced regressions.",
+    "promotion_scope": "Retain the K=4,R=2 legacy-high GF8 AVX2 packed generated encoder for the measured aligned 64-byte-multiple region from 64 through 2048 bytes. Do not generalize the performance claim to every currently eligible arbitrary byte count.",
+    "follow_up": [
+      "Optimize or dispatch around the 1-to-31-byte scalar remainder, beginning with the 63-byte holdout, while preserving exact-byte and aliasing semantics.",
+      "Evaluate extending the generated K=4,R=2 path beyond 2048 bytes versus improving the mature fallback, with 2049 as the mandatory boundary holdout."
+    ],
+    "claim_limit": "This is single-core, batch-one evidence on one AMD Ryzen 9 9950X3D using packed buffers, explicit AVX2, and the listed maximum-loss patterns."
+  }
+}
