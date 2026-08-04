@@ -14759,9 +14759,11 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
        tail-capable path. */
     if (terminal_shape == kTerminalT4K3R3)
     {
-        return shard_bytes == 64 || shard_bytes == 128 ||
-            shard_bytes == 256 || shard_bytes == 512 ||
-            shard_bytes == 1024;
+        /* The qualified set is exactly the five powers of two in this range.
+           This representation also keeps sub-64-byte mature fallbacks to one
+           predictable comparison instead of five failed equality checks. */
+        return shard_bytes >= 64 && shard_bytes <= 1024 &&
+            (shard_bytes & (shard_bytes - 1U)) == 0;
     }
     if (shard_bytes == 64 || shard_bytes == 128 || shard_bytes == 256)
     {
@@ -14788,7 +14790,11 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || codec->terminal_t4_shape == kTerminalT4None ||
+    /* Every promoted ordinary terminal is 64-byte aligned.  Reject ragged
+       mature-path calls before loading the codec shape so adding a new fixed
+       shape cannot tax arbitrary-byte fallbacks. */
+    if (!codec || (shard_bytes & 63U) != 0 ||
+        codec->terminal_t4_shape == kTerminalT4None ||
         !IsGF8AVX2T4PackedTerminalByteCount(
             codec->terminal_t4_shape, shard_bytes))
         return false;
