@@ -1362,6 +1362,80 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                     if (actual[lane][i] != 0xc3)
                         return false;
 
+            /*
+                Qualify the exact K=R=6 and K=R=7 suffix contracts against
+                the independent complete-parent reference.  Missing source
+                rows are explicit zeros and punctured output rows must remain
+                byte-for-byte untouched.
+            */
+            for (unsigned active_count = 6;
+                 active_count <= 7; ++active_count)
+            {
+                for (unsigned lane = 0; lane < side; ++lane)
+                {
+                    std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+                    std::memset(expected[lane], 0xc3, sizeof(expected[lane]));
+                    actual_pointers[lane] = actual[lane] + 1;
+                    expected_pointers[lane] = expected[lane] + 1;
+                    partial_input[lane] = lane < active_count
+                        ? static_cast<const void*>(input[lane] + 1)
+                        : static_cast<const void*>(zero + 1);
+                }
+                ReferenceFF8HighEncodeOneBlock(
+                    ops, partial_input, expected_pointers, side,
+                    partial_inverse_skew, partial_forward_skew, kBytes);
+                const uint32_t partial_flag = active_count == 6
+                    ? kFF8HighEncodeK6R6Partial
+                    : kFF8HighEncodeK7R7Partial;
+                ops.ff8_high_encode_one_block(
+                    input_pointers, actual_pointers, side | partial_flag,
+                    partial_inverse_skew, partial_forward_skew, kBytes);
+                if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                    return false;
+                for (unsigned lane = 0; lane < active_count; ++lane)
+                    if (std::memcmp(
+                            actual[lane], expected[lane],
+                            sizeof(actual[lane])) != 0)
+                        return false;
+                for (unsigned lane = active_count; lane < side; ++lane)
+                    for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                        if (actual[lane][i] != 0xc3)
+                            return false;
+            }
+
+            static const uint32_t kMalformedPartialFlags[] = {
+                kFF8HighEncodeShortenedInput |
+                    kFF8HighEncodeK6R6Partial,
+                kFF8HighEncodeShortenedInput |
+                    kFF8HighEncodeK7R7Partial,
+                kFF8HighEncodeK5R5Partial |
+                    kFF8HighEncodeK6R6Partial,
+                kFF8HighEncodeK5R5Partial |
+                    kFF8HighEncodeK7R7Partial,
+                kFF8HighEncodeK6R6Partial |
+                    kFF8HighEncodeK7R7Partial
+            };
+            for (size_t flag_i = 0;
+                 flag_i < sizeof(kMalformedPartialFlags) /
+                    sizeof(kMalformedPartialFlags[0]); ++flag_i)
+            {
+                for (unsigned lane = 0; lane < side; ++lane)
+                {
+                    std::memset(actual[lane], 0xc3, sizeof(actual[lane]));
+                    actual_pointers[lane] = actual[lane] + 1;
+                }
+                ops.ff8_high_encode_one_block(
+                    input_pointers, actual_pointers,
+                    side | kMalformedPartialFlags[flag_i],
+                    partial_inverse_skew, partial_forward_skew, kBytes);
+                if (std::memcmp(input, input_before, sizeof(input)) != 0)
+                    return false;
+                for (unsigned lane = 0; lane < side; ++lane)
+                    for (size_t i = 0; i < sizeof(actual[lane]); ++i)
+                        if (actual[lane][i] != 0xc3)
+                            return false;
+            }
+
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
             /*
                 Qualify the exact K=9/R=5..8 terminals independently of the
@@ -1427,6 +1501,8 @@ static bool TestFF8HighEncodeOneBlock(const Ops& ops)
                     kFF8HighEncodeK9Tail |
                     (5U << kFF8HighEncodeK9OutputCountShift),
                 kFF8HighEncodeK5R5Partial |
+                    kFF8HighEncodeK6R6Partial |
+                    kFF8HighEncodeK7R7Partial |
                     kFF8HighEncodeK9Tail |
                     (5U << kFF8HighEncodeK9OutputCountShift)
             };

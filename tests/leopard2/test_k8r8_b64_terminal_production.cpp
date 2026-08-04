@@ -209,14 +209,16 @@ void CheckOutputGuards(
     }
 }
 
-size_t ExpectedK8R8ProductionScratch()
+size_t ExpectedT8ProductionScratch(const Cell& cell)
 {
     const size_t alignment = leo2_scratch_alignment();
     const size_t metadata_bytes =
-        16U * 2U * sizeof(uintptr_t) + 24U * sizeof(void*);
+        static_cast<size_t>(cell.original_count + cell.recovery_count) *
+            2U * sizeof(uintptr_t) +
+        static_cast<size_t>(cell.original_count + 16U) * sizeof(void*);
     const size_t data_offset =
         (metadata_bytes + alignment - 1U) & ~(alignment - 1U);
-    return data_offset + 16U * 64U;
+    return data_offset + 16U * cell.shard_bytes;
 }
 
 void ExerciseCell(leo2_context* context, const Cell& cell)
@@ -231,7 +233,7 @@ void ExerciseCell(leo2_context* context, const Cell& cell)
     RequireResult(leo2_encode_scratch_size(
         codec, cell.shard_bytes, &scratch_bytes),
         LEO2_SUCCESS, cell, "query exact production scratch");
-    RequireCell(scratch_bytes == ExpectedK8R8ProductionScratch(), cell,
+    RequireCell(scratch_bytes == ExpectedT8ProductionScratch(cell), cell,
         "production scratch differs from the portable fixed geometry");
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
     RequireCell(reinterpret_cast<uintptr_t>(scratch.data()) %
@@ -325,7 +327,17 @@ int main()
         if (result != LEO2_SUCCESS)
             throw std::runtime_error("create production AVX2 context");
 
-        ExerciseCell(context, Cell{ 8, 8, 64 });
+        static const Cell cells[] = {
+            { 5, 5, 256 },
+            { 6, 6, 256 },
+            { 7, 7, 256 },
+            { 8, 8, 256 },
+            { 5, 5, 1024 },
+            { 6, 6, 1024 },
+            { 8, 8, 64 }
+        };
+        for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
+            ExerciseCell(context, cells[i]);
 
         leo2_context_destroy(context);
         std::printf("production K=8/R=8/T=8 packed-terminal smoke checks passed\n");

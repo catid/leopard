@@ -365,21 +365,73 @@ void ExerciseCell(
     leo2_codec_destroy(codec);
 }
 
-void ExercisePromotedMatrix(leo2_context* context)
+void ExercisePromotedMatrix(
+    leo2_context* context,
+    bool full_parity_terminal_available)
 {
-    ExerciseCell(context, Cell{ 8, 8, 64 }, true);
+    static const Cell cells[] = {
+        { 5, 5, 256 },
+        { 6, 6, 256 },
+        { 7, 7, 256 },
+        { 8, 8, 256 },
+        { 5, 5, 1024 },
+        { 6, 6, 1024 },
+        /* Retain the separately qualified balanced 64-byte terminal. */
+        { 8, 8, 64 }
+    };
+    for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
+    {
+        const bool is_established_b64 =
+            cells[i].original_count == 8 &&
+            cells[i].recovery_count == 8 && cells[i].shard_bytes == 64;
+        ExerciseCell(context, cells[i],
+            is_established_b64 || full_parity_terminal_available);
+    }
 }
 
 void ExerciseNonPromotedCells(leo2_context* context)
 {
-    static const Cell cells[] = {
-        { 8, 8, 63 },
-        { 8, 8, 128 },
-        { 8, 7, 64 },
-        { 7, 8, 64 }
+    static const size_t boundary_bytes[] = {
+        255, 257, 1023, 1025
     };
-    for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
-        ExerciseCell(context, cells[i], false);
+    for (unsigned count = 5; count <= 8; ++count)
+    {
+        for (size_t byte_i = 0;
+             byte_i < sizeof(boundary_bytes) / sizeof(boundary_bytes[0]);
+             ++byte_i)
+        {
+            ExerciseCell(context,
+                Cell{ count, count, boundary_bytes[byte_i] }, false);
+        }
+    }
+
+    /* K=7/8 did not clear the exact-main promotion gate at 1024 bytes. */
+    ExerciseCell(context, Cell{ 7, 7, 1024 }, false);
+    ExerciseCell(context, Cell{ 8, 8, 1024 }, false);
+
+    /* Every punctured T=8 neighbor stays on the mature general path. */
+    static const size_t exact_bytes[] = { 256, 1024 };
+    for (unsigned original_count = 5; original_count <= 8; ++original_count)
+        for (unsigned recovery_count = 5; recovery_count <= 8;
+             ++recovery_count)
+        {
+            if (original_count == recovery_count)
+                continue;
+            for (size_t byte_i = 0;
+                 byte_i < sizeof(exact_bytes) / sizeof(exact_bytes[0]);
+                 ++byte_i)
+            {
+                ExerciseCell(context,
+                    Cell{ original_count, recovery_count,
+                        exact_bytes[byte_i] }, false);
+            }
+        }
+
+    /* Preserve the established B64 terminal's immediate neighbors. */
+    ExerciseCell(context, Cell{ 8, 8, 63 }, false);
+    ExerciseCell(context, Cell{ 8, 8, 128 }, false);
+    ExerciseCell(context, Cell{ 8, 7, 64 }, false);
+    ExerciseCell(context, Cell{ 7, 8, 64 }, false);
 }
 
 void ExerciseForcedTransform(leo2_context* context)
@@ -504,9 +556,10 @@ void ExerciseFallbackLayouts(leo2_context* context, const Cell& cell)
     leo2_codec_destroy(codec);
 }
 
-void ExerciseValidationAtomicity(leo2_context* context)
+void ExerciseValidationAtomicity(
+    leo2_context* context,
+    const Cell& cell)
 {
-    const Cell cell = { 8, 8, 64 };
     leo2_codec* codec = CreateCodec(context, cell);
     const size_t scratch_bytes = QueryScratch(codec, cell);
     AlignedBuffer scratch(scratch_bytes + leo2_scratch_alignment());
@@ -617,25 +670,27 @@ void ExerciseValidationAtomicity(leo2_context* context)
 
     SetPackedPointers(
         input.bytes(), output.bytes(), cell, original, recovery);
-    alignas(64) uint8_t protected_storage[8U * 64U] = {};
+    AlignedBuffer protected_storage(
+        static_cast<size_t>(cell.recovery_count) * cell.shard_bytes);
     leo2_encode_batch_item* const protected_item =
-        new (protected_storage) leo2_encode_batch_item;
+        new (protected_storage.data()) leo2_encode_batch_item;
     protected_item->shard_bytes = cell.shard_bytes;
     protected_item->original = &original[0];
     protected_item->recovery = &recovery[0];
     protected_item->scratch = scratch.data();
     protected_item->scratch_bytes = scratch_bytes;
     for (unsigned i = 0; i < cell.recovery_count; ++i)
-        recovery[i] = protected_storage +
+        recovery[i] = protected_storage.bytes() +
             static_cast<size_t>(i) * cell.shard_bytes;
     const std::vector<uint8_t> protected_before(
-        protected_storage, protected_storage + sizeof(protected_storage));
+        protected_storage.bytes(),
+        protected_storage.bytes() + protected_storage.size());
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode_batch(codec, protected_item, 1),
         LEO2_OVERLAP, cell, "reject output/batch-metadata overlap");
     RequireCell(T8PackedCalls() == 0, cell,
         "batch-metadata overlap reached the packed terminal");
-    RequireCell(std::memcmp(protected_storage, &protected_before[0],
+    RequireCell(std::memcmp(protected_storage.bytes(), &protected_before[0],
             protected_before.size()) == 0,
         cell, "batch-metadata-overlap rejection was not atomic");
 
@@ -651,11 +706,16 @@ void ExerciseScalarFallbacks()
     leo2_context* context = NULL;
     Require(leo2_context_create(&options, &context) == LEO2_SUCCESS,
         "create scalar K=8/R=8/T=8 fallback context");
-    ExerciseCell(context, Cell{ 8, 8, 64 }, false);
+    static const Cell cells[] = {
+        { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
+        { 5, 5, 1024 }, { 6, 6, 1024 }, { 8, 8, 64 }
+    };
+    for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
+        ExerciseCell(context, cells[i], false);
     leo2_context_destroy(context);
 }
 
-void ExerciseAutoBackend()
+void ExerciseAutoBackend(bool full_parity_terminal_available)
 {
     leo2_context_options options = {};
     options.struct_size = sizeof(options);
@@ -666,7 +726,18 @@ void ExerciseAutoBackend()
         "create AUTO K=8/R=8/T=8 context");
     const bool expect_terminal =
         leo2_context_backend(context) == LEO2_BACKEND_AVX2;
-    ExerciseCell(context, Cell{ 8, 8, 64 }, expect_terminal);
+    static const Cell cells[] = {
+        { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 }, { 8, 8, 256 },
+        { 5, 5, 1024 }, { 6, 6, 1024 }, { 8, 8, 64 }
+    };
+    for (size_t i = 0; i < sizeof(cells) / sizeof(cells[0]); ++i)
+    {
+        const bool is_established_b64 =
+            cells[i].original_count == 8 &&
+            cells[i].recovery_count == 8 && cells[i].shard_bytes == 64;
+        ExerciseCell(context, cells[i], expect_terminal &&
+            (is_established_b64 || full_parity_terminal_available));
+    }
     leo2_context_destroy(context);
 }
 
@@ -677,8 +748,11 @@ int main()
     try
     {
         /* Scalar correctness remains useful on hosts without AVX2. */
+        const bool full_parity_terminal_available =
+            leopard2_internal::
+                SetT8FullParityTerminalEnabledForDiagnostics(true);
         ExerciseScalarFallbacks();
-        ExerciseAutoBackend();
+        ExerciseAutoBackend(full_parity_terminal_available);
 
         leo2_context_options options = {};
         options.struct_size = sizeof(options);
@@ -696,11 +770,20 @@ int main()
         Require(context_result == LEO2_SUCCESS,
             "create AVX2 K=8/R=8/T=8 terminal context");
 
-        ExercisePromotedMatrix(context);
+        ExercisePromotedMatrix(context, full_parity_terminal_available);
         ExerciseNonPromotedCells(context);
         ExerciseForcedTransform(context);
-        ExerciseFallbackLayouts(context, Cell{ 8, 8, 64 });
-        ExerciseValidationAtomicity(context);
+        static const Cell promoted_cells[] = {
+            { 5, 5, 256 }, { 6, 6, 256 }, { 7, 7, 256 },
+            { 8, 8, 256 }, { 5, 5, 1024 }, { 6, 6, 1024 },
+            { 8, 8, 64 }
+        };
+        for (size_t i = 0;
+             i < sizeof(promoted_cells) / sizeof(promoted_cells[0]); ++i)
+        {
+            ExerciseFallbackLayouts(context, promoted_cells[i]);
+            ExerciseValidationAtomicity(context, promoted_cells[i]);
+        }
 
         leo2_context_destroy(context);
         std::printf("K=8/R=8/T=8 packed terminal checks passed\n");

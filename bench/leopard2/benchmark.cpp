@@ -126,6 +126,7 @@ struct Options
     int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
     int balanced_b64_terminal_mode;
+    bool disable_t8_full_parity_terminal;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
     bool disable_k9r6r8_b256_terminal;
@@ -181,6 +182,7 @@ struct Options
         , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , balanced_b64_terminal_mode(-1)
+        , disable_t8_full_parity_terminal(false)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
@@ -486,6 +488,8 @@ static void Usage(std::ostream& output, const char* program)
         << "  --balanced-b64-terminal-mode 0|1\n"
         << "                         Attribution-only: mature or packed balanced path\n"
         << "                         in identical executable text using schema v22\n"
+        << "  --disable-t8-full-parity-terminal\n"
+        << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k16r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r5-b256-terminal\n"
@@ -650,6 +654,8 @@ static Options ParseOptions(int argc, char** argv)
             else
                 Fail("--balanced-b64-terminal-mode must be exactly 0 or 1");
         }
+        else if (argument == "--disable-t8-full-parity-terminal")
+            options.disable_t8_full_parity_terminal = true;
         else if (argument == "--disable-k16r8-b256-terminal")
             options.disable_k16r8_b256_terminal = true;
         else if (argument == "--disable-k9r5-b256-terminal")
@@ -1583,6 +1589,10 @@ static int Run(const Options& options)
         !leopard2_internal::SetBalancedB64TerminalEnabledForDiagnostics(
             options.balanced_b64_terminal_mode == 1))
         Fail("cannot set the balanced B64 terminal attribution mode");
+    if (options.disable_t8_full_parity_terminal &&
+        !leopard2_internal::
+            SetT8FullParityTerminalEnabledForDiagnostics(false))
+        Fail("cannot disable the T=8 full-parity terminal for attribution");
     if (options.disable_k16r8_b256_terminal &&
         !leopard2_internal::SetK16R8B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K16/R8/256-byte terminal for attribution");
@@ -2296,6 +2306,9 @@ static int Run(const Options& options)
     json << ",\n"
          << "    \"k8r3r4_t4_terminal_diagnostic_disabled\": "
          << (options.k8r3r4_t4_terminal_mode == 0 ? "true" : "false")
+         << ",\n"
+         << "    \"t8_full_parity_terminal_diagnostic_disabled\": "
+         << (options.disable_t8_full_parity_terminal ? "true" : "false")
          << ",\n"
          << "    \"k16r8_b256_terminal_diagnostic_disabled\": "
          << (options.disable_k16r8_b256_terminal ? "true" : "false")

@@ -7069,6 +7069,177 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK5R5T8Vector(
     AVX2FF8HighEncodeK5R5T8Tail(data, work, byte_count);
 }
 
+/*
+    Exact shortened/punctured companions for K=R=6 and K=R=7.  The complete
+    T=8 parent transform is unchanged, but known-zero source suffixes are
+    formed in registers and punctured parity suffixes are never stored.
+*/
+template<unsigned ActiveCount>
+static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeK6K7T8Vector(
+    const void* const* data,
+    void* const* work,
+    const uint8_t* inverse_skew,
+    const uint8_t* forward_skew,
+    uint64_t byte_count)
+{
+    static_assert(ActiveCount == 6 || ActiveCount == 7,
+        "exact T=8 partial kernel supports K=R=6 or K=R=7");
+    static const uint16_t kInverse1 = 153;
+    static const uint16_t kInverse2 = 17;
+    static const uint16_t kInverse3 = 102;
+    static const uint16_t kInverse4 = 85;
+    static const uint16_t kInverse5 = 51;
+    static const uint16_t kInverse6 = 34;
+    static const uint16_t kInverse7 = 187;
+    static const uint16_t kForward1 = 255;
+    static const uint16_t kForward2 = 255;
+    static const uint16_t kForward3 = 85;
+    static const uint16_t kForward4 = 255;
+    static const uint16_t kForward5 = 17;
+    static const uint16_t kForward6 = 85;
+    static const uint16_t kForward7 = 34;
+    LEO_DEBUG_ASSERT(
+        inverse_skew[0] == 255 &&
+        inverse_skew[1] == kInverse1 &&
+        inverse_skew[2] == kInverse2 &&
+        inverse_skew[3] == kInverse3 &&
+        inverse_skew[4] == kInverse4 &&
+        inverse_skew[5] == kInverse5 &&
+        inverse_skew[6] == kInverse6 &&
+        inverse_skew[7] == kInverse7);
+    LEO_DEBUG_ASSERT(
+        forward_skew[0] == 0 &&
+        forward_skew[1] == kForward1 &&
+        forward_skew[2] == kForward2 &&
+        forward_skew[3] == kForward3 &&
+        forward_skew[4] == kForward4 &&
+        forward_skew[5] == kForward5 &&
+        forward_skew[6] == kForward6 &&
+        forward_skew[7] == kForward7);
+    (void)inverse_skew;
+    (void)forward_skew;
+
+    const uint8_t* input[ActiveCount];
+    uint8_t* output[ActiveCount];
+    for (unsigned lane = 0; lane < ActiveCount; ++lane)
+    {
+        input[lane] = static_cast<const uint8_t*>(data[lane]);
+        output[lane] = static_cast<uint8_t*>(work[lane]);
+    }
+
+    const uint64_t vector_bytes = byte_count & ~UINT64_C(31);
+    for (uint64_t offset = 0; offset < vector_bytes; offset += 32)
+    {
+        __m256i value0 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[0] + offset));
+        __m256i value1 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[1] + offset));
+        __m256i value2 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[2] + offset));
+        __m256i value3 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[3] + offset));
+        __m256i value4 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[4] + offset));
+        __m256i value5 = _mm256_loadu_si256(
+            reinterpret_cast<const __m256i*>(input[5] + offset));
+        __m256i value6 = _mm256_setzero_si256();
+        if (ActiveCount == 7)
+            value6 = _mm256_loadu_si256(
+                reinterpret_cast<const __m256i*>(input[6] + offset));
+        __m256i value7 = _mm256_setzero_si256();
+
+        AVX2FF8T8VectorIFFTRadix4(
+            value0, value1, value2, value3,
+            kInverse1, kInverse3, kInverse2);
+        AVX2FF8T8VectorIFFTRadix4(
+            value4, value5, value6, value7,
+            kInverse5, kInverse7, kInverse6);
+        AVX2FF8T8VectorIFFTDistance4(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7, kInverse4);
+
+        AVX2FF8T8VectorFFTRadix4Distance2(
+            value0, value1, value2, value3,
+            value4, value5, value6, value7,
+            kForward2, kForward6, kForward4);
+        AVX2FF8T8VectorFFT2(value0, value1, kForward1);
+        AVX2FF8T8VectorFFT2(value2, value3, kForward3);
+        AVX2FF8T8VectorFFT2(value4, value5, kForward5);
+        AVX2FF8T8VectorFFT2(value6, value7, kForward7);
+
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[0] + offset), value0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[1] + offset), value1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[2] + offset), value2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[3] + offset), value3);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[4] + offset), value4);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[5] + offset), value5);
+        if (ActiveCount == 7)
+            _mm256_storeu_si256(
+                reinterpret_cast<__m256i*>(output[6] + offset), value6);
+    }
+
+    for (uint64_t offset = vector_bytes; offset < byte_count; ++offset)
+    {
+        uint8_t values[8] = {};
+        for (unsigned lane = 0; lane < ActiveCount; ++lane)
+            values[lane] = input[lane][offset];
+
+        AVX2FF8T8VectorScalarIFFT2(
+            values[0], values[1], kInverse1);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[2], values[3], kInverse3);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[0], values[2], kInverse2);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[1], values[3], kInverse2);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[4], values[5], kInverse5);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[6], values[7], kInverse7);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[4], values[6], kInverse6);
+        AVX2FF8T8VectorScalarIFFT2(
+            values[5], values[7], kInverse6);
+        for (unsigned lane = 0; lane < 4; ++lane)
+            AVX2FF8T8VectorScalarIFFT2(
+                values[lane], values[lane + 4], kInverse4);
+
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[4], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[1], values[5], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[2], values[6], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[3], values[7], kForward4);
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[2], kForward2);
+        AVX2FF8T8VectorScalarFFT2(
+            values[1], values[3], kForward2);
+        AVX2FF8T8VectorScalarFFT2(
+            values[4], values[6], kForward6);
+        AVX2FF8T8VectorScalarFFT2(
+            values[5], values[7], kForward6);
+        AVX2FF8T8VectorScalarFFT2(
+            values[0], values[1], kForward1);
+        AVX2FF8T8VectorScalarFFT2(
+            values[2], values[3], kForward3);
+        AVX2FF8T8VectorScalarFFT2(
+            values[4], values[5], kForward5);
+        AVX2FF8T8VectorScalarFFT2(
+            values[6], values[7], kForward7);
+
+        for (unsigned lane = 0; lane < ActiveCount; ++lane)
+            output[lane][offset] = values[lane];
+    }
+}
+
 static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     const void* const* data,
     void* const* work,
@@ -7081,6 +7252,10 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
         (side_and_flags & kFF8HighEncodeShortenedInput) != 0;
     const bool k5_r5_partial =
         (side_and_flags & kFF8HighEncodeK5R5Partial) != 0;
+    const bool k6_r6_partial =
+        (side_and_flags & kFF8HighEncodeK6R6Partial) != 0;
+    const bool k7_r7_partial =
+        (side_and_flags & kFF8HighEncodeK7R7Partial) != 0;
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     const bool k9_tail =
         (side_and_flags & kFF8HighEncodeK9Tail) != 0;
@@ -7090,6 +7265,8 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     const uint32_t side = side_and_flags &
         ~(kFF8HighEncodeShortenedInput |
           kFF8HighEncodeK5R5Partial |
+          kFF8HighEncodeK6R6Partial |
+          kFF8HighEncodeK7R7Partial |
           kFF8HighEncodeK9Tail |
           kFF8HighEncodeK9OutputCountMask);
 #else
@@ -7097,20 +7274,28 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     const uint32_t k9_output_count = 0;
     const uint32_t side =
         side_and_flags &
-        ~(kFF8HighEncodeShortenedInput | kFF8HighEncodeK5R5Partial);
+        ~(kFF8HighEncodeShortenedInput |
+          kFF8HighEncodeK5R5Partial |
+          kFF8HighEncodeK6R6Partial |
+          kFF8HighEncodeK7R7Partial);
 #endif
     LEO_DEBUG_ASSERT(side == 8);
     if (side != 8)
         return;
     const bool k9_output_count_valid =
         k9_output_count >= 5 && k9_output_count <= 8;
-    if ((shortened && (k5_r5_partial || k9_tail)) ||
-        (k5_r5_partial && k9_tail) ||
+    if ((shortened &&
+            (k5_r5_partial || k6_r6_partial || k7_r7_partial || k9_tail)) ||
+        (k5_r5_partial && (k6_r6_partial || k7_r7_partial || k9_tail)) ||
+        (k6_r6_partial && (k7_r7_partial || k9_tail)) ||
+        (k7_r7_partial && k9_tail) ||
         (k9_tail ? !k9_output_count_valid : k9_output_count != 0))
         return;
     LEO_DEBUG_ASSERT(
         static_cast<unsigned>(shortened) +
         static_cast<unsigned>(k5_r5_partial) +
+        static_cast<unsigned>(k6_r6_partial) +
+        static_cast<unsigned>(k7_r7_partial) +
         static_cast<unsigned>(k9_tail) <= 1U);
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
     if (k9_tail)
@@ -7160,6 +7345,18 @@ static LEO2_AVX2_T8_ENTRY void AVX2FF8HighEncodeOneBlockT8Vector(
     {
         LEO_DEBUG_ASSERT(!shortened);
         AVX2FF8HighEncodeK5R5T8Vector(
+            data, work, inverse_skew, forward_skew, byte_count);
+        return;
+    }
+    if (k6_r6_partial)
+    {
+        AVX2FF8HighEncodeK6K7T8Vector<6>(
+            data, work, inverse_skew, forward_skew, byte_count);
+        return;
+    }
+    if (k7_r7_partial)
+    {
+        AVX2FF8HighEncodeK6K7T8Vector<7>(
             data, work, inverse_skew, forward_skew, byte_count);
         return;
     }

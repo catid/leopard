@@ -251,6 +251,13 @@ bool SetK8R3R4T4TerminalEnabledForDiagnostics(bool enabled);
 bool SetK16R8B256TerminalEnabledForDiagnostics(bool enabled);
 
 /*
+    Process-local same-executable control for the dense K=R=5..8 T=8
+    packed-slab terminal.  Change it only while no encode call is executing.
+    This is benchmark instrumentation, not public API or wire identity.
+*/
+bool SetT8FullParityTerminalEnabledForDiagnostics(bool enabled);
+
+/*
     Process-local benchmark control for the exact balanced 64-byte packed
     terminals.  Change it only while no encode call is executing.  This
     remains outside the public API and changes no codec or wire identity.
