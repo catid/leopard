@@ -235,6 +235,17 @@ void ExerciseCell(leo2_context* context, size_t shard_bytes)
         "execute production K4/R2 one-item batch");
     CheckParity(shard_bytes, original, recovery);
 
+    std::memset(output_base, kGuardValue, output_payload);
+    leo2_encode_batch_binding* binding = NULL;
+    RequireResult(leo2_encode_batch_binding_create(
+        codec, &item, 1, &binding), LEO2_SUCCESS, shard_bytes,
+        "create production K4/R2 encode binding");
+    RequireResult(leo2_encode_batch_binding_execute(binding),
+        LEO2_SUCCESS, shard_bytes,
+        "execute production K4/R2 encode binding");
+    CheckParity(shard_bytes, original, recovery);
+    leo2_encode_batch_binding_destroy(binding);
+
     for (size_t i = 0; i < kGuardBytes + 3U; ++i)
         Require(output.bytes()[i] == kGuardValue, shard_bytes,
             "production encode modified leading output guard");
@@ -397,7 +408,8 @@ int main()
         static const size_t sizes[] = {
             1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
             127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
-            1984, 2016, 2048, 2049, 4096
+            1984, 2016, 2047, 2048, 2049, 2111, 2112, 2113,
+            4095, 4096, 4097, 8192, 16384, 16385
         };
         for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
             ExerciseCell(context, sizes[i]);

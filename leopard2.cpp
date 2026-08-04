@@ -14385,12 +14385,19 @@ EncodeGF8AVX2T2BatchTerminal(
 
 #undef LEO2_T2_PACKED_TERMINAL_NOINLINE
 
+/* The generated K=4/R=2 circuit is a single streaming pass.  Unlike the
+   transform fallback, its live state does not grow with the shard, so retain
+   it through the measured 16 KiB crossover interval.  Larger shards stay on
+   the mature path until their cache and bandwidth crossover is qualified. */
+static const uint64_t kGF8AVX2T2K4TerminalMaximumBytes = 16U * 1024U;
+
 static LEO_FORCE_INLINE bool IsGF8AVX2T2K4PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
     if (!codec || codec->terminal_r1_t8_shape != kTerminalT2K4R2 ||
-        shard_bytes == 0 || shard_bytes > 2U * 1024U)
+        shard_bytes == 0 ||
+        shard_bytes > kGF8AVX2T2K4TerminalMaximumBytes)
         return false;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;

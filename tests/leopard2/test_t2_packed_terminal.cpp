@@ -259,6 +259,11 @@ void ExercisePackedCell(
             scratch_bytes + leo2_scratch_alignment());
         std::vector<uint8_t> detached_source(bytes);
         std::memcpy(&detached_source[0], original[k - 1], bytes);
+        for (size_t i = 0; i < bytes; ++i)
+        {
+            detached_source[i] ^= static_cast<uint8_t>(
+                0x5bU + static_cast<unsigned>(i * 29U));
+        }
         const void* second_original[4] = {
             original[0], original[1], original[2], original[3]
         };
@@ -281,7 +286,7 @@ void ExercisePackedCell(
         Require(PackedCalls() == 2,
             "prevalidated two-item T=2 routing mismatch");
         CheckParity(k, bytes, original, recovery);
-        CheckParity(k, bytes, original, second_recovery);
+        CheckParity(k, bytes, second_original, second_recovery);
 
         if (k == 4 && bytes == 64)
         {
@@ -319,7 +324,7 @@ void ExercisePackedCell(
         Require(PackedCalls() == 2,
             "prevalidated two-item binding T=2 routing mismatch");
         CheckParity(k, bytes, original, recovery);
-        CheckParity(k, bytes, original, second_recovery);
+        CheckParity(k, bytes, second_original, second_recovery);
         leo2_encode_batch_binding_destroy(two_item_binding);
 
         void* const second_parity_one = second_recovery[1];
@@ -417,7 +422,21 @@ void ExerciseFallbackAndErrors(leo2_context* context, unsigned k)
         Require(output.bytes()[bytes + i] == 0xa5,
             "sparse T=2 fallback modified null parity");
 
+    SetPackedPointers(
+        input.bytes(), output.bytes(), k, bytes, original, recovery);
+    ResetOutput(output.bytes(), bytes);
     recovery[0] = NULL;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, bytes, original, recovery,
+        scratch.data(), scratch_bytes), LEO2_SUCCESS,
+        "execute parity-one-only T=2 fallback");
+    Require(PackedCalls() == 0,
+        "parity-one-only output entered the packed T=2 terminal");
+    CheckParity(k, bytes, original, recovery);
+    for (size_t i = 0; i < bytes; ++i)
+        Require(output.bytes()[i] == 0xa5,
+            "parity-one-only T=2 fallback modified null parity");
+
     recovery[1] = NULL;
     leopard::ff8::TestOnlyResetHighEncodeCounts();
     RequireResult(leo2_encode(codec, bytes, original, recovery,
@@ -564,14 +583,16 @@ int main()
         static const size_t sizes[] = {
             1, 2, 3, 7, 15, 16, 17, 31, 32, 33, 63, 64, 65,
             127, 128, 129, 255, 256, 257, 1023, 1024, 1025,
-            1984, 2016, 2048, 2049, 4096
+            1984, 2016, 2047, 2048, 2049, 2111, 2112, 2113,
+            4095, 4096, 4097, 8192, 16384, 16385
         };
         for (unsigned k = 2; k <= 4; ++k)
         {
             for (size_t i = 0; i < sizeof(sizes) / sizeof(sizes[0]); ++i)
             {
                 const size_t bytes = sizes[i];
-                const bool selected = bytes <= 2048;
+                const bool selected = bytes <= 2048 ||
+                    (k == 4 && bytes <= 16384);
                 ExercisePackedCell(context, k, bytes, selected);
             }
         }
