@@ -1,0 +1,192 @@
+{
+  "schema": "leopard2-gf8-t2-k4-16m-extension-checkpoint/v1",
+  "created_utc": "2026-08-04T10:01:54Z",
+  "status": "promoted",
+  "bead": "leopard-79h.38.5.10.27.9",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "AVX2",
+    "K": 4,
+    "R": 2,
+    "maximum_selected_shard_bytes": 16777216
+  },
+  "candidate": {
+    "branch": "codex/leopard2",
+    "commit": "b49f39c098170c63edffe9b88e536c5e49988f9b",
+    "tree": "7178d79014ec3bf9c3f75eaa1d757dbebcd13e47",
+    "source_tracked_dirty": false
+  },
+  "implementation": {
+    "kernel": "Leopard2BackendAVX2T2K4.cpp",
+    "selector": "IsGF8AVX2T2K4PackedTerminalEligible",
+    "change": "Extend the already-qualified one-pass generated K=4/R=2 packed terminal from 16 KiB through 16 MiB.",
+    "reason_for_finite_cap": "The cap covers the largest qualified practical shard and bounds speculative 4*bytes and 2*bytes packed-range arithmetic without broadening the API validation proof.",
+    "fallback_above_cap": "The mature transform path remains selected above 16 MiB and for sparse, nonpacked, overlapping, or otherwise ineligible layouts."
+  },
+  "frozen_artifacts": {
+    "directory": "/tmp/leopard-k4r2-final-b49f39c-20260804-v1",
+    "candidate_executable_sha256": "37f552c282072bc0e3fc96dc34d43ae22486202d4c39f2325958838ba3eb4580",
+    "candidate_archive_sha256": "ad2853d5bafb4811b0eca894b5cbc55c24760b0e2090520e2b9e31ac1d81cdf4",
+    "same_source_control_commit": "0e1cc9dc19c4bdce99a105db0a92d84e7e72e9ea",
+    "same_source_control_executable_sha256": "5759a0e70e0d2002ade897bb738e468fe977880d9b496d351909eefa10b1e34a",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+    "hashes_unchanged_after_campaigns": true
+  },
+  "authoritative_campaign": {
+    "cpu": 12,
+    "reserved_smt_sibling": 28,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 3,
+    "order": "ABBA/BABA/ABBA",
+    "iterations_per_process": 9,
+    "warmups_per_process": 2,
+    "processes": 144,
+    "same_source_processes": 72,
+    "exact_main_processes": 72,
+    "sibling_nonidle_jiffies_same_source": 0,
+    "sibling_nonidle_jiffies_exact_main": 0,
+    "performance_statistic": "Geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence intervals.",
+    "correctness": "All invocations selected AVX2, retained clean committed-source attestations, and matched original-data, transmitted-parity, and recovered-original FNV-1a digests across implementations."
+  },
+  "same_source_fallback_over_candidate": [
+    {
+      "shard_bytes": 16384,
+      "selected_by_both": true,
+      "estimate": 1.003008580,
+      "student_t_95_ci": [0.973265971, 1.033660111]
+    },
+    {
+      "shard_bytes": 16385,
+      "newly_selected": true,
+      "estimate": 1.598230012,
+      "student_t_95_ci": [1.333468556, 1.915560108]
+    },
+    {
+      "shard_bytes": 65536,
+      "newly_selected": true,
+      "estimate": 1.432808728,
+      "student_t_95_ci": [1.167957947, 1.757718124]
+    },
+    {
+      "shard_bytes": 1048576,
+      "newly_selected": true,
+      "estimate": 1.550358395,
+      "student_t_95_ci": [1.540543543, 1.560235779]
+    },
+    {
+      "shard_bytes": 16777216,
+      "newly_selected": true,
+      "estimate": 1.394926915,
+      "student_t_95_ci": [1.282842199, 1.516804718]
+    },
+    {
+      "shard_bytes": 16777217,
+      "selected_by_neither": true,
+      "estimate": 0.998991972,
+      "student_t_95_ci": [0.915595975, 1.089983997]
+    }
+  ],
+  "exact_main_over_leopard2": [
+    {
+      "shard_bytes": 16384,
+      "estimate": 1.925540464,
+      "student_t_95_ci": [1.799388679, 2.060536516]
+    },
+    {
+      "shard_bytes": 16385,
+      "estimate": 1.507961986,
+      "student_t_95_ci": [1.369692176, 1.660190070]
+    },
+    {
+      "shard_bytes": 65536,
+      "estimate": 2.160514718,
+      "student_t_95_ci": [2.141871292, 2.179320421]
+    },
+    {
+      "shard_bytes": 1048576,
+      "estimate": 2.318494092,
+      "student_t_95_ci": [2.216431590, 2.425256380]
+    },
+    {
+      "shard_bytes": 16777216,
+      "estimate": 2.581829593,
+      "student_t_95_ci": [2.516539251, 2.648813860]
+    },
+    {
+      "shard_bytes": 16777217,
+      "fallback_selected": true,
+      "estimate": 1.810523245,
+      "student_t_95_ci": [1.706057900, 1.921385211]
+    }
+  ],
+  "boundary_screening": {
+    "required_cells": [
+      2047,
+      2048,
+      2049,
+      2111,
+      2112,
+      2113,
+      4095,
+      4096,
+      4097,
+      8192,
+      16384
+    ],
+    "artifacts": [
+      "/tmp/leopard-k4r2-extension-screen-20260804-v2",
+      "/tmp/leopard-k4r2-auto-control-screen-20260804-v3",
+      "/tmp/leopard-k4r2-final-clean-0e1cc9d-20260804-v1",
+      "/tmp/leopard-k4r2-large-extension-screen-20260804-v1",
+      "/tmp/leopard-k4r2-large-vs-main-20260804-v1"
+    ],
+    "result": "Every newly selected boundary and large-size screen improved. Existing-path and first-fallback neighbors were inert within the two-percent point-estimate gate; all parity checksums matched."
+  },
+  "correctness_gates": {
+    "release": {
+      "build": "/tmp/leopard-k4r2-final-b49f39c-v1",
+      "tests": [
+        "leopard2_t2_packed_terminal",
+        "leopard2_t2_k4_production"
+      ],
+      "result": "2/2 passed in 1.47 seconds",
+      "maximum_rss_kib": 32320
+    },
+    "asan_ubsan": {
+      "build": "/tmp/leopard2-t8-1k-final-default-asan",
+      "compiler": "clang++-18",
+      "flags": "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+      "tests": [
+        "leopard2_t2_packed_terminal",
+        "leopard2_t2_k4_production"
+      ],
+      "result": "2/2 passed in 5.41 seconds",
+      "maximum_rss_kib": 83712
+    },
+    "covered_contracts": [
+      "packed aligned and unaligned ordinary encode",
+      "one-item and production batch encode",
+      "arbitrary scalar tails",
+      "sparse parity subsets including parity-index one only",
+      "nonpacked and detached inputs",
+      "scratch, metadata, overlap, aliasing, and failure-atomicity checks",
+      "legacy parity and independent direct-generator oracle"
+    ]
+  },
+  "resource_policy": {
+    "build_parallelism": 1,
+    "compiler_address_space_limit_mib": 512,
+    "reason": "Prior session OOMs required serialized capped compiler work. Sanitizer execution was single-threaded and uncapped because ASan reserves a large virtual shadow mapping. Authoritative cache-sensitive timing was pinned to one physical core."
+  },
+  "promotion_gate": {
+    "correctness_passed": true,
+    "minimum_credible_target_gain": 1.05,
+    "new_target_ci95_lower_minimum": 1.167957947,
+    "neighbor_point_regression_limit": 1.02,
+    "neighbors_with_point_regression_over_two_percent": 0,
+    "passed": true
+  },
+  "disposition": "Promoted. The existing generated one-pass terminal remains bit-identical, wins credibly throughout the newly selected interval, preserves the mature fallback outside the bounded region, and is 1.508x to 2.582x faster than exact Leopard main over the measured selected cells."
+}
