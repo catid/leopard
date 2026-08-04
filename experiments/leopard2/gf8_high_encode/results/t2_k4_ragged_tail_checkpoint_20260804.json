@@ -1,0 +1,173 @@
+{
+  "schema": "leopard2-gf8-t2-k4-ragged-tail-checkpoint/v1",
+  "created_utc": "2026-08-04T10:24:24Z",
+  "status": "promoted",
+  "bead": "leopard-79h.38.5.10.27.8",
+  "scope": {
+    "field": "GF8",
+    "profile": "LEO2_PROFILE_LEGACY_HIGH_V1",
+    "backend": "AVX2",
+    "K": 4,
+    "R": 2,
+    "focus": "arbitrary positive shard lengths and ragged final vectors"
+  },
+  "candidate": {
+    "branch": "codex/leopard2",
+    "commit": "a3d27503de9089239980d79e555027dddc50eca5",
+    "tree": "4c7426912d02fe4d44870f922a2d5481eadddc37",
+    "source_tracked_dirty": false
+  },
+  "implementation": {
+    "translation_unit": "Leopard2BackendAVX2T2K4.cpp",
+    "algorithm": [
+      "Retain the 32-byte YMM streaming loop for complete chunks.",
+      "Use one overlapping in-range 32-byte final vector for 16..31-byte remainders.",
+      "Use one overlapping in-range 16-byte final vector for 8..15-byte remainders after a complete YMM chunk.",
+      "Use one overlapping in-range 8-byte final vector for 4..7-byte remainders after a complete YMM chunk.",
+      "Use one overlapping in-range 4-byte final vector for 1..3-byte remainders after a complete YMM chunk.",
+      "For exact B=8..15 and B=16..31, use one full-width vector plus a second overlapping final vector when needed.",
+      "Retain the scalar oracle-quality path only for exact B=1..7."
+    ],
+    "bounds_proof": "Every overlapping access has interval [B-W,B), with B>=W. The public selector has already proved disjoint input and output ranges; re-writing independent parity bytes in the overlap is idempotent.",
+    "generated_object": {
+      "function_text_bytes": 2436,
+      "vector_stack_spills": 0,
+      "runtime_executable_memory": false
+    }
+  },
+  "frozen_artifacts": {
+    "directory": "/tmp/leopard-k4r2-ragged-final-a3d2750-20260804-v1",
+    "identity_file_sha256": "ffbb66516ebb1cc20cf9bd7f3fec3c85112561ee3aff7404701fa4feac63a02d",
+    "candidate_executable_sha256": "c66793889fb2b72acaaa3cc6c23877d1d101ec3a4665808cc37221742bbb7fc9",
+    "candidate_archive_sha256": "eb90b953e03b016e91e7354b487d6200288118944f131ce06b75e2a38bfd2aa5",
+    "same_source_control_commit": "b49f39c098170c63edffe9b88e536c5e49988f9b",
+    "same_source_control_executable_sha256": "37f552c282072bc0e3fc96dc34d43ae22486202d4c39f2325958838ba3eb4580",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+    "hashes_unchanged_after_all_campaigns": true
+  },
+  "authoritative_abba": {
+    "cpu": 12,
+    "reserved_smt_sibling": 28,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "rounds": 3,
+    "order": "ABBA/BABA/ABBA",
+    "iterations_per_process": 15,
+    "warmups_per_process": 4,
+    "reuse": 8192,
+    "same_source_processes": 156,
+    "exact_main_processes": 156,
+    "same_source_sibling_nonidle_jiffies": 0,
+    "exact_main_sibling_nonidle_jiffies": 0,
+    "performance_statistic": "Geometric mean of one balanced log contrast per independent ABBA round with two-sided Student-t 95 percent confidence intervals.",
+    "correctness": "All 312 invocations selected AVX2, retained clean source attestations, preserved frozen hashes, and matched original, parity, and recovery FNV-1a digests across implementations."
+  },
+  "same_source_control_over_candidate": [
+    {"shard_bytes": 7, "estimate": 1.000002008, "ci95": [0.855353825, 1.169111527], "unchanged_scalar_control": true},
+    {"shard_bytes": 8, "estimate": 1.708000648, "ci95": [1.633032984, 1.786409853]},
+    {"shard_bytes": 15, "estimate": 2.266300818, "ci95": [2.205644151, 2.328625583]},
+    {"shard_bytes": 16, "estimate": 2.548480123, "ci95": [2.535176947, 2.561853107]},
+    {"shard_bytes": 31, "estimate": 3.914129600, "ci95": [3.885069502, 3.943407066]},
+    {"shard_bytes": 32, "estimate": 1.026043049, "ci95": [1.001329918, 1.051366108], "aligned_control": true},
+    {"shard_bytes": 35, "estimate": 1.208804578, "ci95": [1.122965178, 1.301205536]},
+    {"shard_bytes": 39, "estimate": 1.555086726, "ci95": [1.484812124, 1.628687350]},
+    {"shard_bytes": 47, "estimate": 2.337860884, "ci95": [2.309404364, 2.366668046]},
+    {"shard_bytes": 48, "estimate": 2.451550901, "ci95": [2.279530640, 2.636552329]},
+    {"shard_bytes": 63, "estimate": 3.945434212, "ci95": [3.871851988, 4.020414822]},
+    {"shard_bytes": 64, "estimate": 1.037948749, "ci95": [1.036933017, 1.038965476], "aligned_control": true},
+    {"shard_bytes": 65, "estimate": 0.995753709, "ci95": [0.927292808, 1.069268995], "neighbor_control": true}
+  ],
+  "exact_main_over_leopard2": [
+    {"shard_bytes": 7, "main_physical_bytes": 64, "estimate": 1.085439720, "ci95": [0.964829775, 1.221126686], "unchanged_scalar_control": true},
+    {"shard_bytes": 8, "main_physical_bytes": 64, "estimate": 1.760973120, "ci95": [1.657430823, 1.870983867]},
+    {"shard_bytes": 15, "main_physical_bytes": 64, "estimate": 1.573459569, "ci95": [1.493834864, 1.657328446]},
+    {"shard_bytes": 16, "main_physical_bytes": 64, "estimate": 1.712303068, "ci95": [1.656853625, 1.769608220]},
+    {"shard_bytes": 31, "main_physical_bytes": 64, "estimate": 1.589243244, "ci95": [1.520898499, 1.660659202]},
+    {"shard_bytes": 32, "main_physical_bytes": 64, "estimate": 1.686561599, "ci95": [1.639858250, 1.734595063]},
+    {"shard_bytes": 35, "main_physical_bytes": 64, "estimate": 1.570659550, "ci95": [1.469159250, 1.679172235]},
+    {"shard_bytes": 39, "main_physical_bytes": 64, "estimate": 1.556310769, "ci95": [1.489138540, 1.626513011]},
+    {"shard_bytes": 47, "main_physical_bytes": 64, "estimate": 1.570636869, "ci95": [1.463385101, 1.685749139]},
+    {"shard_bytes": 48, "main_physical_bytes": 64, "estimate": 1.580836092, "ci95": [1.533572360, 1.629556463]},
+    {"shard_bytes": 63, "main_physical_bytes": 64, "estimate": 1.612788917, "ci95": [1.561014649, 1.666280384]},
+    {"shard_bytes": 64, "main_physical_bytes": 64, "estimate": 1.576979318, "ci95": [1.559119305, 1.595043921]},
+    {"shard_bytes": 65, "main_physical_bytes": 128, "estimate": 1.628294517, "ci95": [1.587299699, 1.670348098]}
+  ],
+  "exhaustive_and_long_directional_map": {
+    "directory": "/tmp/leopard-k4r2-ragged-final-a3d2750-20260804-v1/directional",
+    "cells": 137,
+    "processes": 274,
+    "sibling_nonidle_jiffies": 0,
+    "exact_application_bytes": "Leopard2 encoded the exact requested B bytes.",
+    "main_padding_policy": "Leopard main encoded ceil(B/64)*64 physical bytes with a zero suffix; timings therefore report both exact logical B and padded physical bytes.",
+    "B1_through_B65_main_over_leopard2_range": [1.096215429, 1.822087949],
+    "representative_B66_through_B2049_main_over_leopard2_range": [1.164846719, 2.002622091],
+    "cells_slower_than_main": 0,
+    "digest_mismatches": 0
+  },
+  "same_source_region_map": {
+    "directory": "/tmp/leopard-k4r2-ragged-final-a3d2750-20260804-v1/control-map",
+    "cells": 137,
+    "processes": 274,
+    "sibling_nonidle_jiffies": 0,
+    "changed_B8_through_B65_control_over_candidate_range": [1.039047126, 4.101001581],
+    "representative_B66_through_B2049_control_over_candidate_range": [0.998302963, 3.492120343],
+    "changed_cells_with_point_regression_over_two_percent": 0
+  },
+  "unchanged_scalar_neighbor_abba": {
+    "directory": "/tmp/leopard-k4r2-ragged-final-a3d2750-20260804-v1/scalar-neighbors",
+    "rounds": 9,
+    "iterations_per_process": 21,
+    "warmups_per_process": 6,
+    "processes": 252,
+    "sibling_nonidle_jiffies": 0,
+    "B1_through_B7_control_over_candidate_estimate_range": [1.035041, 1.094700],
+    "minimum_ci95_lower": 1.011211,
+    "result": "No unchanged scalar neighbor regressed."
+  },
+  "correctness_gates": {
+    "release": {
+      "build": "/tmp/leopard-k4r2-ragged-final-a3d2750-v1",
+      "tests": ["leopard2_t2_packed_terminal", "leopard2_t2_k4_production"],
+      "result": "2/2 passed in 1.48 seconds",
+      "maximum_rss_kib": 32608
+    },
+    "asan_ubsan": {
+      "build": "/tmp/leopard2-t8-1k-final-default-asan",
+      "compiler": "clang++-18",
+      "flags": "-O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=all",
+      "tests": ["leopard2_t2_packed_terminal", "leopard2_t2_k4_production"],
+      "result": "2/2 passed in 5.45 seconds",
+      "maximum_rss_kib": 86272
+    },
+    "coverage": [
+      "Every exact B=1..65 across public encode, one-item batch, and reusable batch binding",
+      "Independent direct systematic generator and forced mature transform parity",
+      "Linux per-source and per-output PROT_NONE guard pages for every B=8..65",
+      "Unaligned packed slabs, canary guards, sparse outputs, detached inputs, and nonpacked fallbacks",
+      "Scratch, metadata, input/output alias, cross-item alias, and failure-atomicity controls",
+      "Representative remainder classes after longer prefixes through B=2048 plus B2049 and larger selector neighbors"
+    ],
+    "independent_reviews": 2,
+    "review_result": "No skipped byte, OOB access, aliasing UB, compiler portability blocker, or acceptance gap found."
+  },
+  "development_rejection": {
+    "prototype": "A first uncommitted 4-byte final window for a 5-byte remainder skipped one byte at B37.",
+    "detection": "The newly exhaustive direct-generator test failed immediately.",
+    "resolution": "Use a window at least as wide as the entire remainder class; the corrected source passed exhaustive, guard-page, sanitizer, and differential gates before commit."
+  },
+  "resource_policy": {
+    "build_parallelism": 1,
+    "compiler_address_space_limit_mib": 512,
+    "clean_build_maximum_rss_kib": 314572,
+    "reason": "Prior OOMs required serialized capped compiler work. ASan execution was uncapped and single-threaded because its shadow mapping is incompatible with RLIMIT_AS. Cache-sensitive timings were pinned to one physical core and resumed only after all read-only workers finished."
+  },
+  "promotion_gate": {
+    "correctness_passed": true,
+    "minimum_target_speedup": 1.05,
+    "minimum_target_ci95_lower_same_source": 1.122965178,
+    "minimum_target_ci95_lower_exact_main": 1.463385101,
+    "neighbor_point_regressions_over_two_percent": 0,
+    "passed": true
+  },
+  "disposition": "Promoted. K4/R2 exact ragged encoding no longer falls behind padded Leopard main in any clean B1..65 or representative through-B2049 cell. The new in-range vector tails are 1.209x to 3.945x faster than the prior Leopard2 scalar tails at the qualified targets and retain deterministic legacy parity."
+}
