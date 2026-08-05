@@ -1,0 +1,124 @@
+{
+  "schema": "leopard2-raw-native-high-one-shot-promotion/v1",
+  "date_utc": "2026-08-05",
+  "bead": "leopard-79h.38.2.5.7",
+  "status": "promoted",
+  "source": {
+    "commit": "a3ab73d8dcc415106c31a1507ef660cd61de0d5e",
+    "tree": "7b4c97113a2964b11dfc43a8e639d862b41af350",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "target": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "K": "9..16",
+    "R": "5..8",
+    "losses": "5..R",
+    "shard_bytes": "1..256",
+    "parent_count": 32,
+    "padded_side": 8,
+    "description": "allocation-free scratch-resident public one-shot Algorithm 5 setup and execution"
+  },
+  "artifacts": {
+    "candidate_build": "/tmp/leopard-raw-native-high-a3ab73d-pure-avx2-v1",
+    "candidate_benchmark_sha256": "e32d0825792109f18add643a030f1df225338b9aa3d5f6c9be0da7a8b83d9d3f",
+    "candidate_archive_sha256": "e32f279a228fd02b9f341a3e8be8c6a2742e8a486adb3357b57c8d142e1a9182",
+    "exact_main_build": "/tmp/leopard-main-pure-avx2-v13-d0e5fb7",
+    "exact_main_benchmark_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+    "exact_main_archive_sha256": "ca0f40a4c334b4199e22deab07fc20b0fe36abbe75fce105fbee00b78dff0cc5"
+  },
+  "correctness": {
+    "allocation_audited_public_one_shot_cases": 768,
+    "independent_generator_oracle_and_reusable_algorithm5_cases": 168,
+    "hot_path_allocations_in_eligible_cases": 0,
+    "covered_byte_sizes": [1, 63, 64, 65, 255, 256],
+    "fallback_byte_size": 257,
+    "covered_loss_shapes": [
+      "prefix originals",
+      "suffix originals",
+      "scattered originals",
+      "mixed missing originals and parity",
+      "surplus parity selection"
+    ],
+    "contract_checks": [
+      "short scratch",
+      "scratch alignment",
+      "pointer and presence mismatch",
+      "input/output/metadata overlap",
+      "range overflow",
+      "insufficient received data",
+      "failure atomicity",
+      "profile, field, backend, forced-mode, and byte-boundary fallbacks"
+    ],
+    "release": "pass",
+    "asan_ubsan": "pass",
+    "tsan": "pass",
+    "gcc_wall_wextra_wpedantic_werror": "pass",
+    "all_benchmark_workload_digests_matched": true
+  },
+  "same_source_abba": {
+    "raw_directory": "/tmp/leopard-raw-native-high-samesource-abba-v2",
+    "evidence_class": "controlled pinned ABBA with zero reserved-sibling non-idle jiffies; no external affinity-supervisor seal",
+    "timing_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "rounds": 3,
+    "order": ["mode2-control", "mode3-candidate", "mode3-candidate", "mode2-control"],
+    "iterations_per_process": 31,
+    "warmup": 4,
+    "reuse": 200,
+    "accepted_processes": 72,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "ratio_orientation": "mode2_control_time_over_mode3_candidate_time",
+    "cells": [
+      {"shard_bytes": 1, "speedup": 1.324810, "ci95": [1.298485, 1.351668], "control_us": 1.038910, "candidate_us": 0.784085},
+      {"shard_bytes": 63, "speedup": 1.339480, "ci95": [1.309908, 1.369719], "control_us": 1.002110, "candidate_us": 0.751810},
+      {"shard_bytes": 64, "speedup": 1.341696, "ci95": [1.260936, 1.427628], "control_us": 0.954310, "candidate_us": 0.699185},
+      {"shard_bytes": 65, "speedup": 1.251430, "ci95": [1.207808, 1.296627], "control_us": 1.410245, "candidate_us": 1.124765},
+      {"shard_bytes": 256, "speedup": 1.223727, "ci95": [1.200934, 1.246953], "control_us": 1.249790, "candidate_us": 1.025715},
+      {"shard_bytes": 257, "route": "inert fallback control", "speedup": 1.001419, "ci95": [0.973214, 1.030441], "control_us": 1.718770, "candidate_us": 1.719145}
+    ]
+  },
+  "exact_main_abba": {
+    "raw_directory": "/tmp/leopard-raw-native-high-light-abba-v2",
+    "evidence_class": "controlled pinned exact-main ABBA with zero reserved-sibling non-idle jiffies; frozen read-only build artifacts; no external affinity-supervisor seal",
+    "timing_cpu": 29,
+    "reserved_smt_sibling": 13,
+    "rounds": 3,
+    "order": ["exact-main", "leopard2", "leopard2", "exact-main"],
+    "iterations_per_process": 31,
+    "warmup": 4,
+    "reuse": 200,
+    "accepted_processes": 48,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "ratio_orientation": "exact_main_time_over_leopard2_time",
+    "application_equivalence_note": "For nonmultiples of 64, exact main processes the next 64-byte multiple with a zero suffix while Leopard2 processes the requested byte count.",
+    "cells": [
+      {"shard_bytes": 1, "speedup": 1.062944, "ci95": [1.048195, 1.077900], "exact_main_us": 0.828935, "leopard2_us": 0.779060},
+      {"shard_bytes": 63, "speedup": 1.123774, "ci95": [1.111395, 1.136291], "exact_main_us": 0.828310, "leopard2_us": 0.739935},
+      {"shard_bytes": 64, "speedup": 1.188482, "ci95": [1.175185, 1.201930], "exact_main_us": 0.826385, "leopard2_us": 0.697955},
+      {"shard_bytes": 65, "speedup": 0.828928, "ci95": [0.815217, 0.842870], "exact_main_us": 0.950263, "leopard2_us": 1.145462}
+    ]
+  },
+  "wide_directional_screen": {
+    "raw_directory": "/tmp/leopard-raw-native-high-light-abba-v1",
+    "evidence_class": "directional only because the reserved sibling accumulated three non-idle jiffies",
+    "cells": 14,
+    "processes": 168,
+    "all_digests_matched": true,
+    "notable_exact_main_speedups": {
+      "K16_R8_L5_B64": 1.219466,
+      "K9_R5_L5_B64": 1.392898,
+      "K12_R6_L6_B64": 1.270247,
+      "K9_R8_L8_B64": 1.298612,
+      "K16_R8_L8_B256": 1.102434
+    },
+    "expected_outside_or_fallback_gaps": {
+      "K16_R8_L4_B64": 0.639165,
+      "K16_R8_L8_B257": 0.758049,
+      "K17_R8_L8_B64": 0.856069,
+      "K16_R4_L4_B64": 0.652774
+    }
+  },
+  "conclusion": "Promote the bounded raw native-high path. It clears the original K16/R8/loss8/64-byte Leopard1 regression by 18.85 percent with a 17.52 percent lower confidence bound, while the same-source 257-byte inert control is neutral. The exact-main 65-byte reversal is an adjacent absolute crossover gap, not a regression caused by this candidate; investigate a direct ragged-tail repair before widening the route."
+}

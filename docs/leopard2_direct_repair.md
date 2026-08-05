@@ -479,3 +479,31 @@ and
 An attempted specialized-only metadata reduction was rejected because its
 amortized result was neutral to negative; that result is retained in
 `experiments/leopard2/direct_repair/results/small_dual_specialized_metadata_negative_20260805.json`.
+
+## Scratch-resident tiny native-high one-shot path
+
+For GF8/AVX2 legacy-high `N=32`, `T=8` codecs with `K=9..16`, `R=5..8`,
+losses `5..R`, and at most 256 bytes per shard, the public one-shot decoder now
+constructs its deterministic selection, locator, block prefixes, and output
+descriptors in caller scratch and invokes the tiled Algorithm 5 executor
+without allocating a heap plan.  Full 64-byte prefixes reveal directly into
+the requested outputs; a ragged tail is staged in existing scratch and
+gathered.  The reusable plan API and every ineligible one-shot call retain the
+ordinary immutable-plan path.
+
+Across 768 allocation-audited public cases and 168 independent-oracle cases,
+the new path reproduced reusable Algorithm 5 and direct systematic recovery,
+with zero eligible hot-path allocations.  Focused Release, ASan+UBSan, TSan,
+and strict-warning gates pass.  A zero-sibling-jiffy same-source ABBA measured
+1.342x at `K=16,R=8,L=8,B=64`; its 257-byte inert control was neutral.  A
+separate pure-AVX2 comparison against exact Leopard1 measured 1.188x at the
+original 64-byte target, with a 95% interval of 1.175x--1.202x.
+
+The same exact-main replay found a 0.829x ratio at 65 bytes.  That is an
+adjacent absolute crossover gap rather than a candidate regression: the raw
+path still improves 65-byte one-shot time by 1.251x over its heap-plan control,
+but its extra ragged transform tile costs more than Leopard1.  Direct repair of
+only the ragged tail remains the leading follow-up.
+
+See `experiments/leopard2/optimization_log/27-raw-native-high-one-shot.md` and
+`experiments/leopard2/direct_repair/results/raw_native_high_one_shot_20260805.json`.
