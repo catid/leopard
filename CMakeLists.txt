@@ -100,6 +100,12 @@ option(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
 option(LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
     "Retain transform and direct routes for qualified GF8/AVX2 loss-5..8 plans"
     ON)
+option(LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
+    "Derive reusable small-dual direct rows from the transform locator"
+    ON)
+option(LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
+    "Experimentally omit pruned schedules from selected reusable small-dual plans"
+    OFF)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
@@ -362,7 +368,9 @@ set_property(SOURCE
     tests/leopard2/test_api.cpp
     tests/leopard2/test_small_dual_direct.cpp
     APPEND PROPERTY COMPILE_DEFINITIONS
-    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=$<BOOL:${LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT}>)
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=$<BOOL:${LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT}>
+    LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=$<BOOL:${LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS}>
+    LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=$<BOOL:${LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK}>)
 if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
     # Only the public routing TU consumes this selector.  The generated AVX2
     # arithmetic has its own conditional object below.
@@ -2397,6 +2405,7 @@ if(LEO2_BUILD_TESTS)
 
     add_executable(leopard2_small_dual_direct_test
         tests/leopard2/direct_oracle.cpp
+        tests/leopard2/direct_repair.cpp
         tests/leopard2/test_small_dual_direct.cpp)
     target_compile_definitions(leopard2_small_dual_direct_test PRIVATE
         LEO2_ENABLE_TEST_HOOKS=1)

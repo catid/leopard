@@ -35,7 +35,8 @@ ATTESTATION_RESULT_SCHEMA_V8 = "leopard2-balanced-auto-path-result/v8"
 ATTESTATION_RESULT_SCHEMA_V9 = "leopard2-balanced-auto-path-result/v9"
 ATTESTATION_RESULT_SCHEMA_V10 = "leopard2-balanced-auto-path-result/v10"
 ATTESTATION_RESULT_SCHEMA_V11 = "leopard2-balanced-auto-path-result/v11"
-ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v12"
+ATTESTATION_RESULT_SCHEMA_V12 = "leopard2-balanced-auto-path-result/v12"
+ATTESTATION_RESULT_SCHEMA = "leopard2-balanced-auto-path-result/v13"
 PROMOTION_TIMING_SCHEMA = "leopard2-balanced-promotion-timing-evidence/v1"
 EXACT_MANIFEST_SCHEMA_V5 = "leopard2-main-compare-manifest/v5"
 EXACT_MANIFEST_SCHEMA_V6 = "leopard2-main-compare-manifest/v6"
@@ -46,13 +47,14 @@ EXACT_MANIFEST_SCHEMA_V10 = "leopard2-main-compare-manifest/v10"
 EXACT_MANIFEST_SCHEMA_V11 = "leopard2-main-compare-manifest/v11"
 EXACT_MANIFEST_SCHEMA_V12 = "leopard2-main-compare-manifest/v12"
 EXACT_MANIFEST_SCHEMA_V13 = "leopard2-main-compare-manifest/v13"
-EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v14"
+EXACT_MANIFEST_SCHEMA_V14 = "leopard2-main-compare-manifest/v14"
+EXACT_MANIFEST_SCHEMA = "leopard2-main-compare-manifest/v15"
 EXACT_MANIFEST_SCHEMAS = frozenset((
     EXACT_MANIFEST_SCHEMA_V5, EXACT_MANIFEST_SCHEMA_V6,
     EXACT_MANIFEST_SCHEMA_V7, EXACT_MANIFEST_SCHEMA_V8,
     EXACT_MANIFEST_SCHEMA_V9, EXACT_MANIFEST_SCHEMA_V10,
     EXACT_MANIFEST_SCHEMA_V11, EXACT_MANIFEST_SCHEMA_V12,
-    EXACT_MANIFEST_SCHEMA_V13,
+    EXACT_MANIFEST_SCHEMA_V13, EXACT_MANIFEST_SCHEMA_V14,
     EXACT_MANIFEST_SCHEMA,
 ))
 EXACT_MAIN_COMMIT = "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
@@ -117,11 +119,13 @@ EXACT_RAW_SCHEMA_V10 = "leopard2-main-compare-raw/v10"
 EXACT_RAW_SCHEMA_V11 = "leopard2-main-compare-raw/v11"
 EXACT_RAW_SCHEMA_V12 = "leopard2-main-compare-raw/v12"
 EXACT_RAW_SCHEMA_V13 = "leopard2-main-compare-raw/v13"
-EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v14"
+EXACT_RAW_SCHEMA_V14 = "leopard2-main-compare-raw/v14"
+EXACT_RAW_SCHEMA = "leopard2-main-compare-raw/v15"
 EXACT_RAW_SCHEMAS = frozenset((
     EXACT_RAW_SCHEMA_V5, EXACT_RAW_SCHEMA_V6, EXACT_RAW_SCHEMA_V7,
     EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA_V9, EXACT_RAW_SCHEMA_V10,
     EXACT_RAW_SCHEMA_V11, EXACT_RAW_SCHEMA_V12, EXACT_RAW_SCHEMA_V13,
+    EXACT_RAW_SCHEMA_V14,
     EXACT_RAW_SCHEMA,
 ))
 EXACT_SCHEMA_PAIRS = frozenset((
@@ -134,6 +138,7 @@ EXACT_SCHEMA_PAIRS = frozenset((
     (EXACT_MANIFEST_SCHEMA_V11, EXACT_RAW_SCHEMA_V11),
     (EXACT_MANIFEST_SCHEMA_V12, EXACT_RAW_SCHEMA_V12),
     (EXACT_MANIFEST_SCHEMA_V13, EXACT_RAW_SCHEMA_V13),
+    (EXACT_MANIFEST_SCHEMA_V14, EXACT_RAW_SCHEMA_V14),
     (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA),
 ))
 CANONICAL_LDD_SCHEMA = "leopard2-main-compare-canonical-ldd/v1"
@@ -188,7 +193,8 @@ COMPILE_COMMANDS_SCHEMA_V6 = "leopard2-main-compare-compile-commands/v6"
 COMPILE_COMMANDS_SCHEMA_V7 = "leopard2-main-compare-compile-commands/v7"
 COMPILE_COMMANDS_SCHEMA_V8 = "leopard2-main-compare-compile-commands/v8"
 COMPILE_COMMANDS_SCHEMA_V9 = "leopard2-main-compare-compile-commands/v9"
-COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v10"
+COMPILE_COMMANDS_SCHEMA_V10 = "leopard2-main-compare-compile-commands/v10"
+COMPILE_COMMANDS_SCHEMA = "leopard2-main-compare-compile-commands/v11"
 GNU_CXX_DRIVER_BASENAME = re.compile(
     r"(?:g\+\+|(?:[A-Za-z0-9_.+]+-)+"
     r"(?:gnu|gnueabi(?:hf)?|eabi|elf|musl|mingw32)-g\+\+)"
@@ -207,8 +213,10 @@ CANDIDATE_COMPILE_PROFILE_V4 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v4"
 CANDIDATE_COMPILE_PROFILE_V5 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v5"
-CANDIDATE_COMPILE_PROFILE = \
+CANDIDATE_COMPILE_PROFILE_V6 = \
     "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v6"
+CANDIDATE_COMPILE_PROFILE = \
+    "gnu-compatible-cxx11-runtime-dispatch-effective-avx2-x86_64-release/v7"
 BASELINE_NATIVE_ISA_POLICY = "whole-build -march=native"
 BASELINE_PURE_AVX2_ISA_POLICY = (
     "whole-build -march=x86-64 -mtune=generic -mavx2 -mno-avx512f")
@@ -238,8 +246,10 @@ BUILD_CONFIGURATION_RECORD_SCHEMA_V6 = \
     "leopard2-main-compare-build-configuration/v6"
 BUILD_CONFIGURATION_RECORD_SCHEMA_V7 = \
     "leopard2-main-compare-build-configuration/v7"
-BUILD_CONFIGURATION_RECORD_SCHEMA = \
+BUILD_CONFIGURATION_RECORD_SCHEMA_V8 = \
     "leopard2-main-compare-build-configuration/v8"
+BUILD_CONFIGURATION_RECORD_SCHEMA = \
+    "leopard2-main-compare-build-configuration/v9"
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = \
     "leopard2-benchmark-build-configuration/v2"
 BUILD_CONFIGURATION_FILE_SCHEMA_V3 = \
@@ -252,8 +262,10 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V6 = \
     "leopard2-benchmark-build-configuration/v6"
 BUILD_CONFIGURATION_FILE_SCHEMA_V7 = \
     "leopard2-benchmark-build-configuration/v7"
-BUILD_CONFIGURATION_FILE_SCHEMA = \
+BUILD_CONFIGURATION_FILE_SCHEMA_V8 = \
     "leopard2-benchmark-build-configuration/v8"
+BUILD_CONFIGURATION_FILE_SCHEMA = \
+    "leopard2-benchmark-build-configuration/v9"
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
     "leopard2_benchmark_build_configuration.txt"
@@ -271,7 +283,8 @@ EVIDENCE_SCOPE_SCHEMA_V6 = "leopard2-balanced-evidence-scope/v6"
 EVIDENCE_SCOPE_SCHEMA_V7 = "leopard2-balanced-evidence-scope/v7"
 EVIDENCE_SCOPE_SCHEMA_V8 = "leopard2-balanced-evidence-scope/v8"
 EVIDENCE_SCOPE_SCHEMA_V9 = "leopard2-balanced-evidence-scope/v9"
-EVIDENCE_SCOPE_SCHEMA = "leopard2-balanced-evidence-scope/v10"
+EVIDENCE_SCOPE_SCHEMA_V10 = "leopard2-balanced-evidence-scope/v10"
+EVIDENCE_SCOPE_SCHEMA = "leopard2-balanced-evidence-scope/v11"
 CANONICAL_BUILD_VALIDATOR_V2 = \
     "exact-main/run_abba.py build_provenance schema v8"
 CANONICAL_BUILD_VALIDATOR_V3 = \
@@ -284,8 +297,10 @@ CANONICAL_BUILD_VALIDATOR_V6 = \
     "exact-main/run_abba.py build_provenance schema v12"
 CANONICAL_BUILD_VALIDATOR_V7 = \
     "exact-main/run_abba.py build_provenance schema v13"
-CANONICAL_BUILD_VALIDATOR = \
+CANONICAL_BUILD_VALIDATOR_V8 = \
     "exact-main/run_abba.py build_provenance schema v14"
+CANONICAL_BUILD_VALIDATOR = \
+    "exact-main/run_abba.py build_provenance schema v15"
 CANONICAL_PRODUCTION_BUILD_SCHEMA_V2 = \
     "leopard2-canonical-production-build/v2"
 CANONICAL_PRODUCTION_BUILD_SCHEMA_V3 = \
@@ -298,8 +313,10 @@ CANONICAL_PRODUCTION_BUILD_SCHEMA_V6 = \
     "leopard2-canonical-production-build/v6"
 CANONICAL_PRODUCTION_BUILD_SCHEMA_V7 = \
     "leopard2-canonical-production-build/v7"
-CANONICAL_PRODUCTION_BUILD_SCHEMA = \
+CANONICAL_PRODUCTION_BUILD_SCHEMA_V8 = \
     "leopard2-canonical-production-build/v8"
+CANONICAL_PRODUCTION_BUILD_SCHEMA = \
+    "leopard2-canonical-production-build/v9"
 BUILD_CONFIGURATION_VARIABLES_V2 = (
     "CMAKE_BUILD_TYPE", "CMAKE_GENERATOR", "CMAKE_CONFIGURATION_TYPES",
     "CMAKE_CXX_COMPILER", "CMAKE_CXX_FLAGS", "CMAKE_CXX_FLAGS_DEBUG",
@@ -345,7 +362,12 @@ BUILD_CONFIGURATION_VARIABLES_V7 = (
     *BUILD_CONFIGURATION_VARIABLES_V6,
     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
 )
-BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V7
+BUILD_CONFIGURATION_VARIABLES_V8 = BUILD_CONFIGURATION_VARIABLES_V7
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V8,
+    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
+)
 REQUIRED_BUILD_CONFIGURATION_ENTRIES_V2 = {
     "CMAKE_CXX_FLAGS": " -Wall -Wextra -fopenmp",
     "CMAKE_CXX_FLAGS_DEBUG": "-g -O0",
@@ -393,8 +415,13 @@ REQUIRED_BUILD_CONFIGURATION_ENTRIES_V7 = {
     **REQUIRED_BUILD_CONFIGURATION_ENTRIES_V6,
     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
 }
-REQUIRED_BUILD_CONFIGURATION_ENTRIES = \
+REQUIRED_BUILD_CONFIGURATION_ENTRIES_V8 = \
     REQUIRED_BUILD_CONFIGURATION_ENTRIES_V7
+REQUIRED_BUILD_CONFIGURATION_ENTRIES = {
+    **REQUIRED_BUILD_CONFIGURATION_ENTRIES_V8,
+    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+}
 REQUIRED_LEGACY_CANDIDATE_CACHE = {
     "ENABLE_OPENMP": "ON",
     "LEO2_BACKEND_VARIANT": "auto",
@@ -449,7 +476,12 @@ REQUIRED_CANDIDATE_CACHE_V7 = {
     **REQUIRED_CANDIDATE_CACHE_V6,
     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
 }
-REQUIRED_CANDIDATE_CACHE = REQUIRED_CANDIDATE_CACHE_V7
+REQUIRED_CANDIDATE_CACHE_V8 = REQUIRED_CANDIDATE_CACHE_V7
+REQUIRED_CANDIDATE_CACHE = {
+    **REQUIRED_CANDIDATE_CACHE_V8,
+    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+}
 CANONICAL_NINJA_PATH = "/usr/bin/ninja"
 REQUIRED_BASELINE_CACHE = {
     "LEO_MAIN_HAS_MARCH_NATIVE": "1",
@@ -1418,6 +1450,12 @@ def _build_configuration_contract(
             BUILD_CONFIGURATION_VARIABLES,
             REQUIRED_CANDIDATE_CACHE,
         )
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V8:
+        return (
+            BUILD_CONFIGURATION_RECORD_SCHEMA_V8,
+            BUILD_CONFIGURATION_VARIABLES_V8,
+            REQUIRED_CANDIDATE_CACHE_V8,
+        )
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V7:
         return (
             BUILD_CONFIGURATION_RECORD_SCHEMA_V7,
@@ -1467,11 +1505,16 @@ def _build_configuration_contract_for_compile_schema(
                 COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
                 COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
                 COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+                COMPILE_COMMANDS_SCHEMA_V10,
                 COMPILE_COMMANDS_SCHEMA},
             "normalized compile-command schema differs")
     if compile_schema == COMPILE_COMMANDS_SCHEMA:
         require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA,
                 "current compile-command schema requires the current "
+                "effective-configuration schema")
+    elif compile_schema == COMPILE_COMMANDS_SCHEMA_V10:
+        require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V8,
+                "v14 compile-command schema requires the v14 "
                 "effective-configuration schema")
     elif compile_schema == COMPILE_COMMANDS_SCHEMA_V9:
         require(file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V7,
@@ -1505,6 +1548,8 @@ def _required_build_configuration_entries(
 ) -> Mapping[str, str]:
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         return REQUIRED_BUILD_CONFIGURATION_ENTRIES
+    if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V8:
+        return REQUIRED_BUILD_CONFIGURATION_ENTRIES_V8
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V7:
         return REQUIRED_BUILD_CONFIGURATION_ENTRIES_V6
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V6:
@@ -1527,6 +1572,7 @@ def _build_configuration_material(
 ) -> bytes:
     require(tuple(variables) in (
                 BUILD_CONFIGURATION_VARIABLES,
+                BUILD_CONFIGURATION_VARIABLES_V8,
                 BUILD_CONFIGURATION_VARIABLES_V7,
                 BUILD_CONFIGURATION_VARIABLES_V6,
                 BUILD_CONFIGURATION_VARIABLES_V5,
@@ -1992,6 +2038,7 @@ def _normalized_compile_argv(
                 COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
                 COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
                 COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+                COMPILE_COMMANDS_SCHEMA_V10,
                 COMPILE_COMMANDS_SCHEMA},
             "normalized compile argv schema differs")
     output = _normalized_compile_output(
@@ -2012,6 +2059,7 @@ def _normalized_compile_argv(
                                   COMPILE_COMMANDS_SCHEMA_V7,
                                   COMPILE_COMMANDS_SCHEMA_V8,
                                   COMPILE_COMMANDS_SCHEMA_V9,
+                                  COMPILE_COMMANDS_SCHEMA_V10,
                                   COMPILE_COMMANDS_SCHEMA) else
             ["-march=native"])
         return [
@@ -2046,13 +2094,15 @@ def _normalized_compile_argv(
             "-mavx2", "-mgfni", "-mno-avx512f", "-falign-functions=64"],
     }
     if compile_schema in (
-            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA) and \
+            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V10,
+            COMPILE_COMMANDS_SCHEMA) and \
             relative == "Leopard2BackendAVX2T8K8B1024.cpp" and \
             _resolved_compiler_is_gnu(compiler_path):
         isolated_flags[relative].insert(-1, "-flive-range-shrinkage")
     effective_avx2 = compile_schema in (
         COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
         COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+        COMPILE_COMMANDS_SCHEMA_V10,
         COMPILE_COMMANDS_SCHEMA)
     source_definitions: list[str] = []
     global_definitions = ([
@@ -2092,7 +2142,9 @@ def _normalized_compile_argv(
         ])
     elif relative == "Leopard2BackendAVX2T8K8B1024.cpp":
         require(compile_schema in (
-                    COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA),
+                    COMPILE_COMMANDS_SCHEMA_V9,
+                    COMPILE_COMMANDS_SCHEMA_V10,
+                    COMPILE_COMMANDS_SCHEMA),
                 "historical compile profile contains the K8/R8/B1024 source")
         definitions = sorted([
             *global_definitions,
@@ -2172,12 +2224,15 @@ def _normalized_compile_argv(
         ]
         if compile_schema in (COMPILE_COMMANDS_SCHEMA_V8,
                               COMPILE_COMMANDS_SCHEMA_V9,
+                              COMPILE_COMMANDS_SCHEMA_V10,
                               COMPILE_COMMANDS_SCHEMA):
             definitions.insert(
                 definitions.index("-DLEO2_HAVE_AVX2_BACKEND=1"),
                 "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1")
         if compile_schema in (
-                COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA):
+                COMPILE_COMMANDS_SCHEMA_V9,
+                COMPILE_COMMANDS_SCHEMA_V10,
+                COMPILE_COMMANDS_SCHEMA):
             definitions.insert(
                 definitions.index("-DLEO2_HAVE_AVX2_BACKEND=1"),
                 "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1")
@@ -2187,16 +2242,25 @@ def _normalized_compile_argv(
                 "-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
         if compile_schema in (COMPILE_COMMANDS_SCHEMA_V8,
                               COMPILE_COMMANDS_SCHEMA_V9,
+                              COMPILE_COMMANDS_SCHEMA_V10,
                               COMPILE_COMMANDS_SCHEMA) and \
                 relative == "leopard2.cpp":
             source_definitions.extend([
                 "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
                 "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             ])
-        if compile_schema == COMPILE_COMMANDS_SCHEMA and \
+        if compile_schema in (
+                COMPILE_COMMANDS_SCHEMA_V10,
+                COMPILE_COMMANDS_SCHEMA) and \
                 relative == "leopard2.cpp":
             source_definitions.append(
                 "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1")
+        if compile_schema == COMPILE_COMMANDS_SCHEMA and \
+                relative == "leopard2.cpp":
+            source_definitions.extend([
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+            ])
     # CMake emits the target-wide definitions in lexical order for the
     # effective-AVX2 build profiles.  Keep this reconstruction byte-for-byte
     # aligned with the retained compile command; source-property definitions
@@ -2232,12 +2296,14 @@ def _validate_scope_build(
                 COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
                 COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
                 COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+                COMPILE_COMMANDS_SCHEMA_V10,
                 COMPILE_COMMANDS_SCHEMA},
             f"{role} normalized compile-command schema differs")
     complete_build = compile_schema in (
         COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
         COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
         COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+        COMPILE_COMMANDS_SCHEMA_V10,
         COMPILE_COMMANDS_SCHEMA)
     expected_build_keys = {
                 "build_dir", "cmake_cache", "compile_commands",
@@ -2271,6 +2337,7 @@ def _validate_scope_build(
                                   COMPILE_COMMANDS_SCHEMA_V7,
                                   COMPILE_COMMANDS_SCHEMA_V8,
                                   COMPILE_COMMANDS_SCHEMA_V9,
+                                  COMPILE_COMMANDS_SCHEMA_V10,
                                   COMPILE_COMMANDS_SCHEMA) else
             REQUIRED_BASELINE_CACHE)
     elif complete_build:
@@ -2316,6 +2383,8 @@ def _validate_scope_build(
              cache.get("LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA") ==
                 (BUILD_CONFIGURATION_FILE_SCHEMA
                  if compile_schema == COMPILE_COMMANDS_SCHEMA else
+                 BUILD_CONFIGURATION_FILE_SCHEMA_V8
+                 if compile_schema == COMPILE_COMMANDS_SCHEMA_V10 else
                  BUILD_CONFIGURATION_FILE_SCHEMA_V7
                  if compile_schema == COMPILE_COMMANDS_SCHEMA_V9 else
                  BUILD_CONFIGURATION_FILE_SCHEMA_V6
@@ -2339,7 +2408,8 @@ def _validate_scope_build(
         BASELINE_LIBRARY_SOURCES if baseline else
         CANDIDATE_LIBRARY_SOURCES
         if compile_schema in (
-            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA) else
+            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V10,
+            COMPILE_COMMANDS_SCHEMA) else
         CANDIDATE_LIBRARY_SOURCES_V12
         if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
         CANDIDATE_LIBRARY_SOURCES_V11
@@ -2350,7 +2420,8 @@ def _validate_scope_build(
         BASELINE_EXPECTED_COMPILE_COMMAND_COUNT if baseline else
         (CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
          if compile_schema in (
-             COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA) else
+             COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V10,
+             COMPILE_COMMANDS_SCHEMA) else
          CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V12
          if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
          CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V11)) * configured_variant_count
@@ -2465,12 +2536,14 @@ def _validate_scope_build(
             COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA_V6,
             COMPILE_COMMANDS_SCHEMA_V7,
             COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+            COMPILE_COMMANDS_SCHEMA_V10,
             COMPILE_COMMANDS_SCHEMA):
         expected_semantics_keys.add("generated_attestation_header")
     if compile_schema in (
             COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
             COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
             COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+            COMPILE_COMMANDS_SCHEMA_V10,
             COMPILE_COMMANDS_SCHEMA):
         expected_semantics_keys.add("effective_build_configuration")
     expected_profile = (
@@ -2479,10 +2552,13 @@ def _validate_scope_build(
                                COMPILE_COMMANDS_SCHEMA_V7,
                                COMPILE_COMMANDS_SCHEMA_V8,
                                COMPILE_COMMANDS_SCHEMA_V9,
+                               COMPILE_COMMANDS_SCHEMA_V10,
                                COMPILE_COMMANDS_SCHEMA) else
          BASELINE_COMPILE_PROFILE) if baseline else
         CANDIDATE_COMPILE_PROFILE
         if compile_schema == COMPILE_COMMANDS_SCHEMA else
+        CANDIDATE_COMPILE_PROFILE_V6
+        if compile_schema == COMPILE_COMMANDS_SCHEMA_V10 else
         CANDIDATE_COMPILE_PROFILE_V5
         if compile_schema == COMPILE_COMMANDS_SCHEMA_V9 else
         CANDIDATE_COMPILE_PROFILE_V4
@@ -2500,11 +2576,13 @@ def _validate_scope_build(
                                COMPILE_COMMANDS_SCHEMA_V7,
                                COMPILE_COMMANDS_SCHEMA_V8,
                                COMPILE_COMMANDS_SCHEMA_V9,
+                               COMPILE_COMMANDS_SCHEMA_V10,
                                COMPILE_COMMANDS_SCHEMA) else
          BASELINE_NATIVE_ISA_POLICY) if baseline else
         CANDIDATE_ISA_POLICY
         if compile_schema in (
-            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA) else
+            COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V10,
+            COMPILE_COMMANDS_SCHEMA) else
         CANDIDATE_ISA_POLICY_V12
         if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
         CANDIDATE_ISA_POLICY_V11
@@ -2603,6 +2681,7 @@ def _validate_scope_build(
             COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA_V6,
             COMPILE_COMMANDS_SCHEMA_V7,
             COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+            COMPILE_COMMANDS_SCHEMA_V10,
             COMPILE_COMMANDS_SCHEMA):
         if baseline:
             require(semantics.get("generated_attestation_header") is None,
@@ -2618,6 +2697,7 @@ def _validate_scope_build(
             COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
             COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
             COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+            COMPILE_COMMANDS_SCHEMA_V10,
             COMPILE_COMMANDS_SCHEMA):
         if baseline:
             require(semantics.get("effective_build_configuration") is None,
@@ -3097,7 +3177,8 @@ def selection_scope_from_verified_bundle(
             "AVX-512 and NEON are outside this campaign")
     if raw.get("schema") in (
             EXACT_RAW_SCHEMA_V10, EXACT_RAW_SCHEMA_V11,
-            EXACT_RAW_SCHEMA_V12, EXACT_RAW_SCHEMA_V13, EXACT_RAW_SCHEMA):
+            EXACT_RAW_SCHEMA_V12, EXACT_RAW_SCHEMA_V13,
+            EXACT_RAW_SCHEMA_V14, EXACT_RAW_SCHEMA):
         require(resolved_backend == "avx2",
                 "current exact-main candidate did not resolve the effective-AVX2 "
                 "AUTO backend")
@@ -3112,7 +3193,7 @@ def selection_scope_from_verified_bundle(
     rich_scope = raw_schema in {
         EXACT_RAW_SCHEMA_V7, EXACT_RAW_SCHEMA_V8, EXACT_RAW_SCHEMA_V9,
         EXACT_RAW_SCHEMA_V10, EXACT_RAW_SCHEMA_V11, EXACT_RAW_SCHEMA_V12,
-        EXACT_RAW_SCHEMA_V13, EXACT_RAW_SCHEMA}
+        EXACT_RAW_SCHEMA_V13, EXACT_RAW_SCHEMA_V14, EXACT_RAW_SCHEMA}
     tool_names = ["runner", "taskset", "ldd"]
     if rich_scope:
         tool_names.append("evidence_helper")
@@ -3132,6 +3213,8 @@ def selection_scope_from_verified_bundle(
     scope = {
         "schema": (
             EVIDENCE_SCOPE_SCHEMA if raw_schema == EXACT_RAW_SCHEMA else
+            EVIDENCE_SCOPE_SCHEMA_V10
+            if raw_schema == EXACT_RAW_SCHEMA_V14 else
             EVIDENCE_SCOPE_SCHEMA_V9
             if raw_schema == EXACT_RAW_SCHEMA_V13 else
             EVIDENCE_SCOPE_SCHEMA_V8
@@ -3193,7 +3276,8 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         EVIDENCE_SCOPE_SCHEMA_V3, EVIDENCE_SCOPE_SCHEMA_V4,
         EVIDENCE_SCOPE_SCHEMA_V5, EVIDENCE_SCOPE_SCHEMA_V6,
         EVIDENCE_SCOPE_SCHEMA_V7, EVIDENCE_SCOPE_SCHEMA_V8,
-        EVIDENCE_SCOPE_SCHEMA_V9, EVIDENCE_SCOPE_SCHEMA},
+        EVIDENCE_SCOPE_SCHEMA_V9, EVIDENCE_SCOPE_SCHEMA_V10,
+        EVIDENCE_SCOPE_SCHEMA},
             "gate evidence scope shape differs")
     backend = scope.get("resolved_auto_backend")
     require(backend in CAMPAIGN_BACKENDS and
@@ -3201,6 +3285,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
                                   EVIDENCE_SCOPE_SCHEMA_V7,
                                   EVIDENCE_SCOPE_SCHEMA_V8,
                                   EVIDENCE_SCOPE_SCHEMA_V9,
+                                  EVIDENCE_SCOPE_SCHEMA_V10,
                                   EVIDENCE_SCOPE_SCHEMA) or
              backend == "avx2") and
             scope.get("forced_confirmation_backends") ==
@@ -3239,6 +3324,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         EVIDENCE_SCOPE_SCHEMA_V7: frozenset((COMPILE_COMMANDS_SCHEMA_V7,)),
         EVIDENCE_SCOPE_SCHEMA_V8: frozenset((COMPILE_COMMANDS_SCHEMA_V8,)),
         EVIDENCE_SCOPE_SCHEMA_V9: frozenset((COMPILE_COMMANDS_SCHEMA_V9,)),
+        EVIDENCE_SCOPE_SCHEMA_V10: frozenset((COMPILE_COMMANDS_SCHEMA_V10,)),
         EVIDENCE_SCOPE_SCHEMA: frozenset((COMPILE_COMMANDS_SCHEMA,)),
     }
     require(
@@ -3250,6 +3336,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
         COMPILE_COMMANDS_SCHEMA_V5, COMPILE_COMMANDS_SCHEMA_V6,
         COMPILE_COMMANDS_SCHEMA_V7,
         COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+        COMPILE_COMMANDS_SCHEMA_V10,
         COMPILE_COMMANDS_SCHEMA,
     ):
         attestation = candidate_compile["generated_attestation_header"]
@@ -3267,6 +3354,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             EVIDENCE_SCOPE_SCHEMA_V6, EVIDENCE_SCOPE_SCHEMA_V7,
             EVIDENCE_SCOPE_SCHEMA_V8,
             EVIDENCE_SCOPE_SCHEMA_V9,
+            EVIDENCE_SCOPE_SCHEMA_V10,
             EVIDENCE_SCOPE_SCHEMA):
         require(
             builds["baseline"]["multi_config_build_tool"] ==
@@ -3313,6 +3401,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             EVIDENCE_SCOPE_SCHEMA_V6, EVIDENCE_SCOPE_SCHEMA_V7,
             EVIDENCE_SCOPE_SCHEMA_V8,
             EVIDENCE_SCOPE_SCHEMA_V9,
+            EVIDENCE_SCOPE_SCHEMA_V10,
             EVIDENCE_SCOPE_SCHEMA):
         expected_tools.add("evidence_helper")
     require(isinstance(tools, dict) and set(tools) == expected_tools,
@@ -3326,6 +3415,7 @@ def validate_evidence_scope(scope: object) -> dict[str, Any]:
             EVIDENCE_SCOPE_SCHEMA_V6, EVIDENCE_SCOPE_SCHEMA_V7,
             EVIDENCE_SCOPE_SCHEMA_V8,
             EVIDENCE_SCOPE_SCHEMA_V9,
+            EVIDENCE_SCOPE_SCHEMA_V10,
             EVIDENCE_SCOPE_SCHEMA):
         require(
             tools["evidence_helper"]["path"] ==
@@ -4674,6 +4764,7 @@ def _attestation_result_build_contract(
                 ATTESTATION_RESULT_SCHEMA_V9,
                 ATTESTATION_RESULT_SCHEMA_V10,
                 ATTESTATION_RESULT_SCHEMA_V11,
+                ATTESTATION_RESULT_SCHEMA_V12,
                 ATTESTATION_RESULT_SCHEMA},
             "attestation result schema is unsupported")
     if result_schema == ATTESTATION_RESULT_SCHEMA:
@@ -4683,6 +4774,15 @@ def _attestation_result_build_contract(
             COMPILE_COMMANDS_SCHEMA,
             CANDIDATE_COMPILE_PROFILE,
             REQUIRED_CANDIDATE_CACHE,
+            True,
+        )
+    if result_schema == ATTESTATION_RESULT_SCHEMA_V12:
+        return (
+            CANONICAL_PRODUCTION_BUILD_SCHEMA_V8,
+            CANONICAL_BUILD_VALIDATOR_V8,
+            COMPILE_COMMANDS_SCHEMA_V10,
+            CANDIDATE_COMPILE_PROFILE_V6,
+            REQUIRED_CANDIDATE_CACHE_V8,
             True,
         )
     if result_schema == ATTESTATION_RESULT_SCHEMA_V11:
@@ -5001,6 +5101,7 @@ def validate_attestation_result_files(
                 ATTESTATION_RESULT_SCHEMA_V9,
                 ATTESTATION_RESULT_SCHEMA_V10,
                 ATTESTATION_RESULT_SCHEMA_V11,
+                ATTESTATION_RESULT_SCHEMA_V12,
                 ATTESTATION_RESULT_SCHEMA},
             "attestation result schema differs")
     unused_canonical_schema, unused_validator, unused_compile_schema, \
@@ -5128,15 +5229,19 @@ def fake_evidence_scope(
                 COMPILE_COMMANDS_SCHEMA_V4, COMPILE_COMMANDS_SCHEMA_V5,
                 COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
                 COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+                COMPILE_COMMANDS_SCHEMA_V10,
                 COMPILE_COMMANDS_SCHEMA},
             "fixture compile schema is unsupported")
     current = compile_schema == COMPILE_COMMANDS_SCHEMA
     effective_avx2 = compile_schema in (
         COMPILE_COMMANDS_SCHEMA_V6, COMPILE_COMMANDS_SCHEMA_V7,
         COMPILE_COMMANDS_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V9,
+        COMPILE_COMMANDS_SCHEMA_V10,
         COMPILE_COMMANDS_SCHEMA)
     configuration_file_schema = (
         BUILD_CONFIGURATION_FILE_SCHEMA if current else
+        BUILD_CONFIGURATION_FILE_SCHEMA_V8
+        if compile_schema == COMPILE_COMMANDS_SCHEMA_V10 else
         BUILD_CONFIGURATION_FILE_SCHEMA_V7
         if compile_schema == COMPILE_COMMANDS_SCHEMA_V9 else
         BUILD_CONFIGURATION_FILE_SCHEMA_V6
@@ -5245,7 +5350,8 @@ def fake_evidence_scope(
             BASELINE_LIBRARY_SOURCES if baseline else
             CANDIDATE_LIBRARY_SOURCES
             if compile_schema in (
-                COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA) else
+                COMPILE_COMMANDS_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V10,
+                COMPILE_COMMANDS_SCHEMA) else
             CANDIDATE_LIBRARY_SOURCES_V12
             if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
             CANDIDATE_LIBRARY_SOURCES_V11
@@ -5373,6 +5479,8 @@ def fake_evidence_scope(
                             BASELINE_COMPILE_PROFILE) if baseline else
                             CANDIDATE_COMPILE_PROFILE
                             if compile_schema == COMPILE_COMMANDS_SCHEMA else
+                            CANDIDATE_COMPILE_PROFILE_V6
+                            if compile_schema == COMPILE_COMMANDS_SCHEMA_V10 else
                             CANDIDATE_COMPILE_PROFILE_V5
                             if compile_schema == COMPILE_COMMANDS_SCHEMA_V9 else
                             CANDIDATE_COMPILE_PROFILE_V4
@@ -5385,6 +5493,7 @@ def fake_evidence_scope(
                     CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT
                     if compile_schema in (
                         COMPILE_COMMANDS_SCHEMA_V9,
+                        COMPILE_COMMANDS_SCHEMA_V10,
                         COMPILE_COMMANDS_SCHEMA) else
                     CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT_V12
                     if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
@@ -5408,6 +5517,7 @@ def fake_evidence_scope(
                     CANDIDATE_ISA_POLICY
                     if compile_schema in (
                         COMPILE_COMMANDS_SCHEMA_V9,
+                        COMPILE_COMMANDS_SCHEMA_V10,
                         COMPILE_COMMANDS_SCHEMA) else
                     CANDIDATE_ISA_POLICY_V12
                     if compile_schema == COMPILE_COMMANDS_SCHEMA_V8 else
@@ -5536,6 +5646,8 @@ def fake_evidence_scope(
     return {
         "schema": (
             EVIDENCE_SCOPE_SCHEMA if current else
+            EVIDENCE_SCOPE_SCHEMA_V10
+            if compile_schema == COMPILE_COMMANDS_SCHEMA_V10 else
             EVIDENCE_SCOPE_SCHEMA_V9
             if compile_schema == COMPILE_COMMANDS_SCHEMA_V9 else
             EVIDENCE_SCOPE_SCHEMA_V8
@@ -5782,6 +5894,8 @@ def self_test() -> None:
                 COMPILE_COMMANDS_SCHEMA_V8 and
             exact_runner.COMPILE_COMMANDS_SCHEMA_V9 ==
                 COMPILE_COMMANDS_SCHEMA_V9 and
+            exact_runner.COMPILE_COMMANDS_SCHEMA_V10 ==
+                COMPILE_COMMANDS_SCHEMA_V10 and
             exact_runner.COMPILE_COMMANDS_SCHEMA == COMPILE_COMMANDS_SCHEMA and
             exact_runner.BASELINE_PURE_AVX2_COMPILE_PROFILE ==
                 BASELINE_PURE_AVX2_COMPILE_PROFILE and
@@ -5793,6 +5907,8 @@ def self_test() -> None:
                 CANDIDATE_COMPILE_PROFILE_V4 and
             exact_runner.CANDIDATE_COMPILE_PROFILE_V5 ==
                 CANDIDATE_COMPILE_PROFILE_V5 and
+            exact_runner.CANDIDATE_COMPILE_PROFILE_V6 ==
+                CANDIDATE_COMPILE_PROFILE_V6 and
             exact_runner.CANDIDATE_COMPILE_PROFILE ==
                 CANDIDATE_COMPILE_PROFILE and
             exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V9) ==
@@ -5803,6 +5919,8 @@ def self_test() -> None:
                 CANDIDATE_ISA_POLICY_V12 and
             exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V13) ==
                 CANDIDATE_ISA_POLICY and
+            exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA_V14) ==
+                CANDIDATE_ISA_POLICY and
             exact_runner.candidate_isa_policy(exact_runner.RAW_SCHEMA) ==
                 CANDIDATE_ISA_POLICY and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES) ==
@@ -5811,6 +5929,8 @@ def self_test() -> None:
                 BUILD_CONFIGURATION_VARIABLES_V6 and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V7) ==
                 BUILD_CONFIGURATION_VARIABLES_V7 and
+            tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V8) ==
+                BUILD_CONFIGURATION_VARIABLES_V8 and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V5) ==
                 BUILD_CONFIGURATION_VARIABLES_V5 and
             tuple(exact_runner.BUILD_CONFIGURATION_VARIABLES_V4) ==
@@ -5823,6 +5943,8 @@ def self_test() -> None:
                 BUILD_CONFIGURATION_FILE_SCHEMA_V6 and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V7 ==
                 BUILD_CONFIGURATION_FILE_SCHEMA_V7 and
+            exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V8 ==
+                BUILD_CONFIGURATION_FILE_SCHEMA_V8 and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V5 ==
                 BUILD_CONFIGURATION_FILE_SCHEMA_V5 and
             exact_runner.BUILD_CONFIGURATION_FILE_SCHEMA_V4 ==
@@ -5835,6 +5957,8 @@ def self_test() -> None:
                 BUILD_CONFIGURATION_RECORD_SCHEMA_V6 and
             exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V7 ==
                 BUILD_CONFIGURATION_RECORD_SCHEMA_V7 and
+            exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V8 ==
+                BUILD_CONFIGURATION_RECORD_SCHEMA_V8 and
             exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V5 ==
                 BUILD_CONFIGURATION_RECORD_SCHEMA_V5 and
             exact_runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V4 ==
@@ -5847,10 +5971,12 @@ def self_test() -> None:
                 EVIDENCE_HELPER_RELATIVE_PATH,
             "balanced scope translation-unit contract drifted from its producer")
     require(exact_runner.MANIFEST_SCHEMA == EXACT_MANIFEST_SCHEMA and
+            exact_runner.MANIFEST_SCHEMA_V14 == EXACT_MANIFEST_SCHEMA_V14 and
             exact_runner.MANIFEST_SCHEMA_V13 == EXACT_MANIFEST_SCHEMA_V13 and
             exact_runner.MANIFEST_SCHEMA_V12 == EXACT_MANIFEST_SCHEMA_V12 and
             exact_runner.MANIFEST_SCHEMA_V11 == EXACT_MANIFEST_SCHEMA_V11 and
             exact_runner.MANIFEST_SCHEMA_V10 == EXACT_MANIFEST_SCHEMA_V10 and
+            exact_runner.RAW_SCHEMA_V14 == EXACT_RAW_SCHEMA_V14 and
             exact_runner.RAW_SCHEMA_V13 == EXACT_RAW_SCHEMA_V13 and
             exact_runner.RAW_SCHEMA_V12 == EXACT_RAW_SCHEMA_V12 and
             exact_runner.RAW_SCHEMA_V11 == EXACT_RAW_SCHEMA_V11 and
@@ -5861,6 +5987,8 @@ def self_test() -> None:
         {"schema": EXACT_MANIFEST_SCHEMA},
         {"schema": EXACT_RAW_SCHEMA})
     for manifest_schema, raw_schema in (
+        (EXACT_MANIFEST_SCHEMA_V14, EXACT_RAW_SCHEMA),
+        (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V14),
         (EXACT_MANIFEST_SCHEMA_V13, EXACT_RAW_SCHEMA),
         (EXACT_MANIFEST_SCHEMA, EXACT_RAW_SCHEMA_V13),
         (EXACT_MANIFEST_SCHEMA_V12, EXACT_RAW_SCHEMA),
@@ -6204,8 +6332,16 @@ def self_test() -> None:
             current_v14_semantics["profile"] == CANDIDATE_COMPILE_PROFILE and
             current_v14_configuration["entries"].get(
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON" and
+            current_v14_configuration["entries"].get(
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS") == "ON" and
+            current_v14_configuration["entries"].get(
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK") == "OFF" and
             current_v14_leopard2["arguments"].count(
                 "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1") == 1 and
+            current_v14_leopard2["arguments"].count(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1") == 1 and
+            current_v14_leopard2["arguments"].count(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0") == 1 and
             any(path.endswith("/Leopard2BackendAVX2T8K8B1024.cpp")
                 for path in current_v14_semantics["required_sources"]),
             "current v14 source/compile closure fixture differs")
@@ -6347,10 +6483,51 @@ def self_test() -> None:
             "historical v13 effective-configuration/source fixture no longer "
             "replays")
 
+        historical_v14_scope = fake_evidence_scope(
+            compile_schema=COMPILE_COMMANDS_SCHEMA_V10)
+        validate_evidence_scope(historical_v14_scope)
+        historical_v14_semantics = historical_v14_scope[
+            "builds"]["candidate"]["validated_compile_commands"]
+        historical_v14_configuration = historical_v14_semantics[
+            "effective_build_configuration"]
+        parsed_historical_v14 = _parse_build_configuration_bytes(
+            historical_v14_configuration["content"]["text"].encode("utf-8"))
+        v14_record_schema, v14_variables, v14_cache = \
+            _build_configuration_contract_for_compile_schema(
+                COMPILE_COMMANDS_SCHEMA_V10,
+                parsed_historical_v14["configuration_schema"])
+        historical_v14_leopard2 = next(
+            entry for entry in historical_v14_semantics["required_entries"]
+            if entry["file"].endswith("/leopard2.cpp"))
+        require(
+            v14_record_schema == BUILD_CONFIGURATION_RECORD_SCHEMA_V8 and
+            v14_variables == BUILD_CONFIGURATION_VARIABLES_V8 and
+            v14_cache == REQUIRED_CANDIDATE_CACHE_V8 and
+            historical_v14_semantics["profile"] ==
+                CANDIDATE_COMPILE_PROFILE_V6 and
+            parsed_historical_v14["entries"].get(
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON" and
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS" not in
+                parsed_historical_v14["entries"] and
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK" not in
+                parsed_historical_v14["entries"] and
+            "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1" in
+                historical_v14_leopard2["arguments"] and
+            "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1" not in
+                historical_v14_leopard2["arguments"] and
+            "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0" not in
+                historical_v14_leopard2["arguments"],
+            "historical v14 effective-configuration/source fixture no longer "
+            "replays")
+
         for label, relabeled_scope, scope_schema, compile_version in (
-            ("v14 body as v13", current_v14_scope,
+            ("v15 body as v14", current_v14_scope,
+             EVIDENCE_SCOPE_SCHEMA_V10, COMPILE_COMMANDS_SCHEMA_V10),
+            ("v14 body as v15", historical_v14_scope,
+             EVIDENCE_SCOPE_SCHEMA, COMPILE_COMMANDS_SCHEMA),
+            ("v15 body as v13", current_v14_scope,
              EVIDENCE_SCOPE_SCHEMA_V9, COMPILE_COMMANDS_SCHEMA_V9),
-            ("v13 body as v14", historical_v13_scope,
+            ("v13 body as v15", historical_v13_scope,
              EVIDENCE_SCOPE_SCHEMA, COMPILE_COMMANDS_SCHEMA),
             ("v14 body as v12", current_v14_scope,
              EVIDENCE_SCOPE_SCHEMA_V8, COMPILE_COMMANDS_SCHEMA_V8),
@@ -7692,9 +7869,15 @@ def self_test() -> None:
                         COMPILE_COMMANDS_SCHEMA_V6,
                         COMPILE_COMMANDS_SCHEMA_V7,
                         COMPILE_COMMANDS_SCHEMA_V8,
-                        COMPILE_COMMANDS_SCHEMA_V9},
+                        COMPILE_COMMANDS_SCHEMA_V9,
+                        COMPILE_COMMANDS_SCHEMA_V10},
                     "historical canonical fixture schema differs")
-            if compile_schema == COMPILE_COMMANDS_SCHEMA_V9:
+            if compile_schema == COMPILE_COMMANDS_SCHEMA_V10:
+                file_schema = BUILD_CONFIGURATION_FILE_SCHEMA_V8
+                canonical_schema = CANONICAL_PRODUCTION_BUILD_SCHEMA_V8
+                validator = CANONICAL_BUILD_VALIDATOR_V8
+                profile = CANDIDATE_COMPILE_PROFILE_V6
+            elif compile_schema == COMPILE_COMMANDS_SCHEMA_V9:
                 file_schema = BUILD_CONFIGURATION_FILE_SCHEMA_V7
                 canonical_schema = CANONICAL_PRODUCTION_BUILD_SCHEMA_V7
                 validator = CANONICAL_BUILD_VALIDATOR_V7
@@ -7804,6 +7987,8 @@ def self_test() -> None:
             COMPILE_COMMANDS_SCHEMA_V8)
         historical_v13_build = historical_canonical_build_fixture(
             COMPILE_COMMANDS_SCHEMA_V9)
+        historical_v14_build = historical_canonical_build_fixture(
+            COMPILE_COMMANDS_SCHEMA_V10)
         historical_root = root / "historical-attestation-result"
         shutil.copytree(raw_root, historical_root / "raw")
         historical = derive_attestation_result(
@@ -7915,14 +8100,34 @@ def self_test() -> None:
                 ATTESTATION_RESULT_SCHEMA_V11,
                 "historical v13 attestation schema did not replay strictly")
 
+        historical_v14_root = root / "historical-v14-attestation-result"
+        shutil.copytree(raw_root, historical_v14_root / "raw")
+        historical_v14 = derive_attestation_result(
+            stage_root, source, historical_v14_build, collector,
+            raw_documents, raw_artifacts, timing_evidence,
+            result_schema=ATTESTATION_RESULT_SCHEMA_V12)
+        historical_v14_manifest = historical_v14_root / "manifest.json"
+        write_json(historical_v14_manifest, historical_v14)
+        validated_historical_v14 = validate_attestation_result_files(
+            stage_root, historical_v14_manifest, source,
+            historical_v14_build, collector,
+            verified_timing_evidence=timing_evidence)
+        require(validated_historical_v14["schema"] ==
+                ATTESTATION_RESULT_SCHEMA_V12,
+                "historical v14 attestation schema did not replay strictly")
+
         for label, result_schema, candidate_build, candidate_timing in (
             ("current body under historical result",
              ATTESTATION_RESULT_SCHEMA_V6, build, timing_evidence),
             ("historical body under current result",
              ATTESTATION_RESULT_SCHEMA, historical_build, timing_evidence),
-            ("v14 body under v13 result",
+            ("v15 body under v14 result",
+             ATTESTATION_RESULT_SCHEMA_V12, build, timing_evidence),
+            ("v14 body under v15 result",
+             ATTESTATION_RESULT_SCHEMA, historical_v14_build, timing_evidence),
+            ("v15 body under v13 result",
              ATTESTATION_RESULT_SCHEMA_V11, build, timing_evidence),
-            ("v13 body under v14 result",
+            ("v13 body under v15 result",
              ATTESTATION_RESULT_SCHEMA, historical_v13_build, timing_evidence),
             ("v14 body under v12 result",
              ATTESTATION_RESULT_SCHEMA_V10, build, timing_evidence),

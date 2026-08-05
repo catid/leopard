@@ -2294,6 +2294,8 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BUILD_ALLK_DIAGNOSTIC": "OFF",
             "LEO2_BUILD_TESTS": "ON",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -2352,8 +2354,36 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             self.assertIn(
                 "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=ON",
                 configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS:BOOL=ON",
+                configure)
+            self.assertIn(
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=OFF",
+                configure)
+            v8_cache = dict(cache)
+            for selector in (
+                    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+                v8_cache.pop(selector)
+            v8_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8
+            v8_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v8-build", v8_cache)
+            self.assertIn(
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=ON",
+                v8_configure)
+            self.assertFalse(any(
+                any(argument.startswith(f"-D{selector}:")
+                    for selector in (
+                        "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                        "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"))
+                for argument in v8_configure))
             v7_cache = dict(cache)
-            v7_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+            for selector in (
+                    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+                v7_cache.pop(selector)
             v7_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
             v7_configure = provenance._reproducible_configure_argv(
@@ -2382,7 +2412,11 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             v5_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5
             v5_cache["LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"] = "OFF"
-            v5_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+            for selector in (
+                    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+                v5_cache.pop(selector)
             for selector in v6_only:
                 v5_cache.pop(selector)
             v5_configure = provenance._reproducible_configure_argv(
@@ -3398,6 +3432,8 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
                 },
                 "c_compiler": identity,
                 "compiler": identity,
@@ -3482,6 +3518,8 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_BUILD_FUZZERS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
@@ -3502,7 +3540,11 @@ class ExactCommandValidationTests(unittest.TestCase):
         }
         validated = provenance._validate_candidate_required_cache(cache)
         v6_cache = dict(cache)
-        v6_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        for selector in (
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v6_cache.pop(selector)
         v6_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
         v6_validated = provenance._validate_candidate_required_cache(
@@ -3513,7 +3555,11 @@ class ExactCommandValidationTests(unittest.TestCase):
             v6_validated["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
         v7_cache = dict(cache)
-        v7_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        for selector in (
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v7_cache.pop(selector)
         v7_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
         v7_validated = provenance._validate_candidate_required_cache(
@@ -3533,6 +3579,29 @@ class ExactCommandValidationTests(unittest.TestCase):
                 v7_with_current_selector,
                 expected_configuration_schema=
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
+        v8_cache = dict(cache)
+        for selector in (
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v8_cache.pop(selector)
+        v8_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8
+        v8_validated = provenance._validate_candidate_required_cache(
+            v8_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
+        self.assertEqual(
+            v8_validated["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"], "ON")
+        v8_with_current_selector = dict(v8_cache)
+        v8_with_current_selector[
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS"] = "ON"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "historical candidate CMake cache"):
+            provenance._validate_candidate_required_cache(
+                v8_with_current_selector,
+                expected_configuration_schema=
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3548,6 +3617,8 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
         }
         for selector, expected in selectors.items():
             self.assertEqual(validated[selector], expected)
@@ -3652,7 +3723,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5, v6, v7, and current"):
+                        "supports only v5 through v8 and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3717,6 +3788,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
             },
         }
         v5 = {
@@ -3733,17 +3806,31 @@ class ExactCommandValidationTests(unittest.TestCase):
             },
         }
         v6 = copy.deepcopy(current)
-        v6["validated_cache"].pop(
-            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        for selector in (
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v6["validated_cache"].pop(selector)
         v6["validated_cache"][
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
         v7 = copy.deepcopy(current)
-        v7["validated_cache"].pop(
-            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        for selector in (
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v7["validated_cache"].pop(selector)
         v7["validated_cache"][
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
+        v8 = copy.deepcopy(current)
+        for selector in (
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v8["validated_cache"].pop(selector)
+        v8["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8
         v4 = {
             "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
             "validated_cache": {
@@ -3790,6 +3877,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "configuration_schema"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v8, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -3844,7 +3937,9 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
-                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"):
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
             with self.subTest(current_missing=selector):
                 missing_selector = copy.deepcopy(current)
                 del missing_selector["validated_cache"][selector]
@@ -3867,9 +3962,21 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
         with self.assertRaisesRegex(
                 provenance.BuildProvenanceError,
-                "v6/v7/current reproducible-build closure"):
+                "v6/v7/v8/current reproducible-build closure"):
             provenance._reproducible_replay_contract(
                 v7_with_current_selector)
+
+        for selector, value in (
+                ("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS", "ON"),
+                ("LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK", "OFF")):
+            with self.subTest(v8_forward_selector=selector):
+                v8_with_current_selector = copy.deepcopy(v8)
+                v8_with_current_selector["validated_cache"][selector] = value
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "v6/v7/v8/current reproducible-build closure"):
+                    provenance._reproducible_replay_contract(
+                        v8_with_current_selector)
 
         for selector in (
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
@@ -4297,6 +4404,8 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
@@ -4551,6 +4660,8 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
+            "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+            "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
         }
@@ -4583,8 +4694,70 @@ class ExactCommandValidationTests(unittest.TestCase):
                 router, source_root=SOURCE_ROOT,
                 cache=noncanonical_dual_cache,
                 library_sources=routed_library_sources)
+        for selector, definition, changed_value, changed_definition in (
+                (
+                    "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                    "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+                    "OFF",
+                    "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=0",
+                ),
+                (
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
+                    "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+                    "ON",
+                    "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
+                )):
+            with self.subTest(router_selector=selector):
+                changed_cache = dict(replay_cache)
+                changed_cache[selector] = changed_value
+                changed_definitions = (
+                    router_definitions - {definition}) | {
+                        changed_definition}
+                self.assertEqual(
+                    provenance._validate_compile_flags(
+                        compile_argv(
+                            router, changed_definitions, target_flags=()),
+                        router, source_root=SOURCE_ROOT,
+                        cache=changed_cache,
+                        library_sources=routed_library_sources),
+                    "portable-core")
+                noncanonical_cache = dict(replay_cache)
+                noncanonical_cache[selector] = "TRUE"
+                with self.assertRaisesRegex(
+                        provenance.BuildProvenanceError,
+                        "exactly ON or OFF"):
+                    provenance._validate_compile_flags(
+                        compile_argv(
+                            router, router_definitions, target_flags=()),
+                        router, source_root=SOURCE_ROOT,
+                        cache=noncanonical_cache,
+                        library_sources=routed_library_sources)
+        v8_router_cache = dict(replay_cache)
+        for selector in (
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v8_router_cache.pop(selector)
+        v8_router_cache[
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(
+                    router,
+                    router_definitions - {
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+                    },
+                    target_flags=()),
+                router, source_root=SOURCE_ROOT, cache=v8_router_cache,
+                library_sources=routed_library_sources),
+            "portable-core")
         v7_router_cache = dict(replay_cache)
-        v7_router_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        for selector in (
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+                "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"):
+            v7_router_cache.pop(selector)
         v7_router_cache[
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
@@ -4593,7 +4766,10 @@ class ExactCommandValidationTests(unittest.TestCase):
                 compile_argv(
                     router,
                     router_definitions - {
-                        "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1"},
+                        "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+                    },
                     target_flags=()),
                 router, source_root=SOURCE_ROOT, cache=v7_router_cache,
                 library_sources=routed_library_sources),
