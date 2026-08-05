@@ -781,6 +781,13 @@ uint64_t test_raw_native_high_matrix(leo2_context* avx2)
         extended_bytes,
         extended_bytes +
             sizeof(extended_bytes) / sizeof(extended_bytes[0]));
+    // The allocation-free source-major interval begins on a vector boundary.
+    // Exercise every 64-byte residue without letting a padded-tail bug hide
+    // behind naturally aligned benchmark sizes.
+    for (size_t tail = 0; tail < 64; ++tail)
+        boundary_bytes.push_back(12288 + tail);
+    boundary_bytes.push_back(16383);
+    boundary_bytes.push_back(16384);
     uint64_t cases = 0;
     for (uint32_t k = 9; k <= 16; ++k)
     {
@@ -860,16 +867,27 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 32, 32, 257, 9, 2, true, false);
     const uint64_t raw_native_high_cases =
         test_raw_native_high_matrix(avx2);
-    require(raw_native_high_cases == 12544,
+    require(raw_native_high_cases == 20992,
         "raw native-high matrix case count drifted");
 
-    // Native-high direct execution uses the measured 7168-byte ceiling.
-    // The first byte beyond it retains the heap-owned direct-plan fallback.
+    // Native-high direct execution has separately measured output-major and
+    // source-major intervals.  Their gap and the first byte above the latter
+    // retain the heap-owned direct-plan fallback.
     run_raw_transient_case(avx2, 16, 8, 257, 8, 2, false, true);
     run_raw_transient_case(avx2, 16, 8, 7168, 8, 1, true, true);
     run_raw_transient_case(avx2, 16, 8, 7169, 8, 2, false, false);
+    run_raw_transient_case(avx2, 16, 8, 12287, 8, 0, true, false);
+    run_raw_transient_case(avx2, 16, 8, 12288, 8, 1, true, true);
+    run_raw_transient_case(avx2, 16, 8, 12351, 8, 2, true, true);
+    run_raw_transient_case(avx2, 16, 8, 16384, 8, 0, true, true);
+    run_raw_transient_case(avx2, 16, 8, 16385, 8, 1, true, false);
+    run_raw_transient_case(avx2, 16, 8, 32768, 8, 2, true, false);
+    run_raw_transient_case(avx2, 16, 8, 65536, 8, 0, true, false);
+    run_raw_transient_case(avx2, 16, 8, 1024U * 1024U,
+        8, 1, true, false);
     test_raw_transient_failure_atomicity(avx2, 32, 32, 9, 65);
     test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 7168);
+    test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 16384);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
 

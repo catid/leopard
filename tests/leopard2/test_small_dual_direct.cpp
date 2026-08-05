@@ -530,6 +530,17 @@ size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
     byte_sizes.insert(byte_sizes.end(), extended_bytes,
         extended_bytes +
             sizeof(extended_bytes) / sizeof(extended_bytes[0]));
+    const size_t source_major_and_fallback_bytes[] = {
+        12287, 12288, 12289,
+        12319, 12320, 12321,
+        12350, 12351,
+        16383, 16384, 16385,
+        32768, 65536
+    };
+    byte_sizes.insert(byte_sizes.end(), source_major_and_fallback_bytes,
+        source_major_and_fallback_bytes +
+            sizeof(source_major_and_fallback_bytes) /
+                sizeof(source_major_and_fallback_bytes[0]));
     size_t cases = 0;
     for (size_t k_i = 0;
          k_i < sizeof(original_counts) / sizeof(original_counts[0]); ++k_i)
@@ -1027,7 +1038,7 @@ int main()
 
         const size_t raw_native_high_oracle_cases =
             verify_raw_native_high_oracle_matrix(context);
-        require(raw_native_high_oracle_cases == 11886,
+        require(raw_native_high_oracle_cases == 12432,
             "raw native-high oracle matrix case count drifted");
 
         verify_routes_and_execution(context, 5, 5, 5);
