@@ -9715,13 +9715,15 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
 }
 
 /*
-    Tiny native Algorithm 5 calls already reserve a 2T+R tiled workspace and
-    an address-range table in public scratch.  A heap-owned transient plan is
-    therefore unnecessary in the measured small-dual region: the complete
-    pattern-dependent state below is bounded by that range table and expires
-    with the call.  Reusable plans keep their owning vectors and compiled
-    schedules.
+    Tiny native-high calls already reserve a workspace and an address-range
+    table in public scratch.  A heap-owned transient plan is therefore
+    unnecessary in the measured small-dual region: the complete locator state
+    below is bounded by that range table and expires with the call.  Direct
+    execution does not depend on transform work-slot or tile geometry.
+    Reusable plans keep their owning vectors and compiled schedules.
 */
+static const uint64_t kRawNativeHighDirectMaximumBytes = 7168;
+
 struct RawNativeHighDecodePattern
 {
     uint8_t* coordinate_erased;
@@ -9823,7 +9825,8 @@ static void ExecuteRawNativeHighDirectAVX2(
         codec->original_count <= 16);
     LEO_DEBUG_ASSERT(output_count >= 5 &&
         output_count <= kDirectMaxRepairLosses);
-    LEO_DEBUG_ASSERT(shard_bytes != 0 && shard_bytes <= 256);
+    LEO_DEBUG_ASSERT(shard_bytes != 0 &&
+        shard_bytes <= kRawNativeHighDirectMaximumBytes);
     const uint8_t* const field_logs = leopard::ff8::ElementLogTable();
     const void* sources[16];
     uint32_t source_coordinates[16];
@@ -9897,7 +9900,8 @@ static void ExecuteRawNativeHighDecode(
     void* const* restored)
 {
 #if defined(LEO2_HAVE_AVX2_BACKEND)
-    LEO_DEBUG_ASSERT(shard_bytes != 0 && shard_bytes <= 256);
+    LEO_DEBUG_ASSERT(shard_bytes != 0 &&
+        shard_bytes <= kRawNativeHighDirectMaximumBytes);
     ExecuteRawNativeHighDirectAVX2(
         codec, pattern, original, recovery, restored, shard_bytes);
 #else
@@ -9926,7 +9930,8 @@ static leo2_result TryOneShotRawNativeHighDecode(
 {
     handled = false;
     if (g_one_shot_plan_setup_mode.load(std::memory_order_acquire) != 3U ||
-        !codec || shard_bytes == 0 || shard_bytes > 256 ||
+        !codec || shard_bytes == 0 ||
+        shard_bytes > kRawNativeHighDirectMaximumBytes ||
         codec->flags != 0 || codec->original_count < 9 ||
         codec->original_count > 16 || codec->recovery_count < 5 ||
         codec->recovery_count > 8 || codec->parent_count != 32 ||
@@ -10008,10 +10013,6 @@ static leo2_result TryOneShotRawNativeHighDecode(
     if (missing_original_count < 5 ||
         missing_original_count > codec->recovery_count)
         return LEO2_SUCCESS;
-    if (OneShotDirectRepairQualified(
-            codec, missing_original_count, shard_bytes))
-        return LEO2_SUCCESS;
-
     DecodeScratchGeometry geometry;
     leo2_result result = DecodeLayout(
         codec, NULL, shard_bytes, false, geometry);
@@ -10020,15 +10021,6 @@ static leo2_result TryOneShotRawNativeHighDecode(
         handled = true;
         return result;
     }
-    const size_t required_work_slots =
-        static_cast<size_t>(codec->padded_side) * 2U +
-        missing_original_count;
-    if (geometry.selection.path != leopard2_internal::kDecodePathTiled ||
-        geometry.work_slot_count < required_work_slots ||
-        geometry.execution_tile_count > 1 ||
-        geometry.work_slot_bytes < kScratchAlignment)
-        return LEO2_SUCCESS;
-
     AddressRange scratch_range;
     result = CheckScratch(
         scratch, scratch_bytes, geometry.layout, scratch_range);

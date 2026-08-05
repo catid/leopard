@@ -512,6 +512,24 @@ size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
         "raw native-high setup mode select failed");
     const BinaryField field = leopard2_test::make_legacy_gf8();
     const unsigned original_counts[] = { 9, 12, 16 };
+    std::vector<size_t> byte_sizes;
+    for (size_t bytes = 1; bytes <= 256; ++bytes)
+        byte_sizes.push_back(bytes);
+    const size_t extended_bytes[] = {
+        257,
+        319, 320, 321,
+        511, 512, 513,
+        1023, 1024, 1025,
+        2047, 2048, 2049,
+        4095, 4096, 4097,
+        6143, 6144, 6145,
+        7103, 7104, 7105,
+        7135, 7136, 7137,
+        7167, 7168
+    };
+    byte_sizes.insert(byte_sizes.end(), extended_bytes,
+        extended_bytes +
+            sizeof(extended_bytes) / sizeof(extended_bytes[0]));
     size_t cases = 0;
     for (size_t k_i = 0;
          k_i < sizeof(original_counts) / sizeof(original_counts[0]); ++k_i)
@@ -557,8 +575,10 @@ size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
                     leo2_decode_plan* reusable_plan = make_plan(
                         reusable_codec, original_present, recovery_present);
 
-                    for (size_t bytes = 1; bytes <= 256; ++bytes)
+                    for (size_t byte_index = 0;
+                         byte_index < byte_sizes.size(); ++byte_index)
                     {
+                        const size_t bytes = byte_sizes[byte_index];
                         size_t raw_scratch_bytes = 0;
                         size_t reusable_scratch_bytes = 0;
                         require_result(leo2_decode_scratch_size(
@@ -1007,7 +1027,7 @@ int main()
 
         const size_t raw_native_high_oracle_cases =
             verify_raw_native_high_oracle_matrix(context);
-        require(raw_native_high_oracle_cases == 10752,
+        require(raw_native_high_oracle_cases == 11886,
             "raw native-high oracle matrix case count drifted");
 
         verify_routes_and_execution(context, 5, 5, 5);

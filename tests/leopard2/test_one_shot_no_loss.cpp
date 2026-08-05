@@ -566,9 +566,10 @@ void test_raw_transient_failure_atomicity(
     leo2_context* context,
     uint32_t k,
     uint32_t r,
-    uint32_t losses)
+    uint32_t losses,
+    size_t bytes)
 {
-    RawTransientFixture fixture(context, k, r, 65);
+    RawTransientFixture fixture(context, k, r, bytes);
     fixture.Configure(losses, 2, true);
     require(fixture.decode_scratch_bytes > 1,
         "raw transient fixture has no decode scratch");
@@ -764,6 +765,22 @@ uint64_t test_raw_native_high_matrix(leo2_context* avx2)
     boundary_bytes.push_back(193);
     boundary_bytes.push_back(255);
     boundary_bytes.push_back(256);
+    const size_t extended_bytes[] = {
+        257,
+        319, 320, 321,
+        511, 512, 513,
+        1023, 1024, 1025,
+        2047, 2048, 2049,
+        4095, 4096, 4097,
+        6143, 6144, 6145,
+        7103, 7104, 7105,
+        7135, 7136, 7137,
+        7167, 7168
+    };
+    boundary_bytes.insert(boundary_bytes.end(),
+        extended_bytes,
+        extended_bytes +
+            sizeof(extended_bytes) / sizeof(extended_bytes[0]));
     uint64_t cases = 0;
     for (uint32_t k = 9; k <= 16; ++k)
     {
@@ -839,18 +856,20 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 17, 31, 255, 17, 0, true, true);
     run_raw_transient_case(avx2, 31, 17, 64, 17, 2, false, true);
 
-    // The first promotion is intentionally bounded to 256 bytes.
+    // Translated-low raw setup remains independently bounded to 256 bytes.
     run_raw_transient_case(avx2, 32, 32, 257, 9, 2, true, false);
     const uint64_t raw_native_high_cases =
         test_raw_native_high_matrix(avx2);
-    require(raw_native_high_cases == 9088,
+    require(raw_native_high_cases == 12544,
         "raw native-high matrix case count drifted");
 
-    // Both raw implementations stop at 256 bytes.  The first byte beyond
-    // that boundary must retain the heap-owned transient-plan fallback.
-    run_raw_transient_case(avx2, 16, 8, 257, 8, 2, false, false);
-    test_raw_transient_failure_atomicity(avx2, 32, 32, 9);
-    test_raw_transient_failure_atomicity(avx2, 16, 8, 8);
+    // Native-high direct execution uses the measured 7168-byte ceiling.
+    // The first byte beyond it retains the heap-owned direct-plan fallback.
+    run_raw_transient_case(avx2, 16, 8, 257, 8, 2, false, true);
+    run_raw_transient_case(avx2, 16, 8, 7168, 8, 1, true, true);
+    run_raw_transient_case(avx2, 16, 8, 7169, 8, 2, false, false);
+    test_raw_transient_failure_atomicity(avx2, 32, 32, 9, 65);
+    test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 7168);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
 
