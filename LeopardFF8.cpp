@@ -621,6 +621,11 @@ ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log)
 }
 
 
+const ffe_t* ElementLogTable()
+{
+    return LogLUT;
+}
+
 static bool InitializeHighTailGeneratorLogs()
 {
     // Legacy-high K=T+d,R=T for d in {1,2} uses parent [4T,3T], with

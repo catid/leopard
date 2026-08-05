@@ -78,6 +78,10 @@ ffe_t MultiplyElements(ffe_t a, ffe_t b);
 ffe_t InverseElement(ffe_t value);
 ffe_t ElementLog(ffe_t value); // value must be nonzero
 ffe_t MultiplyLogElement(ffe_t value, ffe_t multiplier_log);
+// Immutable after Initialize().  This internal view lets bounded scalar
+// setup kernels amortize the call boundary while preserving the exact legacy
+// Cantor/log representation.  Entries cover every uint8_t value/log.
+const ffe_t* ElementLogTable();
 
 // Fixed-multiplier execution helpers.  multiplier_log is produced by
 // ElementLog(), source and destination must not overlap, and byte_count may be

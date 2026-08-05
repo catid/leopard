@@ -753,15 +753,24 @@ void test_raw_transient_reusable_plan(
 
 uint64_t test_raw_native_high_matrix(leo2_context* avx2)
 {
-    const size_t boundary_bytes[] = { 1, 63, 64, 65, 255, 256 };
+    std::vector<size_t> boundary_bytes;
+    boundary_bytes.push_back(1);
+    boundary_bytes.push_back(63);
+    boundary_bytes.push_back(64);
+    for (size_t tail = 1; tail < 64; ++tail)
+        boundary_bytes.push_back(64 + tail);
+    boundary_bytes.push_back(128);
+    boundary_bytes.push_back(129);
+    boundary_bytes.push_back(193);
+    boundary_bytes.push_back(255);
+    boundary_bytes.push_back(256);
     uint64_t cases = 0;
     for (uint32_t k = 9; k <= 16; ++k)
     {
         for (uint32_t r = 5; r <= 8; ++r)
         {
             for (size_t byte_i = 0;
-                 byte_i < sizeof(boundary_bytes) /
-                     sizeof(boundary_bytes[0]); ++byte_i)
+                 byte_i < boundary_bytes.size(); ++byte_i)
             {
                 RawTransientFixture fixture(
                     avx2, k, r, boundary_bytes[byte_i]);
@@ -834,7 +843,7 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 32, 32, 257, 9, 2, true, false);
     const uint64_t raw_native_high_cases =
         test_raw_native_high_matrix(avx2);
-    require(raw_native_high_cases == 768,
+    require(raw_native_high_cases == 9088,
         "raw native-high matrix case count drifted");
 
     // Both raw implementations stop at 256 bytes.  The first byte beyond

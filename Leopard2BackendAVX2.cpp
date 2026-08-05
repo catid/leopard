@@ -5138,8 +5138,7 @@ static void AVX2FF8MultiplyAddOutputs(
     }
 }
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
+#if !defined(LEO2_AVX512_VARIANT) && !defined(LEO2_GFNI_VARIANT)
 #if defined(_MSC_VER)
 # define LEO2_AVX2_TINY_GROUP_NOINLINE __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
@@ -5262,8 +5261,8 @@ AVX2FF8EncodeOutputGroupTinyImpl(
     const uint8_t* coefficient_logs,
     uint64_t byte_count)
 {
-    static_assert(OutputCount >= 1 && OutputCount <= 5,
-        "tiny encode output group must contain one through five outputs");
+    static_assert(OutputCount >= 1 && OutputCount <= 8,
+        "tiny encode output group must contain one through eight outputs");
     const uint8_t* sources[16];
     uint8_t* destinations[OutputCount];
     const uint8_t* rows[OutputCount];
@@ -5466,7 +5465,7 @@ AVX2FF8EncodeOutputGroupTinyImpl(
 
 #undef LEO2_AVX2_TINY_GROUP_NOINLINE
 
-void AVX2FF8EncodeOutputGroupTiny(
+void AVX2FF8LinearCombinationTiny(
     const void* const* sources,
     uint32_t source_count,
     void* const* destinations,
@@ -5476,7 +5475,7 @@ void AVX2FF8EncodeOutputGroupTiny(
 {
     if (!sources || source_count == 0 || source_count > 16 ||
         !destinations || !coefficient_logs || output_count == 0 ||
-        output_count > 5)
+        output_count > 8)
         return;
     switch (output_count)
     {
@@ -5509,6 +5508,21 @@ void AVX2FF8EncodeOutputGroupTiny(
             AVX2FF8EncodeOutputGroupTinyImpl<5>(
                 sources, source_count, destinations,
                 coefficient_logs, byte_count);
+        break;
+    case 6:
+        AVX2FF8EncodeOutputGroupTinyImpl<6>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 7:
+        AVX2FF8EncodeOutputGroupTinyImpl<7>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
+        break;
+    case 8:
+        AVX2FF8EncodeOutputGroupTinyImpl<8>(
+            sources, source_count, destinations,
+            coefficient_logs, byte_count);
         break;
     }
 }

@@ -716,15 +716,14 @@ void AVX2XorMemorySourcesFixed256(
     uint32_t excluded_source);
 #endif
 
-#if defined(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE) && \
-    !defined(NO_LEO_HAS_FF8)
+#if defined(LEO2_HAVE_AVX2_BACKEND) && !defined(NO_LEO_HAS_FF8)
 /*
-    Default-off tiny legacy-high encoder experiment.  coefficient_logs stores
+    Pure-AVX2 tiny linear-combination kernel.  coefficient_logs stores
     output_count contiguous source_count-element rows in Leopard GF8 log
-    representation.  One through five pairwise-disjoint destinations are
+    representation.  One through eight pairwise-disjoint destinations are
     overwritten with their exact linear combinations.
 */
-void AVX2FF8EncodeOutputGroupTiny(
+void AVX2FF8LinearCombinationTiny(
     const void* const* sources,
     uint32_t source_count,
     void* const* destinations,

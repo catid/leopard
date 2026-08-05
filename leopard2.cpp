@@ -9727,11 +9727,7 @@ struct RawNativeHighDecodePattern
     uint8_t* coordinate_erased;
     uint8_t* locator;
     uint32_t* missing_originals;
-    uint32_t* requested_coordinates;
-    uint16_t* block_input_counts;
-    leopard2_internal::DecodeOutputBlock* output_blocks;
     uint32_t missing_original_count;
-    uint32_t output_block_count;
 };
 
 static bool BindRawNativeHighPatternStorage(
@@ -9749,14 +9745,7 @@ static bool BindRawNativeHighPatternStorage(
         TakeRawDecodeMetadata(scratch, metadata_limit,
             codec->parent_count, cursor, pattern.locator) &&
         TakeRawDecodeMetadata(scratch, metadata_limit,
-            missing_original_count, cursor, pattern.missing_originals) &&
-        TakeRawDecodeMetadata(scratch, metadata_limit,
-            missing_original_count, cursor, pattern.requested_coordinates) &&
-        TakeRawDecodeMetadata(scratch, metadata_limit,
-            codec->parent_count / codec->padded_side, cursor,
-            pattern.block_input_counts) &&
-        TakeRawDecodeMetadata(scratch, metadata_limit,
-            missing_original_count, cursor, pattern.output_blocks);
+            missing_original_count, cursor, pattern.missing_originals);
 }
 
 static bool PrepareRawNativeHighPattern(
@@ -9767,14 +9756,9 @@ static bool PrepareRawNativeHighPattern(
 {
     const uint32_t n = codec->parent_count;
     const uint32_t t = codec->padded_side;
-    const uint32_t block_count = n / t;
-    if (codec->permanent_erased.size() != n ||
-        codec->fixed_factors8.size() != n || block_count < 2)
+    if (codec->permanent_erased.size() != n)
         return false;
     memcpy(pattern.coordinate_erased, codec->permanent_erased.data(), n);
-    memset(pattern.block_input_counts, 0,
-        static_cast<size_t>(block_count) *
-            sizeof(*pattern.block_input_counts));
 
     uint32_t missing_index = 0;
     for (uint32_t i = 0; i < codec->original_count; ++i)
@@ -9786,7 +9770,6 @@ static bool PrepareRawNativeHighPattern(
             coordinate >= n)
             return false;
         pattern.missing_originals[missing_index] = i;
-        pattern.requested_coordinates[missing_index] = coordinate;
         pattern.coordinate_erased[coordinate] = 1;
         ++missing_index;
     }
@@ -9807,49 +9790,6 @@ static bool PrepareRawNativeHighPattern(
     if (selected_recovery_needed != 0)
         return false;
 
-    const auto observe_coordinate = [&](uint32_t coordinate) {
-        const uint32_t block = coordinate / t;
-        const uint16_t prefix = static_cast<uint16_t>(coordinate % t + 1U);
-        if (prefix > pattern.block_input_counts[block])
-            pattern.block_input_counts[block] = prefix;
-    };
-    for (uint32_t i = 0; i < codec->original_count; ++i)
-    {
-        const uint32_t coordinate = t + i;
-        if (original_present[i] && !pattern.coordinate_erased[coordinate])
-            observe_coordinate(coordinate);
-    }
-    for (uint32_t i = 0; i < codec->recovery_count; ++i)
-    {
-        if (recovery_present[i] && !pattern.coordinate_erased[i])
-            observe_coordinate(i);
-    }
-
-    pattern.output_block_count = 0;
-    uint32_t begin = 0;
-    while (begin < pattern.missing_original_count)
-    {
-        const uint32_t coordinate = pattern.requested_coordinates[begin];
-        const uint32_t block = coordinate / t;
-        if (block == 0 || block >= block_count ||
-            pattern.output_block_count >= pattern.missing_original_count)
-            return false;
-        uint32_t end = begin + 1U;
-        uint32_t requested_prefix = coordinate % t + 1U;
-        while (end < pattern.missing_original_count &&
-               pattern.requested_coordinates[end] / t == block)
-        {
-            requested_prefix =
-                pattern.requested_coordinates[end] % t + 1U;
-            ++end;
-        }
-        const leopard2_internal::DecodeOutputBlock descriptor = {
-            block, requested_prefix, begin, end
-        };
-        pattern.output_blocks[pattern.output_block_count++] = descriptor;
-        begin = end;
-    }
-
     const uint32_t total_erasure_count = n - codec->parent_dimension;
     if (codec->permanent_locator8.empty())
     {
@@ -9868,126 +9808,107 @@ static bool PrepareRawNativeHighPattern(
     return true;
 }
 
-static void PopulateRawNativeHighCoordinates(
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+static void ExecuteRawNativeHighDirectAVX2(
     const leo2_codec* codec,
-    const RawNativeHighDecodePattern& pattern,
-    const void* const* original,
-    const void* const* recovery,
-    size_t source_offset,
-    size_t pass_bytes,
-    uint8_t* staging_slots,
-    void** coordinate_data)
-{
-    const uint32_t t = codec->padded_side;
-    const bool stage_inputs = staging_slots != NULL;
-    std::fill(coordinate_data,
-        coordinate_data + codec->parent_count, static_cast<void*>(NULL));
-    for (uint32_t i = 0; i < codec->original_count; ++i)
-    {
-        const uint32_t coordinate = t + i;
-        if (!original[i] || pattern.coordinate_erased[coordinate])
-            continue;
-        const uint8_t* const source =
-            static_cast<const uint8_t*>(original[i]) + source_offset;
-        if (stage_inputs)
-        {
-            uint8_t* const slot = staging_slots +
-                static_cast<size_t>(i) * kScratchAlignment;
-            StageShardForKernel(
-                codec, slot, source, pass_bytes, kScratchAlignment);
-            coordinate_data[coordinate] = slot;
-        }
-        else
-            coordinate_data[coordinate] = const_cast<uint8_t*>(source);
-    }
-    for (uint32_t i = 0; i < codec->recovery_count; ++i)
-    {
-        if (!recovery[i] || pattern.coordinate_erased[i])
-            continue;
-        const uint8_t* const source =
-            static_cast<const uint8_t*>(recovery[i]) + source_offset;
-        if (stage_inputs)
-        {
-            uint8_t* const slot = staging_slots +
-                (static_cast<size_t>(codec->original_count) + i) *
-                    kScratchAlignment;
-            StageShardForKernel(
-                codec, slot, source, pass_bytes, kScratchAlignment);
-            coordinate_data[i] = slot;
-        }
-        else
-            coordinate_data[i] = const_cast<uint8_t*>(source);
-    }
-}
-
-static void ExecuteRawNativeHighDecode(
-    const leo2_codec* codec,
-    const DecodeScratchGeometry& geometry,
     const RawNativeHighDecodePattern& pattern,
     const void* const* original,
     const void* const* recovery,
     void* const* restored,
-    uint8_t* scratch)
+    size_t shard_bytes)
 {
-    const uint32_t n = codec->parent_count;
+    const uint32_t output_count = pattern.missing_original_count;
     const uint32_t t = codec->padded_side;
-    const leopard::backend::Ops& ops = *codec->context->ops;
-    void** const coordinate_data = reinterpret_cast<void**>(
-        scratch + geometry.layout.pointer_offset);
-    void** const work = coordinate_data + n;
-    void** const requested_output = work + static_cast<size_t>(t) * 2U;
-    uint8_t* const staging_slots = geometry.tail_bytes != 0
-        ? scratch + geometry.layout.data_offset : NULL;
-    uint8_t* const work_storage = scratch + geometry.work_data_offset;
-    for (size_t i = 0; i < geometry.work_slot_count; ++i)
-        work[i] = work_storage + i * geometry.work_slot_bytes;
+    LEO_DEBUG_ASSERT(codec->original_count >= 9 &&
+        codec->original_count <= 16);
+    LEO_DEBUG_ASSERT(output_count >= 5 &&
+        output_count <= kDirectMaxRepairLosses);
+    LEO_DEBUG_ASSERT(shard_bytes != 0 && shard_bytes <= 256);
+    const uint8_t* const field_logs = leopard::ff8::ElementLogTable();
+    const void* sources[16];
+    uint32_t source_coordinates[16];
+    void* outputs[kDirectMaxRepairLosses];
+    uint8_t coefficient_logs[16 * kDirectMaxRepairLosses];
+    uint32_t source_count = 0;
 
-    if (geometry.aligned_prefix_bytes != 0)
+    for (uint32_t recovery_index = 0;
+         recovery_index < codec->recovery_count; ++recovery_index)
     {
-        PopulateRawNativeHighCoordinates(codec, pattern,
-            original, recovery, 0, geometry.aligned_prefix_bytes,
-            NULL, coordinate_data);
-        for (uint32_t i = 0; i < pattern.missing_original_count; ++i)
+        if (!recovery[recovery_index] ||
+            pattern.coordinate_erased[recovery_index])
+            continue;
+        sources[source_count] = recovery[recovery_index];
+        source_coordinates[source_count++] = recovery_index;
+    }
+    for (uint32_t original_index = 0;
+         original_index < codec->original_count; ++original_index)
+    {
+        const uint32_t coordinate = t + original_index;
+        if (!original[original_index] ||
+            pattern.coordinate_erased[coordinate])
+            continue;
+        sources[source_count] = original[original_index];
+        source_coordinates[source_count++] = coordinate;
+    }
+    LEO_DEBUG_ASSERT(source_count == codec->original_count);
+
+    for (uint32_t output_index = 0;
+         output_index < output_count; ++output_index)
+    {
+        const uint32_t missing_original =
+            pattern.missing_originals[output_index];
+        const uint32_t missing_coordinate = t + missing_original;
+        LEO_DEBUG_ASSERT(missing_original < codec->original_count);
+        LEO_DEBUG_ASSERT(pattern.coordinate_erased[missing_coordinate]);
+        LEO_DEBUG_ASSERT(restored[missing_original]);
+        outputs[output_index] = restored[missing_original];
+        for (uint32_t source_index = 0;
+             source_index < source_count; ++source_index)
         {
-            requested_output[i] =
-                restored[pattern.missing_originals[i]];
+            const uint32_t source_coordinate =
+                source_coordinates[source_index];
+            const DirectField8::Element difference =
+                static_cast<DirectField8::Element>(
+                    source_coordinate ^ missing_coordinate);
+            LEO_DEBUG_ASSERT(difference != 0);
+            DirectField8::Element multiplier_log =
+                DirectField8::SubtractLogs(
+                    pattern.locator[source_coordinate],
+                    pattern.locator[missing_coordinate]);
+            coefficient_logs[
+                static_cast<size_t>(output_index) * source_count +
+                    source_index] = DirectField8::SubtractLogs(
+                        multiplier_log, field_logs[difference]);
         }
-        leopard::ff8::ReedSolomonDecodeHighTiledPlanned(
-            ops, geometry.aligned_prefix_bytes, n, t,
-            const_cast<const void* const*>(coordinate_data),
-            pattern.block_input_counts, pattern.requested_coordinates,
-            pattern.output_blocks, pattern.output_block_count,
-            pattern.locator, codec->fixed_factors8.data(),
-            requested_output, work);
     }
 
-    if (geometry.tail_bytes != 0)
-    {
-        PopulateRawNativeHighCoordinates(codec, pattern,
-            original, recovery, geometry.aligned_prefix_bytes,
-            geometry.tail_bytes, staging_slots, coordinate_data);
-        for (uint32_t i = 0; i < pattern.missing_original_count; ++i)
-        {
-            const size_t slot = static_cast<size_t>(t) * 2U + i;
-            requested_output[i] =
-                work_storage + slot * geometry.work_slot_bytes;
-        }
-        leopard::ff8::ReedSolomonDecodeHighTiledPlanned(
-            ops, kScratchAlignment, n, t,
-            const_cast<const void* const*>(coordinate_data),
-            pattern.block_input_counts, pattern.requested_coordinates,
-            pattern.output_blocks, pattern.output_block_count,
-            pattern.locator, codec->fixed_factors8.data(),
-            requested_output, work);
-        for (uint32_t i = 0; i < pattern.missing_original_count; ++i)
-        {
-            const uint32_t original_index = pattern.missing_originals[i];
-            GatherShardFromKernel(codec,
-                static_cast<uint8_t*>(restored[original_index]) +
-                    geometry.aligned_prefix_bytes,
-                requested_output[i], geometry.tail_bytes);
-        }
-    }
+    leopard::backend::AVX2FF8LinearCombinationTiny(
+        sources, source_count, outputs, coefficient_logs,
+        output_count, shard_bytes);
+}
+#endif
+
+static void ExecuteRawNativeHighDecode(
+    const leo2_codec* codec,
+    size_t shard_bytes,
+    const RawNativeHighDecodePattern& pattern,
+    const void* const* original,
+    const void* const* recovery,
+    void* const* restored)
+{
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    LEO_DEBUG_ASSERT(shard_bytes != 0 && shard_bytes <= 256);
+    ExecuteRawNativeHighDirectAVX2(
+        codec, pattern, original, recovery, restored, shard_bytes);
+#else
+    (void)codec;
+    (void)shard_bytes;
+    (void)pattern;
+    (void)original;
+    (void)recovery;
+    (void)restored;
+    LEO_DEBUG_ASSERT(false);
+#endif
 }
 
 static leo2_result TryOneShotRawNativeHighDecode(
@@ -10132,8 +10053,8 @@ static leo2_result TryOneShotRawNativeHighDecode(
     if (!PrepareRawNativeHighPattern(
             codec, original_present, recovery_present, pattern))
         return LEO2_INTERNAL_ERROR;
-    ExecuteRawNativeHighDecode(codec, geometry, pattern,
-        original, recovery, restored, static_cast<uint8_t*>(scratch));
+    ExecuteRawNativeHighDecode(codec, static_cast<size_t>(shard_bytes),
+        pattern, original, recovery, restored);
     return LEO2_SUCCESS;
 }
 #endif
@@ -10258,7 +10179,7 @@ static leo2_result ExecuteGF8DirectEncodeSourceMajor(
         {
             const uint32_t group_count = std::min(
                 output_group_width, output_count - output_base);
-            leopard::backend::AVX2FF8EncodeOutputGroupTiny(
+            leopard::backend::AVX2FF8LinearCombinationTiny(
                 original, codec->original_count, outputs + output_base,
                 codec->direct_generator_logs8.data() +
                     static_cast<size_t>(output_base) *
