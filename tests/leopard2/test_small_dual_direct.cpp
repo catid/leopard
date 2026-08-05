@@ -506,6 +506,121 @@ void verify_locator_pattern_sweep(leo2_context* context)
 }
 #endif
 
+size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
+{
+    require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
+        "raw native-high setup mode select failed");
+    const BinaryField field = leopard2_test::make_legacy_gf8();
+    const unsigned original_counts[] = { 9, 12, 16 };
+    const size_t byte_counts[] = { 1, 64, 65, 256 };
+    size_t cases = 0;
+    for (size_t k_i = 0;
+         k_i < sizeof(original_counts) / sizeof(original_counts[0]); ++k_i)
+    {
+        const unsigned k = original_counts[k_i];
+        for (unsigned r = 5; r <= 8; ++r)
+        {
+            const ProfileLayout layout = leopard2_test::make_profile_layout(
+                leopard2_test::kLegacyHigh, k, r);
+            const Matrix generator =
+                leopard2_test::direct_systematic_generator(field, layout);
+            leo2_codec* codec = make_codec(context, k, r, 0);
+            leo2_codec* reusable_codec = make_codec(
+                context, k, r, LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
+            const unsigned loss_counts[] = { 5, r };
+            for (size_t loss_i = 0;
+                 loss_i < sizeof(loss_counts) / sizeof(loss_counts[0]);
+                 ++loss_i)
+            {
+                const unsigned losses = loss_counts[loss_i];
+                if (loss_i != 0 && losses == loss_counts[0])
+                    continue;
+                for (unsigned shape = 0; shape < 2; ++shape)
+                {
+                    std::vector<uint8_t> original_present(k, 1);
+                    std::vector<unsigned> missing;
+                    for (unsigned i = 0; i < losses; ++i)
+                    {
+                        const unsigned original = shape == 0
+                            ? i : k - 1U - i;
+                        original_present[original] = 0;
+                        missing.push_back(original);
+                    }
+                    std::sort(missing.begin(), missing.end());
+                    std::vector<uint8_t> recovery_present(r, 1);
+                    if (shape != 0 && losses < r)
+                    {
+                        std::fill(recovery_present.begin(),
+                            recovery_present.end(), 0);
+                        for (unsigned i = 0; i < losses; ++i)
+                            recovery_present[r - 1U - i] = 1;
+                    }
+                    leo2_decode_plan* reusable_plan = make_plan(
+                        reusable_codec, original_present, recovery_present);
+
+                    for (size_t byte_i = 0;
+                         byte_i < sizeof(byte_counts) /
+                             sizeof(byte_counts[0]); ++byte_i)
+                    {
+                        const size_t bytes = byte_counts[byte_i];
+                        size_t raw_scratch_bytes = 0;
+                        size_t reusable_scratch_bytes = 0;
+                        require_result(leo2_decode_scratch_size(
+                            codec, bytes, &raw_scratch_bytes),
+                            "raw native-high scratch query");
+                        require_result(leo2_decode_plan_scratch_size(
+                            reusable_plan, bytes, &reusable_scratch_bytes),
+                            "raw native-high reusable scratch query");
+                        const uint64_t seed =
+                            UINT64_C(0x5241574849474800) +
+                            k * 65537U + r * 257U + losses * 17U +
+                            shape * 7U + bytes;
+                        Buffers raw(k, r, 0, bytes, raw_scratch_bytes,
+                            field, generator, seed);
+                        Buffers reusable(k, r, 0, bytes,
+                            reusable_scratch_bytes, field, generator, seed);
+                        raw.apply_presence(
+                            original_present, recovery_present);
+                        reusable.apply_presence(
+                            original_present, recovery_present);
+                        require_result(leo2_decode(codec, bytes,
+                            original_present.data(), recovery_present.data(),
+                            raw.original_input.data(),
+                            raw.recovery_input.data(),
+                            raw.restored_output.data(), raw.scratch.data,
+                            raw.scratch.bytes),
+                            "raw native-high one-shot decode");
+                        require_result(leo2_decode_plan_execute(
+                            reusable_plan, bytes,
+                            reusable.original_input.data(),
+                            reusable.recovery_input.data(),
+                            reusable.restored_output.data(),
+                            reusable.scratch.data, reusable.scratch.bytes),
+                            "raw native-high reusable Algorithm 5 decode");
+                        raw.verify_missing(missing);
+                        reusable.verify_missing(missing);
+                        for (size_t missing_i = 0;
+                             missing_i < missing.size(); ++missing_i)
+                        {
+                            const unsigned original = missing[missing_i];
+                            require(std::memcmp(
+                                    raw.restored[original].data() + 1,
+                                    reusable.restored[original].data() + 1,
+                                    bytes) == 0,
+                                "raw native-high output differs from reusable Algorithm 5");
+                        }
+                        ++cases;
+                    }
+                    leo2_decode_plan_destroy(reusable_plan);
+                }
+            }
+            leo2_codec_destroy(reusable_codec);
+            leo2_codec_destroy(codec);
+        }
+    }
+    return cases;
+}
+
 void verify_routes_and_execution(
     leo2_context* context,
     unsigned k,
@@ -893,6 +1008,11 @@ int main()
                 original_present, std::vector<uint8_t>(8, 1));
         }
 #endif
+
+        const size_t raw_native_high_oracle_cases =
+            verify_raw_native_high_oracle_matrix(context);
+        require(raw_native_high_oracle_cases == 168,
+            "raw native-high oracle matrix case count drifted");
 
         verify_routes_and_execution(context, 5, 5, 5);
         verify_routes_and_execution(context, 5, 8, 5);
