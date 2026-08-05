@@ -482,17 +482,16 @@ amortized result was neutral to negative; that result is retained in
 
 ## Scratch-resident tiny native-high one-shot path
 
-For GF8/AVX2 legacy-high `N=32`, `T=8` codecs with `K=9..16`, `R=5..8`,
-losses `5..R`, and at most 256 bytes per shard, the public one-shot decoder now
-constructs its deterministic selection, locator, block prefixes, and output
-descriptors in caller scratch and invokes the tiled Algorithm 5 executor
-without allocating a heap plan.  Full 64-byte prefixes reveal directly into
-the requested outputs; a ragged tail is staged in existing scratch and
-gathered.  The reusable plan API and every ineligible one-shot call retain the
-ordinary immutable-plan path.
+The first raw milestone covered GF8/AVX2 legacy-high `N=32`, `T=8` codecs with
+`K=9..16`, `R=5..8`, losses `5..R`, and at most 256 bytes per shard. It
+constructed deterministic selection, locator, block prefixes, and output
+descriptors in caller scratch and invoked the tiled Algorithm 5 executor
+without allocating a heap plan. That execution strategy has since been
+superseded by whole-shard direct repair below; the historical setup and
+compatibility evidence remain relevant.
 
 Across 768 allocation-audited public cases and 168 independent-oracle cases,
-the new path reproduced reusable Algorithm 5 and direct systematic recovery,
+that first path reproduced reusable Algorithm 5 and direct systematic recovery,
 with zero eligible hot-path allocations.  Focused Release, ASan+UBSan, TSan,
 and strict-warning gates pass.  A zero-sibling-jiffy same-source ABBA measured
 1.342x at `K=16,R=8,L=8,B=64`; its 257-byte inert control was neutral.  A
@@ -502,8 +501,8 @@ original 64-byte target, with a 95% interval of 1.175x--1.202x.
 The same exact-main replay found a 0.829x ratio at 65 bytes.  That is an
 adjacent absolute crossover gap rather than a candidate regression: the raw
 path still improves 65-byte one-shot time by 1.251x over its heap-plan control,
-but its extra ragged transform tile costs more than Leopard1.  Direct repair of
-only the ragged tail remains the leading follow-up.
+but its extra ragged transform tile costs more than Leopard1. Direct repair of
+the tail was the leading follow-up and produced the whole-shard route below.
 
 See `experiments/leopard2/optimization_log/27-raw-native-high-one-shot.md` and
 `experiments/leopard2/direct_repair/results/raw_native_high_one_shot_20260805.json`.
@@ -512,10 +511,10 @@ See `experiments/leopard2/optimization_log/27-raw-native-high-one-shot.md` and
 
 The 65-byte follow-up found a broader result than the proposed direct suffix.
 For the same bounded raw eligibility, locator-derived direct repair is cheaper
-than Algorithm 5 over the complete shard from 1 through 256 bytes. Production
-therefore retains the allocation-free raw locator setup but now emits the
-fixed multiplier for each selected survivor `s` and missing original `x`
-directly from the locator:
+than Algorithm 5 or a heap-owned direct plan over the complete shard from 1
+through 7168 bytes. Production therefore retains the allocation-free raw
+locator setup but now emits the fixed multiplier for each selected survivor
+`s` and missing original `x` directly from the locator:
 
     log coefficient(s,x)
       = locator[s] - locator[x] - log(s xor x).
@@ -526,10 +525,13 @@ all transform tiles, ragged staging, gather, and the raw transform metadata.
 The independent derivation is in the “Direct repair rows from an existing
 locator” section of `docs/leopard2_math_and_sources.md`.
 
-The widened correctness gate covers every `K=9..16`, `R=5..8`, loss count
-`5..R`, and byte size 1..256: 9,088 allocation-audited public cases and 10,752
-independent-generator/reusable-Algorithm-5 differentials. Focused Release and
-Clang ASan+UBSan tests pass, as do GF8-only and GF16-only library builds.
+The current correctness gate covers every `K=9..16`, `R=5..8`, loss count
+`5..R`, every byte through 256, and selected power/tail/crossover boundaries
+through 7168: 12,544 allocation-audited public cases and 11,886 independent-
+generator/reusable-Algorithm-5 differentials. Focused Release and Clang
+ASan+UBSan tests pass, as do GF8-only and GF16-only library builds. The first
+byte above the measured ceiling, 7169, retains the ordinary heap-owned direct
+plan.
 
 A frozen pure-AVX2, three-round ABBA campaign compared commit `edeb558` with
 exact Leopard main `6e5725e` over 25 cells. All cells won: the minimum point
@@ -543,3 +545,12 @@ select the new path there.
 The complete campaign is recorded in
 `experiments/leopard2/optimization_log/28-native-high-whole-direct.md` and
 `experiments/leopard2/direct_repair/results/raw_native_high_whole_direct_avx2_20260805.json`.
+
+The crossover extension at commit `322cdf0` swept all 80 valid count/loss
+shapes and every tail residue near the ceiling. Frozen same-source ABBA found
+a 1.1240x minimum selected speedup with a 1.1106x minimum lower confidence
+bound. Exact Leopard main was 1.8856x--5.1333x slower. The 256- and 7169-byte
+inert controls remained within the two-percent point-regression gate. Details
+and the unpromoted source-major continuation are in
+`experiments/leopard2/optimization_log/29-native-high-direct-crossover.md` and
+`experiments/leopard2/direct_repair/results/raw_native_high_direct_crossover_20260805.json`.

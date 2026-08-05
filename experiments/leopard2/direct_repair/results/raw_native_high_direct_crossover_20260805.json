@@ -1,0 +1,598 @@
+{
+  "schema": "leopard2-raw-native-high-direct-crossover-promotion/v1",
+  "date_utc": "2026-08-05",
+  "bead": "leopard-79h.38.2.5.9",
+  "status": "promoted",
+  "source": {
+    "candidate_commit": "322cdf04d088357218e106456d57a6ea6e3e2f96",
+    "candidate_tree": "f6be37dee93326fcaed1268b1368c89f92581323",
+    "previous_cap_control_commit": "edeb558e95edda97268fb93d4a4cbb3634bbd903",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "change": {
+    "previous_maximum_shard_bytes": 256,
+    "promoted_maximum_shard_bytes": 7168,
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "pure_avx2",
+    "K": "9..16",
+    "R": "5..8",
+    "missing_originals": "5..R",
+    "execution": "whole-shard locator-derived output-major AVX2 linear combination",
+    "setup": "caller-scratch locator and coefficient setup; no heap plan",
+    "boundary_7169": "ordinary heap-owned direct-plan fallback"
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 28,
+    "reserved_smt_sibling": 12,
+    "codec_threads": 1,
+    "why_single_core": "Sub-microsecond and cache-sensitive authoritative timing was pinned and isolated; parallel benchmarking would invalidate the comparison."
+  },
+  "artifacts": {
+    "lane": "/tmp/leopard-bench-lane-root-322cdf0-v1",
+    "candidate_executable_sha256": "9e52f871647713ecb876e8cd79b90e6e21886343fb16cca5dea9e060897f4b21",
+    "candidate_archive_sha256": "be440eaa17edcb197c8a7c5ea632eee12daee86ee7f6aa47c8835daa015595ac",
+    "control_executable_sha256": "a6ece9bb05b53b2b65dbd50dc9d3170c4a820b3852180a76fe8c2880a3e9c177",
+    "control_archive_sha256": "40215fc7b84615891f0b6b4070dd601b928bc887f3592e2833b34e2a53e2e183",
+    "exact_main_executable_sha256": "4ea8769b90ad9e5016e508a33d8fb1b4052b580de3339777c4383df2b4cf9b76",
+    "exact_main_archive_sha256": "ca0f40a4c334b4199e22deab07fc20b0fe36abbe75fce105fbee00b78dff0cc5",
+    "source_attestation": {
+      "commit": "322cdf04d088357218e106456d57a6ea6e3e2f96",
+      "tree": "f6be37dee93326fcaed1268b1368c89f92581323",
+      "tracked_dirty": false
+    },
+    "retention_note": "Frozen binaries and raw samples under /tmp are ephemeral; hashes, identities, test outcomes, and statistics are committed here."
+  },
+  "correctness": {
+    "release_allocation_audited_public_cases": 12544,
+    "release_direct_generator_and_reusable_algorithm5_differentials": 11886,
+    "extended_test_bytes": [
+      257,
+      319,
+      320,
+      321,
+      511,
+      512,
+      513,
+      1023,
+      1024,
+      1025,
+      2047,
+      2048,
+      2049,
+      4095,
+      4096,
+      4097,
+      6143,
+      6144,
+      6145,
+      7103,
+      7104,
+      7105,
+      7135,
+      7136,
+      7137,
+      7167,
+      7168
+    ],
+    "fallback_boundary": 7169,
+    "varied_missing_original_and_parity_patterns": true,
+    "failure_atomicity_at_maximum": true,
+    "zero_hot_path_allocations": true,
+    "release_focused_tests": "pass",
+    "clang18_asan_ubsan_focused_tests": "pass",
+    "gf8_only_library_build": "pass",
+    "gf16_only_library_build": "pass",
+    "all_benchmark_round_trips_and_digests": "pass",
+    "oom_controls": "one build/test at a time; build -j1; compiler virtual address capped at 512 or 768 MiB; runtime virtual address capped at 512 MiB except ASan shadow mapping"
+  },
+  "directional_discovery": {
+    "evidence_class": "pinned directional screens from mutable diagnostic builds; used only to choose the committed threshold",
+    "bytes_257_through_4095_vs_previous": {
+      "cells": 70,
+      "minimum_speedup": 1.355616,
+      "geometric_mean_speedup": 3.05595,
+      "maximum_speedup": 7.611059,
+      "all_workload_digests_matched": true
+    },
+    "bytes_257_through_4095_vs_exact_main": {
+      "cells": 70,
+      "minimum_speedup": 1.395177,
+      "geometric_mean_speedup": 2.688821,
+      "maximum_speedup": 4.752233,
+      "all_workload_digests_matched": true
+    },
+    "all_80_count_loss_shapes_at_selected_4096_through_7168": {
+      "cells": 480,
+      "minimum_speedup": 1.106301,
+      "geometric_mean_speedup": 1.332537,
+      "maximum_speedup": 1.754137,
+      "all_workload_digests_matched": true
+    },
+    "thirteen_weak_shapes_all_64_tail_residues_7105_through_7168": {
+      "cells": 832,
+      "minimum_speedup": 1.106968,
+      "geometric_mean_speedup": 1.221169,
+      "maximum_speedup": 1.45618,
+      "all_workload_digests_matched": true
+    },
+    "raw_source_major_followup": {
+      "status": "not promoted in this milestone",
+      "reason": "Setup-bypass gains diminish below the five-percent gate and tail/seed cells approach parity; retain as a separately calibrated follow-up rather than widening this output-major route.",
+      "by_shard_bytes": {
+        "8193": {
+          "cells": 80,
+          "minimum_speedup": 1.012009,
+          "geometric_mean_speedup": 1.173922,
+          "below_1_05": 4
+        },
+        "12288": {
+          "cells": 80,
+          "minimum_speedup": 1.127356,
+          "geometric_mean_speedup": 1.170675,
+          "below_1_05": 0
+        },
+        "16384": {
+          "cells": 80,
+          "minimum_speedup": 1.098986,
+          "geometric_mean_speedup": 1.130937,
+          "below_1_05": 0
+        },
+        "24576": {
+          "cells": 80,
+          "minimum_speedup": 1.046486,
+          "geometric_mean_speedup": 1.087555,
+          "below_1_05": 1
+        },
+        "32768": {
+          "cells": 80,
+          "minimum_speedup": 1.039667,
+          "geometric_mean_speedup": 1.067625,
+          "below_1_05": 6
+        },
+        "49152": {
+          "cells": 80,
+          "minimum_speedup": 1.008296,
+          "geometric_mean_speedup": 1.04793,
+          "below_1_05": 46
+        },
+        "65536": {
+          "cells": 80,
+          "minimum_speedup": 1.013308,
+          "geometric_mean_speedup": 1.036507,
+          "below_1_05": 75
+        }
+      }
+    }
+  },
+  "statistics": {
+    "design": "three ABBA rounds; each round ratio is the geometric mean of two baseline process medians divided by two candidate process medians",
+    "samples_per_process": 31,
+    "warmups": 4,
+    "reuse": 200,
+    "interval": "two-sided Student-t 95 percent interval over three log round ratios, df=2",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "evidence_class": "frozen read-only binaries, clean committed candidate source, unchanged pre/post SHA-256, pinned CPU, idle reserved sibling; no external affinity-supervisor seal"
+  },
+  "same_source_abba": {
+    "raw_directory": "/tmp/leopard-raw-direct-322cdf0-samesource-abba-v1",
+    "accepted_processes": 168,
+    "reserved_sibling": {
+      "total_jiffies": 1652,
+      "idle_jiffies": 1652,
+      "nonidle_jiffies": 0
+    },
+    "timing_cpu": {
+      "total_jiffies": 1652,
+      "idle_jiffies": 3,
+      "nonidle_jiffies": 1649
+    },
+    "ratio_orientation": "previous_256_byte_cap_control_over_candidate",
+    "minimum_selected_speedup": 1.123995,
+    "minimum_selected_ci95_lower": 1.110615,
+    "cells": [
+      {
+        "cell": "inert256",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 256,
+        "baseline_us": 0.600267,
+        "candidate_us": 0.600129,
+        "speedup": 1.000231,
+        "ci95": [
+          0.98769,
+          1.012931
+        ],
+        "route": "inert fallback"
+      },
+      {
+        "cell": "inert7169",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 7169,
+        "baseline_us": 11.693481,
+        "candidate_us": 11.838649,
+        "speedup": 0.987738,
+        "ci95": [
+          0.950569,
+          1.02636
+        ],
+        "route": "inert fallback"
+      },
+      {
+        "cell": "k12l5b4096",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 5,
+        "shard_bytes": 4096,
+        "baseline_us": 3.246877,
+        "candidate_us": 2.499643,
+        "speedup": 1.298936,
+        "ci95": [
+          1.283087,
+          1.314982
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k12l7b6144",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 7,
+        "shard_bytes": 6144,
+        "baseline_us": 6.486697,
+        "candidate_us": 4.692208,
+        "speedup": 1.38244,
+        "ci95": [
+          1.371734,
+          1.39323
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k12l7b7168",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 7,
+        "shard_bytes": 7168,
+        "baseline_us": 7.298938,
+        "candidate_us": 5.381768,
+        "speedup": 1.356234,
+        "ci95": [
+          1.33134,
+          1.381594
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l5b4096",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 4096,
+        "baseline_us": 4.170531,
+        "candidate_us": 3.436403,
+        "speedup": 1.213633,
+        "ci95": [
+          1.205219,
+          1.222105
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l5b7136",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7136,
+        "baseline_us": 5.994946,
+        "candidate_us": 5.328836,
+        "speedup": 1.125001,
+        "ci95": [
+          1.113928,
+          1.136184
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l5b7168a",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 6.031164,
+        "candidate_us": 5.365828,
+        "speedup": 1.123995,
+        "ci95": [
+          1.110615,
+          1.137537
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l5b7168b",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 6.043654,
+        "candidate_us": 5.354549,
+        "speedup": 1.128695,
+        "ci95": [
+          1.118741,
+          1.138738
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l8b4097",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 4097,
+        "baseline_us": 8.89704,
+        "candidate_us": 5.387401,
+        "speedup": 1.651453,
+        "ci95": [
+          1.533856,
+          1.778066
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l8b7168a",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 7168,
+        "baseline_us": 10.795442,
+        "candidate_us": 8.065485,
+        "speedup": 1.338474,
+        "ci95": [
+          1.336406,
+          1.340545
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k16l8b7168b",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 7168,
+        "baseline_us": 10.672605,
+        "candidate_us": 8.16857,
+        "speedup": 1.306545,
+        "ci95": [
+          1.299161,
+          1.313972
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k9b257",
+        "K": 9,
+        "R": 5,
+        "missing_originals": 5,
+        "shard_bytes": 257,
+        "baseline_us": 1.393667,
+        "candidate_us": 0.280287,
+        "speedup": 4.972278,
+        "ci95": [
+          4.849029,
+          5.09866
+        ],
+        "route": "selected"
+      },
+      {
+        "cell": "k9b7168",
+        "K": 9,
+        "R": 5,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 3.7249,
+        "candidate_us": 3.096174,
+        "speedup": 1.203066,
+        "ci95": [
+          1.189079,
+          1.217216
+        ],
+        "route": "selected"
+      }
+    ]
+  },
+  "exact_main_abba": {
+    "raw_directory": "/tmp/leopard-raw-direct-322cdf0-main-abba-v2",
+    "accepted_processes": 144,
+    "reserved_sibling": {
+      "total_jiffies": 1475,
+      "idle_jiffies": 1475,
+      "nonidle_jiffies": 0
+    },
+    "timing_cpu": {
+      "total_jiffies": 1475,
+      "idle_jiffies": 2,
+      "nonidle_jiffies": 1473
+    },
+    "ratio_orientation": "exact_main_decode_including_setup_over_leopard2_one_shot_decode_including_setup",
+    "application_equivalence_note": "Exact main physically rounds nonmultiples to 64 bytes with a zero suffix; both programs fingerprint the same requested logical prefix.",
+    "minimum_speedup": 1.885551,
+    "minimum_ci95_lower": 1.881145,
+    "maximum_speedup": 5.133289,
+    "cells": [
+      {
+        "cell": "k12l5b4096",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 5,
+        "shard_bytes": 4096,
+        "baseline_us": 9.380037,
+        "candidate_us": 2.496581,
+        "speedup": 3.757154,
+        "ci95": [
+          3.712982,
+          3.80185
+        ]
+      },
+      {
+        "cell": "k12l7b6144",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 7,
+        "shard_bytes": 6144,
+        "baseline_us": 14.061162,
+        "candidate_us": 4.689218,
+        "speedup": 2.998615,
+        "ci95": [
+          2.987782,
+          3.009488
+        ]
+      },
+      {
+        "cell": "k12l7b7168",
+        "K": 12,
+        "R": 7,
+        "missing_originals": 7,
+        "shard_bytes": 7168,
+        "baseline_us": 16.220215,
+        "candidate_us": 5.379759,
+        "speedup": 3.015045,
+        "ci95": [
+          3.007795,
+          3.022312
+        ]
+      },
+      {
+        "cell": "k16l5b4096",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 4096,
+        "baseline_us": 9.735642,
+        "candidate_us": 3.43096,
+        "speedup": 2.837585,
+        "ci95": [
+          2.799521,
+          2.876166
+        ]
+      },
+      {
+        "cell": "k16l5b7136",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7136,
+        "baseline_us": 17.001661,
+        "candidate_us": 5.332614,
+        "speedup": 3.188241,
+        "ci95": [
+          3.153392,
+          3.223476
+        ]
+      },
+      {
+        "cell": "k16l5b7168a",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 16.961724,
+        "candidate_us": 5.364526,
+        "speedup": 3.161831,
+        "ci95": [
+          3.148257,
+          3.175463
+        ]
+      },
+      {
+        "cell": "k16l5b7168b",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 16.83933,
+        "candidate_us": 5.358058,
+        "speedup": 3.142805,
+        "ci95": [
+          3.121062,
+          3.164699
+        ]
+      },
+      {
+        "cell": "k16l8b4097",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 4097,
+        "baseline_us": 10.140955,
+        "candidate_us": 5.378245,
+        "speedup": 1.885551,
+        "ci95": [
+          1.881145,
+          1.889967
+        ]
+      },
+      {
+        "cell": "k16l8b7168a",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 7168,
+        "baseline_us": 17.160795,
+        "candidate_us": 8.075365,
+        "speedup": 2.12508,
+        "ci95": [
+          2.112709,
+          2.137522
+        ]
+      },
+      {
+        "cell": "k16l8b7168b",
+        "K": 16,
+        "R": 8,
+        "missing_originals": 8,
+        "shard_bytes": 7168,
+        "baseline_us": 17.161535,
+        "candidate_us": 8.165397,
+        "speedup": 2.101739,
+        "ci95": [
+          2.095991,
+          2.107503
+        ]
+      },
+      {
+        "cell": "k9b257",
+        "K": 9,
+        "R": 5,
+        "missing_originals": 5,
+        "shard_bytes": 257,
+        "baseline_us": 1.203674,
+        "candidate_us": 0.284267,
+        "speedup": 4.2343,
+        "ci95": [
+          4.100632,
+          4.372324
+        ]
+      },
+      {
+        "cell": "k9b7168",
+        "K": 9,
+        "R": 5,
+        "missing_originals": 5,
+        "shard_bytes": 7168,
+        "baseline_us": 15.915899,
+        "candidate_us": 3.100527,
+        "speedup": 5.133289,
+        "ci95": [
+          5.08325,
+          5.183821
+        ]
+      }
+    ]
+  },
+  "conclusion": "Promote the allocation-free whole-direct route through 7168 bytes. The weakest selected same-source cell is 1.123995x with a 1.110615x lower 95-percent bound; exact Leopard main is 1.885551x to 5.133289x slower. The 256-byte lower and 7169-byte upper inert controls remain within the two-percent point-regression gate. Do not promote the experimental raw source-major continuation without a separate pattern-aware crossover campaign."
+}

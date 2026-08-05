@@ -111,3 +111,7 @@ direct-versus-Algorithm-5 crossover sweep rather than an unmeasured widening.
 Complete identities, hashes, all 25 exact-main cells, all eight same-source
 cells, test counts, confidence intervals, and limitations are in
 `experiments/leopard2/direct_repair/results/raw_native_high_whole_direct_avx2_20260805.json`.
+
+Follow-up report 29 completed that crossover sweep and promoted the same
+whole-direct executor through 7168 bytes. The 1..256 measurements above remain
+the original promotion evidence rather than being retroactively relabeled.
