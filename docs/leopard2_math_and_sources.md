@@ -211,9 +211,11 @@ For erasure set `E` in active coordinates, define
     Lambda(x)  = product over e in E of (x - e)
     Lambda'(e) = product over u in E, u != e of (e - u)
 
-At a surviving point `a`, setup stores `Lambda(a)`.  At an erased output `e`, it
-stores `1/Lambda'(e)`.  These values depend on the erasure pattern but not shard
-bytes and therefore belong in an immutable decode plan.
+At a surviving point `a`, setup stores `log Lambda(a)`.  At an erased output
+`e`, it stores `log Lambda'(e)`; reveal applies the additive inverse of that
+logarithm, which is multiplication by `1/Lambda'(e)`.  These values depend on
+the erasure pattern but not shard bytes and therefore belong in an immutable
+decode plan.
 
 For a code polynomial `f` of degree below `D`, if `|E| <= N-D`, then
 `fhat=f*Lambda` has degree below `N`.  Its evaluations are zero at erasures and
@@ -226,6 +228,37 @@ and evaluate only requested erased coordinates.  Since `Lambda(e)=0`,
 This direct identity is the production fallback.  It is independent of the
 specialized low/high complexity reductions and works with fewer than the maximum
 number of erasures.
+
+### Direct repair rows from an existing locator
+
+The following is a Leopard2 derivation used only when a reusable plan already
+owns both the transform locator and a direct-repair execution view.  Let `V` be
+the active parent coordinate set, `E` the plan's exact erasure set, and
+`A = V minus E`.  Thus `A` includes known-zero shortened systematic coordinates
+and exactly the deterministic `K` received public coordinates selected by the
+plan.  Write `Z_V = Lambda Z_A`.  The derivative `c_N = Z_V'` is constant and
+nonzero on the additive parent subspace, hence for a survivor `s` and erased
+original `x`:
+
+    c_N = Lambda(s) Z_A'(s)
+    c_N = Lambda'(x) Z_A(x)
+
+The Lagrange coefficient carrying received value `f(s)` into `f(x)` is
+
+    Z_A(x) / ((x + s) Z_A'(s))
+      = Lambda(s) / ((x + s) Lambda'(x)).
+
+Characteristic two turns subtraction into addition, and Cantor coordinate
+addition is index xor.  With the locator stored in logarithmic form, the fixed
+multiplier is therefore
+
+    term_log = locator[s] - locator[x] - log(s xor x)  (mod 2^m - 1).
+
+Known-zero shortened members of `A` affect the canceled parent derivative but
+need no byte-execution term.  Native-high and xor-`P` translated-low views use
+their own execution coordinates; translation preserves every pairwise xor.
+Tests compare every constructed row against the independent systematic
+generator-matrix solver before the locator shortcut is allowed in production.
 
 R20 and the generic decoder in R16 provide related locator constructions.  Legacy
 Leopard evaluates locator logarithms with a full-field FWHT.  Leopard2 plan setup

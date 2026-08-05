@@ -102,6 +102,30 @@
 #error "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT must be 0 or 1"
 #endif
 
+/*
+    A reusable small-dual plan already constructs the transform locator.  Its
+    survivor values and erased-coordinate derivatives are also a complete
+    Lagrange repair description, so the direct view need not independently
+    generate parity rows and invert their missing-original submatrix.  Keep a
+    build-time control until final-source setup measurements qualify the
+    shortcut; both settings retain identical byte execution and wire output.
+*/
+#ifndef LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
+#define LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS 1
+#endif
+#if LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS < 0 || \
+    LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS > 1
+#error "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS must be 0 or 1"
+#endif
+
+#ifndef LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
+#define LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK 0
+#endif
+#if LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK < 0 || \
+    LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK > 1
+#error "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK must be 0 or 1"
+#endif
+
 #ifndef LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
 #define LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO 1
 #endif
@@ -850,6 +874,11 @@ struct leo2_decode_plan
     bool direct_xor;
     bool direct_copy;
     bool direct_repair;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    /* Test-visible provenance for the algebraically equivalent locator-built
+       direct rows.  It is immutable after plan publication. */
+    bool direct_terms_from_locator;
+#endif
     /*
         True only for a reusable small-code plan that owns both exact
         transform metadata and direct-repair coefficients.  The byte-aware
@@ -2228,6 +2257,33 @@ static bool SkipMeasuredDenseGF8AVX2HighPrunedSchedules(
 static bool SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(
     const leo2_decode_plan* plan);
 
+static bool SkipSmallDualPrunedSchedules(const leo2_decode_plan* plan)
+{
+#if LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
+    if (!plan || !plan->codec || !plan->direct_transform_fallback)
+        return false;
+    /* A translated small-dual plan uses the same tiny regular Algorithm 4
+       fallback already selected by one-shot setup.  Native Algorithm 5 full
+       public-loss patterns likewise have dense block prefixes; compiling a
+       ragged graph duplicates setup work for the sub-1-KiB fallback. */
+    if (PlanUsesTranslatedLowDecode(plan))
+        return true;
+    if (plan->missing_original_count != plan->codec->recovery_count)
+        return false;
+    /* Leave the established T=8 dense/boundary region as the sole selector
+       for its already-qualified shapes.  Every production small-dual parent
+       has T=8; the boundary rule covers R>=7 and K+1>=2R (including the
+       dense K16/R8 case).  This candidate handles only the disjoint rest. */
+    const uint64_t recovery = plan->codec->recovery_count;
+    const uint64_t originals = plan->codec->original_count;
+    return recovery + 1U < plan->codec->padded_side ||
+        originals + 1U < recovery * 2U;
+#else
+    (void)plan;
+    return false;
+#endif
+}
+
 enum DecodeTransformMetadata
 {
     kDecodeTransformMetadataGeneric = 1U << 0,
@@ -2274,6 +2330,7 @@ static bool PreparePlanExecutionMetadata(
         (metadata_mask & kDecodeTransformMetadataSpecialized) != 0;
     const bool compile_pruned_schedules =
         !skip_transient_pruned_schedules &&
+        !SkipSmallDualPrunedSchedules(plan) &&
         !SkipMeasuredDenseGF8AVX2HighPrunedSchedules(plan) &&
         !SkipMeasuredBoundaryGF8AVX2HighPrunedSchedules(plan);
 
@@ -4199,6 +4256,157 @@ static bool PrepareDirectRepairTerms(
     }
     return plan->direct_term_offsets.size() == losses + 1;
 }
+
+/*
+    Let V be the active parent, E its exact erasure set, A = V \\ E, and
+    Lambda = Z_E.  The derivative of the additive-subspace vanishing
+    polynomial Z_V is constant, so for survivor s in A and missing x in E:
+
+        Z_V' = Lambda(s) Z_A'(s) = Lambda'(x) Z_A(x).
+
+    The Lagrange coefficient taking f(s) to f(x) is therefore
+
+        Lambda(s) / ((x + s) Lambda'(x)).
+
+    Locator setup stores log Lambda at survivors and log Lambda' at erased
+    coordinates.  This helper turns the locator already required by a dual
+    transform plan directly into the same repair rows as the independent
+    generator-matrix solver.  Shortened systematic coordinates remain in A,
+    but their known-zero values require no retained execution term.
+*/
+template<class Field>
+static bool PrepareDirectRepairTermsFromLocator(
+    leo2_decode_plan* plan,
+    const std::vector<typename Field::Element>& locator_logs)
+{
+    typedef typename Field::Element Element;
+    const leo2_codec* codec = plan ? plan->codec : NULL;
+    const uint32_t losses = plan ? plan->missing_original_count : 0;
+    if (!codec || losses == 0 || losses > kDirectMaxRepairLosses ||
+        plan->missing_originals.size() != losses ||
+        plan->original_present.size() != codec->original_count ||
+        plan->recovery_present.size() != codec->recovery_count ||
+        plan->coordinate_erased.size() != codec->parent_count ||
+        locator_logs.size() != codec->parent_count)
+        return false;
+
+    uint32_t selected_parities[kDirectMaxRepairLosses] = {};
+    uint32_t selected_count = 0;
+    for (uint32_t parity = 0; parity < codec->recovery_count; ++parity)
+    {
+        const uint32_t coordinate =
+            DecodeExecutionCoordinateForRecovery(plan, parity);
+        if (!plan->recovery_present[parity] ||
+            plan->coordinate_erased[coordinate])
+            continue;
+        if (selected_count >= losses)
+            return false;
+        selected_parities[selected_count++] = parity;
+    }
+    if (selected_count != losses)
+        return false;
+
+    size_t maximum_term_count = 0;
+    if (!CheckedMultiply(static_cast<size_t>(losses),
+            static_cast<size_t>(codec->original_count), maximum_term_count))
+        return false;
+    plan->direct_term_offsets.clear();
+    plan->direct_terms.clear();
+    plan->direct_term_offsets.reserve(static_cast<size_t>(losses) + 1U);
+    plan->direct_terms.reserve(maximum_term_count);
+    plan->direct_term_offsets.push_back(0);
+
+    for (uint32_t output = 0; output < losses; ++output)
+    {
+        const uint32_t missing_original = plan->missing_originals[output];
+        if (missing_original >= codec->original_count ||
+            plan->original_present[missing_original])
+            return false;
+        const uint32_t missing_coordinate =
+            DecodeExecutionCoordinateForOriginal(plan, missing_original);
+        if (missing_coordinate >= codec->parent_count ||
+            !plan->coordinate_erased[missing_coordinate])
+            return false;
+        const Element derivative_log = locator_logs[missing_coordinate];
+
+        const auto append_term = [&](uint32_t tagged_source,
+                                     uint32_t source_coordinate) {
+            const Element difference = static_cast<Element>(
+                missing_coordinate ^ source_coordinate);
+            if (source_coordinate >= codec->parent_count || difference == 0 ||
+                plan->coordinate_erased[source_coordinate])
+                return false;
+            Element coefficient_log = Field::SubtractLogs(
+                locator_logs[source_coordinate], derivative_log);
+            coefficient_log = Field::SubtractLogs(
+                coefficient_log, Field::Log(difference));
+            const leo2_direct_repair_term term = {
+                tagged_source, static_cast<uint16_t>(coefficient_log)
+            };
+            plan->direct_terms.push_back(term);
+            return true;
+        };
+
+        for (uint32_t equation = 0; equation < losses; ++equation)
+        {
+            const uint32_t parity = selected_parities[equation];
+            if (!append_term(kDirectRecoveryTag | parity,
+                    DecodeExecutionCoordinateForRecovery(plan, parity)))
+                return false;
+        }
+        for (uint32_t original = 0;
+             original < codec->original_count; ++original)
+        {
+            if (!plan->original_present[original])
+                continue;
+            if (!append_term(original,
+                    DecodeExecutionCoordinateForOriginal(plan, original)))
+                return false;
+        }
+
+        const size_t begin = plan->direct_term_offsets.back();
+        const size_t end = plan->direct_terms.size();
+        if (end - begin != codec->original_count)
+            return false;
+        for (size_t i = begin + 1; i < end; ++i)
+        {
+            if (plan->direct_terms[i].multiplier_log == 0)
+            {
+                std::swap(plan->direct_terms[begin], plan->direct_terms[i]);
+                break;
+            }
+        }
+        plan->direct_term_offsets.push_back(end);
+    }
+    return plan->direct_term_offsets.size() == losses + 1U &&
+        plan->direct_terms.size() == maximum_term_count;
+}
+
+#if defined(LEO2_ENABLE_TEST_HOOKS) && defined(LEO_HAS_FF8)
+static bool VerifyGF8LocatorDirectTermsAgainstMatrix(
+    leo2_decode_plan* plan,
+    const std::vector<DirectField8::Element>& barycentric_weights)
+{
+    const std::vector<size_t> locator_offsets = plan->direct_term_offsets;
+    const std::vector<leo2_direct_repair_term> locator_terms =
+        plan->direct_terms;
+    if (!PrepareDirectRepairTerms<DirectField8>(
+            plan, barycentric_weights, NULL))
+        return false;
+    bool equal = plan->direct_term_offsets == locator_offsets &&
+        plan->direct_terms.size() == locator_terms.size();
+    for (size_t i = 0; equal && i < locator_terms.size(); ++i)
+    {
+        equal = plan->direct_terms[i].tagged_source ==
+                    locator_terms[i].tagged_source &&
+            plan->direct_terms[i].multiplier_log ==
+                    locator_terms[i].multiplier_log;
+    }
+    plan->direct_term_offsets = locator_offsets;
+    plan->direct_terms = locator_terms;
+    return equal;
+}
+#endif
 
 static leo2_backend RuntimeBackend()
 {
@@ -14138,6 +14346,12 @@ bool GetDecodePlanDirectStorageInfo(
     *source_row_count_out = source_row_count;
     return true;
 }
+
+bool DecodePlanUsesLocatorDirectTerms(const leo2_decode_plan* plan)
+{
+    return plan && plan->direct_terms_from_locator;
+}
+
 #endif
 
 } // namespace leopard2_internal
@@ -18490,6 +18704,9 @@ static leo2_result DecodePlanCreateInternal(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_repair = false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+        plan->direct_terms_from_locator = false;
+#endif
         plan->direct_transform_fallback = false;
 
 #if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
@@ -18538,6 +18755,14 @@ static leo2_result DecodePlanCreateInternal(
             !plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             !force_test_transform &&
             direct_repair_qualified;
+        const bool defer_small_dual_locator_terms =
+#if LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS && defined(LEO_HAS_FF8)
+            attempt_direct_repair && small_dual_pattern && !setup_hint &&
+            codec->field == LEO2_FIELD_GF8 &&
+            !codec->direct_barycentric8.empty();
+#else
+            false;
+#endif
         plan->original_present.assign(
             original_present, original_present + codec->original_count);
         plan->recovery_present.assign(
@@ -18547,7 +18772,7 @@ static leo2_result DecodePlanCreateInternal(
             if (!original_present[i])
                 plan->missing_originals.push_back(i);
 
-        if (attempt_direct_repair)
+        if (attempt_direct_repair && !defer_small_dual_locator_terms)
         {
 #ifdef LEO_HAS_FF8
             if (codec->field == LEO2_FIELD_GF8 &&
@@ -18603,7 +18828,8 @@ static leo2_result DecodePlanCreateInternal(
         }
 
         plan->direct_transform_fallback =
-            plan->direct_repair && small_dual_pattern && !setup_hint;
+            (plan->direct_repair && small_dual_pattern && !setup_hint) ||
+            defer_small_dual_locator_terms;
 
         if (!plan->direct_repair || plan->direct_transform_fallback)
         {
@@ -18815,6 +19041,49 @@ static leo2_result DecodePlanCreateInternal(
                         codec->parent_count, &plan->coordinate_erased[0],
                         permanent_erased.data(), permanent_locator.data(),
                         codec->recovery_count, &plan->locator16[0]);
+            }
+#endif
+
+#ifdef LEO_HAS_FF8
+            if (defer_small_dual_locator_terms)
+            {
+                const bool locator_prepared =
+                    PrepareDirectRepairTermsFromLocator<
+                    DirectField8>(plan, plan->locator8);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                if (locator_prepared &&
+                    !VerifyGF8LocatorDirectTermsAgainstMatrix(
+                        plan, codec->direct_barycentric8))
+                {
+                    delete plan;
+                    return LEO2_INTERNAL_ERROR;
+                }
+#endif
+                bool prepared = locator_prepared;
+                if (!prepared)
+                {
+                    /* Preserve the mature algebraic solver as a safety
+                       fallback.  Qualification tests require the locator
+                       provenance bit, so this branch cannot silently hide a
+                       failed shortcut in a promoted build. */
+                    prepared = PrepareDirectRepairTerms<DirectField8>(
+                        plan, codec->direct_barycentric8, NULL);
+                }
+                if (!prepared)
+                {
+                    delete plan;
+                    return LEO2_INTERNAL_ERROR;
+                }
+                plan->direct_repair = true;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+                plan->direct_terms_from_locator = locator_prepared;
+#endif
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+                if (!PrepareGF8SourceMajorDirectSchedule(plan))
+                {
+                    plan->direct_source_rows.clear();
+                }
+#endif
             }
 #endif
         }

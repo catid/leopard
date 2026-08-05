@@ -1,0 +1,76 @@
+{
+  "schema": "leopard2-small-dual-regular-fallback-directional-v1",
+  "date_utc": "2026-08-05",
+  "status": "inconclusive_default_off",
+  "hypothesis": "For translated-low small-dual plans and previously uncovered native-high full-public-loss plans, regular Algorithm 4/5 transforms are cheaper than compiling and executing ragged pruned schedules below the 1024-byte direct threshold.",
+  "candidate": {
+    "benchmark_sha256": "83a095b964161a765755b28b8e75c05416d81438b7b40a8e23a71b9114f9a228",
+    "regular_fallback": true
+  },
+  "control": {
+    "benchmark_sha256": "a97fa7fe6b8b01149c31b8111ee61c65a7d90c4cae275110c17504b287b972df",
+    "regular_fallback": false
+  },
+  "shared_configuration": {
+    "locator_derived_direct_terms": true,
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "thread_count": 1,
+    "timing_cpu": 12,
+    "smt_sibling": 28,
+    "reuse": 8,
+    "iterations_per_cell": 11,
+    "warmup": 2,
+    "byte_counts": [1, 63, 64, 65, 255, 256, 257, 1023],
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "evidence_class": "controlled directional; no external affinity-supervisor seal"
+  },
+  "screen": {
+    "all_measured_cells": 400,
+    "newly_affected_cells": 352,
+    "inert_existing_dense_or_boundary_controls": 48,
+    "affected_setup_geometric_mean_speedup": 2.7784,
+    "affected_minimum_setup_speedup": 1.7937,
+    "affected_execution_geometric_mean_speedup": 1.1977,
+    "affected_minimum_execution_speedup": 1.0359,
+    "affected_execution_point_regressions": 0,
+    "affected_amortized_geometric_mean_speedup": 1.3480,
+    "affected_minimum_amortized_speedup": 1.0782,
+    "affected_amortized_point_regressions": 0,
+    "inert_control_execution_point_regressions": 18,
+    "inert_control_execution_regressions_over_2_percent": 7,
+    "inert_control_worst_execution_speedup": 0.9490,
+    "inert_control_worst_shape": "K14/R7/loss7/64B"
+  },
+  "representative_cells": [
+    {
+      "shape": "K5/R5/loss5/64B",
+      "setup_speedup": 2.8214,
+      "execution_speedup": 1.4860,
+      "amortized_speedup": 1.7630
+    },
+    {
+      "shape": "K7/R7/loss6/1023B",
+      "setup_speedup": 3.0789,
+      "execution_speedup": 1.0875,
+      "amortized_speedup": 1.1743
+    },
+    {
+      "shape": "K8/R8/loss5/1023B",
+      "setup_speedup": 3.0811,
+      "execution_speedup": 1.1460,
+      "amortized_speedup": 1.2308
+    },
+    {
+      "shape": "K16/R5/loss5/64B",
+      "setup_speedup": 2.7455,
+      "execution_speedup": 1.1746,
+      "amortized_speedup": 1.3640
+    }
+  ],
+  "scope": "Translated-low production small-dual plans plus native-high maximum public loss only where the existing dense and one-coordinate boundary policies do not already skip schedules.",
+  "limitations": "Candidate and control were sequential 11-repetition blocks without confidence intervals. Although the selector was logically inert in 48 existing-policy cells, changing the inline selector shifted hot-function text addresses; those controls therefore reveal a code-layout or timing-drift confound. Explicit LEGACY_HIGH R>K cells were not in this screen.",
+  "decision": "Keep LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK disabled by default. Isolate the selector from hot text layout or provide a same-binary diagnostic, then run committed-source ABBA with confidence intervals across affected and inert controls before reconsidering promotion.",
+  "conclusion": "The affected region is promising, but the neighboring-control regressions fail the promotion gate and prevent a causal performance claim from this screen."
+}

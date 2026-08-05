@@ -489,6 +489,10 @@ bool GetDecodePlanDirectStorageInfo(
     size_t* retained_bytes_out,
     size_t* term_count_out,
     size_t* source_row_count_out);
+
+/* True only when the direct rows were derived from the already-required
+   transform locator rather than the independent matrix fallback. */
+bool DecodePlanUsesLocatorDirectTerms(const leo2_decode_plan* plan);
 #endif
 
 } // namespace leopard2_internal

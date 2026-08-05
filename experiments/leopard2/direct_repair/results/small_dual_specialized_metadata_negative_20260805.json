@@ -1,0 +1,77 @@
+{
+  "schema": "leopard2-small-dual-specialized-metadata-negative-v1",
+  "date_utc": "2026-08-05",
+  "status": "rejected",
+  "hypothesis": "A reusable production small-dual plan can omit unreachable generic transform dependencies and retain only Algorithm 4/5 metadata, reducing plan setup without changing execution.",
+  "candidate": {
+    "behavior": "specialized-only transform metadata when direct_transform_fallback is true",
+    "benchmark_sha256": "73ec431dcdc7b05b12789e5242ad5be3d82e844bc8c755d3c3fd90f80cbee459"
+  },
+  "control": {
+    "behavior": "generic plus specialized metadata for native-high AUTO plans",
+    "benchmark_sha256": "a97fa7fe6b8b01149c31b8111ee61c65a7d90c4cae275110c17504b287b972df"
+  },
+  "shared_configuration": {
+    "locator_derived_direct_terms": true,
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "thread_count": 1,
+    "timing_cpu": 12,
+    "smt_sibling": 28,
+    "iterations": 31,
+    "warmup": 5,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "evidence_class": "controlled directional; no external affinity-supervisor seal"
+  },
+  "cells": [
+    {
+      "K": 5,
+      "R": 5,
+      "losses": 5,
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "candidate_setup_us": 0.80,
+      "control_setup_us": 0.81,
+      "setup_speedup": 1.0125,
+      "amortized_speedup": 1.0091
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 5,
+      "shard_bytes": 1023,
+      "reuse": 8,
+      "candidate_setup_us": 1.55,
+      "control_setup_us": 1.63,
+      "setup_speedup": 1.0516,
+      "execution_speedup": 0.9930,
+      "amortized_speedup": 0.9975
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 8,
+      "shard_bytes": 1023,
+      "reuse": 8,
+      "candidate_setup_us": 0.77,
+      "control_setup_us": 0.80,
+      "setup_speedup": 1.0390,
+      "execution_speedup": 0.9856,
+      "amortized_speedup": 0.9875
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 8,
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "candidate_setup_us": 0.78,
+      "control_setup_us": 0.79,
+      "setup_speedup": 1.0128,
+      "amortized_speedup": 1.0048
+    }
+  ],
+  "kill_criterion": "Reject if setup does not improve credibly by at least 5 percent across the target region or any neighboring amortized cell regresses by more than 2 percent.",
+  "conclusion": "The change was effectively inert for translated-low K5, produced only a marginal native-high setup reduction, and did not improve amortized decode. The important K16/R8/loss8/1023-byte point estimate moved backward. The code was removed rather than adding another production policy branch."
+}

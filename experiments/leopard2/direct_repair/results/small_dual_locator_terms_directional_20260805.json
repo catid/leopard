@@ -1,0 +1,89 @@
+{
+  "schema": "leopard2-small-dual-locator-terms-directional-v1",
+  "date_utc": "2026-08-05",
+  "status": "promoted_pending_authoritative_replay",
+  "hypothesis": "Reuse the transform locator to form direct-repair coefficients as Lambda(s)/((x+s)*Lambda_prime(x)), eliminating duplicate generator-row and matrix-inversion setup.",
+  "candidate": {
+    "benchmark_sha256": "a97fa7fe6b8b01149c31b8111ee61c65a7d90c4cae275110c17504b287b972df",
+    "locator_derived_direct_terms": true
+  },
+  "control": {
+    "benchmark_sha256": "656c92a336284fab6cc0b13eb021cb14772dcc65c70363a23bcabea53827c485",
+    "locator_derived_direct_terms": false
+  },
+  "shared_configuration": {
+    "backend": "avx2",
+    "field": "gf8",
+    "profile": "legacy_high_v1",
+    "thread_count": 1,
+    "regular_fallback": false,
+    "timing_cpu": 12,
+    "smt_sibling": 28,
+    "iterations": 25,
+    "warmup": 4,
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "evidence_class": "controlled directional; no external affinity-supervisor seal"
+  },
+  "correctness": {
+    "production_plan_patterns_compared_to_matrix_solver": 214,
+    "independent_generator_oracle_plans": 7,
+    "independent_source_coordinate_unit_coefficients": 444,
+    "explicit_legacy_high_r_greater_than_k": true,
+    "release_selector_matrix": "pass: locator/fallback ON/OFF, ON/ON, OFF/OFF, OFF/ON",
+    "release_test": "pass",
+    "asan_ubsan_test": "pass",
+    "tsan_test": "pass"
+  },
+  "cells": [
+    {
+      "K": 5,
+      "R": 5,
+      "losses": 5,
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "candidate_setup_us": 0.78,
+      "control_setup_us": 1.23,
+      "setup_speedup": 1.5769,
+      "same_source_amortized_speedup": 1.4259,
+      "exact_main_speedup": 1.2593
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 8,
+      "shard_bytes": 1023,
+      "reuse": 8,
+      "candidate_setup_us": 0.79,
+      "control_setup_us": 2.74,
+      "setup_speedup": 3.4684,
+      "same_source_amortized_speedup": 1.1005,
+      "exact_main_speedup": 1.0476
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 8,
+      "shard_bytes": 1024,
+      "reuse": 1,
+      "candidate_setup_us": 0.80,
+      "control_setup_us": 2.681,
+      "setup_speedup": 3.3513,
+      "same_source_amortized_speedup": 1.8825,
+      "exact_main_speedup": 1.2783
+    },
+    {
+      "K": 16,
+      "R": 8,
+      "losses": 8,
+      "shard_bytes": 4096,
+      "reuse": 8,
+      "candidate_setup_us": 0.79,
+      "control_setup_us": 2.72,
+      "setup_speedup": 3.4430,
+      "same_source_amortized_speedup": 1.0397,
+      "exact_main_speedup": 2.1215
+    }
+  ],
+  "limitations": "The exact-main point estimates are controlled directional evidence without the external affinity-supervisor seal, raw-sample confidence intervals, or final committed-source attestation. Although the arithmetic byte executor and retained coefficient layout are unchanged, toggling an inline selector changes binary text layout.",
+  "conclusion": "The locator identity removes the setup-dominated regressions previously observed at K5/R5 and K16/R8 while preserving exact coefficient maps. Final committed-source ABBA replay, including unaffected neighbors and explicit R>K, remains required."
+}

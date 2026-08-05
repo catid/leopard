@@ -430,3 +430,52 @@ retained scheduler outliers.  Both raw bundles independently verify.
 Machine-readable identities, hashes, confidence intervals, correctness gates,
 and reproduction commands are in
 `experiments/leopard2/direct_repair/results/equal_rounded_avx2_authoritative_20260731.json`.
+
+## Small-code dual-plan setup and fallback schedule
+
+Reusable legacy-high GF8/AVX2 plans in the qualified `K=5..16`, `R=5..8`,
+loss-five-through-eight region own both a transform fallback for tiny shards
+and direct coefficients for larger shards.  The initial dual implementation
+constructed those coefficients a second time from generator rows and an
+`L`-by-`L` inverse even though its transform locator already contains the
+needed interpolation factors.  For missing execution coordinate `x` and
+selected survivor `s`, Leopard2 now emits the direct multiplier
+
+    Lambda(s) / ((x + s) Lambda'(x)).
+
+The complete derivation and locator-log convention are in
+`docs/leopard2_math_and_sources.md`.  A 214-plan pattern sweep compares the
+new rows with the retained matrix solver; seven directed native/translated,
+punctured, shortened, missing-parity, virtual-erasure, and explicit high-profile
+`R > K` cases additionally expose 444 coefficients through source-coordinate
+unit inputs against the independent direct systematic generator oracle.
+All four locator/fallback selector combinations pass the focused Release gate;
+the promoted locator-on/fallback-off configuration also passes focused
+ASan+UBSan and TSan execution, including concurrent immutable-plan reuse.
+
+Pinned directional measurements reduced plan setup by 1.58x at K5/R5 and by
+3.35--3.47x at K16/R8.  The formerly losing 1024-byte/reuse-one cells moved to
+1.259x and 1.278x versus exact Leopard1.  The 1023-byte/reuse-eight K16/R8
+point moved from a regression to a 1.048x point win.  These measurements use
+immutable binaries and the canonical campaign lock, but still await the
+external affinity-supervisor seal required for final authoritative status.
+
+An experimental selector can omit pruned transform graphs where the regular
+Algorithm 4/5 fallback appeared faster.  A 400-cell boundary screen covered
+bytes `1,63,64,65,255,256,257,1023`; all 352 newly affected cells improved,
+with geometric setup, execution, and amortized speedups of 2.778x, 1.198x, and
+1.348x.  However, the 48 intended-inert controls showed 18 execution point
+regressions, seven exceeding 2% and a worst point of 0.949x.  The two binaries
+had different hot-function text layouts and the sequential 11-sample runs had
+no confidence intervals, so those controls expose an unresolved measurement
+confound.  The selector is therefore disabled by default pending an isolated
+same-binary or section-stable ABBA replay with confidence intervals, including
+explicit high-profile `R > K` shapes.
+
+Machine-readable directional results are in
+`experiments/leopard2/direct_repair/results/small_dual_locator_terms_directional_20260805.json`
+and
+`experiments/leopard2/direct_repair/results/small_dual_regular_fallback_directional_20260805.json`.
+An attempted specialized-only metadata reduction was rejected because its
+amortized result was neutral to negative; that result is retained in
+`experiments/leopard2/direct_repair/results/small_dual_specialized_metadata_negative_20260805.json`.

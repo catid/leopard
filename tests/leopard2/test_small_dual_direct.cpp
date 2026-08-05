@@ -7,6 +7,7 @@
 */
 
 #include "direct_oracle.h"
+#include "direct_repair.h"
 #include "Leopard2Direct.h"
 #include "Leopard2Dispatch.h"
 #include "leopard2.h"
@@ -28,6 +29,14 @@
 
 #ifndef LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE
 #define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
+#endif
+
+#ifndef LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
+#define LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS 1
+#endif
+
+#ifndef LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
+#define LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK 0
 #endif
 
 namespace {
@@ -318,6 +327,185 @@ void verify_transform_only(
     leo2_codec_destroy(codec);
 }
 
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT && \
+    LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
+void verify_locator_coefficient_map(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    const std::vector<uint8_t>& original_present,
+    const std::vector<uint8_t>& recovery_present)
+{
+    require(original_present.size() == k && recovery_present.size() == r,
+        "coefficient-map presence size mismatch");
+    std::vector<unsigned> missing;
+    for (unsigned original = 0; original < k; ++original)
+        if (!original_present[original])
+            missing.push_back(original);
+    require(missing.size() >= 5 && missing.size() <= 8,
+        "coefficient-map loss count is outside the dual region");
+
+    const BinaryField field = leopard2_test::make_legacy_gf8();
+    const ProfileLayout layout = leopard2_test::make_profile_layout(
+        leopard2_test::kLegacyHigh, k, r);
+    const Matrix generator =
+        leopard2_test::direct_systematic_generator(field, layout);
+    const leopard2_test::DirectRepairPlan oracle =
+        leopard2_test::make_direct_repair_plan(
+            field, generator, missing, recovery_present);
+
+    leo2_codec* codec = make_codec(context, k, r, 0);
+    leo2_decode_plan* plan = make_plan(
+        codec, original_present, recovery_present);
+    require(leopard2_internal::DecodePlanUsesLocatorDirectTerms(plan),
+        "coefficient-map plan did not use locator-derived terms");
+
+    static const size_t kShardBytes = 1024;
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_plan_scratch_size(
+        plan, kShardBytes, &scratch_bytes),
+        "coefficient-map scratch query");
+    Scratch scratch(scratch_bytes);
+    std::vector<std::vector<uint8_t> > originals(
+        k, std::vector<uint8_t>(kShardBytes, 0));
+    std::vector<std::vector<uint8_t> > recovery(
+        r, std::vector<uint8_t>(kShardBytes, 0));
+    std::vector<std::vector<uint8_t> > restored(
+        k, std::vector<uint8_t>(kShardBytes, 0));
+    std::vector<const void*> original_input(k, NULL);
+    std::vector<const void*> recovery_input(r, NULL);
+    std::vector<void*> restored_output(k, NULL);
+    for (unsigned original = 0; original < k; ++original)
+    {
+        if (original_present[original])
+            original_input[original] = originals[original].data();
+        else
+            restored_output[original] = restored[original].data();
+    }
+    for (unsigned parity = 0; parity < r; ++parity)
+        if (recovery_present[parity])
+            recovery_input[parity] = recovery[parity].data();
+
+    struct BasisSource
+    {
+        bool parity;
+        unsigned index;
+    };
+    std::vector<BasisSource> sources;
+    for (unsigned parity_i = 0;
+         parity_i < oracle.selected_parities.size(); ++parity_i)
+    {
+        const BasisSource source = {
+            true, oracle.selected_parities[parity_i]
+        };
+        sources.push_back(source);
+    }
+    for (unsigned original = 0; original < k; ++original)
+    {
+        if (original_present[original])
+        {
+            const BasisSource source = { false, original };
+            sources.push_back(source);
+        }
+    }
+    require(sources.size() == k,
+        "coefficient-map selected source count is not K");
+
+    for (size_t source_i = 0; source_i < sources.size(); ++source_i)
+    {
+        for (unsigned original = 0; original < k; ++original)
+            std::fill(originals[original].begin(), originals[original].end(), 0);
+        for (unsigned parity = 0; parity < r; ++parity)
+            std::fill(recovery[parity].begin(), recovery[parity].end(), 0);
+        for (unsigned original = 0; original < k; ++original)
+            std::fill(restored[original].begin(), restored[original].end(), 0xa5);
+        const BasisSource& source = sources[source_i];
+        (source.parity ? recovery[source.index] : originals[source.index])[0] = 1;
+
+        require_result(leo2_decode_plan_execute(plan, kShardBytes,
+            original_input.data(), recovery_input.data(),
+            restored_output.data(), scratch.data, scratch.bytes),
+            "coefficient-map plan execute");
+        for (size_t output = 0; output < missing.size(); ++output)
+        {
+            uint8_t expected = 0;
+            const std::vector<leopard2_test::DirectRepairTerm>& terms =
+                oracle.output_terms[output];
+            for (size_t term_i = 0; term_i < terms.size(); ++term_i)
+            {
+                if (terms[term_i].parity == source.parity &&
+                    terms[term_i].index == source.index)
+                {
+                    expected = static_cast<uint8_t>(terms[term_i].coefficient);
+                    break;
+                }
+            }
+            const std::vector<uint8_t>& output_shard =
+                restored[missing[output]];
+            require(output_shard[0] == expected,
+                "locator-derived coefficient differs from independent matrix oracle");
+            require(std::find_if(output_shard.begin() + 1,
+                        output_shard.end(), [](uint8_t value) {
+                            return value != 0;
+                        }) == output_shard.end(),
+                "coefficient-map zero tail was modified incorrectly");
+        }
+    }
+
+    leo2_decode_plan_destroy(plan);
+    leo2_codec_destroy(codec);
+}
+
+void verify_locator_pattern_sweep(leo2_context* context)
+{
+    size_t plan_count = 0;
+    for (unsigned k = 5; k <= 16; ++k)
+    {
+        /* Explicit LEGACY_HIGH is public even when R > K.  AUTO would choose
+           LOW for those counts, but the high-profile dual-plan algebra and
+           xor-P execution view still require direct coverage. */
+        for (unsigned r = 5; r <= 8; ++r)
+        {
+            leo2_codec* codec = make_codec(context, k, r, 0);
+            for (unsigned losses = 5;
+                 losses <= std::min(k, r); ++losses)
+            {
+                if (losses == k && k >= 7)
+                    continue;
+                for (unsigned pattern = 0; pattern < 2; ++pattern)
+                {
+                    std::vector<uint8_t> original_present(k, 1);
+                    for (unsigned i = 0; i < losses; ++i)
+                    {
+                        const unsigned original = pattern == 0
+                            ? i : k - 1U - i;
+                        original_present[original] = 0;
+                    }
+                    std::vector<uint8_t> recovery_present(r, 1);
+                    if (pattern != 0)
+                    {
+                        for (unsigned parity = 0;
+                             parity < r - losses; ++parity)
+                            recovery_present[parity] = 0;
+                    }
+                    leo2_decode_plan* plan = make_plan(
+                        codec, original_present, recovery_present);
+                    require(leopard2_internal::
+                            DecodePlanUsesLocatorDirectTerms(plan),
+                        "eligible sweep plan did not use locator-derived terms");
+                    leo2_decode_plan_destroy(plan);
+                    ++plan_count;
+                }
+            }
+            leo2_codec_destroy(codec);
+        }
+    }
+    require(plan_count == 214,
+        "locator coefficient sweep did not cover the expected plan count");
+}
+#endif
+
 void verify_routes_and_execution(
     leo2_context* context,
     unsigned k,
@@ -346,6 +534,33 @@ void verify_routes_and_execution(
         "dual direct storage introspection failed");
     direct_retained_bytes(transform_plan, false,
         "forced transform storage introspection failed");
+    const bool expect_locator_terms =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 &&
+        LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0 &&
+        LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS != 0 &&
+        production_direct_shape;
+    require(leopard2_internal::DecodePlanUsesLocatorDirectTerms(plan) ==
+            expect_locator_terms,
+        "dual plan direct-term provenance disagrees with the selector");
+    require(!leopard2_internal::DecodePlanUsesLocatorDirectTerms(
+            transform_plan),
+        "forced transform plan retained locator-derived direct terms");
+    if (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 &&
+        LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0 &&
+        production_direct_shape &&
+        LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK != 0 &&
+        (leo2_test_decode_plan_uses_translated_low(plan) || losses == r))
+    {
+        leopard2_internal::DecodePlanPrunedScheduleInfo schedules = {};
+        require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+                plan, &schedules),
+            "dual pruned-schedule introspection failed");
+        require(schedules.low_input_plan_count == 0 &&
+                schedules.low_output_plan_count == 0 &&
+                schedules.high_input_plan_count == 0 &&
+                schedules.high_output_plan_count == 0,
+            "regular-fallback dual plan retained a pruned schedule");
+    }
 
     const size_t byte_counts[] = {
         1, 63, 64, 1023, 1024, 1025, 4095, 4096, 4097
@@ -534,6 +749,16 @@ void verify_irregular_presence_boundary(leo2_context* context)
         "irregular direct storage introspection failed");
     direct_retained_bytes(transform_plan, false,
         "irregular forced-transform storage introspection failed");
+    const bool expect_locator_terms =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 &&
+        LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0 &&
+        LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS != 0;
+    require(leopard2_internal::DecodePlanUsesLocatorDirectTerms(plan) ==
+            expect_locator_terms,
+        "irregular direct-term provenance disagrees with the selector");
+    require(!leopard2_internal::DecodePlanUsesLocatorDirectTerms(
+            transform_plan),
+        "irregular forced transform retained locator-derived terms");
 
     const size_t byte_counts[] = { 1023, 1024, 1025 };
     for (size_t byte_i = 0;
@@ -624,7 +849,54 @@ int main()
             return 0;
         }
 
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT && \
+    LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
+        verify_locator_pattern_sweep(context);
+        verify_locator_coefficient_map(context, 7, 5,
+            std::vector<uint8_t>{ 0, 1, 0, 0, 1, 0, 0 },
+            std::vector<uint8_t>{ 1, 1, 1, 1, 1 });
+        verify_locator_coefficient_map(context, 8, 8,
+            std::vector<uint8_t>{ 0, 1, 0, 1, 0, 0, 1, 0 },
+            std::vector<uint8_t>{ 1, 0, 1, 1, 1, 1, 0, 1 });
+        verify_locator_coefficient_map(context, 8, 8,
+            std::vector<uint8_t>{ 0, 0, 0, 1, 0, 0, 0, 0 },
+            std::vector<uint8_t>{ 1, 1, 0, 1, 1, 1, 1, 1 });
+        verify_locator_coefficient_map(context, 5, 8,
+            std::vector<uint8_t>{ 0, 0, 0, 0, 0 },
+            std::vector<uint8_t>{ 0, 1, 0, 1, 1, 1, 1, 1 });
+        {
+            std::vector<uint8_t> original_present(16, 1);
+            const unsigned missing[] = { 0, 3, 7, 11, 15 };
+            for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+                original_present[missing[i]] = 0;
+            verify_locator_coefficient_map(context, 16, 5,
+                original_present, std::vector<uint8_t>(5, 1));
+        }
+        {
+            std::vector<uint8_t> original_present(16, 1);
+            const unsigned missing[] = { 1, 4, 7, 12, 15 };
+            for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+                original_present[missing[i]] = 0;
+            std::vector<uint8_t> recovery_present(8, 1);
+            recovery_present[0] = 0;
+            recovery_present[6] = 0;
+            verify_locator_coefficient_map(context, 16, 8,
+                original_present, recovery_present);
+        }
+        {
+            std::vector<uint8_t> original_present(16, 1);
+            const unsigned missing[] = { 0, 2, 4, 6, 9, 11, 13, 15 };
+            for (size_t i = 0; i < sizeof(missing) / sizeof(missing[0]); ++i)
+                original_present[missing[i]] = 0;
+            verify_locator_coefficient_map(context, 16, 8,
+                original_present, std::vector<uint8_t>(8, 1));
+        }
+#endif
+
         verify_routes_and_execution(context, 5, 5, 5);
+        verify_routes_and_execution(context, 5, 8, 5);
+        verify_routes_and_execution(context, 6, 8, 6);
         verify_routes_and_execution(context, 7, 7, 7);
         verify_routes_and_execution(context, 8, 8, 5);
         verify_routes_and_execution(context, 8, 8, 8);
