@@ -2293,6 +2293,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BENCHMARK_GIT_EXECUTABLE": str(tool_path("git")),
             "LEO2_BUILD_ALLK_DIAGNOSTIC": "OFF",
             "LEO2_BUILD_TESTS": "ON",
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -2349,6 +2350,19 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_CAUCHY_LOG_REUSE:BOOL=ON",
                 configure)
             self.assertIn(
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=ON",
+                configure)
+            v7_cache = dict(cache)
+            v7_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+            v7_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
+            v7_configure = provenance._reproducible_configure_argv(
+                SOURCE_ROOT, Path(directory) / "v7-build", v7_cache)
+            self.assertFalse(any(
+                argument.startswith(
+                    "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:")
+                for argument in v7_configure))
+            self.assertIn(
                 "-DLEO2_EXPERIMENT_HIGH_T32_B256_GENERATED:BOOL=ON",
                 configure)
             self.assertIn(
@@ -2368,6 +2382,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             v5_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V5
             v5_cache["LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED"] = "OFF"
+            v5_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
             for selector in v6_only:
                 v5_cache.pop(selector)
             v5_configure = provenance._reproducible_configure_argv(
@@ -3382,6 +3397,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                     "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+                    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
                 },
                 "c_compiler": identity,
                 "compiler": identity,
@@ -3465,6 +3481,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_BUILD_BENCHMARKS": "ON",
             "LEO2_BUILD_FUZZERS": "OFF",
             "LEO2_ENABLE_CUDA": "OFF",
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
@@ -3485,6 +3502,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         }
         validated = provenance._validate_candidate_required_cache(cache)
         v6_cache = dict(cache)
+        v6_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
         v6_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
         v6_validated = provenance._validate_candidate_required_cache(
@@ -3494,6 +3512,27 @@ class ExactCommandValidationTests(unittest.TestCase):
         self.assertEqual(
             v6_validated["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
+        v7_cache = dict(cache)
+        v7_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        v7_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
+        v7_validated = provenance._validate_candidate_required_cache(
+            v7_cache,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
+        self.assertEqual(
+            v7_validated["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
+        v7_with_current_selector = dict(v7_cache)
+        v7_with_current_selector[
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "historical candidate CMake cache"):
+            provenance._validate_candidate_required_cache(
+                v7_with_current_selector,
+                expected_configuration_schema=
+                    provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
         selectors = {
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
@@ -3508,6 +3547,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
         }
         for selector, expected in selectors.items():
             self.assertEqual(validated[selector], expected)
@@ -3612,7 +3652,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 }
                 with self.assertRaisesRegex(
                         provenance.BuildProvenanceError,
-                        "supports only v5, v6, and current"):
+                        "supports only v5, v6, v7, and current"):
                     provenance.verify_reproducible_candidate_build(
                         candidate, jobs=1)
 
@@ -3676,6 +3716,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK": "ON",
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             },
         }
         v5 = {
@@ -3692,9 +3733,17 @@ class ExactCommandValidationTests(unittest.TestCase):
             },
         }
         v6 = copy.deepcopy(current)
+        v6["validated_cache"].pop(
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
         v6["validated_cache"][
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6
+        v7 = copy.deepcopy(current)
+        v7["validated_cache"].pop(
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        v7["validated_cache"][
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
         v4 = {
             "schema": provenance.PRODUCTION_BUILD_CLOSURE_SCHEMA,
             "validated_cache": {
@@ -3735,6 +3784,12 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
                     "configuration_schema"],
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
+        self.assertEqual(
+            provenance._require_reproducible_replay_artifact_contract(
+                v7, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
+                provenance.CANONICAL_REPLAY_RECIPE_SCHEMA)[
+                    "configuration_schema"],
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
         self.assertEqual(
             provenance._require_reproducible_replay_artifact_contract(
                 v5, provenance.REPRODUCIBLE_BUILD_PROOF_SCHEMA,
@@ -3788,7 +3843,8 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
                 "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
                 "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED",
-                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK"):
+                "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"):
             with self.subTest(current_missing=selector):
                 missing_selector = copy.deepcopy(current)
                 del missing_selector["validated_cache"][selector]
@@ -3805,6 +3861,15 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.BuildProvenanceError,
                 "v5 reproducible-build closure configuration"):
             provenance._reproducible_replay_contract(v5_with_v6_selector)
+
+        v7_with_current_selector = copy.deepcopy(v7)
+        v7_with_current_selector["validated_cache"][
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "ON"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError,
+                "v6/v7/current reproducible-build closure"):
+            provenance._reproducible_replay_contract(
+                v7_with_current_selector)
 
         for selector in (
                 "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED",
@@ -4231,6 +4296,7 @@ class ExactCommandValidationTests(unittest.TestCase):
         cache = {
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED": "OFF",
@@ -4484,6 +4550,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
             "-DLEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+            "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
         }
@@ -4491,6 +4558,44 @@ class ExactCommandValidationTests(unittest.TestCase):
             provenance._validate_compile_flags(
                 compile_argv(router, router_definitions, target_flags=()),
                 router, source_root=SOURCE_ROOT, cache=replay_cache,
+                library_sources=routed_library_sources),
+            "portable-core")
+        dual_off_cache = dict(replay_cache)
+        dual_off_cache["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "OFF"
+        dual_off_definitions = (
+            router_definitions - {
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1"}) | {
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=0"}
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(
+                    router, dual_off_definitions, target_flags=()),
+                router, source_root=SOURCE_ROOT, cache=dual_off_cache,
+                library_sources=routed_library_sources),
+            "portable-core")
+        noncanonical_dual_cache = dict(replay_cache)
+        noncanonical_dual_cache[
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "TRUE"
+        with self.assertRaisesRegex(
+                provenance.BuildProvenanceError, "exactly ON or OFF"):
+            provenance._validate_compile_flags(
+                compile_argv(router, router_definitions, target_flags=()),
+                router, source_root=SOURCE_ROOT,
+                cache=noncanonical_dual_cache,
+                library_sources=routed_library_sources)
+        v7_router_cache = dict(replay_cache)
+        v7_router_cache.pop("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT")
+        v7_router_cache[
+            "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
+            provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7
+        self.assertEqual(
+            provenance._validate_compile_flags(
+                compile_argv(
+                    router,
+                    router_definitions - {
+                        "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1"},
+                    target_flags=()),
+                router, source_root=SOURCE_ROOT, cache=v7_router_cache,
                 library_sources=routed_library_sources),
             "portable-core")
         missing_low_p32 = compile_argv(
@@ -4589,6 +4694,13 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V6)
         self.assertIn(t2_path, v6_expected)
         self.assertNotIn(t8_k8_b1024_path, v6_expected)
+
+        v7_expected = provenance._expected_library_sources(
+            SOURCE_ROOT, cache, tracked,
+            expected_configuration_schema=
+                provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V7)
+        self.assertIn(t2_path, v7_expected)
+        self.assertIn(t8_k8_b1024_path, v7_expected)
 
         disabled_cache = dict(cache)
         disabled_cache["LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED"] = "OFF"

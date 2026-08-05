@@ -88,6 +88,20 @@
 #error "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE must be 0, 1, or 2"
 #endif
 
+/*
+    Production dual-route policy for the measured GF8/AVX2 K=5..16,
+    R=5..8, loss=5..8 region.  Diagnostic small-direct modes continue to
+    force their historical byte-independent transform/output-major/
+    source-major controls and therefore take precedence over this policy.
+*/
+#ifndef LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+#define LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT 1
+#endif
+#if LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT < 0 || \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT > 1
+#error "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT must be 0 or 1"
+#endif
+
 #ifndef LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO
 #define LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE_AUTO 1
 #endif
@@ -837,6 +851,12 @@ struct leo2_decode_plan
     bool direct_copy;
     bool direct_repair;
     /*
+        True only for a reusable small-code plan that owns both exact
+        transform metadata and direct-repair coefficients.  The byte-aware
+        resolver below is the sole authority for choosing between them.
+    */
+    bool direct_transform_fallback;
+    /*
         A legacy-high P=T transform plan executes an Algorithm 4 view
         translated by xor P.  The plan captures this decision immutably;
         codec-owned low-profile constants and execution-order plan metadata
@@ -844,6 +864,26 @@ struct leo2_decode_plan
     */
     bool translated_low;
 };
+
+static const size_t kSmallDualDirectReusableMinimumBytes = 1024;
+static const size_t kSmallDualDirectOneShotMinimumBytes = 4096;
+
+static bool PlanUsesDirectRepairExecution(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes)
+{
+    return plan && plan->direct_repair &&
+        (!plan->direct_transform_fallback ||
+         shard_bytes >= kSmallDualDirectReusableMinimumBytes);
+}
+
+static bool PlanUsesDirectDecodeExecution(
+    const leo2_decode_plan* plan,
+    uint64_t shard_bytes)
+{
+    return plan && (plan->direct_xor || plan->direct_copy ||
+        PlanUsesDirectRepairExecution(plan, shard_bytes));
+}
 
 static bool PlanHasCompactDirectXor(const leo2_decode_plan* plan)
 {
@@ -2876,7 +2916,8 @@ static bool ShouldUseGF8DirectOneLossFourTiny(
 }
 #endif
 
-#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0 || \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
 static bool IsSmallDirectRepairCodec(const leo2_codec* codec)
 {
     return codec && codec->context &&
@@ -2886,6 +2927,31 @@ static bool IsSmallDirectRepairCodec(const leo2_codec* codec)
         codec->original_count >= 5 &&
         codec->original_count <= kDirectLegacyMaxRepairOriginals &&
         codec->recovery_count >= 5 && codec->recovery_count <= 8;
+}
+#endif
+
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+static bool IsProductionSmallDualPattern(
+    const leo2_codec* codec,
+    uint32_t missing_original_count)
+{
+    /*
+        The current translated transform has a particularly strong full-loss
+        terminal at K=7 and K=8.  A fresh same-source screen after that
+        terminal landed found source-major direct repair neutral at K=7 and
+        slower at K=8 for every measured byte regime.  Keep those patterns on
+        the transform side; all other qualified loss-5-through-8 shapes retain
+        a clear direct-repair margin at the selected byte thresholds.
+    */
+    if (!IsSmallDirectRepairCodec(codec))
+        return false;
+    const bool strong_full_loss_transform =
+        missing_original_count == codec->original_count &&
+        codec->original_count >= 7;
+    return missing_original_count >= 5 &&
+        missing_original_count <= kDirectMaxRepairLosses &&
+        !strong_full_loss_transform;
 }
 #endif
 
@@ -2903,12 +2969,18 @@ static bool CanPrepareDirectRepair(const leo2_codec* codec)
         codec->padded_side >= 2;
 }
 
-static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
+static uint32_t DirectRepairLossLimit(
+    const leo2_codec* codec,
+    uint32_t missing_original_count)
 {
+    (void)missing_original_count;
     if (IsExpandedDirectRepairCodec(codec))
         return kDirectMaxRepairLosses;
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0
     if (IsSmallDirectRepairCodec(codec))
+        return kDirectMaxRepairLosses;
+#elif LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+    if (IsProductionSmallDualPattern(codec, missing_original_count))
         return kDirectMaxRepairLosses;
 #endif
     if (IsMeasuredEqualRoundedDirectRepairCodec(codec))
@@ -2917,6 +2989,25 @@ static uint32_t DirectRepairLossLimit(const leo2_codec* codec)
     if (IsGeneralDirectOneLossCodec(codec))
         return 1;
     return 4;
+}
+
+static bool OneShotDirectRepairQualified(
+    const leo2_codec* codec,
+    uint32_t missing_original_count,
+    uint64_t shard_bytes)
+{
+    if (missing_original_count >
+        DirectRepairLossLimit(codec, missing_original_count))
+        return false;
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+    if (IsProductionSmallDualPattern(codec, missing_original_count) &&
+        shard_bytes < kSmallDualDirectOneShotMinimumBytes)
+        return false;
+#else
+    (void)shard_bytes;
+#endif
+    return true;
 }
 
 #if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN) && defined(LEO_HAS_FF8)
@@ -3927,7 +4018,7 @@ static bool PrepareDirectRepairTerms(
     typedef typename Field::Element Element;
     const leo2_codec* codec = plan->codec;
     const uint32_t losses = plan->missing_original_count;
-    if (losses == 0 || losses > DirectRepairLossLimit(codec) ||
+    if (losses == 0 || losses > DirectRepairLossLimit(codec, losses) ||
         barycentric_weights.size() != codec->original_count)
         return false;
 
@@ -9363,7 +9454,8 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
         handled = true;
         return LEO2_NEED_MORE_DATA;
     }
-    if (missing_original_count <= DirectRepairLossLimit(codec))
+    if (OneShotDirectRepairQualified(
+            codec, missing_original_count, shard_bytes))
         return LEO2_SUCCESS;
 
     DecodeScratchGeometry geometry;
@@ -10336,6 +10428,10 @@ static leopard2_internal::DirectRepairExecutor SelectDirectRepairExecutor(
 #if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2
         const bool measured_small = output_count >= 5 &&
             IsSmallDirectRepairCodec(codec);
+#elif LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+      LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+        const bool measured_small = output_count >= 5 &&
+            IsProductionSmallDualPattern(codec, output_count);
 #else
         const bool measured_small = false;
 #endif
@@ -10834,7 +10930,7 @@ static leo2_result ValidateDecodeBatchItemAddressability(
     size_t rounded_bytes = 0;
     DecodeScratchGeometry geometry;
     const bool direct =
-        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+        PlanUsesDirectDecodeExecution(plan, item.shard_bytes);
     leo2_result result = direct
         ? DirectDecodeLayout(
             codec, item.shard_bytes, direct_layout, rounded_bytes)
@@ -12036,7 +12132,7 @@ leo2_result GetDecodePlanPathInfo(
     }
     if (shard_bytes == 0)
         return LEO2_INVALID_ARGUMENT;
-    if (plan->direct_repair || plan->direct_xor || plan->direct_copy)
+    if (PlanUsesDirectDecodeExecution(plan, shard_bytes))
     {
         ScratchLayout layout;
         size_t rounded = 0;
@@ -12046,7 +12142,7 @@ leo2_result GetDecodePlanPathInfo(
             return result;
         FillTerminalDecodePathInfo(kDecodePathDirect, kDecodeRuleDirect,
             shard_bytes, multi_item_batch, *info_out);
-        if (plan->direct_repair)
+        if (PlanUsesDirectRepairExecution(plan, shard_bytes))
             info_out->direct_executor =
                 SelectDirectRepairExecutor(
                     plan, static_cast<size_t>(shard_bytes));
@@ -12105,7 +12201,7 @@ leo2_result GetDecodePlanExecutionTiles(
         return LEO2_INVALID_ARGUMENT;
     if (plan->no_op)
         return LEO2_SUCCESS;
-    if (plan->direct_repair || plan->direct_xor || plan->direct_copy)
+    if (PlanUsesDirectDecodeExecution(plan, shard_bytes))
     {
         ScratchLayout layout;
         size_t rounded_bytes = 0;
@@ -14005,6 +14101,41 @@ bool GetDecodePlanPresenceStorageInfo(
     *original_capacity_out = plan->original_present.capacity();
     *recovery_capacity_out = plan->recovery_present.capacity();
     *erased_capacity_out = plan->coordinate_erased.capacity();
+    return true;
+}
+
+bool GetDecodePlanDirectStorageInfo(
+    const leo2_decode_plan* plan,
+    size_t* retained_bytes_out,
+    size_t* term_count_out,
+    size_t* source_row_count_out)
+{
+    if (!plan || !retained_bytes_out || !term_count_out ||
+        !source_row_count_out)
+        return false;
+    size_t offset_bytes = 0;
+    size_t term_bytes = 0;
+    if (!CheckedMultiply(plan->direct_term_offsets.capacity(),
+            sizeof(plan->direct_term_offsets[0]), offset_bytes) ||
+        !CheckedMultiply(plan->direct_terms.capacity(),
+            sizeof(plan->direct_terms[0]), term_bytes) ||
+        offset_bytes > std::numeric_limits<size_t>::max() - term_bytes)
+        return false;
+    size_t retained_bytes = offset_bytes + term_bytes;
+    size_t source_row_count = 0;
+#if defined(LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN)
+    size_t source_row_bytes = 0;
+    if (!CheckedMultiply(plan->direct_source_rows.capacity(),
+            sizeof(plan->direct_source_rows[0]), source_row_bytes) ||
+        retained_bytes >
+            std::numeric_limits<size_t>::max() - source_row_bytes)
+        return false;
+    retained_bytes += source_row_bytes;
+    source_row_count = plan->direct_source_rows.size();
+#endif
+    *retained_bytes_out = retained_bytes;
+    *term_count_out = plan->direct_terms.size();
+    *source_row_count_out = source_row_count;
     return true;
 }
 #endif
@@ -18359,6 +18490,7 @@ static leo2_result DecodePlanCreateInternal(
         plan->direct_copy = codec->profile == LEO2_PROFILE_LOW_V1 &&
             codec->padded_side == 1 && missing_original_count == 1;
         plan->direct_repair = false;
+        plan->direct_transform_fallback = false;
 
 #if LEO2_EXPERIMENT_NO_LOSS_PLAN_SHORT_CIRCUIT
         /*
@@ -18391,10 +18523,21 @@ static leo2_result DecodePlanCreateInternal(
         force_test_transform =
             codec->test_decode_mode != LEO2_TEST_DECODE_AUTO;
 #endif
+        bool small_dual_pattern = false;
+#if LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 && \
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+        small_dual_pattern = !force_test_transform &&
+            IsProductionSmallDualPattern(codec, missing_original_count);
+#endif
+        const bool direct_repair_qualified = setup_hint
+            ? OneShotDirectRepairQualified(codec, missing_original_count,
+                setup_hint->shard_bytes)
+            : missing_original_count <=
+                DirectRepairLossLimit(codec, missing_original_count);
         const bool attempt_direct_repair =
             !plan->no_op && !plan->direct_xor && !plan->direct_copy &&
             !force_test_transform &&
-            missing_original_count <= DirectRepairLossLimit(codec);
+            direct_repair_qualified;
         plan->original_present.assign(
             original_present, original_present + codec->original_count);
         plan->recovery_present.assign(
@@ -18459,7 +18602,10 @@ static leo2_result DecodePlanCreateInternal(
 #endif
         }
 
-        if (!plan->direct_repair)
+        plan->direct_transform_fallback =
+            plan->direct_repair && small_dual_pattern && !setup_hint;
+
+        if (!plan->direct_repair || plan->direct_transform_fallback)
         {
             plan->coordinate_erased = codec->permanent_erased;
             for (uint32_t i = 0; i < missing_original_count; ++i)
@@ -18572,7 +18718,7 @@ static leo2_result DecodePlanCreateInternal(
         }
 
         if (!plan->no_op && !plan->direct_xor && !plan->direct_copy &&
-            !plan->direct_repair)
+            (!plan->direct_repair || plan->direct_transform_fallback))
         {
             plan->translated_low =
                 (codec->flags & LEO2_CODEC_FORCE_GENERIC_DECODE) == 0 &&
@@ -18587,7 +18733,7 @@ static leo2_result DecodePlanCreateInternal(
 #if LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL && defined(LEO_HAS_FF8)
             plan->low_b64_terminal_kind = ClassifyLowB64Terminal(
                 codec, plan->translated_low, missing_original_count,
-                setup_hint == NULL);
+                setup_hint == NULL || setup_hint->setup_mode == 0U);
 #endif
             if (!plan->translated_low)
             {
@@ -18605,7 +18751,8 @@ static leo2_result DecodePlanCreateInternal(
             const uint8_t reusable_auto_metadata =
                 kDecodeTransformMetadataGeneric |
                 kDecodeTransformMetadataSpecialized;
-            if (setup_hint && metadata_mask == reusable_auto_metadata &&
+            if (setup_hint && setup_hint->setup_mode != 0U &&
+                metadata_mask == reusable_auto_metadata &&
                 SelectOneShotTransformMetadataMask(
                     codec, plan, *setup_hint, exact_metadata_mask))
                 metadata_mask = exact_metadata_mask;
@@ -18758,7 +18905,7 @@ leo2_result CreateOneShotTransformPlanForDiagnostics(
     };
     const leo2_result result = DecodePlanCreateInternal(
         codec, original_present, recovery_present, plan_out, validated_prefix,
-        setup_mode != 0U ? &hint : NULL);
+        &hint);
     if (result != LEO2_SUCCESS || !plan_out || !*plan_out)
         return result;
     leo2_decode_plan* const plan = *plan_out;
@@ -18827,7 +18974,7 @@ LEO2_EXPORT leo2_result leo2_decode_plan_scratch_size(
     size_t direct_rounded = 0;
     DecodeScratchGeometry geometry;
     const bool direct_execution =
-        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+        PlanUsesDirectDecodeExecution(plan, shard_bytes);
     const leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
@@ -19202,7 +19349,7 @@ static leo2_result DecodePlanExecuteInternal(
     size_t direct_rounded = 0;
     DecodeScratchGeometry geometry;
     const bool direct_execution =
-        plan->direct_repair || plan->direct_xor || plan->direct_copy;
+        PlanUsesDirectDecodeExecution(plan, shard_bytes);
     leo2_result result = direct_execution
         ? DirectDecodeLayout(
             plan->codec, shard_bytes, direct_layout, direct_rounded)
@@ -19265,7 +19412,7 @@ static leo2_result DecodePlanExecuteInternal(
             restored_original);
         return LEO2_SUCCESS;
     }
-    if (plan->direct_repair)
+    if (PlanUsesDirectRepairExecution(plan, shard_bytes))
         return ExecuteDirectRepair(plan, static_cast<size_t>(shard_bytes),
             original, recovery, restored_original);
 
@@ -20330,11 +20477,9 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
         false,
         one_shot_setup_mode
     };
-    const DecodePlanSetupHint* const setup_hint_pointer =
-        one_shot_setup_mode != 0U ? &setup_hint : NULL;
     leo2_result result = DecodePlanCreateInternal(
         codec, original_present, recovery_present, &plan, validated_prefix,
-        setup_hint_pointer);
+        &setup_hint);
     if (result != LEO2_SUCCESS)
         return result;
     const ProtectedMetadataSpan protected_metadata[2] = {

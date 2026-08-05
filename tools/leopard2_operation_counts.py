@@ -1782,6 +1782,16 @@ def select_decode_execution(
     if (force == "auto" and 2 <= k <= 16 and
             geometry["parent_dimension"] <= 256 and loss_count <= 4):
         return DecodeSelection("direct", "direct", 0, 0)
+    # Reusable production plans retain both Algorithm 5/translated Algorithm 4
+    # metadata and source-major direct coefficients in this measured region.
+    # The public plan scratch query and execution resolve the same 1024-byte
+    # boundary; exact one-shot setup uses a separately calibrated 4096-byte
+    # cold threshold that is outside this execution-only model.
+    if (force == "auto" and profile == "high" and field_name == "gf8" and
+            backend == "avx2" and 5 <= k <= 16 and 5 <= r <= 8 and
+            5 <= loss_count <= 8 and
+            not (loss_count == k and k >= 7) and shard_bytes >= 1024):
+        return DecodeSelection("direct", "direct", 0, 0)
 
     # With P=ceil_pow2(K)=ceil_pow2(R)=T and N=2P, xor P translates the
     # immutable legacy-high codeword into the Algorithm 4 low-profile view.
@@ -2434,8 +2444,12 @@ def model_direct_repair(
         return Schedule(details={"no_op": True, "missing_originals": "none"})
     if not (2 <= k <= 16):
         raise ModelError("bounded direct repair requires 2 <= K <= 16")
-    if loss_count > 4:
-        raise ModelError("bounded direct repair supports at most four losses")
+    small_dual = (
+        profile == "high" and 5 <= k <= 16 and 5 <= r <= 8 and
+        5 <= loss_count <= 8 and not (loss_count == k and k >= 7)
+    )
+    if loss_count > (8 if small_dual else 4):
+        raise ModelError("bounded direct repair loss count is outside dispatch")
     if loss_count > r:
         raise ModelError("loss count exceeds public recovery count")
     if parent_dimension > 256 or padded < 2:
@@ -2463,6 +2477,7 @@ def model_direct_repair(
             "dense_term_upper_bound": dense_terms,
             "coefficient_dependent_terms": True,
             "profile": profile,
+            "source_major": small_dual,
         },
     )
     return schedule

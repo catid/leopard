@@ -240,12 +240,13 @@ static inline bool IsDecodeByteGeometryConsistent(
 }
 
 /*
-    One ordered transform-decode selector owns both workspace sizing and
-    transform execution.  No-op and direct repair are immutable terminal plan
-    states that bypass transform workspace and are reported by the private
-    introspection wrapper before this selector is called.  The actual byte
-    split is deliberately part of the input even though the currently promoted
-    crossover rules use the 64-byte-rounded size: future rules cannot
+    One ordered selector owns workspace sizing and execution for transform
+    routes.  Its private wrapper first resolves no-op, copy/XOR, unconditional
+    direct-repair, and byte-aware dual direct/transform plans.  A dual immutable
+    plan owns both routes; when its exact shard size selects the transform
+    route, this selector remains the sole transform authority.  The actual byte
+    split is deliberately part of the input because the promoted dual-plan
+    crossover uses the exact public byte size: future rules cannot
     accidentally receive only a rounded surrogate and ignore a ragged pass.
     matching_auto_rules excludes the capacity fallback and lets tests prove
     that evidence-scoped rules do not overlap.

@@ -478,6 +478,17 @@ bool GetDecodePlanPresenceStorageInfo(
     size_t* original_capacity_out,
     size_t* recovery_capacity_out,
     size_t* erased_capacity_out);
+
+/*
+    Test-only capacity accounting for the incremental direct-repair view held
+    by a reusable dual plan.  The byte result excludes allocator bookkeeping
+    and the fixed-size opaque plan object, which are shared by both controls.
+*/
+bool GetDecodePlanDirectStorageInfo(
+    const leo2_decode_plan* plan,
+    size_t* retained_bytes_out,
+    size_t* term_count_out,
+    size_t* source_row_count_out);
 #endif
 
 } // namespace leopard2_internal

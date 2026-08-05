@@ -52,6 +52,10 @@
 #define LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE 0
 #endif
 
+#ifndef LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+#define LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT 1
+#endif
+
 #ifndef LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS
 #define LEO2_EXPERIMENT_EQUAL_ROUNDED_MULTI_LOSS 1
 #endif
@@ -915,6 +919,9 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
 {
     static const bool experimental_small_direct =
         LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0;
+    static const bool production_small_dual =
+        LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 0 &&
+        LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0;
     static const bool experimental_general_one_loss =
 #if defined(LEO2_GFNI_VARIANT)
         false;
@@ -940,6 +947,14 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
         { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           65, 8, experimental_small_direct, true },
         { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1023, 8, experimental_small_direct, true },
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          1024, 8, experimental_small_direct || production_small_dual, true },
+        { 16, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 8, experimental_small_direct || production_small_dual, true },
+        { 7, 7, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+          4096, 7, experimental_small_direct, true },
+        { 8, 8, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           4096, 8, experimental_small_direct, true },
         { 16, 9, LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
           4096, 8, false, false },
@@ -1126,10 +1141,16 @@ void test_direct_repair_dispatch_bounds(leo2_context* context)
                 test.k >= 5 && test.k <= 16 &&
                 test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
                 LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 2;
+            const bool production_small_source_major =
+                production_small_dual && test.k >= 5 && test.k <= 16 &&
+                test.r >= 5 && test.r <= 8 && test.losses >= 5 &&
+                !(test.losses == test.k && test.k >= 7) &&
+                test.bytes >= 1024;
             const leopard2_internal::DirectRepairExecutor expected_executor =
                 expanded_k65_source_major ||
                 experimental_equal_rounded_source_major ||
-                experimental_small_source_major
+                experimental_small_source_major ||
+                production_small_source_major
                     ? leopard2_internal::kDirectRepairExecutorSourceMajor
                     : leopard2_internal::kDirectRepairExecutorOutputMajor;
             require(path_info.direct_executor == expected_executor,
@@ -3500,18 +3521,21 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                     plans[path], bytes, &scratch[path]),
                     "balanced family scratch query");
             }
-            const bool experimental_auto_direct =
-                LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0 &&
+            const bool small_auto_direct =
                 leo2_context_backend(context) == LEO2_BACKEND_AVX2 &&
-                k >= 5 && k <= 8;
+                k >= 5 && k <= 8 &&
+                (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE != 0 ||
+                 (LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0 &&
+                  k < 7 &&
+                  bytes >= 1024));
             require_balanced_family(
                 scratch[1] == scratch[2] &&
-                (experimental_auto_direct
+                (small_auto_direct
                     ? scratch[0] < scratch[1]
                     : scratch[0] == scratch[1]),
                 k, bytes,
-                experimental_auto_direct
-                    ? "experimental AUTO did not use bounded direct scratch"
+                small_auto_direct
+                    ? "AUTO did not use bounded direct scratch"
                     : "AUTO, generic, and materialized scratch differ");
             require_balanced_family(
                 scratch[3] == scratch[2], k, bytes,
@@ -3522,12 +3546,12 @@ void test_balanced_family_forced_equivalence(leo2_context* context)
                 codecs[0], bytes, &one_shot_scratch),
                 "balanced family one-shot scratch query");
             require_balanced_family(
-                experimental_auto_direct
+                small_auto_direct
                     ? one_shot_scratch == scratch[1] &&
                         one_shot_scratch > scratch[0]
                     : one_shot_scratch == scratch[0],
                 k, bytes,
-                experimental_auto_direct
+                small_auto_direct
                     ? "one-shot query did not retain conservative scratch"
                     : "one-shot query does not cover the full-loss AUTO plan");
             if (bytes == execution_bytes)

@@ -90,8 +90,11 @@ BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V3 = (
 BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V4 = (
     "leopard2-benchmark-build-configuration-attestation/v4"
 )
-BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5 = (
     "leopard2-benchmark-build-configuration-attestation/v5"
+)
+BUILD_CONFIGURATION_ATTESTATION_SCHEMA = (
+    "leopard2-benchmark-build-configuration-attestation/v6"
 )
 BUILD_CONFIGURATION_FILE_SCHEMA_V2 = (
     "leopard2-benchmark-build-configuration/v2"
@@ -102,8 +105,11 @@ BUILD_CONFIGURATION_FILE_SCHEMA_V3 = (
 BUILD_CONFIGURATION_FILE_SCHEMA_V6 = (
     "leopard2-benchmark-build-configuration/v6"
 )
-BUILD_CONFIGURATION_FILE_SCHEMA = (
+BUILD_CONFIGURATION_FILE_SCHEMA_V7 = (
     "leopard2-benchmark-build-configuration/v7"
+)
+BUILD_CONFIGURATION_FILE_SCHEMA = (
+    "leopard2-benchmark-build-configuration/v8"
 )
 BUILD_CONFIGURATION_RELATIVE_PATH = (
     "generated/leopard2-benchmark-attestation/"
@@ -153,12 +159,18 @@ BUILD_CONFIGURATION_VARIABLES_V6 = (
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE",
     BUILD_CONFIGURATION_VARIABLES_V2[-1],
 )
-BUILD_CONFIGURATION_VARIABLES = BUILD_CONFIGURATION_VARIABLES_V6
+BUILD_CONFIGURATION_VARIABLES_V7 = BUILD_CONFIGURATION_VARIABLES_V6
+BUILD_CONFIGURATION_VARIABLES = (
+    *BUILD_CONFIGURATION_VARIABLES_V7,
+    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+)
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS = (
     *BUILD_CONFIGURATION_VARIABLES[16:],
 )
 BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V6 = \
-    BUILD_CONFIGURATION_EXPERIMENT_SELECTORS
+    tuple(BUILD_CONFIGURATION_VARIABLES_V6[16:])
+BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V7 = \
+    BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V6
 BUILD_CONFIGURATION_CANONICAL_SELECTORS_V2 = {
     "LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN": "OFF",
     "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE": "OFF",
@@ -184,8 +196,12 @@ BUILD_CONFIGURATION_CANONICAL_SELECTORS_V6 = {
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
 }
-BUILD_CONFIGURATION_CANONICAL_SELECTORS = \
+BUILD_CONFIGURATION_CANONICAL_SELECTORS_V7 = \
     BUILD_CONFIGURATION_CANONICAL_SELECTORS_V6
+BUILD_CONFIGURATION_CANONICAL_SELECTORS = {
+    **BUILD_CONFIGURATION_CANONICAL_SELECTORS_V7,
+    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
+}
 CMAKE_CACHE_ENTRY_TYPES = frozenset((
     "BOOL", "FILEPATH", "INTERNAL", "PATH", "STATIC", "STRING",
     "UNINITIALIZED",
@@ -215,6 +231,7 @@ CMAKE_CACHE_REQUIRED_ENTRY_TYPES = {
     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": frozenset(("BOOL",)),
     "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": frozenset(("STRING",)),
+    "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": frozenset(("BOOL",)),
 }
 BENCHMARK_ENVIRONMENT = {
     "LANG": "C",
@@ -3027,6 +3044,12 @@ def build_configuration_contract(attestation_schema):
             BUILD_CONFIGURATION_VARIABLES,
             BUILD_CONFIGURATION_EXPERIMENT_SELECTORS,
         )
+    if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5:
+        return (
+            BUILD_CONFIGURATION_FILE_SCHEMA_V7,
+            BUILD_CONFIGURATION_VARIABLES_V7,
+            BUILD_CONFIGURATION_EXPERIMENT_SELECTORS_V7,
+        )
     if attestation_schema == BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V4:
         return (
             BUILD_CONFIGURATION_FILE_SCHEMA_V6,
@@ -3066,6 +3089,7 @@ def build_configuration_digest(
         )
     if tuple(variables) not in (
             BUILD_CONFIGURATION_VARIABLES,
+            BUILD_CONFIGURATION_VARIABLES_V7,
             BUILD_CONFIGURATION_VARIABLES_V6,
             BUILD_CONFIGURATION_VARIABLES_V3,
             BUILD_CONFIGURATION_VARIABLES_V2):
@@ -3086,6 +3110,13 @@ def build_configuration_digest(
         raise CrossoverError(
             "effective CMake configuration has an invalid "
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"
+        )
+    if ("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT" in entries and
+            entries["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] not in
+            ("ON", "OFF")):
+        raise CrossoverError(
+            "effective CMake configuration has an invalid "
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"
         )
     material = "".join(
         "{}={}\n".format(variable, entries[variable])
@@ -3131,6 +3162,9 @@ def read_build_configuration_attestation(path):
     if file_schema == BUILD_CONFIGURATION_FILE_SCHEMA:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA
         variables = BUILD_CONFIGURATION_VARIABLES
+    elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V7:
+        attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5
+        variables = BUILD_CONFIGURATION_VARIABLES_V7
     elif file_schema == BUILD_CONFIGURATION_FILE_SCHEMA_V6:
         attestation_schema = BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V4
         variables = BUILD_CONFIGURATION_VARIABLES_V6
@@ -3212,6 +3246,9 @@ def validate_build_configuration_attestation(
         if (value.get("schema") ==
                 BUILD_CONFIGURATION_ATTESTATION_SCHEMA):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS
+        elif (value.get("schema") ==
+              BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5):
+            canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V7
         elif (value.get("schema") ==
               BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V4):
             canonical_selectors = BUILD_CONFIGURATION_CANONICAL_SELECTORS_V6
@@ -9631,7 +9668,8 @@ def self_test():
             "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED",
             "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK",
-            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL"):
+            "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL",
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"):
         changed_entries = dict(self_test_effective_entries)
         changed_entries[selector] = (
             "OFF" if changed_entries[selector] == "ON" else "ON")
@@ -9772,6 +9810,48 @@ def self_test():
             raise CrossoverError(
                 "self-test failed: current evidence accepted a historical "
                 "v3 effective-configuration attestation")
+        historical_v7_entries = {
+            variable: self_test_effective_entries[variable]
+            for variable in BUILD_CONFIGURATION_VARIABLES_V7
+        }
+        historical_v7_digest = build_configuration_digest(
+            historical_v7_entries, BUILD_CONFIGURATION_VARIABLES_V7)
+        historical_v7_material = "".join(
+            "{}={}\n".format(variable, historical_v7_entries[variable])
+            for variable in BUILD_CONFIGURATION_VARIABLES_V7)
+        configuration_path.write_text(
+            "schema={}\nsha256={}\n{}".format(
+                BUILD_CONFIGURATION_FILE_SCHEMA_V7,
+                historical_v7_digest,
+                historical_v7_material),
+            encoding="utf-8")
+        historical_v7_attestation = (
+            read_build_configuration_attestation(configuration_path))
+        check(
+            historical_v7_attestation == {
+                "entries": historical_v7_entries,
+                "path": str(configuration_path.resolve()),
+                "schema": BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5,
+                "sha256": historical_v7_digest,
+            },
+            "historical v7 sidecar omits only the current dual-direct "
+            "selector")
+        check(
+            validate_build_configuration_attestation(
+                historical_v7_attestation,
+                configuration_path,
+                BUILD_CONFIGURATION_ATTESTATION_SCHEMA_V5,
+            ) == historical_v7_digest,
+            "historical v7 attestation requires its explicit old contract")
+        try:
+            validate_build_configuration_attestation(
+                historical_v7_attestation, configuration_path)
+        except CrossoverError:
+            pass
+        else:
+            raise CrossoverError(
+                "self-test failed: current evidence accepted a historical "
+                "v7 effective-configuration attestation")
         current_enabled = {
             "entries": dict(self_test_effective_entries),
             "path": str(configuration_path.resolve()),
@@ -9886,6 +9966,12 @@ def self_test():
             )
         )
         reject_configuration_file(
+            "missing current GF8 small dual-direct selector",
+            valid_configuration.replace(
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=ON\n", "", 1
+            )
+        )
+        reject_configuration_file(
             "duplicate small-direct mode",
             valid_configuration +
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n"
@@ -9895,6 +9981,13 @@ def self_test():
             valid_configuration.replace(
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=0\n",
                 "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=3\n", 1
+            )
+        )
+        reject_configuration_file(
+            "forged GF8 small dual-direct selector",
+            valid_configuration.replace(
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=ON\n",
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=TRUE\n", 1
             )
         )
         reject_configuration_file(
@@ -9954,6 +10047,20 @@ def self_test():
                     "self-test failed: forged small-direct mode {!r} was "
                     "accepted".format(invalid_mode)
                 )
+        for invalid_dual_direct in (
+                "", "1", "0", "TRUE", "FALSE", "on", "ON\nOFF"):
+            invalid_entries = dict(self_test_effective_entries)
+            invalid_entries[
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = invalid_dual_direct
+            try:
+                build_configuration_digest(invalid_entries)
+            except CrossoverError:
+                pass
+            else:
+                raise CrossoverError(
+                    "self-test failed: forged GF8 small dual-direct selector "
+                    "{!r} was accepted".format(invalid_dual_direct)
+                )
 
         for label, invalid_path in (
                 ("NUL sidecar path", "/self-test/\0configuration.txt"),
@@ -9993,6 +10100,7 @@ def self_test():
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE",
         "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT",
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE",
+        "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
     )
     valid_cache = (
         "CMAKE_BUILD_TYPE:STRING=Release\n"
@@ -10001,6 +10109,7 @@ def self_test():
         "LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE:BOOL=OFF\n"
         "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT:BOOL=OFF\n"
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE:STRING=0\n"
+        "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=ON\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL={}\n"
         "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256:INTERNAL={}\n"
     ).format(BUILD_CONFIGURATION_FILE_SCHEMA, self_test_digest).encode("utf-8")
@@ -10014,6 +10123,7 @@ def self_test():
         parsed_cache["LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE"] == "OFF" and
         parsed_cache["LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT"] == "OFF" and
         parsed_cache["LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE"] == "0" and
+        parsed_cache["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] == "ON" and
         parsed_cache[
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SHA256"
         ] == self_test_digest,
@@ -10050,6 +10160,13 @@ def self_test():
                 valid_cache.replace(
                     b"LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:INTERNAL=",
                     b"LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA:STRING=",
+                ),
+            ),
+            (
+                "wrong GF8 small dual-direct cache entry type",
+                valid_cache.replace(
+                    b"LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:BOOL=",
+                    b"LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT:STRING=",
                 ),
             ),
             (

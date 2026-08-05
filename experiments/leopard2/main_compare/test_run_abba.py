@@ -380,7 +380,9 @@ def baseline_result(
         "parent_count": 16, "padded_side": 4, "thread_count": 1,
     }
     correctness = {"round_trip": True}
-    if raw_schema in (runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+    if raw_schema in (
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         parameters["logical_shard_bytes"] = CELL.shard_bytes
         resolved.update({
             "padded_application_bytes": False,
@@ -418,7 +420,8 @@ def candidate_result(
     })
     if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         parameters["measure_one_shot_decode"] = True
     flags = runner.candidate_mode_flags(
         runner.candidate_mode_for_campaign(campaign))
@@ -446,7 +449,8 @@ def candidate_result(
         "schema": ("leopard2-benchmark-v9"
                    if raw_schema in (
                        runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-                       runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA)
+                       runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+                       runner.RAW_SCHEMA)
                    else "leopard2-benchmark-v2"),
         "build": ({
             "compiler": "fixture",
@@ -454,7 +458,8 @@ def candidate_result(
             "cauchy_log_reuse_enabled": True,
         } if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA)
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA)
         else {"compiler": "fixture"}),
         "parameters": parameters,
         "resolved": {
@@ -487,7 +492,8 @@ def candidate_result(
     }
     if raw_schema in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         result["memory"] = {
             "one_shot_decode_scratch_bytes_per_stripe": 128,
             "one_shot_decode_scratch_bytes_batch": 128,
@@ -619,6 +625,7 @@ def compile_commands_fixture(root: Path, role: str) -> tuple[Path, dict, Path]:
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE": "ON",
             "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL": "ON",
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE": "0",
         }
         material = runner.build_configuration_material(configuration_entries)
@@ -711,7 +718,8 @@ def complete_build_fixture(
     specification = copy.deepcopy(SPECIFICATION)
     if raw_schema not in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     build_dir = specification[f"{role}_build_dir"]
     source_root = specification[f"{role}_source_root"]
@@ -732,7 +740,8 @@ def complete_build_fixture(
         }
         if raw_schema in (
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-                runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+                runner.RAW_SCHEMA):
             cache.update({
                 "LEO_MAIN_PURE_AVX2": "ON",
                 "LEO_MAIN_HAS_MARCH_X86_64": "1",
@@ -991,7 +1000,8 @@ def complete_build_fixture(
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         if baseline:
             compile_identity["generated_attestation_header"] = None
         else:
@@ -1108,7 +1118,8 @@ def complete_runtime_fixture(
             runner.RAW_SCHEMA_V6, runner.RAW_SCHEMA_V7,
             runner.RAW_SCHEMA_V8, runner.RAW_SCHEMA_V9,
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         result["canonical_ldd_output"] = runner.canonical_ldd_output(
             raw, "fixture raw ldd output")
     else:
@@ -1334,7 +1345,8 @@ def cmake_fixture_identity(
         specification = copy.deepcopy(SPECIFICATION)
         if raw_schema not in (
                 runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-                runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+                runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+                runner.RAW_SCHEMA):
             specification.pop("baseline_pure_avx2", None)
         specification.update({
             "baseline_executable": baseline_executable["path"],
@@ -1396,7 +1408,8 @@ def cmake_fixture_identity(
     specification = copy.deepcopy(SPECIFICATION)
     if raw_schema not in (
             runner.RAW_SCHEMA_V10, runner.RAW_SCHEMA_V11,
-            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+            runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+            runner.RAW_SCHEMA):
         specification.pop("baseline_pure_avx2", None)
     specification["candidate_archive"] = archive_path
     return identity, specification
@@ -1534,7 +1547,7 @@ def write_complete_evidence_bundle(
                 runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
                 runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
                 runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
-                runner.MANIFEST_SCHEMA):
+                runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA):
             stdout_path.chmod(0o600)
             stderr_path.chmod(0o600)
         invocation["stdout"] = {
@@ -1573,13 +1586,14 @@ def write_complete_evidence_bundle(
         runner.MANIFEST_SCHEMA_V7, runner.MANIFEST_SCHEMA_V8,
         runner.MANIFEST_SCHEMA_V9, runner.MANIFEST_SCHEMA_V10,
         runner.MANIFEST_SCHEMA_V11, runner.MANIFEST_SCHEMA_V12,
-        runner.MANIFEST_SCHEMA,
+        runner.MANIFEST_SCHEMA_V13, runner.MANIFEST_SCHEMA,
     ):
         manifest_payload["supervision"] = value["supervision"]
     if manifest_schema in (
             runner.MANIFEST_SCHEMA_V8, runner.MANIFEST_SCHEMA_V9,
             runner.MANIFEST_SCHEMA_V10, runner.MANIFEST_SCHEMA_V11,
-            runner.MANIFEST_SCHEMA_V12, runner.MANIFEST_SCHEMA):
+            runner.MANIFEST_SCHEMA_V12, runner.MANIFEST_SCHEMA_V13,
+            runner.MANIFEST_SCHEMA):
         manifest_payload["executable_snapshots"] = \
             value["executable_snapshots"]
     manifest = runner.signed(manifest_payload)
@@ -1664,6 +1678,7 @@ def synthetic_failure(raw_schema: str) -> dict:
         runner.RAW_SCHEMA_V10: runner.FAILURE_SCHEMA_V10,
         runner.RAW_SCHEMA_V11: runner.FAILURE_SCHEMA_V11,
         runner.RAW_SCHEMA_V12: runner.FAILURE_SCHEMA_V12,
+        runner.RAW_SCHEMA_V13: runner.FAILURE_SCHEMA_V13,
         runner.RAW_SCHEMA: runner.FAILURE_SCHEMA,
     }[raw_schema]
     payload = {
@@ -1692,6 +1707,8 @@ def synthetic_failure(raw_schema: str) -> dict:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V11
     elif raw_schema == runner.RAW_SCHEMA_V12:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V12
+    elif raw_schema == runner.RAW_SCHEMA_V13:
+        payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT_V13
     elif raw_schema == runner.RAW_SCHEMA:
         payload["evidence_contract"] = runner.FAILURE_EVIDENCE_CONTRACT
     if raw_schema in runner.SUPERVISION_SCHEMAS:
@@ -2417,21 +2434,24 @@ class MainCompareRunnerTests(unittest.TestCase):
             historical, None, check_files=False,
             check_current_inputs=False)
 
-        current = synthetic_raw()
-        current_compile = current["identities_initial"]["candidate_build"][
+        v13 = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V13)
+        current_compile = v13["identities_initial"]["candidate_build"][
             "validated_compile_commands"]
         current_configuration = current_compile[
             "effective_build_configuration"]
         self.assertEqual(
-            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA_V9)
         self.assertEqual(
-            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE)
+            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE_V5)
         self.assertEqual(
             current_configuration["schema"],
-            runner.BUILD_CONFIGURATION_RECORD_SCHEMA)
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V7)
         self.assertEqual(
             current_configuration["configuration_schema"],
-            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V7)
+        self.assertNotIn(
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+            current_configuration["entries"])
         self.assertEqual(len(runner.CANDIDATE_LIBRARY_SOURCES), 18)
         self.assertEqual(runner.CANDIDATE_EXPECTED_COMPILE_COMMAND_COUNT, 27)
         k8_source = "Leopard2BackendAVX2T8K8B1024.cpp"
@@ -2463,9 +2483,9 @@ class MainCompareRunnerTests(unittest.TestCase):
         k8_source_path = Path(SPECIFICATION["candidate_source_root"]) / \
             k8_source
         for label, raw_schema, configuration, compiler_path, expected in (
-            ("current GNU", runner.RAW_SCHEMA, current_configuration,
+            ("v13 GNU", runner.RAW_SCHEMA_V13, current_configuration,
              "/usr/bin/g++", 1),
-            ("current Clang", runner.RAW_SCHEMA, current_configuration,
+            ("v13 Clang", runner.RAW_SCHEMA_V13, current_configuration,
              "/usr/bin/clang++", 0),
         ):
             with self.subTest(live_range_profile=label):
@@ -2482,7 +2502,7 @@ class MainCompareRunnerTests(unittest.TestCase):
                         arguments.index("-mno-avx512f") + 1],
                         "-flive-range-shrinkage")
         runner.validate_raw(
-            current, None, check_files=False,
+            v13, None, check_files=False,
             check_current_inputs=False)
 
         for label, source, token in (
@@ -2491,7 +2511,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             ("core K8 capability", "Leopard2Backend.cpp", k8_capability),
         ):
             with self.subTest(missing=label):
-                edited = synthetic_raw()
+                edited = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V13)
                 entry = next(
                     item for item in edited["identities_initial"][
                         "candidate_build"]["validated_compile_commands"][
@@ -2502,9 +2522,9 @@ class MainCompareRunnerTests(unittest.TestCase):
                 self.assert_rejected(edited)
 
         upgraded = copy.deepcopy(historical)
-        upgraded["schema"] = runner.RAW_SCHEMA
+        upgraded["schema"] = runner.RAW_SCHEMA_V13
         self.assert_rejected(upgraded)
-        downgraded = copy.deepcopy(current)
+        downgraded = copy.deepcopy(v13)
         downgraded["schema"] = runner.RAW_SCHEMA_V12
         self.assert_rejected(downgraded)
 
@@ -2518,6 +2538,98 @@ class MainCompareRunnerTests(unittest.TestCase):
                 (runner.MANIFEST_SCHEMA_V12, runner.RAW_SCHEMA_V12))
         runner.validate_failure(
             synthetic_failure(runner.RAW_SCHEMA_V12), Path("/unused"),
+            check_files=False)
+
+    def test_v13_replays_before_v14_small_dual_direct_identity_bump(
+            self) -> None:
+        historical = synthetic_raw(raw_schema=runner.RAW_SCHEMA_V13)
+        historical_compile = historical["identities_initial"][
+            "candidate_build"]["validated_compile_commands"]
+        historical_configuration = historical_compile[
+            "effective_build_configuration"]
+        self.assertEqual(
+            historical_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA_V9)
+        self.assertEqual(
+            historical_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE_V5)
+        self.assertEqual(
+            historical_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA_V7)
+        self.assertEqual(
+            historical_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA_V7)
+        self.assertNotIn(
+            "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT",
+            historical_configuration["entries"])
+        historical_leopard2 = next(
+            entry for entry in historical_compile["required_entries"]
+            if entry["file"].endswith("/leopard2.cpp"))
+        self.assertNotIn(
+            "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
+            historical_leopard2["arguments"])
+        runner.validate_raw(
+            historical, None, check_files=False, check_current_inputs=False)
+
+        current = synthetic_raw()
+        current_compile = current["identities_initial"]["candidate_build"][
+            "validated_compile_commands"]
+        current_configuration = current_compile[
+            "effective_build_configuration"]
+        self.assertEqual(
+            current_compile["schema"], runner.COMPILE_COMMANDS_SCHEMA)
+        self.assertEqual(
+            current_compile["profile"], runner.CANDIDATE_COMPILE_PROFILE)
+        self.assertEqual(
+            current_configuration["schema"],
+            runner.BUILD_CONFIGURATION_RECORD_SCHEMA)
+        self.assertEqual(
+            current_configuration["configuration_schema"],
+            runner.BUILD_CONFIGURATION_FILE_SCHEMA)
+        self.assertEqual(
+            current_configuration["entries"][
+                "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"], "ON")
+        current_leopard2 = next(
+            entry for entry in current_compile["required_entries"]
+            if entry["file"].endswith("/leopard2.cpp"))
+        self.assertEqual(
+            current_leopard2["arguments"].count(
+                "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1"), 1)
+        runner.validate_raw(
+            current, None, check_files=False, check_current_inputs=False)
+
+        disabled = synthetic_raw()
+        disabled["identities_initial"]["candidate_build"][
+            "validated_cache"]["LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT"] = "OFF"
+        synchronize_identity(disabled)
+        self.assert_rejected(disabled)
+
+        missing_definition = synthetic_raw()
+        entry = next(
+            item for item in missing_definition["identities_initial"][
+                "candidate_build"]["validated_compile_commands"][
+                    "required_entries"]
+            if item["file"].endswith("/leopard2.cpp"))
+        entry["arguments"].remove(
+            "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1")
+        synchronize_identity(missing_definition)
+        self.assert_rejected(missing_definition)
+
+        upgraded = copy.deepcopy(historical)
+        upgraded["schema"] = runner.RAW_SCHEMA
+        self.assert_rejected(upgraded)
+        downgraded = copy.deepcopy(current)
+        downgraded["schema"] = runner.RAW_SCHEMA_V13
+        self.assert_rejected(downgraded)
+
+        with tempfile.TemporaryDirectory() as directory:
+            manifest_path = write_complete_evidence_bundle(
+                Path(directory), historical, runner.MANIFEST_SCHEMA_V13)
+            manifest, raw, _, _ = runner.verified_campaign_bundle(
+                manifest_path, no_current_input_check=True)
+            self.assertEqual(
+                (manifest["schema"], raw["schema"]),
+                (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA_V13))
+        runner.validate_failure(
+            synthetic_failure(runner.RAW_SCHEMA_V13), Path("/unused"),
             check_files=False)
 
     def test_v8_exact_shapes_and_timestamps_fail_closed(self) -> None:
@@ -2999,13 +3111,15 @@ class MainCompareRunnerTests(unittest.TestCase):
                 with self.assertRaises(plan.PlanError):
                     plan.verify_exact_manifest(manifest_path)
 
-    def test_promotion_accepts_v12_v13_and_rejects_schema_downgrades(
+    def test_promotion_accepts_v12_v13_v14_and_rejects_schema_downgrades(
         self,
     ) -> None:
         plan = load_plan_runner()
         for manifest_schema, raw_schema, scope_schema in (
             (runner.MANIFEST_SCHEMA_V12, runner.RAW_SCHEMA_V12,
              plan.EVIDENCE_SCOPE_SCHEMA_V8),
+            (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA_V13,
+             plan.EVIDENCE_SCOPE_SCHEMA_V9),
             (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA,
              plan.EVIDENCE_SCOPE_SCHEMA),
         ):
@@ -3020,6 +3134,8 @@ class MainCompareRunnerTests(unittest.TestCase):
                     plan.validate_evidence_scope(scope)["schema"],
                     scope_schema)
         for manifest_schema, raw_schema in (
+            (runner.MANIFEST_SCHEMA_V13, runner.RAW_SCHEMA),
+            (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V13),
             (runner.MANIFEST_SCHEMA_V12, runner.RAW_SCHEMA),
             (runner.MANIFEST_SCHEMA, runner.RAW_SCHEMA_V12),
             (runner.MANIFEST_SCHEMA_V8, runner.RAW_SCHEMA),
@@ -3668,6 +3784,7 @@ class MainCompareRunnerTests(unittest.TestCase):
             ("LEO2_EXPERIMENT_DIRECT_SOURCE_PLAN", "ON"),
             ("LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE", "ON"),
             ("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT", "OFF"),
+            ("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT", "OFF"),
             ("LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE", "1"),
         ):
             with self.subTest(selector=variable):
@@ -3699,6 +3816,18 @@ class MainCompareRunnerTests(unittest.TestCase):
                          "-DLEO2_BENCHMARK_BUILD_CONFIGURATION_SHA256=")
                      else token)
                     for token in entry["arguments"]]
+                if variable == "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT":
+                    leopard2_entry = next(
+                        candidate_entry for candidate_entry in build[
+                            "validated_compile_commands"]["required_entries"]
+                        if candidate_entry["file"].endswith("/leopard2.cpp"))
+                    leopard2_entry["arguments"] = [
+                        ("-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=0"
+                         if token ==
+                            "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1"
+                         else token)
+                        for token in leopard2_entry["arguments"]
+                    ]
                 synchronize_identity(value)
                 self.assert_rejected(value)
 
@@ -7089,10 +7218,12 @@ class MainCompareRunnerTests(unittest.TestCase):
             with self.subTest(cell=bad), self.assertRaises(runner.EvidenceError):
                 runner.parse_cell(bad)
 
-    def test_v12_v13_logical_tail_uses_zero_padded_exact_main_only(
+    def test_v12_v13_v14_logical_tail_uses_zero_padded_exact_main_only(
         self,
     ) -> None:
-        for raw_schema in (runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA):
+        for raw_schema in (
+                runner.RAW_SCHEMA_V12, runner.RAW_SCHEMA_V13,
+                runner.RAW_SCHEMA):
             for logical, physical in ((63, 64), (65, 128), (2049, 2112)):
                 with self.subTest(raw_schema=raw_schema, logical=logical):
                     self._assert_logical_tail_contract(

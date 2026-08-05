@@ -97,6 +97,9 @@ option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
 option(LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL
     "Enable the promoted GF8/AVX2 Algorithm 4 P32/N64/B64 terminal when available"
     ON)
+option(LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT
+    "Retain transform and direct routes for qualified GF8/AVX2 loss-5..8 plans"
+    ON)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS
@@ -354,6 +357,12 @@ target_compile_definitions(leopard PRIVATE
     LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>
     LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING}>)
+set_property(SOURCE
+    leopard2.cpp
+    tests/leopard2/test_api.cpp
+    tests/leopard2/test_small_dual_direct.cpp
+    APPEND PROPERTY COMPILE_DEFINITIONS
+    LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=$<BOOL:${LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT}>)
 if(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
     # Only the public routing TU consumes this selector.  The generated AVX2
     # arithmetic has its own conditional object below.
@@ -367,11 +376,14 @@ if(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK)
         LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1)
 endif()
 if(NOT LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE STREQUAL "0")
-    # This diagnostic selector is consumed only by leopard2.cpp.  Keep its
-    # trusted compile-command delta source-scoped for both the production and
-    # test-hook archives; unrelated library objects must remain byte-for-byte
-    # reproducible across modes.
-    set_property(SOURCE leopard2.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    # The implementation and its focused policy test consume this diagnostic
+    # selector.  Keep the trusted compile-command delta source-scoped for both
+    # production/test-hook archives and the expectation source; unrelated
+    # library objects must remain byte-for-byte reproducible across modes.
+    set_property(SOURCE
+        leopard2.cpp
+        tests/leopard2/test_small_dual_direct.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS
         "LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=${LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE}")
 endif()
 if(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT)
@@ -2382,6 +2394,19 @@ if(LEO2_BUILD_TESTS)
         tests/leopard2/test_direct_repair.cpp)
     target_include_directories(leopard2_direct_repair_test PRIVATE tests/leopard2)
     add_test(NAME leopard2_direct_repair COMMAND leopard2_direct_repair_test)
+
+    add_executable(leopard2_small_dual_direct_test
+        tests/leopard2/direct_oracle.cpp
+        tests/leopard2/test_small_dual_direct.cpp)
+    target_compile_definitions(leopard2_small_dual_direct_test PRIVATE
+        LEO2_ENABLE_TEST_HOOKS=1)
+    target_include_directories(leopard2_small_dual_direct_test
+        PRIVATE tests/leopard2)
+    target_link_libraries(leopard2_small_dual_direct_test leopard_test_hooks)
+    add_test(NAME leopard2_small_dual_direct
+        COMMAND leopard2_small_dual_direct_test)
+    set_tests_properties(leopard2_small_dual_direct PROPERTIES
+        ENVIRONMENT "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1")
 
     add_executable(leopard2_legacy_golden_test
         tests/leopard2/test_legacy_golden.cpp)

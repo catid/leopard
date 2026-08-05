@@ -77,10 +77,11 @@ original output entries are ignored.  Missing parity is never rebuilt implicitly
 `leo2_decode_plan_execute` restores missing originals only.  A pattern with no
 missing originals has zero scratch and is a true no-op, including when parity is
 missing.  `R=1` high-profile repair and `K=1` low-profile repair use direct paths.
-Other patterns use the specialized IT2026 low- or high-rate decoder selected by
-the codec profile.  Locator construction, profile normalization, pruning inputs,
-and output selection depend only on the erasure pattern and are performed during
-plan creation; execution is the byte-heavy reusable step.
+Bounded measured regions may use the direct matrix solver; other patterns use
+the specialized IT2026 low- or high-rate decoder selected by the codec profile.
+Locator construction, profile normalization, pruning inputs, and output
+selection depend only on the erasure pattern and are performed during plan
+creation; execution is the byte-heavy reusable step.
 
 The plan stores a compact fused-transform output bitmap, generic and per-block
 input prefixes, sorted requested coordinates, and sparse high-rate output-block
@@ -118,6 +119,24 @@ formulas.  In the measured GF8 generic-fallback region, aligned SSSE3/AVX2/AVX51
 prefixes of at least 4 KiB also reveal directly from the `N`-slot workspace into
 caller outputs, eliminating the separate in-scratch reveal and public scatter
 passes without changing scratch size or wire identity.
+
+One qualified legacy-high GF8/AVX2 region uses an immutable dual-capability
+plan: `5 <= K <= 16`, `5 <= R <= 8`, and five through eight missing originals.
+Full-loss `K=7` and `K=8` patterns remain on the translated transform because
+the current transform terminal is faster there.
+The reusable plan retains both direct coefficients and transform metadata, then
+selects transform for shard lengths below 1024 bytes and source-major direct
+repair at 1024 bytes and above.  The same resolver serves execution and
+`leo2_decode_plan_scratch_size`, so callers must query scratch for the exact
+length they will execute; a reused plan can require a different size at another
+length.  Batch items resolve independently using their own lengths.  The
+one-shot wrapper includes plan-setup cost in its policy and switches at 4096
+bytes instead: transform below 4096 and direct at 4096 or above.  The
+pattern-independent `leo2_decode_scratch_size` remains a conservative bound.
+Disable this production crossover with
+`-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=OFF`; unsupported neighbors and any
+direct-term preparation failure retain the transform path.  See
+`leopard2_direct_repair.md` for its derivation and measured scope.
 
 The plan uses exactly `K` received public coordinates.  It keeps every surviving
 systematic shard, then keeps the lowest-index received parity shards needed to

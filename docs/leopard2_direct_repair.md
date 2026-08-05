@@ -3,18 +3,38 @@
 ## Scope and dispatch
 
 Leopard2 retains the specialized low/high LCH decoders and the generic
-`O(N log N)` decoder.  An immutable direct-repair plan is selected by default
-in four measured regions:
+`O(N log N)` decoder.  Direct repair is available by default in five measured
+regions:
 
 - the original bounded region, `2 <= K <= 16`, for one through four missing
   originals and a parent systematic dimension no larger than 256;
+- a dual-route GF8/AVX2 legacy-high region with `5 <= K <= 16`,
+  `5 <= R <= 8`, and five through eight missing originals, except full loss
+  at `K=7` or `K=8` where the translated transform remains faster;
 - a GF8/AVX2 legacy-high region for exactly one missing original when
-  `17 <= K <= 128`, `P=T`, and the parent is `N=2P`; and
+  `17 <= K <= 128`, `P=T`, and the parent is `N=2P`;
 - the separately measured GF8/AVX2 `K=65`, `P=T=128` region for one through
-  eight missing originals; and
+  eight missing originals;
 - generalized one-loss GF8/AVX2 repair for unequal legacy-high parents with
   `K > 16`, `R > 1`, and for low-profile parents with `K > 16`, `R > K`,
   provided the parent length is no larger than 256.
+
+The small dual-route region retains both direct coefficients and the required
+transform metadata in one immutable reusable plan.  The exact execution byte
+count deterministically selects transform below 1024 bytes and source-major
+direct repair at 1024 bytes and above.  Because those routes have different
+workspace layouts, callers must pass the intended byte count to
+`leo2_decode_plan_scratch_size` and use that result for the matching execution;
+batch items resolve their routes independently.  The one-shot `leo2_decode`
+path accounts for its non-amortized setup cost and uses transform below 4096
+bytes, preparing a direct-only plan at 4096 bytes and above.  Its codec-level
+scratch query remains conservative and pattern-independent.
+
+`-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=OFF` restores transform-only production
+behavior for this loss-five-through-eight region.  The diagnostic
+`LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE=1` and `=2` settings instead force the
+output-major and source-major direct controls, respectively.  If direct-term
+preparation cannot complete, production safely retains the transform route.
 
 The generalized selector is enabled in normal CMake and checked-in Visual
 Studio builds.  `-DLEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=OFF` retains the
@@ -24,8 +44,9 @@ Forced generic, specialized, tiled, or materialized decoding disables direct
 repair.  The existing `R=1` XOR and `K=1` copy paths remain earlier dispatch
 choices.  Other cases use the locator and transform decoder.  The generalized
 one-loss regions are deliberately tied to GF8 and the effective AVX2 operations
-table.  They are not a claim that direct repair wins for multiple losses,
-GF16, GFNI, AVX-512, SSSE3, or scalar execution.  The historical global
+table.  Outside the qualified small dual-route and `K=65` regions, they are not
+a claim that direct repair wins for multiple losses, GF16, GFNI, AVX-512,
+SSSE3, or scalar execution.  The historical global
 `LEO2_GFNI_VARIANT` diagnostic also leaves these selectors disabled even when
 the CMake option is enabled.
 
@@ -129,11 +150,15 @@ product.  The generic solver remains the fallback and correctness oracle.
 
 ## Execution and memory
 
-Immutable codecs store the bounded barycentric weights.  Immutable decode plans
-store the sorted missing originals, per-output term offsets, tagged source
-indices, and fixed-multiplier logarithms.  Plan execution writes each missing
-original directly to its caller-provided disjoint output and uses scratch only
-for the existing overlap/range validation array.
+Immutable codecs store the bounded barycentric weights.  Direct-capable decode
+plans store the sorted missing originals, per-output term offsets, tagged source
+indices, and fixed-multiplier logarithms.  A qualified reusable small dual plan
+also retains its locator and transform schedules; both representations remain
+immutable and safe for concurrent execution.  When direct repair is selected,
+execution writes each missing original directly to its caller-provided disjoint
+output and uses scratch only for the existing overlap/range validation array.
+When the byte-aware resolver selects transform, the ordinary transform
+workspace applies.
 
 GF8 fixed multiply and multiply-add accept any positive byte count.  Complete
 64-byte tiles use the current SSSE3/AVX2/AVX512 backend.  The measured extended
@@ -211,7 +236,7 @@ semantics are unchanged.
 
 ## Correctness evidence
 
-The production API test now checks:
+The production test suite now checks:
 
 - every GF8 element pair and every nonzero GF8 inverse against the independent
   polynomial-basis/Cantor-coordinate oracle;
@@ -231,7 +256,8 @@ The production API test now checks:
   parent systematic coordinate; and
 - exact dispatch boundaries for the bounded region, the equal-rounded one-loss
   region, unequal legacy-high and redundancy-dominant low one-loss regions,
-  and the `K=65` eight-loss exception; and
+  the `K=65` eight-loss exception, and the small dual-route count, loss, backend,
+  1024-byte reusable-plan, and 4096-byte one-shot boundaries; and
 - targeted generalized one-loss execution
   through high-profile
   `(K,R)=(240,16)` and low-profile `(31,200)`, including first and last
