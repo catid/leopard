@@ -116,6 +116,8 @@ Scratch falls with all of it: encode 1073.8 MB -> 8.5 MB (126x) at legacy-high
 | 24 | GF16 affine table packing | **landed** | 8 MiB -> 2 MiB, perf neutral, requirement 2 done |
 | 25 | Affinity-aware GF16 L3 tiling | **landed** | avoids 20.7-26.1% large-cache regressions; retains up to 1.11x |
 | 26 | Stack-owned transient one-shot plan | rejected and reverted | target aggregate 0.988x; two regressions |
+| 27 | Scratch-resident native-high one-shot Algorithm 5 | **landed** | 1.188x vs main at 64 B; exposed 65-B crossover |
+| 28 | Whole-shard native-high locator-direct repair | **landed** | 1.289-4.513x vs exact main; 65 B now 2.228x |
 
 ## Method notes worth keeping
 

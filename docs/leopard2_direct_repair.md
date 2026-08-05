@@ -507,3 +507,39 @@ only the ragged tail remains the leading follow-up.
 
 See `experiments/leopard2/optimization_log/27-raw-native-high-one-shot.md` and
 `experiments/leopard2/direct_repair/results/raw_native_high_one_shot_20260805.json`.
+
+### Whole-shard direct execution
+
+The 65-byte follow-up found a broader result than the proposed direct suffix.
+For the same bounded raw eligibility, locator-derived direct repair is cheaper
+than Algorithm 5 over the complete shard from 1 through 256 bytes. Production
+therefore retains the allocation-free raw locator setup but now emits the
+fixed multiplier for each selected survivor `s` and missing original `x`
+directly from the locator:
+
+    log coefficient(s,x)
+      = locator[s] - locator[x] - log(s xor x).
+
+An output-major `K` by `L` coefficient matrix drives a pure-AVX2 linear-
+combination kernel over the caller's exact positive byte count. This removes
+all transform tiles, ragged staging, gather, and the raw transform metadata.
+The independent derivation is in the “Direct repair rows from an existing
+locator” section of `docs/leopard2_math_and_sources.md`.
+
+The widened correctness gate covers every `K=9..16`, `R=5..8`, loss count
+`5..R`, and byte size 1..256: 9,088 allocation-audited public cases and 10,752
+independent-generator/reusable-Algorithm-5 differentials. Focused Release and
+Clang ASan+UBSan tests pass, as do GF8-only and GF16-only library builds.
+
+A frozen pure-AVX2, three-round ABBA campaign compared commit `edeb558` with
+exact Leopard main `6e5725e` over 25 cells. All cells won: the minimum point
+speedup was 1.2886x with a 1.2830x lower 95-percent bound, and the maximum was
+4.5130x. The former `K=16,R=8,L=8,B=65` gap is now a 2.2282x win. A separate
+same-source comparison improved every selected boundary cell by
+1.1987x--2.2812x. Its ineligible 257-byte control measured 0.9846x, a 1.54%
+layout/process regression below the two-percent gate; production does not
+select the new path there.
+
+The complete campaign is recorded in
+`experiments/leopard2/optimization_log/28-native-high-whole-direct.md` and
+`experiments/leopard2/direct_repair/results/raw_native_high_whole_direct_avx2_20260805.json`.
