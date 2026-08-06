@@ -32,6 +32,10 @@
 #define LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT 0
 #endif
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+#define LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED 0
+#endif
+
 #include "leopard2.h"
 
 #include <stddef.h>
@@ -829,6 +833,20 @@ bool TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
     const void* data_base,
     void* recovery_base,
     void* temporary_base);
+#endif
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+/*
+    Default-off exact legacy-high K=32,R=T=16,B=256 experiment.  The caller
+    supplies packed 32-row source and 16-row recovery slabs plus a packed
+    16-row temporary slab.  Each row is exactly 256 bytes.  The entry is linked
+    only into the runtime-qualified pure AVX2 member.
+*/
+void AVX2FF8HighEncodeT16Q2B64Fused(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count);
 #endif
 #endif
 // Immutable nibble-table storage shared by the AVX2 and AVX-512VL codegen

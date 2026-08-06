@@ -3355,6 +3355,33 @@ void ReedSolomonEncodeTwoBlocksT8Tiny(
 }
 #endif
 
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+void ReedSolomonEncodeTwoBlocksT16B64(
+    const backend::Ops& ops,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    (void)ops;
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(
+        data_base != NULL && recovery_base != NULL && temporary_base != NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    /* Two four-group inverse tiles and one complete forward tile. */
+    TestHighIFFTButterfly4OutCalls.fetch_add(8,
+        std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighTwoBlockCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    backend::AVX2FF8HighEncodeT16Q2B64Fused(
+        data_base, recovery_base, temporary_base,
+        original_count, recovery_count);
+}
+#endif
+
 
 void ReedSolomonEncodeLow(
     const backend::Ops& ops,

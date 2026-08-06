@@ -91,6 +91,9 @@ option(LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK
 option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
+option(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    "Enable the GF8/AVX2 K=17..32,R=9..16,B=64 fused encoder"
+    ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"
     ON)
@@ -719,6 +722,14 @@ endif()
 if(LEO2_HAVE_AVX2_BACKEND)
     target_compile_definitions(leopard2_backend_avx2 PRIVATE
         LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+    if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        target_sources(leopard2_backend_avx2 PRIVATE
+            Leopard2BackendAVX2T16Q2.cpp)
+        target_compile_definitions(leopard2_backend_avx2 PRIVATE
+            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+        target_compile_definitions(leopard PRIVATE
+            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+    endif()
     if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
         target_compile_definitions(leopard2_backend_avx2 PRIVATE
             LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE=1)
@@ -866,6 +877,10 @@ if(LEO2_BUILD_BENCHMARKS)
     target_link_libraries(bench_leopard leopard)
 
     add_executable(bench_leopard2 bench/leopard2/benchmark.cpp)
+    if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+        target_compile_definitions(bench_leopard2 PRIVATE
+            LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+    endif()
     target_link_libraries(bench_leopard2 leopard)
     leopard2_enable_benchmark_source_attestation(bench_leopard2)
 
@@ -1089,6 +1104,15 @@ if(LEO2_BUILD_TESTS)
         target_compile_definitions(leopard2_backend_avx2_test_hooks PRIVATE
             LEO2_ENABLE_TEST_HOOKS=1
             LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=$<BOOL:${LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING}>)
+        if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED)
+            target_sources(leopard2_backend_avx2_test_hooks PRIVATE
+                Leopard2BackendAVX2T16Q2.cpp)
+            target_compile_definitions(
+                leopard2_backend_avx2_test_hooks PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+            target_compile_definitions(leopard_test_hooks PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1)
+        endif()
         if(LEO2_EXPERIMENT_HIGH_DIRECT_ENCODE)
             target_compile_definitions(
                 leopard2_backend_avx2_test_hooks PRIVATE
@@ -1732,6 +1756,27 @@ if(LEO2_BUILD_TESTS)
         set_tests_properties(leopard2_t32_final_ifft_range PROPERTIES
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+        if(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED AND
+           LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8)
+            add_executable(leopard2_t16_q2_b64_fused_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t16_q2_b64_fused.cpp)
+            target_include_directories(
+                leopard2_t16_q2_b64_fused_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_t16_q2_b64_fused_test PRIVATE
+                LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED=1
+                LEO2_HAVE_AVX2_BACKEND=1
+                LEO2_ENABLE_TEST_HOOKS=1)
+            target_link_libraries(
+                leopard2_t16_q2_b64_fused_test leopard_test_hooks)
+            add_test(NAME leopard2_t16_q2_b64_fused
+                COMMAND leopard2_t16_q2_b64_fused_test)
+            set_tests_properties(leopard2_t16_q2_b64_fused PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
 
         add_executable(leopard2_balanced_b64_terminal_test
             tests/leopard2/direct_oracle.cpp

@@ -31,6 +31,10 @@
 #include "LeopardCommon.h"
 #include "Leopard2Plan.h"
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+#define LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED 0
+#endif
+
 #ifdef LEO_HAS_FF8
 
 namespace leopard { namespace backend { struct Ops; }}
@@ -271,6 +275,21 @@ void ReedSolomonEncodeTwoBlocksT8Tiny(
     const void* const* data,
     void* const* work,
     uint64_t byte_count);
+#endif
+
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+/*
+    Execute the exact default-off AVX2 K=32/R=T=16/B=256 two-block tile.
+    Public validation has already established packed, disjoint 32-row input,
+    16-row output, and 16-row temporary slabs with 256 bytes per row.
+*/
+void ReedSolomonEncodeTwoBlocksT16B64(
+    const backend::Ops& ops,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count);
 #endif
 
 // Encodes the low-rate coordinate profile:

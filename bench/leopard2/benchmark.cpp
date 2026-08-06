@@ -133,6 +133,9 @@ struct Options
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
     bool disable_k9r6r8_b256_terminal;
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    bool disable_high_t16_q2_b64_fused;
+#endif
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
     bool disable_high_t4_binding;
     bool prevalidated_binding;
@@ -192,6 +195,9 @@ struct Options
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
         , disable_k9r6r8_b256_terminal(false)
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+        , disable_high_t16_q2_b64_fused(false)
+#endif
 #if defined(LEO2_BENCHMARK_PREVALIDATED_BATCH)
         , disable_high_t4_binding(false)
         , prevalidated_binding(false)
@@ -508,6 +514,10 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: retain the prior ordinary encode path\n"
         << "  --disable-k9r6r8-b256-terminal\n"
         << "                         Attribution-only: retain the prior path using schema v10\n"
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+        << "  --disable-high-t16-q2-b64-fused\n"
+        << "                         Attribution-only: retain the prior ordinary encode path\n"
+#endif
 #if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
     !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
         << "  --report-direct-executor\n"
@@ -710,6 +720,10 @@ static Options ParseOptions(int argc, char** argv)
             options.disable_k9r5_b256_terminal = true;
         else if (argument == "--disable-k9r6r8-b256-terminal")
             options.disable_k9r6r8_b256_terminal = true;
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+        else if (argument == "--disable-high-t16-q2-b64-fused")
+            options.disable_high_t16_q2_b64_fused = true;
+#endif
         else if (argument == "--report-direct-executor")
         {
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) || \
@@ -1670,6 +1684,12 @@ static int Run(const Options& options)
     if (options.disable_k9r6r8_b256_terminal &&
         !leopard2_internal::SetK9R6R8B256TerminalEnabledForDiagnostics(false))
         Fail("cannot disable the K9/R=6..8/256-byte terminal for attribution");
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    if (options.disable_high_t16_q2_b64_fused &&
+        !leopard2_internal::
+            SetHighT16Q2B64FusedEnabledForDiagnostics(false))
+        Fail("cannot disable the high T16 q=2 B64 fused path for attribution");
+#endif
     leo2_context_options context_options;
     memset(&context_options, 0, sizeof(context_options));
     context_options.struct_size = sizeof(context_options);
@@ -2611,6 +2631,11 @@ static int Run(const Options& options)
         json << ",\n"
              << "    \"k9r6r8_b256_terminal_diagnostic_disabled\": true";
     }
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    json << ",\n"
+         << "    \"high_t16_q2_b64_fused_diagnostic_disabled\": "
+         << (options.disable_high_t16_q2_b64_fused ? "true" : "false");
+#endif
 #if defined(LEO2_BENCHMARK_SOURCE_ATTESTATION)
     if (options.attest_source)
     {

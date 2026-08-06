@@ -31,6 +31,10 @@
 
 #include "leopard2.h"
 
+#ifndef LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+#define LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED 0
+#endif
+
 /*
     These hooks are intentionally absent from production builds and the public
     Leopard2 ABI.  Tests set the per-codec mode before concurrent execution.
@@ -265,6 +269,15 @@ bool SetHighT8TwoBlockB256PackedTerminalEnabledForDiagnostics(bool enabled);
     This is benchmark instrumentation, not public API or wire identity.
 */
 bool SetT8FullParityTerminalEnabledForDiagnostics(bool enabled);
+
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+/*
+    Same-executable benchmark control for the default-on
+    K=17..32/R=9..16/64-byte packed AVX2 terminal.  Change it only while no
+    encode call is executing.  It changes neither public ABI nor wire identity.
+*/
+bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);
+#endif
 
 /*
     Process-local benchmark control for the exact balanced 64-byte packed
