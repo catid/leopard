@@ -5132,7 +5132,9 @@ def _validate_candidate_required_cache(
             BENCHMARK_BUILD_CONFIGURATION_SCHEMA}:
         required_exact.update({
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK":
+                "ON" if expected_configuration_schema ==
+                BENCHMARK_BUILD_CONFIGURATION_SCHEMA else "OFF",
         })
     else:
         for selector in (
@@ -5220,15 +5222,18 @@ def _reproducible_replay_contract(
                   cache.get("LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT") == "ON" and
                   cache.get("LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS") ==
                     "ON" and
-                  cache.get(
-                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK") ==
-                    "OFF" and
                   ((configuration_schema ==
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA and
+                    cache.get(
+                        "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK") ==
+                        "ON" and
                     cache.get(
                         "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED") == "ON") or
                    (configuration_schema ==
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9 and
+                    cache.get(
+                        "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK") ==
+                        "OFF" and
                     "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED" not in cache))) or
                  (configuration_schema ==
                     BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8 and

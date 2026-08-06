@@ -107,8 +107,8 @@ option(LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS
     "Derive reusable small-dual direct rows from the transform locator"
     ON)
 option(LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK
-    "Experimentally omit pruned schedules from selected reusable small-dual plans"
-    OFF)
+    "Omit slower pruned schedules from selected reusable small-dual plans"
+    ON)
 set(LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE "0" CACHE STRING
     "Default-off small GF8 direct-repair experiment: 0=transform, 1=output-major, 2=source-major")
 set_property(CACHE LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE PROPERTY STRINGS

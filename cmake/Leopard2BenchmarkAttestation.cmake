@@ -99,7 +99,7 @@ function(leopard2_enable_benchmark_source_attestation target)
         elseif(variable STREQUAL
                 "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK")
             if(NOT DEFINED LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK)
-                set(variable_value "OFF")
+                set(variable_value "ON")
             elseif(NOT LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK MATCHES
                     "^(ON|OFF)$")
                 message(FATAL_ERROR

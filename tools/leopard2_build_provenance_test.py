@@ -2306,7 +2306,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
             "LEO2_BUILD_TESTS": "ON",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
             "LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA":
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
@@ -2373,7 +2373,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                 "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS:BOOL=ON",
                 configure)
             self.assertIn(
-                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=OFF",
+                "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK:BOOL=ON",
                 configure)
             v8_cache = dict(cache)
             for selector in (
@@ -3452,7 +3452,7 @@ class ReproducibleCompilerReplayTests(unittest.TestCase):
                     "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                     "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
                     "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+                    "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
                 },
                 "c_compiler": identity,
                 "compiler": identity,
@@ -3538,7 +3538,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_ENABLE_CUDA": "OFF",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T8_VECTOR": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
@@ -3627,6 +3627,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                     provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V8)
         v9_cache = dict(cache)
         v9_cache.pop("LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED")
+        v9_cache["LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK"] = "OFF"
         v9_cache["LEO2_BENCHMARK_EFFECTIVE_CONFIGURATION_SCHEMA"] = \
             provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA_V9
         v9_validated = provenance._validate_candidate_required_cache(
@@ -3652,7 +3653,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
         }
         for selector, expected in selectors.items():
             self.assertEqual(validated[selector], expected)
@@ -3824,7 +3825,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT": "ON",
                 "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
                 "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+                "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
             },
         }
         v5 = {
@@ -4444,7 +4445,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                 provenance.BENCHMARK_BUILD_CONFIGURATION_SCHEMA,
             "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT": "ON",
             "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS": "ON",
-            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "OFF",
+            "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK": "ON",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_GENERATED": "OFF",
             "LEO2_DIAGNOSTIC_DISABLE_HIGH_T32_B256_TWO_BLOCK": "OFF",
             "LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED": "ON",
@@ -4714,7 +4715,7 @@ class ExactCommandValidationTests(unittest.TestCase):
             "-DLEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
             "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
             "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
-            "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+            "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
             "-DLEO2_HAVE_AVX2_BACKEND=1",
             "-DLEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
         }
@@ -4756,9 +4757,9 @@ class ExactCommandValidationTests(unittest.TestCase):
                 ),
                 (
                     "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK",
-                    "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
-                    "ON",
                     "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
+                    "OFF",
+                    "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
                 )):
             with self.subTest(router_selector=selector):
                 changed_cache = dict(replay_cache)
@@ -4799,7 +4800,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                     router,
                     router_definitions - {
                         "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
-                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
                     },
                     target_flags=()),
                 router, source_root=SOURCE_ROOT, cache=v8_router_cache,
@@ -4821,7 +4822,7 @@ class ExactCommandValidationTests(unittest.TestCase):
                     router_definitions - {
                         "-DLEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
                         "-DLEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
-                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+                        "-DLEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=1",
                     },
                     target_flags=()),
                 router, source_root=SOURCE_ROOT, cache=v7_router_cache,
