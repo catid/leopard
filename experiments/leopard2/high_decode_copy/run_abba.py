@@ -54,10 +54,70 @@ HOOK_ARCHIVE_DEFINITIONS = frozenset({
     "LEO2_DISABLE_AVX2_CODEGEN=1",
     "LEO2_DISABLE_SSSE3_CODEGEN=1",
     "LEO2_ENABLE_TEST_HOOKS=1",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+    "LEO2_EXPERIMENT_HIGH_T8_PARTIAL_BINDING=1",
+    "LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING=1",
+    "LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1",
+    "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
     "LEO2_HAVE_AVX2_BACKEND=1",
-    "LEO2_HAVE_AVX512_BACKEND=1",
+    "LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
     "LEO2_HAVE_SSSE3_BACKEND=1",
 })
+EVIDENCE_COMMON_DEFINITIONS = frozenset({
+    "LEO2_ENABLE_TEST_HOOKS=1",
+    "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+    "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+})
+HOOK_SOURCE_EXTRA_DEFINITIONS = {
+    "leopard2.cpp.o": frozenset({
+        "LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT=1",
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
+        "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+        "LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED=1",
+        "LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK=1",
+        "LEO2_EXPERIMENT_SMALL_DUAL_LOCATOR_TERMS=1",
+        "LEO2_EXPERIMENT_SMALL_DUAL_REGULAR_FALLBACK=0",
+    }),
+    "Leopard2Backend.cpp.o": frozenset({
+        "LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1",
+    }),
+}
+AUXILIARY_ARCHIVE_OBJECTS = (
+    ("Leopard2BackendAVX2T16B64.cpp", "leopard2_backend_avx2_t16_b64",
+     frozenset({"LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1"})),
+    ("Leopard2LowP32B64AVX2.cpp", "leopard2_low_p32_b64_avx2",
+     frozenset({"LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1"})),
+    ("Leopard2BackendAVX2T2K4.cpp", "leopard2_backend_avx2_t2_k4",
+     frozenset({"LEO2_HAVE_AVX2_BACKEND=1"})),
+    ("Leopard2BackendAVX2T8K8B1024.cpp", "leopard2_backend_avx2_t8_k8_b1024",
+     frozenset({"LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1"})),
+)
+AUXILIARY_ARCHIVE_DEFINITIONS = {
+    "leopard2_backend_avx2_t16_b64": frozenset({
+        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+        "LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        "LEO2_HAVE_AVX2_BACKEND=1",
+    }),
+    "leopard2_low_p32_b64_avx2": frozenset({
+        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+        "LEO2_EXPERIMENT_LOW_P32_B64_TERMINAL=1",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        "LEO2_HAVE_AVX2_BACKEND=1",
+    }),
+    "leopard2_backend_avx2_t2_k4": frozenset({
+        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        "LEO2_HAVE_AVX2_BACKEND=1",
+    }),
+    "leopard2_backend_avx2_t8_k8_b1024": frozenset({
+        "LEO2_EXPERIMENT_CAUCHY_LOG_REUSE=1",
+        "LEO2_EXPERIMENT_ONE_SHOT_EQUAL_ROUNDED_DIRECT=1",
+        "LEO2_HAVE_AVX2_BACKEND=1",
+        "LEO2_HAVE_AVX2_T8_K8_B1024_DIRECT=1",
+    }),
+}
 
 
 def load_module(name: str, path: Path) -> ModuleType:
@@ -266,7 +326,8 @@ def find_build_root(binary: Path) -> Path:
 
 def diagnostic_specifications(
     source_root: Path, build: Path, evidence_schema: str = RAW_SCHEMA,
-    include_gfni: bool = False,
+    include_gfni: bool = False, include_avx512: bool = True,
+    auxiliary_targets: Sequence[str] | None = None,
 ) -> list[tuple[Path, Path, set[str]]]:
     require(type(evidence_schema) is str and evidence_schema in RAW_SCHEMAS,
             "unknown high-decode copy evidence schema")
@@ -287,12 +348,6 @@ def diagnostic_specifications(
         backends.append((
             "Leopard2BackendAVX2Xor.cpp",
             "leopard2_backend_avx2_test_hooks"))
-    backends.append(
-        ("Leopard2BackendAVX512.cpp", "leopard2_backend_avx512_test_hooks"),
-    )
-    if include_gfni:
-        backends.append(
-            ("Leopard2BackendGFNI.cpp", "leopard2_backend_gfni_test_hooks"))
     specifications: list[tuple[Path, Path, set[str]]] = [
         (source_root / name,
          build / "CMakeFiles/leopard_test_hooks.dir" / f"{name}.o",
@@ -305,6 +360,37 @@ def diagnostic_specifications(
          {"LEO2_ENABLE_TEST_HOOKS=1"})
         for name, target in backends
     )
+    if auxiliary_targets is None:
+        selected_auxiliary = {
+            target for _source, target, _definitions in AUXILIARY_ARCHIVE_OBJECTS
+        } if evidence_schema == RAW_SCHEMA else set()
+    else:
+        selected_auxiliary = set(auxiliary_targets)
+        known_auxiliary = {
+            target for _source, target, _definitions in AUXILIARY_ARCHIVE_OBJECTS
+        }
+        require(len(selected_auxiliary) == len(auxiliary_targets) and
+                selected_auxiliary.issubset(known_auxiliary),
+                "diagnostic auxiliary archive target set changed")
+    specifications.extend(
+        (source_root / source,
+         build / "CMakeFiles" / f"{target}.dir" / f"{source}.o",
+         set(definitions))
+        for source, target, definitions in AUXILIARY_ARCHIVE_OBJECTS
+        if target in selected_auxiliary
+    )
+    if include_avx512:
+        specifications.append((
+            source_root / "Leopard2BackendAVX512.cpp",
+            build / "CMakeFiles/leopard2_backend_avx512_test_hooks.dir" /
+                "Leopard2BackendAVX512.cpp.o",
+            {"LEO2_ENABLE_TEST_HOOKS=1"}))
+    if include_gfni:
+        specifications.append((
+            source_root / "Leopard2BackendGFNI.cpp",
+            build / "CMakeFiles/leopard2_backend_gfni_test_hooks.dir" /
+                "Leopard2BackendGFNI.cpp.o",
+            {"LEO2_ENABLE_TEST_HOOKS=1"}))
     specifications.append((
         source_root / "bench/leopard2/benchmark.cpp",
         build / "CMakeFiles" / f"{TARGET_NAME}.dir" /
@@ -316,6 +402,7 @@ def diagnostic_specifications(
 def validate_diagnostic_compile_flags(
     tokens: Sequence[str], label: str, source_root: Path, output: Path,
     required_definitions: set[str], include_gfni: bool = False,
+    include_avx512: bool = True,
 ) -> None:
     """Validate the experiment-specific preprocessor/include closure.
 
@@ -328,18 +415,8 @@ def validate_diagnostic_compile_flags(
         token[2:] for token in tokens
         if token.startswith("-D") and token != "-DNDEBUG"
     ]
-    expected_definitions = set(required_definitions)
-    if output.parent.name == "leopard_test_hooks.dir":
-        expected_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
-        if include_gfni:
-            expected_definitions.add("LEO2_HAVE_GFNI_BACKEND=1")
-    elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
-        expected_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
-    elif output.parent.name == "leopard2_backend_gfni_test_hooks.dir":
-        expected_definitions.update({
-            "LEO2_HAVE_AVX2_BACKEND=1",
-            "LEO2_HAVE_GFNI_BACKEND=1",
-        })
+    expected_definitions = expected_private_definitions(
+        output, required_definitions, include_gfni, include_avx512)
     require(len(private_definitions) == len(set(private_definitions)) and
             set(private_definitions) == expected_definitions,
             f"{label} private definitions differ")
@@ -354,12 +431,50 @@ def validate_diagnostic_compile_flags(
            not token.startswith("-I") and token != "-Werror" and
            not (output.parent.name ==
                 "leopard2_backend_gfni_test_hooks.dir" and
-                token == "-mgfni")
+                token == "-mgfni") and
+           not (output.parent.name ==
+                "leopard2_backend_avx2_t8_k8_b1024.dir" and
+                token == "-flive-range-shrinkage")
     ]
     if output.parent.name == "leopard2_backend_gfni_test_hooks.dir":
         require(tokens.count("-mgfni") == 1,
                 f"{label} GFNI ISA flag differs")
+    if output.parent.name == "leopard2_backend_avx2_t8_k8_b1024.dir":
+        require(tokens.count("-flive-range-shrinkage") <= 1,
+                f"{label} GCC live-range flag is duplicated")
     SUPPORT.validate_effective_flags(shared_tokens, label, "compile")
+
+
+def expected_private_definitions(
+    output: Path, required_definitions: set[str], include_gfni: bool,
+    include_avx512: bool,
+) -> set[str]:
+    """Return the exact CMake-private definition set for one evidence object."""
+    auxiliary = AUXILIARY_ARCHIVE_DEFINITIONS.get(output.parent.name.removesuffix(".dir"))
+    if auxiliary is not None:
+        return set(auxiliary)
+    expected_definitions = set(required_definitions)
+    expected_definitions.update(EVIDENCE_COMMON_DEFINITIONS)
+    if output.parent.name == "leopard_test_hooks.dir":
+        expected_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
+        expected_definitions.update(
+            HOOK_SOURCE_EXTRA_DEFINITIONS.get(output.name, ()))
+        if include_gfni:
+            expected_definitions.add("LEO2_HAVE_GFNI_BACKEND=1")
+        if include_avx512:
+            expected_definitions.add("LEO2_HAVE_AVX512_BACKEND=1")
+    elif output.parent.name == "leopard2_backend_avx2_test_hooks.dir":
+        expected_definitions.add("LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING=1")
+        if output.name == "Leopard2BackendAVX2.cpp.o":
+            expected_definitions.add("LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT=1")
+    elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
+        expected_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
+    elif output.parent.name == "leopard2_backend_gfni_test_hooks.dir":
+        expected_definitions.update({
+            "LEO2_HAVE_AVX2_BACKEND=1",
+            "LEO2_HAVE_GFNI_BACKEND=1",
+        })
+    return expected_definitions
 
 
 def compile_entries_include_gfni(
@@ -385,6 +500,55 @@ def compile_entries_include_gfni(
     return matches == 1
 
 
+def compile_entries_include_avx512(
+    entries: Sequence[Mapping[str, Any]], build: Path,
+) -> bool:
+    expected = (
+        build / "CMakeFiles/leopard2_backend_avx512_test_hooks.dir" /
+        "Leopard2BackendAVX512.cpp.o").resolve()
+    matches = 0
+    for entry in entries:
+        output_value = entry.get("output")
+        directory_value = entry.get("directory")
+        if not isinstance(output_value, str) or not isinstance(
+                directory_value, str):
+            continue
+        output = Path(output_value)
+        if not output.is_absolute():
+            output = Path(directory_value) / output
+        if output.resolve() == expected:
+            matches += 1
+    require(matches <= 1,
+            "diagnostic compile commands duplicate the optional AVX512 object")
+    return matches == 1
+
+
+def compile_entries_include_auxiliary_targets(
+    entries: Sequence[Mapping[str, Any]], build: Path,
+) -> tuple[str, ...]:
+    selected = []
+    for source, target, _definitions in AUXILIARY_ARCHIVE_OBJECTS:
+        expected = (build / "CMakeFiles" / f"{target}.dir" /
+                    f"{source}.o").resolve()
+        matches = 0
+        for entry in entries:
+            output_value = entry.get("output")
+            directory_value = entry.get("directory")
+            if not isinstance(output_value, str) or not isinstance(
+                    directory_value, str):
+                continue
+            output = Path(output_value)
+            if not output.is_absolute():
+                output = Path(directory_value) / output
+            if output.resolve() == expected:
+                matches += 1
+        require(matches <= 1,
+                f"diagnostic compile commands duplicate auxiliary target {target}")
+        if matches == 1:
+            selected.append(target)
+    return tuple(selected)
+
+
 def diagnostic_compile_closure(
     source_root: Path, build: Path, commands_path: Path, compiler: Path,
     compiler_invocation: str, compiler_identity: Mapping[str, Any],
@@ -397,8 +561,12 @@ def diagnostic_compile_closure(
     require(isinstance(entries, list) and entries,
             "diagnostic compile_commands.json is empty")
     include_gfni = compile_entries_include_gfni(entries, build)
+    include_avx512 = compile_entries_include_avx512(entries, build)
+    auxiliary_targets = compile_entries_include_auxiliary_targets(entries, build)
     specifications = diagnostic_specifications(
-        source_root, build, include_gfni=include_gfni)
+        source_root, build, include_gfni=include_gfni,
+        include_avx512=include_avx512,
+        auxiliary_targets=auxiliary_targets)
     benchmark_object = specifications[-1][1]
     expected_outputs = {output.resolve(): (source.resolve(), definitions)
                         for source, output, definitions in specifications}
@@ -446,7 +614,7 @@ def diagnostic_compile_closure(
                 f"diagnostic compile action source/compiler differs for {output}")
         validate_diagnostic_compile_flags(
             tokens, f"diagnostic compile action {output}", source_root,
-            output, definitions, include_gfni)
+            output, definitions, include_gfni, include_avx512)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 f"diagnostic compile action lacks OpenMP: {output}")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -636,6 +804,19 @@ def validate_clean_rebuild(
         "LEO2_BUILD_TESTS": "ON", "LEO2_ENABLE_CUDA": "OFF",
         "LEOPARD_ENABLE_GF8": "ON", "LEOPARD_ENABLE_GF16": "ON",
     }
+    # Preserve explicit and cached compiler-feature probes.  In particular,
+    # diagnostic builds may deliberately force AVX-512 probes off; rerunning
+    # those probes against the same compiler would silently change the object
+    # closure that this test is intended to reproduce exactly.
+    for name in (
+        "LEO2_FLAG_ARCH_AVX2", "LEO2_FLAG_FALIGN_FUNCTIONS_64",
+        "LEO2_FLAG_MAVX2", "LEO2_FLAG_MAVX512BW", "LEO2_FLAG_MAVX512F",
+        "LEO2_FLAG_MAVX512VL", "LEO2_FLAG_MGFNI", "LEO2_FLAG_MNO_AVX",
+        "LEO2_FLAG_MNO_AVX512F", "LEO2_FLAG_MPREFER_VECTOR_WIDTH_256",
+        "LEO2_FLAG_MSSSE3",
+    ):
+        if name in cache:
+            retained_options[name] = cache[name]
     require(all(retained_options[name]
                 for name in ("CMAKE_AR", "CMAKE_CXX_COMPILER", "CMAKE_RANLIB")),
             "diagnostic build omitted a compiler/archive tool")
@@ -985,8 +1166,11 @@ def validate_compile_snapshot(
             "retained compile commands are not an object array")
 
     include_gfni = compile_entries_include_gfni(entries, build)
+    include_avx512 = compile_entries_include_avx512(entries, build)
+    auxiliary_targets = compile_entries_include_auxiliary_targets(entries, build)
     specifications = diagnostic_specifications(
-        source_root, build, evidence_schema, include_gfni)
+        source_root, build, evidence_schema, include_gfni,
+        include_avx512, auxiliary_targets)
     records = build_value.get("validated_compile_closure")
     require(type(records) is list and len(records) == len(specifications) and
             all(isinstance(record, dict) for record in records),
@@ -1032,7 +1216,7 @@ def validate_compile_snapshot(
                 "retained compile action source/output/compiler changed")
         validate_diagnostic_compile_flags(
             tokens, f"retained compile action {output}", source_root,
-            output, definitions, include_gfni)
+            output, definitions, include_gfni, include_avx512)
         require("-fopenmp" in tokens or "-fopenmp=libomp" in tokens,
                 "retained compile action lost OpenMP")
         define_tokens = {token[2:] for token in tokens if token.startswith("-D")}
@@ -2125,11 +2309,8 @@ def synthetic_snapshot_identity(
     compile_records: list[dict[str, Any]] = []
     compile_entries: list[dict[str, Any]] = []
     for source, output, definitions in specifications:
-        compile_definitions = set(definitions)
-        if output.parent.name == "leopard_test_hooks.dir":
-            compile_definitions = set(HOOK_ARCHIVE_DEFINITIONS)
-        elif output.parent.name == "leopard2_backend_avx512_test_hooks.dir":
-            compile_definitions.add("LEO2_HAVE_AVX2_BACKEND=1")
+        compile_definitions = expected_private_definitions(
+            output, definitions, include_gfni=False, include_avx512=True)
         tokens = [compiler_invocation, "-O3", "-DNDEBUG", "-fopenmp",
                   *["-D" + item for item in sorted(compile_definitions)],
                   f"-I{source_root}",
@@ -2286,6 +2467,32 @@ def synthetic_snapshot_identity(
 
 def self_test() -> None:
     fixture_build = Path("/fixture/build")
+    avx512_output = (
+        fixture_build /
+        "CMakeFiles/leopard2_backend_avx512_test_hooks.dir" /
+        "Leopard2BackendAVX512.cpp.o")
+    avx512_entry = {
+        "directory": str(fixture_build),
+        "output": str(avx512_output.relative_to(fixture_build)),
+    }
+    require(not compile_entries_include_avx512([], fixture_build) and
+            compile_entries_include_avx512([avx512_entry], fixture_build),
+            "optional AVX512 compile-action detection differs")
+    no_avx512_specs = diagnostic_specifications(
+        Path("/fixture/source"), fixture_build, include_avx512=False)
+    require(not any(
+        output == avx512_output
+        for unused_source, output, unused_definitions in no_avx512_specs),
+        "disabled optional AVX512 compile specification was retained")
+    try:
+        compile_entries_include_avx512(
+            [avx512_entry, copy.deepcopy(avx512_entry)], fixture_build)
+    except EvidenceError:
+        pass
+    else:
+        raise AssertionError(
+            "duplicate optional AVX512 compile action was accepted")
+
     gfni_output = (
         fixture_build /
         "CMakeFiles/leopard2_backend_gfni_test_hooks.dir" /
@@ -2614,12 +2821,20 @@ def self_test() -> None:
         "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
         "LeopardFF16.cpp", "Leopard2BackendSSSE3.cpp",
         "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX2Xor.cpp",
+        "Leopard2BackendAVX2T16B64.cpp", "Leopard2LowP32B64AVX2.cpp",
+        "Leopard2BackendAVX2T2K4.cpp", "Leopard2BackendAVX2T8K8B1024.cpp",
         "Leopard2BackendAVX512.cpp", "benchmark.cpp",
     ]
+    expected_legacy_sources = [
+        "leopard.cpp", "leopard2.cpp", "Leopard2Backend.cpp",
+        "Leopard2BackendScalar.cpp", "Leopard2CpuFeatures.cpp",
+        "Leopard2Plan.cpp", "LeopardCommon.cpp", "LeopardFF8.cpp",
+        "LeopardFF16.cpp", "Leopard2BackendSSSE3.cpp",
+        "Leopard2BackendAVX2.cpp", "Leopard2BackendAVX512.cpp",
+        "benchmark.cpp",
+    ]
     require(current_sources == expected_current_sources and
-            legacy_sources == [
-                name for name in expected_current_sources
-                if name != "Leopard2BackendAVX2Xor.cpp"],
+            legacy_sources == expected_legacy_sources,
             "current/legacy diagnostic source order changed")
     fixture_binary = Path(fixture_identity["build"]["binary"]["path"])
     raw_records = []
