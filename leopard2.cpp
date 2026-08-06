@@ -6311,38 +6311,25 @@ static uint8_t ClassifyTerminalT4Shape(const leo2_codec* codec)
         !codec->context->ops->ff8_high_encode_t4_batch)
         return kTerminalT4None;
 
-    switch (codec->original_count)
-    {
-    case 3:
+    const uint32_t original_count = codec->original_count;
+    if (original_count == 3)
         return kTerminalT4K3R3;
-    case 4:
-        return codec->recovery_count == 3
-            ? kTerminalT4K4R3 : kTerminalT4K4R4;
-    case 5:
-        return codec->recovery_count == 3
-            ? kTerminalT4K5R3 : kTerminalT4K5R4;
-    case 6:
-        return codec->recovery_count == 3
-            ? kTerminalT4K6R3 : kTerminalT4K6R4;
-    case 7:
-        return codec->recovery_count == 3
-            ? kTerminalT4K7R3 : kTerminalT4K7R4;
-    case 8:
+    if (original_count == 8)
+    {
         if (g_k8r3r4_t4_terminal_mode == 1U)
         {
             return codec->recovery_count == 3
                 ? kTerminalT4K8R3 : kTerminalT4K8R4;
         }
-        break;
-    case 13:
-        return codec->recovery_count == 3
-            ? kTerminalT4K13R3 : kTerminalT4K13R4;
-    case 14:
-        return codec->recovery_count == 3
-            ? kTerminalT4K14R3 : kTerminalT4K14R4;
-    default:
-        break;
+        return kTerminalT4None;
     }
+    if (original_count <= 7)
+        return static_cast<uint8_t>(
+            kTerminalT4K4R3 + (original_count - 4U) * 2U +
+            (codec->recovery_count - 3U));
+    return static_cast<uint8_t>(
+        kTerminalT4K13R3 + (original_count - 13U) * 2U +
+        (codec->recovery_count - 3U));
 #else
     static_cast<void>(codec);
 #endif
@@ -15176,6 +15163,8 @@ uint64_t HighT4BatchMaximumBytes(
     if (recovery_count != 3 && recovery_count != 4)
         return 0;
     const bool punctured_r3 = recovery_count == 3;
+    if (original_count == 13 || original_count == 14)
+        return 16U * 1024U;
     switch (original_count)
     {
     case 3: return punctured_r3 ? 16U * 1024U : 2U * 1024U;
@@ -15186,9 +15175,6 @@ uint64_t HighT4BatchMaximumBytes(
     case 9: return punctured_r3 ? 4U * 1024U : 3U * 1024U;
     case 10: return punctured_r3 ? 8U * 1024U : 4U * 1024U;
     case 11: return punctured_r3 ? 6U * 1024U : 2U * 1024U;
-    case 13:
-    case 14:
-        return 16U * 1024U;
     default: return 0;
     }
 }
@@ -16911,35 +16897,36 @@ static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalByteCount(
         /* K=5/R=4/B=64 has its fixed specialized terminal above. */
         return terminal_shape != kTerminalT4K5R4 || shard_bytes != 64;
     }
+    const bool four_block = terminal_shape >= kTerminalT4K13R3;
     if (shard_bytes == 512)
-    {
-        /* Keep this promotion local to its measured K=4..8 family.  A later
-           shape may share this classifier without inheriting B=512. */
         return (terminal_shape >= kTerminalT4K4R3 &&
-                terminal_shape <= kTerminalT4K8R4) ||
-            (terminal_shape >= kTerminalT4K13R3 &&
-                terminal_shape <= kTerminalT4K14R4);
-    }
+            terminal_shape <= kTerminalT4K8R4) || four_block;
     /* Restrict B=1024 to the disjoint K=4 and K=8 families.  Keep K=5..7 on
        the mature path until they are measured independently. */
     if (shard_bytes == 1024)
     {
         return (terminal_shape >= kTerminalT4K4R3 &&
                 terminal_shape <= kTerminalT4K4R4) ||
-            (terminal_shape >= kTerminalT4K8R3 &&
-                terminal_shape <= kTerminalT4K8R4) ||
-            (terminal_shape >= kTerminalT4K13R3 &&
-                terminal_shape <= kTerminalT4K14R4);
+            terminal_shape >= kTerminalT4K8R3;
     }
-    return shard_bytes == 1984 &&
-        terminal_shape >= kTerminalT4K13R3 &&
-        terminal_shape <= kTerminalT4K14R4;
+    return shard_bytes == 1984 && four_block;
 }
 
 static LEO_FORCE_INLINE bool IsGF8AVX2T4PackedTerminalEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
+#ifndef LEO2_ENABLE_TEST_HOOKS
+    /* B=64 is the dominant setup-bound cell and every classified shape but
+       K5/R4 owns it here (that shape has a still smaller dedicated terminal).
+       Resolve the immutable codec identity before entering the general byte
+       classifier so established K=3..8 terminals do not pay for later shape
+       extensions. */
+    if (shard_bytes == 64 && codec &&
+        codec->terminal_t4_shape != kTerminalT4None &&
+        codec->terminal_t4_shape != kTerminalT4K5R4)
+        return true;
+#endif
     /* Every promoted ordinary terminal is 64-byte aligned.  Reject ragged
        mature-path calls before loading the codec shape so adding a new fixed
        shape cannot tax arbitrary-byte fallbacks. */

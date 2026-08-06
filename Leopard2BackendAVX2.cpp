@@ -3042,6 +3042,17 @@ static void AVX2FF8HighEncodeT4Batch(
         byte_count >= 32 && byte_count <= 16U * 1024U &&
         (byte_count & 31U) == 0);
 
+    /* One exact tiny stripe does not amortize the batch wrapper.  Reuse the
+       established register-resident circuit directly; multi-stripe bindings
+       retain the prepared-table batch specializations below. */
+    if (original_count == 4 && recovery_count == 4 &&
+        item_count == 1 && byte_count == 64)
+    {
+        AVX2FF8HighEncodeT4Blocks<4>(
+            data, recovery, inverse_skew, forward_skew, byte_count);
+        return;
+    }
+
     /* This callback is private to already-qualified Leopard2 codecs and its
        startup known-answer test.  Collapse the old recovery branch followed
        by an original-count jump table into one fixed-shape dispatch. */
