@@ -1,0 +1,110 @@
+{
+  "schema": "leopard2.k192_t64_partial_schedule_policy.v1",
+  "date_utc": "2026-08-06",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "authoritative_cpu": 30,
+    "smt_sibling": 14,
+    "sibling_nonidle_delta_ticks": 0
+  },
+  "source": {
+    "baseline_commit": "3e0b75a6a66e9fa633e749e5dc68701cfc882dd8",
+    "candidate_commit": "358a3591ea5a8280ace21078052277e89e242098",
+    "candidate_tree": "45a365fddc2120a7b4f49cc5bf1d0ec7b1c3feeb",
+    "candidate_tracked_dirty": false,
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_binaries": {
+    "baseline_sha256": "c52b22857b1ac790736df5db21bcc50788d7c81591c7b4f9b2f45dea25ecca94",
+    "candidate_sha256": "9bb733451eea4c9c27a1a2ab62f1178e251a0a43cb3db8dd48091406ff123d02",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "hashes_stable_before_after": true
+  },
+  "policy": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "parent_count": 256,
+    "padded_redundancy_side": 64,
+    "original_count": 192,
+    "recovery_count": [33, 64],
+    "partial_original_loss_minimum": 2,
+    "maximum_loss_admitted": false,
+    "reusable_regular_max_complete_pass_bytes": 448,
+    "reusable_half_loss_regular_max_bytes": 512,
+    "one_shot_omit_pruned_schedules_max_aligned_prefix_bytes": 4096,
+    "raw_scratch_owned_dense_terminal_bytes": 64,
+    "wire_format_changed": false
+  },
+  "method": {
+    "rounds": 5,
+    "iterations_per_round": 17,
+    "warmups_per_round": 6,
+    "reuse": 64,
+    "seed": 515151,
+    "thread_count": 1,
+    "affinity": "taskset CPU 30; sibling CPU 14 non-idle delta verified",
+    "environment": "OMP_NUM_THREADS=1,OMP_THREAD_LIMIT=1,OMP_DYNAMIC=FALSE,OMP_PROC_BIND=TRUE",
+    "ratio_definition": "baseline_time/candidate_time or exact_main_time/candidate_time; greater than one favors candidate",
+    "point_estimate": "geometric mean of five paired per-round median ratios",
+    "interval": "two-sided Student-t 95 percent interval on paired log ratios, df=4"
+  },
+  "directional_scope_screens": {
+    "b64_r33_through_r64": {
+      "cells_per_loss_shape": 32,
+      "loss_shapes": ["two", "floor_half", "r_minus_one"],
+      "execution_geomean": [1.23716, 1.56678, 1.61267],
+      "execution_minimum": [1.15216, 1.37491, 1.47286],
+      "one_shot_geomean": [3.35066, 4.77224, 4.63934],
+      "one_shot_minimum": [2.78479, 3.95757, 4.05014],
+      "exact_main_geomean": [1.10464, 1.12711, 1.08073],
+      "candidate_cells_faster_than_main": [30, 30, 30],
+      "digest_mismatches": 0
+    },
+    "b448_r33_through_r64": {
+      "loss_shapes": ["two", "floor_half", "r_minus_one"],
+      "execution_geomean": [1.018429, 1.145630, 1.169013],
+      "one_shot_geomean": [1.833178, 2.149341, 2.091787],
+      "exact_main_geomean": [1.397115, 1.263952, 1.193405],
+      "candidate_cells_faster_than_main": [32, 32, 32],
+      "digest_mismatches": 0
+    },
+    "b512_r33_through_r64": {
+      "loss_shapes": ["two", "floor_half", "r_minus_one"],
+      "execution_geomean": [1.001280, 1.126759, 1.149410],
+      "one_shot_geomean": [1.738000, 2.025773, 1.973348],
+      "exact_main_geomean": [1.394422, 1.259211, 1.187198],
+      "candidate_cells_faster_than_main": [32, 32, 32],
+      "digest_mismatches": 0
+    }
+  },
+  "clean_commit_authoritative_cells": [
+    {"B":64,"R":33,"L":16,"execution":1.393091,"execution_ci95":[1.356747,1.430409],"one_shot":3.986256,"one_shot_ci95":[3.875897,4.099757],"exact_main":0.882901,"exact_main_ci95":[0.854411,0.912341]},
+    {"B":64,"R":34,"L":17,"execution":1.415719,"execution_ci95":[1.403565,1.427977],"one_shot":4.061386,"one_shot_ci95":[4.038006,4.084901],"exact_main":0.918601,"exact_main_ci95":[0.909791,0.927497]},
+    {"B":64,"R":35,"L":17,"execution":1.547154,"execution_ci95":[1.531405,1.563065],"one_shot":4.928012,"one_shot_ci95":[4.898893,4.957304],"exact_main":1.189283,"exact_main_ci95":[1.173838,1.204932]},
+    {"B":64,"R":62,"L":31,"execution":1.613804,"execution_ci95":[1.592241,1.635660],"one_shot":4.770406,"one_shot_ci95":[4.730687,4.810459],"exact_main":1.130333,"exact_main_ci95":[1.123404,1.137304]},
+    {"B":64,"R":64,"L":32,"execution":1.620340,"execution_ci95":[1.601966,1.638925],"one_shot":4.750916,"one_shot_ci95":[4.720434,4.781594],"exact_main":1.122335,"exact_main_ci95":[1.113128,1.131618]},
+    {"B":448,"R":33,"L":2,"execution":1.022528,"execution_ci95":[1.000767,1.044761],"one_shot":1.835118,"one_shot_ci95":[1.827295,1.842975],"exact_main":1.422857,"exact_main_ci95":[1.389530,1.456983]},
+    {"B":448,"R":62,"L":31,"execution":1.168742,"execution_ci95":[1.166485,1.171002],"one_shot":2.146814,"one_shot_ci95":[2.143863,2.149769],"exact_main":1.251136,"exact_main_ci95":[1.244384,1.257924]},
+    {"B":448,"R":64,"L":63,"execution":1.169891,"execution_ci95":[1.163165,1.176657],"one_shot":2.049825,"one_shot_ci95":[2.047254,2.052400],"exact_main":1.146778,"exact_main_ci95":[1.144497,1.149064]},
+    {"B":512,"R":33,"L":2,"execution":0.999519,"execution_ci95":[0.995513,1.003541],"one_shot":1.737180,"one_shot_ci95":[1.728541,1.745863],"exact_main":1.394292,"exact_main_ci95":[1.387062,1.401560]},
+    {"B":512,"R":62,"L":31,"execution":1.146280,"execution_ci95":[1.144076,1.148488],"one_shot":2.030068,"one_shot_ci95":[2.025024,2.035125],"exact_main":1.247022,"exact_main_ci95":[1.241174,1.252897]},
+    {"B":512,"R":64,"L":63,"execution":1.153047,"execution_ci95":[1.150691,1.155408],"one_shot":1.938915,"one_shot_ci95":[1.933547,1.944298],"exact_main":1.139849,"exact_main_ci95":[1.135960,1.143752]},
+    {"B":4096,"R":62,"L":31,"execution":1.006855,"execution_ci95":[0.994707,1.019151],"one_shot":1.135584,"one_shot_ci95":[1.123934,1.147354],"exact_main":1.354012,"exact_main_ci95":[1.338073,1.370142]},
+    {"B":4160,"R":62,"L":31,"execution":0.994067,"execution_ci95":[0.975853,1.012620],"one_shot":0.994751,"one_shot_ci95":[0.979790,1.009941],"exact_main":1.190078,"exact_main_ci95":[1.179747,1.200499]}
+  ],
+  "correctness": {
+    "clean_authoritative_digest_triplets_match": true,
+    "authoritative_json_reports": 195,
+    "release_focused_tests": {"passed":10,"failed":0},
+    "clang18_asan_ubsan_focused_tests": {"passed":4,"failed":0}
+  },
+  "residual": {
+    "bead": "leopard-79h.38.2.5.16",
+    "region": "K=192, B=64, R=33 or R=34, L=floor(R/2), public one-shot",
+    "reason": "Reusable Algorithm-5 execution is already at main speed; Leopard2 retains stronger presence, range, overlap, scratch, and failure-atomicity validation than the legacy API.",
+    "safety_rule": "Do not remove API validation merely to match exact main."
+  }
+}
