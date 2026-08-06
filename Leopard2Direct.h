@@ -273,7 +273,7 @@ bool SetT8FullParityTerminalEnabledForDiagnostics(bool enabled);
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 /*
     Same-executable benchmark control for the default-on
-    K=17..32/R=9..16/64-byte packed AVX2 terminal.  Change it only while no
+    K=17..32/R=9..16/1..64-byte packed AVX2 terminal. Change it only while no
     encode call is executing.  It changes neither public ABI nor wire identity.
 */
 bool SetHighT16Q2B64FusedEnabledForDiagnostics(bool enabled);

@@ -255,7 +255,7 @@ void ExerciseAdjacentExclusions(leo2_context* context)
         size_t shard_bytes;
     };
     static const Cell kCells[] = {
-        { 32, 16, 63 },
+        { 32, 16, 66 },
         { 32, 16, 65 },
         { 16, 16, 64 },
         { 33, 16, 64 },
@@ -303,65 +303,168 @@ void ExerciseAdjacentExclusions(leo2_context* context)
 
 void ExerciseEligibleMatrix(leo2_context* context)
 {
-    for (uint32_t original_count = 17;
-         original_count <= 32; ++original_count)
+    static const size_t kEligibleByteCounts[] = {
+        1, 2, 3, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64
+    };
+    for (size_t byte_index = 0;
+         byte_index < sizeof(kEligibleByteCounts) /
+             sizeof(kEligibleByteCounts[0]); ++byte_index)
     {
-        for (uint32_t recovery_count = 9;
-             recovery_count <= 16; ++recovery_count)
+        const size_t shard_bytes = kEligibleByteCounts[byte_index];
+        for (uint32_t original_count = 17;
+             original_count <= 32; ++original_count)
         {
-            leo2_codec* codec = NULL;
-            RequireResult(leo2_codec_create(context,
-                original_count, recovery_count,
-                LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
-                NULL, &codec), LEO2_SUCCESS,
-                "create eligible T16 q=2 codec");
-            size_t scratch_bytes = 0;
-            RequireResult(leo2_encode_scratch_size(
-                codec, kShardBytes, &scratch_bytes), LEO2_SUCCESS,
-                "query eligible T16 q=2 scratch");
-            AlignedBuffer scratch(scratch_bytes);
-            AlignedBuffer input(
-                static_cast<size_t>(original_count) * kShardBytes);
-            AlignedBuffer output(
-                static_cast<size_t>(recovery_count) * kShardBytes);
-            FillInput(input.bytes(), input.size(),
-                UINT64_C(0x5132543136423634) +
-                    original_count * 257U + recovery_count);
-            std::vector<const void*> original(original_count);
-            std::vector<void*> recovery(recovery_count);
-            SetPackedPointers(input.bytes(), output.bytes(),
-                original_count, recovery_count, kShardBytes,
-                &original[0], &recovery[0]);
+            for (uint32_t recovery_count = 9;
+                 recovery_count <= 16; ++recovery_count)
+            {
+                leo2_codec* codec = NULL;
+                RequireResult(leo2_codec_create(context,
+                    original_count, recovery_count,
+                    LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+                    NULL, &codec), LEO2_SUCCESS,
+                    "create eligible T16 q=2 codec");
+                size_t scratch_bytes = 0;
+                RequireResult(leo2_encode_scratch_size(
+                    codec, shard_bytes, &scratch_bytes), LEO2_SUCCESS,
+                    "query eligible T16 q=2 scratch");
+                AlignedBuffer scratch(scratch_bytes);
+                AlignedBuffer input(
+                    static_cast<size_t>(original_count) * shard_bytes);
+                AlignedBuffer output(
+                    static_cast<size_t>(recovery_count) * shard_bytes);
+                FillInput(input.bytes(), input.size(),
+                    UINT64_C(0x5132543136423634) +
+                        original_count * 257U + recovery_count);
+                std::vector<const void*> original(original_count);
+                std::vector<void*> recovery(recovery_count);
+                SetPackedPointers(input.bytes(), output.bytes(),
+                    original_count, recovery_count, shard_bytes,
+                    &original[0], &recovery[0]);
 
-            leopard::ff8::TestOnlyResetHighEncodeCounts();
-            RequireResult(leo2_encode(codec, kShardBytes,
-                &original[0], &recovery[0],
-                scratch.data(), scratch.size()), LEO2_SUCCESS,
-                "execute eligible T16 q=2 terminal");
-            Require(TwoBlockCalls() == 1,
-                "eligible T16 q=2 encode missed terminal");
-            CheckDirectOracle(original_count, recovery_count,
-                kShardBytes, &original[0], &recovery[0]);
-            const std::vector<uint8_t> candidate(
-                output.bytes(), output.bytes() + output.size());
+                leopard::ff8::TestOnlyResetHighEncodeCounts();
+                RequireResult(leo2_encode(codec, shard_bytes,
+                    &original[0], &recovery[0],
+                    scratch.data(), scratch.size()), LEO2_SUCCESS,
+                    "execute eligible T16 q=2 terminal");
+                Require(TwoBlockCalls() == 1,
+                    "eligible T16 q=2 encode missed terminal");
+                CheckDirectOracle(original_count, recovery_count,
+                    shard_bytes, &original[0], &recovery[0]);
+                const std::vector<uint8_t> candidate(
+                    output.bytes(), output.bytes() + output.size());
 
-            RequireResult(leo2_test_codec_set_encode_mode(
-                codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
-                "force eligible T16 q=2 mature transform");
-            std::memset(output.bytes(), 0xa5, output.size());
-            leopard::ff8::TestOnlyResetHighEncodeCounts();
-            RequireResult(leo2_encode(codec, kShardBytes,
-                &original[0], &recovery[0],
-                scratch.data(), scratch.size()), LEO2_SUCCESS,
-                "execute eligible T16 q=2 mature transform");
-            Require(TwoBlockCalls() == 0,
-                "forced mature transform entered T16 q=2 terminal");
-            Require(std::memcmp(output.bytes(), &candidate[0],
-                    candidate.size()) == 0,
-                "eligible T16 q=2 terminal differs from mature transform");
-            leo2_codec_destroy(codec);
+                RequireResult(leo2_test_codec_set_encode_mode(
+                    codec, LEO2_TEST_ENCODE_FORCE_TRANSFORM), LEO2_SUCCESS,
+                    "force eligible T16 q=2 mature transform");
+                std::memset(output.bytes(), 0xa5, output.size());
+                leopard::ff8::TestOnlyResetHighEncodeCounts();
+                RequireResult(leo2_encode(codec, shard_bytes,
+                    &original[0], &recovery[0],
+                    scratch.data(), scratch.size()), LEO2_SUCCESS,
+                    "execute eligible T16 q=2 mature transform");
+                Require(TwoBlockCalls() == 0,
+                    "forced mature transform entered T16 q=2 terminal");
+                Require(std::memcmp(output.bytes(), &candidate[0],
+                        candidate.size()) == 0,
+                    "eligible T16 q=2 terminal differs from mature transform");
+                leo2_codec_destroy(codec);
+            }
         }
     }
+}
+
+void ExerciseStagedTailInterfaces(leo2_context* context)
+{
+    static const uint32_t kTailOriginalCount = 17;
+    static const uint32_t kTailRecoveryCount = 9;
+    static const size_t kTailBytes = 33;
+    leo2_codec* codec = NULL;
+    RequireResult(leo2_codec_create(context,
+        kTailOriginalCount, kTailRecoveryCount,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
+        NULL, &codec), LEO2_SUCCESS, "create staged-tail codec");
+    size_t scratch_bytes = 0;
+    RequireResult(leo2_encode_scratch_size(
+        codec, kTailBytes, &scratch_bytes), LEO2_SUCCESS,
+        "query staged-tail scratch");
+    AlignedBuffer scratch(scratch_bytes);
+    AlignedBuffer input(kTailOriginalCount * kTailBytes + 1);
+    AlignedBuffer output(kTailRecoveryCount * kTailBytes + 3);
+    FillInput(input.bytes() + 1, kTailOriginalCount * kTailBytes,
+        UINT64_C(0x5354414745445441));
+    std::vector<const void*> original(kTailOriginalCount);
+    std::vector<void*> recovery(kTailRecoveryCount);
+    SetPackedPointers(input.bytes() + 1, output.bytes() + 3,
+        kTailOriginalCount, kTailRecoveryCount, kTailBytes,
+        &original[0], &recovery[0]);
+
+    leo2_encode_batch_item item = {
+        kTailBytes, &original[0], &recovery[0],
+        scratch.data(), scratch.size()
+    };
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode_batch(codec, &item, 1), LEO2_SUCCESS,
+        "execute staged-tail batch terminal");
+    Require(TwoBlockCalls() == 1,
+        "staged-tail batch missed the fused terminal");
+    CheckDirectOracle(kTailOriginalCount, kTailRecoveryCount,
+        kTailBytes, &original[0], &recovery[0]);
+
+    std::memset(output.bytes(), 0xa5, output.size());
+    recovery[4] = NULL;
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kTailBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_SUCCESS, "execute staged-tail sparse fallback");
+    Require(TwoBlockCalls() == 0,
+        "staged-tail sparse output entered the packed terminal");
+    CheckDirectOracle(kTailOriginalCount, kTailRecoveryCount,
+        kTailBytes, &original[0], &recovery[0]);
+    for (size_t i = 0; i < kTailBytes; ++i)
+        Require(output.bytes()[3 + 4 * kTailBytes + i] == 0xa5,
+            "staged-tail sparse fallback modified null output");
+    recovery[4] = output.bytes() + 3 + 4 * kTailBytes;
+
+    std::vector<uint8_t> detached(kTailBytes);
+    std::memcpy(&detached[0], original.back(), kTailBytes);
+    const void* const packed_last = original.back();
+    original.back() = &detached[0];
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kTailBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_SUCCESS, "execute staged-tail detached fallback");
+    Require(TwoBlockCalls() == 0,
+        "staged-tail detached input entered the packed terminal");
+    CheckDirectOracle(kTailOriginalCount, kTailRecoveryCount,
+        kTailBytes, &original[0], &recovery[0]);
+    original.back() = packed_last;
+
+    const std::vector<uint8_t> output_before(
+        output.bytes(), output.bytes() + output.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kTailBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size() - 1),
+        LEO2_SCRATCH_TOO_SMALL, "reject undersized staged-tail scratch");
+    Require(TwoBlockCalls() == 0,
+        "undersized staged-tail scratch reached fused arithmetic");
+    Require(std::memcmp(output.bytes(), &output_before[0],
+            output_before.size()) == 0,
+        "undersized staged-tail scratch modified output");
+
+    for (uint32_t i = 0; i < kTailRecoveryCount; ++i)
+        recovery[i] = input.bytes() + 1 + i * kTailBytes;
+    const std::vector<uint8_t> input_before(
+        input.bytes(), input.bytes() + input.size());
+    leopard::ff8::TestOnlyResetHighEncodeCounts();
+    RequireResult(leo2_encode(codec, kTailBytes,
+        &original[0], &recovery[0], scratch.data(), scratch.size()),
+        LEO2_OVERLAP, "reject overlapping staged-tail slabs");
+    Require(TwoBlockCalls() == 0,
+        "staged-tail overlap reached fused arithmetic");
+    Require(std::memcmp(input.bytes(), &input_before[0],
+            input_before.size()) == 0,
+        "staged-tail overlap rejection modified input");
+    leo2_codec_destroy(codec);
 }
 
 void ExerciseScalarExclusion()
@@ -700,6 +803,7 @@ int main(int argc, char** argv)
         RequireResult(result, LEO2_SUCCESS, "create AVX2 context");
         Exercise(context, benchmark_iterations);
         ExerciseEligibleMatrix(context);
+        ExerciseStagedTailInterfaces(context);
         ExerciseAdjacentExclusions(context);
         leo2_context_destroy(context);
         ExerciseScalarExclusion();

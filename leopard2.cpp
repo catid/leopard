@@ -18121,7 +18121,7 @@ static LEO_FORCE_INLINE bool IsGF8AVX2HighT16Q2B64FusedEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || shard_bytes != 64 ||
+    if (!codec || shard_bytes == 0 || shard_bytes > 64 ||
         g_high_t16_q2_b64_fused_mode != 1U ||
         codec->original_count < 17 || codec->original_count > 32 ||
         codec->recovery_count < 9 || codec->recovery_count > 16 ||
@@ -18154,7 +18154,10 @@ static LEO_FORCE_INLINE bool IsGF8AVX2HighT16Q2B64FusedEligible(
 #endif
 
 /*
-    Packed-layout terminal for the spill-free two-block T=16 kernel.
+    Packed-layout terminal for the spill-free two-block T=16 kernel. Exact
+    64-byte shards execute directly; shorter shards are staged into zero-padded
+    64-byte rows and scattered back after the transform, preserving arbitrary
+    public byte tails without any out-of-bounds vector access.
     This duplicates only the aggregate fast validator used by the established
     K=16/R=8 terminal.  Any valid non-packed or sparse call falls back to the
     ordinary validator and transform; every actual error is reported before
@@ -18165,6 +18168,7 @@ static LEO2_HIGH_T16_Q2_B64_FUSED_NOINLINE bool
 TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     const leo2_codec* codec,
     const AddressRange* protected_ranges,
+    uint64_t shard_bytes,
     const void* const* original,
     void* const* recovery,
     void* scratch,
@@ -18172,14 +18176,16 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     leo2_result& result_out)
 {
     LEO_DEBUG_ASSERT(
-        IsGF8AVX2HighT16Q2B64FusedEligible(codec, 64));
+        IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes));
     LEO_DEBUG_ASSERT(ProtectedCount <= 1);
+    LEO_DEBUG_ASSERT(shard_bytes >= 1 && shard_bytes <= 64);
+    const size_t byte_count = static_cast<size_t>(shard_bytes);
 
     ScratchLayout layout;
     size_t work_data_offset = 0;
 #ifdef LEO2_ENABLE_TEST_HOOKS
     EncodeScratchGeometry geometry;
-    result_out = EncodeLayout(codec, 64, geometry);
+    result_out = EncodeLayout(codec, shard_bytes, geometry);
     if (result_out != LEO2_SUCCESS)
         return true;
     layout = geometry.layout;
@@ -18189,7 +18195,8 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
             static_cast<size_t>(codec->original_count) +
                 codec->recovery_count,
             static_cast<size_t>(codec->original_count) + 32U,
-            0, 32U, 64U, layout, work_data_offset))
+            byte_count == 64 ? 0U : codec->original_count,
+            32U, 64U, layout, work_data_offset, 64U))
     {
         result_out = LEO2_INTERNAL_ERROR;
         return true;
@@ -18230,10 +18237,10 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     AddressRange input_range;
     AddressRange output_range;
     if (!MakeRange(original[0],
-            static_cast<uint64_t>(codec->original_count) * 64U,
+            static_cast<uint64_t>(codec->original_count) * byte_count,
             input_range) ||
         !MakeRange(recovery[0],
-            static_cast<uint64_t>(codec->recovery_count) * 64U,
+            static_cast<uint64_t>(codec->recovery_count) * byte_count,
             output_range))
     {
         result_out = LEO2_INVALID_ARGUMENT;
@@ -18243,12 +18250,12 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     for (size_t i = 0; i < codec->original_count; ++i)
     {
         pointer_mismatch |= reinterpret_cast<uintptr_t>(original[i]) ^
-            (input_range.begin + i * 64U);
+            (input_range.begin + i * byte_count);
     }
     for (size_t i = 0; i < codec->recovery_count; ++i)
     {
         pointer_mismatch |= reinterpret_cast<uintptr_t>(recovery[i]) ^
-            (output_range.begin + i * 64U);
+            (output_range.begin + i * byte_count);
     }
     if (pointer_mismatch != 0)
         return false;
@@ -18264,6 +18271,24 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     }
 
     uint8_t* const base = static_cast<uint8_t*>(scratch);
+    if (byte_count != 64)
+    {
+        uint8_t* const staged_input = base + layout.data_offset;
+        uint8_t* const work = base + work_data_offset;
+        for (size_t row = 0; row < codec->original_count; ++row)
+        {
+            uint8_t* const destination = staged_input + row * 64U;
+            memcpy(destination, original[row], byte_count);
+            memset(destination + byte_count, 0, 64U - byte_count);
+        }
+        leopard::ff8::ReedSolomonEncodeTwoBlocksT16B64(
+            *codec->context->ops, staged_input, work, work + 16U * 64U,
+            codec->original_count, 16U);
+        for (size_t row = 0; row < codec->recovery_count; ++row)
+            memcpy(recovery[row], work + row * 64U, byte_count);
+        result_out = LEO2_SUCCESS;
+        return true;
+    }
     leopard::ff8::ReedSolomonEncodeTwoBlocksT16B64(
         *codec->context->ops, original[0], recovery[0],
         base + work_data_offset,
@@ -19402,35 +19427,48 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
             return terminal_result;
     }
 #endif
-    if (IsGF8AVX2BalancedB64PackedTerminalEligible(codec, shard_bytes))
+    if (shard_bytes >= 1 && shard_bytes <= 64)
     {
-        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
-        bool handled;
-        if (codec->padded_side == 32)
-            handled = TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
-        else if (codec->padded_side == 64)
-            handled = TryEncodeGF8BalancedB64PackedTerminal<64, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
+        if (IsGF8AVX2BalancedB64PackedTerminalEligible(codec, shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            bool handled;
+            if (codec->padded_side == 32)
+                handled = TryEncodeGF8BalancedB64PackedTerminal<32, 0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result);
+            else if (codec->padded_side == 64)
+                handled = TryEncodeGF8BalancedB64PackedTerminal<64, 0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result);
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
-        else if (codec->padded_side == 128)
-            handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
-        else
-            handled = TryEncodeGF8BalancedB64PackedTerminal<16, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
+            else if (codec->padded_side == 128)
+                handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result);
+            else
+                handled = TryEncodeGF8BalancedB64PackedTerminal<16, 0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result);
 #else
-        else
-            handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result);
+            else
+                handled = TryEncodeGF8BalancedB64PackedTerminal<128, 0>(
+                    codec, NULL, original, recovery, scratch, scratch_bytes,
+                    terminal_result);
 #endif
-        if (handled)
-            return terminal_result;
+            if (handled)
+                return terminal_result;
+        }
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+        if (IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<0>(
+                    codec, NULL, shard_bytes, original, recovery,
+                    scratch, scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+#endif
     }
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
     if (IsGF8AVX2HighT16PreparedTerminalEligible(codec, shard_bytes))
@@ -19474,16 +19512,6 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
     {
         leo2_result terminal_result = LEO2_INTERNAL_ERROR;
         if (TryEncodeGF8K16R8T8B256PackedTerminal<0>(
-                codec, NULL, original, recovery, scratch, scratch_bytes,
-                terminal_result))
-            return terminal_result;
-    }
-#endif
-#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED && defined(LEO_HAS_FF8)
-    if (IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes))
-    {
-        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
-        if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<0>(
                 codec, NULL, original, recovery, scratch, scratch_bytes,
                 terminal_result))
             return terminal_result;
@@ -19659,41 +19687,57 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
                 return terminal_result;
         }
 #endif
-        if (IsGF8AVX2BalancedB64PackedTerminalEligible(
-                codec, items[0].shard_bytes))
+        if (items[0].shard_bytes >= 1 && items[0].shard_bytes <= 64)
         {
-            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
-            bool handled;
-            if (codec->padded_side == 32)
-                handled = TryEncodeGF8BalancedB64PackedTerminal<32, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
-            else if (codec->padded_side == 64)
-                handled = TryEncodeGF8BalancedB64PackedTerminal<64, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
+            if (IsGF8AVX2BalancedB64PackedTerminalEligible(
+                    codec, items[0].shard_bytes))
+            {
+                leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+                bool handled;
+                if (codec->padded_side == 32)
+                    handled = TryEncodeGF8BalancedB64PackedTerminal<32, 1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result);
+                else if (codec->padded_side == 64)
+                    handled = TryEncodeGF8BalancedB64PackedTerminal<64, 1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result);
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
-            else if (codec->padded_side == 128)
-                handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
-            else
-                handled = TryEncodeGF8BalancedB64PackedTerminal<16, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
+                else if (codec->padded_side == 128)
+                    handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result);
+                else
+                    handled = TryEncodeGF8BalancedB64PackedTerminal<16, 1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result);
 #else
-            else
-                handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result);
+                else
+                    handled = TryEncodeGF8BalancedB64PackedTerminal<128, 1>(
+                        codec, &item_range, items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result);
 #endif
-            if (handled)
-                return terminal_result;
+                if (handled)
+                    return terminal_result;
+            }
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+            if (IsGF8AVX2HighT16Q2B64FusedEligible(
+                    codec, items[0].shard_bytes))
+            {
+                leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+                if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<1>(
+                        codec, &item_range, items[0].shard_bytes,
+                        items[0].original,
+                        items[0].recovery, items[0].scratch,
+                        items[0].scratch_bytes, terminal_result))
+                    return terminal_result;
+            }
+#endif
         }
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
         if (IsGF8AVX2HighT16PreparedTerminalEligible(
@@ -19745,18 +19789,6 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
         {
             leo2_result terminal_result = LEO2_INTERNAL_ERROR;
             if (TryEncodeGF8K16R8T8B256PackedTerminal<1>(
-                    codec, &item_range, items[0].original,
-                    items[0].recovery, items[0].scratch,
-                    items[0].scratch_bytes, terminal_result))
-                return terminal_result;
-        }
-#endif
-#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED && defined(LEO_HAS_FF8)
-        if (IsGF8AVX2HighT16Q2B64FusedEligible(
-                codec, items[0].shard_bytes))
-        {
-            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
-            if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<1>(
                     codec, &item_range, items[0].original,
                     items[0].recovery, items[0].scratch,
                     items[0].scratch_bytes, terminal_result))
