@@ -1,0 +1,103 @@
+{
+  "schema": "leopard2.t64_partial_schedule_policy.v1",
+  "date_utc": "2026-08-06",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "logical_cpus": 32,
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "authoritative_cpu": 30,
+    "smt_sibling": 14,
+    "sibling_nonidle_delta_ticks": 0
+  },
+  "source": {
+    "baseline_commit": "a7778fde4da0cc5258e85c3e842a4035c10b6297",
+    "candidate_commit": "3e0b75a6a66e9fa633e749e5dc68701cfc882dd8",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "frozen_binaries": {
+    "baseline_sha256": "c505ed85ef54640beb31dcb444250c2b8f3c6806eeb16ab4096a107eb76080b3",
+    "candidate_sha256": "c52b22857b1ac790736df5db21bcc50788d7c81591c7b4f9b2f45dea25ecca94",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "hashes_stable_before_after": true
+  },
+  "policy": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "backend": "avx2",
+    "region": "T=64,K=65..191,R=33..64,partial original loss L>=2",
+    "reusable_regular_max_complete_pass_bytes": 448,
+    "one_shot_omit_pruned_schedules_min_aligned_prefix_bytes": 512,
+    "one_shot_omit_pruned_schedules_max_aligned_prefix_bytes": 4096,
+    "one_shot_ragged_tail_bytes": 64,
+    "reusable_plan_semantics_changed": false,
+    "wire_format_changed": false
+  },
+  "method": {
+    "rounds": 5,
+    "iterations_per_round": 17,
+    "warmups_per_round": 6,
+    "reuse": 64,
+    "seed": 515151,
+    "thread_count": 1,
+    "affinity": "taskset CPU 30; sibling CPU 14 non-idle delta verified",
+    "environment": "OMP_NUM_THREADS=1,OMP_THREAD_LIMIT=1,OMP_DYNAMIC=FALSE,OMP_PROC_BIND=TRUE",
+    "ratio_definition": "baseline_time/candidate_time or exact_main_time/candidate_time; greater than one favors candidate",
+    "point_estimate": "geometric mean of five paired per-round median ratios",
+    "interval": "two-sided Student-t 95 percent interval on paired log ratios, df=4"
+  },
+  "directional_scope_screens": {
+    "b448_l2": {
+      "cells": 4064,
+      "K": [65, 191],
+      "R": [33, 64],
+      "execution_geomean": 1.082065552,
+      "one_shot_geomean": 1.924135717,
+      "initial_execution_wins": 4000,
+      "isolated_weak_cells_rerun": 30,
+      "isolated_worst_execution_ratio": 0.996154,
+      "digest_mismatches": 0
+    },
+    "b4096_l2": {
+      "cells": 4064,
+      "K": [65, 191],
+      "R": [33, 64],
+      "one_shot_geomean": 1.124013847,
+      "initial_one_shot_wins": 4061,
+      "initial_worst_one_shot_ratio": 0.996918251,
+      "isolated_weak_cells_rerun": 30,
+      "isolated_worst_point_ratio": 1.006556,
+      "digest_mismatches": 0
+    }
+  },
+  "clean_commit_authoritative_cells": [
+    {"B":448,"K":65,"R":33,"L":2,"execution":1.083211,"execution_ci95":[1.073362,1.093150],"one_shot":2.008980,"one_shot_ci95":[1.986513,2.031701],"exact_main":1.698829,"exact_main_ci95":[1.678579,1.719324]},
+    {"B":448,"K":99,"R":50,"L":2,"execution":1.032318,"execution_ci95":[1.030290,1.034349],"one_shot":2.056047,"one_shot_ci95":[2.049519,2.062595],"exact_main":1.542705,"exact_main_ci95":[1.539610,1.545806]},
+    {"B":448,"K":124,"R":63,"L":2,"execution":1.106860,"execution_ci95":[1.098583,1.115200],"one_shot":2.145706,"one_shot_ci95":[2.134609,2.156861],"exact_main":1.612373,"exact_main_ci95":[1.605506,1.619270]},
+    {"B":448,"K":191,"R":62,"L":2,"execution":1.000847,"execution_ci95":[0.985926,1.015993],"one_shot":1.802336,"one_shot_ci95":[1.789410,1.815357],"exact_main":1.373401,"exact_main_ci95":[1.367440,1.379388]},
+    {"B":512,"K":65,"R":33,"L":2,"execution":0.996151,"execution_ci95":[0.989224,1.003126],"one_shot":1.907930,"one_shot_ci95":[1.897665,1.918252],"exact_main":1.720927,"exact_main_ci95":[1.708449,1.733495]},
+    {"B":512,"K":99,"R":50,"L":2,"execution":0.994829,"execution_ci95":[0.990387,0.999291],"one_shot":1.938578,"one_shot_ci95":[1.930636,1.946553],"exact_main":1.542659,"exact_main_ci95":[1.533334,1.552041]},
+    {"B":512,"K":124,"R":63,"L":2,"execution":1.006280,"execution_ci95":[1.001563,1.011020],"one_shot":2.024508,"one_shot_ci95":[2.019669,2.029360],"exact_main":1.608905,"exact_main_ci95":[1.602801,1.615033]},
+    {"B":512,"K":191,"R":62,"L":2,"execution":1.007228,"execution_ci95":[0.995337,1.019261],"one_shot":1.711159,"one_shot_ci95":[1.707614,1.714712],"exact_main":1.371087,"exact_main_ci95":[1.364200,1.378009]},
+    {"B":4096,"K":65,"R":33,"L":2,"execution":1.012983,"execution_ci95":[1.005261,1.020765],"one_shot":1.111551,"one_shot_ci95":[1.093979,1.129405],"exact_main":1.980751,"exact_main_ci95":[1.962940,1.998724]},
+    {"B":4096,"K":99,"R":50,"L":2,"execution":0.998063,"execution_ci95":[0.993292,1.002856],"one_shot":1.053015,"one_shot_ci95":[1.036848,1.069434],"exact_main":1.758223,"exact_main_ci95":[1.724456,1.792652]},
+    {"B":4096,"K":99,"R":50,"L":25,"execution":1.003389,"execution_ci95":[0.991570,1.015348],"one_shot":1.117940,"one_shot_ci95":[1.105605,1.130412],"exact_main":1.551074,"exact_main_ci95":[1.536713,1.565568]},
+    {"B":4096,"K":124,"R":63,"L":2,"execution":1.000543,"execution_ci95":[0.977260,1.024380],"one_shot":1.140887,"one_shot_ci95":[1.118199,1.164036],"exact_main":1.855381,"exact_main_ci95":[1.821299,1.890101]},
+    {"B":4096,"K":124,"R":63,"L":31,"execution":1.001600,"execution_ci95":[0.994776,1.008471],"one_shot":1.109203,"one_shot_ci95":[1.094300,1.124309],"exact_main":1.486841,"exact_main_ci95":[1.471635,1.502205]},
+    {"B":4096,"K":191,"R":62,"L":2,"execution":1.000148,"execution_ci95":[0.988255,1.012184],"one_shot":1.019737,"one_shot_ci95":[1.009049,1.030539],"exact_main":1.562938,"exact_main_ci95":[1.541967,1.584194]},
+    {"B":4096,"K":191,"R":62,"L":61,"execution":1.002275,"execution_ci95":[0.991076,1.013600],"one_shot":1.130842,"one_shot_ci95":[1.113352,1.148606],"exact_main":1.230293,"exact_main_ci95":[1.215766,1.244995]},
+    {"B":4160,"K":65,"R":33,"L":2,"one_shot":1.000138,"one_shot_ci95":[0.989599,1.010789],"exact_main":1.796676,"exact_main_ci95":[1.775000,1.818617]},
+    {"B":4160,"K":99,"R":50,"L":2,"one_shot":1.004029,"one_shot_ci95":[0.989726,1.018539],"exact_main":1.678163,"exact_main_ci95":[1.657630,1.698950]},
+    {"B":4160,"K":124,"R":63,"L":2,"one_shot":1.006625,"one_shot_ci95":[0.989237,1.024319],"exact_main":1.639576,"exact_main_ci95":[1.613037,1.666551]},
+    {"B":4160,"K":191,"R":62,"L":2,"one_shot":0.990748,"one_shot_ci95":[0.973566,1.008232],"exact_main":1.528992,"exact_main_ci95":[1.506704,1.551609]}
+  ],
+  "correctness": {
+    "all_authoritative_digest_triplets_match": true,
+    "release_focused_tests": {"passed":10,"failed":0},
+    "clang18_asan_ubsan_focused_tests": {"passed":4,"failed":0}
+  },
+  "negative_result": {
+    "experiment": "extend transient schedule omission through 8192 bytes",
+    "result": "rejected",
+    "reason": "upper-K one-shot cells regressed by up to about two percent above 4096 bytes"
+  }
+}
