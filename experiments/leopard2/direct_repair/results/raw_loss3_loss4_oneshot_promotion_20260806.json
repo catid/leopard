@@ -1,0 +1,111 @@
+{
+  "schema": "leopard2-raw-loss3-loss4-oneshot-promotion/v1",
+  "date_utc": "2026-08-06",
+  "beads": [
+    "leopard-79h.38.5.10.38.23",
+    "leopard-79h.38.5.10.38.24"
+  ],
+  "status": "promoted",
+  "hypothesis": "Reuse caller scratch for one-shot erasure-pattern metadata and locator-derived GF8 repair coefficients so tiny calls avoid heap-owned decode-plan setup while retaining the same direct or translated-low byte executor.",
+  "implementation": {
+    "translated_low": {
+      "K": "7..8",
+      "missing_originals": 4,
+      "shard_bytes": "1..256",
+      "change": "let the existing scratch-owned translated-low path override the heap direct-plan qualification"
+    },
+    "native_high": {
+      "K": "9..16",
+      "R": "5..8",
+      "missing_originals": "3..8",
+      "shard_bytes": "1..7168 and 12288..16384",
+      "change": "extend the existing scratch-owned locator/direct AVX2 executor from losses 5..8 to losses 3..8"
+    },
+    "hot_path_allocations": 0,
+    "wire_profile_changed": false
+  },
+  "source": {
+    "loss4_commit": "2e940d107ea322ea9507d9bb2d78b3a5528f9147",
+    "loss4_tree": "597cb9756174e9099cc5b6a77987402c0676271a",
+    "loss3_final_commit": "276f0d860c6cf765279b8220d129da91a8d6cd90",
+    "loss3_final_tree": "511461fd1e9f766050f8aca6de708ffc7abfdd02",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198"
+  },
+  "correctness": {
+    "release_raw_vs_direct_oracle_and_algorithm5_cases": 26640,
+    "release_allocation_audited_one_shot_cases": 41984,
+    "release_tests": [
+      "leopard2_small_dual_direct_test: pass, 249.98 seconds, 30684 KiB peak RSS",
+      "leopard2_one_shot_no_loss_test: pass, 0.71 seconds, 96704 KiB peak RSS"
+    ],
+    "clang18_asan_ubsan_leak_tests": [
+      "leopard2_small_dual_direct_test: pass, 186.39 seconds, 543740 KiB peak RSS",
+      "leopard2_one_shot_no_loss_test: pass, 1.73 seconds, 470452 KiB peak RSS"
+    ],
+    "covered_raw_native_counts": "K=9,12,16; R=5..8; losses=3,4,5,R; two original-loss shapes and parity subsets",
+    "covered_byte_boundaries": "1..256 plus 257, 319..321, 511..513, 1023..1025, 2047..2049, 4095..4097, 6143..6145, 7103..7105, 7135..7137, 7167..7168, 12287..12351, 16383..16385, 32768, 65536",
+    "all_benchmark_round_trips_passed": true,
+    "all_benchmark_workload_digests_matched": true
+  },
+  "directional_old_new_sweeps": {
+    "loss4": {
+      "cells": 512,
+      "counts": "K7/R5 and K8/R8, every shard byte 1..256",
+      "regressions": 0,
+      "minimum_old_over_new": 1.2328994146910737,
+      "artifact": "/tmp/leopard2-loss4-byte-scan-v1.json",
+      "artifact_sha256": "c04a2675ecd582c5ebdc3c42d47d3dab0c9d1ba4d34566740793ad94b8cc11c2"
+    },
+    "loss3": {
+      "cells": 768,
+      "counts": "K9/R5, K12/R8, and K16/R8, every shard byte 1..256",
+      "regressions": 0,
+      "minimum_old_over_new": 2.13519869274325,
+      "artifact": "/tmp/leopard2-loss3-byte-scan-v1.json",
+      "artifact_sha256": "822ec9d38798bc213a3f27eb9cb55ae4d1ceb4043d111a0852d7259e3887ef2c"
+    }
+  },
+  "exact_main_abba": {
+    "ratio_orientation": "exact Leopard main decode including setup / Leopard2 public one-shot decode including setup",
+    "method": "five alternating ABBA/BAAB rounds; 15 process iterations and 3 warmups; Student-t 95 percent interval over independent round log contrasts",
+    "lock": "/tmp/leopard-gf8-authoritative.lock",
+    "controller_cpu": 0,
+    "timing_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "reserved_sibling_nonidle_jiffies": 0,
+    "child_address_space_limit_bytes": 536870912,
+    "loss4_targets": {
+      "cells": 10,
+      "credible_wins": 10,
+      "minimum_speedup": 1.6718604670624657,
+      "minimum_ci95_lower": 1.6335911441303765,
+      "maximum_speedup": 3.8079949109402063,
+      "summary": "/tmp/leopard2-loss4-final-2e940d1-v1/summary.json",
+      "summary_sha256": "da863d6b5660fed77ade527575e002f9486d3f54bfd7afbf622362ce65f6ace7",
+      "candidate_executable_sha256": "61c5644d5b2bebadefaae93ebc8dc45a4de9ae0a4d3ea89c2074d43b8eedeab5"
+    },
+    "loss3_final_campaign": {
+      "cells": 33,
+      "credible_wins": 33,
+      "credible_losses": 0,
+      "minimum_speedup": 1.236366885556587,
+      "minimum_ci95_lower": 1.2298115623277082,
+      "loss3_target_cells": 6,
+      "loss3_target_minimum_speedup": 2.573556211521882,
+      "loss3_target_minimum_ci95_lower": 2.5562631204588997,
+      "loss3_target_maximum_speedup": 4.320694418530039,
+      "summary": "/tmp/leopard2-loss3-final-276f0d8-v1/summary.json",
+      "summary_sha256": "70c7488def4f6998b18b6d2a0e0a101ca9498a7c3a9459173292419b01beed6a",
+      "candidate_executable_sha256": "5a464c7ed33d4a314e901baf268e3294a974bdf684c0f431af950977611ffcc6",
+      "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93"
+    }
+  },
+  "machine": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_cpus": "0-12,16-28",
+    "allowed_cpu_count": 26,
+    "numa_nodes": 1,
+    "why_not_128_cores": "The active affinity exposed 26 CPUs, and authoritative sub-microsecond cache-sensitive timings were intentionally serialized and pinned; parallel timing would invalidate the comparison."
+  },
+  "retention_note": "Raw samples and frozen binaries are ephemeral under /tmp; this committed record preserves source identities, executable hashes, aggregate statistics, validation commands, and artifact hashes."
+}
