@@ -1,0 +1,150 @@
+{
+  "schema": "leopard2-exact65-staging-evidence/v1",
+  "date_utc": "2026-08-06",
+  "bead": "leopard-79h.38.2.5.17",
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "kernel": "Linux 6.8.0-134-generic x86_64",
+    "governor": "powersave",
+    "allowed_cpus": "0-13,16-29",
+    "timing_cpu": 13,
+    "smt_sibling": 29,
+    "orchestration_affinity_during_full_map": "0-12,16-28",
+    "sibling_runnable_observations": 0
+  },
+  "artifacts": {
+    "candidate_commit": "77adfd0d8ff6472c4b53707496fbb838c8a748d3",
+    "candidate_sha256": "84237bfd7c602105085d1a9d7f049cbde61590b249cb826b6df23dcd09df7c26",
+    "control_commit": "102c50d7485b5ad3154634accc13da8b9ce80c88",
+    "control_sha256": "1505c2367d6e3ae7d66c4bd018286961066c7923110a52e4639fa3972b125fd4",
+    "main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "representative_root": "/tmp/leopard2-exact65-77adfd0-authoritative-v1",
+    "full_map_root": "/tmp/leopard2-exact65-77adfd0-all-n128-t32-v2",
+    "full_map_reports": 32768,
+    "hashes_stable_after_campaigns": true,
+    "stderr_files_nonempty": 0,
+    "rejected_full_map_root": "/tmp/leopard2-exact65-77adfd0-all-n128-t32-v1",
+    "rejected_full_map_reason": "Four monitor samples caught the Codex process runnable on sibling CPU 29; no timing conclusion from that first map was retained."
+  },
+  "method": {
+    "representative": {
+      "K": 57,
+      "R": 29,
+      "field": "gf8",
+      "backend": "avx2",
+      "bytes": [64, 65, 127, 128],
+      "losses": [2, 14, 28, 29],
+      "batch": 1,
+      "reuse": 128,
+      "iterations_per_process": 17,
+      "warmup_per_process": 6,
+      "rounds": 5,
+      "processes_per_implementation_per_cell": 10,
+      "seed": 515151,
+      "order": "Counterbalanced six-process rounds over control, candidate, and exact main.",
+      "interval": "Geometric mean of five round-level ratios with deterministic percentile bootstrap over rounds.",
+      "ratio_semantics": "A ratio above one means the denominator implementation is faster."
+    },
+    "full_map": {
+      "K": "33..96",
+      "R": "17..32",
+      "parent_count": 128,
+      "padded_side": 32,
+      "bytes": [64, 65, 127, 128],
+      "losses": ["R-1", "R"],
+      "distinct_cells": 8192,
+      "order": "One alternating ABBA group per cell: exact main and candidate each occupy two positions.",
+      "batch": 1,
+      "reuse": 32,
+      "iterations_per_process": 5,
+      "warmup_per_process": 2,
+      "main_semantics": "Leopard main processes the next 64-byte physical size and fingerprints only the exact zero-padded logical prefix.",
+      "note": "This exhaustive map is a directional crossover map; the higher-repetition representative campaign supplies confidence intervals."
+    }
+  },
+  "representative_results": [
+    {
+      "bytes": 65,
+      "loss": 2,
+      "control_over_candidate_execution": { "geomean": 1.074812, "ci95_low": 1.068373, "ci95_high": 1.083969 },
+      "control_over_candidate_one_shot": { "geomean": 1.047725, "ci95_low": 1.044588, "ci95_high": 1.051524 },
+      "main_over_candidate_one_shot": { "geomean": 1.224193, "ci95_low": 1.219502, "ci95_high": 1.228647 }
+    },
+    {
+      "bytes": 65,
+      "loss": 14,
+      "control_over_candidate_execution": { "geomean": 1.065258, "ci95_low": 1.059098, "ci95_high": 1.069515 },
+      "control_over_candidate_one_shot": { "geomean": 1.034700, "ci95_low": 1.031408, "ci95_high": 1.038003 },
+      "main_over_candidate_one_shot": { "geomean": 1.069128, "ci95_low": 1.066572, "ci95_high": 1.072261 }
+    },
+    {
+      "bytes": 65,
+      "loss": 28,
+      "control_over_candidate_execution": { "geomean": 1.052965, "ci95_low": 1.044992, "ci95_high": 1.060359 },
+      "control_over_candidate_one_shot": { "geomean": 1.027249, "ci95_low": 1.021386, "ci95_high": 1.033147 },
+      "main_over_candidate_one_shot": { "geomean": 0.996628, "ci95_low": 0.990858, "ci95_high": 1.002099 }
+    },
+    {
+      "bytes": 65,
+      "loss": 29,
+      "control_over_candidate_execution": { "geomean": 1.051100, "ci95_low": 1.047477, "ci95_high": 1.056019 },
+      "control_over_candidate_one_shot": { "geomean": 1.031181, "ci95_low": 1.028660, "ci95_high": 1.033396 },
+      "main_over_candidate_one_shot": { "geomean": 1.007093, "ci95_low": 1.003280, "ci95_high": 1.011402 }
+    },
+    {
+      "bytes": 127,
+      "loss": 28,
+      "control_over_candidate_one_shot": { "geomean": 0.997253, "ci95_low": 0.995757, "ci95_high": 0.999112 },
+      "main_over_candidate_one_shot": { "geomean": 0.962783, "ci95_low": 0.961207, "ci95_high": 0.964742 }
+    },
+    {
+      "bytes": 128,
+      "loss": 28,
+      "control_over_candidate_one_shot": { "geomean": 0.992549, "ci95_low": 0.989265, "ci95_high": 0.995786 },
+      "main_over_candidate_one_shot": { "geomean": 1.054486, "ci95_low": 1.049615, "ci95_high": 1.058925 }
+    }
+  ],
+  "full_map_summary": [
+    { "bytes": 64, "loss": "R-1", "cells": 1024, "main_over_candidate_geomean": 0.998894, "median": 0.993815, "candidate_faster_cells": 470 },
+    { "bytes": 64, "loss": "R", "cells": 1024, "main_over_candidate_geomean": 1.018490, "median": 1.009686, "candidate_faster_cells": 571 },
+    { "bytes": 65, "loss": "R-1", "cells": 1024, "main_over_candidate_geomean": 0.988281, "median": 0.981839, "candidate_faster_cells": 392 },
+    { "bytes": 65, "loss": "R", "cells": 1024, "main_over_candidate_geomean": 1.000854, "median": 0.993044, "candidate_faster_cells": 474 },
+    { "bytes": 127, "loss": "R-1", "cells": 1024, "main_over_candidate_geomean": 0.947440, "median": 0.939509, "candidate_faster_cells": 229 },
+    { "bytes": 127, "loss": "R", "cells": 1024, "main_over_candidate_geomean": 0.959163, "median": 0.950758, "candidate_faster_cells": 289 },
+    { "bytes": 128, "loss": "R-1", "cells": 1024, "main_over_candidate_geomean": 1.044268, "median": 1.037781, "candidate_faster_cells": 763 },
+    { "bytes": 128, "loss": "R", "cells": 1024, "main_over_candidate_geomean": 1.058856, "median": 1.050429, "candidate_faster_cells": 852 }
+  ],
+  "correctness": {
+    "full_map_digest_mismatches": 0,
+    "full_map_geometry_mismatches": 0,
+    "representative_distinct_digest_tuples_per_cell": 1,
+    "release_focused": "13/13 passed in 4.28 seconds",
+    "clang18_asan_ubsan_focused": "7/7 passed in 2.64 seconds",
+    "source_reads": "The specialization copies bytes 0..63 and byte 64 separately, so no vector read crosses the exact 65-byte public range."
+  },
+  "experiments": [
+    {
+      "name": "fixed-extent inline copy and zero",
+      "promoted": true,
+      "result": "Removes variable-size memcpy/memset dispatch per selected row and improves the intended 65-byte reusable execution cells by 5.1 to 7.5 percent."
+    },
+    {
+      "name": "separate AVX2 batched zero pass",
+      "promoted": false,
+      "result": "Slowed reusable execution by 1.3 to 2.4 percent because the extra pass and AVX transition outweighed wider stores.",
+      "root": "/tmp/leopard2-exact65-stage-avxzero-v2"
+    },
+    {
+      "name": "AVX2 coordinate-map rescan with fused copy and zero",
+      "promoted": false,
+      "result": "Slowed reusable execution by 1.4 to 1.9 percent; rescanning all 128 coordinate pointers outweighed halving vector load/store instructions.",
+      "root": "/tmp/leopard2-exact65-stage-avxcopy-v1"
+    }
+  ],
+  "decision": {
+    "promoted": true,
+    "reason": "The specialization is small, exact-byte safe, passes Release and sanitizer gates, exceeds five percent reusable-execution improvement throughout the representative 65-byte loss range, and has no neighboring public one-shot regression above one percent.",
+    "remaining_gap": "The exhaustive map identifies 127-byte staging as the largest adjacent gap: Leopard2 trails exact main by 4.1 to 5.3 percent geometrically and by as much as 15.7 percent in the sampled high-K/high-R cells. A fixed 127-to-128-byte staging specialization is the next candidate."
+  }
+}
