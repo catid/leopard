@@ -9,7 +9,8 @@
 /*
     Production regression for the pass-local GF8/AVX2 native Algorithm 5
     tiny schedule policy.  Reusable AUTO plans retain their exact schedules,
-    but qualified tiny maximum-loss passes execute the mature regular kernels.
+    but qualified tiny multi-loss passes execute the mature regular kernels.
+    Exact-byte one-shot plans omit schedules under the same measured policy.
     A forced-tiled codec is the same-executable pruned-schedule control.
 */
 
@@ -674,6 +675,37 @@ std::vector<ByteCase> one_byte_case(
     return result;
 }
 
+size_t transient_high_schedule_count(
+    leo2_context* context,
+    uint32_t k,
+    uint32_t r,
+    const std::vector<uint32_t>& missing,
+    size_t bytes,
+    const std::string& label)
+{
+    CodecOwner codec;
+    create_codec(context, k, r, 0, false, codec, label);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    for (size_t i = 0; i < missing.size(); ++i)
+        original_present[missing[i]] = 0;
+
+    PlanOwner plan;
+    require_result(
+        leopard2_internal::CreateOneShotTransformPlanForDiagnostics(
+            codec.get(), bytes, original_present.data(),
+            recovery_present.data(), plan.output()),
+        label + " transient plan create");
+    leopard2_internal::DecodePlanPrunedScheduleInfo info;
+    require(leopard2_internal::GetDecodePlanPrunedScheduleInfo(
+            plan.get(), &info),
+        label + " transient schedule introspection failed");
+    require(info.low_input_plan_count == 0 &&
+            info.low_output_plan_count == 0,
+        label + " transient native-high plan compiled low schedules");
+    return info.high_input_plan_count + info.high_output_plan_count;
+}
+
 } // namespace
 
 int main()
@@ -774,12 +806,135 @@ int main()
             false, false, true, 0x54a33414U);
         run_campaign(avx2_context, "t32-punctured-partial-loss-neighbor",
             57, 29, random_missing(57, 28, 0x78a5dd93U),
-            one_byte_case(64, RoutePrunedOnly),
-            false, false, true, 0x54a33818U);
-        run_campaign(avx2_context, "l31-neighbor",
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a33818U);
+        run_campaign(avx2_context, "t32-r32-l31",
             192, 32, striped_missing(192, 31),
-            one_byte_case(64, RoutePrunedOnly),
-            false, false, true, 0x54a32707U);
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a32707U);
+
+        std::vector<ByteCase> sparse_partial_thresholds;
+        {
+            const ByteCase entry = { 64, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 320, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 321, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 384, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 385, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 512, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 513, RouteRegularOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            sparse_partial_thresholds.push_back(entry);
+        }
+        run_campaign(avx2_context, "t32-sparse-partial-thresholds",
+            57, 29, random_missing(57, 2, 0x148c2a91U),
+            sparse_partial_thresholds,
+            true, false, true, 0x54a33919U);
+        run_campaign(avx2_context, "t32-three-loss-b320",
+            57, 29, random_missing(57, 3, 0x778bd120U),
+            one_byte_case(320, RouteRegularOnly),
+            true, false, true, 0x54a33c1cU);
+        run_campaign(avx2_context, "t32-four-loss-b320",
+            57, 29, random_missing(57, 4, 0x82e4b7a3U),
+            one_byte_case(320, RouteRegularOnly),
+            true, false, true, 0x54a33d1dU);
+
+        std::vector<ByteCase> half_loss_thresholds;
+        {
+            const ByteCase entry = { 384, RouteRegularOnly };
+            half_loss_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 448, RouteRegularOnly };
+            half_loss_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 512, RouteRegularOnly };
+            half_loss_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 576, RoutePrunedOnly };
+            half_loss_thresholds.push_back(entry);
+        }
+        {
+            const ByteCase entry = { 577, RouteMixed };
+            half_loss_thresholds.push_back(entry);
+        }
+        run_campaign(avx2_context, "t32-half-loss-thresholds",
+            57, 29, random_missing(57, 15, 0x826ba7d4U),
+            half_loss_thresholds,
+            true, false, true, 0x54a33a1aU);
+        run_campaign(avx2_context, "t32-floor-half",
+            57, 29, random_missing(57, 14, 0x1f3278c9U),
+            one_byte_case(512, RouteRegularOnly),
+            true, false, true, 0x54a33b1bU);
+
+        require(leopard2_internal::SetOneShotPlanSetupModeForDiagnostics(3),
+            "select production one-shot setup policy");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da19U), 64,
+                "transient sparse B64") == 0,
+            "eligible sparse B64 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da1aU), 320,
+                "transient sparse B320") == 0,
+            "eligible sparse B320 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da1bU), 384,
+                "transient sparse B384") == 0,
+            "eligible one-shot sparse B384 plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 15, 0xc4b6da1cU), 512,
+                "transient half-loss B512") == 0,
+            "eligible half-loss B512 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 14, 0xc4b6da1dU), 512,
+                "transient floor-half B512") == 0,
+            "eligible one-shot floor-half B512 plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 15, 0xc4b6da1eU), 513,
+                "transient ragged B513") == 0,
+            "all-regular ragged B513 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da20U), 575,
+                "transient ragged B575") == 0,
+            "all-regular ragged B575 transient plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da21U), 576,
+                "transient B576") != 0,
+            "pruned B576 transient plan omitted schedules");
+        require(transient_high_schedule_count(avx2_context,
+                57, 29, random_missing(57, 2, 0xc4b6da22U), 577,
+                "transient mixed B577") != 0,
+            "mixed B577 transient plan omitted schedules");
+        require(transient_high_schedule_count(avx2_context,
+                99, 50, random_missing(99, 25, 0xc4b6da1fU), 64,
+                "transient T64 partial") != 0,
+            "T64 partial transient plan entered the T32 policy");
 
         std::vector<ByteCase> t64_byte_matrix;
         const size_t t64_regular_sizes[] = {

@@ -5589,6 +5589,12 @@ static bool SelectOneShotTransformMetadataMask(
     }
 }
 
+#ifdef LEO_HAS_FF8
+static bool BypassTinyGF8AVX2HighPrunedSchedules(
+    const leo2_decode_plan* plan,
+    size_t buffer_bytes);
+#endif
+
 static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
     const leo2_decode_plan* plan,
     const DecodePlanSetupHint& hint,
@@ -5602,19 +5608,42 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         Exact-byte one-shot plans never escape the call.  For translated
         Algorithm 4, compiling sparse input/output graphs costs more through
         1 KiB than executing the mature prefix transforms, including partial
-        high-loss patterns.  Preserve the narrower maximum-loss policy for
-        native Algorithm 5, whose partial-pattern crossover is independent.
+        high-loss patterns.  Native Algorithm 5 keeps its independently
+        measured byte/loss predicate below; maximum loss retains the older
+        one-shot-only extension through 1 KiB.
     */
-    return metadata_mask == kDecodeTransformMetadataSpecialized &&
-        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
-        codec->field == LEO2_FIELD_GF8 &&
-        (!translated_low || hint.setup_mode >= 3U) && codec->context &&
-        codec->context->ops &&
-        codec->context->ops->kind == LEO2_BACKEND_AVX2 &&
-        codec->recovery_count > 1 &&
-        (plan->missing_original_count == codec->recovery_count ||
-         translated_low) &&
-        hint.shard_bytes <= 1024;
+    if (metadata_mask != kDecodeTransformMetadataSpecialized ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 || !codec->context ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2 ||
+        codec->recovery_count <= 1)
+        return false;
+    if (translated_low)
+        return hint.setup_mode >= 3U && hint.shard_bytes <= 1024;
+    if (plan->missing_original_count == codec->recovery_count)
+        return hint.shard_bytes <= 1024;
+#ifdef LEO_HAS_FF8
+    /* A small exact-byte one-shot executes an aligned prefix plus, when
+       ragged, one padded 64-byte tail.  If its prefix is no wider than 512
+       bytes, the reusable predicate proves that every pass discards the
+       compiled schedules.  At 576 bytes the prefix itself becomes pruned. */
+    if (hint.shard_bytes > std::numeric_limits<size_t>::max())
+        return false;
+    if (codec->padded_side != 32)
+        return false;
+    const size_t exact_bytes = static_cast<size_t>(hint.shard_bytes);
+    const size_t aligned_prefix = exact_bytes &
+        ~static_cast<size_t>(kScratchAlignment - 1U);
+    if (aligned_prefix > 512U)
+        return false;
+    const size_t maximum_pass = aligned_prefix == 0
+        ? kScratchAlignment : aligned_prefix;
+    return BypassTinyGF8AVX2HighPrunedSchedules(
+        plan, maximum_pass);
+#else
+    return false;
+#endif
 }
 
 static size_t AVX2DecodeExecutionTileBytes(
@@ -6411,8 +6440,11 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         schedule won by 1.49x geometric mean at 64 bytes and 1.14x at 512
         bytes; the weakest uncontaminated multi-seed cell still won by 1.03x.
         A later punctured-side screen extended the same T=32 policy to
-        R=L=17..31; see the committed experiment summary for its exact
-        crossover and neighbor evidence.
+        R=L=17..31.  Follow-up partial-loss screens covered T=32 R=17..32:
+        regular kernels won every measured L>=2 cell through 512 bytes,
+        including 1320/1320 same-binary cells over four independent pattern
+        seeds in the former crossover region.  Sparse one-loss repair and
+        passes above 512 bytes retain their established dispatch.
 
         For T=64, a same-binary screen covered every K=65..191 and
         R=L=33..62 pair at 64 bytes.  The regular schedule won all 3810 cells;
@@ -6440,7 +6472,6 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 ||
         codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
-        plan->missing_original_count != codec->recovery_count ||
         PlanUsesTranslatedLowDecode(plan))
         return false;
 
@@ -6450,11 +6481,13 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
            proves recovery_count <= 32.  Keep one comparison here: besides
            making the invariant explicit, it preserves the established hot
            text layout for decode paths that never enter this policy. */
-        return codec->recovery_count > 16 &&
+        return plan->missing_original_count >= 2U &&
+            codec->recovery_count > 16 &&
             codec->parent_count > 64 && codec->parent_count <= kGF8Order &&
             codec->original_count > 32 && codec->original_count <= 224;
     }
-    return codec->padded_side == 64 &&
+    return plan->missing_original_count == codec->recovery_count &&
+        codec->padded_side == 64 &&
         codec->recovery_count >= 33 && codec->recovery_count <= 62 &&
         codec->parent_count == kGF8Order &&
         codec->original_count >= 65 && codec->original_count <= 191;
@@ -6552,7 +6585,10 @@ static void ExecuteTransformDecodePass(
         {
             /* This branch is native high GF8; keep the policy out of low and
                generic code generation as well as out of their execution. */
-            const bool bypass_high_pruned_schedules =
+            const bool eligible_tiny_side = codec->padded_side == 32 ||
+                (codec->padded_side == 64 &&
+                 plan->missing_original_count == codec->recovery_count);
+            const bool bypass_high_pruned_schedules = eligible_tiny_side &&
                 BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
             leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
