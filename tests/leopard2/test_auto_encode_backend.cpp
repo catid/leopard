@@ -1442,15 +1442,30 @@ void test_small_high_encode(
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
         leopard::ff8::TestOnlyResetHighEncodeCounts();
         (void)encode(codec.get(), original, test_case.r, false);
-        const bool sub_2k_t4 =
+        const size_t complete_bytes =
+            (test_case.bytes / 64U) * 64U;
+        const bool sub_2k_register_t4 =
             test_case.r >= 3 && test_case.r <= 4 &&
             ((test_case.k >= 3 && test_case.k <= 7) ||
              (test_case.k >= 9 && test_case.k <= 11)) &&
-            (test_case.bytes / 64U) * 64U >= 32U;
-        require(leopard::ff8::TestOnlyGetHighEncodeCounts().
-                    small_transform_calls ==
-                        (sub_2k_t4 ? 1U : 0U),
-            "T=2/T=4 coarse-kernel policy escaped its shape bounds");
+            complete_bytes >= 32U;
+        const bool sub_2k_direct_t4 =
+            test_case.r >= 3 && test_case.r <= 4 &&
+            test_case.k >= 12 && complete_bytes >= 64U;
+        const uint64_t actual_calls = leopard::ff8::
+            TestOnlyGetHighEncodeCounts().small_transform_calls;
+        const uint64_t expected_calls =
+            sub_2k_register_t4 || sub_2k_direct_t4 ? 1U : 0U;
+        if (actual_calls != expected_calls)
+        {
+            throw std::runtime_error(
+                "T=2/T=4 coarse-kernel policy escaped its shape bounds: "
+                "K=" + std::to_string(test_case.k) +
+                " R=" + std::to_string(test_case.r) +
+                " bytes=" + std::to_string(test_case.bytes) +
+                " expected=" + std::to_string(expected_calls) +
+                " actual=" + std::to_string(actual_calls));
+        }
     }
 }
 
