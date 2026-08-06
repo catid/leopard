@@ -1,0 +1,162 @@
+{
+  "schema": "leopard2-t32-punctured-tiny-schedule-bypass-summary-v1",
+  "generated_utc": "2026-08-06T07:18:00Z",
+  "decision": {
+    "status": "promote",
+    "summary": "Extend the pass-local native-high GF8 AVX2 T=32 maximum-loss regular-kernel policy from R=32 to every punctured R=17..31 for complete 64-byte passes through 512 bytes.",
+    "wire_format_changed": false,
+    "field_arithmetic_changed": false,
+    "scratch_geometry_changed": false,
+    "plan_mutability_changed": false,
+    "scope": {
+      "profile": "legacy_high_v1",
+      "field": "gf8",
+      "backend": "avx2",
+      "layout": "native_v1",
+      "padded_side_T": 32,
+      "transmitted_recovery_R_inclusive": [17, 31],
+      "parent_N": [128, 256],
+      "original_K_inclusive": [33, 224],
+      "loss_rule": "missing_original_count == R",
+      "aligned_pass_bytes_inclusive": [64, 512]
+    },
+    "fallback": "R<=16, partial loss, translated Algorithm 4, scalar, SSSE3, GF16, forced codecs, and complete passes >=576 bytes retain their previous routes. Ragged calls apply the rule independently to each complete aligned prefix or padded tail pass.",
+    "threshold_note": "The two weakest 512-byte low-K cells improve by 4.57% and 4.99% against the same-binary control, just below the default 5% point threshold. Promotion is retained because this is one invariant-preserving comparison, all 1,080 directional cells won, the broad 512-byte geometric gain is 13.10%, every exact-main target won by at least 28.82%, and no target or neighbor regressed."
+  },
+  "implementation": {
+    "commit": "92024d320f3dc32c70320aee8a7a4513cedb1ea0",
+    "source_tree": "b1e83d44ca11c305a7d7ed3bf6139456209600da",
+    "predecessor_commit": "e3fa3636f9ba70d886bfbd2c7423ca3e0497cc51",
+    "exact_leopard_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "production_file": "leopard2.cpp",
+    "focused_test": "tests/leopard2/test_high_t32_tiny_schedule_policy.cpp",
+    "design": "The immutable plan retains exact schedules. Only a qualified byte pass supplies null schedule views to the existing Algorithm 5 executor, selecting its mature regular kernels. padded_side==32 already proves R<=32, so the production predicate uses the single comparison R>16; retaining the redundant upper comparison caused a measured unrelated code-layout regression and was rejected."
+  },
+  "host": {
+    "cpu": "AMD Ryzen 9 9950X3D 16-Core Processor",
+    "allowed_logical_cpus": 30,
+    "physical_smt_pairs": 15,
+    "sockets": 1,
+    "numa_nodes": 1,
+    "compiler": "gcc 13.3.0",
+    "sanitizer_compiler": "clang 18.1.3",
+    "authoritative_timing_cpu": 30,
+    "reserved_smt_sibling": 14
+  },
+  "binary_provenance": {
+    "current_sha256": "6219f8f5a223c51986dd3237db99581edf769e8a979e7aa1d31b2490da0a8d22",
+    "exact_parent_sha256": "3fd4a523eb15997c230d117a8f9b036d6a9be5b869f4bb8c5b3a3124c107bbf9",
+    "exact_main_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "hashes_identical_before_and_after_campaign": true,
+    "current_source_tracked_dirty": false,
+    "current_avx512_zmm_opmask_zeroing_instruction_matches": 0
+  },
+  "authoritative_method": {
+    "raw_root": "/tmp/leopard2-t32-punctured-92024d3-authoritative-v3",
+    "raw_summary_sha256": "214657ec247ca3ae47d157ff7415be747730fc174020a4ab3c87151dcbaeee9d",
+    "canonical_lock": "/tmp/leopard-gf8-authoritative.lock",
+    "accepted_cells": 16,
+    "accepted_rounds": 144,
+    "reports": 1044,
+    "rejected_rounds": 0,
+    "timing_samples_per_invocation": 15,
+    "warmup_calls_per_invocation": 64,
+    "reuse": 64,
+    "invocations_per_role_per_round": 2,
+    "counterbalancing": "forward plus reverse role order, with the first role alternating by round",
+    "interval": "paired log-ratio Student-t 95% confidence interval, df=8",
+    "ratio_semantics": "baseline time divided by current time; values above one favor current Leopard2",
+    "per_process_address_space_limit_bytes": 268435456,
+    "openmp_environment": {
+      "OMP_PLACES": "unset",
+      "OMP_NUM_THREADS": "1",
+      "OMP_THREAD_LIMIT": "1",
+      "OMP_DYNAMIC": "FALSE",
+      "OMP_PROC_BIND": "TRUE"
+    }
+  },
+  "directional_scope_search": {
+    "authority": "directional because these screens preceded the clean implementation commit",
+    "sampled_k_r_bytes": {
+      "artifact": "/tmp/leopard2-t32-punctured-dirty-directional-v1.json",
+      "sha256": "e687a8a5eeeab0ba9722c1878f1429a0ebd55d599f7196e378dc18ca1beaddbb",
+      "cells": 1080,
+      "wins": 1080,
+      "geometric_gain_by_bytes": {
+        "64": 1.5090903887,
+        "128": 1.3608181958,
+        "256": 1.2256439890,
+        "512": 1.1309672865
+      },
+      "minimum_gain": 1.0711642277
+    },
+    "exhaustive_b64": {
+      "artifact": "/tmp/leopard2-t32-punctured-all-k-r-b64-dirty-v1.json",
+      "sha256": "a19c8ca91b52183bd9e98a06ea792a37ed156e7ff65bfedb393451f4a17dd167",
+      "domain": "every K=33..224 and R=17..31",
+      "cells": 2880,
+      "initial_wins": 2879,
+      "geometric_gain": 1.5530853303,
+      "noisy_cell_disposition": "K=170,R=29 reran on nine quiet rounds at 1.60359x, CI95 1.59393..1.61332",
+      "rerun_artifact_sha256": "9bbbff2fdfa933a85f1e641d046825598f93802c669b60cd5cebbffd3acef920"
+    },
+    "multi_seed_boundaries": {
+      "artifact": "/tmp/leopard2-t32-punctured-multiseed-dirty-v1.json",
+      "sha256": "bc03112d52f2051b0e2da8f1a2deede6462501e7b13f60943c727780b655f3da",
+      "cells": 288,
+      "wins": 288,
+      "seeds_per_shape": 4,
+      "geometric_gain_b64": 1.5120895602,
+      "geometric_gain_b512": 1.1260480069,
+      "minimum_gain": 1.0455235538
+    }
+  },
+  "target_result_format": "Each ratio is [geometric mean, CI95 lower, CI95 upper].",
+  "target_results": [
+    {"K":33,"R":17,"bytes":64,"loss":17,"pruned_over_current":[1.465244,1.457524,1.473006],"parent_over_current":[1.478798,1.473894,1.483718],"main_over_current_execution":[1.603386,1.596500,1.610301],"main_over_current_amortized_reuse64":[1.541788,1.535231,1.548373],"main_over_current_one_shot":[1.152509,1.145665,1.159394]},
+    {"K":33,"R":31,"bytes":512,"loss":31,"pruned_over_current":[1.045696,1.043528,1.047868],"parent_over_current":[1.047202,1.045595,1.048811],"main_over_current_execution":[1.572297,1.566157,1.578462],"main_over_current_amortized_reuse64":[1.555722,1.549656,1.561811],"main_over_current_one_shot":[1.418571,1.412955,1.424210]},
+    {"K":34,"R":31,"bytes":512,"loss":31,"pruned_over_current":[1.049886,1.046111,1.053676],"parent_over_current":[1.053173,1.050376,1.055977],"main_over_current_execution":[1.546715,1.542875,1.550564],"main_over_current_amortized_reuse64":[1.530555,1.526772,1.534348],"main_over_current_one_shot":[1.397852,1.395038,1.400672]},
+    {"K":57,"R":29,"bytes":64,"loss":29,"pruned_over_current":[1.544743,1.534398,1.555159],"parent_over_current":[1.533010,1.517983,1.548185],"main_over_current_execution":[1.384630,1.378697,1.390589],"main_over_current_amortized_reuse64":[1.327715,1.322205,1.333248],"main_over_current_one_shot":[1.030759,1.023698,1.037869]},
+    {"K":96,"R":24,"bytes":512,"loss":24,"pruned_over_current":[1.107747,1.105745,1.109753],"parent_over_current":[1.110163,1.106247,1.114093],"main_over_current_execution":[1.288208,1.284740,1.291686],"main_over_current_amortized_reuse64":[1.270281,1.266893,1.273678],"main_over_current_one_shot":[1.183189,1.179921,1.186467]},
+    {"K":97,"R":24,"bytes":64,"loss":24,"pruned_over_current":[1.551942,1.547151,1.556748],"parent_over_current":[1.546146,1.538736,1.553591],"main_over_current_execution":[1.922206,1.914342,1.930103],"main_over_current_amortized_reuse64":[1.822372,1.814814,1.829961],"main_over_current_one_shot":[1.429784,1.423865,1.435728]},
+    {"K":128,"R":17,"bytes":256,"loss":17,"pruned_over_current":[1.228485,1.222698,1.234299],"parent_over_current":[1.224435,1.220261,1.228623],"main_over_current_execution":[1.995031,1.986818,2.003279],"main_over_current_amortized_reuse64":[1.939820,1.931895,1.947778],"main_over_current_one_shot":[1.710889,1.703221,1.718590]},
+    {"K":170,"R":29,"bytes":64,"loss":29,"pruned_over_current":[1.600796,1.587309,1.614399],"parent_over_current":[1.601496,1.589376,1.613709],"main_over_current_execution":[1.533681,1.526636,1.540758],"main_over_current_amortized_reuse64":[1.441543,1.435169,1.447946],"main_over_current_one_shot":[1.202317,1.199006,1.205637]},
+    {"K":192,"R":31,"bytes":128,"loss":31,"pruned_over_current":[1.379401,1.373125,1.385705],"parent_over_current":[1.382559,1.375493,1.389662],"main_over_current_execution":[1.546112,1.539805,1.552446],"main_over_current_amortized_reuse64":[1.479124,1.473223,1.485048],"main_over_current_one_shot":[1.283131,1.280217,1.286052]},
+    {"K":224,"R":31,"bytes":512,"loss":31,"pruned_over_current":[1.098028,1.094184,1.101886],"parent_over_current":[1.098256,1.094552,1.101973],"main_over_current_execution":[1.542142,1.537808,1.546488],"main_over_current_amortized_reuse64":[1.515305,1.511116,1.519505],"main_over_current_one_shot":[1.440823,1.438766,1.442884]}
+  ],
+  "neighbor_results": {
+    "maximum_point_execution_regression_vs_exact_parent_percent": 1.524,
+    "maximum_guarded_execution_regression_ci95_percent": 1.743,
+    "maximum_point_one_shot_regression_vs_exact_parent_percent": 0.932,
+    "expanded_R32_guard": {
+      "cell": {"K":192,"R":32,"bytes":64,"loss":32},
+      "accepted_rounds": 25,
+      "raw_sha256": "af2d2cba4e7bb78cae64d53444a8fc11f130fcabbc687881e4fcac5d31e62cf4",
+      "parent_over_current_execution": [0.984984,0.982866,0.987106],
+      "parent_over_current_one_shot": [0.990768,0.989015,0.992525]
+    },
+    "inert_domains": ["T16", "partial loss", "576-byte cutoff", "translated Algorithm 4", "existing R=32 policy", "upper-K 576-byte cutoff"],
+    "new_gap_found": {
+      "cell": {"K":57,"R":29,"bytes":64,"loss":28},
+      "main_over_current_execution": [0.936342,0.930613,0.942107],
+      "main_over_current_amortized_reuse64": [0.910077,0.904616,0.915570],
+      "main_over_current_one_shot": [0.325201,0.324360,0.326045],
+      "disposition": "Unchanged by this maximum-loss policy and tracked as the next partial-loss optimization task."
+    }
+  },
+  "correctness_and_safety": {
+    "release": "8/8 focused backend, locator, dense-plan, direct-oracle high-decode, legacy compatibility, pruned-stage, T32 schedule-policy, and high/low-duality tests passed under a 256 MiB process limit.",
+    "asan_ubsan": "3/3 focused direct-oracle high-decode, pruned-stage, and T32 schedule-policy tests passed with Clang 18 ASan+UBSan.",
+    "route_matrix": "Covers R=17/24/29/31, K=33/57/96/97/224, N=128/256, clustered/striped/random losses, byte sizes 1/63/64/65/511/512/513/575/576/577, unaligned buffers, partial-loss, T16, translated-low, scalar, and existing R32 controls.",
+    "initial_sanitizer_build_note": "A RelWithDebInfo sanitizer compile exceeded the intentional 512 MiB compiler address-space cap in Clang LiveDebugValues. The Release -O1 -g0 ASan+UBSan build remained capped during compilation and its test executions were intentionally not VA-capped."
+  },
+  "invalidated_or_superseded_runs": [
+    "Authoritative v1 used d84ce20 rather than the immediate Leopard2 parent; exact-main and same-binary measurements were valid, but every cell was rerun with exact parent e3fa363.",
+    "Authoritative v2 retained a redundant R<=32 comparison and exposed a >2% inert translated-low one-shot layout regression. The predicate was reduced to the equivalent R>16 form, the regression disappeared, and every cell was rerun as v3."
+  ],
+  "limitations": [
+    "Authoritative performance evidence is for one AMD Zen 5 AVX2 host.",
+    "Only 30 logical CPUs were available in process affinity, so this single-core campaign cannot supply 128-core or NUMA scaling evidence.",
+    "The policy intentionally does not address partial-loss setup/execution; the neighbor campaign identifies that as the next Leopard-main gap."
+  ]
+}
