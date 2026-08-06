@@ -2687,6 +2687,122 @@ static LEO2_AVX2_FORCE_INLINE void AVX2FF8T4Inverse(
     }
 }
 
+#if !defined(LEO2_GFNI_VARIANT)
+static LEO2_AVX2_FORCE_INLINE __m256i AVX2LoadGF8Exact127Tail(
+    const uint8_t* input)
+{
+    /*
+        Assemble public bytes 96..126 plus the shortened zero byte without
+        reading source[127].  The overlapping high load remains wholly inside
+        the 127-byte object: it reads source[111..126], then drops byte 111.
+    */
+    const __m128i low = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(input + 96));
+    const __m128i overlapping_high = _mm_loadu_si128(
+        reinterpret_cast<const __m128i*>(input + 111));
+    const __m128i high = _mm_srli_si128(overlapping_high, 1);
+    return _mm256_inserti128_si256(
+        _mm256_castsi128_si256(low), high, 1);
+}
+
+static LEO2_AVX2_FORCE_INLINE void AVX2FF8IFFTGroupExact127(
+    const void* const* input_pointer,
+    void* const* output_pointer,
+    uint8_t live_mask,
+    uint16_t multiplier_log01,
+    uint16_t multiplier_log23,
+    uint16_t multiplier_log02)
+{
+    const uint8_t* const input[4] = {
+        static_cast<const uint8_t*>(input_pointer[0]),
+        static_cast<const uint8_t*>(input_pointer[1]),
+        static_cast<const uint8_t*>(input_pointer[2]),
+        static_cast<const uint8_t*>(input_pointer[3])
+    };
+    uint8_t* const output[4] = {
+        static_cast<uint8_t*>(output_pointer[0]),
+        static_cast<uint8_t*>(output_pointer[1]),
+        static_cast<uint8_t*>(output_pointer[2]),
+        static_cast<uint8_t*>(output_pointer[3])
+    };
+    const AVX2FF8T4Tables tables = AVX2FF8PrepareT4Tables(
+        multiplier_log01, multiplier_log23, multiplier_log02);
+
+#if defined(__clang__)
+# pragma clang loop unroll(disable)
+#elif defined(__GNUC__)
+# pragma GCC unroll 1
+#endif
+    for (unsigned offset = 0; offset < 128; offset += 32)
+    {
+        __m256i x0 = _mm256_setzero_si256();
+        __m256i x1 = _mm256_setzero_si256();
+        __m256i x2 = _mm256_setzero_si256();
+        __m256i x3 = _mm256_setzero_si256();
+        if (offset == 96)
+        {
+            if ((live_mask & 1U) != 0)
+                x0 = AVX2LoadGF8Exact127Tail(input[0]);
+            if ((live_mask & 2U) != 0)
+                x1 = AVX2LoadGF8Exact127Tail(input[1]);
+            if ((live_mask & 4U) != 0)
+                x2 = AVX2LoadGF8Exact127Tail(input[2]);
+            if ((live_mask & 8U) != 0)
+                x3 = AVX2LoadGF8Exact127Tail(input[3]);
+        }
+        else
+        {
+            if ((live_mask & 1U) != 0)
+                x0 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input[0] + offset));
+            if ((live_mask & 2U) != 0)
+                x1 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input[1] + offset));
+            if ((live_mask & 4U) != 0)
+                x2 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input[2] + offset));
+            if ((live_mask & 8U) != 0)
+                x3 = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(
+                    input[3] + offset));
+        }
+        AVX2FF8T4Inverse(x0, x1, x2, x3, tables);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[0] + offset), x0);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[1] + offset), x1);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[2] + offset), x2);
+        _mm256_storeu_si256(
+            reinterpret_cast<__m256i*>(output[3] + offset), x3);
+    }
+}
+
+void AVX2FF8IFFTBlockFromSourcesExact127(
+    const void* const* sources,
+    void** work,
+    uint32_t count,
+    const uint8_t* skew_lut)
+{
+    LEO_DEBUG_ASSERT(count > 4 && (count & 3U) == 0);
+    for (uint32_t r = 0; r < count; r += 4)
+    {
+        uint8_t live_mask = 0;
+        for (unsigned lane = 0; lane < 4; ++lane)
+            if (sources[r + lane])
+                live_mask |= static_cast<uint8_t>(1U << lane);
+        if (live_mask == 0)
+        {
+            for (unsigned lane = 0; lane < 4; ++lane)
+                memset(work[r + lane], 0, 128);
+            continue;
+        }
+        AVX2FF8IFFTGroupExact127(
+            sources + r, work + r, live_mask,
+            skew_lut[r + 1], skew_lut[r + 3], skew_lut[r + 2]);
+    }
+}
+#endif
+
 static LEO2_AVX2_FORCE_INLINE void AVX2FF8T4Forward(
     __m256i& x0, __m256i& x1, __m256i& x2, __m256i& x3,
     const AVX2FF8T4Tables& tables)

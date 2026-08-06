@@ -516,6 +516,7 @@ struct TestOnlyHighDecodeCounts
     uint64_t receive_ifft_butterfly4_out_of_place;
     uint64_t receive_copy_shards;
     uint64_t receive_zero_shards;
+    uint64_t receive_exact127_blocks;
     uint64_t locator_weighted_ifft_butterfly4;
     uint64_t locator_scale_rows_elided;
     uint64_t locator_inactive_rows;
@@ -854,6 +855,25 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
     const leopard2_internal::PrunedTransformPlan* output_plans,
     unsigned output_plan_count,
     void** work);
+void ReedSolomonDecodeHighTiledPrunedPlannedExactSources(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const * const coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
+    void** work,
+    uint64_t exact_source_bytes);
 
 void ReedSolomonDecode(
     const backend::Ops& ops,

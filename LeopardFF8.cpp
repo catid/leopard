@@ -137,6 +137,7 @@ static std::atomic<uint64_t> TestHighSyndromeBlockZeroXorShards(0);
 static std::atomic<uint64_t> TestHighReceiveIFFTButterfly4OutCalls(0);
 static std::atomic<uint64_t> TestHighReceiveCopyShards(0);
 static std::atomic<uint64_t> TestHighReceiveZeroShards(0);
+static std::atomic<uint64_t> TestHighReceiveExact127Blocks(0);
 static std::atomic<uint64_t> TestHighLocatorWeightedIFFTButterfly4Calls(0);
 static std::atomic<uint64_t> TestHighLocatorScaleRowsElided(0);
 static std::atomic<uint64_t> TestHighLocatorInactiveRows(0);
@@ -2019,11 +2020,37 @@ static void StageHighDecodeSources(
     const uint64_t bytes,
     const void* const* sources,
     void** work,
-    const unsigned count)
+    const unsigned count,
+    const uint64_t exact_source_bytes = 0)
 {
+    LEO_DEBUG_ASSERT(exact_source_bytes <= bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
     uint64_t copy_count = 0;
 #endif
+    if (exact_source_bytes != 0)
+    {
+        for (unsigned i = 0; i < count; ++i)
+        {
+            if (sources[i])
+            {
+                memcpy(work[i], sources[i], exact_source_bytes);
+                memset(static_cast<uint8_t*>(work[i]) + exact_source_bytes,
+                    0, bytes - exact_source_bytes);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+                ++copy_count;
+#endif
+            }
+            else
+                memset(work[i], 0, bytes);
+        }
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        TestHighReceiveCopyShards.fetch_add(
+            copy_count, std::memory_order_relaxed);
+        TestHighReceiveZeroShards.fetch_add(
+            count - copy_count, std::memory_order_relaxed);
+#endif
+        return;
+    }
     for (unsigned i = 0; i < count; ++i)
     {
         if (sources[i])
@@ -2058,10 +2085,46 @@ static void IFFT_DIT_DecoderFromSources(
     void** work,
     void** xor_result,
     const unsigned m,
-    const ffe_t* skewLUT)
+    const ffe_t* skewLUT,
+    const uint64_t exact_source_bytes = 0)
 {
     LEO_DEBUG_ASSERT(m_truncated <= m);
     LEO_DEBUG_ASSERT(m <= 4 || (m & 3U) == 0);
+#if defined(LEO2_HAVE_AVX2_BACKEND)
+    if (exact_source_bytes != 0)
+    {
+        LEO_DEBUG_ASSERT(exact_source_bytes == 127);
+        LEO_DEBUG_ASSERT(bytes == 128);
+        LEO_DEBUG_ASSERT(m > 4 && (m & 3U) == 0);
+        LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+        uint64_t live_groups = 0;
+        uint64_t zero_shards = 0;
+        for (unsigned r = 0; r < m; r += 4)
+        {
+            unsigned live_count = 0;
+            for (unsigned lane = 0; lane < 4; ++lane)
+                live_count += sources[r + lane] != NULL;
+            live_groups += live_count != 0;
+            zero_shards += 4U - live_count;
+        }
+        TestHighReceiveIFFTButterfly4OutCalls.fetch_add(
+            live_groups, std::memory_order_relaxed);
+        TestHighReceiveZeroShards.fetch_add(
+            zero_shards, std::memory_order_relaxed);
+        TestHighReceiveExact127Blocks.fetch_add(
+            1, std::memory_order_relaxed);
+#endif
+        backend::AVX2FF8IFFTBlockFromSourcesExact127(
+            sources, work, m, skewLUT);
+        IFFT_DIT_DecoderImpl(
+            ops, bytes, m_truncated, work, m, skewLUT, xor_result, 4);
+        return;
+    }
+#else
+    LEO_DEBUG_ASSERT(exact_source_bytes == 0);
+    (void)exact_source_bytes;
+#endif
     const bool qualified_source_backend =
         ops.kind == LEO2_BACKEND_SSSE3 ||
         ops.kind == LEO2_BACKEND_AVX2 ||
@@ -4429,6 +4492,7 @@ void TestOnlyResetHighDecodeCounts()
         0, std::memory_order_relaxed);
     TestHighReceiveCopyShards.store(0, std::memory_order_relaxed);
     TestHighReceiveZeroShards.store(0, std::memory_order_relaxed);
+    TestHighReceiveExact127Blocks.store(0, std::memory_order_relaxed);
     TestHighLocatorWeightedIFFTButterfly4Calls.store(
         0, std::memory_order_relaxed);
     TestHighLocatorScaleRowsElided.store(0, std::memory_order_relaxed);
@@ -4491,6 +4555,8 @@ TestOnlyHighDecodeCounts TestOnlyGetHighDecodeCounts()
         TestHighReceiveCopyShards.load(std::memory_order_relaxed);
     result.receive_zero_shards =
         TestHighReceiveZeroShards.load(std::memory_order_relaxed);
+    result.receive_exact127_blocks =
+        TestHighReceiveExact127Blocks.load(std::memory_order_relaxed);
     result.locator_weighted_ifft_butterfly4 =
         TestHighLocatorWeightedIFFTButterfly4Calls.load(
             std::memory_order_relaxed);
@@ -5344,7 +5410,8 @@ static void FinishHighDecodeSyndrome(
     unsigned block_zero_input_count,
     bool have_later_contribution,
     unsigned t,
-    void** work)
+    void** work,
+    uint64_t exact_source_bytes = 0)
 {
     (void)block_zero_input_count;
 #if defined(LEO2_ENABLE_TEST_HOOKS)
@@ -5355,7 +5422,7 @@ static void FinishHighDecodeSyndrome(
     if (!have_later_contribution)
     {
         StageHighDecodeSources(
-            buffer_bytes, block_zero_sources, work, t);
+            buffer_bytes, block_zero_sources, work, t, exact_source_bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
         TestHighSyndromeForwardTransformElisions.fetch_add(
             1, std::memory_order_relaxed);
@@ -5376,7 +5443,8 @@ static void FinishHighDecodeSyndrome(
 LEO_OPENMP_PARALLEL_FOR
     for (int i = 0; i < (int)t; ++i)
         if (block_zero_sources[i])
-            xor_mem(ops, work[i], block_zero_sources[i], buffer_bytes);
+            xor_mem(ops, work[i], block_zero_sources[i],
+                exact_source_bytes != 0 ? exact_source_bytes : buffer_bytes);
 }
 
 
@@ -5744,7 +5812,7 @@ void ReedSolomonDecodeHighPlanned(
 }
 
 
-void ReedSolomonDecodeHighTiledPrunedPlanned(
+void ReedSolomonDecodeHighTiledPrunedPlannedExactSources(
     const backend::Ops& ops,
     uint64_t buffer_bytes,
     unsigned n,
@@ -5761,7 +5829,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
     unsigned input_plan_count,
     const leopard2_internal::PrunedTransformPlan* output_plans,
     unsigned output_plan_count,
-    void** work)
+    void** work,
+    uint64_t exact_source_bytes)
 {
     LEO_DEBUG_ASSERT(t >= 2 && t < n && n <= kOrder);
     LEO_DEBUG_ASSERT(input_plan_count == 0 || input_plans != NULL);
@@ -5769,6 +5838,9 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
     LEO_DEBUG_ASSERT(output_plan_count == 0 ||
         output_plan_count == output_block_count);
     LEO_DEBUG_ASSERT(n % t == 0);
+    LEO_DEBUG_ASSERT(exact_source_bytes == 0 ||
+        (exact_source_bytes == 127 && buffer_bytes == 128 &&
+         ops.kind == LEO2_BACKEND_AVX2 && input_plan_count == 0));
 
     void** const accumulator = work;
     void** const tile = work + t;
@@ -5805,7 +5877,8 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
         if (pruned)
         {
             StageHighDecodeSources(
-                buffer_bytes, coordinate_data + offset, block_work, t);
+                buffer_bytes, coordinate_data + offset, block_work, t,
+                exact_source_bytes);
             LEO_DEBUG_ASSERT(pruned->size == t &&
                 pruned->shift == offset && pruned->inverse);
             const bool use_accumulating_sink =
@@ -5853,7 +5926,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                 ops, buffer_bytes, input_count, coordinate_data + offset,
                 block_work,
                 have_later_contribution ? accumulator : NULL,
-                t, FFTSkewStorage + offset);
+                t, FFTSkewStorage + offset, exact_source_bytes);
 #if defined(LEO2_ENABLE_TEST_HOOKS)
             (have_later_contribution ? TestHighSyndromeAccumulatedBlocks
                                      : TestHighSyndromeMaterializedBlocks)
@@ -5866,7 +5939,7 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
 
     FinishHighDecodeSyndrome(
         ops, buffer_bytes, coordinate_data, block_input_counts[0],
-        have_later_contribution, t, accumulator);
+        have_later_contribution, t, accumulator, exact_source_bytes);
     IFFT_DIT_DecoderWeightedLocator(
         ops, buffer_bytes, coordinate_data, locator_logs,
         accumulator, t, FFTSkewStorage);
@@ -5949,6 +6022,34 @@ void ReedSolomonDecodeHighTiledPrunedPlanned(
                 reveal_log, buffer_bytes);
         }
     }
+}
+
+
+void ReedSolomonDecodeHighTiledPrunedPlanned(
+    const backend::Ops& ops,
+    uint64_t buffer_bytes,
+    unsigned n,
+    unsigned t,
+    const void* const* coordinate_data,
+    const uint16_t* block_input_counts,
+    const uint32_t* requested_coordinates,
+    const leopard2_internal::DecodeOutputBlock* output_blocks,
+    unsigned output_block_count,
+    const ffe_t* locator_logs,
+    const ffe_t* output_factors,
+    void* const* requested_output,
+    const leopard2_internal::PrunedTransformBlock* input_plans,
+    unsigned input_plan_count,
+    const leopard2_internal::PrunedTransformPlan* output_plans,
+    unsigned output_plan_count,
+    void** work)
+{
+    ReedSolomonDecodeHighTiledPrunedPlannedExactSources(
+        ops, buffer_bytes, n, t, coordinate_data, block_input_counts,
+        requested_coordinates, output_blocks, output_block_count,
+        locator_logs, output_factors, requested_output,
+        input_plans, input_plan_count, output_plans, output_plan_count,
+        work, 0);
 }
 
 

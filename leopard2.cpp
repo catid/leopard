@@ -6444,6 +6444,22 @@ static LEO_FORCE_INLINE void CopyAndPadGF8Exact65To128(
     memset(output + 65, 0, 63);
 }
 
+static LEO_FORCE_INLINE void CopyAndPadGF8Exact127To128(
+    void* destination,
+    const void* source)
+{
+    /*
+        A 127-byte fused-ragged shard needs only one synthetic byte.  Exposing
+        the fixed copy extent avoids the generic variable-size memcpy and
+        memset calls for every selected input while retaining the exact public
+        read range.  The compiler may overlap in-range vector loads, but the
+        memcpy contract never permits a read of source byte 127.
+    */
+    uint8_t* const output = static_cast<uint8_t*>(destination);
+    memcpy(output, source, 127);
+    output[127] = 0;
+}
+
 static void ScatterGF16CompactTail(
     void* destination,
     const void* source,
@@ -6497,6 +6513,11 @@ static void StageShardForKernel(
     if (codec->field == LEO2_FIELD_GF8 && bytes == 65 && rounded == 128)
     {
         CopyAndPadGF8Exact65To128(destination, source);
+        return;
+    }
+    if (codec->field == LEO2_FIELD_GF8 && bytes == 127 && rounded == 128)
+    {
+        CopyAndPadGF8Exact127To128(destination, source);
         return;
     }
     if (codec->field == LEO2_FIELD_GF16 && rounded != bytes)
@@ -6634,8 +6655,12 @@ static void ExecuteTransformDecodePass(
     bool use_generic,
     bool use_tiled,
     bool reveal_outputs_in_place,
-    void* const* high_systematic_output)
+    void* const* high_systematic_output,
+    size_t exact_source_bytes = 0)
 {
+#ifndef LEO_HAS_FF8
+    (void)exact_source_bytes;
+#endif
     const leo2_codec* codec = plan->codec;
     const leopard::backend::Ops& ops = *codec->context->ops;
     const bool use_low_specialized =
@@ -6721,7 +6746,7 @@ static void ExecuteTransformDecodePass(
                 codec->padded_side == 64;
             const bool bypass_high_pruned_schedules = eligible_tiny_side &&
                 BypassTinyGF8AVX2HighPrunedSchedules(plan, buffer_bytes);
-            leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
+            leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlannedExactSources(
                 ops, buffer_bytes, codec->parent_count, codec->padded_side,
                 coordinate_input, plan->block_input_counts.data(),
                 requested_coordinates, plan->high_output_blocks.data(),
@@ -6732,7 +6757,8 @@ static void ExecuteTransformDecodePass(
                 bypass_high_pruned_schedules ? 0U : high_input_plan_count,
                 bypass_high_pruned_schedules ? NULL : high_output_plans,
                 bypass_high_pruned_schedules ? 0U : high_output_plan_count,
-                work);
+                work,
+                bypass_high_pruned_schedules ? exact_source_bytes : 0);
         }
         else if (use_low_specialized)
         {
@@ -6878,6 +6904,9 @@ static void PopulateDecodeCoordinates(
     const bool stage_gf8_exact65_to128 = stage_inputs &&
         codec->field == LEO2_FIELD_GF8 && pass_bytes == 65 &&
         staging_slot_bytes == 128;
+    const bool stage_gf8_exact127_to128 = stage_inputs &&
+        codec->field == LEO2_FIELD_GF8 && pass_bytes == 127 &&
+        staging_slot_bytes == 128;
     size_t staging_slot = 0;
     std::fill(
         coordinate_data, coordinate_data + codec->parent_count,
@@ -6897,6 +6926,8 @@ static void PopulateDecodeCoordinates(
                 staging_slot++ * staging_slot_bytes;
             if (stage_gf8_exact65_to128)
                 CopyAndPadGF8Exact65To128(slot, source);
+            else if (stage_gf8_exact127_to128)
+                CopyAndPadGF8Exact127To128(slot, source);
             else
                 StageShardForKernel(
                     codec, slot, source, pass_bytes, staging_slot_bytes);
@@ -6919,6 +6950,8 @@ static void PopulateDecodeCoordinates(
                 staging_slot++ * staging_slot_bytes;
             if (stage_gf8_exact65_to128)
                 CopyAndPadGF8Exact65To128(slot, source);
+            else if (stage_gf8_exact127_to128)
+                CopyAndPadGF8Exact127To128(slot, source);
             else
                 StageShardForKernel(
                     codec, slot, source, pass_bytes, staging_slot_bytes);
@@ -10039,30 +10072,36 @@ static bool PrepareRawNativeHighPattern(
 }
 
 /*
-    The measured T=64 partial-loss execution winner is Algorithm 5's regular
-    AVX2 schedule, not the tiny direct matrix above.  Public one-shot decode
-    nevertheless used to allocate a complete vector-owned plan merely to
-    carry this bounded pattern metadata into one 64-byte call.  Keep a
-    separate scratch-owned view so the direct terminal's deliberately small
-    K/L bounds and coefficient layout remain unchanged.
+    Public one-shot decode used to allocate a complete vector-owned plan just
+    to carry bounded Algorithm 5 pattern metadata into one transform call.
+    Keep a scratch-owned view for the measured regular-schedule winners:
 
-    This route is intentionally narrower than the reusable-plan policy: only
-    dense partial loss at exactly one native AVX2 cache line is admitted.  It
-    owns no pruned schedule and calls the same regular Algorithm 5 kernel that
-    the measured reusable plan selects in this region.  The K=192
-    no-shortening endpoint is algebraically the same N=256/T=64 parent and is
-    admitted only for partial loss; maximum loss retains its separately tuned
-    plan path.
+      * dense partial T=64 loss at one native AVX2 cache line; and
+      * near-maximum T=32 loss at the exact 127-byte source boundary.
+
+    The first route writes complete public rows directly.  The second route
+    synthesizes byte 127 while loading and stages complete 128-byte results
+    before copying the exact public prefix.  Neither route owns a pruned
+    schedule, and both retain the general one-shot path outside their narrow
+    measured regions.
+
+    Preserve the older T64-named diagnostic macro as a source-compatible
+    alias for experiment scripts and frozen benchmark controls.
 */
-#ifndef LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM
-#define LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM 0
+#ifndef LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM
+# ifdef LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM
+#  define LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM \
+    LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM
+# else
+#  define LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM 0
+# endif
 #endif
-#if LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM < 0 || \
-    LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM > 1
-#error "LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM must be 0 or 1"
+#if LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM < 0 || \
+    LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM > 1
+#error "LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM must be 0 or 1"
 #endif
-static volatile unsigned g_raw_native_high_t64_transform_mode =
-    LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM ? 2U : 1U;
+static volatile unsigned g_raw_native_high_transform_mode =
+    LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_TRANSFORM ? 2U : 1U;
 
 struct RawNativeHighTransformPattern
 {
@@ -10207,19 +10246,27 @@ static void PopulateRawNativeHighCoordinates(
     }
 }
 
-static leo2_result ExecuteRawNativeHighT64Transform(
+static leo2_result ExecuteRawNativeHighTransform(
     const leo2_codec* codec,
     const DecodeScratchGeometry& geometry,
     const RawNativeHighTransformPattern& pattern,
     const void* const* original,
     const void* const* recovery,
     void* const* restored,
+    uint64_t shard_bytes,
     uint8_t* scratch)
 {
     const size_t work_rows = static_cast<size_t>(codec->padded_side) * 2U;
-    if (geometry.aligned_prefix_bytes != kScratchAlignment ||
-        geometry.tail_bytes != 0 || geometry.execution_tile_count != 1 ||
-        geometry.work_slot_bytes < kScratchAlignment ||
+    const bool exact127 = shard_bytes == 127 &&
+        geometry.fused_ragged_pass && geometry.rounded_bytes == 128 &&
+        geometry.aligned_prefix_bytes == kScratchAlignment &&
+        geometry.tail_bytes == 63;
+    const bool exact_cache_line = shard_bytes == kScratchAlignment &&
+        geometry.aligned_prefix_bytes == kScratchAlignment &&
+        geometry.tail_bytes == 0;
+    if ((!exact127 && !exact_cache_line) ||
+        geometry.execution_tile_count != 1 ||
+        geometry.work_slot_bytes < (exact127 ? 128U : kScratchAlignment) ||
         geometry.work_slot_count <
             work_rows + pattern.base.missing_original_count ||
         codec->fixed_factors8.size() != codec->parent_count)
@@ -10239,21 +10286,43 @@ static leo2_result ExecuteRawNativeHighT64Transform(
         const uint32_t missing = pattern.base.missing_originals[i];
         if (missing >= codec->original_count || !restored[missing])
             return LEO2_INTERNAL_ERROR;
-        requested_output[i] = restored[missing];
+        requested_output[i] = exact127
+            ? work_storage + (work_rows + i) * geometry.work_slot_bytes
+            : restored[missing];
     }
 
-    leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
-        *codec->context->ops, kScratchAlignment,
-        codec->parent_count, codec->padded_side,
-        const_cast<const void* const*>(coordinate_data),
-        pattern.block_input_counts, pattern.requested_coordinates,
-        pattern.output_blocks, pattern.output_block_count,
-        pattern.base.locator, codec->fixed_factors8.data(),
-        requested_output, NULL, 0, NULL, 0, work);
+    if (exact127)
+    {
+        leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlannedExactSources(
+            *codec->context->ops, 128,
+            codec->parent_count, codec->padded_side,
+            const_cast<const void* const*>(coordinate_data),
+            pattern.block_input_counts, pattern.requested_coordinates,
+            pattern.output_blocks, pattern.output_block_count,
+            pattern.base.locator, codec->fixed_factors8.data(),
+            requested_output, NULL, 0, NULL, 0, work, 127);
+        for (uint32_t i = 0;
+             i < pattern.base.missing_original_count; ++i)
+        {
+            const uint32_t missing = pattern.base.missing_originals[i];
+            memcpy(restored[missing], requested_output[i], 127);
+        }
+    }
+    else
+    {
+        leopard::ff8::ReedSolomonDecodeHighTiledPrunedPlanned(
+            *codec->context->ops, kScratchAlignment,
+            codec->parent_count, codec->padded_side,
+            const_cast<const void* const*>(coordinate_data),
+            pattern.block_input_counts, pattern.requested_coordinates,
+            pattern.output_blocks, pattern.output_block_count,
+            pattern.base.locator, codec->fixed_factors8.data(),
+            requested_output, NULL, 0, NULL, 0, work);
+    }
     return LEO2_SUCCESS;
 }
 
-static leo2_result TryOneShotRawNativeHighT64Transform(
+static leo2_result TryOneShotRawNativeHighTransform(
     const leo2_codec* codec,
     uint64_t shard_bytes,
     const uint8_t* original_present,
@@ -10267,12 +10336,19 @@ static leo2_result TryOneShotRawNativeHighT64Transform(
     bool& handled)
 {
     handled = false;
-    if (g_raw_native_high_t64_transform_mode != 1U ||
+    const bool exact127_shape = codec && shard_bytes == 127 &&
+        codec->original_count >= 33 && codec->original_count <= 96 &&
+        codec->recovery_count >= 17 && codec->recovery_count <= 32 &&
+        codec->parent_count == 128 && codec->padded_side == 32;
+    const bool t64_cache_line_shape = codec &&
+        shard_bytes == kScratchAlignment &&
+        codec->original_count >= 65 && codec->original_count <= 192 &&
+        codec->recovery_count >= 33 && codec->recovery_count <= 64 &&
+        codec->parent_count == kGF8Order && codec->padded_side == 64;
+    if (g_raw_native_high_transform_mode != 1U ||
         g_one_shot_plan_setup_mode.load(std::memory_order_acquire) != 3U ||
-        !codec || shard_bytes != kScratchAlignment || codec->flags != 0 ||
-        codec->original_count < 65 || codec->original_count > 192 ||
-        codec->recovery_count < 33 || codec->recovery_count > 64 ||
-        codec->parent_count != kGF8Order || codec->padded_side != 64 ||
+        !codec || (!exact127_shape && !t64_cache_line_shape) ||
+        codec->flags != 0 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
         codec->field != LEO2_FIELD_GF8 ||
         codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
@@ -10347,9 +10423,17 @@ static leo2_result TryOneShotRawNativeHighT64Transform(
         handled = true;
         return LEO2_NEED_MORE_DATA;
     }
-    if (missing_original_count >= codec->recovery_count ||
-        missing_original_count < codec->recovery_count / 2U)
+    if (exact127_shape)
+    {
+        if (missing_original_count > codec->recovery_count ||
+            missing_original_count + 1U < codec->recovery_count)
+            return LEO2_SUCCESS;
+    }
+    else if (missing_original_count >= codec->recovery_count ||
+             missing_original_count < codec->recovery_count / 2U)
+    {
         return LEO2_SUCCESS;
+    }
 
     DecodeScratchGeometry geometry;
     leo2_result result = DecodeLayout(
@@ -10383,8 +10467,9 @@ static leo2_result TryOneShotRawNativeHighT64Transform(
     if (!PrepareRawNativeHighTransformPattern(
             codec, original_present, recovery_present, pattern))
         return LEO2_INTERNAL_ERROR;
-    return ExecuteRawNativeHighT64Transform(codec, geometry, pattern,
-        original, recovery, restored, static_cast<uint8_t*>(scratch));
+    return ExecuteRawNativeHighTransform(codec, geometry, pattern,
+        original, recovery, restored, shard_bytes,
+        static_cast<uint8_t*>(scratch));
 }
 
 #if defined(LEO2_HAVE_AVX2_BACKEND)
@@ -21480,14 +21565,25 @@ static leo2_result DecodePlanExecuteInternal(
     {
         const size_t exact_bytes =
             geometry.aligned_prefix_bytes + geometry.tail_bytes;
+        bool direct_exact127_sources = false;
+#ifdef LEO_HAS_FF8
+        direct_exact127_sources = exact_bytes == 127 &&
+            !use_generic && use_tiled &&
+            codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+            !PlanUsesTranslatedLowDecode(plan) &&
+            BypassTinyGF8AVX2HighPrunedSchedules(
+                plan, geometry.rounded_bytes);
+#endif
         PopulateDecodeCoordinates(
-            plan, original, recovery, 0, exact_bytes, staging_slots,
+            plan, original, recovery, 0, exact_bytes,
+            direct_exact127_sources ? NULL : staging_slots,
             coordinate_data, geometry.input_slot_bytes);
         const void* const* const coordinate_input =
             const_cast<const void* const*>(coordinate_data);
         ExecuteTransformDecodePass(
             plan, geometry.rounded_bytes, coordinate_input, work,
-            use_generic, use_tiled, true, NULL);
+            use_generic, use_tiled, true, NULL,
+            direct_exact127_sources ? exact_bytes : 0);
         GatherTransformDecodePass(
             plan, restored_original, 0, exact_bytes, work,
             use_generic, use_tiled, true);
@@ -22477,15 +22573,15 @@ static LEO2_ONE_SHOT_GENERAL_NOINLINE leo2_result DecodeOneShotGeneral(
         raw_translated_low_handled)
         return raw_translated_low_result;
 
-    bool raw_native_high_t64_handled = false;
-    const leo2_result raw_native_high_t64_result =
-        TryOneShotRawNativeHighT64Transform(
+    bool raw_native_high_transform_handled = false;
+    const leo2_result raw_native_high_transform_result =
+        TryOneShotRawNativeHighTransform(
             codec, shard_bytes, original_present, recovery_present,
             original, recovery, restored_original, scratch, scratch_bytes,
-            validated_prefix, raw_native_high_t64_handled);
-    if (raw_native_high_t64_result != LEO2_SUCCESS ||
-        raw_native_high_t64_handled)
-        return raw_native_high_t64_result;
+            validated_prefix, raw_native_high_transform_handled);
+    if (raw_native_high_transform_result != LEO2_SUCCESS ||
+        raw_native_high_transform_handled)
+        return raw_native_high_transform_result;
 
     bool raw_native_high_handled = false;
     const leo2_result raw_native_high_result =

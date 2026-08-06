@@ -737,6 +737,18 @@ void AVX2FF8LinearCombinationTiny(
 const Ops* InitializeAVX2(const InitializeArgs& args);
 #if !defined(NO_LEO_HAS_FF8)
 /*
+    Exact-tail receive boundary for one complete Algorithm 5 block.  Every
+    live source exposes exactly 127 bytes.  The callback synthesizes a zero at
+    byte 127 while applying the first two inverse layers into complete
+    128-byte work rows.  Null sources represent selected-codeword zeros.
+*/
+void AVX2FF8IFFTBlockFromSourcesExact127(
+    const void* const* sources,
+    void** work,
+    uint32_t count,
+    const uint8_t* skew_lut);
+
+/*
     Complete the fixed K=2/3,R=2 legacy-high GF8 transform for a prevalidated
     packed stripe.  Complete 32-byte vectors use AVX2 and any final byte tail
     uses the same fixed maps through the scalar table.  This concrete entry is

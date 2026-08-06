@@ -678,6 +678,59 @@ void run_decode_case(
     leo2_codec_destroy(codec);
 }
 
+void run_one_shot_decode_case(
+    leo2_context* context,
+    unsigned k,
+    unsigned r,
+    size_t bytes,
+    const std::vector<unsigned>& missing_originals,
+    const std::vector<unsigned>& missing_recovery,
+    TestCounts* counts)
+{
+    leo2_codec* codec = make_codec(context, k, r,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
+    const Shards source = make_originals(
+        k, bytes, 0x1275a6eULL + k * 17U + r);
+    const Shards parity = encode_new(codec, source, bytes);
+    std::vector<uint8_t> original_present(k, 1);
+    std::vector<uint8_t> recovery_present(r, 1);
+    std::vector<const void*> original_ptrs(k, NULL);
+    std::vector<const void*> recovery_ptrs(r, NULL);
+    std::vector<void*> restored_ptrs(k, NULL);
+    Shards restored(k, std::vector<uint8_t>(bytes, 0));
+    for (size_t i = 0; i < missing_originals.size(); ++i)
+        original_present[missing_originals[i]] = 0;
+    for (size_t i = 0; i < missing_recovery.size(); ++i)
+        recovery_present[missing_recovery[i]] = 0;
+    for (unsigned i = 0; i < k; ++i)
+    {
+        if (original_present[i])
+            original_ptrs[i] = &source[i][0];
+        else
+            restored_ptrs[i] = &restored[i][0];
+    }
+    for (unsigned i = 0; i < r; ++i)
+        if (recovery_present[i])
+            recovery_ptrs[i] = &parity[i][0];
+
+    size_t scratch_bytes = 0;
+    require_result(leo2_decode_scratch_size(codec, bytes, &scratch_bytes),
+        "exact-127 one-shot scratch query");
+    AlignedBuffer scratch(scratch_bytes);
+    require_result(leo2_decode(codec, bytes,
+        &original_present[0], &recovery_present[0], &original_ptrs[0],
+        &recovery_ptrs[0], &restored_ptrs[0], scratch.data, scratch.bytes),
+        "exact-127 one-shot decode");
+    for (size_t i = 0; i < missing_originals.size(); ++i)
+    {
+        const unsigned missing = missing_originals[i];
+        require(restored[missing] == source[missing],
+            "exact-127 one-shot recovery mismatch");
+        ++counts->recovered_shards;
+    }
+    leo2_codec_destroy(codec);
+}
+
 void test_concurrent_preformatted_source_major_plan(
     leo2_context* context,
     TestCounts* counts)
@@ -2038,6 +2091,60 @@ void test_expanded_direct_repair_execution(TestCounts* counts)
     }
 #endif
     test_concurrent_preformatted_source_major_plan(context, counts);
+
+    /*
+        Exercise the public 127-byte source boundary that the native-high
+        AVX2 decoder consumes without first copying into 128-byte staging
+        rows.  The burst and interleaved patterns cover both partial and full
+        receive groups; run_decode_case independently compares the selected
+        decoder with the retained generic transform.  Under ASan, the exact
+        127-byte vector allocations also place any source[127] read in the
+        allocator redzone.
+    */
+    std::vector<unsigned> burst_missing(28);
+    for (unsigned i = 0; i < burst_missing.size(); ++i)
+        burst_missing[i] = i;
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    run_decode_case(context, 57, 29,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 127,
+        burst_missing, std::vector<unsigned>{28}, counts);
+    require(leopard::ff8::TestOnlyGetHighDecodeCounts().
+            receive_exact127_blocks != 0,
+        "burst exact-127 decode did not select the AVX2 source boundary");
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    run_one_shot_decode_case(context, 57, 29, 127,
+        burst_missing, std::vector<unsigned>{28}, counts);
+    require(leopard::ff8::TestOnlyGetHighDecodeCounts().
+            receive_exact127_blocks != 0,
+        "burst exact-127 one-shot did not select the raw AVX2 boundary");
+
+    std::vector<unsigned> full_loss_missing(29);
+    for (unsigned i = 0; i < full_loss_missing.size(); ++i)
+        full_loss_missing[i] = i;
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    run_one_shot_decode_case(context, 57, 29, 127,
+        full_loss_missing, std::vector<unsigned>(), counts);
+    require(leopard::ff8::TestOnlyGetHighDecodeCounts().
+            receive_exact127_blocks != 0,
+        "full-loss exact-127 one-shot did not select the raw AVX2 boundary");
+
+    std::vector<unsigned> interleaved_missing(30);
+    for (unsigned i = 0; i < interleaved_missing.size(); ++i)
+        interleaved_missing[i] = (i * 17U + 3U) % 92U;
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    run_decode_case(context, 92, 31,
+        LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8, 127,
+        interleaved_missing, std::vector<unsigned>{0}, counts);
+    require(leopard::ff8::TestOnlyGetHighDecodeCounts().
+            receive_exact127_blocks != 0,
+        "interleaved exact-127 decode did not select the AVX2 source boundary");
+    leopard::ff8::TestOnlyResetHighDecodeCounts();
+    run_one_shot_decode_case(context, 92, 31, 127,
+        interleaved_missing, std::vector<unsigned>{0}, counts);
+    require(leopard::ff8::TestOnlyGetHighDecodeCounts().
+            receive_exact127_blocks != 0,
+        "interleaved exact-127 one-shot did not select the raw AVX2 boundary");
+
     run_decode_case(context, 65, 127,
         LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8,
         63, missing_originals, std::vector<unsigned>{0, 64, 126}, counts);
