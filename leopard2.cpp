@@ -10068,7 +10068,17 @@ static leo2_result TryOneShotRawTranslatedLowDecode(
         handled = true;
         return LEO2_NEED_MORE_DATA;
     }
-    if (OneShotDirectRepairQualified(
+    /*
+        Loss-four direct plans still pay for heap-owned coefficient vectors.
+        At K=7..8 the existing scratch-owned translated-low transform is
+        faster for the complete 1..256-byte interval.  Let that raw path own
+        the call even though the reusable direct-plan policy also supports
+        four losses.  K<=6 keeps the direct plan: its smaller coefficient map
+        already wins this setup-sensitive regime.
+    */
+    const bool raw_loss_four = missing_original_count == 4 &&
+        codec->original_count >= 7 && codec->original_count <= 8;
+    if (!raw_loss_four && OneShotDirectRepairQualified(
             codec, missing_original_count, shard_bytes))
         return LEO2_SUCCESS;
 
@@ -10779,7 +10789,10 @@ static leo2_result TryOneShotRawNativeHighDecode(
         handled = true;
         return LEO2_NEED_MORE_DATA;
     }
-    if (missing_original_count < 5 ||
+    /* The scratch-owned locator/direct executor has no loss-five algebraic
+       dependency.  Include loss four so K=9..16 tiny one-shot calls avoid
+       constructing the slower heap-owned direct plan. */
+    if (missing_original_count < 4 ||
         missing_original_count > codec->recovery_count)
         return LEO2_SUCCESS;
     DecodeScratchGeometry geometry;
@@ -11484,7 +11497,7 @@ static leo2_result ExecuteRawNativeHighDirectAVX2(
     const uint32_t output_count = pattern.missing_original_count;
     const uint32_t t = codec->padded_side;
     if (codec->original_count < 9 || codec->original_count > 16 ||
-        output_count < 5 || output_count > kDirectMaxRepairLosses ||
+        output_count < 4 || output_count > kDirectMaxRepairLosses ||
         !IsRawNativeHighDirectByteCount(shard_bytes))
         return LEO2_INTERNAL_ERROR;
 

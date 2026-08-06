@@ -555,13 +555,16 @@ size_t verify_raw_native_high_oracle_matrix(leo2_context* context)
             leo2_codec* codec = make_codec(context, k, r, 0);
             leo2_codec* reusable_codec = make_codec(
                 context, k, r, LEO2_CODEC_FORCE_SPECIALIZED_DECODE);
-            const unsigned loss_counts[] = { 5, r };
+            const unsigned loss_counts[] = { 4, 5, r };
             for (size_t loss_i = 0;
                  loss_i < sizeof(loss_counts) / sizeof(loss_counts[0]);
                  ++loss_i)
             {
                 const unsigned losses = loss_counts[loss_i];
-                if (loss_i != 0 && losses == loss_counts[0])
+                bool duplicate_loss_count = false;
+                for (size_t previous = 0; previous < loss_i; ++previous)
+                    duplicate_loss_count |= losses == loss_counts[previous];
+                if (duplicate_loss_count)
                     continue;
                 for (unsigned shape = 0; shape < 2; ++shape)
                 {
@@ -717,16 +720,25 @@ void verify_routes_and_execution(
         const bool expect_direct =
             diagnostic_direct ||
             (LEO2_ENABLE_GF8_SMALL_DUAL_DIRECT != 0 &&
-             production_direct_shape && bytes >= 1024);
+             production_direct_shape &&
+             (bytes <= 63 || bytes >= 1024));
         const leopard2_internal::DirectRepairExecutor expected_executor =
             expect_direct
                 ? (LEO2_EXPERIMENT_GF8_SMALL_DIRECT_MODE == 1
                     ? leopard2_internal::kDirectRepairExecutorOutputMajor
                     : leopard2_internal::kDirectRepairExecutorSourceMajor)
                 : leopard2_internal::kDirectRepairExecutorNone;
-        require((path.path == leopard2_internal::kDecodePathDirect) ==
-                expect_direct,
-            "dual plan selected the wrong side of the 1024-byte boundary");
+        if ((path.path == leopard2_internal::kDecodePathDirect) !=
+            expect_direct)
+        {
+            std::ostringstream stream;
+            stream << "dual plan selected the wrong side of the 1024-byte "
+                   << "boundary: K=" << k << " R=" << r
+                   << " losses=" << losses << " bytes=" << bytes
+                   << " expected_direct=" << expect_direct
+                   << " actual_path=" << static_cast<int>(path.path);
+            throw std::runtime_error(stream.str());
+        }
         require(path.direct_executor == expected_executor,
             "dual plan reported the wrong byte executor");
 
@@ -1036,11 +1048,6 @@ int main()
         }
 #endif
 
-        const size_t raw_native_high_oracle_cases =
-            verify_raw_native_high_oracle_matrix(context);
-        require(raw_native_high_oracle_cases == 12432,
-            "raw native-high oracle matrix case count drifted");
-
         verify_routes_and_execution(context, 5, 5, 5);
         verify_routes_and_execution(context, 5, 8, 5);
         verify_routes_and_execution(context, 6, 8, 6);
@@ -1049,6 +1056,10 @@ int main()
         verify_routes_and_execution(context, 8, 8, 8);
         verify_routes_and_execution(context, 16, 8, 5);
         verify_routes_and_execution(context, 16, 8, 8);
+        const size_t raw_native_high_oracle_cases =
+            verify_raw_native_high_oracle_matrix(context);
+        require(raw_native_high_oracle_cases == 19536,
+            "raw native-high oracle matrix case count drifted");
         verify_irregular_presence_boundary(context);
         verify_transform_only(context, 16, 9, 8,
             LEO2_PROFILE_LEGACY_HIGH_V1, LEO2_FIELD_GF8);
