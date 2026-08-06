@@ -1,0 +1,203 @@
+{
+  "schema": "leopard2-final-source-allk-gf8-gap-checkpoint/v1",
+  "date_utc": "2026-08-06",
+  "status": "completed_with_degenerate_k1_contract_floor",
+  "scope": "Final-source pure-AVX2 Leopard main versus Leopard2 GF8 sweep for every K=1 through 255, followed by isolated replay of every apparent losing cell",
+  "ratio_orientation": "exact Leopard main time / Leopard2 time; values above one favor Leopard2",
+  "source_identity": {
+    "leopard2_commit": "b1f334a320fccaaadd7668e026fbd5fffde525b0",
+    "leopard2_tree": "a3fc45e47c2633d4aca9091161fb04996ca5271d",
+    "leopard2_tracked_dirty": false,
+    "leopard2_executable_sha256": "c3938e44b8d2a8741f8677083ce745c6786423d48cfb0ff37e57624a0b2de1f0",
+    "exact_main_commit": "6e5725ebdf9da4370b0bcc4f70fa8eb66f4e6198",
+    "exact_main_executable_sha256": "78575e2fe1b9796d10dcb4c14d2bcc1b627a79e787be66d34dc7aa666899aa93",
+    "binary_hashes_unchanged_after_every_isolated_campaign": true,
+    "candidate_configuration_schema": 10,
+    "candidate_allk_contract_schema": 13,
+    "effective_backend": "avx2",
+    "avx512f": false,
+    "avx512bw": false,
+    "avx512vl": false
+  },
+  "broad_diagnostic": {
+    "profile": "legacy_high_v1",
+    "field": "gf8",
+    "K": [1, 255],
+    "redundancy_bands": ["R=1", "middle legal R", "maximum legal GF8 R"],
+    "shard_bytes": [4096, 65536],
+    "loss_bands": ["one missing original", "maximum original loss"],
+    "cells": 2522,
+    "valid_cells": 2522,
+    "failed_cells": 0,
+    "workload_digest_mismatches": 0,
+    "workers": 8,
+    "allowed_timing_cpus": [0, 1, 2, 3, 4, 5, 6, 7],
+    "memory_max_bytes": 1610612736,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 676954112,
+    "diagnostic_not_promotion_evidence": true,
+    "main_over_leopard2": {
+      "encode": {
+        "median": 1.173474516038977,
+        "strict_cells_below_one": 18
+      },
+      "decode_first_use_explicit_plan": {
+        "median": 2.3483648923658507,
+        "strict_cells_below_one": 46
+      },
+      "decode_at_reuse_16": {
+        "median": 2.4326068364354,
+        "strict_cells_below_one": 14
+      }
+    },
+    "interpretation": "The aggregate result strongly favored Leopard2, but cross-lane cache and SMT interference produced implausible individual outliers. Every strict loss was therefore treated only as an isolation candidate."
+  },
+  "selected_worst_cell_isolation": {
+    "rounds_per_cell": 5,
+    "order": "alternating ABBA/BAAB",
+    "timed_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "iterations": 9,
+    "warmups": 2,
+    "binary_hashes_unchanged": true,
+    "cells": [
+      {
+        "id": "K167-R32-B4096-L32",
+        "encode": [1.212453034, 1.099249872, 1.337314105],
+        "decode_first": [1.476755275, 1.458629250, 1.495106546],
+        "decode_reuse": [1.679468775, 1.659362153, 1.699819031]
+      },
+      {
+        "id": "K145-R64-B4096-L64",
+        "encode": [1.150546935, 1.144530927, 1.156594564],
+        "decode_first": [1.241065627, 1.234692312, 1.247471840],
+        "decode_reuse": [1.251020919, 1.244587944, 1.257487145]
+      },
+      {
+        "id": "K97-R49-B4096-L49",
+        "encode": [1.099360103, 1.094878276, 1.103860277],
+        "decode_first": [1.257652063, 1.252317059, 1.263009796],
+        "decode_reuse": [1.388940639, 1.383416924, 1.394486409]
+      },
+      {
+        "id": "K97-R97-B65536-L97",
+        "encode": [1.142098578, 1.099003268, 1.186883788],
+        "decode_first": [2.384117257, 2.382691329, 2.385544039],
+        "decode_reuse": [2.403886906, 2.402313426, 2.405461416]
+      },
+      {
+        "id": "K186-R32-B65536-L32",
+        "encode": [1.244223597, 1.158196798, 1.336640166],
+        "decode_first": [1.472437868, 1.466379137, 1.478521633],
+        "decode_reuse": [1.481017781, 1.474811511, 1.487250169]
+      }
+    ],
+    "tuple_format": "[geometric mean, Student-t 95% lower bound, Student-t 95% upper bound]",
+    "conclusion": "Every selected transform and large-encode outlier was a saturated-lane artifact; all isolated intervals favor Leopard2."
+  },
+  "complete_strict_loss_replay": {
+    "candidate_cells": 61,
+    "excluded_cells": [
+      "K1-R1-B4096-L1: remeasured with an 8192-call timing window",
+      "K1-R1-B65536-L1: remeasured with a 1024-call timing window"
+    ],
+    "metric_rows": 183,
+    "rounds_per_cell": 5,
+    "invocations_per_round": 4,
+    "iterations_per_invocation": 9,
+    "warmups_per_invocation": 2,
+    "reuse": 16,
+    "timed_cpu": 6,
+    "reserved_smt_sibling": 22,
+    "memory_max_bytes": 268435456,
+    "memory_swap_max_bytes": 0,
+    "child_address_space_limit_bytes": 201326592,
+    "all_processes_exit_zero": true,
+    "all_round_trips_passed": true,
+    "all_workload_digests_matched": true,
+    "all_resolved_routes_are_legacy_high_gf8_avx2": true,
+    "confirmed_encode_losses": 0,
+    "confirmed_reused_decode_losses": 0,
+    "point_estimate_wins": 178,
+    "confirmed_setup_inclusive_losses": [
+      {"K": 2, "R": 1, "bytes": 4096, "ratio": 0.547723, "ci95": [0.524554, 0.571914]},
+      {"K": 3, "R": 1, "bytes": 4096, "ratio": 0.730986, "ci95": [0.720967, 0.741144]},
+      {"K": 4, "R": 1, "bytes": 4096, "ratio": 0.713660, "ci95": [0.709849, 0.717492]},
+      {"K": 5, "R": 1, "bytes": 4096, "ratio": 0.951592, "ci95": [0.927814, 0.975980]},
+      {"K": 7, "R": 1, "bytes": 4096, "ratio": 0.819343, "ci95": [0.808952, 0.829868]}
+    ],
+    "minimum_non_first_metric_interval": {
+      "cell": "K11-R11-B4096-L11 encode",
+      "ratio": 1.02006,
+      "ci95": [1.00431, 1.03606]
+    }
+  },
+  "comparable_one_shot_followup": {
+    "reason": "The all-K first-use metric deliberately adds immutable decode-plan construction to one execution. Leopard main has no reusable-plan API, so public one-shot decode is the comparable per-call contract.",
+    "rounds_per_cell": 5,
+    "iterations_per_invocation": 31,
+    "reuse": 1024,
+    "cells": [
+      {"K": 2, "R": 1, "bytes": 4096, "one_shot": [1.40907, 1.28512, 1.54498], "plan_reuse": [1.36701, 1.24158, 1.50512]},
+      {"K": 3, "R": 1, "bytes": 4096, "one_shot": [1.13272, 1.10325, 1.16297], "plan_reuse": [1.09552, 1.06601, 1.12586]},
+      {"K": 4, "R": 1, "bytes": 4096, "one_shot": [1.40371, 1.37779, 1.43012], "plan_reuse": [1.31390, 1.30540, 1.32246]},
+      {"K": 5, "R": 1, "bytes": 4096, "one_shot": [1.29523, 1.28918, 1.30131], "plan_reuse": [1.32149, 1.31651, 1.32649]},
+      {"K": 7, "R": 1, "bytes": 4096, "one_shot": [1.29675, 1.26472, 1.32958], "plan_reuse": [1.25241, 1.22168, 1.28390]}
+    ],
+    "tuple_format": "[geometric mean, Student-t 95% lower bound, Student-t 95% upper bound]",
+    "conclusion": "Every K=2,3,4,5,7 one-shot and reused-plan interval favors Leopard2. Their apparent first-use deficit is exclusively the optional reusable-plan setup charge."
+  },
+  "degenerate_k1_r1": {
+    "mathematics": "Encode and one-loss decode both reduce to an exact copy, so no Reed-Solomon or AVX2 transform work remains to eliminate.",
+    "bytes_4096": {
+      "encode": [1.01059, 0.979277, 1.04291],
+      "one_shot_decode": [0.834038, 0.818028, 0.850360],
+      "plan_first": [0.462329, 0.454356, 0.470441],
+      "plan_reuse_8192": [1.05505, 1.03289, 1.07768]
+    },
+    "bytes_65536": {
+      "encode": [0.997303, 0.970980, 1.02434],
+      "one_shot_decode": [0.987520, 0.986363, 0.988678],
+      "plan_first": [0.942407, 0.941289, 0.943527],
+      "plan_reuse_1024": [0.994975, 0.993759, 0.996192]
+    },
+    "tuple_format": "[geometric mean, Student-t 95% lower bound, Student-t 95% upper bound]",
+    "cause": "Leopard2 validates 64-bit byte counts, pointer-array addressability, scratch, metadata/data overlap, output disjointness, and failure atomicity before copying; Leopard main exposes a weaker legacy contract around the same memcpy.",
+    "prior_exhausted_candidates": [
+      "bounded fixed-shape validator",
+      "earlier K1 presence dispatch",
+      "separate exported tail dispatcher",
+      "branchless metadata-overlap checks",
+      "trusted item-range classification",
+      "direct libc calls in fixed helpers"
+    ],
+    "prior_candidate_disposition": "All safe ordinary-call candidates were neutral, below the five-percent promotion threshold, or moved more than two percent cost into K2/general neighbors. The immutable prevalidated batch binding is the throughput contract and removes repeated validation without weakening ordinary calls.",
+    "retained_prevalidated_binding_evidence": {
+      "artifact": "experiments/leopard2/r1_xor/results/k1_binding_dea78fd_20260801.json",
+      "source_commit": "dea78fd4a60f72d0c45c2d8488868da27e573766",
+      "bytes_4096_main_over_binding_encode": [1.189009420, 1.171894377, 1.209362972],
+      "bytes_4096_main_over_binding_decode": [1.166173552, 1.143915961, 1.184724650],
+      "bytes_65536_main_over_binding_encode": [1.007339876, 1.006938554, 1.007762833],
+      "bytes_65536_main_over_binding_decode": [1.006012834, 1.005161293, 1.006773486],
+      "setup_reported_separately": true,
+      "decode_break_even_calls": {"4096": 21, "65536": 22},
+      "tuple_format": "[geometric mean, bootstrap 95% lower bound, bootstrap 95% upper bound]"
+    },
+    "production_change_from_this_checkpoint": false
+  },
+  "artifacts": {
+    "broad_summary": {"path": "/tmp/leopard2-allk-b1f334a-w8-v5/summary.json", "sha256": "1b67a1cdc2a5deeed601779af279e24a1ba18ae0e2f48ffe505f335899cc8d25", "bytes": 1896372},
+    "broad_cells": {"path": "/tmp/leopard2-allk-b1f334a-w8-v5/cells.jsonl", "sha256": "c90da9431ab19232ae861777dc2d31a2ef8561f7fbac44314cdad2b07e9dd59e", "bytes": 77226316},
+    "selected_isolation": {"path": "/tmp/leopard2-isolated-b1f334a-v1/results/summary.json", "sha256": "ff52a22041bb6e8e106c0d924e3ba1465542d71c3abcbd77825099c8206eda54", "bytes": 30032},
+    "strict_loss_summary": {"path": "/tmp/leopard2-allk-loss-confirm-b1f334a-v1/summary.tsv", "sha256": "17f955bc7a135eae217a3fcb3687e9eafe3f35f633850160885b027f59612c11", "bytes": 9718},
+    "strict_loss_rounds": {"path": "/tmp/leopard2-allk-loss-confirm-b1f334a-v1/round-ratios.tsv", "sha256": "7a2dd02965b2c5c2f515cd9ec09b078bca49699419456912007a44a3b051347b", "bytes": 39658},
+    "one_shot_summary": {"path": "/tmp/leopard2-r1-oneshot-confirm-b1f334a-v1/summary.tsv", "sha256": "72b9d98fd73890e9538a2951384f42f8821b74c24fe6e90cc773dd33f516268e", "bytes": 1162},
+    "k1_high_resolution_summary": {"path": "/tmp/leopard2-k1-highres-b1f334a-v2/summary.tsv", "sha256": "29aec864540a764742a09ef6689ea485879deadcaba11de9ae925850c08b68ba", "bytes": 196}
+  },
+  "final_conclusion": {
+    "encode": "No isolated GF8 AVX2 encode loss remains outside the copy-only K1/R1 statistical tie.",
+    "decode_execution": "No isolated GF8 AVX2 reused execution loss remains at 4 KiB. At K1/R1 and 64 KiB the residual is 0.5 percent, below the production promotion threshold and in a memcpy-only case.",
+    "decode_one_shot": "Leopard2 beats Leopard main for every rechecked nondegenerate first-use cell. K1/R1 alone remains slower because stronger API validation dominates an otherwise identical copy.",
+    "optimization_decision": "Do not weaken safety or add another ordinary K1 layout specialization. Retain the measured prevalidated binding for applications that need copy-speed repeated execution."
+  }
+}

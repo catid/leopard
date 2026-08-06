@@ -140,6 +140,17 @@ The 2,522-cell matrix uses 4 KiB and 64 KiB shards, so the exact 256-byte
 T32 terminal and at-most-64-byte T16/Q2 kernel cannot affect a timed cell, but
 their values still belong to the authenticated production selector identity.
 
+The final-source GF8 checkpoint is
+`results/b1f334a-final-allk-gf8/summary.json`.  Its broad 2,522-cell run is a
+discovery sweep; every one of its 63 apparent losing cells was subsequently
+replayed on one isolated physical core.  No encode or reused-decode regression
+survived outside the degenerate K=1,R=1 copy case.  The K=2,3,4,5,7 R=1 cells
+that lose only when reusable-plan construction is charged to a single call all
+beat exact main through the comparable allocation-free one-shot API.  K=1,R=1
+retains Leopard2's stronger overlap, range, scratch, and failure-atomicity
+validation around an otherwise identical copy; the checkpoint records both
+that residual and the previously exhausted safe specialization candidates.
+
 ## Counterbalanced comparison
 
 `run_abba.py` supplies the other half of the comparison. Its current evidence
