@@ -1754,6 +1754,41 @@ if(LEO2_BUILD_TESTS)
             ENVIRONMENT
                 "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
 
+        if(LEO2_HAVE_AVX2_BACKEND AND LEOPARD_ENABLE_GF8 AND
+           LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED)
+            add_executable(leopard2_t16_prepared_terminal_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t16_prepared_terminal.cpp)
+            target_include_directories(
+                leopard2_t16_prepared_terminal_test PRIVATE tests/leopard2)
+            target_compile_definitions(
+                leopard2_t16_prepared_terminal_test PRIVATE
+                LEO2_ENABLE_TEST_HOOKS=1
+                LEO2_EXPERIMENT_HIGH_T16_B64_GENERATED=1)
+            target_link_libraries(leopard2_t16_prepared_terminal_test
+                leopard_test_hooks)
+            add_test(NAME leopard2_t16_prepared_terminal
+                COMMAND leopard2_t16_prepared_terminal_test)
+            set_tests_properties(leopard2_t16_prepared_terminal PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+
+            add_executable(leopard2_t16_prepared_terminal_production_test
+                tests/leopard2/direct_oracle.cpp
+                tests/leopard2/test_t16_prepared_terminal_production.cpp)
+            target_include_directories(
+                leopard2_t16_prepared_terminal_production_test
+                PRIVATE tests/leopard2)
+            target_link_libraries(
+                leopard2_t16_prepared_terminal_production_test leopard)
+            add_test(NAME leopard2_t16_prepared_terminal_production
+                COMMAND leopard2_t16_prepared_terminal_production_test)
+            set_tests_properties(
+                leopard2_t16_prepared_terminal_production PROPERTIES
+                ENVIRONMENT
+                    "OMP_DYNAMIC=FALSE;OMP_NUM_THREADS=1;OMP_THREAD_LIMIT=1")
+        endif()
+
         # Exercise the fixed non-hook scratch geometry and ordinary archive;
         # the hook test above intentionally derives its larger diagnostic
         # workspace through EncodeLayout.

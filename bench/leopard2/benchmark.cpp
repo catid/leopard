@@ -126,6 +126,7 @@ struct Options
     int r1_fixed_avx2_mode;
     int k8r3r4_t4_terminal_mode;
     int balanced_b64_terminal_mode;
+    int high_t16_prepared_terminal_mode;
     bool disable_t8_full_parity_terminal;
     bool disable_k16r8_b256_terminal;
     bool disable_k9r5_b256_terminal;
@@ -182,6 +183,7 @@ struct Options
         , r1_fixed_avx2_mode(-1)
         , k8r3r4_t4_terminal_mode(-1)
         , balanced_b64_terminal_mode(-1)
+        , high_t16_prepared_terminal_mode(-1)
         , disable_t8_full_parity_terminal(false)
         , disable_k16r8_b256_terminal(false)
         , disable_k9r5_b256_terminal(false)
@@ -653,6 +655,16 @@ static Options ParseOptions(int argc, char** argv)
                 options.balanced_b64_terminal_mode = 1;
             else
                 Fail("--balanced-b64-terminal-mode must be exactly 0 or 1");
+        }
+        else if (argument == "--high-t16-prepared-terminal-mode")
+        {
+            const std::string mode = NeedValue(argc, argv, i);
+            if (mode == "0")
+                options.high_t16_prepared_terminal_mode = 0;
+            else if (mode == "1")
+                options.high_t16_prepared_terminal_mode = 1;
+            else
+                Fail("--high-t16-prepared-terminal-mode must be exactly 0 or 1");
         }
         else if (argument == "--disable-t8-full-parity-terminal")
             options.disable_t8_full_parity_terminal = true;
@@ -1589,6 +1601,10 @@ static int Run(const Options& options)
         !leopard2_internal::SetBalancedB64TerminalEnabledForDiagnostics(
             options.balanced_b64_terminal_mode == 1))
         Fail("cannot set the balanced B64 terminal attribution mode");
+    if (options.high_t16_prepared_terminal_mode >= 0 &&
+        !leopard2_internal::SetHighT16PreparedTerminalEnabledForDiagnostics(
+            options.high_t16_prepared_terminal_mode == 1))
+        Fail("cannot set the high T16 prepared terminal attribution mode");
     if (options.disable_t8_full_parity_terminal &&
         !leopard2_internal::
             SetT8FullParityTerminalEnabledForDiagnostics(false))
@@ -1894,12 +1910,14 @@ static int Run(const Options& options)
         options.r1_small_reduction_mode >= 0 ||
         options.r1_fixed_avx2_mode >= 0 ||
         options.balanced_b64_terminal_mode >= 0 ||
+        options.high_t16_prepared_terminal_mode >= 0 ||
         options.disable_k9r6r8_b256_terminal ||
         options.k8r3r4_t4_terminal_mode == 0;
     const unsigned schema_version =
 #if defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION)
         4;
 #else
+        options.high_t16_prepared_terminal_mode >= 0 ? 24 :
         options.balanced_b64_terminal_mode >= 0 ? 22 :
         options.low_p16_partial_direct_output_mode >= 0 ? 21 :
         options.low_p128_b64_terminal_mode >= 0 ? 20 :
@@ -2322,6 +2340,15 @@ static int Run(const Options& options)
              << options.balanced_b64_terminal_mode << ",\n"
              << "    \"balanced_b64_terminal_enabled\": "
              << (options.balanced_b64_terminal_mode == 1
+                    ? "true" : "false");
+    }
+    if (options.high_t16_prepared_terminal_mode >= 0)
+    {
+        json << ",\n"
+             << "    \"high_t16_prepared_terminal_diagnostic_mode\": "
+             << options.high_t16_prepared_terminal_mode << ",\n"
+             << "    \"high_t16_prepared_terminal_enabled\": "
+             << (options.high_t16_prepared_terminal_mode == 1
                     ? "true" : "false");
     }
     if (options.low_p16_partial_direct_output_mode >= 0)

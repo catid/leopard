@@ -473,6 +473,7 @@ struct TestOnlyHighEncodeCounts
     uint64_t t8_k7_b1024_direct_calls;
     uint64_t t8_k8_b1024_direct_calls;
     uint64_t balanced_b64_packed_calls;
+    uint64_t t16_prepared_calls;
     uint64_t final_ifft2_range_calls;
     uint64_t tail_column_calls;
     uint64_t half_tail_column_calls;
@@ -522,6 +523,7 @@ void TestOnlyRecordT2PackedCall();
 void TestOnlyRecordT4PackedCall();
 void TestOnlyRecordT8PackedCall();
 void TestOnlyRecordBalancedB64PackedCall();
+void TestOnlyRecordT16PreparedCall();
 // Attribution-only selector.  Production archives contain neither this state
 // nor the load in the high encoder's final inverse layer.
 void TestOnlySetHighFinalIFFT2RangeDisabled(bool disabled);

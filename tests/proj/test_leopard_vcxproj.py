@@ -143,19 +143,55 @@ def validate_t16_b64_routing_contract(text):
     minimum_side_route = (
         "const uint32_t minimum_side =\n"
         "        " + available + " ? 16U : 32U;")
-    if text.count(minimum_side_route) != 1 or text.count(available) != 6:
+    if text.count(minimum_side_route) != 1 or text.count(available) != 16:
         raise ContractError("T16/B64 routing site drift")
 
-    guarded_blocks = re.findall(
-        r"^#if " + re.escape(available) + r"\n(.*?)^#endif$",
-        text, flags=re.MULTILINE | re.DOTALL)
+    lines = text.splitlines(keepends=True)
+    guarded_blocks = []
+    guard_line = "#if " + available
+    conditional_open = re.compile(r"^\s*#\s*(?:if|ifdef|ifndef)\b")
+    conditional_close = re.compile(r"^\s*#\s*endif\b")
+    for line_index, line in enumerate(lines):
+        if line.rstrip("\r\n") != guard_line:
+            continue
+        depth = 1
+        block_lines = []
+        for nested_line in lines[line_index + 1:]:
+            if conditional_open.match(nested_line):
+                depth += 1
+            elif conditional_close.match(nested_line):
+                depth -= 1
+                if depth == 0:
+                    break
+            block_lines.append(nested_line)
+        if depth != 0:
+            raise ContractError("T16/B64 unterminated routing guard")
+        guarded_blocks.append("".join(block_lines))
     route_markers = (
+        ("bool high_t16_prepared_generated;",),
+        ("g_high_t16_prepared_terminal_mode = 1U;",),
+        ("g_high_t16_prepared_terminal_mode = enabled ? 1U : 2U;",
+         "(void)enabled;"),
         ("if (FixedSide == 16)",
          "TryAVX2FF8HighEncodeT16B64("),
+        ("ExecuteGF8AVX2HighT16(",
+         "TryEncodeGF8HighT16PreparedPackedTerminal("),
         ("TryEncodeGF8BalancedB64PackedTerminal<128, 0>(",
          "TryEncodeGF8BalancedB64PackedTerminal<16, 0>("),
+        ("IsGF8AVX2HighT16PreparedTerminalEligible(codec, shard_bytes)",
+         "TryEncodeGF8HighT16PreparedPackedTerminal<0>("),
         ("TryEncodeGF8BalancedB64PackedTerminal<128, 1>(",
          "TryEncodeGF8BalancedB64PackedTerminal<16, 1>("),
+        ("IsGF8AVX2HighT16PreparedTerminalEligible(\n"
+         "                codec, items[0].shard_bytes)",
+         "TryEncodeGF8HighT16PreparedPackedTerminal<1>("),
+        ("binding->high_t16_prepared_generated = false;",),
+        ("Screen the generated T=16 arithmetic independently",
+         "binding->high_t16_prepared_generated = all_dense_qualified;"),
+        ("ExecuteHighT16PreparedBinding(",
+         "LEO2_HIGH_T16_PREPARED_NOINLINE"),
+        ("if (binding->high_t16_prepared_generated)",
+         "return ExecuteHighT16PreparedBinding(binding);"),
     )
     if len(guarded_blocks) != len(route_markers):
         raise ContractError("T16/B64 routing site drift")
@@ -7910,7 +7946,7 @@ target_sources(leopard PRIVATE $<TARGET_OBJECTS:hidden_backend>)
             match.start() for match in re.finditer(
                 re.escape(route_guard), self.leopard2_cpp)
         ]
-        self.assertEqual(3, len(route_offsets))
+        self.assertEqual(13, len(route_offsets))
         for offset in route_offsets:
             mutations.append(
                 self.leopard2_cpp[:offset] + "#if " + experiment +

@@ -768,6 +768,18 @@ void AVX2FF8HighEncodeT2K4Packed(
 bool TryAVX2FF8HighEncodeT16B64(
     const void* const* data,
     void* const* recovery);
+/*
+    Execute the same generated T=16 circuit over a positive whole number of
+    64-byte tiles.  Callers own shortening/puncturing by supplying zero input
+    rows and disposable output rows, respectively.  Keeping that coordinate
+    policy outside the backend lets one wire-identical circuit cover every
+    legacy-high K=R=9..16 profile without adding per-K arithmetic bodies.
+*/
+bool TryAVX2FF8HighEncodeT16(
+    const void* const* data,
+    void* const* recovery,
+    uint32_t original_count,
+    uint64_t byte_count);
 #endif
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_GENERATED)
 /*

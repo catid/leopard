@@ -762,6 +762,9 @@ struct leo2_encode_batch_binding
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     const leopard::backend::Ops* high_t8_two_block_ops;
 #endif
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    bool high_t16_prepared_generated;
+#endif
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
     defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_ENABLE_TEST_HOOKS)
@@ -1087,6 +1090,9 @@ static volatile uint32_t g_k8r3r4_t4_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K8R3R4_T4_TERMINAL;
 static volatile uint32_t g_balanced_b64_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_BALANCED_B64_TERMINAL;
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+static volatile uint32_t g_high_t16_prepared_terminal_mode = 1U;
+#endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING
 static volatile uint32_t g_k16r8_b256_terminal_mode =
     1U + LEO2_DIAGNOSTIC_DISABLE_K16R8_B256_TERMINAL;
@@ -14352,6 +14358,17 @@ bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled)
 #endif
 }
 
+bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled)
+{
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    g_high_t16_prepared_terminal_mode = enabled ? 1U : 2U;
+    return true;
+#else
+    (void)enabled;
+    return false;
+#endif
+}
+
 bool SetK9R5B256TerminalEnabledForDiagnostics(bool enabled)
 {
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -16750,6 +16767,191 @@ TryEncodeGF8BalancedB64PackedTerminal(
 }
 
 #undef LEO2_BALANCED_B64_TERMINAL_NOINLINE
+
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+#if defined(_MSC_VER)
+#define LEO2_HIGH_T16_PREPARED_ENTRY __declspec(noinline)
+#elif (defined(__GNUC__) || defined(__clang__)) && defined(__ELF__)
+#define LEO2_HIGH_T16_PREPARED_ENTRY \
+    __attribute__((noinline, section(".text.leo2_high_t16_prepared"), \
+        aligned(64)))
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_HIGH_T16_PREPARED_ENTRY __attribute__((noinline, aligned(64)))
+#else
+#define LEO2_HIGH_T16_PREPARED_ENTRY
+#endif
+
+static LEO2_HIGH_T16_PREPARED_ENTRY bool ExecuteGF8AVX2HighT16(
+    uint32_t count,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery)
+{
+    static const size_t kMaximumBytes = 2048;
+    if (shard_bytes < 512 || shard_bytes > kMaximumBytes ||
+        (shard_bytes & 63U) != 0)
+        return false;
+    alignas(32) static const uint8_t zero_shard[kMaximumBytes] = {};
+    alignas(32) uint8_t discarded_recovery[7][kMaximumBytes];
+    const void* padded_original[16];
+    void* padded_recovery[16];
+    LEO_DEBUG_ASSERT(count >= 9 && count <= 16);
+    for (uint32_t coordinate = 0; coordinate < 16; ++coordinate)
+    {
+        padded_original[coordinate] = coordinate < count
+            ? original[coordinate] : zero_shard;
+        padded_recovery[coordinate] = coordinate < count
+            ? recovery[coordinate]
+            : discarded_recovery[coordinate - count];
+    }
+    const bool encoded = leopard::backend::TryAVX2FF8HighEncodeT16(
+        padded_original, padded_recovery, count, shard_bytes);
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    if (encoded)
+        leopard::ff8::TestOnlyRecordT16PreparedCall();
+#endif
+    return encoded;
+}
+
+static LEO_FORCE_INLINE bool IsGF8AVX2HighT16PreparedTerminalEligible(
+    const leo2_codec* codec,
+    uint64_t shard_bytes)
+{
+    if (!codec || shard_bytes < 512 || shard_bytes > 2048 ||
+        (shard_bytes & 63U) != 0 ||
+        g_high_t16_prepared_terminal_mode != 1U ||
+        codec->original_count < 9 || codec->original_count > 16 ||
+        codec->recovery_count != codec->original_count ||
+        codec->padded_side != 16 ||
+        codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||
+        codec->field != LEO2_FIELD_GF8 ||
+        codec->shard_layout != LEO2_SHARD_LAYOUT_NATIVE_V1 ||
+        !codec->context || codec->context->backend != LEO2_BACKEND_AVX2 ||
+        !codec->context->ops ||
+        codec->context->ops->kind != LEO2_BACKEND_AVX2)
+        return false;
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    return codec->test_encode_mode == LEO2_TEST_ENCODE_AUTO;
+#else
+    return true;
+#endif
+}
+
+template<size_t ProtectedCount>
+static LEO2_HIGH_T16_PREPARED_ENTRY bool
+TryEncodeGF8HighT16PreparedPackedTerminal(
+    const leo2_codec* codec,
+    const AddressRange* protected_ranges,
+    uint64_t shard_bytes,
+    const void* const* original,
+    void* const* recovery,
+    void* scratch,
+    size_t scratch_bytes,
+    leo2_result& result_out)
+{
+    LEO_DEBUG_ASSERT(
+        IsGF8AVX2HighT16PreparedTerminalEligible(codec, shard_bytes));
+    static_assert(ProtectedCount <= 1,
+        "T16 prepared terminal protects at most one batch descriptor");
+    const uint32_t count = codec->original_count;
+    const size_t bytes = static_cast<size_t>(shard_bytes);
+    const size_t tail_bytes = bytes & (kScratchAlignment - 1U);
+    const size_t aligned_prefix_bytes = bytes - tail_bytes;
+    const size_t work_slot_bytes = std::max(aligned_prefix_bytes,
+        tail_bytes == 0 ? size_t(0) : kScratchAlignment);
+
+    ScratchLayout layout;
+    size_t work_data_offset = 0;
+    if (!ComputeSplitScratchLayout(
+            2U * count, count + 32U,
+            tail_bytes == 0 ? 0U : count,
+            32U, work_slot_bytes, layout, work_data_offset))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+#ifdef LEO2_ENABLE_TEST_HOOKS
+    EncodeScratchGeometry geometry;
+    result_out = EncodeLayout(codec, shard_bytes, geometry);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    layout = geometry.layout;
+#endif
+
+    AddressRange scratch_range;
+    result_out = CheckScratch(
+        scratch, scratch_bytes, layout, scratch_range);
+    if (result_out != LEO2_SUCCESS)
+        return true;
+    if (!original || !recovery)
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+
+    AddressRange metadata_ranges[2 + ProtectedCount];
+    if (!MakeArrayRange(
+            original, count, sizeof(*original), metadata_ranges[0]) ||
+        !MakeArrayRange(
+            recovery, count, sizeof(*recovery), metadata_ranges[1]))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    for (size_t i = 0; i < ProtectedCount; ++i)
+        metadata_ranges[2 + i] = protected_ranges[i];
+    if (RangeOverlapsAny(
+            scratch_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!original[0] || !recovery[0])
+        return false;
+    AddressRange input_range;
+    AddressRange output_range;
+    if (!MakeRange(original[0], count * shard_bytes, input_range) ||
+        !MakeRange(recovery[0], count * shard_bytes, output_range))
+    {
+        result_out = LEO2_INVALID_ARGUMENT;
+        return true;
+    }
+    uintptr_t pointer_mismatch = 0;
+    for (uint32_t coordinate = 0; coordinate < count; ++coordinate)
+    {
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(
+                original[coordinate]) ^
+            (input_range.begin + coordinate * shard_bytes);
+        pointer_mismatch |= reinterpret_cast<uintptr_t>(
+                recovery[coordinate]) ^
+            (output_range.begin + coordinate * shard_bytes);
+    }
+    if (pointer_mismatch != 0)
+        return false;
+
+    if (RangesOverlap(input_range, scratch_range) ||
+        RangesOverlap(output_range, scratch_range) ||
+        RangesOverlap(input_range, output_range) ||
+        RangeOverlapsAny(
+            output_range, metadata_ranges, 2 + ProtectedCount))
+    {
+        result_out = LEO2_OVERLAP;
+        return true;
+    }
+
+    if (!ExecuteGF8AVX2HighT16(
+            count, shard_bytes, original, recovery))
+    {
+        result_out = LEO2_INTERNAL_ERROR;
+        return true;
+    }
+    result_out = LEO2_SUCCESS;
+    return true;
+}
+
+#undef LEO2_HIGH_T16_PREPARED_ENTRY
+#endif
 #endif
 
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
@@ -18190,6 +18392,16 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
         if (handled)
             return terminal_result;
     }
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    if (IsGF8AVX2HighT16PreparedTerminalEligible(codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8HighT16PreparedPackedTerminal<0>(
+                codec, NULL, shard_bytes, original, recovery,
+                scratch, scratch_bytes, terminal_result))
+            return terminal_result;
+    }
+#endif
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     if (IsGF8AVX2K9T8B256TerminalEligible(codec, shard_bytes))
@@ -18415,6 +18627,19 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
             if (handled)
                 return terminal_result;
         }
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+        if (IsGF8AVX2HighT16PreparedTerminalEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8HighT16PreparedPackedTerminal<1>(
+                    codec, &item_range, items[0].shard_bytes,
+                    items[0].original,
+                    items[0].recovery, items[0].scratch,
+                    items[0].scratch_bytes, terminal_result))
+                return terminal_result;
+        }
+#endif
 #endif
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
         if (IsGF8AVX2K9T8B256TerminalEligible(
@@ -18644,6 +18869,9 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
 #if LEO2_EXPERIMENT_HIGH_T8_TWO_BLOCK_BINDING && defined(LEO_HAS_FF8)
     binding->high_t8_two_block_ops = NULL;
 #endif
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    binding->high_t16_prepared_generated = false;
+#endif
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
     defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_ENABLE_TEST_HOOKS)
@@ -18816,6 +19044,44 @@ LEO2_EXPORT leo2_result leo2_encode_batch_binding_create(
                     geometry.work_data_offset;
             }
         }
+    }
+#endif
+
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    /*
+        Screen the generated T=16 arithmetic independently from ordinary-call
+        validation.  Binding setup has already frozen every pointer and proved
+        all ranges disjoint, so repeated execution only pads shortened source
+        coordinates and sinks punctured parity coordinates.  Contexts with a
+        pool retain the normal batch scheduler.
+    */
+    if (!codec->context->pool &&
+        g_high_t16_prepared_terminal_mode == 1U &&
+        codec->profile == LEO2_PROFILE_LEGACY_HIGH_V1 &&
+        codec->field == LEO2_FIELD_GF8 &&
+        codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
+        codec->padded_side == 16 &&
+        codec->original_count >= 9 && codec->original_count <= 16 &&
+        codec->recovery_count == codec->original_count &&
+        codec->context->backend == LEO2_BACKEND_AVX2 &&
+        codec->context->ops &&
+        codec->context->ops->kind == LEO2_BACKEND_AVX2)
+    {
+        bool all_dense_qualified = true;
+        for (size_t item_index = 0;
+             item_index < binding->items.size() && all_dense_qualified;
+             ++item_index)
+        {
+            const leo2_encode_batch_item& item = binding->items[item_index];
+            all_dense_qualified =
+                IsGF8AVX2HighT16PreparedTerminalEligible(
+                    codec, item.shard_bytes);
+            for (uint32_t parity = 0;
+                 parity < codec->recovery_count && all_dense_qualified;
+                 ++parity)
+                all_dense_qualified = item.recovery[parity] != NULL;
+        }
+        binding->high_t16_prepared_generated = all_dense_qualified;
     }
 #endif
 
@@ -19029,6 +19295,34 @@ LEO2_EXPORT int leo2_test_encode_batch_binding_uses_k1_copy(
 #define LEO2_ENCODE_BINDING_GENERAL_NOINLINE
 #endif
 
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+#if defined(_MSC_VER)
+#define LEO2_HIGH_T16_PREPARED_NOINLINE __declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+#define LEO2_HIGH_T16_PREPARED_NOINLINE __attribute__((noinline))
+#else
+#define LEO2_HIGH_T16_PREPARED_NOINLINE
+#endif
+
+static LEO2_HIGH_T16_PREPARED_NOINLINE leo2_result
+ExecuteHighT16PreparedBinding(const leo2_encode_batch_binding* binding)
+{
+    const uint32_t count = binding->codec->original_count;
+    LEO_DEBUG_ASSERT(count >= 9 && count <= 16);
+    for (size_t item_index = 0;
+         item_index < binding->items.size(); ++item_index)
+    {
+        const leo2_encode_batch_item& item = binding->items[item_index];
+        if (!ExecuteGF8AVX2HighT16(
+                count, item.shard_bytes, item.original, item.recovery))
+            return LEO2_INTERNAL_ERROR;
+    }
+    return LEO2_SUCCESS;
+}
+
+#undef LEO2_HIGH_T16_PREPARED_NOINLINE
+#endif
+
 static LEO2_ENCODE_BINDING_GENERAL_NOINLINE leo2_result
 ExecuteEncodeBatchBindingGeneral(
     const leo2_encode_batch_binding* binding)
@@ -19053,6 +19347,10 @@ ExecuteEncodeBatchBindingGeneral(
             }
         }
     }
+#if LEO2_HAVE_HIGH_T16_B64_GENERATED
+    if (binding->high_t16_prepared_generated)
+        return ExecuteHighT16PreparedBinding(binding);
+#endif
 #if defined(LEO2_EXPERIMENT_HIGH_T32_B256_TWO_BLOCK) && \
     defined(LEO2_HAVE_AVX2_BACKEND) && defined(LEO_HAS_FF8) && \
     !defined(LEO2_ENABLE_TEST_HOOKS)

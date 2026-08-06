@@ -481,6 +481,12 @@ if(build_configuration_temporaries)
         "${build_configuration_temporaries}")
 endif()
 
+# The selector probes above intentionally rewrite target compile definitions
+# without rebuilding between every configure.  Settle the restored graph once
+# before recording the no-op baseline; otherwise a correctly stale object can
+# be mistaken for needless work by the following unchanged refresh.
+leo2_build_and_check()
+
 # A no-op reconfigure and unchanged refresh must not touch either generated
 # identity input or relink either benchmark.  Exact-main freshness requires
 # the benchmark object to remain at least as new as this sidecar.

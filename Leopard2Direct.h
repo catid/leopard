@@ -264,6 +264,8 @@ bool SetT8FullParityTerminalEnabledForDiagnostics(bool enabled);
 */
 bool SetBalancedB64TerminalEnabledForDiagnostics(bool enabled);
 
+bool SetHighT16PreparedTerminalEnabledForDiagnostics(bool enabled);
+
 /*
     Process-local benchmark control for the exact K=9/R=5/256-byte packed
     terminal.  Change it only while no encode call is executing.  This remains
