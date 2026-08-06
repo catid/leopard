@@ -3380,6 +3380,32 @@ void ReedSolomonEncodeTwoBlocksT16B64(
         data_base, recovery_base, temporary_base,
         original_count, recovery_count);
 }
+
+void ReedSolomonEncodeTwoBlocksT16B256(
+    const backend::Ops& ops,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    (void)ops;
+    LEO_DEBUG_ASSERT(ops.kind == LEO2_BACKEND_AVX2);
+    LEO_DEBUG_ASSERT(
+        data_base != NULL && recovery_base != NULL && temporary_base != NULL);
+#if defined(LEO2_ENABLE_TEST_HOOKS)
+    const unsigned active_second_groups = (original_count - 13U) / 4U;
+    TestHighIFFTButterfly4OutCalls.fetch_add(
+        4U + active_second_groups,
+        std::memory_order_relaxed);
+    TestHighForwardFusedCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighWholeTransformCalls.fetch_add(1, std::memory_order_relaxed);
+    TestHighTwoBlockCalls.fetch_add(1, std::memory_order_relaxed);
+#endif
+    backend::AVX2FF8HighEncodeT16Q2B256Fused(
+        data_base, recovery_base, temporary_base,
+        original_count, recovery_count);
+}
 #endif
 
 

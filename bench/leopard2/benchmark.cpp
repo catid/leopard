@@ -516,7 +516,7 @@ static void Usage(std::ostream& output, const char* program)
         << "                         Attribution-only: retain the prior path using schema v10\n"
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
         << "  --disable-high-t16-q2-b64-fused\n"
-        << "                         Attribution-only: retain the prior ordinary encode path\n"
+        << "                         Attribution-only: disable fused B1..64/256 encode paths\n"
 #endif
 #if !defined(LEO2_HIGH_DECODE_COPY_ATTRIBUTION) && \
     !defined(LEO2_HIGH_LOW_DUALITY_ATTRIBUTION)
@@ -1688,7 +1688,7 @@ static int Run(const Options& options)
     if (options.disable_high_t16_q2_b64_fused &&
         !leopard2_internal::
             SetHighT16Q2B64FusedEnabledForDiagnostics(false))
-        Fail("cannot disable the high T16 q=2 B64 fused path for attribution");
+        Fail("cannot disable the high T16 q=2 B1..64/256 fused path for attribution");
 #endif
     leo2_context_options context_options;
     memset(&context_options, 0, sizeof(context_options));

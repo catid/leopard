@@ -290,6 +290,13 @@ void ReedSolomonEncodeTwoBlocksT16B64(
     void* temporary_base,
     unsigned original_count,
     unsigned recovery_count);
+void ReedSolomonEncodeTwoBlocksT16B256(
+    const backend::Ops& ops,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count);
 #endif
 
 // Encodes the low-rate coordinate profile:

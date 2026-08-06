@@ -836,12 +836,17 @@ bool TryAVX2FF8HighEncodeT32B256TwoBlockPacked(
 #endif
 #if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
 /*
-    Default-off exact legacy-high K=32,R=T=16,B=256 experiment.  The caller
-    supplies packed 32-row source and 16-row recovery slabs plus a packed
-    16-row temporary slab.  Each row is exactly 256 bytes.  The entry is linked
-    only into the runtime-qualified pure AVX2 member.
+    Fused legacy-high T=16 two-block encoders.  The caller supplies packed
+    source, recovery, and temporary slabs; public validation and pure-AVX2
+    runtime dispatch have already completed before either entry is reached.
 */
 void AVX2FF8HighEncodeT16Q2B64Fused(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count);
+void AVX2FF8HighEncodeT16Q2B256Fused(
     const void* data_base,
     void* recovery_base,
     void* temporary_base,

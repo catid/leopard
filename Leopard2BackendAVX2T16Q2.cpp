@@ -33,7 +33,6 @@ const void* GetAVX2FF8Tables();
 */
 
 static const size_t kT16Q2TableBytes = 32;
-static const uint64_t kT16Q2ShardBytes = 64;
 
 static LEO_FORCE_INLINE __m256i T16Q2Broadcast(const uint8_t table[16])
 {
@@ -137,6 +136,7 @@ static LEO_FORCE_INLINE void T16Q2FFT4(
 }
 
 template<
+    uint64_t ShardBytes,
     unsigned Log01,
     unsigned Log23,
     unsigned Log02,
@@ -152,52 +152,53 @@ static LEO_FORCE_INLINE void T16Q2InverseGroup(
     if (PartialInput && InputRow >= original_count)
     {
         const __m256i zero = _mm256_setzero_si256();
-        for (uint64_t offset = 0; offset < kT16Q2ShardBytes; offset += 32)
+        for (uint64_t offset = 0; offset < ShardBytes; offset += 32)
         {
             T16Q2Store(work_base,
-                (OutputRow + 0U) * kT16Q2ShardBytes + offset, zero);
+                (OutputRow + 0U) * ShardBytes + offset, zero);
             T16Q2Store(work_base,
-                (OutputRow + 1U) * kT16Q2ShardBytes + offset, zero);
+                (OutputRow + 1U) * ShardBytes + offset, zero);
             T16Q2Store(work_base,
-                (OutputRow + 2U) * kT16Q2ShardBytes + offset, zero);
+                (OutputRow + 2U) * ShardBytes + offset, zero);
             T16Q2Store(work_base,
-                (OutputRow + 3U) * kT16Q2ShardBytes + offset, zero);
+                (OutputRow + 3U) * ShardBytes + offset, zero);
         }
         return;
     }
 
-    for (uint64_t offset = 0; offset < kT16Q2ShardBytes; offset += 32)
+    for (uint64_t offset = 0; offset < ShardBytes; offset += 32)
     {
         const __m256i zero = _mm256_setzero_si256();
         __m256i value0 = !PartialInput || InputRow + 0U < original_count
             ? T16Q2Load(data_base,
-                (InputRow + 0U) * kT16Q2ShardBytes + offset)
+                (InputRow + 0U) * ShardBytes + offset)
             : zero;
         __m256i value1 = !PartialInput || InputRow + 1U < original_count
             ? T16Q2Load(data_base,
-                (InputRow + 1U) * kT16Q2ShardBytes + offset)
+                (InputRow + 1U) * ShardBytes + offset)
             : zero;
         __m256i value2 = !PartialInput || InputRow + 2U < original_count
             ? T16Q2Load(data_base,
-                (InputRow + 2U) * kT16Q2ShardBytes + offset)
+                (InputRow + 2U) * ShardBytes + offset)
             : zero;
         __m256i value3 = !PartialInput || InputRow + 3U < original_count
             ? T16Q2Load(data_base,
-                (InputRow + 3U) * kT16Q2ShardBytes + offset)
+                (InputRow + 3U) * ShardBytes + offset)
             : zero;
         T16Q2IFFT4<Log01, Log23, Log02>(
             tables, value0, value1, value2, value3);
         T16Q2Store(work_base,
-            (OutputRow + 0U) * kT16Q2ShardBytes + offset, value0);
+            (OutputRow + 0U) * ShardBytes + offset, value0);
         T16Q2Store(work_base,
-            (OutputRow + 1U) * kT16Q2ShardBytes + offset, value1);
+            (OutputRow + 1U) * ShardBytes + offset, value1);
         T16Q2Store(work_base,
-            (OutputRow + 2U) * kT16Q2ShardBytes + offset, value2);
+            (OutputRow + 2U) * ShardBytes + offset, value2);
         T16Q2Store(work_base,
-            (OutputRow + 3U) * kT16Q2ShardBytes + offset, value3);
+            (OutputRow + 3U) * ShardBytes + offset, value3);
     }
 }
 
+template<uint64_t ShardBytes, unsigned ActiveSecondGroups>
 static LEO_FORCE_INLINE void T16Q2FusedOuter(
     const unsigned char* tables,
     void* recovery_base,
@@ -205,32 +206,36 @@ static LEO_FORCE_INLINE void T16Q2FusedOuter(
 {
     for (unsigned column = 0; column < 4; ++column)
     {
-        for (uint64_t offset = 0; offset < kT16Q2ShardBytes; offset += 32)
+        for (uint64_t offset = 0; offset < ShardBytes; offset += 32)
         {
+            const __m256i zero = _mm256_setzero_si256();
             __m256i first0 = T16Q2Load(
                 recovery_base,
-                (column + 0U) * kT16Q2ShardBytes + offset);
+                (column + 0U) * ShardBytes + offset);
             __m256i first1 = T16Q2Load(
                 recovery_base,
-                (column + 4U) * kT16Q2ShardBytes + offset);
+                (column + 4U) * ShardBytes + offset);
             __m256i first2 = T16Q2Load(
                 recovery_base,
-                (column + 8U) * kT16Q2ShardBytes + offset);
+                (column + 8U) * ShardBytes + offset);
             __m256i first3 = T16Q2Load(
                 recovery_base,
-                (column + 12U) * kT16Q2ShardBytes + offset);
+                (column + 12U) * ShardBytes + offset);
             __m256i second0 = T16Q2Load(
                 temporary_base,
-                (column + 0U) * kT16Q2ShardBytes + offset);
-            __m256i second1 = T16Q2Load(
-                temporary_base,
-                (column + 4U) * kT16Q2ShardBytes + offset);
-            __m256i second2 = T16Q2Load(
-                temporary_base,
-                (column + 8U) * kT16Q2ShardBytes + offset);
-            __m256i second3 = T16Q2Load(
-                temporary_base,
-                (column + 12U) * kT16Q2ShardBytes + offset);
+                (column + 0U) * ShardBytes + offset);
+            __m256i second1 = ActiveSecondGroups >= 2
+                ? T16Q2Load(temporary_base,
+                    (column + 4U) * ShardBytes + offset)
+                : zero;
+            __m256i second2 = ActiveSecondGroups >= 3
+                ? T16Q2Load(temporary_base,
+                    (column + 8U) * ShardBytes + offset)
+                : zero;
+            __m256i second3 = ActiveSecondGroups >= 4
+                ? T16Q2Load(temporary_base,
+                    (column + 12U) * ShardBytes + offset)
+                : zero;
 
             /* Final IFFT layer for the first and second message cosets. */
             T16Q2IFFT4<17, 34, 85>(
@@ -248,21 +253,22 @@ static LEO_FORCE_INLINE void T16Q2FusedOuter(
 
             T16Q2Store(
                 recovery_base,
-                (column + 0U) * kT16Q2ShardBytes + offset, first0);
+                (column + 0U) * ShardBytes + offset, first0);
             T16Q2Store(
                 recovery_base,
-                (column + 4U) * kT16Q2ShardBytes + offset, first1);
+                (column + 4U) * ShardBytes + offset, first1);
             T16Q2Store(
                 recovery_base,
-                (column + 8U) * kT16Q2ShardBytes + offset, first2);
+                (column + 8U) * ShardBytes + offset, first2);
             T16Q2Store(
                 recovery_base,
-                (column + 12U) * kT16Q2ShardBytes + offset, first3);
+                (column + 12U) * ShardBytes + offset, first3);
         }
     }
 }
 
 template<
+    uint64_t ShardBytes,
     unsigned Log01,
     unsigned Log23,
     unsigned Log02,
@@ -276,38 +282,42 @@ static LEO_FORCE_INLINE void T16Q2ForwardGroup(
 {
     if (PartialOutput && BaseRow >= recovery_count)
         return;
-    for (uint64_t offset = 0; offset < kT16Q2ShardBytes; offset += 32)
+    for (uint64_t offset = 0; offset < ShardBytes; offset += 32)
     {
         __m256i value0 = T16Q2Load(
             work_base,
-            (BaseRow + 0U) * kT16Q2ShardBytes + offset);
+            (BaseRow + 0U) * ShardBytes + offset);
         __m256i value1 = T16Q2Load(
             work_base,
-            (BaseRow + 1U) * kT16Q2ShardBytes + offset);
+            (BaseRow + 1U) * ShardBytes + offset);
         __m256i value2 = T16Q2Load(
             work_base,
-            (BaseRow + 2U) * kT16Q2ShardBytes + offset);
+            (BaseRow + 2U) * ShardBytes + offset);
         __m256i value3 = T16Q2Load(
             work_base,
-            (BaseRow + 3U) * kT16Q2ShardBytes + offset);
+            (BaseRow + 3U) * ShardBytes + offset);
         T16Q2FFT4<Log01, Log23, Log02>(
             tables, value0, value1, value2, value3);
         if (!PartialOutput || BaseRow + 0U < recovery_count)
             T16Q2Store(recovery_base,
-                (BaseRow + 0U) * kT16Q2ShardBytes + offset, value0);
+                (BaseRow + 0U) * ShardBytes + offset, value0);
         if (!PartialOutput || BaseRow + 1U < recovery_count)
             T16Q2Store(recovery_base,
-                (BaseRow + 1U) * kT16Q2ShardBytes + offset, value1);
+                (BaseRow + 1U) * ShardBytes + offset, value1);
         if (!PartialOutput || BaseRow + 2U < recovery_count)
             T16Q2Store(recovery_base,
-                (BaseRow + 2U) * kT16Q2ShardBytes + offset, value2);
+                (BaseRow + 2U) * ShardBytes + offset, value2);
         if (!PartialOutput || BaseRow + 3U < recovery_count)
             T16Q2Store(recovery_base,
-                (BaseRow + 3U) * kT16Q2ShardBytes + offset, value3);
+                (BaseRow + 3U) * ShardBytes + offset, value3);
     }
 }
 
-template<bool PartialInput, bool PartialOutput>
+template<
+    uint64_t ShardBytes,
+    unsigned ActiveSecondGroups,
+    bool PartialInput,
+    bool PartialOutput>
 static LEO_FORCE_INLINE void T16Q2Encode(
     const unsigned char* tables,
     const void* data_base,
@@ -321,39 +331,85 @@ static LEO_FORCE_INLINE void T16Q2Encode(
     void* const primary_base = PartialOutput
         ? temporary_base : recovery_base;
     void* const secondary_base = PartialOutput
-        ? temporary_bytes + 16U * kT16Q2ShardBytes : temporary_base;
+        ? temporary_bytes + 16U * ShardBytes : temporary_base;
 
     /* First two inverse layers, FFTSkewStorage + 16. */
-    T16Q2InverseGroup<219, 7, 153, 0, 0, false>(
+    T16Q2InverseGroup<ShardBytes, 219, 7, 153, 0, 0, false>(
         tables, data_base, primary_base, original_count);
-    T16Q2InverseGroup<111, 28, 102, 4, 4, false>(
+    T16Q2InverseGroup<ShardBytes, 111, 28, 102, 4, 4, false>(
         tables, data_base, primary_base, original_count);
-    T16Q2InverseGroup<183, 224, 51, 8, 8, false>(
+    T16Q2InverseGroup<ShardBytes, 183, 224, 51, 8, 8, false>(
         tables, data_base, primary_base, original_count);
-    T16Q2InverseGroup<131, 222, 187, 12, 12, false>(
+    T16Q2InverseGroup<ShardBytes, 131, 222, 187, 12, 12, false>(
         tables, data_base, primary_base, original_count);
 
     /* First two inverse layers, FFTSkewStorage + 32. */
-    T16Q2InverseGroup<196, 76, 219, 16, 0, PartialInput>(
+    T16Q2InverseGroup<ShardBytes, 196, 76, 219, 16, 0, PartialInput>(
         tables, data_base, secondary_base, original_count);
-    T16Q2InverseGroup<54, 99, 7, 20, 4, PartialInput>(
-        tables, data_base, secondary_base, original_count);
-    T16Q2InverseGroup<19, 49, 111, 24, 8, PartialInput>(
-        tables, data_base, secondary_base, original_count);
-    T16Q2InverseGroup<67, 52, 28, 28, 12, PartialInput>(
-        tables, data_base, secondary_base, original_count);
+    if (ActiveSecondGroups >= 2)
+        T16Q2InverseGroup<ShardBytes, 54, 99, 7, 20, 4, PartialInput>(
+            tables, data_base, secondary_base, original_count);
+    if (ActiveSecondGroups >= 3)
+        T16Q2InverseGroup<ShardBytes, 19, 49, 111, 24, 8, PartialInput>(
+            tables, data_base, secondary_base, original_count);
+    if (ActiveSecondGroups >= 4)
+        T16Q2InverseGroup<ShardBytes, 67, 52, 28, 28, 12, PartialInput>(
+            tables, data_base, secondary_base, original_count);
 
-    T16Q2FusedOuter(tables, primary_base, secondary_base);
+    T16Q2FusedOuter<ShardBytes, ActiveSecondGroups>(
+        tables, primary_base, secondary_base);
 
     /* Final forward layer, FFTSkewStorage + 0. */
-    T16Q2ForwardGroup<255, 85, 255, 0, PartialOutput>(
+    T16Q2ForwardGroup<ShardBytes, 255, 85, 255, 0, PartialOutput>(
         tables, primary_base, recovery_base, recovery_count);
-    T16Q2ForwardGroup<17, 34, 85, 4, PartialOutput>(
+    T16Q2ForwardGroup<ShardBytes, 17, 34, 85, 4, PartialOutput>(
         tables, primary_base, recovery_base, recovery_count);
-    T16Q2ForwardGroup<153, 102, 17, 8, PartialOutput>(
+    T16Q2ForwardGroup<ShardBytes, 153, 102, 17, 8, PartialOutput>(
         tables, primary_base, recovery_base, recovery_count);
-    T16Q2ForwardGroup<51, 187, 34, 12, PartialOutput>(
+    T16Q2ForwardGroup<ShardBytes, 51, 187, 34, 12, PartialOutput>(
         tables, primary_base, recovery_base, recovery_count);
+}
+
+template<uint64_t ShardBytes, unsigned ActiveSecondGroups>
+static LEO_FORCE_INLINE void T16Q2EncodeSelected(
+    const unsigned char* tables,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    if (original_count == 32 && recovery_count == 16)
+        T16Q2Encode<ShardBytes, ActiveSecondGroups, false, false>(
+            tables, data_base,
+            recovery_base, temporary_base, original_count, recovery_count);
+    else if (recovery_count == 16)
+        T16Q2Encode<ShardBytes, ActiveSecondGroups, true, false>(
+            tables, data_base,
+            recovery_base, temporary_base, original_count, recovery_count);
+    else
+        T16Q2Encode<ShardBytes, ActiveSecondGroups, true, true>(
+            tables, data_base,
+            recovery_base, temporary_base, original_count, recovery_count);
+}
+
+template<uint64_t ShardBytes, unsigned ActiveSecondGroups>
+static LEO_FORCE_INLINE void T16Q2EncodePartialSelected(
+    const unsigned char* tables,
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    if (recovery_count == 16)
+        T16Q2Encode<ShardBytes, ActiveSecondGroups, true, false>(
+            tables, data_base,
+            recovery_base, temporary_base, original_count, recovery_count);
+    else
+        T16Q2Encode<ShardBytes, ActiveSecondGroups, true, true>(
+            tables, data_base,
+            recovery_base, temporary_base, original_count, recovery_count);
 }
 
 #if defined(_MSC_VER)
@@ -388,14 +444,41 @@ LEO2_AVX2_T16_Q2_ENTRY void AVX2FF8HighEncodeT16Q2B64Fused(
     if (!tables)
         return;
 
-    if (original_count == 32 && recovery_count == 16)
-        T16Q2Encode<false, false>(tables, data_base, recovery_base,
+    T16Q2EncodeSelected<64, 4>(tables, data_base, recovery_base,
+        temporary_base, original_count, recovery_count);
+}
+
+LEO2_AVX2_T16_Q2_ENTRY void AVX2FF8HighEncodeT16Q2B256Fused(
+    const void* data_base,
+    void* recovery_base,
+    void* temporary_base,
+    unsigned original_count,
+    unsigned recovery_count)
+{
+    LEO_DEBUG_ASSERT(
+        data_base != NULL && recovery_base != NULL && temporary_base != NULL);
+    LEO_DEBUG_ASSERT(original_count >= 17 && original_count <= 32);
+    LEO_DEBUG_ASSERT(recovery_count >= 9 && recovery_count <= 16);
+    const unsigned char* tables =
+        static_cast<const unsigned char*>(GetAVX2FF8Tables());
+    LEO_DEBUG_ASSERT(tables != NULL);
+    if (!tables)
+        return;
+
+    if (original_count <= 20)
+        T16Q2EncodePartialSelected<256, 1>(
+            tables, data_base, recovery_base,
             temporary_base, original_count, recovery_count);
-    else if (recovery_count == 16)
-        T16Q2Encode<true, false>(tables, data_base, recovery_base,
+    else if (original_count <= 24)
+        T16Q2EncodePartialSelected<256, 2>(
+            tables, data_base, recovery_base,
+            temporary_base, original_count, recovery_count);
+    else if (original_count <= 28)
+        T16Q2EncodePartialSelected<256, 3>(
+            tables, data_base, recovery_base,
             temporary_base, original_count, recovery_count);
     else
-        T16Q2Encode<true, true>(tables, data_base, recovery_base,
+        T16Q2EncodeSelected<256, 4>(tables, data_base, recovery_base,
             temporary_base, original_count, recovery_count);
 }
 

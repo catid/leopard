@@ -92,7 +92,7 @@ option(LEO2_EXPERIMENT_HIGH_T8_RAGGED_BINDING
     "Enable the qualified 65..1024-byte AVX2 T=8 ragged binding selector"
     ON)
 option(LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
-    "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64 fused encoder"
+    "Enable the GF8/AVX2 K=17..32,R=9..16,B=1..64/256 fused encoder"
     ON)
 option(LEO2_EXPERIMENT_GENERAL_ONE_LOSS_DIRECT
     "Enable promoted generalized GF8/AVX2 one-loss direct repair"

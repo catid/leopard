@@ -18121,7 +18121,8 @@ static LEO_FORCE_INLINE bool IsGF8AVX2HighT16Q2B64FusedEligible(
     const leo2_codec* codec,
     uint64_t shard_bytes)
 {
-    if (!codec || shard_bytes == 0 || shard_bytes > 64 ||
+    if (!codec || shard_bytes == 0 ||
+        (shard_bytes > 64 && shard_bytes != 256) ||
         g_high_t16_q2_b64_fused_mode != 1U ||
         codec->original_count < 17 || codec->original_count > 32 ||
         codec->recovery_count < 9 || codec->recovery_count > 16 ||
@@ -18154,10 +18155,10 @@ static LEO_FORCE_INLINE bool IsGF8AVX2HighT16Q2B64FusedEligible(
 #endif
 
 /*
-    Packed-layout terminal for the spill-free two-block T=16 kernel. Exact
-    64-byte shards execute directly; shorter shards are staged into zero-padded
-    64-byte rows and scattered back after the transform, preserving arbitrary
-    public byte tails without any out-of-bounds vector access.
+    Packed-layout terminal for the spill-free two-block T=16 kernels. Exact
+    64- and 256-byte shards execute directly; shorter shards are staged into
+    zero-padded 64-byte rows and scattered back after the transform, preserving
+    arbitrary public byte tails without any out-of-bounds vector access.
     This duplicates only the aggregate fast validator used by the established
     K=16/R=8 terminal.  Any valid non-packed or sparse call falls back to the
     ordinary validator and transform; every actual error is reported before
@@ -18178,8 +18179,10 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     LEO_DEBUG_ASSERT(
         IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes));
     LEO_DEBUG_ASSERT(ProtectedCount <= 1);
-    LEO_DEBUG_ASSERT(shard_bytes >= 1 && shard_bytes <= 64);
+    LEO_DEBUG_ASSERT(
+        (shard_bytes >= 1 && shard_bytes <= 64) || shard_bytes == 256);
     const size_t byte_count = static_cast<size_t>(shard_bytes);
+    const bool staged_short = byte_count < 64;
 
     ScratchLayout layout;
     size_t work_data_offset = 0;
@@ -18191,12 +18194,13 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     layout = geometry.layout;
     work_data_offset = geometry.work_data_offset;
 #else
+    const size_t kernel_bytes = byte_count == 256 ? 256U : 64U;
     if (!ComputeSplitScratchLayout(
             static_cast<size_t>(codec->original_count) +
                 codec->recovery_count,
             static_cast<size_t>(codec->original_count) + 32U,
-            byte_count == 64 ? 0U : codec->original_count,
-            32U, 64U, layout, work_data_offset, 64U))
+            staged_short ? codec->original_count : 0U,
+            32U, kernel_bytes, layout, work_data_offset, 64U))
     {
         result_out = LEO2_INTERNAL_ERROR;
         return true;
@@ -18271,7 +18275,7 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
     }
 
     uint8_t* const base = static_cast<uint8_t*>(scratch);
-    if (byte_count != 64)
+    if (staged_short)
     {
         uint8_t* const staged_input = base + layout.data_offset;
         uint8_t* const work = base + work_data_offset;
@@ -18289,10 +18293,16 @@ TryEncodeGF8HighT16Q2B64FusedPackedTerminal(
         result_out = LEO2_SUCCESS;
         return true;
     }
-    leopard::ff8::ReedSolomonEncodeTwoBlocksT16B64(
-        *codec->context->ops, original[0], recovery[0],
-        base + work_data_offset,
-        codec->original_count, codec->recovery_count);
+    if (byte_count == 256)
+        leopard::ff8::ReedSolomonEncodeTwoBlocksT16B256(
+            *codec->context->ops, original[0], recovery[0],
+            base + work_data_offset,
+            codec->original_count, codec->recovery_count);
+    else
+        leopard::ff8::ReedSolomonEncodeTwoBlocksT16B64(
+            *codec->context->ops, original[0], recovery[0],
+            base + work_data_offset,
+            codec->original_count, codec->recovery_count);
     result_out = LEO2_SUCCESS;
     return true;
 }
@@ -19470,6 +19480,17 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode(
         }
 #endif
     }
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+    if (shard_bytes == 256 &&
+        IsGF8AVX2HighT16Q2B64FusedEligible(codec, shard_bytes))
+    {
+        leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+        if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<0>(
+                codec, NULL, shard_bytes, original, recovery,
+                scratch, scratch_bytes, terminal_result))
+            return terminal_result;
+    }
+#endif
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
     if (IsGF8AVX2HighT16PreparedTerminalEligible(codec, shard_bytes))
     {
@@ -19739,6 +19760,20 @@ LEO2_EXPORT LEO2_ENCODE_ENTRY_ALIGNED leo2_result leo2_encode_batch(
             }
 #endif
         }
+#if LEO2_EXPERIMENT_HIGH_T16_Q2_B64_FUSED
+        if (items[0].shard_bytes == 256 &&
+            IsGF8AVX2HighT16Q2B64FusedEligible(
+                codec, items[0].shard_bytes))
+        {
+            leo2_result terminal_result = LEO2_INTERNAL_ERROR;
+            if (TryEncodeGF8HighT16Q2B64FusedPackedTerminal<1>(
+                    codec, &item_range, items[0].shard_bytes,
+                    items[0].original, items[0].recovery,
+                    items[0].scratch, items[0].scratch_bytes,
+                    terminal_result))
+                return terminal_result;
+        }
+#endif
 #if LEO2_HAVE_HIGH_T16_B64_GENERATED
         if (IsGF8AVX2HighT16PreparedTerminalEligible(
                 codec, items[0].shard_bytes))
