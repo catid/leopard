@@ -5660,7 +5660,7 @@ static bool SkipOneShotTinyGF8AVX2PrunedSchedules(
         codec->shard_layout == LEO2_SHARD_LAYOUT_NATIVE_V1 &&
         codec->padded_side == 64 && codec->parent_count == kGF8Order &&
         codec->recovery_count >= 33 && codec->recovery_count <= 64 &&
-        codec->original_count >= 65 && codec->original_count <= 191 &&
+        codec->original_count >= 65 && codec->original_count <= 192 &&
         plan->missing_original_count >= 2U &&
         plan->missing_original_count < codec->recovery_count;
 #else
@@ -6496,6 +6496,15 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
         execution boundary stops at seven complete passes.  Its one-shot
         setup cost is handled independently above.
 
+        The no-shortening K=192 endpoint was measured separately for every
+        R=33..64 at B=64, B=448, and B=512 with sparse, half, and near-maximum
+        partial losses.  Regular execution won every candidate/control cell;
+        public one-shot decode beat exact Leopard main for all B448/B512 cells
+        and for every B64 cell with R>=35.  R=33/34 reusable execution was at
+        main speed, while the safer Leopard2 one-shot validation remained its
+        only deficit.  Admit K=192 for partial loss only: maximum loss retains
+        the independently calibrated K<=191, R<=62 rule below.
+
         Keep the byte-aware choice at execution rather than discarding the
         plan's exact schedules: the same immutable plan may later execute a
         larger shard, where pruning remains useful.  Reusable forced codecs
@@ -6532,10 +6541,11 @@ static bool BypassTinyGF8AVX2HighPrunedSchedules(
     if (codec->padded_side != 64 ||
         codec->recovery_count < 33 || codec->recovery_count > 64 ||
         codec->parent_count != kGF8Order ||
-        codec->original_count < 65 || codec->original_count > 191)
+        codec->original_count < 65 || codec->original_count > 192)
         return false;
     if (plan->missing_original_count == codec->recovery_count)
-        return codec->recovery_count <= 62;
+        return codec->original_count <= 191 &&
+            codec->recovery_count <= 62;
     if (plan->missing_original_count < 2U)
         return false;
     return buffer_bytes <= 448U ||
@@ -9954,7 +9964,10 @@ static bool PrepareRawNativeHighPattern(
     This route is intentionally narrower than the reusable-plan policy: only
     dense partial loss at exactly one native AVX2 cache line is admitted.  It
     owns no pruned schedule and calls the same regular Algorithm 5 kernel that
-    the measured reusable plan selects in this region.
+    the measured reusable plan selects in this region.  The K=192
+    no-shortening endpoint is algebraically the same N=256/T=64 parent and is
+    admitted only for partial loss; maximum loss retains its separately tuned
+    plan path.
 */
 #ifndef LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM
 #define LEO2_DIAGNOSTIC_DISABLE_RAW_NATIVE_HIGH_T64_TRANSFORM 0
@@ -10172,7 +10185,7 @@ static leo2_result TryOneShotRawNativeHighT64Transform(
     if (g_raw_native_high_t64_transform_mode != 1U ||
         g_one_shot_plan_setup_mode.load(std::memory_order_acquire) != 3U ||
         !codec || shard_bytes != kScratchAlignment || codec->flags != 0 ||
-        codec->original_count < 65 || codec->original_count > 191 ||
+        codec->original_count < 65 || codec->original_count > 192 ||
         codec->recovery_count < 33 || codec->recovery_count > 64 ||
         codec->parent_count != kGF8Order || codec->padded_side != 64 ||
         codec->profile != LEO2_PROFILE_LEGACY_HIGH_V1 ||

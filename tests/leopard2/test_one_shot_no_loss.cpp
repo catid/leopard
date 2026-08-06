@@ -895,15 +895,20 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     run_raw_transient_case(avx2, 124, 63, 64, 31, 0, true, true);
     run_raw_transient_case(avx2, 124, 64, 64, 63, 2, true, true);
     run_raw_transient_case(avx2, 191, 62, 64, 61, 1, true, true);
+    run_raw_transient_case(avx2, 192, 33, 64, 16, 0, true, true);
+    run_raw_transient_case(avx2, 192, 34, 64, 17, 1, true, true);
+    run_raw_transient_case(avx2, 192, 62, 64, 31, 2, true, true);
+    run_raw_transient_case(avx2, 192, 64, 64, 63, 0, true, true);
 
     /* K=64 is outside this terminal but remains allocation-free through the
        independently qualified translated-low raw path. */
     run_raw_transient_case(avx2, 64, 33, 64, 16, 0, true, true);
-    run_raw_transient_case(avx2, 192, 62, 64, 31, 1, true, false);
     run_raw_transient_case(avx2, 99, 50, 63, 25, 2, true, false);
     run_raw_transient_case(avx2, 99, 50, 65, 25, 0, true, false);
     run_raw_transient_case(avx2, 99, 50, 64, 24, 1, true, false);
     run_raw_transient_case(avx2, 99, 50, 64, 50, 2, false, false);
+    run_raw_transient_case(avx2, 192, 62, 64, 30, 1, true, false);
+    run_raw_transient_case(avx2, 192, 62, 64, 62, 2, false, false);
 
     // Native-high direct execution has separately measured output-major and
     // source-major intervals.  Their gap and the first byte above the latter
@@ -924,6 +929,7 @@ void test_raw_transient_decode(leo2_context* automatic_context)
     test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 7168);
     test_raw_transient_failure_atomicity(avx2, 16, 8, 8, 16384);
     test_raw_transient_failure_atomicity(avx2, 99, 50, 49, 64);
+    test_raw_transient_failure_atomicity(avx2, 192, 62, 31, 64);
     test_raw_transient_reusable_plan(avx2, 32, 32, 9);
     test_raw_transient_reusable_plan(avx2, 16, 8, 8);
 

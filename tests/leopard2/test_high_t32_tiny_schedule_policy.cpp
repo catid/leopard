@@ -995,6 +995,22 @@ int main()
                 99, 50, random_missing(99, 25, 0xc4b6da31U), 4160,
                 "transient T64 half-loss B4160") != 0,
             "pruned T64 half-loss B4160 transient plan omitted schedules");
+        require(transient_high_schedule_count(avx2_context,
+                192, 62, random_missing(192, 2, 0xc4b6da32U), 448,
+                "transient K192 T64 sparse B448") == 0,
+            "eligible K192 T64 sparse B448 plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                192, 62, random_missing(192, 2, 0xc4b6da33U), 512,
+                "transient K192 T64 sparse B512") == 0,
+            "one-shot-only K192 T64 sparse B512 plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                192, 62, random_missing(192, 31, 0xc4b6da34U), 4096,
+                "transient K192 T64 half-loss B4096") == 0,
+            "one-shot-only K192 T64 B4096 plan retained schedules");
+        require(transient_high_schedule_count(avx2_context,
+                192, 62, random_missing(192, 31, 0xc4b6da35U), 4160,
+                "transient K192 T64 half-loss B4160") != 0,
+            "pruned K192 T64 B4160 transient plan omitted schedules");
 
         std::vector<ByteCase> t64_byte_matrix;
         const size_t t64_regular_sizes[] = {
@@ -1152,8 +1168,32 @@ int main()
             true, false, true, 0x54a33212U);
         run_campaign(avx2_context, "t64-k192-partial-neighbor",
             192, 62, striped_missing(192, 31),
-            one_byte_case(64, RoutePrunedOnly),
-            false, false, true, 0x54a34222U);
+            one_byte_case(64, RouteRegularOnly),
+            true, false, true, 0x54a34222U);
+        {
+            std::vector<ByteCase> k192_partial_boundaries;
+            const ByteCase b448 = { 448, RouteRegularOnly };
+            const ByteCase b512 = { 512, RouteRegularOnly };
+            const ByteCase b4096 = { 4096, RoutePrunedOnly };
+            k192_partial_boundaries.push_back(b448);
+            k192_partial_boundaries.push_back(b512);
+            k192_partial_boundaries.push_back(b4096);
+            run_campaign(avx2_context, "t64-k192-half-boundaries",
+                192, 62, random_missing(192, 31, 0xa659b17cU),
+                k192_partial_boundaries,
+                true, false, true, 0x54a34424U);
+        }
+        {
+            std::vector<ByteCase> k192_sparse_boundaries;
+            const ByteCase b448 = { 448, RouteRegularOnly };
+            const ByteCase b512 = { 512, RoutePrunedOnly };
+            k192_sparse_boundaries.push_back(b448);
+            k192_sparse_boundaries.push_back(b512);
+            run_campaign(avx2_context, "t64-k192-sparse-boundaries",
+                192, 62, random_missing(192, 2, 0x9f0cb2d8U),
+                k192_sparse_boundaries,
+                true, false, true, 0x54a34525U);
+        }
 
         leo2_context_options scalar_options = {};
         scalar_options.struct_size = sizeof(scalar_options);
